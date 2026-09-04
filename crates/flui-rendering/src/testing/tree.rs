@@ -168,7 +168,7 @@ impl TreeNode {
     }
 
     /// Convenience wrapper for [`SliverMultiBoxAdaptorParentData`] on
-    /// [`RenderSliverList`] / `RenderSliverGridLazy` children.
+    /// [`RenderSliverList`] / `RenderSliverGrid` children.
     ///
     /// Stamps the logical `index` onto the child before layout so the
     /// virtualizer band walk can discover it in `logical_to_slot` and treat

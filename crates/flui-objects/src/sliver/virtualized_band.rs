@@ -386,12 +386,16 @@ where
     // it via `SparseChildren::retain_band` using the `cache_first`/
     // `cache_last` band this function returns, which is what avoids an ABA
     // double-remove between the render and element sides.
-    *attached_child_count = ctx.child_count();
+    // The attached count this pass positions. The hit-test snapshot is
+    // taken from it only once the geometry below validates: a rejected pass
+    // keeps the previous pass's child offsets, so a resident attached since
+    // then has no committed position and must not be reachable by index.
+    let dense_now = ctx.child_count();
 
     // ── 6. Build slot → logical map for positioning ───────────────────────
     // Rebuilt after the layout pass so newly-materialized children are
     // included.
-    let slot_to_logical: Vec<Option<usize>> = (0..*attached_child_count)
+    let slot_to_logical: Vec<Option<usize>> = (0..dense_now)
         .map(|slot| ctx.child_parent_data(slot).map(|pd| pd.index))
         .collect();
 
@@ -454,6 +458,9 @@ where
         scroll_offset_correction,
         ..geometry
     };
+    if geometry.validation_error().is_none() {
+        *attached_child_count = dense_now;
+    }
 
     // Return the geometry and the retained band so the caller can forward it
     // to `ctx.emit_retain_band`.

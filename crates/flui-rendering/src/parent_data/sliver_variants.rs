@@ -140,74 +140,6 @@ impl Hash for SliverMultiBoxAdaptorParentData {
 impl crate::parent_data::base::ParentData for SliverMultiBoxAdaptorParentData {}
 
 // ============================================================================
-// SLIVER GRID PARENT DATA
-// ============================================================================
-
-/// Parent data for sliver grid children.
-///
-/// Extends `SliverMultiBoxAdaptorParentData` with cross-axis offset.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SliverGridParentData {
-    /// Logical offset in scrollable axis.
-    pub layout_offset: f32,
-
-    /// Index of this child in the grid.
-    pub index: usize,
-
-    /// Keep-alive mixin.
-    pub keep_alive: KeepAliveParentDataMixin,
-
-    /// Offset in cross axis (for grid positioning).
-    pub cross_axis_offset: f32,
-}
-
-impl SliverGridParentData {
-    /// Create with index and cross-axis offset.
-    pub const fn new(index: usize, cross_axis_offset: f32) -> Self {
-        Self {
-            layout_offset: 0.0,
-            index,
-            keep_alive: KeepAliveParentDataMixin::new(),
-            cross_axis_offset,
-        }
-    }
-
-    /// Create at origin.
-    pub const fn zero() -> Self {
-        Self::new(0, 0.0)
-    }
-
-    /// Builder: set layout offset.
-    pub const fn with_layout_offset(mut self, offset: f32) -> Self {
-        self.layout_offset = offset;
-        self
-    }
-
-    /// Builder: set cross-axis offset.
-    pub const fn with_cross_axis_offset(mut self, offset: f32) -> Self {
-        self.cross_axis_offset = offset;
-        self
-    }
-}
-
-impl Default for SliverGridParentData {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl Hash for SliverGridParentData {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
-        self.index.hash(state);
-        self.keep_alive.hash(state);
-        self.cross_axis_offset.to_bits().hash(state);
-    }
-}
-
-impl crate::parent_data::base::ParentData for SliverGridParentData {}
-
-// ============================================================================
 // TREE SLIVER NODE PARENT DATA
 // ============================================================================
 
@@ -517,39 +449,6 @@ mod tests {
         let a = SliverMultiBoxAdaptorParentData::new(2).with_layout_offset(1.0);
         let b = SliverMultiBoxAdaptorParentData::new(2).with_layout_offset(1.0);
         let c = SliverMultiBoxAdaptorParentData::new(3).with_layout_offset(1.0);
-
-        assert_eq!(a, b);
-        assert_eq!(hash_of(&a), hash_of(&b));
-        assert_ne!(hash_of(&a), hash_of(&c));
-    }
-
-    #[test]
-    fn test_sliver_grid_parent_data() {
-        let data = SliverGridParentData::new(3, 50.0).with_layout_offset(100.0);
-
-        assert_eq!(data.index, 3);
-        assert_eq!(data.cross_axis_offset, 50.0);
-    }
-
-    #[test]
-    fn sliver_grid_parent_data_zero_default_and_cross_axis_builder() {
-        assert_eq!(
-            SliverGridParentData::default(),
-            SliverGridParentData::zero()
-        );
-        assert_eq!(SliverGridParentData::zero().index, 0);
-        assert_eq!(SliverGridParentData::zero().cross_axis_offset, 0.0);
-
-        let data = SliverGridParentData::zero().with_cross_axis_offset(25.0);
-        assert_eq!(data.cross_axis_offset, 25.0);
-        assert_eq!(data.layout_offset, 0.0);
-    }
-
-    #[test]
-    fn sliver_grid_parent_data_hash_matches_for_equal_values() {
-        let a = SliverGridParentData::new(1, 2.0);
-        let b = SliverGridParentData::new(1, 2.0);
-        let c = SliverGridParentData::new(1, 3.0);
 
         assert_eq!(a, b);
         assert_eq!(hash_of(&a), hash_of(&b));

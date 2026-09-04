@@ -311,7 +311,7 @@ fn multiple_grids_and_lists_scene() -> Viewport<Vec<BoxedView>> {
             ],
         )
         .boxed(),
-        SliverGrid::new(
+        SliverGrid::list(
             Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
             vec![
                 SizedBox::shrink().boxed(),

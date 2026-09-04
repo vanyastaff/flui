@@ -90,9 +90,8 @@ pub use sliver::{
     RenderShrinkWrappingViewport, RenderSliverAnimatedOpacity, RenderSliverFillRemaining,
     RenderSliverFillRemainingAndOverscroll, RenderSliverFillRemainingWithScrollable,
     RenderSliverFillViewport, RenderSliverFixedExtentList, RenderSliverFloatingPersistentHeader,
-    RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverGridLazy,
-    RenderSliverIgnorePointer, RenderSliverList, RenderSliverMainAxisGroup, RenderSliverOffstage,
-    RenderSliverOpacity, RenderSliverPadding, RenderSliverPinnedPersistentHeader,
-    RenderSliverScrollingPersistentHeader, RenderSliverToBoxAdapter, RenderViewport, SnapAction,
-    SnapCommand, StretchTriggerSignal,
+    RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverIgnorePointer,
+    RenderSliverList, RenderSliverMainAxisGroup, RenderSliverOffstage, RenderSliverOpacity,
+    RenderSliverPadding, RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader,
+    RenderSliverToBoxAdapter, RenderViewport, SnapAction, SnapCommand, StretchTriggerSignal,
 };

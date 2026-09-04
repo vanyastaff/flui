@@ -243,7 +243,7 @@ disposition = "keep"
 note = """
 The concrete render catalog. It sits *above* `flui-rendering` and *below* \
 `flui-view`: `flui-view` names concrete render types (`RenderLayoutBuilder`, \
-`RenderSliverList`, `RenderSliverGridLazy`, `RenderSizedBox`) for framework \
+`RenderSliverList`, `RenderSliverGrid`, `RenderSizedBox`) for framework \
 machinery whose element and render halves cooperate. Previously documented as \
 a peer of `flui-widgets` above `flui-view`, which the real production graph \
 contradicts.\

@@ -23,7 +23,6 @@
 //! │
 //! ├── SliverLogicalParentData
 //! │   ├── SliverMultiBoxAdaptorParentData
-//! │   │   ├── SliverGridParentData
 //! │   │   └── TreeSliverNodeParentData
 //! │   └── SliverLogicalContainerParentData
 //! │
@@ -56,8 +55,8 @@
 //!     .with_top(10.0)
 //!     .with_left(20.0);
 //!
-//! // Sliver grid
-//! let grid_data = SliverGridParentData::new(5, 100.0)
+//! // Sliver multi-box adaptor (list, grid, ...)
+//! let list_data = SliverMultiBoxAdaptorParentData::new(5)
 //!     .with_layout_offset(500.0);
 //!
 //! // Table cell
@@ -98,9 +97,8 @@ pub use keep_alive_mixin::KeepAliveParentDataMixin;
 pub use sliver_parent_data::SliverParentData;
 // Sliver variants
 pub use sliver_variants::{
-    SliverGridParentData, SliverLogicalContainerParentData, SliverLogicalParentData,
-    SliverMultiBoxAdaptorParentData, SliverPhysicalContainerParentData, SliverPhysicalParentData,
-    TreeSliverNodeParentData,
+    SliverLogicalContainerParentData, SliverLogicalParentData, SliverMultiBoxAdaptorParentData,
+    SliverPhysicalContainerParentData, SliverPhysicalParentData, TreeSliverNodeParentData,
 };
 // Table and text
 pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParentData};
@@ -110,7 +108,7 @@ pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParent
 // ============================================================================
 
 /// Total number of parent data types in hierarchy.
-pub const PARENT_DATA_TYPE_COUNT: usize = 18;
+pub const PARENT_DATA_TYPE_COUNT: usize = 17;
 
 /// Core parent data types (non-container).
 pub const CORE_TYPES: usize = 4;
@@ -141,9 +139,8 @@ pub mod prelude {
     pub use super::{ContainerParentDataMixin, KeepAliveParentDataMixin};
     // Sliver variants
     pub use super::{
-        SliverGridParentData, SliverLogicalContainerParentData, SliverLogicalParentData,
-        SliverMultiBoxAdaptorParentData, SliverPhysicalContainerParentData,
-        SliverPhysicalParentData, TreeSliverNodeParentData,
+        SliverLogicalContainerParentData, SliverLogicalParentData, SliverMultiBoxAdaptorParentData,
+        SliverPhysicalContainerParentData, SliverPhysicalParentData, TreeSliverNodeParentData,
     };
     // Table and text
     pub use super::{TableCellParentData, TableCellVerticalAlignment, TextParentData};
@@ -165,9 +162,9 @@ pub mod r#box {
 /// Sliver protocol parent data types.
 pub mod sliver {
     pub use super::{
-        SliverGridParentData, SliverLogicalContainerParentData, SliverLogicalParentData,
-        SliverMultiBoxAdaptorParentData, SliverParentData, SliverPhysicalContainerParentData,
-        SliverPhysicalParentData, TreeSliverNodeParentData,
+        SliverLogicalContainerParentData, SliverLogicalParentData, SliverMultiBoxAdaptorParentData,
+        SliverParentData, SliverPhysicalContainerParentData, SliverPhysicalParentData,
+        TreeSliverNodeParentData,
     };
 }
 
@@ -222,8 +219,7 @@ pub fn type_usage(type_name: &str) -> &'static str {
         "TableCellParentData" => "Table cells with row/column position",
         "TextParentData" => "Rich text with inline spans",
         "SliverLogicalParentData" => "Sliver logical positioning",
-        "SliverMultiBoxAdaptorParentData" => "Sliver lists with keep-alive",
-        "SliverGridParentData" => "Sliver grids with cross-axis offset",
+        "SliverMultiBoxAdaptorParentData" => "Sliver lists/grids with keep-alive",
         "TreeSliverNodeParentData" => "Tree views with depth tracking",
         "SliverLogicalContainerParentData" => "Sliver container (logical)",
         "SliverPhysicalParentData" => "Sliver physical paint offset",
@@ -242,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_type_count() {
-        assert_eq!(type_count(), 18);
+        assert_eq!(type_count(), 17);
     }
 
     #[test]
@@ -267,7 +263,7 @@ mod tests {
         let _sliver = SliverParentData::default();
         let _flex = FlexParentData::default();
         let _stack = StackParentData::default();
-        let _grid = SliverGridParentData::default();
+        let _adaptor = SliverMultiBoxAdaptorParentData::default();
         let _table = TableCellParentData::default();
         let _text = TextParentData::default();
     }
@@ -279,6 +275,6 @@ mod tests {
         // Should be able to use all types from prelude
         let _ = BoxParentData::default();
         let _ = FlexParentData::default();
-        let _ = SliverGridParentData::default();
+        let _ = SliverMultiBoxAdaptorParentData::default();
     }
 }

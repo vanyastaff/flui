@@ -60,8 +60,7 @@
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
-//! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | yes | yes | yes | — |
-//! | `RenderSliverGridLazy` | `harness_render_sliver_grid_lazy_*` | yes | — | — | yes | — |
+//! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | yes | — | yes | — |
 //! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes | — |
 //! | `RenderSliverToBoxAdapter` | `harness_sliver_to_box_adapter_*` | yes | — | — | yes | — |
 //! | `RenderSliverFillViewport` | `harness_sliver_fill_viewport_*` | yes | — | — | yes | — |
@@ -126,7 +125,7 @@ use flui_rendering::{
     testing::{
         BoxQueryRun, DrawKind, ParentDataSeed, Probe, RenderTester, TreeNode,
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
-        box_node, commands_of, localize_hit_point, sliver_node,
+        box_node, localize_hit_point, sliver_node,
     },
     traits::{RenderBox, TextBaseline},
     view::{ScrollDirection, ScrollableViewportOffset},
@@ -203,7 +202,6 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderMouseRegion",
     "RenderSliverFixedExtentList",
     "RenderSliverGrid",
-    "RenderSliverGridLazy",
     "RenderSliverPadding",
     "RenderSliverMainAxisGroup",
     "RenderSliverToBoxAdapter",
@@ -618,6 +616,22 @@ fn viewport(sliver: TreeNode) -> TreeNode {
 fn fixed_extent_list(item_extent: f32, children: Vec<TreeNode>) -> TreeNode {
     let count = children.len();
     let mut node = sliver_node(RenderSliverFixedExtentList::new(item_extent, count));
+    for (index, child) in children.into_iter().enumerate() {
+        node = node.child(
+            child.with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                SliverMultiBoxAdaptorParentData::new(index),
+            )),
+        );
+    }
+    node
+}
+
+/// A request-strategy grid over `children`, each seeded with the logical
+/// index of its position — the parent data the element tree would have
+/// stamped at adoption.
+fn grid_list(delegate: Arc<dyn SliverGridDelegate>, children: Vec<TreeNode>) -> TreeNode {
+    let count = children.len();
+    let mut node = sliver_node(RenderSliverGrid::new(delegate, count));
     for (index, child) in children.into_iter().enumerate() {
         node = node.child(
             child.with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
@@ -6407,41 +6421,58 @@ fn harness_sliver_fixed_extent_list_count_clamp_shrinks_the_extent() {
 // ── RenderSliverGrid ─────────────────────────────────────────────────────────
 
 #[test]
-fn harness_render_sliver_grid_lays_out_two_column_grid() {
-    // 4 children, 2 columns, viewport 200×200: 2 rows of 100×100 tiles.
-    // scroll_extent = compute_max_scroll_offset(4) = 100*2 - 0 = 200.
-    // All 4 tiles fit in the 200px viewport so all receive layout.
-    let run = RenderTester::mount(viewport(
-        sliver_node(RenderSliverGrid::new(Arc::new(
-            SliverGridDelegateWithFixedCrossAxisCount::new(2),
-        )))
-        .label("grid")
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"))
-        .child(box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"))
-        .child(box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"))
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3")),
+fn harness_render_sliver_grid_zero_items_reports_zero_geometry() {
+    // Empty source — no build requests should be emitted and the reported
+    // scroll extent must be zero.
+    let grid = RenderSliverGrid::new(
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+        0,
+    );
+    let run = RenderTester::mount(viewport(sliver_node(grid).label("grid")))
+        .with_size(Size::new(px(200.0), px(400.0)))
+        .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("grid")).scroll_extent,
+        0.0,
+        "empty RenderSliverGrid must report zero scroll extent",
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderSliverGrid",
+        &["item_count", "attached_child_count"],
+    );
+}
+
+#[test]
+fn harness_render_sliver_grid_pre_seeded_tiles_lay_out_correctly() {
+    // 4 items, 2 columns, 200×200 viewport → 2 rows of 100×100 tiles.
+    // All 4 tiles are pre-seeded with correct SliverMultiBoxAdaptorParentData so
+    // they are "resident" during layout; no build requests should be emitted.
+    // scroll_extent = compute_max_scroll_offset(4) = 2 rows × 100px = 200px.
+    let mut run = RenderTester::mount(viewport(
+        grid_list(
+            Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+            vec![
+                box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"),
+                box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"),
+                box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"),
+                box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3"),
+            ],
+        )
+        .label("grid"),
     ))
     .with_size(Size::new(px(200.0), px(200.0)))
     .run_layout();
 
-    // Sliver geometry.
-    let geom = run.sliver_geometry(run.id("grid"));
+    // Scroll extent: 2 rows × 100px.
     assert_eq!(
-        geom.scroll_extent, 200.0,
-        "4 children × 2 columns = 2 rows × 100px = 200px total extent",
-    );
-    assert!(geom.paint_extent > 0.0);
-    // A grid painting on-screen content must report `visible: true`, matching
-    // Flutter's `SliverGeometry.visible ?? paintExtent > 0.0` default and every
-    // sibling sliver leaf. Regression guard for the production fix that added
-    // this field: with it omitted, `visible` stayed `false` and the viewport's
-    // hit-test walk (`sliver_child_is_visible`) never reached grid children.
-    assert!(
-        geom.visible,
-        "a grid with paint_extent > 0 must report visible: true (else it is un-hit-testable)",
+        run.sliver_geometry(run.id("grid")).scroll_extent,
+        200.0,
+        "4 items in a 2-column 100px-tile grid = 2 rows × 100px = 200px scroll extent",
     );
 
-    // Each tile must receive tight 100×100 constraints from the delegate.
+    // Every tile must receive tight 100×100 constraints from the delegate.
     assert_eq!(
         run.box_geometry(run.id("tile0")),
         Size::new(px(100.0), px(100.0)),
@@ -6453,212 +6484,38 @@ fn harness_render_sliver_grid_lays_out_two_column_grid() {
         "tile2 (second row) must also be 100×100",
     );
 
-    // Diagnostics must surface child_count and committed geometry.
-    assert_descendant_properties(&run.diagnostics(), "RenderSliverGrid", &["child_count"]);
+    // All 4 tiles are resident — no build requests should be pending.
+    let pending = run.owner_mut().take_pending_child_requests();
+    assert!(
+        pending.is_empty(),
+        "all tiles are pre-seeded; no build requests should be emitted but got {pending:?}",
+    );
+
     let tree = run.diagnostics();
-    let sliver_node_diag = tree.find_descendant("RenderSliverGrid").unwrap();
-    assert_has_committed_geometry(sliver_node_diag);
+    let grid_diag = tree
+        .find_descendant("RenderSliverGrid")
+        .expect("RenderSliverGrid must appear in diagnostics");
+    assert_has_committed_geometry(grid_diag);
 }
 
-/// A `RenderSliverGrid` with zero children commits `laid_out_band: None` and
-/// must show that observably in diagnostics — `DiagnosticsBuilder::add_flag`
-/// only ever emits a property when its `bool` is `true`
-/// (`crates/flui-foundation/src/debug.rs`), so an earlier draft of this
-/// property (`add_flag("laid_out_band", false, ...)` for the `None` arm)
-/// silently emitted NOTHING for exactly this case — dead instrumentation
-/// that made "no band yet" indistinguishable from "field doesn't exist" in
-/// the dump. `hit_test` must also report no hits, matching the empty band.
-#[test]
-fn harness_render_sliver_grid_zero_children_reports_none_band_observably() {
-    let run = RenderTester::mount(viewport(
-        sliver_node(RenderSliverGrid::new(Arc::new(
-            SliverGridDelegateWithFixedCrossAxisCount::new(2),
-        )))
-        .label("grid"),
-    ))
-    .with_size(Size::new(px(200.0), px(200.0)))
-    .run_layout();
+// The two former stale-out-of-band `hit_test`/`paint` pins
+// (`hit_test_ignores_stale_out_of_band_offset`, `paint_ignores_stale_out_of_band_tile`)
+// pinned an object-level `laid_out_band` gate that only the now-deleted eager
+// grid carried — this render object keeps no such band. The same stale-rect
+// hazard is closed one layer up instead: the frame-level fixpoint evicts a
+// sliver's out-of-band residents before paint runs (ADR-0017's amendment). See
+// `crates/flui-widgets/tests/lazy_list.rs::lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint`.
 
-    assert_eq!(
-        run.descendant_property("RenderSliverGrid", "laid_out_band")
-            .as_deref(),
-        Some("None"),
-        "a zero-child grid must report its laid_out_band as None, observably \
-         — not silently omit the property",
-    );
-    assert!(
-        run.hit(50.0, 50.0).is_empty(),
-        "a zero-child grid must never report a hit",
-    );
-}
-
-/// Regression for the stale-rect hit-test defect (`docs/ROADMAP.md` Cross.H):
-/// `RenderSliverGrid` never evicts out-of-band children (it is eager — see
-/// the type's module doc), so a child whose committed offset was set on an
-/// EARLIER layout pass keeps that offset once it falls out of the windowed
-/// band. Before the `laid_out_band` gate, `hit_test` walked `0..child_count`
-/// unconditionally and so could still route a tap to that stale rect.
-///
-/// 15 single-column (`cross_axis_count = 1`) tiles, each 100px tall, in a
-/// 200×200 viewport with the default 250px cache extent:
-///
-/// - First layout at `scroll_offset = 1000.0` bands rows `[7, 14]` — tile10's
-///   committed offset is `10*100 - 1000 = 0`.
-/// - Second layout (jump back to the top) at `scroll_offset = 0.0` bands rows
-///   `[0, 4]` — tile0's FRESH offset is `0*100 - 0 = 0`: the exact same
-///   on-screen rect tile10 is still (pre-fix) claiming, because tile10 (now
-///   out of band) is left untouched by the second pass's position loop.
-///
-/// `.rev()` order means the unguarded walk reaches index 10 before index 0,
-/// so it used to resolve a tap over that shared rect to the stale tile10
-/// instead of the fresh tile0.
-#[test]
-fn harness_render_sliver_grid_hit_test_ignores_stale_out_of_band_offset() {
-    const TILE_LABELS: [&str; 15] = [
-        "tile0", "tile1", "tile2", "tile3", "tile4", "tile5", "tile6", "tile7", "tile8", "tile9",
-        "tile10", "tile11", "tile12", "tile13", "tile14",
-    ];
-    let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(1).with_main_axis_extent(100.0);
-    let mut run = RenderTester::mount(viewport_with_scroll(
-        1000.0,
-        sliver_node(RenderSliverGrid::new(Arc::new(delegate)))
-            .label("grid")
-            .children(
-                TILE_LABELS
-                    .iter()
-                    .map(|&label| box_node(RenderColoredBox::red(200.0, 100.0)).label(label)),
-            ),
-    ))
-    .with_size(Size::new(px(200.0), px(200.0)))
-    .run_layout();
-
-    let vp_id = run.id("viewport");
-    let tile0 = run.id("tile0");
-    let tile10 = run.id("tile10");
-
-    // First pass, band [7, 14]: tile10 receives a real, freshly-positioned
-    // offset — the precondition for it to later look "plausibly valid" once
-    // stale.
-    assert_eq!(
-        run.offset(tile10),
-        Offset::new(px(0.0), px(0.0)),
-        "tile10 = row 10 at scroll_offset=1000: 10*100 - 1000 = 0",
-    );
-
-    // Jump back to the top — beyond the cache window in the other direction.
-    // New band is [0, 4]; tile10 falls out of band and keeps its stale
-    // scroll_offset=1000 committed rect (this sliver never evicts).
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(0.0);
-    });
-    run.relayout();
-
-    assert_eq!(
-        run.offset(tile0),
-        Offset::new(px(0.0), px(0.0)),
-        "tile0 = row 0 at scroll_offset=0: fresh offset is (0, 0)",
-    );
-    assert_eq!(
-        run.offset(tile10),
-        Offset::new(px(0.0), px(0.0)),
-        "tile10 is out of band this pass and must still report its stale \
-         (0, 0) rect from the first layout — the precondition this test \
-         exercises; if this fails, the scenario no longer reproduces the bug",
-    );
-
-    // The tap must resolve to the fresh in-band tile0, never the stale
-    // out-of-band tile10, even though both report the identical rect.
-    let hit = run.hit_first(50.0, 50.0);
-    assert_eq!(
-        hit,
-        Some(tile0),
-        "a tap over the fresh tile0 rect must not resolve to stale tile10 \
-         (got {hit:?}) — hit_test must only walk the committed laid_out_band, \
-         not every arena-resident child",
-    );
-}
-
-/// Companion to the hit-test regression above, for `paint`: `RenderSliverGrid`
-/// used to call `ctx.paint_children()`, which splices every arena-resident
-/// child (`0..child_count`) unconditionally. The paint driver's box-child
-/// dispatch (`crates/flui-rendering/src/pipeline/owner/paint.rs`) has the
-/// identical shape the pre-fix `hit_test` walk had: it reads
-/// `child_node.offset()`/size with no laid-out-this-frame gate for box-typed
-/// children — the `geometry.visible` cull a few lines above it only applies
-/// to sliver-typed children. An out-of-band tile that was genuinely laid out
-/// on an EARLIER pass carries a real (non-zero) committed size, so it would
-/// still get painted at its stale position — a visible, not just
-/// hit-testable, symptom.
-///
-/// 15 single-column tiles, tile10 painted blue (every other tile red) so its
-/// presence in the frame's picture is unambiguous regardless of exact
-/// on-screen position — this test does not need the row0/row10 coordinate
-/// collision the hit-test regression above constructs; it only needs tile10
-/// to be genuinely in-band once (so it has real, non-zero geometry to
-/// mistakenly repaint) and then genuinely out-of-band.
-#[test]
-fn harness_render_sliver_grid_paint_ignores_stale_out_of_band_tile() {
-    const TILE_LABELS: [&str; 15] = [
-        "tile0", "tile1", "tile2", "tile3", "tile4", "tile5", "tile6", "tile7", "tile8", "tile9",
-        "tile10", "tile11", "tile12", "tile13", "tile14",
-    ];
-    const TILE10_BLUE: &str = "#0000FFFF";
-
-    let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(1).with_main_axis_extent(100.0);
-    let mut run = RenderTester::mount(viewport_with_scroll(
-        1000.0,
-        sliver_node(RenderSliverGrid::new(Arc::new(delegate)))
-            .label("grid")
-            .children(TILE_LABELS.iter().map(|&label| {
-                let tile = if label == "tile10" {
-                    RenderColoredBox::blue(200.0, 100.0)
-                } else {
-                    RenderColoredBox::red(200.0, 100.0)
-                };
-                box_node(tile).label(label)
-            })),
-    ))
-    .with_size(Size::new(px(200.0), px(200.0)))
-    .run_frame();
-
-    // First frame, band [7, 14]: tile10 is genuinely in-band and must paint
-    // (establishes the real, non-zero committed geometry pass 2 must not
-    // repaint from).
-    assert!(
-        commands_of(run.layer_tree())
-            .iter()
-            .any(|c| c.line.contains(TILE10_BLUE)),
-        "tile10 (blue) must paint while genuinely in-band; got: {:#?}",
-        commands_of(run.layer_tree()),
-    );
-
-    // Jump back to the top — band becomes [0, 4]; tile10 falls out of band.
-    let vp_id = run.id("viewport");
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(0.0);
-    });
-    run.pump();
-
-    assert!(
-        commands_of(run.layer_tree())
-            .iter()
-            .all(|c| !c.line.contains(TILE10_BLUE)),
-        "tile10 (blue) is out of band this frame and must not paint at all, \
-         stale-but-real geometry or not; got: {:#?}",
-        commands_of(run.layer_tree()),
-    );
-}
-
-/// Regression for a NARROWER, review-caught defect in the same fix:
-/// `laid_out_band` must be committed as the LAST thing `perform_layout`
-/// does, after the layout and position loops — not right after computing
-/// `first_in_band`/`last_in_band`, before either loop runs. The pipeline
-/// wraps every render object's `perform_layout` call in `catch_unwind`
+/// Regression for a NARROWER, review-caught defect ported from the eager
+/// grid's original fix: what a poisoned relayout must not lose is the
+/// pipeline's committed child offsets and this object's own resident count —
+/// neither rolls back when `perform_layout` is interrupted, both freeze at
+/// whatever the LAST SUCCESSFUL pass left. The pipeline wraps every render
+/// object's `perform_layout` call in `catch_unwind`
 /// (`crates/flui-rendering/src/pipeline/owner/subtree_arena.rs`); if the
-/// caller-supplied `grid_delegate` panics partway through a pass, an EARLY
-/// commit would have already pointed `laid_out_band` at a window whose
-/// offsets that (aborted) pass never got to (re)write — reopening the exact
-/// stale-rect class the fix closes, just from a different trigger.
+/// caller-supplied `grid_delegate` panics partway through a pass, an
+/// interrupted commit would leave stale state pointing at a window the
+/// aborted pass never finished writing.
 ///
 /// `SliverGridLayout::compute_max_scroll_offset` divides by
 /// `cross_axis_count` (`(child_count - 1) / self.cross_axis_count`) with no
@@ -6667,7 +6524,11 @@ fn harness_render_sliver_grid_paint_ignores_stale_out_of_band_tile() {
 /// `SliverGridDelegate` is a public trait implemented by caller code, and
 /// nothing in its contract (or `SliverGridLayout`'s public fields) rules out
 /// a degenerate return value, so this is a real, externally reachable panic
-/// site — not a contrived one.
+/// site — not a contrived one. `RenderSliverGrid::perform_layout` calls it
+/// while computing `scroll_extent`, AFTER the layout loop but BEFORE it
+/// commits `attached_child_count`, so the panic leaves both the resident
+/// count and the committed offsets exactly as the last successful pass left
+/// them.
 #[test]
 fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_relayout() {
     #[derive(Debug)]
@@ -6694,18 +6555,20 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
         }
     }
 
-    // Pass 1: an ordinary 2-column delegate lays out and positions all 4
-    // tiles for real — the "last successful pass" this test's assertions
-    // must survive back to.
+    // Pass 1: an ordinary 2-column delegate over 4 pre-seeded (resident)
+    // tiles lays out and positions all of them for real — the "last
+    // successful pass" this test's assertions must survive back to.
     let mut run = RenderTester::mount(viewport(
-        sliver_node(RenderSliverGrid::new(Arc::new(
-            SliverGridDelegateWithFixedCrossAxisCount::new(2),
-        )))
-        .label("grid")
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"))
-        .child(box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"))
-        .child(box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"))
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3")),
+        grid_list(
+            Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+            vec![
+                box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"),
+                box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"),
+                box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"),
+                box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3"),
+            ],
+        )
+        .label("grid"),
     ))
     .with_size(Size::new(px(200.0), px(200.0)))
     .run_layout();
@@ -6717,23 +6580,19 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
         Offset::new(px(0.0), px(0.0)),
         "pass 1 must position tile0 normally before the poisoned pass 2",
     );
-    let band_before = run.descendant_property("RenderSliverGrid", "laid_out_band");
-    assert!(
-        band_before
-            .as_deref()
-            .is_some_and(|band| band.starts_with("Some(")),
-        "pass 1 must commit a non-empty laid_out_band before the poisoned pass 2; \
-         got {band_before:?}",
+    let count_before = run.descendant_property("RenderSliverGrid", "attached_child_count");
+    assert_eq!(
+        count_before.as_deref(),
+        Some("4"),
+        "pass 1 must commit all 4 residents before the poisoned pass 2; got {count_before:?}",
     );
 
     // Pass 2: swap in the poisoned delegate and relayout directly (not via
     // `LayoutRun::relayout`, which `.expect()`s success on the OVERALL frame
     // — orthogonal to this test, since the pipeline's own per-node
-    // resilience (the same "recovers into a degraded tree" posture
-    // `docs/ROADMAP.md`'s Cross.H documents elsewhere for a sibling
-    // delegate-validation gap) catches this panic and keeps the frame
-    // `Ok`; only THIS render object's own state is at risk, which is what
-    // the rest of this test verifies directly).
+    // resilience catches this panic and keeps the frame `Ok`; only THIS
+    // render object's own state is at risk, which is what the rest of this
+    // test verifies directly).
     run.update::<RenderSliverGrid>(grid_id, |grid| {
         let impact = grid.set_grid_delegate(Arc::new(ZeroCrossAxisCountDelegate));
         assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
@@ -6744,17 +6603,17 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
         "the pipeline's per-node catch_unwind must keep the overall pass Ok even \
          when one render object's delegate panics; got {result:?}",
     );
-    let band_after = run.descendant_property("RenderSliverGrid", "laid_out_band");
+    let count_after = run.descendant_property("RenderSliverGrid", "attached_child_count");
     assert_eq!(
-        band_after, band_before,
-        "the poisoned pass 2 (which never reached its own commit statement) must \
-         leave `laid_out_band` exactly as pass 1 committed it — a change here means \
-         the commit is (again) reachable before the panic point",
+        count_after, count_before,
+        "the poisoned pass 2 (which panics computing scroll_extent before its own \
+         commit statement runs) must leave `attached_child_count` exactly as pass 1 \
+         committed it",
     );
 
-    // tile0's offset must be UNCHANGED from pass 1: the panic in
-    // `compute_max_scroll_offset` fires before either loop in `perform_layout`
-    // runs, so pass 2 never called `ctx.position_child` at all.
+    // tile0's offset must be UNCHANGED from pass 1: the panic fires before
+    // pass 2's position loop runs, so pass 2 never called `ctx.position_child`
+    // at all.
     assert_eq!(
         run.offset(tile0),
         Offset::new(px(0.0), px(0.0)),
@@ -6763,39 +6622,34 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     );
 
     // The actual regression: hit_test must keep resolving against pass 1's
-    // committed band. Committing `laid_out_band` early (right after
-    // computing `first_in_band`/`last_in_band`, before either loop) would
-    // have pointed it at pass 2's `[0, 0]` window — a window pass 2's panic
-    // meant nothing was ever positioned in — leaving hit_test blind to
-    // tile0's still-perfectly-valid rect.
+    // committed state, not a state the poisoned pass never finished writing.
     assert_eq!(
         run.hit_first(50.0, 50.0),
         Some(tile0),
         "hit_test must keep resolving against the LAST SUCCESSFUL pass's \
-         band after a poisoned relayout, not a band the poisoned pass never \
-         finished positioning",
+         state after a poisoned relayout",
     );
 }
 
-/// Regression for a THIRD, review-caught way the same commit can outlive its
-/// offsets — distinct from both a panic (previous test) and the ordinary
-/// windowing case (the first regression test above): a normal, panic-free
+/// Regression for a THIRD, review-caught way committed state can outlive its
+/// offsets — distinct from a panic (previous test): a normal, panic-free
 /// `perform_layout` return whose `SliverGeometry` the PIPELINE ITSELF later
 /// rejects. `SliverProtocol::validate_layout_output`
 /// (`crates/flui-rendering/src/pipeline/owner/subtree_arena.rs`) runs AFTER
 /// this function returns, and only commits this pass's `ctx.position_child`
 /// writes to `RenderState` (a separate step, gated on that validation) when
 /// it passes. A delegate whose `SliverGridLayout` produces a negative extent
-/// (here: `main_axis_stride: -100.0` — a panic-free, ordinary float, not a
-/// NaN — see the delegate's own doc comment for why a NaN or an
-/// out-of-range positive value risks tripping an UNRELATED
-/// `debug_assert!(from <= to)` in `calculate_paint_offset`/
-/// `calculate_cache_offset` first, which would test that debug-assertion
-/// instead of this one) makes `compute_max_scroll_offset` return a negative
-/// `scroll_extent`, which `SliverGeometry::validation_error` rejects on its
-/// own dedicated check. `laid_out_band` must not commit either in that case,
-/// or it would describe a band whose offsets the pipeline silently declined
-/// to write.
+/// (here: `main_axis_stride: -200.0` — a panic-free, ordinary float, not a
+/// NaN — chosen so `main_axis_stride <= 0.0` trips the index helpers' own
+/// zero-guard and keeps the band trivially `[0, 0]`, avoiding an unrelated
+/// `debug_assert!(from <= to)` trip in `calculate_paint_offset`/
+/// `calculate_cache_offset`) makes `compute_max_scroll_offset` return a
+/// negative `scroll_extent`, which `SliverGeometry::validation_error` rejects
+/// on its own dedicated check. That post-return validation gate is generic
+/// across every sliver, so it protects tile0's committed offset here exactly
+/// as it did for the eager grid; `attached_child_count` is unconditional (it
+/// counts arena-resident children, which a rejected geometry does not
+/// change), so it stays at pass 1's value too.
 #[test]
 fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_geometry() {
     #[derive(Debug)]
@@ -6803,31 +6657,6 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
 
     impl SliverGridDelegate for NegativeMainAxisStrideDelegate {
         fn get_layout(&self, _constraints: SliverConstraints) -> SliverGridLayout {
-            // `main_axis_stride <= 0.0` trips `get_min/max_child_index_for_
-            // scroll_offset`'s own zero-guard (both return 0), so the band
-            // stays a trivially valid `[0, 0]` and `get_scroll_offset_of_child`
-            // (no guard of its own) only ever multiplies by a `row` of `0` —
-            // no NaN, no `debug_assert!(from <= to)` trip in
-            // `calculate_paint_offset`/`calculate_cache_offset`. The negative
-            // stride surfaces ONLY in `compute_max_scroll_offset`, whose
-            // result becomes `SliverGeometry::scroll_extent` — finite, just
-            // negative, which `validation_error` rejects on its own, distinct
-            // check (`self.scroll_extent < 0.0`).
-            //
-            // `child_main_axis_extent` stays `100.0` — pass 1's own tile
-            // size — deliberately, NOT `0.0`: tile0 is still index `0`, still
-            // inside pass 2's degenerate `[0, 0]` band, so `perform_layout`'s
-            // layout loop still calls `ctx.layout_box_child(0, ..)` on it.
-            // Each child's OWN size commits immediately when THAT call
-            // returns (it is not deferred the way the PARENT's child-offset
-            // commit is) — unaffected by the parent's later geometry
-            // rejection. A `0.0` here would have re-laid tile0 out to a
-            // genuinely zero-height box, which is real, not stale, and would
-            // then fail this test's own hit-test assertion for an unrelated
-            // reason (a zero-size box is never hit) — a confound this test
-            // must avoid to isolate the ONE thing it verifies: that
-            // `laid_out_band`, not tile0's size, stays consistent with
-            // tile0's (untouched) offset after pass 2 is rejected.
             SliverGridLayout {
                 cross_axis_count: 2,
                 main_axis_stride: -200.0,
@@ -6847,17 +6676,19 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
         }
     }
 
-    // Pass 1: an ordinary 2-column delegate lays out and positions all 4
-    // tiles for real.
+    // Pass 1: an ordinary 2-column delegate over 4 pre-seeded tiles lays out
+    // and positions all of them for real.
     let mut run = RenderTester::mount(viewport(
-        sliver_node(RenderSliverGrid::new(Arc::new(
-            SliverGridDelegateWithFixedCrossAxisCount::new(2),
-        )))
-        .label("grid")
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"))
-        .child(box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"))
-        .child(box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"))
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3")),
+        grid_list(
+            Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+            vec![
+                box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"),
+                box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"),
+                box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"),
+                box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3"),
+            ],
+        )
+        .label("grid"),
     ))
     .with_size(Size::new(px(200.0), px(200.0)))
     .run_layout();
@@ -6869,42 +6700,52 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
         Offset::new(px(0.0), px(0.0)),
         "pass 1 must position tile0 normally before the rejected pass 2",
     );
-    let band_before = run.descendant_property("RenderSliverGrid", "laid_out_band");
-    assert!(
-        band_before
-            .as_deref()
-            .is_some_and(|band| band.starts_with("Some(")),
-        "pass 1 must commit a non-empty laid_out_band before the rejected pass 2; \
-         got {band_before:?}",
+    let count_before = run.descendant_property("RenderSliverGrid", "attached_child_count");
+    assert_eq!(
+        count_before.as_deref(),
+        Some("4"),
+        "pass 1 must commit all 4 residents before the rejected pass 2; got {count_before:?}",
     );
 
     // Pass 2: swap in the negative-scroll-extent-producing delegate and
     // relayout directly (not via `LayoutRun::relayout`, which `.expect()`s
     // success on the OVERALL frame — this render object returns NORMALLY
-    // here, no panic; only the
-    // pipeline's post-return geometry validation rejects it, so whether the
-    // overall pass stays `Ok` is a fact about the pipeline's per-node
-    // resilience, not something this test needs to force one way or the
-    // other to prove its point).
+    // here, no panic; only the pipeline's post-return geometry validation
+    // rejects it).
+    // Between the passes the element tree attaches one more resident (the
+    // window's next tile, index 4), as a service pass would. Pass 2 lays it
+    // out — its own geometry commits in its own walk — but the rejected pass
+    // never commits an offset for it, so it sits at the origin with real
+    // geometry. The hit-test snapshot must not reach it: it is committed only
+    // for a pass whose geometry validates.
+    let late_tile = run
+        .owner_mut()
+        .insert_child_render_object(grid_id, Box::new(RenderColoredBox::green(100.0, 100.0)))
+        .expect("the grid accepts another child");
+    run.owner_mut()
+        .render_tree_mut()
+        .get_mut(late_tile)
+        .expect("just inserted")
+        .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(4)));
     run.update::<RenderSliverGrid>(grid_id, |grid| {
         let impact = grid.set_grid_delegate(Arc::new(NegativeMainAxisStrideDelegate));
         assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
     });
     let _ = run.owner_mut().run_layout();
 
-    let band_after = run.descendant_property("RenderSliverGrid", "laid_out_band");
+    let count_after = run.descendant_property("RenderSliverGrid", "attached_child_count");
     assert_eq!(
-        band_after, band_before,
-        "pass 2's geometry (negative scroll_extent) must fail SliverGeometry::validation_error, \
-         and `laid_out_band` must not commit when the pipeline rejects a pass's geometry \
-         — a change here means the pipeline committed this pass's offsets after all, or \
-         the guard regressed",
+        count_after, count_before,
+        "pass 2's geometry (negative scroll_extent) must fail \
+         SliverGeometry::validation_error, and this render object's resident \
+         count must not change either — a change here means the arena gained \
+         or lost a child, which this scenario never does",
     );
 
     // tile0's offset must be UNCHANGED from pass 1: the pipeline skips its
     // child-offset commit step entirely when geometry validation rejects a
-    // pass, so pass 2's `ctx.position_child` call for tile0 (band [0, 0]
-    // under the degenerate delegate) never actually lands in `RenderState`.
+    // pass, so pass 2's `ctx.position_child` call for tile0 never actually
+    // lands in `RenderState`.
     assert_eq!(
         run.offset(tile0),
         Offset::new(px(0.0), px(0.0)),
@@ -6912,13 +6753,14 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
     );
 
     // The actual regression: hit_test must keep resolving against pass 1's
-    // committed band, not a band whose offsets the pipeline silently
+    // committed offsets, not a pass whose offsets the pipeline silently
     // declined to write because it rejected pass 2's geometry.
     assert_eq!(
         run.hit_first(50.0, 50.0),
         Some(tile0),
-        "hit_test must keep resolving against the LAST VALID pass's band \
-         after a geometry-rejected relayout",
+        "hit_test must keep resolving against the LAST VALID pass's committed \
+         offsets after a geometry-rejected relayout — not the late resident \
+         sitting unpositioned at the origin",
     );
 }
 
@@ -6938,129 +6780,25 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
 // `LayoutRun::update`/`relayout` (`crates/flui-rendering/src/testing/
 // harness.rs`) DOES support mutating and re-laying-out an already-mounted
 // tree — the mechanism itself is not the blocker. The blocker is
-// `RenderSliverGridLazy::perform_layout` (`crates/flui-objects/src/sliver/
-// sliver_grid_lazy.rs`): resident (already-attached, pre-seeded) slots inside
+// `RenderSliverGrid::perform_layout` (`crates/flui-objects/src/sliver/
+// sliver_grid.rs`): resident (already-attached, pre-seeded) slots inside
 // the current window get laid out, and absent slots get a
 // `ctx.request_child_build` — but nothing detaches slots that fall OUTSIDE
 // the window (`ctx.emit_retain_band` only signals the ELEMENT tree's
 // `SparseChildren::retain_band` to evict them later — the render level has
 // no eviction call of its own; only the element tree can retire a slot,
-// which is what prevents an ABA double-remove between the two sides).
-// Since this
-// harness mounts render objects directly with no element tree at all, there
-// is no consumer for that retain-band signal — pre-seeding all 60 children
-// and scrolling would show every one still `.attached` forever, the OPPOSITE
-// of what the oracle asserts. Reproducing the oracle's actual scenario needs
-// a fake render-level child-manager that creates/disposes real `RenderBox`
-// children on demand (Flutter's `TestRenderSliverBoxChildManager`); this
-// harness's `viewport()`/`sliver_node()` builders have no such concept for
-// ANY lazy sliver, grid or list alike — a test-infrastructure gap, not
-// something wrong in `RenderSliverGridLazy`'s own (correct, checked
-// separately by the two hit-test cases in the widget-level port) behavior.
-
-// ── RenderSliverGridLazy ──────────────────────────────────────────────────────
-
-#[test]
-fn harness_render_sliver_grid_lazy_zero_items_reports_zero_geometry() {
-    // Empty source — no build requests should be emitted and the reported
-    // scroll extent must be zero.
-    let grid = RenderSliverGridLazy::new(
-        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
-        0,
-    );
-    let run = RenderTester::mount(viewport(sliver_node(grid).label("lazy_grid")))
-        .with_size(Size::new(px(200.0), px(400.0)))
-        .run_layout();
-
-    assert_eq!(
-        run.sliver_geometry(run.id("lazy_grid")).scroll_extent,
-        0.0,
-        "empty RenderSliverGridLazy must report zero scroll extent",
-    );
-    assert_descendant_properties(
-        &run.diagnostics(),
-        "RenderSliverGridLazy",
-        &["item_count", "attached_child_count"],
-    );
-}
-
-#[test]
-fn harness_render_sliver_grid_lazy_pre_seeded_tiles_lay_out_correctly() {
-    // 4 items, 2 columns, 200×200 viewport → 2 rows of 100×100 tiles.
-    // All 4 tiles are pre-seeded with correct SliverMultiBoxAdaptorParentData so
-    // they are "resident" during layout; no build requests should be emitted.
-    // scroll_extent = compute_max_scroll_offset(4) = 2 rows × 100px = 200px.
-    let grid = RenderSliverGridLazy::new(
-        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
-        4,
-    );
-    let mut run = RenderTester::mount(viewport(
-        sliver_node(grid)
-            .label("lazy_grid")
-            .child(
-                box_node(RenderColoredBox::red(100.0, 100.0))
-                    .label("tile0")
-                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
-                        SliverMultiBoxAdaptorParentData::new(0),
-                    )),
-            )
-            .child(
-                box_node(RenderColoredBox::green(100.0, 100.0))
-                    .label("tile1")
-                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
-                        SliverMultiBoxAdaptorParentData::new(1),
-                    )),
-            )
-            .child(
-                box_node(RenderColoredBox::blue(100.0, 100.0))
-                    .label("tile2")
-                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
-                        SliverMultiBoxAdaptorParentData::new(2),
-                    )),
-            )
-            .child(
-                box_node(RenderColoredBox::red(100.0, 100.0))
-                    .label("tile3")
-                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
-                        SliverMultiBoxAdaptorParentData::new(3),
-                    )),
-            ),
-    ))
-    .with_size(Size::new(px(200.0), px(200.0)))
-    .run_layout();
-
-    // Scroll extent: 2 rows × 100px.
-    assert_eq!(
-        run.sliver_geometry(run.id("lazy_grid")).scroll_extent,
-        200.0,
-        "4 items in a 2-column 100px-tile grid = 2 rows × 100px = 200px scroll extent",
-    );
-
-    // Every tile must receive tight 100×100 constraints from the delegate.
-    assert_eq!(
-        run.box_geometry(run.id("tile0")),
-        Size::new(px(100.0), px(100.0)),
-        "tile0 must be sized 100×100 by the delegate",
-    );
-    assert_eq!(
-        run.box_geometry(run.id("tile2")),
-        Size::new(px(100.0), px(100.0)),
-        "tile2 (second row) must also be 100×100",
-    );
-
-    // All 4 tiles are resident — no build requests should be pending.
-    let pending = run.owner_mut().take_pending_child_requests();
-    assert!(
-        pending.is_empty(),
-        "all tiles are pre-seeded; no build requests should be emitted but got {pending:?}",
-    );
-
-    let tree = run.diagnostics();
-    let grid_diag = tree
-        .find_descendant("RenderSliverGridLazy")
-        .expect("RenderSliverGridLazy must appear in diagnostics");
-    assert_has_committed_geometry(grid_diag);
-}
+// which is what prevents an ABA double-remove between the two sides). Since
+// this harness mounts render objects directly with no element tree at all,
+// there is no consumer for that retain-band signal — pre-seeding all 60
+// children and scrolling would show every one still `.attached` forever,
+// the OPPOSITE of what the oracle asserts. Reproducing the oracle's actual
+// scenario needs a fake render-level child-manager that creates/disposes
+// real `RenderBox` children on demand (Flutter's
+// `TestRenderSliverBoxChildManager`); this harness's
+// `viewport()`/`sliver_node()` builders have no such concept for ANY lazy
+// sliver, grid or list alike — a test-infrastructure gap, not something
+// wrong in `RenderSliverGrid`'s own (correct, checked separately by the two
+// hit-test cases above) behavior.
 
 #[test]
 fn harness_sliver_padding_insets_geometry() {

@@ -10,7 +10,7 @@
 //! object family via one trait, [`LazyMultiBoxRender`]:
 //!
 //! - **Render half** (`flui-objects`): a concrete `RenderSliver` implementor
-//!   (`RenderSliverList`, `RenderSliverGridLazy`, …) — emits build requests via
+//!   (`RenderSliverList`, `RenderSliverGrid`, …) — emits build requests via
 //!   `SliverLayoutContext::request_child_build` for absent slots, and emits
 //!   `emit_retain_band` for eviction.
 //! - **Element half** (this module): [`SliverAdaptorElement<R>`] — registered
@@ -23,7 +23,7 @@
 //! exposes — a per-item extent estimate, a grid delegate, …) and pairing it
 //! with a `pub type Alias = SliverMultiBoxAdaptor<TheRenderObject>;` — no new
 //! manager, behavior, or element type is needed. [`SliverList`] and
-//! [`SliverGridLazy`] are the two production instances today.
+//! [`SliverGrid`] are the two production instances today.
 //!
 //! # Lifecycle
 //!
@@ -55,7 +55,7 @@
 use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
-use flui_objects::{RenderSliverFixedExtentList, RenderSliverGridLazy, RenderSliverList};
+use flui_objects::{RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
     traits::RenderSliver,
@@ -95,9 +95,9 @@ pub(crate) type ItemBuilder = Rc<dyn Fn(usize) -> Option<BoxedView>>;
 /// needed — the crate-private `SliverAdaptorManager<R>` and
 /// `SliverAdaptorBehavior<R>` are generic over any `R: LazyMultiBoxRender`.
 ///
-/// `RenderSliverList` and `RenderSliverGridLazy` (both in `flui-objects`) are
+/// `RenderSliverList` and `RenderSliverGrid` (both in `flui-objects`) are
 /// the two production implementors, paired with the [`SliverList`] and
-/// [`SliverGridLazy`] view aliases respectively.
+/// [`SliverGrid`] view aliases respectively.
 pub trait LazyMultiBoxRender:
     RenderSliver<Arity = Variable, ParentData = SliverMultiBoxAdaptorParentData> + Send + Sync + 'static
 {
@@ -311,8 +311,8 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
 /// owns a crate-private `SliverAdaptorManager<R>` that services
 /// `ChildManager::service` calls post-layout.
 ///
-/// [`SliverList`] and [`SliverGridLazy`] are type aliases over this struct;
-/// their inherent constructors (`SliverList::new`, `SliverGridLazy::new`, …)
+/// [`SliverList`] and [`SliverGrid`] are type aliases over this struct;
+/// their inherent constructors (`SliverList::new`, `SliverGrid::new`, …)
 /// live in their own `impl` blocks below.
 ///
 /// # Invariant: no dense children
@@ -374,7 +374,7 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
     /// This is how a render object outside this crate joins the lazy child
     /// lifecycle — implement the trait, construct the adaptor, and the
     /// element tree builds, retains, evicts and reconciles its children
-    /// exactly as it does for [`SliverList`] and [`SliverGridLazy`]. (The
+    /// exactly as it does for [`SliverList`] and [`SliverGrid`]. (The
     /// aliases keep their own `new`; an inherent `new` on the generic type
     /// would collide with them.)
     #[must_use]
@@ -1112,16 +1112,16 @@ impl SliverList {
 }
 
 // ============================================================================
-// SLIVER GRID LAZY — RenderSliverGridLazy as a LazyMultiBoxRender
+// SLIVER GRID — RenderSliverGrid as a LazyMultiBoxRender
 // ============================================================================
 
-impl LazyMultiBoxRender for RenderSliverGridLazy {
+impl LazyMultiBoxRender for RenderSliverGrid {
     type Config = Arc<dyn flui_rendering::delegates::SliverGridDelegate>;
 
-    const KIND: &'static str = "SliverGridLazy";
+    const KIND: &'static str = "SliverGrid";
 
     fn create(config: &Self::Config, item_count: usize) -> Self {
-        RenderSliverGridLazy::new(Arc::clone(config), item_count)
+        RenderSliverGrid::new(Arc::clone(config), item_count)
     }
 
     fn update(&mut self, config: &Self::Config) -> flui_rendering::RenderUpdateImpact {
@@ -1129,22 +1129,22 @@ impl LazyMultiBoxRender for RenderSliverGridLazy {
     }
 
     fn item_count(&self) -> usize {
-        RenderSliverGridLazy::item_count(self)
+        RenderSliverGrid::item_count(self)
     }
 
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact {
-        RenderSliverGridLazy::set_item_count(self, item_count)
+        RenderSliverGrid::set_item_count(self, item_count)
     }
 }
 
-/// The canonical lazy-grid adaptor over [`RenderSliverGridLazy`].
+/// The canonical lazy-grid adaptor over [`RenderSliverGrid`].
 ///
 /// See [`SliverMultiBoxAdaptor`]'s type-level doc for the shared lifecycle;
 /// this alias's own constructor below is the public surface `flui-widgets`'
 /// `GridView` builds on.
-pub type SliverGridLazy = SliverMultiBoxAdaptor<RenderSliverGridLazy>;
+pub type SliverGrid = SliverMultiBoxAdaptor<RenderSliverGrid>;
 
-impl SliverGridLazy {
+impl SliverGrid {
     /// Constructs a new lazy-grid view configuration.
     pub fn new(
         grid_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
@@ -1662,12 +1662,9 @@ mod tests {
         }
     }
 
-    /// Construct a bare `SliverAdaptorManager<RenderSliverGridLazy>` for
+    /// Construct a bare `SliverAdaptorManager<RenderSliverGrid>` for
     /// direct unit-testing (bypassing the behavior's `on_mount` wiring).
-    fn grid_manager(
-        host: ElementId,
-        item_count: usize,
-    ) -> SliverAdaptorManager<RenderSliverGridLazy> {
+    fn grid_manager(host: ElementId, item_count: usize) -> SliverAdaptorManager<RenderSliverGrid> {
         SliverAdaptorManager {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
@@ -1903,7 +1900,7 @@ mod tests {
     // =========================================================================
     // `needs_resident_refresh` → `refresh_resident`: the grid sister fix.
     // Mirrors the two `refresh_resident_*` tests above exactly, driving
-    // `SliverAdaptorManager<RenderSliverGridLazy>::service` instead of the
+    // `SliverAdaptorManager<RenderSliverGrid>::service` instead of the
     // list manager's — confirming by construction that the shared, generic
     // manager behaves identically for both render families.
     // =========================================================================

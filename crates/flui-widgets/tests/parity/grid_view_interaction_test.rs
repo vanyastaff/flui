@@ -518,13 +518,19 @@ fn tap_text(laid: &LaidOut, text: &str) {
 /// The scroll-jump geometry test below (case 5,
 /// [`grid_view_extent_horizontal_large_scroll_jump_tile_geometry_and_onstage_band`])
 /// no longer needs it and uses a raw `jump_to` instead: it runs through
-/// `GridView::builder` (the element-owned LAZY path, `RenderSliverGridLazy`
-/// — this file's Finding 1 only describes the eager list-of-children
-/// constructors), whose out-of-band children are genuinely evicted from the
-/// render tree each pass (`SparseChildren::retain_band`,
+/// `GridView::builder`, whose out-of-band children are genuinely evicted from
+/// the render tree each pass (`SparseChildren::retain_band`,
 /// `crates/flui-view/src/element/sparse_children.rs`) rather than left
 /// stale — an evicted child has no geometry to misread at all, so neither
 /// half of this helper's problem statement applies there.
+///
+/// Since ADR-0053 unified `GridView::count`/`GridView::extent` onto the same
+/// request-strategy adaptor `GridView::builder` uses, `service`
+/// (`crates/flui-view/src/element/sliver_adaptor.rs`) evicts by the same
+/// `retain_band` call regardless of whether the children came from a builder
+/// closure or `StaticChildren` — so the `.count`/`.extent` control tests
+/// above may no longer need this sweep either; that has not been verified
+/// here, and removing it is a separate, un-taken follow-up, not assumed.
 fn jump_to_swept(laid: &mut LaidOut, controller: &ScrollController, target: f32) {
     const STEP: f32 = 100.0; // comfortably under the 250px cache extent
     loop {
@@ -753,8 +759,8 @@ fn grid_view_extent_control_test_taps_route_by_position_across_scroll() {
 ///
 /// Scrolls via a raw one-shot `ScrollController::jump_to` (not
 /// [`jump_to_swept`] — see that helper's doc for why this case is exempt:
-/// the LAZY (`RenderSliverGridLazy`) path genuinely evicts out-of-band
-/// children instead of leaving them stale).
+/// the request-strategy grid genuinely evicts out-of-band children instead
+/// of leaving them stale).
 #[test]
 fn grid_view_extent_horizontal_large_scroll_jump_tile_geometry_and_onstage_band() {
     let delegate: Arc<dyn SliverGridDelegate> = Arc::new(
@@ -988,7 +994,14 @@ fn grid_view_one_line_paints_only_onstage_tiles() {
     let laid = harness::pump_widget(root, harness::screen());
 
     let tiles = laid.find_all_by_render_type("RenderDecoratedBox");
-    assert_eq!(tiles.len(), 4, "all 4 tiles must be mounted (eager path)");
+    assert_eq!(
+        tiles.len(),
+        4,
+        "all 4 tiles must be mounted: row 1 (top edge y=400) still sits inside \
+         the default 250px cache band past the 200px viewport (y=0..450), so \
+         both rows are in the resident window — not because the grid mounts \
+         every child regardless of position",
+    );
 
     // `Center` fills its own incoming (600px) height and centers the 200px
     // `SizedBox` inside it, so the viewport's on-screen band starts at
@@ -1052,7 +1065,13 @@ fn grid_view_in_zero_context_renders_no_onstage_children() {
 /// end as "no upper bound" the way `sliver_grid.dart:608-610` does, the cell
 /// arithmetic overflowed, and pipeline resilience recovered into a zero-height
 /// viewport. With that guard in place the oracle's expectation holds directly,
-/// so the pair collapses back into this single real-green case.
+/// so the pair collapses back into this single real-green case. Since
+/// ADR-0053 unified `GridView::count` onto the request-strategy adaptor, all
+/// 20 items still materialize here (not just an in-band subset): an
+/// unbounded main-axis window lays out to the end regardless of declared
+/// count (Flutter-equal — `targetLastIndex == null` — and true of 20, far
+/// below the sentinel `MAX_UNBOUNDED_WINDOW_CHILDREN` threshold that would
+/// otherwise truncate it).
 #[test]
 fn grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
     let children: Vec<BoxedView> = (0..20).map(|i| Text::new(format!("{i}")).boxed()).collect();
@@ -1073,10 +1092,12 @@ fn grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
 ///
 /// Flutter needs one test here because one `RenderSliverGrid` serves both
 /// constructors — `.count` and `.builder` differ only in their child
-/// delegate. FLUI splits that render object in two (eager
-/// `RenderSliverGrid`, lazy `RenderSliverGridLazy`), so the oracle's single
-/// case needs two tests to cover, and the fix that retired the pin above
-/// left this half producing the identical 800x0 collapse.
+/// delegate, and since ADR-0053 the same is true of FLUI's `RenderSliverGrid`
+/// (`.count` now routes over the same request-strategy object `.builder`
+/// does). This file still ports the oracle's single case as two tests, one
+/// per constructor, since each exercises a different child-provision path
+/// even though both drive the identical render object; the fix that retired
+/// the pin above left this half producing the identical 800x0 collapse.
 #[test]
 fn grid_view_builder_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
     let delegate: Arc<dyn SliverGridDelegate> =

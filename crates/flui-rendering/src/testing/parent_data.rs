@@ -36,7 +36,7 @@ pub enum ParentDataSeed {
     /// [`SliverPhysicalParentData`] for single-child sliver adapters.
     SliverPhysical(SliverPhysicalParentData),
     /// [`SliverMultiBoxAdaptorParentData`] for [`RenderSliverList`] and
-    /// `RenderSliverGridLazy` children — stamps the logical index so the
+    /// `RenderSliverGrid` children — stamps the logical index so the
     /// virtualizer band walk can find the child in `logical_to_slot`.
     ///
     /// [`RenderSliverList`]: crate::traits::RenderSliver
