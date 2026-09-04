@@ -35,6 +35,39 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Layout marks semantics, but only while an accessibility client is attached
+
+**Rule:** Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in *both* of
+`RenderObject`'s layout entry points (`rendering/object.dart`, `layoutWithoutResize` and
+`layout`), unconditionally. Every node that lays out re-publishes its semantics geometry, which
+is what makes a scroll update the accessibility tree at all: a viewport's offset listener
+requests layout and nothing else.
+
+**Choice:** the same pairing, expressed as one drain per layout walk instead of a call per
+object (`SubtreeArena::laid_out_for_semantics` → `PipelineOwner::mark_needs_semantics` in
+`layout_dirty_root`), and **gated on semantics being enabled when the walk began**. With no
+accessibility client attached, nothing is recorded and nothing is marked.
+
+**Alternatives considered:** (a) reuse the existing `laid_out` list, which already drives
+`mark_needs_paint` — rejected, it filters to repaint boundaries, and a node's semantics rect
+moves whether or not it is one; (b) record unconditionally, as the reference does — rejected,
+recording every laid-out node is exactly what the boundary filter exists to avoid (it measured
+~5% on `layout/flat/1000`), and `mark_needs_semantics` discards every id when semantics is off,
+so the whole cost would buy nothing in the ordinary case.
+
+**Trade-off accepted:** one extra `bool` test per laid-out node when accessibility is off, and
+the reference's full cost when it is on — every laid-out node joins the semantics queue and the
+graft re-assembles each marked anchor. That on-cost is **not measured here**; Flutter pays it
+unconditionally, which is an argument that it is affordable, not proof. Reading the flag once at
+arena construction is sound because semantics cannot be toggled mid-walk — enabling it goes
+through `&mut PipelineOwner`.
+
+**Replacement test:** `scrolling_republishes_the_semantics_rects`
+(`crates/flui-widgets/tests/semantics.rs`). It scrolls a viewport whose rows are *all* inside the
+cache band, so the frame materialises nothing new, and asserts on a build counter that no row
+rebuilt — without that assertion the test measures a newly-built row's own semantics mark and
+passes with the change reverted, which the first draft did.
+
 ### The hit-test path is driver-owned; the protocol carries no result accumulator
 
 **Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — a contract may be improved, and an

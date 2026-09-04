@@ -193,3 +193,108 @@ fn clip_rect_narrows_the_semantics_rect_of_the_content_it_clips() {
         "an unclipped ClipRect narrows nothing",
     );
 }
+
+/// Scrolling must move the published semantics rects.
+///
+/// A scroll is a layout event and nothing else — the viewport's offset
+/// listener calls `mark_needs_layout` and no element rebuilds (see
+/// `crates/flui-objects/src/sliver/viewport.rs`). So unless layout itself
+/// marks semantics, `run_semantics` finds nothing pending, publishes no
+/// update, and the accessibility tree keeps describing where the content used
+/// to be. Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in
+/// both layout entry points (`rendering/object.dart`) for exactly this reason.
+///
+/// The oracle is the *rect*, not the presence of the node: a stale tree still
+/// answers `find_by_label`, with the old geometry.
+#[test]
+fn scrolling_republishes_the_semantics_rects() {
+    use flui_view::{BoxedView, ViewExt as _};
+    use flui_widgets::{ScrollController, SliverFixedExtentList, Viewport};
+
+    let builds = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let rows: Vec<BoxedView> = (0..2)
+        .map(|i| {
+            Semantics::new()
+                .container(true)
+                .label(format!("row {i}"))
+                .child(RowBody {
+                    builds: std::sync::Arc::clone(&builds),
+                })
+                .boxed()
+        })
+        .collect();
+
+    // A `Viewport` in position mode: `set_pixels` writes the shared
+    // `ScrollPosition` the render object holds, so the offset listener marks
+    // it needing layout and no element rebuilds. `CustomScrollView::offset`
+    // would take the other path — a new view configuration, which rebuilds —
+    // and could not tell this defect apart.
+    // Two 100 px rows in a 100 px viewport with the default 250 px cache
+    // extent: both are inside the band from the first frame and stay there, so
+    // the scroll below materialises nothing new. That is the whole point — a
+    // scroll that builds a row would mark THAT row's semantics through
+    // `apply_render_update_impact`, and the graft would refresh its moved
+    // siblings for free, hiding the gap.
+    let controller = ScrollController::new();
+    controller.update_dimensions(100.0, 0.0, 100.0);
+    let mut laid = lay_out(
+        Viewport::new((SliverFixedExtentList::new(100.0, rows),)).position(controller.position()),
+        crate::common::tight(200.0, 100.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let top_of = |laid: &crate::common::LaidOut, label: &str| -> f32 {
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"))
+            .bounds()
+            .expect("a laid-out row carries bounds")
+            .y0 as f32
+    };
+
+    let before = top_of(&laid, "row 1");
+    assert_eq!(before, 100.0, "row 1 starts one row down");
+
+    // Scroll by one row, and prove the frame that follows is layout-only:
+    // if any element rebuilt, its `update_render_object` could mark semantics
+    // by itself and this test would be measuring that instead.
+    let builds_before = builds.load(std::sync::atomic::Ordering::SeqCst);
+    controller.set_pixels(50.0);
+    laid.tick();
+    assert_eq!(
+        builds.load(std::sync::atomic::Ordering::SeqCst),
+        builds_before,
+        "the scroll frame must rebuild no row, or this test is measuring a \
+         rebuild's own semantics mark rather than layout's"
+    );
+
+    let after = top_of(&laid, "row 1");
+    assert_eq!(
+        after, 50.0,
+        "a 50 px scroll moves row 1 from 100 to 50; a semantics tree that \
+         layout never re-marked would still report {before}"
+    );
+}
+
+/// A row body that counts its builds, so a scroll test can prove its frame
+/// rebuilt nothing.
+#[derive(Clone)]
+struct RowBody {
+    builds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl flui_view::view::StatelessView for RowBody {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        self.builds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        SizedBox::new(200.0, 100.0)
+    }
+}
+
+impl flui_view::View for RowBody {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}

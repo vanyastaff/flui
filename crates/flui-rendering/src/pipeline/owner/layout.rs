@@ -449,10 +449,14 @@ impl PipelineOwner<Layout> {
         // `subtree_arena::SubtreeArena`; this call site is safe.  The arena
         // also borrows the poison table read-only for the walk so poisoned
         // nodes are skipped in place.
+        // Read before the `&mut self.render_tree` borrow below. Semantics
+        // cannot be toggled mid-walk — enabling it needs `&mut PipelineOwner`.
+        let record_for_semantics = self.semantics_enabled();
         let arena = SubtreeArena::from_tree(
             &mut self.render_tree,
             id,
             &self.layout_poison,
+            record_for_semantics,
             #[cfg(any(test, feature = "testing"))]
             &self.parent_data_seeds,
         )?;
@@ -471,6 +475,7 @@ impl PipelineOwner<Layout> {
         let layout_failures = arena.take_layout_failures();
         let layout_successes = arena.take_layout_successes();
         let laid_out = arena.take_laid_out();
+        let laid_out_for_semantics = arena.take_laid_out_for_semantics();
         drop(arena);
 
         // Flutter marks needs-paint per object at the end of
@@ -479,6 +484,18 @@ impl PipelineOwner<Layout> {
         // covered by `mark_needs_paint` finding its enclosing boundary.
         for id in laid_out {
             self.mark_needs_paint(id);
+        }
+
+        // Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in
+        // both of `RenderObject`'s layout entry points, so a node that lays out
+        // re-publishes its semantics geometry — which is what makes a scroll
+        // update the accessibility tree at all, since the viewport's offset
+        // listener requests layout and nothing else. Same rule here, applied
+        // once per walk. The list is empty unless semantics was enabled when
+        // the walk began, so a session with no accessibility client attached
+        // pays nothing for it.
+        for id in laid_out_for_semantics {
+            self.mark_needs_semantics(id);
         }
 
         // Poison bookkeeping for the walk's descendant failures/successes.
