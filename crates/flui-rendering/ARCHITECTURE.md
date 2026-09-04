@@ -83,6 +83,68 @@ the assertion fails the moment one is added without revisiting this entry. Plus
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 (`crates/flui-objects/tests/render_object_harness.rs`), including that an unchanged index requests
 no semantics update.
+### A layout stamps the children it laid out; paint and hit-test skip the rest
+
+**Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's
+band, anything virtualised — leaves the rest holding an offset and a size from an earlier pass.
+Flutter's slivers keep the discipline per object: `RenderSliverMultiBoxAdaptor` tracks its own
+child list and paints only what it laid out.
+
+**Choice:** the pipeline enforces it instead. A layout advances its own `layout_generation` and
+stamps it onto every child it laid out (`placed_generation`); the paint driver and the hit-test
+walk skip any child carrying a different value. Every multi-child object gets the property
+whether or not it remembered to ask for one.
+
+**Why it cannot live in the render object:** `PaintCx` exposes neither parent data nor a child's
+logical index, so an object cannot tell paint which of its children this pass placed. That is why
+the now-deleted eager grid carried a `laid_out_band` field of its own and why the lazy slivers
+still rely on the frame evicting out-of-band residents before paint runs (ADR-0017's amendment) —
+each a per-object workaround for a property the pipeline can hold once.
+
+**Three constraints the implementation found, each of which broke a real test:**
+
+1. The stamp keys on `layout_child`, **not** `position_child`. Twelve single-child proxies
+   (`Opacity`, `RepaintBoundary`, `Transform`, …) lay their child out and never position it,
+   because the offset is implicitly zero; gating on positioning drops every one from paint.
+2. The generation advances at the layout **commit**, not at layout entry. Advancing at entry lets
+   any early return in between — a protocol error, a poisoned descendant — move the parent forward
+   while stamping nobody, which unplaces every child and takes the subtree off screen.
+3. The stamp carries the **parent's identity** as well as its counter. The counter is per-parent,
+   so every parent that has laid out N times has issued the number N, and a `GlobalKey` relocation
+   makes the collision reachable: a child stamped `2` by parent A, reparented onto a B that has
+   never laid out, would pass B's first real layout — which also reaches `2` — despite B having
+   laid out nothing, and would then paint at A's offset.
+4. `placed_generation` starts equal to a parent's initial `layout_generation`, so a child whose
+   parent has not laid anything out **yet** counts as placed. The gate may only remove a child a
+   parent demonstrably *stopped* laying out; absent evidence it paints. Without this, any parent
+   that never lays out its children — served from cache, or laying out by a path of its own —
+   hides its whole subtree.
+
+Marked paths: box `layout_child`/`position_child` (typed and erased), sliver the same, and both
+cross-protocol methods (`layout_sliver_child` on the box side, `layout_box_child` on the sliver
+side). The last two were found by test failures, not by reading.
+
+**Semantics is deliberately NOT gated.** The same rule there drops a child's *content*, not
+merely its stale rect: `harness_merge_semantics_collapses_descendant_boundaries` loses a
+descendant's `is_button` when its parent stops laying it out, because a merge folds configuration
+regardless of geometry. Excluding a stale *rect* and excluding a stale *label* are different
+trades, and the second needs its own decision rather than inheriting this one. Tracked on #834.
+
+**A skip must drop the cached output too.** `run_paint`'s residue scan clears the dirty flag of
+any node the descent did not reach — it has always done that, with a warning, for multi-root and
+detached subtrees — and this gate makes a third case reach it: a child that received a paint-only
+update while unplaced. Clearing the flag while keeping the node's retained capture is what makes
+that lossy, because a child placed again under unchanged constraints short-circuits its own layout
+and requeues nothing, so the stale capture is grafted and the update is gone for good. The scan
+now evicts the capture alongside the flag, which also closes the pre-existing detached-subtree
+case it had only been warning about.
+
+**Replacement tests:** `a_child_dropped_from_a_later_layout_pass_stops_painting`,
+`…_stops_being_hit`, and `a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture`
+(`crates/flui-rendering/tests/placed_generation_gate.rs`), each verified red with its own change
+reverted. Both need **two frames**: a child never laid out at all has size zero
+and paints nothing regardless, so a single-frame version passes with the gate removed — which the
+first draft did. `FrameRun::run_frame_again` is added for it.
 
 ### Layout marks semantics once per walk, at the dirty root
 

@@ -88,6 +88,7 @@
 //! ```
 
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // NOTE: `OnceCell` was previously imported here for `geometry`/`constraints`
 // write-once semantics; both fields moved to `Option<T>` so the import is
@@ -197,6 +198,58 @@ pub struct RenderState<P: Protocol> {
     /// Set by parent during layout, read during paint and hit testing.
     offset: AtomicOffset,
 
+    /// Bumped every time this node is laid out for real — past the
+    /// short-circuit, so a node whose cached geometry was reused does not
+    /// advance.
+    ///
+    /// Paired with [`placed_generation`](Self::placed_generation) on this
+    /// node's children: a child is part of this pass's layout exactly when its
+    /// `placed_generation` equals this value. **Paint and hit-test** read that
+    /// comparison and skip the rest.
+    ///
+    /// Starts at 1, the same value [`placed_generation`](Self::placed_generation)
+    /// starts at, so an untouched parent and its untouched children agree —
+    /// see that field for why "no evidence" has to mean "placed". The first
+    /// real layout advances this to 2 and stamps the children it laid out,
+    /// which is the first moment the two can differ.
+    layout_generation: AtomicU64,
+
+    /// The parent's [`layout_generation`](Self::layout_generation) at the last
+    /// pass that laid this node out as one of its children.
+    ///
+    /// Starts at 1, matching a parent's initial `layout_generation`, so a node
+    /// whose parent has not laid anything out **yet** counts as placed. The
+    /// gate must only ever remove a child a parent demonstrably *stopped*
+    /// laying out; absent evidence it paints, which is the behaviour that
+    /// preceded it. A parent that never lays out its children at all — served
+    /// entirely from cache, or laying out through some path of its own — would
+    /// otherwise take its whole subtree off the screen.
+    ///
+    /// Meaningful only together with [`placed_by`](Self::placed_by): the
+    /// counter is per-parent, so the same number is issued by every parent
+    /// that has laid out the same number of times, and a child reparented
+    /// between two of them would match on the number alone.
+    ///
+    /// **Semantics is deliberately not gated on this.** The same rule there
+    /// drops a child's *content*, not merely its stale rect: a merge folds a
+    /// descendant's configuration regardless of geometry, so excluding an
+    /// unplaced child loses its label and role as well as its position.
+    /// Excluding a stale rect and excluding a stale label are different
+    /// trades; the second needs its own decision. Tracked on issue #834.
+    placed_generation: AtomicU64,
+
+    /// The [`RenderId`](flui_foundation::RenderId) of the parent that issued
+    /// [`placed_generation`](Self::placed_generation), as a raw `u64`; `0`
+    /// when nothing has stamped this node.
+    ///
+    /// Without it the comparison is a bare number against a per-parent
+    /// counter, and numbers collide across parents. A `GlobalKey` relocation
+    /// makes that reachable rather than theoretical: a child stamped `2` by
+    /// parent A, reparented onto a B that has never laid out, passes B's first
+    /// real layout — which also reaches `2` — even though B laid out nothing.
+    /// It would then paint and hit-test at A's offset.
+    placed_by: AtomicU64,
+
     /// Per-node layout calculation cache (Flutter `_LayoutCacheStorage`):
     /// memoized intrinsic dimensions / dry layout / dry baselines.
     /// Cleared by `mark_needs_layout`; a non-empty clear escalates the
@@ -249,6 +302,9 @@ impl<P: Protocol> RenderState<P> {
             geometry: None,
             constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
+            layout_generation: AtomicU64::new(1),
+            placed_generation: AtomicU64::new(1),
+            placed_by: AtomicU64::new(0),
             layout_cache: P::LayoutCache::default(),
             parent_data: None,
             _phantom: PhantomData,
@@ -273,6 +329,9 @@ impl<P: Protocol> RenderState<P> {
             geometry: None,
             constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
+            layout_generation: AtomicU64::new(1),
+            placed_generation: AtomicU64::new(1),
+            placed_by: AtomicU64::new(0),
             layout_cache: P::LayoutCache::default(),
             parent_data: None,
             _phantom: PhantomData,
@@ -385,6 +444,9 @@ where
             geometry: self.geometry.clone(),
             constraints: self.constraints.clone(),
             offset: AtomicOffset::new(self.offset.load()),
+            layout_generation: AtomicU64::new(self.layout_generation.load(Ordering::Relaxed)),
+            placed_generation: AtomicU64::new(self.placed_generation.load(Ordering::Relaxed)),
+            placed_by: AtomicU64::new(self.placed_by.load(Ordering::Relaxed)),
             // Memoized results are node-local; a cloned state starts cold.
             layout_cache: P::LayoutCache::default(),
             parent_data: self.parent_data.clone(),

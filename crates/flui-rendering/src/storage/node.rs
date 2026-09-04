@@ -770,6 +770,35 @@ impl RenderNode {
         with_entry!(self, entry => entry.state().set_offset(offset));
     }
 
+    /// This node's current layout generation — see
+    /// `RenderState::layout_generation`.
+    #[inline]
+    pub fn layout_generation(&self) -> u64 {
+        with_entry!(self, entry => entry.state().layout_generation())
+    }
+
+    /// Advance to a fresh layout generation and return it — see
+    /// `RenderState::advance_layout_generation` for why this belongs at the
+    /// commit rather than at layout entry.
+    #[inline]
+    pub fn advance_layout_generation(&self) -> u64 {
+        with_entry!(self, entry => entry.state().advance_layout_generation())
+    }
+
+    /// Record that `parent` laid this node out during its `parent_generation`
+    /// pass — see `RenderState::set_placed_by` for why both halves are stored.
+    #[inline]
+    pub fn set_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) {
+        with_entry!(self, entry => entry.state().set_placed_by(parent, parent_generation));
+    }
+
+    /// Whether this node was laid out as a child during the parent's current
+    /// pass — see `RenderState::was_placed_by`.
+    #[inline]
+    pub fn was_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) -> bool {
+        with_entry!(self, entry => entry.state().was_placed_by(parent, parent_generation))
+    }
+
     /// Returns the size for Box protocol nodes (None for Sliver nodes).
     pub fn size(&self) -> Option<flui_types::Size> {
         match self {

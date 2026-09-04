@@ -159,10 +159,35 @@ impl PipelineOwner<PaintPhase> {
                 tracing::warn!(
                     id = ?dirty_node.id,
                     depth = dirty_node.depth,
-                    "run_paint: dirty node not reached by root descent (multi-root \
-                     or detached subtree?); paint dropped, flag cleared"
+                    "run_paint: dirty node not reached by root descent (multi-root, \
+                     detached subtree, or a child its parent stopped laying out); \
+                     paint dropped, flag cleared, retained capture evicted"
                 );
                 render_node.clear_needs_paint();
+                // Dropping the invalidation must drop the cached output with
+                // it. `mark_needs_paint` stops at the nearest established
+                // boundary, so a node in this list IS one, and leaving its
+                // capture behind means the next frame that reaches it grafts
+                // output that was already known to be stale — the flag that
+                // would have forced a repaint has just been cleared here.
+                //
+                // Reachable through the placed-generation gate above: a child
+                // its parent stopped laying out is skipped, so a paint-only
+                // update it received while unplaced lands in this scan. If the
+                // parent later places it again with unchanged constraints its
+                // layout short-circuits and requeues nothing, and without this
+                // eviction the stale capture would be grafted.
+                self.retained_boundaries.remove(&dirty_node.id);
+                // …and every capture that EMBEDS it. `mark_needs_paint` stops
+                // at the nearest established boundary, so an enclosing one is
+                // clean by construction, and its capture replays this
+                // boundary's old layers wholesale. The graft-time
+                // `nested_boundaries` check that normally prevents that reuse
+                // is keyed on the inner boundary still being dirty — which the
+                // clear above has just undone, so the check can no longer
+                // fire and the eviction has to stand in for it.
+                self.retained_boundaries
+                    .retain(|_, subtree| !subtree.nested_boundaries.contains(&dirty_node.id));
             }
         }
         // `clear()` retains capacity (preserve Vec backing across frames).
@@ -222,6 +247,10 @@ impl PipelineOwner<PaintPhase> {
         let layer_blend = render_node.paint_layer_blend();
         let transform = render_node.paint_transform();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
+        // The generation this node's most recent layout stamped onto the
+        // children it laid out; a child carrying anything else was not part of
+        // that pass and is skipped at the splice below.
+        let parent_generation = render_node.layout_generation();
 
         // Written unconditionally PRE-paint (Flutter object.dart:3560):
         // a node flipping boundary→non-boundary leaves exactly one
@@ -355,6 +384,19 @@ impl PipelineOwner<PaintPhase> {
                     let Some(child_node) = self.render_tree.get(child_id) else {
                         continue;
                     };
+                    // Skip a child this pass did not lay out. Its committed
+                    // offset describes a pass that no longer holds — a lazy
+                    // sliver's out-of-band resident is the case that makes it
+                    // visible — and painting it there puts content where
+                    // nothing is. `parent_generation` is the parent's current
+                    // layout generation; a child it laid out was stamped with
+                    // that value at the layout commit.
+                    //
+                    // Hit-test reads the same stamp; semantics deliberately
+                    // does NOT — see `RenderState::placed_generation`.
+                    if !child_node.was_placed_by(node_id, parent_generation) {
+                        continue;
+                    }
                     if child_node
                         .as_sliver()
                         .and_then(|entry| entry.state().geometry())

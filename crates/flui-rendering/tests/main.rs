@@ -44,10 +44,13 @@ mod layout_dirty_root;
 mod layout_marks_laid_out_boundaries;
 #[path = "layout_offset_commit.rs"]
 mod layout_offset_commit;
+
 #[path = "layout_poison.rs"]
 mod layout_poison;
 #[path = "layout_raw_bridge.rs"]
 mod layout_raw_bridge;
+#[path = "placed_generation_gate.rs"]
+mod placed_generation_gate;
 
 #[path = "retained_boundary_layers.rs"]
 mod retained_boundary_layers;

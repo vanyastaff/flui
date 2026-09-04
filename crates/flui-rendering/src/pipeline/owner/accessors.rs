@@ -588,6 +588,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             };
 
         let children: Vec<RenderId> = node.children().to_vec();
+        // The generation this node's last layout stamped onto the children it
+        // laid out; anything else was not part of that pass.
+        let parent_generation = node.layout_generation();
         let render_object = entry.render_object();
         // Box bounds gate size, resolved from RenderState (geometry's
         // sole owner — 2B field dedup); threaded into hit_test_raw so the
@@ -659,6 +662,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(child_node) = self.render_tree.get(child_id) else {
                 return false;
             };
+            // Skip a child this pass did not lay out, exactly as paint does.
+            // Its committed offset describes a pass that no longer holds, so
+            // hitting it would return something the user cannot see — and
+            // paint already skips it, so allowing the hit would make the two
+            // disagree, which is worse than the stale rect either alone.
+            if !child_node.was_placed_by(id, parent_generation) {
+                return false;
+            }
             // `local_transform` is the object's own FORWARD (paint-direction)
             // transform, accumulated by its ctx-level `push_transform`/
             // `push_offset` calls (`BoxHitTestCtx::composed_transform`).
@@ -941,6 +952,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         }
         let children: Vec<RenderId> = node.children().to_vec();
+        let parent_generation = node.layout_generation();
         let render_object = entry.render_object();
         // Absolute paint size from RenderState — threaded into
         // hit_test_raw for signature uniformity; the sliver hit gate is
@@ -962,6 +974,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(child_node) = self.render_tree.get(child_id) else {
                 return false;
             };
+            // See the box walk: a child this pass did not lay out is skipped,
+            // matching paint so the two cannot disagree about what is there.
+            if !child_node.was_placed_by(id, parent_generation) {
+                return false;
+            }
             // Rule for whether this closure pushes the child's paint offset
             // onto the `HitTestResult` transform stack: push iff the
             // position handed to the child below was moved into the

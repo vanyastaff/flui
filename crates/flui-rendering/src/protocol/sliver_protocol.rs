@@ -183,6 +183,9 @@ pub struct SliverChildState<P: ParentData + Default> {
     pub geometry: SliverGeometry,
     /// Position offset set by parent.
     pub offset: Offset,
+    /// Whether the parent laid this child out during this pass — see the box
+    /// protocol's `ChildState::laid_out_this_pass`, which this mirrors.
+    pub laid_out_this_pass: bool,
     /// Parent data for this child.
     pub parent_data: P,
 }
@@ -194,6 +197,7 @@ impl<P: ParentData + Default> SliverChildState<P> {
             id,
             geometry: SliverGeometry::ZERO,
             offset: Offset::ZERO,
+            laid_out_this_pass: false,
             parent_data: P::default(),
         }
     }
@@ -524,6 +528,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
                     if let Some(children) = children.as_mut()
                         && let Some(child) = children.get_mut(index)
                     {
+                        child.laid_out_this_pass = true;
                         child.geometry = geometry;
                     }
                     return geometry;
@@ -556,6 +561,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
                 if let Some(children) = children.as_mut()
                     && let Some(child) = children.get_mut(index)
                 {
+                    child.laid_out_this_pass = true;
                     child.offset = offset;
                 }
             }
@@ -814,6 +820,9 @@ pub struct ErasedSliverChildState {
     pub geometry: SliverGeometry,
     /// Position offset set by parent.
     pub offset: Offset,
+    /// Whether the parent laid this child out during this pass — see the box
+    /// protocol's `ErasedChildState::laid_out_this_pass`, which this mirrors.
+    pub laid_out_this_pass: bool,
     /// Parent data, created on demand by the typed bridge.
     pub parent_data: Option<Box<dyn ParentData>>,
 }
@@ -825,6 +834,7 @@ impl ErasedSliverChildState {
             id,
             geometry: SliverGeometry::ZERO,
             offset: Offset::ZERO,
+            laid_out_this_pass: false,
             parent_data: None,
         }
     }
@@ -932,6 +942,7 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         };
         let geometry = (self.layout_child_callback)(child_id, constraints);
         if let Some(slot) = self.children.get_mut(index) {
+            slot.laid_out_this_pass = true;
             slot.geometry = geometry;
         }
         geometry
@@ -941,6 +952,13 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         let Some(&child_id) = self.child_ids.get(index) else {
             return Size::ZERO;
         };
+        // A box child of a sliver — `RenderSliverToBoxAdapter`'s child, a
+        // persistent header's. It has no sliver geometry to record, but it was
+        // still laid out this pass, and the paint gate cannot tell the two
+        // reasons for an unmarked slot apart.
+        if let Some(slot) = self.children.get_mut(index) {
+            slot.laid_out_this_pass = true;
+        }
         (self.layout_box_child_callback)(child_id, constraints)
     }
 
@@ -958,6 +976,7 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
 
     fn position_child(&mut self, index: usize, offset: Offset) {
         if let Some(slot) = self.children.get_mut(index) {
+            slot.laid_out_this_pass = true;
             slot.offset = offset;
         }
     }
