@@ -13218,3 +13218,124 @@ fn harness_decorated_box_background_carries_the_anti_alias_flag() {
         "and the default must not: {on:?}",
     );
 }
+
+// ── The placed-generation gate reaches semantics too ──────────────────────
+
+/// Lays out and positions children `0..laid_out`, leaving the rest untouched —
+/// the shape of any virtualising parent, and the only way to observe a child
+/// that a LATER pass stopped laying out.
+#[derive(Debug)]
+struct LaysOutFirstN {
+    laid_out: usize,
+}
+
+impl flui_foundation::Diagnosticable for LaysOutFirstN {}
+
+impl RenderBox for LaysOutFirstN {
+    type Arity = flui_tree::Variable;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_tree::Variable,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> Size {
+        let constraints = *ctx.constraints();
+        let count = ctx.child_count().min(self.laid_out);
+        for i in 0..count {
+            let size = ctx.layout_child(i, constraints);
+            ctx.position_child(i, Offset::new(px(0.0), px(i as f32 * size.height.get())));
+        }
+        constraints.constrain(Size::new(px(100.0), px(100.0)))
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_tree::Variable,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// A child dropped from a later layout pass contributes no semantics.
+///
+/// The third walk, after paint and hit-test. A screen reader sent to a row
+/// that is no longer laid out lands somewhere with nothing on it — worse than
+/// not announcing it, which is what the reference does: Flutter removes an
+/// off-screen or kept-alive child from the render child list, so it publishes
+/// nothing at all.
+///
+/// This gate was deferred once, because `harness_merge_semantics_collapses_
+/// descendant_boundaries` lost a descendant's `is_button` under it. That is no
+/// longer true, and the reason is the point: the stamp now carries the issuing
+/// parent's identity, so a child its parent NEVER laid out reads as placed
+/// (`placed_by == 0`) rather than as skipped. The gate therefore excludes only
+/// children a parent once laid out and then dropped — this case — and leaves
+/// alone the ones it never touched, which is what that harness fixture has.
+#[test]
+fn harness_placed_generation_gate_excludes_a_dropped_child_from_semantics() {
+    let labelled = |label: &str| {
+        box_node(
+            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label(label))
+                .with_container(true),
+        )
+        .child(box_node(RenderSizedBox::new(
+            Some(px(40.0)),
+            Some(px(20.0)),
+        )))
+    };
+
+    let run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 2 })
+            .label("host")
+            .child(labelled("kept"))
+            .child(labelled("dropped")),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    // Pass one lays both out, so the second is stamped and announced. Without
+    // this the second child was never stamped at all, which reads as PLACED —
+    // and the test would pass with the gate reverted, as its first draft did.
+    let host = run.root();
+    let announced_first: Vec<String> = run
+        .semantics_owner()
+        .expect("semantics enabled")
+        .tree()
+        .iter()
+        .filter_map(|(_, node)| node.label().map(ToString::to_string))
+        .collect();
+    assert!(
+        announced_first.iter().any(|l| l.contains("dropped")),
+        "precondition: both rows are announced while both are laid out; got \
+         {announced_first:?}"
+    );
+
+    // Pass two lays out only the first.
+    let run = run.edit_and_run_again::<LaysOutFirstN>(host, |object| object.laid_out = 1);
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let announced: Vec<String> = owner
+        .tree()
+        .iter()
+        .filter_map(|(_, node)| node.label().map(ToString::to_string))
+        .collect();
+
+    assert!(
+        announced.iter().any(|l| l.contains("kept")),
+        "the child this pass laid out is announced; got {announced:?}"
+    );
+    assert!(
+        !announced.iter().any(|l| l.contains("dropped")),
+        "a child this pass did not lay out must not be announced at a rect \
+         from a pass that no longer holds; got {announced:?}"
+    );
+}

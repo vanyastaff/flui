@@ -230,12 +230,16 @@ pub struct RenderState<P: Protocol> {
     /// that has laid out the same number of times, and a child reparented
     /// between two of them would match on the number alone.
     ///
-    /// **Semantics is deliberately not gated on this.** The same rule there
-    /// drops a child's *content*, not merely its stale rect: a merge folds a
-    /// descendant's configuration regardless of geometry, so excluding an
-    /// unplaced child loses its label and role as well as its position.
-    /// Excluding a stale rect and excluding a stale label are different
-    /// trades; the second needs its own decision. Tracked on issue #881.
+    /// **Semantics is gated on this too**, decided separately from paint and
+    /// hit-test because the trade differs: the same rule there drops a child's
+    /// *content*, not merely its stale rect — a merge folds a descendant's
+    /// configuration regardless of geometry, so excluding an unplaced child
+    /// loses its label and role along with its position. That is the correct
+    /// outcome, since a node the parent stopped laying out has no place on
+    /// screen to announce; the alternative is an assistive technology reading
+    /// a row at coordinates nothing occupies. See `ARCHITECTURE.md`'s
+    /// `## Mapping decisions` entry for the reasoning and the Flutter
+    /// comparison.
     placed_generation: AtomicU64,
 
     /// The [`RenderId`](flui_foundation::RenderId) of the parent that issued

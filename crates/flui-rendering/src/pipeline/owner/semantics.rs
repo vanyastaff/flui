@@ -529,10 +529,25 @@ fn build_semantics_fragments_impl(
 
     let mut child_fragments = Vec::with_capacity(node.children().len());
     if !node_excludes_semantics_subtree(node) {
+        // The generation this node's last layout stamped onto the children it
+        // laid out; anything else was not part of that pass.
+        let parent_generation = node.layout_generation();
         for (child_slot, &child_id) in node.children().iter().enumerate() {
             let Some(child) = tree.get(child_id) else {
                 continue;
             };
+            // Skip a child this pass did not lay out, as paint and hit-test
+            // do. Its rect describes a pass that no longer holds, and a screen
+            // reader sent to it lands somewhere with nothing on it — worse
+            // than not announcing the row at all, which is what the reference
+            // does: Flutter removes an off-screen or kept-alive child from the
+            // render child list, so it publishes no semantics whatsoever.
+            //
+            // Announcing it would also make the accessibility tree disagree
+            // with the two walks that already skip it.
+            if !child.was_placed_by(id, parent_generation) {
+                continue;
+            }
             let child_origin = offset_add(origin, child.offset());
             let (local_paint, local_semantics) = child_clips_of(node, origin, child_slot);
             let mut fragments = build_semantics_fragments(
