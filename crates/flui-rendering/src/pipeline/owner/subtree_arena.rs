@@ -1414,7 +1414,7 @@ unsafe fn layout_subtree_borrowed_impl(
             // sliver's out-of-band residents from being painted at an offset
             // no longer describing the tree.
             if cs.laid_out_this_pass {
-                child_node.set_placed_generation(parent_generation);
+                child_node.set_placed_by(id, parent_generation);
             }
         }
     }
@@ -2050,7 +2050,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             // See the box walk's commit: only children this pass laid out are
             // stamped, and paint and hit-test skip the rest.
             if cs.laid_out_this_pass {
-                child_node.set_placed_generation(parent_generation);
+                child_node.set_placed_by(id, parent_generation);
             }
         }
     }

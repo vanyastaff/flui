@@ -384,7 +384,7 @@ impl PipelineOwner<PaintPhase> {
                     //
                     // Hit-test reads the same stamp; semantics deliberately
                     // does NOT — see `RenderState::placed_generation`.
-                    if !child_node.was_placed_by(parent_generation) {
+                    if !child_node.was_placed_by(node_id, parent_generation) {
                         continue;
                     }
                     if child_node

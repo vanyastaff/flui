@@ -785,18 +785,18 @@ impl RenderNode {
         with_entry!(self, entry => entry.state().advance_layout_generation())
     }
 
-    /// Record that `parent_generation` laid this node out as one of its
-    /// children.
+    /// Record that `parent` laid this node out during its `parent_generation`
+    /// pass — see `RenderState::set_placed_by` for why both halves are stored.
     #[inline]
-    pub fn set_placed_generation(&self, parent_generation: u64) {
-        with_entry!(self, entry => entry.state().set_placed_generation(parent_generation));
+    pub fn set_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) {
+        with_entry!(self, entry => entry.state().set_placed_by(parent, parent_generation));
     }
 
     /// Whether this node was laid out as a child during the parent's current
     /// pass — see `RenderState::was_placed_by`.
     #[inline]
-    pub fn was_placed_by(&self, parent_generation: u64) -> bool {
-        with_entry!(self, entry => entry.state().was_placed_by(parent_generation))
+    pub fn was_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) -> bool {
+        with_entry!(self, entry => entry.state().was_placed_by(parent, parent_generation))
     }
 
     /// Returns the size for Box protocol nodes (None for Sliver nodes).

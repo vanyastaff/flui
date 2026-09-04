@@ -667,7 +667,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // hitting it would return something the user cannot see — and
             // paint already skips it, so allowing the hit would make the two
             // disagree, which is worse than the stale rect either alone.
-            if !child_node.was_placed_by(parent_generation) {
+            if !child_node.was_placed_by(id, parent_generation) {
                 return false;
             }
             // `local_transform` is the object's own FORWARD (paint-direction)
@@ -976,7 +976,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             };
             // See the box walk: a child this pass did not lay out is skipped,
             // matching paint so the two cannot disagree about what is there.
-            if !child_node.was_placed_by(parent_generation) {
+            if !child_node.was_placed_by(id, parent_generation) {
                 return false;
             }
             // Rule for whether this closure pushes the child's paint offset

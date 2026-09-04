@@ -100,7 +100,12 @@ each a per-object workaround for a property the pipeline can hold once.
 2. The generation advances at the layout **commit**, not at layout entry. Advancing at entry lets
    any early return in between — a protocol error, a poisoned descendant — move the parent forward
    while stamping nobody, which unplaces every child and takes the subtree off screen.
-3. `placed_generation` starts equal to a parent's initial `layout_generation`, so a child whose
+3. The stamp carries the **parent's identity** as well as its counter. The counter is per-parent,
+   so every parent that has laid out N times has issued the number N, and a `GlobalKey` relocation
+   makes the collision reachable: a child stamped `2` by parent A, reparented onto a B that has
+   never laid out, would pass B's first real layout — which also reaches `2` — despite B having
+   laid out nothing, and would then paint at A's offset.
+4. `placed_generation` starts equal to a parent's initial `layout_generation`, so a child whose
    parent has not laid anything out **yet** counts as placed. The gate may only remove a child a
    parent demonstrably *stopped* laying out; absent evidence it paints. Without this, any parent
    that never lays out its children — served from cache, or laying out by a path of its own —

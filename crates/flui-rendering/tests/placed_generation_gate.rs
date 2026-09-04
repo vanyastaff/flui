@@ -225,3 +225,47 @@ fn a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture() {
         run.display_commands()
     );
 }
+
+/// A stamp from one parent is not accepted by another that reaches the same
+/// number.
+///
+/// The counter is per-parent, so every parent that has laid out N times has
+/// issued the number N. A `GlobalKey` relocation makes the collision reachable
+/// rather than theoretical: a child stamped `2` by parent A, reparented onto a
+/// B that has never laid out, would pass B's first real layout — which also
+/// reaches `2` — even though B laid out nothing, and would then paint at A's
+/// offset.
+///
+/// Simulated directly on the state rather than through a relocation, because
+/// the property is about the comparison and a relocation test would prove it
+/// only for whatever ids that particular tree happened to allocate.
+#[test]
+fn a_stamp_from_one_parent_is_not_accepted_by_another() {
+    let run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 1 })
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .run_layout();
+
+    let parent = run.root();
+    let child = run.id("child");
+    let generation = run
+        .pipeline()
+        .render_tree()
+        .get(parent)
+        .unwrap()
+        .layout_generation();
+
+    let node = run.pipeline().render_tree().get(child).unwrap();
+    assert!(
+        node.was_placed_by(parent, generation),
+        "the real parent's own stamp is accepted"
+    );
+    assert!(
+        !node.was_placed_by(child, generation),
+        "the SAME generation number from a different parent must be rejected — \
+         this is what a GlobalKey reparent onto a parent with an equal counter \
+         would look like"
+    );
+}

@@ -225,6 +225,11 @@ pub struct RenderState<P: Protocol> {
     /// entirely from cache, or laying out through some path of its own — would
     /// otherwise take its whole subtree off the screen.
     ///
+    /// Meaningful only together with [`placed_by`](Self::placed_by): the
+    /// counter is per-parent, so the same number is issued by every parent
+    /// that has laid out the same number of times, and a child reparented
+    /// between two of them would match on the number alone.
+    ///
     /// **Semantics is deliberately not gated on this.** The same rule there
     /// drops a child's *content*, not merely its stale rect: a merge folds a
     /// descendant's configuration regardless of geometry, so excluding an
@@ -232,6 +237,18 @@ pub struct RenderState<P: Protocol> {
     /// Excluding a stale rect and excluding a stale label are different
     /// trades; the second needs its own decision. Tracked on issue #834.
     placed_generation: AtomicU64,
+
+    /// The [`RenderId`](flui_foundation::RenderId) of the parent that issued
+    /// [`placed_generation`](Self::placed_generation), as a raw `u64`; `0`
+    /// when nothing has stamped this node.
+    ///
+    /// Without it the comparison is a bare number against a per-parent
+    /// counter, and numbers collide across parents. A `GlobalKey` relocation
+    /// makes that reachable rather than theoretical: a child stamped `2` by
+    /// parent A, reparented onto a B that has never laid out, passes B's first
+    /// real layout — which also reaches `2` — even though B laid out nothing.
+    /// It would then paint and hit-test at A's offset.
+    placed_by: AtomicU64,
 
     /// Per-node layout calculation cache (Flutter `_LayoutCacheStorage`):
     /// memoized intrinsic dimensions / dry layout / dry baselines.
@@ -287,6 +304,7 @@ impl<P: Protocol> RenderState<P> {
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
             layout_generation: AtomicU64::new(1),
             placed_generation: AtomicU64::new(1),
+            placed_by: AtomicU64::new(0),
             layout_cache: P::LayoutCache::default(),
             parent_data: None,
             _phantom: PhantomData,
@@ -313,6 +331,7 @@ impl<P: Protocol> RenderState<P> {
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
             layout_generation: AtomicU64::new(1),
             placed_generation: AtomicU64::new(1),
+            placed_by: AtomicU64::new(0),
             layout_cache: P::LayoutCache::default(),
             parent_data: None,
             _phantom: PhantomData,
@@ -427,6 +446,7 @@ where
             offset: AtomicOffset::new(self.offset.load()),
             layout_generation: AtomicU64::new(self.layout_generation.load(Ordering::Relaxed)),
             placed_generation: AtomicU64::new(self.placed_generation.load(Ordering::Relaxed)),
+            placed_by: AtomicU64::new(self.placed_by.load(Ordering::Relaxed)),
             // Memoized results are node-local; a cloned state starts cold.
             layout_cache: P::LayoutCache::default(),
             parent_data: self.parent_data.clone(),
