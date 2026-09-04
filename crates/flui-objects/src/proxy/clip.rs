@@ -197,7 +197,9 @@ mod sealed {
 /// `_RenderCustomClip<T>` access control (the parent class is library-
 /// private), preserves engine-level dispatch invariants, and lets the
 /// compiler monomorphise the clip-emission path per shape.
-pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'static {
+pub trait ClipGeometry:
+    sealed::Sealed + Clone + fmt::Debug + PartialEq + Send + Sync + 'static
+{
     /// Flutter-parity diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
     ///
     /// Generic `RenderClip<S>` would otherwise surface as
@@ -465,6 +467,11 @@ pub struct RenderClip<S: ClipGeometry> {
     path_clip_target: Option<PathClipTarget>,
     /// Stable identity of the widget-owned path source currently registered.
     path_clip_source_token: Option<PathClipSourceToken>,
+    /// A caller-supplied clip shape that replaces `S::default_for_size`.
+    ///
+    /// Data, not a callback — see `set_clip_shape` for why that is the right
+    /// shape here and what it does not cover.
+    clip_shape: Option<S>,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
     /// Keeps the generic shape parameter part of the render object's type even
@@ -481,6 +488,7 @@ impl<S: ClipGeometry> RenderClip<S> {
             rrect_border_radius: None,
             path_clip_target: None,
             path_clip_source_token: None,
+            clip_shape: None,
             has_child: false,
             shape: PhantomData,
         }
@@ -524,7 +532,58 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// `ctx.own_size()`). The cost is one closure call (or one
     /// `default_for_size` dispatch) per paint/hit-test, which is
     /// negligible relative to the canvas / hit-test work that follows.
+    /// The caller-supplied clip shape, if one replaces the default whole box.
+    #[must_use]
+    pub const fn clip_shape(&self) -> Option<&S> {
+        self.clip_shape.as_ref()
+    }
+
+    /// Replaces the default whole-box clip with a fixed shape.
+    ///
+    /// **Data, not a callback, and that is the whole design.** The reference's
+    /// answer here is `CustomClipper<T>` — an abstract class with `getClip(size)`
+    /// and a hand-written `shouldReclip(old)`. Its own test clipper
+    /// (`ValueClipper` in `clip_test.dart`) holds a fixed `value`, ignores the
+    /// `size` it is handed, and implements `shouldReclip` as
+    /// `oldClipper.value != value`. In Rust that is a field and a `!=`.
+    ///
+    /// What that buys, concretely:
+    ///
+    /// * **No `shouldReclip` to get wrong.** The reference's version needs a
+    ///   downcast that silently degrades to always- or never-reclip if written
+    ///   badly. Here the comparison is the derived `PartialEq` the setter
+    ///   already performs, so a wrong answer is not expressible.
+    /// * **No identity token, so no repaint per rebuild.** A closure cannot be
+    ///   compared, so a closure-based clipper needs an identity the caller has
+    ///   to keep stable across rebuilds — the trap `ClipPath` carries today
+    ///   (issue #856). A value has identity by construction.
+    /// * **`Send + Sync`, so it lives in the render object** rather than in an
+    ///   owner-lane side table resolved at paint time.
+    ///
+    /// **What it does not cover, stated rather than dropped:** a clip that is a
+    /// FUNCTION of the box's size. The reference allows one and no case in its
+    /// own suite uses it. If you need it, `ClipPath::new(|size| …)` takes a
+    /// closure and a path can express any rect or oval, so the capability
+    /// exists — it is these two convenience widgets that do not carry it.
+    pub fn set_clip_shape(&mut self, shape: Option<S>) -> flui_rendering::RenderUpdateImpact {
+        if self.clip_shape == shape {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.clip_shape = shape;
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Builder form of [`set_clip_shape`](Self::set_clip_shape).
+    #[must_use]
+    pub fn with_clip_shape(mut self, shape: S) -> Self {
+        self.clip_shape = Some(shape);
+        self
+    }
+
     fn resolve_clip(&self, size: Size) -> S {
+        if let Some(shape) = &self.clip_shape {
+            return shape.clone();
+        }
         self.rrect_border_radius
             .and_then(|border_radius| S::resolve_rrect_border_radius(border_radius, size))
             .or_else(|| {
@@ -610,6 +669,7 @@ impl<S: ClipGeometry> Clone for RenderClip<S> {
             rrect_border_radius: self.rrect_border_radius,
             path_clip_target: self.path_clip_target,
             path_clip_source_token: self.path_clip_source_token.clone(),
+            clip_shape: self.clip_shape.clone(),
             has_child: self.has_child,
             shape: PhantomData,
         }
@@ -630,6 +690,7 @@ impl<S: ClipGeometry> fmt::Debug for RenderClip<S> {
             )
             .field("has_path_clip_target", &self.path_clip_target.is_some())
             .field("path_clip_source_token", &self.path_clip_source_token)
+            .field("has_clip_shape", &self.clip_shape.is_some())
             .field("has_child", &self.has_child)
             .finish()
     }
@@ -654,7 +715,9 @@ impl<S: ClipGeometry> flui_foundation::Diagnosticable for RenderClip<S> {
         builder.add_enum("clip_behavior", self.clip_behavior);
         builder.add_flag(
             "custom_clipper",
-            self.rrect_border_radius.is_some() || self.path_clip_target.is_some(),
+            self.rrect_border_radius.is_some()
+                || self.path_clip_target.is_some()
+                || self.clip_shape.is_some(),
             "has custom clipper",
         );
     }
