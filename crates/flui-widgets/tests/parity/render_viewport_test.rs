@@ -27,15 +27,12 @@
 //!    to the hit-test result, returning `false` so the walk continues into
 //!    the siblings behind it. FLUI has no equivalent stock sliver, so this
 //!    port defines [`AllOverlapSliver`] directly against `RenderSliver`. Its
-//!    `hit_test` calls `ctx.register_self_hit_entry()` — NOT
-//!    `SliverHitTestCtx::add_self`, which looked like the obvious hook
-//!    (`ctx.inner_mut().add_self(id)`) but writes into a protocol-level
-//!    `SliverHitTestResult` that `hit_test_raw`'s bridge never reads (see the
-//!    long comment on `AllOverlapSliver::hit_test` for the debug trail — a
-//!    shipped-but-unwired seam, left as found since fixing it is a separate
-//!    concern from this port). `register_self_hit_entry` is the mechanism
-//!    the pipeline actually wires (`HitTestContext`'s own doc: models
-//!    `HitTestBehavior::Translucent`), and needs no id — the driver already
+//!    `hit_test` calls `ctx.register_self_hit_entry()`. Writing this port is
+//!    what found issue #844: the `add_self` that looked like the obvious hook
+//!    wrote into a protocol-level `SliverHitTestResult` nothing read, and is
+//!    now deleted along with that whole path. `register_self_hit_entry` is
+//!    the mechanism the pipeline actually wires (`HitTestContext`'s own doc:
+//!    models `HitTestBehavior::Translucent`), and needs no id — the driver already
 //!    knows this node's `RenderId` and builds the `HitTestEntry` itself.
 //!    `HitTestResult::path()` exposes ordered entries with a public
 //!    `target: RenderId` field, so the port reads hit order the same way the

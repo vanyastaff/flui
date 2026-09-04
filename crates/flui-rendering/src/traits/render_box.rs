@@ -147,7 +147,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// - Position via `ctx.position()` or `ctx.x()`, `ctx.y()`
     /// - Bounds checking via `ctx.is_within_size(w, h)`
     /// - Child testing via `ctx.hit_test_child()`, `ctx.hit_test_child_at_layout_offset()`
-    /// - Result management via `ctx.add_hit()`, `ctx.result_mut()`
+    /// - Registering this node as hit via `ctx.register_self_hit_entry()`
     /// - Transform stack via `ctx.push_offset()`, `ctx.push_transform()`
     ///
     /// # Default behavior
@@ -169,7 +169,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ///         return true;
     ///     }
     ///     // This object is the hit target
-    ///     ctx.result_mut().add(HitTestEntry::new(self.id()));
+    ///     ctx.register_self_hit_entry();
     ///     true
     /// }
     /// ```

@@ -28,12 +28,11 @@
 //!     }
 //!
 //!     // Add ourselves as a hit target
-//!     ctx.add_self(self.id());
+//!     ctx.register_self_hit_entry();
 //!     true
 //! }
 //! ```
 
-use flui_foundation::RenderId;
 use flui_tree::Arity;
 use flui_types::{
     Pixels, Size,
@@ -43,8 +42,7 @@ use flui_types::{
 use crate::{
     parent_data::ParentData,
     protocol::{
-        BoxHitTest, BoxHitTestEntry, HitTestCapability, HitTestContextApi, MainAxisPosition,
-        Protocol, SliverHitTest,
+        BoxHitTest, HitTestCapability, HitTestContextApi, MainAxisPosition, Protocol, SliverHitTest,
     },
 };
 
@@ -126,25 +124,6 @@ where
     /// Alias for is_within_bounds for semantic clarity.
     pub fn is_hit(&self, bounds: Rect) -> bool {
         self.inner.is_hit(bounds)
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // RESULT MANAGEMENT
-    // ════════════════════════════════════════════════════════════════════════
-
-    /// Gets the hit test result.
-    pub fn result(&self) -> &<P::HitTest as HitTestCapability>::Result {
-        self.inner.result()
-    }
-
-    /// Gets mutable reference to hit test result.
-    pub fn result_mut(&mut self) -> &mut <P::HitTest as HitTestCapability>::Result {
-        self.inner.result_mut()
-    }
-
-    /// Adds a hit entry to the result.
-    pub fn add_hit(&mut self, entry: <P::HitTest as HitTestCapability>::Entry) {
-        self.inner.add_hit(entry);
     }
 
     /// Requests that the pipeline append this render object to the global
@@ -365,18 +344,6 @@ where
         self.is_within_size(self.own_size.width, self.own_size.height)
     }
 
-    /// Adds self as a hit target with the given render ID.
-    pub fn add_self(&mut self, target_id: RenderId) {
-        self.inner
-            .add_hit(BoxHitTestEntry::new(target_id.as_u64(), Matrix4::IDENTITY));
-    }
-
-    /// Adds self as a hit target with transform.
-    pub fn add_self_with_transform(&mut self, target_id: RenderId, transform: Matrix4) {
-        self.inner
-            .add_hit(BoxHitTestEntry::new(target_id.as_u64(), transform));
-    }
-
     /// Tests a child at the given offset.
     ///
     /// Automatically transforms position by subtracting the offset — and,
@@ -472,43 +439,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::RenderId;
-    use flui_tree::Leaf;
-    use flui_types::geometry::Offset;
-
-    use crate::{
-        parent_data::BoxParentData,
-        protocol::{BoxHitTestCtx, BoxProtocol, HitTestContextApi},
-    };
-
-    use super::HitTestContext;
-
-    #[test]
-    fn test_hit_test_context_compiles() {
-        // This test just verifies the module compiles — empty body is enough
-        // because failure surfaces at `cargo build`, not at assert time.
-    }
-
-    /// Exercises `HitTestContext<BoxProtocol>::add_self` end-to-end.
-    ///
-    /// Constructs a real `HitTestContext`, calls `add_self(id)`, then asserts
-    /// the entry written into the inner result carries `target_id == id.as_u64()`.
-    /// A regression in the body (wrong accessor or cast) would fail this test.
-    #[test]
-    fn add_self_writes_render_id_as_u64_into_hit_result() {
-        let id = RenderId::new(7);
-        let inner: BoxHitTestCtx<'_, Leaf, BoxParentData> = BoxHitTestCtx::new(Offset::ZERO);
-        let mut ctx: HitTestContext<'_, BoxProtocol, Leaf, BoxParentData> =
-            HitTestContext::new(inner, flui_types::Size::ZERO);
-
-        ctx.add_self(id);
-
-        let entries = &ctx.inner().result().path;
-        assert_eq!(entries.len(), 1, "exactly one entry after add_self");
-        assert_eq!(
-            entries[0].target_id,
-            id.as_u64(),
-            "stored target_id must equal id.as_u64()"
-        );
-    }
+    // The only test here exercised `add_self`, deleted with the rest of the
+    // unread protocol-level hit result (issue #844). What this module's
+    // surface actually does is covered where it is USED: the driver bridge's
+    // own tests, and the widget-level hit-test ports that dispatch through a
+    // real pipeline. A compiles-clean placeholder would assert nothing
+    // `cargo build` does not already.
 }

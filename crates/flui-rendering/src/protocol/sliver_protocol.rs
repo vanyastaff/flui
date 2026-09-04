@@ -1159,14 +1159,6 @@ impl<'ctx, A: Arity, P: ParentData> SliverHitTestCtx<'ctx, A, P> {
             _phantom: std::marker::PhantomData,
         }
     }
-
-    /// Adds self as a hit target with the given render ID.
-    pub fn add_self(&mut self, target_id: RenderId) {
-        self.result.add(SliverHitTestEntry::new(
-            target_id.as_u64(),
-            self.position.main_axis,
-        ));
-    }
 }
 
 impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
@@ -1174,18 +1166,6 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
 {
     fn position(&self) -> &MainAxisPosition {
         &self.position
-    }
-
-    fn result(&self) -> &SliverHitTestResult {
-        &self.result
-    }
-
-    fn result_mut(&mut self) -> &mut SliverHitTestResult {
-        &mut self.result
-    }
-
-    fn add_hit(&mut self, entry: SliverHitTestEntry) {
-        self.result.add(entry);
     }
 
     fn is_hit(&self, bounds: Rect) -> bool {
@@ -1316,33 +1296,6 @@ mod tests {
             SliverConstraintsCacheKey::from_constraints(&changed_cross_axis),
             "cross_axis_direction participates in SliverConstraints::Hash and must also \
              participate in the layout cache key",
-        );
-    }
-
-    /// Exercises `SliverHitTestCtx::add_self` end-to-end.
-    ///
-    /// Constructs a real `SliverHitTestCtx`, calls `add_self(id)`, then asserts
-    /// the entry written into the result carries `target_id == id.as_u64()`.
-    /// A regression in the body (wrong accessor or cast) would fail this test.
-    #[test]
-    fn add_self_writes_render_id_as_u64_into_sliver_hit_result() {
-        let id = RenderId::new(3);
-        let main_axis_pos = MainAxisPosition::new(42.0, 10.0);
-        let mut ctx: SliverHitTestCtx<'_, Leaf, SliverParentData> =
-            SliverHitTestCtx::new(main_axis_pos);
-
-        ctx.add_self(id);
-
-        let entries = &ctx.result().path;
-        assert_eq!(entries.len(), 1, "exactly one entry after add_self");
-        assert_eq!(
-            entries[0].target_id,
-            id.as_u64(),
-            "stored target_id must equal id.as_u64()"
-        );
-        assert_eq!(
-            entries[0].main_axis_position, 42.0,
-            "main_axis_position must reflect the context position at call time"
         );
     }
 
