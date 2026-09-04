@@ -206,6 +206,162 @@ enum SemanticsFragment {
     Formed(BuiltSemanticsNode),
 }
 
+/// The clips an ancestor chain imposes on a node, in ROOT coordinates.
+///
+/// Two rects, because "not painted" and "not there" are different answers for
+/// a screen reader. Content scrolled just past a viewport's edge is still
+/// reachable — a user can ask to scroll to it — so it stays in the tree and is
+/// flagged hidden; content past the cache area is gone from the tree entirely.
+/// Reporting either one as an ordinary visible node puts a focus ring on empty
+/// screen, which is why this is applied to the rect and not merely to the
+/// membership.
+#[derive(Debug, Clone, Copy, Default)]
+struct SemanticsClips {
+    /// Outside this, a child is painted nowhere the user can see.
+    paint: Option<Rect<Pixels>>,
+    /// Outside this, a child has no accessibility presence at all.
+    semantics: Option<Rect<Pixels>>,
+}
+
+/// What [`SemanticsClips::apply`] decided about one node's rect.
+struct ClippedRect {
+    /// The rect to publish, already narrowed to the surviving part.
+    rect: Rect<Pixels>,
+    /// The node is off-screen but reachable: publish it, flagged hidden.
+    hidden: bool,
+    /// Nothing of the node survives the semantics clip: publish no node for
+    /// it. Its children are still walked — an overflowing child can extend
+    /// back into the clip its parent fell outside of.
+    dropped: bool,
+}
+
+impl SemanticsClips {
+    /// Narrows `rect` to what these clips leave of it.
+    fn apply(self, rect: Rect<Pixels>) -> ClippedRect {
+        let was_empty = rect.is_empty();
+
+        // `Rect::intersect` reports a zero-area overlap as `Some(empty)`;
+        // for a clip that is the same answer as no overlap at all.
+        let intersect = |clip: &Rect<Pixels>, rect: &Rect<Pixels>| {
+            clip.intersect(rect).filter(|kept| !kept.is_empty())
+        };
+
+        let rect = match self.semantics {
+            Some(clip) => match intersect(&clip, &rect) {
+                Some(kept) => kept,
+                // Nothing survives. An already-empty rect is not "clipped
+                // away" — a zero-size annotated node is the caller's own
+                // shape and keeps whatever treatment it had.
+                None if !was_empty => {
+                    return ClippedRect {
+                        rect,
+                        hidden: false,
+                        dropped: true,
+                    };
+                }
+                None => rect,
+            },
+            None => rect,
+        };
+
+        let Some(paint) = self.paint else {
+            return ClippedRect {
+                rect,
+                hidden: false,
+                dropped: false,
+            };
+        };
+
+        match intersect(&paint, &rect) {
+            Some(visible) => ClippedRect {
+                rect: visible,
+                hidden: false,
+                dropped: false,
+            },
+            // Entirely outside what is painted: keep the semantics rect so a
+            // "scroll to" action has somewhere to aim, and flag it hidden.
+            None => ClippedRect {
+                rect,
+                hidden: !was_empty,
+                dropped: false,
+            },
+        }
+    }
+
+    /// The clips a child of this node inherits.
+    ///
+    /// Paint clips always intersect. The semantics clip follows Flutter's
+    /// three-way rule:
+    ///
+    /// - a node that declares one REPLACES whatever it inherited, so a nested
+    ///   viewport re-grants its own cache area to its own children instead of
+    ///   being confined to its parent's;
+    /// - a node that declares only a paint clip NARROWS the inherited
+    ///   semantics clip by it — a clip that hides paint also limits how far
+    ///   an ancestor's cache area reaches through it;
+    /// - a node that declares neither passes the inherited one through, and a
+    ///   node with no inherited semantics clip stays unclipped whatever its
+    ///   paint clip says.
+    fn descend(
+        self,
+        local_paint: Option<Rect<Pixels>>,
+        local_semantics: Option<Rect<Pixels>>,
+    ) -> Self {
+        let paint = intersect_clips(self.paint, local_paint);
+        let semantics = match local_semantics {
+            Some(replacement) => Some(replacement),
+            None => match (self.semantics, local_paint) {
+                // Disjoint means nothing survives, which is an EMPTY clip —
+                // `None` here would read as "no clip at all" and republish
+                // the whole subtree unclipped.
+                (Some(inherited), Some(narrowing)) => {
+                    Some(inherited.intersect(&narrowing).unwrap_or(Rect::ZERO))
+                }
+                (Some(inherited), None) => Some(inherited),
+                (None, _) => None,
+            },
+        };
+        Self { paint, semantics }
+    }
+}
+
+/// Intersection where `None` means "no clip", not "empty".
+fn intersect_clips(a: Option<Rect<Pixels>>, b: Option<Rect<Pixels>>) -> Option<Rect<Pixels>> {
+    match (a, b) {
+        (Some(a), Some(b)) => a.intersect(&b).or(Some(Rect::ZERO)),
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
+}
+
+/// The clips `node` imposes on the child in `child_slot`, moved from the
+/// node's own coordinates into the walk's root coordinates.
+fn child_clips_of(
+    node: &RenderNode,
+    origin: Offset,
+    child_slot: usize,
+) -> (Option<Rect<Pixels>>, Option<Rect<Pixels>>) {
+    let offset = flui_types::Offset::new(origin.dx, origin.dy);
+    let (paint, semantics) = match node {
+        RenderNode::Box(entry) => (
+            entry
+                .render_object()
+                .describe_approximate_paint_clip(child_slot),
+            entry.render_object().describe_semantics_clip(child_slot),
+        ),
+        RenderNode::Sliver(entry) => (
+            entry
+                .render_object()
+                .describe_approximate_paint_clip(child_slot),
+            entry.render_object().describe_semantics_clip(child_slot),
+        ),
+    };
+    (
+        paint.map(|r| r.translate_offset(offset)),
+        semantics.map(|r| r.translate_offset(offset)),
+    )
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SemanticsAssemblyContext {
     is_root: bool,
@@ -239,6 +395,7 @@ fn assemble_semantics_root(
         tree,
         root,
         Offset::ZERO,
+        SemanticsClips::default(),
         SemanticsAssemblyContext {
             is_root: true,
             parent_requires_explicit_node: false,
@@ -272,11 +429,19 @@ fn build_semantics_fragments(
     tree: &RenderTree,
     id: RenderId,
     origin: Offset,
+    clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
 ) -> Option<Vec<SemanticsFragment>> {
     ensure_stack(|| {
-        build_semantics_fragments_impl(tree, id, origin, context, ancestor_blocks_user_actions)
+        build_semantics_fragments_impl(
+            tree,
+            id,
+            origin,
+            clips,
+            context,
+            ancestor_blocks_user_actions,
+        )
     })
 }
 
@@ -329,6 +494,7 @@ fn build_semantics_fragments_impl(
     tree: &RenderTree,
     id: RenderId,
     origin: Offset,
+    clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
 ) -> Option<Vec<SemanticsFragment>> {
@@ -339,21 +505,27 @@ fn build_semantics_fragments_impl(
     let mut config = describe_semantics_configuration(node);
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
-    let rect = node_semantics_rect(node, origin);
+    let clipped = clips.apply(node_semantics_rect(node, origin));
+    let rect = clipped.rect;
+    if clipped.hidden {
+        config.set_hidden(true);
+    }
 
     let decisions = assembly_decisions(&config, context);
 
     let mut child_fragments = Vec::with_capacity(node.children().len());
     if !node_excludes_semantics_subtree(node) {
-        for &child_id in node.children() {
+        for (child_slot, &child_id) in node.children().iter().enumerate() {
             let Some(child) = tree.get(child_id) else {
                 continue;
             };
             let child_origin = offset_add(origin, child.offset());
+            let (local_paint, local_semantics) = child_clips_of(node, origin, child_slot);
             let mut fragments = build_semantics_fragments(
                 tree,
                 child_id,
                 child_origin,
+                clips.descend(local_paint, local_semantics),
                 decisions.child_context,
                 blocks_user_actions,
             )
@@ -362,7 +534,9 @@ fn build_semantics_fragments_impl(
         }
     }
 
-    if !decisions.contributes {
+    // A node the semantics clip leaves nothing of publishes no node, but its
+    // children have already been walked under their own clips above.
+    if !decisions.contributes || clipped.dropped {
         return Some(child_fragments);
     }
 
@@ -576,7 +750,7 @@ fn assembly_inputs_for(
     tree: &RenderTree,
     pipeline_root: RenderId,
     target: RenderId,
-) -> Option<(SemanticsAssemblyContext, Offset, bool)> {
+) -> Option<(SemanticsAssemblyContext, Offset, SemanticsClips, bool)> {
     let mut chain = vec![target];
     let mut cursor = target;
     while let Some(parent) = tree.parent(cursor) {
@@ -595,6 +769,7 @@ fn assembly_inputs_for(
     };
     let mut blocks_user_actions = false;
     let mut origin = Offset::ZERO;
+    let mut clips = SemanticsClips::default();
 
     for (index, &id) in chain.iter().enumerate() {
         let node = tree.get(id)?;
@@ -605,7 +780,7 @@ fn assembly_inputs_for(
             if context.merge_into_ancestor {
                 return None;
             }
-            return Some((context, origin, blocks_user_actions));
+            return Some((context, origin, clips, blocks_user_actions));
         }
 
         let mut config = describe_semantics_configuration(node);
@@ -614,6 +789,15 @@ fn assembly_inputs_for(
         if node_excludes_semantics_subtree(node) {
             return None;
         }
+        // The clip this node imposes on the chain's next link. The child's
+        // slot is its position in this node's children — the same index the
+        // full walk enumerates, so the two folds agree by construction.
+        let child_slot = node
+            .children()
+            .iter()
+            .position(|&child| child == chain[index + 1])?;
+        let (local_paint, local_semantics) = child_clips_of(node, origin, child_slot);
+        clips = clips.descend(local_paint, local_semantics);
         context = assembly_decisions(&config, context).child_context;
     }
 
@@ -638,13 +822,13 @@ fn graft_anchor(
     else {
         return false;
     };
-    let Some((context, origin, blocks_user_actions)) =
+    let Some((context, origin, clips, blocks_user_actions)) =
         assembly_inputs_for(tree, pipeline_root, anchor)
     else {
         return false;
     };
     let Some(mut fragments) =
-        build_semantics_fragments(tree, anchor, origin, context, blocks_user_actions)
+        build_semantics_fragments(tree, anchor, origin, clips, context, blocks_user_actions)
     else {
         return false;
     };
@@ -718,6 +902,114 @@ fn offset_add(a: Offset, b: Offset) -> Offset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A box that clips whatever it hosts, so a fold over an ancestor chain
+    /// has something to accumulate.
+    #[derive(Debug)]
+    struct ClippingBox {
+        semantics_clip: Option<Rect<Pixels>>,
+        paint_clip: Option<Rect<Pixels>>,
+    }
+
+    impl ClippingBox {
+        fn plain() -> Self {
+            Self {
+                semantics_clip: None,
+                paint_clip: None,
+            }
+        }
+
+        fn clipping(semantics: Rect<Pixels>, paint: Rect<Pixels>) -> Self {
+            Self {
+                semantics_clip: Some(semantics),
+                paint_clip: Some(paint),
+            }
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for ClippingBox {}
+
+    impl crate::traits::RenderBox for ClippingBox {
+        type Arity = flui_tree::Variable;
+        type ParentData = crate::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut crate::context::BoxLayoutContext<
+                '_,
+                flui_tree::Variable,
+                crate::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            ctx.constraints().smallest()
+        }
+
+        fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+            self.semantics_clip
+        }
+
+        fn describe_approximate_paint_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+            self.paint_clip
+        }
+    }
+
+    fn rect(top: f32, bottom: f32) -> Rect<Pixels> {
+        Rect::from_ltrb(
+            flui_types::geometry::px(0.0),
+            flui_types::geometry::px(top),
+            flui_types::geometry::px(100.0),
+            flui_types::geometry::px(bottom),
+        )
+    }
+
+    /// The graft re-derives a node's inherited clips by folding the ancestor
+    /// chain, instead of re-walking the tree. If that fold ever stops seeing
+    /// what the walk sees, the incremental path publishes rects the full
+    /// rebuild would have clipped — and nothing else would notice, because
+    /// both paths are "green" on their own.
+    #[test]
+    fn the_graft_fold_accumulates_the_same_clips_the_walk_applies() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.set_root_render_object(Box::new(ClippingBox::clipping(
+            rect(0.0, 60.0),
+            rect(0.0, 20.0),
+        )));
+        let middle = owner
+            .insert_child_render_object(root, Box::new(ClippingBox::plain()))
+            .expect("middle inserted");
+        let leaf = owner
+            .insert_child_render_object(middle, Box::new(ClippingBox::plain()))
+            .expect("leaf inserted");
+
+        let (_, _, clips, _) = assembly_inputs_for(&owner.render_tree, root, leaf)
+            .expect("the chain root..leaf is intact, so the fold resolves");
+
+        assert_eq!(
+            clips.semantics,
+            Some(rect(0.0, 60.0)),
+            "the root's semantics clip must reach a grandchild through the fold",
+        );
+        assert_eq!(
+            clips.paint,
+            Some(rect(0.0, 20.0)),
+            "and so must its paint clip",
+        );
+    }
+
+    /// A node the fold cannot place among its parent's children has no slot to
+    /// ask the clip hooks about, so the graft declines and the caller falls
+    /// back to the full rebuild rather than guessing.
+    #[test]
+    fn the_graft_fold_declines_for_a_node_outside_the_root_chain() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.set_root_render_object(Box::new(ClippingBox::plain()));
+        let orphan = RenderId::new(9999);
+
+        assert!(
+            assembly_inputs_for(&owner.render_tree, root, orphan).is_none(),
+            "a target that is not under the root cannot be grafted",
+        );
+    }
 
     fn pending_fragment(source_render_id: RenderId) -> SemanticsFragment {
         SemanticsFragment::Pending(PendingSemanticsNode {

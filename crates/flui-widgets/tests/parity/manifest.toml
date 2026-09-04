@@ -1140,7 +1140,7 @@ cases = [
 rust = "viewport_test"
 family = "sliver"
 oracles = ["widgets/slivers_test.dart"]
-tests = 3
+tests = 4
 
 [[targets.claims]]
 oracle = "widgets/slivers_test.dart"
@@ -1602,7 +1602,7 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 91
-rust_tests = 662
+rust_tests = 663
 pins = 1
 oracle_files = 390
 oracle_cases = 5753
@@ -1686,7 +1686,7 @@ pins = 0
 
 [summary.families."sliver"]
 targets = 16
-rust_tests = 93
+rust_tests = 94
 cases_claimed = 44
 cases_diverged = 1
 pins = 1

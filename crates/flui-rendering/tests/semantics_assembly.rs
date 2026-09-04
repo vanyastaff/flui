@@ -157,6 +157,8 @@ struct SemanticsContainer {
     block_user_actions: bool,
     side: Option<f32>,
     child_offset: Option<Offset>,
+    semantics_clip: Option<Rect<Pixels>>,
+    paint_clip: Option<Rect<Pixels>>,
 }
 
 impl SemanticsContainer {
@@ -192,6 +194,18 @@ impl SemanticsContainer {
 
     fn with_child_offset(mut self, dx: f32, dy: f32) -> Self {
         self.child_offset = Some(Offset::new(px(dx), px(dy)));
+        self
+    }
+
+    /// Reported from `describe_semantics_clip`, in this node's coordinates.
+    fn with_semantics_clip(mut self, top: f32, bottom: f32) -> Self {
+        self.semantics_clip = Some(Rect::from_ltrb(px(0.0), px(top), px(200.0), px(bottom)));
+        self
+    }
+
+    /// Reported from `describe_approximate_paint_clip`.
+    fn with_paint_clip(mut self, top: f32, bottom: f32) -> Self {
+        self.paint_clip = Some(Rect::from_ltrb(px(0.0), px(top), px(200.0), px(bottom)));
         self
     }
 
@@ -248,6 +262,14 @@ impl RenderBox for SemanticsContainer {
 
     fn excludes_semantics_subtree(&self) -> bool {
         self.excludes_subtree
+    }
+
+    fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+        self.semantics_clip
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+        self.paint_clip
     }
 }
 
@@ -1898,5 +1920,203 @@ fn blocked_child_subtree_does_not_mask_unblocked_parent_actions() {
             .actions(),
         SemanticsAction::DidGainAccessibilityFocus.value(),
         "a non-contributing blocker must still propagate policy down its subtree",
+    );
+}
+
+// ============================================================================
+// Ancestor clips: what a screen reader is told about content that has been
+// scrolled or clipped out of sight.
+// ============================================================================
+
+/// A child with nothing left after its ancestor's semantics clip contributes
+/// no node at all — it is not on screen and not reachable, so announcing it
+/// would point a screen reader at empty space.
+#[test]
+fn a_semantics_clip_drops_a_child_that_falls_entirely_outside_it() {
+    let run = RenderTester::mount(
+        box_node(
+            SemanticsContainer::default()
+                .with_side(200.0)
+                .with_semantics_clip(0.0, 100.0)
+                .with_child_offset(0.0, 150.0),
+        )
+        .child(box_node(
+            SemanticsLeaf::new(20.0).with_label("Out of reach"),
+        )),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    assert_eq!(
+        owner.tree().len(),
+        1,
+        "only the walk root survives; the clipped-away child contributes nothing",
+    );
+}
+
+/// A child that straddles the clip's edge keeps only the part inside it.
+#[test]
+fn a_semantics_clip_narrows_a_child_that_straddles_its_edge() {
+    let run = RenderTester::mount(
+        box_node(
+            SemanticsContainer::default()
+                .with_side(200.0)
+                .with_semantics_clip(0.0, 100.0)
+                .with_child_offset(0.0, 80.0),
+        )
+        .child(box_node(SemanticsLeaf::new(50.0).with_label("Half in"))),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root forms a node");
+    let child_id = *owner
+        .get(root_id)
+        .expect("root resolves")
+        .children()
+        .first()
+        .expect("the straddling child survives, narrowed");
+    let rect = owner.get(child_id).expect("child resolves").rect();
+
+    assert_eq!(
+        (rect.min.y.get(), rect.max.y.get()),
+        (80.0, 100.0),
+        "the child laid out at 80..130 is reported as the 80..100 that is inside the clip",
+    );
+}
+
+/// Outside the paint clip but inside the semantics clip is the off-screen but
+/// reachable case: the node stays, so a "scroll to" action has a target, and
+/// carries the hidden flag so it is not announced as if it were visible.
+#[test]
+fn a_paint_clip_keeps_the_child_and_flags_it_hidden() {
+    let run = RenderTester::mount(
+        box_node(
+            SemanticsContainer::default()
+                .with_side(200.0)
+                .with_semantics_clip(0.0, 200.0)
+                .with_paint_clip(0.0, 50.0)
+                .with_child_offset(0.0, 100.0),
+        )
+        .child(box_node(
+            SemanticsLeaf::new(40.0).with_label("Below the fold"),
+        )),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root forms a node");
+    let child_id = *owner
+        .get(root_id)
+        .expect("root resolves")
+        .children()
+        .first()
+        .expect("an unpainted but reachable child stays in the tree");
+    let child = owner.get(child_id).expect("child resolves");
+
+    assert!(
+        child.config().is_hidden(),
+        "a child the paint clip excludes must be announced as hidden",
+    );
+    assert_eq!(
+        (child.rect().min.y.get(), child.rect().max.y.get()),
+        (100.0, 140.0),
+        "its rect is the semantics one, not the empty paint intersection — a \
+         scroll-to action needs somewhere to aim",
+    );
+}
+
+/// A nested semantics clip REPLACES the one it inherits rather than narrowing
+/// it, so a scrollable inside a scrollable re-grants its own cache area to its
+/// own children (Flutter's rule in `_SemanticsGeometry`). Under an
+/// intersecting rule this child would be dropped.
+#[test]
+fn an_inner_semantics_clip_replaces_the_inherited_one() {
+    let run = RenderTester::mount(
+        box_node(
+            SemanticsContainer::default()
+                .with_side(200.0)
+                .with_semantics_clip(0.0, 60.0),
+        )
+        .child(
+            box_node(
+                SemanticsContainer::default()
+                    .with_side(200.0)
+                    .with_semantics_clip(0.0, 200.0)
+                    .with_child_offset(0.0, 120.0),
+            )
+            .child(box_node(SemanticsLeaf::new(30.0).with_label("Inner"))),
+        ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root forms a node");
+    let found = owner
+        .get(root_id)
+        .expect("root resolves")
+        .children()
+        .iter()
+        .filter_map(|&id| owner.get(id).and_then(|node| node.label()))
+        .any(|label| label == "Inner");
+
+    assert!(
+        found,
+        "the inner clip re-grants 0..200, so a child at 120..150 survives the \
+         outer 0..60 clip it would not have survived under an intersection",
+    );
+}
+
+/// An inherited semantics clip and a paint-only clip that do not overlap leave
+/// NOTHING, and "nothing" has to stay a clip.
+///
+/// `Rect::intersect` answers `None` for a disjoint pair, and `None` in the
+/// accumulated clips means "no clip at all" — so folding the raw result would
+/// republish the whole subtree unclipped at exactly the point it should have
+/// disappeared. The empty rect is the honest carrier for that state.
+#[test]
+fn a_semantics_clip_disjoint_from_an_inner_paint_clip_leaves_nothing_visible() {
+    let run = RenderTester::mount(
+        box_node(
+            SemanticsContainer::default()
+                .with_side(200.0)
+                .with_semantics_clip(0.0, 40.0),
+        )
+        .child(
+            box_node(
+                SemanticsContainer::default()
+                    .with_side(200.0)
+                    // Disjoint from the 0..40 the ancestor granted.
+                    .with_paint_clip(120.0, 200.0),
+            )
+            .child(box_node(SemanticsLeaf::new(30.0).with_label("Nowhere"))),
+        ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root forms a node");
+    let labels: Vec<&str> = owner
+        .get(root_id)
+        .expect("root resolves")
+        .children()
+        .iter()
+        .filter_map(|&id| owner.get(id).and_then(|node| node.label()))
+        .collect();
+
+    assert!(
+        !labels.contains(&"Nowhere"),
+        "the two clips leave no region at all, so the leaf inside them has no \
+         accessibility presence; published labels: {labels:?}",
     );
 }

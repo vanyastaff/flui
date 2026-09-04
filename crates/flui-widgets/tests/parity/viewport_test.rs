@@ -504,3 +504,37 @@ fn multiple_grids_and_lists_scrolling_reveals_each_groups_text_and_clamps_at_max
     );
     assert_on_screen(&laid, controller.pixels(), [false, false, false, true]);
 }
+
+/// The anchor at the three values #537 names, in the same 600px scene the
+/// oracle uses.
+///
+/// Flutter's own suite exercises exactly one anchor (`100.0 / 600.0`, the case
+/// above), so there is no oracle constant to copy at `0.0`, `0.5` or `1.0`.
+/// The expectation here comes from the contract's DEFINITION instead — the
+/// zero-scroll line sits `main_axis_extent * anchor` from the leading edge, so
+/// the first forward sliver starts there and each 400px sibling follows — and
+/// that definition is cross-checked by the oracle case, whose copied constants
+/// put the first child at exactly `600 * (100 / 600) = 100`.
+#[test]
+fn viewport_anchor_places_the_zero_scroll_line_proportionally_at_zero_half_and_one() {
+    for (anchor, first_child_top) in [(0.0_f32, 0.0_f32), (0.5, 300.0), (1.0, 600.0)] {
+        let laid = lay_out(
+            Viewport::new(five_400px_slivers())
+                .offset(0.0)
+                .anchor(anchor),
+            tight(800.0, 600.0),
+        );
+
+        let (offsets, _) = viewport_child_offsets_and_visibility(&laid, laid.root());
+        let expected: Vec<Offset> = (0..5)
+            .map(|i| offset(0.0, first_child_top + 400.0 * i as f32))
+            .collect();
+
+        assert_eq!(
+            offsets.to_vec(),
+            expected,
+            "at anchor {anchor} the zero-scroll line sits {first_child_top}px into a \
+             600px viewport, and the five 400px slivers follow from there",
+        );
+    }
+}

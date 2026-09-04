@@ -688,6 +688,51 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         false
     }
 
+    /// The rect, in THIS node's coordinates, outside which a child's painted
+    /// output is not visible — `None` (the default) when this node clips
+    /// nothing.
+    ///
+    /// The semantics walk intersects these down the tree. A node whose own
+    /// rect falls entirely outside the accumulated paint clip is still
+    /// published, but flagged hidden: it exists for a screen reader to scroll
+    /// to, and must not be announced as if it were on screen. "Approximate"
+    /// is Flutter's word and its contract — a conservative superset is
+    /// allowed, so a rounded or path clip may report its bounding box.
+    ///
+    /// Default: `None`. Override on [`RenderBox`](crate::traits::RenderBox)
+    /// or [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
+    /// forward the call here.
+    fn describe_approximate_paint_clip(
+        &self,
+        _child_slot: usize,
+    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        None
+    }
+
+    /// The rect, in THIS node's coordinates, outside which a child carries no
+    /// accessibility presence at all — `None` (the default) when this node
+    /// imposes no such limit.
+    ///
+    /// Wider than [`describe_approximate_paint_clip`](Self::describe_approximate_paint_clip)
+    /// wherever a node keeps off-screen content reachable: a viewport reports
+    /// its bounds grown by the cache extent, so the row just past the edge
+    /// stays in the tree for a "scroll to" action while the row far beyond it
+    /// does not. A node whose rect leaves nothing after this clip contributes
+    /// no semantics node, and one that is partly inside is narrowed to the
+    /// part that survives.
+    ///
+    /// Unlike the paint clip, an inner value REPLACES the accumulated one
+    /// rather than intersecting with it (Flutter's rule) — a nested viewport
+    /// re-grants its own cache area to its own children.
+    ///
+    /// Default: `None`.
+    fn describe_semantics_clip(
+        &self,
+        _child_slot: usize,
+    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        None
+    }
+
     /// Marks this render object for reprocessing after hot reload.
     ///
     /// Default: no-op. See the *Hot-reload note* in the trait doc for the

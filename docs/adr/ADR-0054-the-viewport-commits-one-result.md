@@ -134,17 +134,61 @@ Decision 4 landed in two parts. The first is `clip_behavior` itself: both viewpo
 `Clip::None`, which produces no clip layer at all — pinned structurally by
 `viewport_clip_behavior_controls_the_clip_layer`, which reads the composited layer kinds for the
 overflowing-clipped, overflowing-unclipped and fitting cases. `Viewport`, `ShrinkWrappingViewport`
-and `CustomScrollView` all expose the knob. Recorded gap: the wgpu backend ignores a clip layer's
-`Clip` mode (`push_clip_rect` takes it and discards it), so `None` versus clipped is observable on
-screen but the clipped modes are not distinguishable from one another; per-mode pixel evidence
-belongs to the engine's own readback suite, not here.
+and `CustomScrollView` all expose the knob.
 
-The second part — the paint and semantics clips a child sees
-(`describeApproximatePaintClip`/`describeSemanticsClip`, and the assembler dropping a node outside
-the semantics clip and marking hidden one outside the paint clip) — is deliberately **not** in that
-change: the hooks would have had no consumer until the assembler reads them, and a hook nothing
-calls is the defect class this repo names. It lands with the assembler work. Decision 5 needs no
-code.
+Pixel evidence comes in two halves, because no single crate can see both ends: the widget test
+above pins that `Clip::None` pushes NO clip layer and any other behaviour pushes one, and
+`a_clip_rect_layer_clips_its_content_and_its_absence_does_not` (flui-engine, the WARP readback
+suite) rasterizes a clip layer and its absence over identical content and reads the pixel 16 px
+past the clip's edge. Its oracle samples the RED channel on purpose: the content is blue and the
+cleared surface is white, so the two agree on blue and an assertion there would pass either way.
+
+Recorded gap: the wgpu backend takes a clip layer's `Clip` mode and discards it
+(`push_clip_rect`'s `_clip_behavior` in `backend.rs`), so the three clipped modes are
+pixel-identical. A test asserting a difference between them would fail, and one asserting they
+agree would pin the defect as if it were the contract; neither is written. Tracked as issue #848.
+
+The second part is the clips a child sees, and it landed with its consumer rather than ahead of
+it. Two hooks join the render-object trait family beside `excludes_semantics_subtree`:
+`describe_approximate_paint_clip(child_slot)` and `describe_semantics_clip(child_slot)`, both
+defaulting to `None` and both answering in the node's own coordinates. The semantics walk folds
+them down the tree in root coordinates and applies Flutter's `_SemanticsGeometry` rules: a node's
+rect is narrowed to what the semantics clip leaves of it, a node the semantics clip leaves nothing
+of contributes no node (its children are still walked, since an overflowing child can extend back
+into the clip its parent fell outside of), and a node outside the paint clip keeps its semantics
+rect and gains the hidden flag — off-screen but reachable, which is what a "scroll to" action
+needs. Paint clips intersect down the chain; a semantics clip REPLACES the inherited one, so a
+scrollable inside a scrollable re-grants its own cache area to its own children.
+
+Both viewports implement both hooks. The semantics clip is the bounds grown by the resolved cache
+extent along the scroll axis; the paint clip is the bounds, with the leading edge pushed in by the
+overlap a pinned header imposes on that particular child — the correction is computed inside the
+layout walk, where the child's own constraints are in hand, and STAGED with the child's position so
+only an accepted pass commits it. Size and cache extent are recorded on every pass rather than only
+an accepted one, because both come from this viewport's own constraints, which no descendant
+stand-in can move.
+
+Three departures from Flutter, all deliberate:
+
+- **No `ensureSemantics` escape hatch.** Flutter lets a sliver force itself into the tree despite
+  the clip; FLUI has no `SliverEnsureSemantics` to set it, so shipping the flag would be a seam
+  with no consumer. It plugs into `describe_semantics_clip`'s early return when that widget is
+  ported.
+- **The hooks take a child SLOT, not a child object.** Flutter passes the `RenderObject` and the
+  viewport reads `child.constraints`; FLUI's committed result already holds the per-slot value, so
+  the slot is enough and no downcast is needed.
+- **`RenderClip` does not implement them yet.** A `ClipRect` widget therefore still publishes
+  accessibility rects for content it paints over. That is an unshipped consumer of a now-general
+  hook, not a regression. Tracked as issue #847.
+
+The clips are applied when semantics is ASSEMBLED, and FLUI does not re-assemble after a
+layout-only change: nothing marks a node's semantics dirty when it lays out, where Flutter calls
+`markNeedsSemanticsUpdate()` immediately after every `performLayout()` (`rendering/object.dart`,
+both layout entry points). So a scroll leaves the tree describing where the content was. The
+defect is older than these clips and is not introduced here, but the clip is what makes it
+describable, so it is named rather than left implicit: issue #850.
+
+Decision 5 needs no code.
 
 The degradation query is deliberately a count-since-context-creation rather than a failure flag:
 the pipeline catches a failure in the failing node's own walk frame and hands the parent a

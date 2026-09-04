@@ -240,6 +240,9 @@ pub(crate) mod test_support;
 #[cfg(test)]
 mod sdf_smoke_test;
 
+#[cfg(test)]
+mod clip_layer_readback_tests;
+
 // aa_oracle_tests contains both CPU unit tests (no GPU) and GPU readback tests.
 // Include whenever test compilation is active.
 #[cfg(test)]

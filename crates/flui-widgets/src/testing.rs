@@ -437,6 +437,35 @@ impl LaidOut {
         })
     }
 
+    /// Turn on semantics, so the next [`pump`](Self::pump) assembles an
+    /// accessibility tree this harness can query.
+    ///
+    /// Off by default: a harness that never asks pays nothing for the phase.
+    /// It must be called BEFORE the frame that should carry the tree — the
+    /// phase it controls has already run for the mount frame.
+    ///
+    /// # Panics
+    ///
+    /// If the binding is not bound to a tree, which a mounted `LaidOut`
+    /// always is.
+    pub fn enable_semantics(&mut self) {
+        self.binding
+            .enable_semantics()
+            .expect("a mounted LaidOut is tree-bound");
+    }
+
+    /// The accessibility tree exactly as a platform adapter would receive it,
+    /// or `None` until [`enable_semantics`](Self::enable_semantics) has been
+    /// called and a frame has run since.
+    ///
+    /// This is the widget layer's only window onto assembled semantics; the
+    /// sliver parity cases that record a "no semantics-tree assertion
+    /// capability here" gap are describing its absence.
+    #[must_use]
+    pub fn a11y_tree(&self) -> Option<flui_testing::A11yTree> {
+        self.binding.a11y_tree()
+    }
+
     /// Drive one more frame after external state has changed — the headless
     /// equivalent of what `setState` schedules: mark the root dirty, then pump a
     /// zero-time frame (rebuild the subtree + re-run layout/paint). Used by the
