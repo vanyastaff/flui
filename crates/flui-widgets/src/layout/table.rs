@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use flui_foundation::{ValueKey, ViewKey};
+use flui_foundation::ViewKey;
 use flui_objects::RenderTable;
 use flui_rendering::parent_data::TableCellParentData;
 use flui_rendering::protocol::BoxProtocol;
@@ -92,37 +92,107 @@ impl TableRow {
 /// the nearest parent-data ancestor of that node.
 #[derive(Clone)]
 struct KeyedCell {
-    key: ValueKey<CellIdentity>,
+    key: CellKey,
     child: BoxedView,
 }
 
-/// A cell's position in the table, as identity rather than as coordinates.
+/// Which of a table's rows a cell belongs to, and which cell of that row it
+/// is — as identity, not as coordinates.
 ///
-/// `row` is the row's own key hash when it has a key, and its ordinal among
-/// the *unkeyed* rows otherwise — the two are kept apart by `keyed` so a hash
-/// can never collide with an ordinal. Matching unkeyed rows by their ordinal
-/// among unkeyed rows (not by their index in the table) is what lets a keyed
-/// row move past them without disturbing them.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct CellIdentity {
-    keyed: bool,
-    row: u64,
-    column: usize,
+/// A part is the corresponding key when there is one and a position
+/// otherwise, and the two are never confused: a keyed row is matched to the
+/// row with an equal key wherever it has moved to, an unkeyed row to the
+/// unkeyed row with the same ordinal *among the unkeyed rows* (which is what
+/// lets a keyed row move past them without disturbing them), a keyed cell to
+/// the cell with an equal key anywhere in its row, and a keyless cell to the
+/// cell in the same column.
+#[derive(Clone)]
+enum KeyPart {
+    /// The key its owner carries. Compared with `key_eq`, never by hash: the
+    /// reconciler treats hashes as buckets and disambiguates semantically,
+    /// and so must this.
+    Keyed(Box<dyn ViewKey>),
+    /// The owner's position among its keyless peers.
+    Position(usize),
+}
+
+impl KeyPart {
+    fn part_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Keyed(a), Self::Keyed(b)) => a.key_eq(&**b),
+            (Self::Position(a), Self::Position(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    fn part_hash(&self) -> u64 {
+        match self {
+            // The discriminant keeps a key's hash out of the position space.
+            Self::Keyed(key) => key.key_hash() ^ 0x9e37_79b9_7f4a_7c15,
+            Self::Position(index) => *index as u64,
+        }
+    }
+}
+
+/// A cell's identity: its row's, then its own.
+#[derive(Clone)]
+struct CellKey {
+    row: KeyPart,
+    cell: KeyPart,
+}
+
+impl ViewKey for CellKey {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn key_eq(&self, other: &dyn ViewKey) -> bool {
+        // PORT-CHECK-OK-DOWNCAST: `key_eq` takes `&dyn ViewKey` and is
+        // contractually a comparison against this key's own type — every key
+        // in the workspace implements it this way (see `SaltedKey`).
+        let same_kind = other.as_any().downcast_ref::<Self>(); // PORT-CHECK-OK-DOWNCAST: see above
+        same_kind
+            .is_some_and(|other| self.row.part_eq(&other.row) && self.cell.part_eq(&other.cell))
+    }
+
+    fn key_hash(&self) -> u64 {
+        // Rotating the row's hash keeps `(row a, cell b)` apart from
+        // `(row b, cell a)`.
+        self.row.part_hash().rotate_left(32) ^ self.cell.part_hash()
+    }
+
+    fn clone_key(&self) -> Box<dyn ViewKey> {
+        Box::new(self.clone())
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CellKey(row: {:?}, cell: {:?})", self.row, self.cell)
+    }
+
+    // `is_global_key` keeps the trait default `false`: this wrapper must
+    // never register a cell's own GlobalKey, which stays on the cell.
+}
+
+impl std::fmt::Debug for KeyPart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Keyed(key) => write!(f, "{:?}", &**key),
+            Self::Position(index) => write!(f, "#{index}"),
+        }
+    }
 }
 
 impl KeyedCell {
-    fn new(identity: CellIdentity, child: BoxedView) -> Self {
-        Self {
-            key: ValueKey::new(identity),
-            child,
-        }
+    fn new(key: CellKey, child: BoxedView) -> Self {
+        Self { key, child }
     }
 }
 
 impl std::fmt::Debug for KeyedCell {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KeyedCell")
-            .field("key", &self.key)
+            .field("key", &self.key.row)
+            .field("cell", &self.key.cell)
             .finish_non_exhaustive()
     }
 }
@@ -241,22 +311,28 @@ impl Table {
 /// renumber the unkeyed ones (Flutter matches its unkeyed rows by sequence
 /// among themselves for the same reason).
 fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
-    let mut unkeyed_ordinal = 0u64;
+    let mut unkeyed_ordinal = 0usize;
     let mut cells = Vec::new();
     for row in rows {
-        let (keyed, row_identity) = if let Some(key) = &row.key {
-            (true, key.key_hash())
+        let row_part = if let Some(key) = &row.key {
+            KeyPart::Keyed(key.clone_key())
         } else {
             let ordinal = unkeyed_ordinal;
             unkeyed_ordinal += 1;
-            (false, ordinal)
+            KeyPart::Position(ordinal)
         };
         for (column, cell) in row.cells.iter().enumerate() {
+            // A cell that carries its own key keeps it as its identity, so it
+            // is matched to the cell with an equal key anywhere in its row —
+            // the identity it had before this wrapper existed. A keyless cell
+            // is matched by column, as its position in the row.
+            let cell_part = cell.0.key().map_or(KeyPart::Position(column), |key| {
+                KeyPart::Keyed(key.clone_key())
+            });
             cells.push(KeyedCell::new(
-                CellIdentity {
-                    keyed,
-                    row: row_identity,
-                    column,
+                CellKey {
+                    row: row_part.clone(),
+                    cell: cell_part,
                 },
                 cell.clone(),
             ));

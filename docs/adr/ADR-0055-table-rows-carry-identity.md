@@ -33,10 +33,20 @@ behavior/dispatch surface, and an FR-036 `dyn`-allowlist entry.
 **Give each cell the identity of its row, and let the existing flat keyed reconciler do the rest.**
 
 `Table` wraps every cell in one concrete render-less view (`KeyedCell`, a `StatelessView` with a
-key — the same shape `AnimatedSwitcher`'s `KeyedEntry` already uses) keyed by
-`CellIdentity { keyed, row, column }`, where `row` is the row's own key hash when it has one and its
-**ordinal among the unkeyed rows** otherwise, and `keyed` keeps the two spaces apart so a hash can
-never collide with an ordinal. `TableRow` gains an optional local key.
+key — the same shape `AnimatedSwitcher`'s `KeyedEntry` already uses) whose key is the pair
+`(row identity, cell identity)`. Each half is the corresponding key when there is one and a
+position otherwise: a row contributes its own key or its **ordinal among the unkeyed rows**, and a
+cell contributes its own key or its column. `TableRow` gains an optional local key.
+
+Equality is semantic, never by hash. `CellKey::key_eq` delegates to each half's `ViewKey::key_eq`,
+because the reconciler treats a hash as a bucket and settles equality semantically; comparing
+hashes here would let two rows whose keys collide trade elements. A key's hash is folded with a
+constant so it cannot land in the position space, and the row's half is rotated so `(row a, cell b)`
+stays apart from `(row b, cell a)`.
+
+Keeping a cell's own key in its identity is what preserves the behaviour cells had as plain
+siblings: two keyed cells that swap columns within a row keep their elements, because the wrapper
+follows the cell instead of pinning it to a column number.
 
 This reproduces the reference's observable behaviour through machinery that already exists:
 

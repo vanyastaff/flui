@@ -86,3 +86,131 @@ fn table_cell_overrides_the_tables_default_vertical_alignment() {
     assert_eq!(laid.offset(laid.child(root, 0)).dy, px(0.0));
     assert_eq!(laid.offset(laid.child(root, 1)).dy, px(40.0));
 }
+
+/// A key on a cell is its identity inside its row: two keyed cells that swap
+/// columns keep their elements, as they would if they were plain siblings.
+///
+/// Each cell's wrapper carries `(row identity, cell identity)`, and a cell
+/// that has its own key contributes that key rather than its column — so the
+/// wrapper follows the cell instead of pinning it to a column number.
+#[test]
+fn keyed_cells_that_swap_columns_keep_their_elements() {
+    use flui_foundation::{ValueKey, ViewKey};
+    use flui_view::{BuildContext, IntoView, StatelessView, View, element::ElementKind};
+    use flui_widgets::Text;
+
+    /// A cell that carries a key of its own — there is no `ViewExt::key`
+    /// builder, so tests wrap the view they want to key.
+    #[derive(Clone)]
+    struct KeyedText {
+        key: ValueKey<String>,
+        label: String,
+    }
+
+    impl View for KeyedText {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateless(self)
+        }
+        fn key(&self) -> Option<&dyn ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    impl StatelessView for KeyedText {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            Text::new(self.label.clone())
+        }
+    }
+
+    let cell = |label: &str| KeyedText {
+        key: ValueKey::new(label.to_string()),
+        label: label.to_string(),
+    };
+    let mut laid = lay_out(
+        Table::new(vec![TableRow::new(vec![
+            cell("left").boxed(),
+            cell("right").boxed(),
+        ])]),
+        tight(200.0, 100.0),
+    );
+    let left_before = laid.find_text("left").expect("left is mounted");
+    let right_before = laid.find_text("right").expect("right is mounted");
+
+    laid.pump_widget(Table::new(vec![TableRow::new(vec![
+        cell("right").boxed(),
+        cell("left").boxed(),
+    ])]));
+
+    assert_eq!(
+        laid.find_text("left"),
+        Some(left_before),
+        "the cell keyed `left` keeps its element after moving to column 1"
+    );
+    assert_eq!(
+        laid.find_text("right"),
+        Some(right_before),
+        "and so does the one it swapped with"
+    );
+}
+
+/// Row identity is compared semantically, not by hash.
+///
+/// The reconciler treats a key's hash as a bucket and settles equality with
+/// `key_eq`; a cell's identity must do the same, or two rows whose keys
+/// happen to collide would trade elements.
+#[test]
+fn rows_whose_keys_collide_by_hash_are_still_distinct() {
+    use flui_foundation::ViewKey;
+    use flui_widgets::Text;
+
+    /// A key whose hash is a constant, so any two of them collide, but whose
+    /// equality is its own value.
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    struct CollidingKey(&'static str);
+
+    impl ViewKey for CollidingKey {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn key_eq(&self, other: &dyn ViewKey) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|other| self == other)
+        }
+        fn key_hash(&self) -> u64 {
+            0
+        }
+        fn clone_key(&self) -> Box<dyn ViewKey> {
+            Box::new(self.clone())
+        }
+        fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CollidingKey({})", self.0)
+        }
+    }
+
+    let row = |label: &str, key: &'static str| {
+        TableRow::new(vec![Text::new(label.to_string()).boxed()]).key(CollidingKey(key))
+    };
+    let mut laid = lay_out(
+        Table::new(vec![row("first", "a"), row("second", "b")]),
+        tight(200.0, 100.0),
+    );
+    let first_before = laid.find_text("first").expect("first is mounted");
+    let second_before = laid.find_text("second").expect("second is mounted");
+
+    // The two rows swap places. Their keys collide by hash, so only `key_eq`
+    // can tell them apart.
+    laid.pump_widget(Table::new(vec![row("second", "b"), row("first", "a")]));
+
+    assert_eq!(
+        laid.find_text("first"),
+        Some(first_before),
+        "row `a` keeps its cell's element wherever it moves to"
+    );
+    assert_eq!(
+        laid.find_text("second"),
+        Some(second_before),
+        "and row `b` keeps its own — a hash collision must not trade them"
+    );
+}
