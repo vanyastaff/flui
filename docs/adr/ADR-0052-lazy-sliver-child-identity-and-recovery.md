@@ -127,6 +127,19 @@ laid out.
   default boundary on, which is what an app would actually write, and is red
   without the change.
 
+  Two things the first draft of that change got wrong, both caught in review.
+  It described itself as tree-wide while covering only the sparse and root
+  paths: an ordinary DENSE parent removes through
+  `id_reconcile::remove_child`, which carried its own copy of the same subtree
+  walk and kept freeing keyed descendants. The copies are gone — that path
+  delegates to `remove_subtree`, so there is one implementation and it cannot
+  drift again. And deactivation is not right for every caller:
+  `detach_root_widget` is permanent teardown with no frame after it, so a
+  deactivated element would sit in the inactive queue with `dispose` never
+  run and a later attach could retake stale state. `SubtreeRemoval` makes the
+  two cases explicit at the call site rather than assuming one behaviour fits
+  both.
+
 ## Alternatives considered
 
 - **In-place single-map remap.** Rejected on review: any shift or swap of two

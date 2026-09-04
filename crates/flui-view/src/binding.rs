@@ -896,7 +896,15 @@ impl WidgetsBinding {
                 ref mut element_tree,
                 ..
             } = *inner;
-            element_tree.remove_subtree(root_id, &mut build_owner.element_owner_mut());
+            // `Finalize`: permanent teardown. Nothing runs `finalize_tree`
+            // after this and no frame follows, so a keyed descendant left
+            // deactivated would never have `dispose` called and a later
+            // `attach_root_widget` could retake its stale state.
+            element_tree.remove_subtree(
+                root_id,
+                &mut build_owner.element_owner_mut(),
+                crate::tree::SubtreeRemoval::Finalize,
+            );
             tracing::debug!(?root_id, "Root widget detached");
         }
     }

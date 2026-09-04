@@ -428,6 +428,25 @@ impl Default for ElementTree {
     }
 }
 
+/// How [`ElementTree::remove_subtree`] treats a `GlobalKey`'d element it finds.
+///
+/// The two modes exist because "this subtree is going away" means two
+/// different things. A parent dropping a child is a within-frame event: a key
+/// may be declared again before the frame ends, so the element is deactivated
+/// and `finalize_tree` unmounts whatever no key claimed. Tearing a
+/// presentation down is not — there is no frame left to run a retake or a
+/// finalize, so a deactivated element would sit in the inactive queue with its
+/// `dispose` never run, and a later attach could retake stale state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubtreeRemoval {
+    /// A keyed element is deactivated for a same-frame retake; the walk stops
+    /// there so the retake keeps its children.
+    DeactivateKeyed,
+    /// Everything goes, keys included. For permanent teardown, where nothing
+    /// will run `finalize_tree` afterwards.
+    Finalize,
+}
+
 impl ElementTree {
     /// Create a new empty ElementTree.
     pub fn new() -> Self {
@@ -1629,16 +1648,22 @@ impl ElementTree {
     /// Complexity: O(n) time + O(n) peak heap for the work-stack (n = subtree
     /// size), O(h) call-stack for the constant-stack iterative walk — paid
     /// only for an un-keyed root; a keyed root is O(1).
-    pub(crate) fn remove_subtree(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
+    pub(crate) fn remove_subtree(
+        &mut self,
+        id: ElementId,
+        owner: &mut crate::ElementOwner<'_>,
+        mode: SubtreeRemoval,
+    ) {
         // A keyed root soft-removes into the inactive queue instead of
         // freeing outright (`remove`'s own branch, keyed on
         // `registered_global_key`); descendants stay untouched. Check
         // this FIRST: it needs no subtree walk, and a keyed root never uses
         // the snapshot below, so paying for that walk before checking would
         // be wasted work for every keyed-root removal.
-        let root_is_keyed = self
-            .get(id)
-            .is_some_and(|node| node.registered_global_key().is_some());
+        let root_is_keyed = mode == SubtreeRemoval::DeactivateKeyed
+            && self
+                .get(id)
+                .is_some_and(|node| node.registered_global_key().is_some());
 
         if root_is_keyed {
             self.remove(id, owner);
@@ -1661,7 +1686,8 @@ impl ElementTree {
         {
             let mut work_stack: Vec<ElementId> = vec![id];
             while let Some(node_id) = work_stack.pop() {
-                if node_id != id
+                if mode == SubtreeRemoval::DeactivateKeyed
+                    && node_id != id
                     && self
                         .get(node_id)
                         .is_some_and(|node| node.registered_global_key().is_some())
@@ -2828,7 +2854,11 @@ mod tests {
             "precondition: the fixture's key must actually register",
         );
 
-        tree.remove_subtree(wrapper, &mut owner.element_owner_mut());
+        tree.remove_subtree(
+            wrapper,
+            &mut owner.element_owner_mut(),
+            SubtreeRemoval::DeactivateKeyed,
+        );
 
         assert!(
             tree.get(wrapper).is_none(),
@@ -2843,6 +2873,64 @@ mod tests {
             owner.has_inactive_elements(),
             "and it must be ON that queue, so `finalize_tree` unmounts it if \
              no key retakes it this frame",
+        );
+    }
+
+    /// `SubtreeRemoval::Finalize` frees a keyed descendant too.
+    ///
+    /// Permanent teardown (`detach_root_widget`) has no frame after it: no
+    /// retake can happen and nothing runs `finalize_tree`. A keyed descendant
+    /// deactivated there would sit in the inactive queue with its `dispose`
+    /// never called, and a later `attach_root_widget` could retake that stale
+    /// state — so the two removals need different modes, not one behaviour.
+    #[test]
+    fn finalizing_removal_frees_a_keyed_descendant_too() {
+        let mut tree = ElementTree::new();
+        let mut owner = crate::owner::BuildOwner::new();
+
+        let root = tree.mount_root(
+            &TestView {
+                name: "root".into(),
+            },
+            &mut owner.element_owner_mut(),
+        );
+        let wrapper = tree.insert(
+            &TestView {
+                name: "unkeyed-wrapper".into(),
+            },
+            root,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let keyed = tree.insert(
+            &KeyedTestView {
+                key: crate::key::GlobalKey::<()>::new(),
+            },
+            wrapper,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(root)
+            .expect("root")
+            .set_child_ids(vec![wrapper]);
+        tree.get_mut(wrapper)
+            .expect("wrapper")
+            .set_child_ids(vec![keyed]);
+
+        tree.remove_subtree(
+            wrapper,
+            &mut owner.element_owner_mut(),
+            SubtreeRemoval::Finalize,
+        );
+
+        assert!(
+            tree.get(keyed).is_none(),
+            "a finalizing removal must free the keyed descendant — leaving it \
+             inactive with no frame to drain the queue skips its dispose",
+        );
+        assert!(
+            !owner.has_inactive_elements(),
+            "and must not leave it on a queue nothing will drain",
         );
     }
 

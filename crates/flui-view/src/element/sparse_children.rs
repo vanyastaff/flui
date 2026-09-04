@@ -24,6 +24,7 @@ use crate::BoxedView;
 use crate::ElementOwner;
 use crate::tree::ElementNode;
 use crate::tree::ElementTree;
+use crate::tree::SubtreeRemoval;
 use crate::view::View;
 
 /// Bookkeeping for a lazy sliver's on-demand children.
@@ -154,7 +155,7 @@ impl SparseChildren {
         // freed.  A single-node `tree.remove` only removes the top-level element
         // and leaks every descendant (e.g. the Padding and Text inside a
         // Container child stay as orphaned slab entries and dangling render nodes).
-        tree.remove_subtree(child, owner);
+        tree.remove_subtree(child, owner, SubtreeRemoval::DeactivateKeyed);
         tracing::trace!(logical_index, ?child, "SparseChildren evicted lazy child");
         true
     }
@@ -356,7 +357,7 @@ impl SparseChildren {
             next.insert(resident.index, resident.id);
         }
         for resident in residents.iter().filter(|r| !r.claimed && !r.carried_over) {
-            tree.remove_subtree(resident.id, owner);
+            tree.remove_subtree(resident.id, owner, SubtreeRemoval::DeactivateKeyed);
             tracing::trace!(
                 logical_index = resident.index,
                 child = ?resident.id,

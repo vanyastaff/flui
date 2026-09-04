@@ -1597,7 +1597,7 @@ impl flui_view::View for TwoLists {
 /// descendant deactivated instead, a lazy item can carry a `GlobalKey` under
 /// the default configuration, which is what an app would actually write.
 #[test]
-fn lazy_list_view_builder_forgets_a_global_keyed_item_grafted_to_another_list() {
+fn lazy_list_view_builder_preserves_a_global_keyed_item_grafted_to_another_list() {
     let keyed_in_second = Arc::new(AtomicBool::new(false));
     let log: Arc<parking_lot::Mutex<Vec<&'static str>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));

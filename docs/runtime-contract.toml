@@ -1906,7 +1906,11 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn enter_for_close" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "ClosePresentation(flui_foundation::PresentationId)" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn close_presentation(" },
-    { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "element_tree.remove_subtree(root_id, &mut build_owner.element_owner_mut());" },
+    # `SubtreeRemoval::Finalize` is the load-bearing half here (issue #838):
+    # root detach is permanent teardown with no frame after it, so a keyed
+    # descendant must be freed rather than deactivated for a retake that can
+    # never happen.
+    { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "crate::tree::SubtreeRemoval::Finalize," },
     { kind = "test", file = "crates/flui-view/src/binding.rs", contains = "fn detach_root_widget_disposes_every_descendant_not_just_the_root" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispose_during_teardown_cannot_reach_sibling_or_dead_services" },
