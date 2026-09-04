@@ -150,9 +150,6 @@ reviews:
     # Build output and lockfile.
     - "!target/**"
     - "!Cargo.lock"
-    # insta snapshots — reviewed by regenerating, not by reading.
-    - "!**/*.snap"
-    - "!**/*.snap.new"
     # Agent/runtime scratch and editor state.
     - "!.claude/**"
     - "!.compound-engineering/**"
@@ -169,9 +166,9 @@ reviews:
     - "!docs/superpowers/**"
     - "!specs/**"
     - "!openspec/**"
-    # Archival: a per-item construction log and a one-off toolchain
-    # evaluation, neither of which ships.
-    - "!docs/ROADMAP-TRACKER.md"
+    # Archival: a one-off toolchain evaluation that does not ship.
+    # docs/ROADMAP-TRACKER.md is deliberately NOT excluded — AGENTS.md names
+    # it as shipped documentation that stays in scope.
     - "!NIGHTLY-RUST-EVALUATION.md"
 
   path_instructions:
@@ -324,6 +321,17 @@ reviews:
         lock — nextest runs fully parallel, one process per test. Realms and
         schedulers do not need this; each test constructs its own.
 
+    - path: "**/*.snap"
+      instructions: |
+        insta snapshots. These are the only artifact showing what the
+        rendered output actually became, so read the diff rather than
+        skipping it. A regenerated snapshot is a claim that the new output
+        is correct: check that the PR says what changed and why, and that
+        the change is consistent with the code diff. A snapshot regenerated
+        with no corresponding production change, or one whose diff is larger
+        than the code change explains, is an accepted regression until the
+        PR argues otherwise.
+
     - path: "**/Cargo.toml"
       instructions: |
         Manifests. Shared dependencies belong in the root
@@ -359,13 +367,21 @@ reviews:
           `--all-targets` lets dev-dependency feature unification hide broken
           per-crate wiring.
 
-    - path: "{scripts,justfile,tools}/**"
+    - path: "{scripts/**,tools/**,justfile}"
       instructions: |
-        Build and gate scripts. A gate must report its own exit status —
-        piping it through `tail`, `head` or `tee` reports the pipe's status
-        and has already turned a failing clippy run into a reported success.
-        Redirect to a file and check `$?`. Shell here is bash/sh under `set
-        -euo pipefail`; flag unquoted expansions and `cd` without a guard.
+        Build and gate scripts. Every `justfile` recipe runs under
+        `set shell := ["bash", "-euo", "pipefail", "-c"]` and every
+        `scripts/*.sh` opens with `set -euo pipefail`, so a pipeline like
+        `failing | tail` DOES propagate the producer's failure. Do not flag
+        those. Flag instead:
+
+        - A pipeline that loses a gate's status because `pipefail` is not in
+          effect there — a new script missing the `set` line, a `bash -c`
+          one-liner, a GitHub Actions `run:` block with its own shell.
+        - Code that needs a specific stage's status rather than "something
+          failed": read `${PIPESTATUS[@]}`, since the pipeline status alone
+          cannot say which stage failed.
+        - Unquoted expansions, and `cd` without a guard.
 
     - path: "docs/adr/*.md"
       instructions: |
@@ -429,8 +445,9 @@ reviews:
           Applies only when the PR changes render-tree, layout, paint,
           hit-test, semantics, scheduling, parent-data, or reconciliation
           behavior under crates/flui-rendering, crates/flui-objects,
-          crates/flui-view, crates/flui-tree, crates/flui-layer or
-          crates/flui-painting. Otherwise pass without comment.
+          crates/flui-view, crates/flui-tree, crates/flui-layer,
+          crates/flui-painting, crates/flui-scheduler or
+          crates/flui-semantics. Otherwise pass without comment.
 
           PASS if either holds:
           (a) the PR description, a code comment, or a test cites the
