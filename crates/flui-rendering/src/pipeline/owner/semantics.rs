@@ -504,20 +504,6 @@ fn assembly_decisions(
 }
 
 /// Body of [`build_semantics_fragments`].
-/// The logical index a lazy sliver stamped on this child, if it is one.
-///
-/// Read from `SliverMultiBoxAdaptorParentData`, which every multi-box sliver
-/// already maintains for layout and which the band walk keeps in step with the
-/// item's real position — so the announced set position cannot drift from the
-/// row on screen the way a build-time captured index can.
-fn sliver_child_index(node: &crate::storage::RenderNode) -> Option<i32> {
-    let index = node
-        .parent_data()?
-        .downcast_ref::<crate::parent_data::SliverMultiBoxAdaptorParentData>()?
-        .index;
-    i32::try_from(index).ok()
-}
-
 fn build_semantics_fragments_impl(
     tree: &RenderTree,
     id: RenderId,
@@ -531,23 +517,6 @@ fn build_semantics_fragments_impl(
 
     let node = tree.get(id)?;
     let mut config = describe_semantics_configuration(node);
-    // A lazy sliver's child already carries its logical index in the parent
-    // data the sliver maintains, so its set position needs no wrapper widget
-    // and cannot drift from where the item actually sits.
-    //
-    // **Improvement over the reference**, recorded in flui-rendering's
-    // `## Mapping decisions`: Flutter's delegates wrap every item in an
-    // `IndexedSemantics`, which is a `SingleChildRenderObjectWidget` — one
-    // extra element and render object per materialised item, carrying an index
-    // captured at build time. `IndexedSemantics` still exists here for content
-    // a sliver does not own, and an explicit one wins: it runs through
-    // `describe_semantics_configuration` above, so a caller who set an index
-    // deliberately is not overwritten by the sliver's.
-    if config.index_in_parent().is_none()
-        && let Some(index) = sliver_child_index(node)
-    {
-        config.set_index_in_parent(index);
-    }
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
     let clipped = clips.apply(node_semantics_rect(node, origin));

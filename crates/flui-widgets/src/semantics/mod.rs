@@ -391,13 +391,17 @@ impl_render_view!(MergeSemantics);
 /// Annotates its child's semantics node with a zero-based index among its
 /// siblings.
 ///
-/// A lazy sliver delegate wraps every item in one of these, so a screen reader
-/// can announce "item 12 of 100" instead of just reading the row. The count in
-/// that phrase comes from the scrollable's own child count, not from here.
+/// This is the "12" a screen reader announces in "item 12 of 100"; the "100"
+/// comes from the enclosing scrollable's own child count, not from here.
 ///
-/// Flutter's `IndexedSemantics`. The index is zero-based on both sides; the
-/// one-based conversion AccessKit's `position_in_set` wants happens once, at
-/// the platform boundary.
+/// Flutter's `IndexedSemantics`, and in the reference every lazy sliver
+/// delegate wraps every materialised item in one by default. FLUI's do not —
+/// see flui-rendering's `## Mapping decisions` — so this is for content you
+/// index yourself: a hand-built list, a grid of cards, anything a lazy sliver
+/// does not own.
+///
+/// The index is zero-based on both sides; the one-based conversion AccessKit's
+/// `position_in_set` wants happens once, at the platform boundary.
 #[derive(Clone, Debug, Default)]
 pub struct IndexedSemantics {
     index: i32,

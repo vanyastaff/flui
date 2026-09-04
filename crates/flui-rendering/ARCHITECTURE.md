@@ -35,44 +35,45 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
-### A lazy sliver's items get their set position from parent data, not a wrapper
+### The set-position pair is published, and the delegates do not wrap
 
 **Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
-Flutter produces the "12" by having each lazy delegate wrap every materialised item in an
-`IndexedSemantics` (`addSemanticIndexes`, on by default), which is a
-`SingleChildRenderObjectWidget` whose `RenderIndexedSemantics` sets
-`SemanticsConfiguration.indexInParent`.
+Flutter carries the two halves separately — `SemanticsConfiguration.indexInParent` on the item and
+`scrollChildCount` on the scrollable — and leaves each platform bridge to reconcile them; its lazy
+delegates supply the first by wrapping every materialised item in an `IndexedSemantics`
+(`addSemanticIndexes`, on by default), a `SingleChildRenderObjectWidget`.
 
-**Choice:** the semantics assembler reads the index the sliver *already* stamped in
-`SliverMultiBoxAdaptorParentData` and sets `index_in_parent` from it, when nothing above already
-set one. `IndexedSemantics` exists here too, as a public widget for content a sliver does not
-own, and an explicit one wins — it runs through `describe_semantics_configuration` first, so a
-caller who set an index deliberately is not overwritten.
+**Choice:** AccessKit has the concept directly, so `accesskit_translation` emits the pair —
+`position_in_set` (one-based, converted there from the framework's zero-based index) and
+`size_of_set` from the sliver's own `scroll_child_count`, which `RenderSliverList` now describes
+from its item count. A negative index is dropped rather than published as a nonsensical position.
+`IndexedSemantics` and `RenderIndexedSemantics` exist as public widgets; FLUI's delegates do
+**not** wrap items in them by default.
 
-**Alternatives considered:** transcribing the wrapper — rejected on two counts. It costs an
-element and a render object per materialised item, measured directly (a three-item `ListView`
-went from 8 render nodes to 11 while the wrapper version was in the tree). And the wrapper's
-index is captured when the item is *built*, while the sliver's is maintained by the band walk, so
-the two can disagree about where a row actually sits; reading the maintained one cannot drift by
-construction.
+**Placement differs from the reference.** An `IndexedSemantics` goes *inside* the row's semantics
+container here, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
+boundary in this assembler, so a wrapper above the container would index the node that forms
+above the row — the sliver — instead of the row. Flutter's delegates wrap outside because its
+merge runs the other way.
 
-**Trade-off accepted:** the announced position is the item's logical index, so a delegate cannot
-declare an item to be *outside* the set — Flutter's `semanticIndexCallback` returning `null`, the
-case a separator uses. FLUI has no separated-list constructor yet; when one lands it needs a way
-to say "not a member", and that is when this gets revisited rather than now, on speculation.
+**Not done, and why it is not a silent gap:** deriving each item's position automatically from
+the index the sliver already stamps in `SliverMultiBoxAdaptorParentData`. It is the better design
+— zero extra nodes, and an index the band walk keeps in step with the row's real position rather
+than one captured at build time — and a working version measured the wrapper cost directly (a
+three-item `ListView` went from 8 render nodes to 11). It is not shipped because
+`SliverList::separated` interleaves items at even logical indices with separators at odd ones, so
+a derivation from the logical index alone announces separators as members and gives the real items
+positions 1, 3, 5. Correcting that needs a semantic index carried beside the logical one through
+`ElementCore::sliver_slot` and both stamp sites, which is its own change. Tracked on #837.
 
-**Improvement at the platform boundary too:** Flutter carries `indexInParent` and
-`scrollChildCount` as separate fields and leaves each platform bridge to reconcile them into that
-platform's set-position concept. AccessKit has the concept directly, so `accesskit_translation`
-emits the pair — `position_in_set` (one-based, converted there from the framework's zero-based
-index) and `size_of_set` — and drops a negative index rather than publishing a nonsensical
-position.
-
-**Replacement test:** `lazy_list_items_carry_their_set_position_without_a_wrapper`
-(`crates/flui-widgets/tests/semantics.rs`), plus
+**Replacement test:** `an_indexed_item_publishes_its_position_and_the_sliver_its_set_size`
+(`crates/flui-widgets/tests/semantics.rs`), asserting on the published AccessKit nodes rather than
+the framework configuration — the whole chain existed in pieces before this and connected to
+nothing, so the near end proves nothing about what a reader receives. Each half is separately
+load-bearing. Plus
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
-(`crates/flui-objects/tests/render_object_harness.rs`) for the public widget's render object,
-including that an unchanged index requests no semantics update.
+(`crates/flui-objects/tests/render_object_harness.rs`), including that an unchanged index requests
+no semantics update.
 
 ### Layout marks semantics once per walk, at the dirty root
 

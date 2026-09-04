@@ -299,56 +299,75 @@ impl flui_view::View for RowBody {
     }
 }
 
-/// A lazy list's items carry their set position with no wrapper widget.
+/// An `IndexedSemantics` publishes its child's set position, and an enclosing
+/// lazy sliver publishes the set size.
 ///
-/// A screen reader announces "item 12 of 100" from AccessKit's
-/// `position_in_set`. Flutter produces that by wrapping every materialised
-/// item in an `IndexedSemantics` — a `SingleChildRenderObjectWidget`, so one
-/// extra element and render object per item, carrying an index captured when
-/// the item was built. FLUI reads the index the sliver already stamps in
-/// `SliverMultiBoxAdaptorParentData`, so it costs nothing and cannot drift
-/// from where the row actually sits.
+/// Together these are the "12" and the "100" a screen reader reads out. They
+/// come from different places on purpose: only the item knows which one it is,
+/// and only the sliver knows how many there are — a virtualised list cannot
+/// count its own materialised children and get the total.
 ///
-/// The render-node count is asserted precisely because "nothing extra" is the
-/// claim: a wrapper-based implementation would pass every other assertion here
-/// while adding one node per item.
+/// The oracle is `position_in_set`/`size_of_set` on the published AccessKit
+/// nodes rather than the framework-side configuration: the whole chain
+/// (config → node → update → translation) existed in pieces before this and
+/// connected to nothing, so asserting the near end proves nothing about what a
+/// screen reader receives.
 #[test]
-fn lazy_list_items_carry_their_set_position_without_a_wrapper() {
+fn an_indexed_item_publishes_its_position_and_the_sliver_its_set_size() {
     use flui_view::ViewExt as _;
-    use flui_widgets::{ScrollController, SliverList, Viewport};
+    use flui_widgets::{IndexedSemantics, ScrollController, SliverList, Viewport};
+
+    const ROWS: usize = 3;
 
     let controller = ScrollController::new();
-    controller.update_dimensions(200.0, 0.0, 400.0);
     let mut laid = lay_out(
         Viewport::new((SliverList::new(
-            3,
+            ROWS,
             100.0,
             std::rc::Rc::new(|i: usize| {
-                (i < 3).then(|| {
+                (i < ROWS).then(|| {
+                    // The index sits INSIDE the row's semantics container. A
+                    // non-boundary config is absorbed by its nearest ANCESTOR
+                    // boundary here, so an `IndexedSemantics` above the
+                    // container would index whatever node forms above the row
+                    // — the sliver — instead of the row itself. Flutter's
+                    // delegates wrap outside because its merge runs the other
+                    // way; this is the FLUI placement.
                     Semantics::new()
                         .container(true)
                         .label(format!("row {i}"))
-                        .child(SizedBox::new(200.0, 100.0))
+                        .child(IndexedSemantics::new(i as i32).child(SizedBox::new(200.0, 100.0)))
                         .boxed()
                 })
             }),
         ),))
         .position(controller.position()),
-        crate::common::tight(200.0, 200.0),
+        crate::common::tight(200.0, 300.0),
     );
     laid.enable_semantics();
     laid.pump();
 
     let tree = laid.a11y_tree().expect("semantics enabled");
-    for (index, label) in [(1usize, "row 0"), (2, "row 1")] {
+    for (announced, label) in [(1usize, "row 0"), (2, "row 1"), (3, "row 2")] {
         let node = tree
             .find_by_label(label)
             .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
         assert_eq!(
             node.position_in_set(),
-            Some(index),
-            "{label} must announce a one-based set position derived from the \
-             sliver's own logical index",
+            Some(announced),
+            "{label} must publish a one-based set position, converted from the \
+             zero-based index the widget carries",
         );
     }
+
+    // The other half: only the sliver knows how many rows there are, so the
+    // total has to come from it. Asserted rather than merely described — a
+    // published position with no size is "item 12 of ?", which is what this
+    // shipped as before the sliver described its own configuration.
+    let sizes: Vec<usize> = tree.nodes().filter_map(|node| node.size_of_set()).collect();
+    assert_eq!(
+        sizes,
+        vec![ROWS],
+        "exactly one node — the sliver — must publish the set size",
+    );
 }

@@ -215,10 +215,9 @@ impl RenderBox for RenderSemanticsAnnotations {
 /// A render object that annotates its child's semantics node with an index
 /// among its siblings.
 ///
-/// Flutter's `RenderIndexedSemantics` (`rendering/proxy_box.dart`), which a
-/// lazy sliver delegate wraps every item in so a screen reader can announce
-/// "item 12 of 100" rather than just reading the row. The index is
-/// **zero-based**, as the reference's is; the one-based conversion AccessKit's
+/// Flutter's `RenderIndexedSemantics` (`rendering/proxy_box.dart`). The index
+/// is the "12" a screen reader announces in "item 12 of 100", and is
+/// **zero-based** as the reference's is; the one-based conversion AccessKit's
 /// `position_in_set` wants happens once, at the platform boundary.
 #[derive(Debug, Clone)]
 pub struct RenderIndexedSemantics {
