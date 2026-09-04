@@ -1619,121 +1619,96 @@ cases = [
 
 # Derived counts. The inventory test recomputes every number here and fails
 # on drift; ROADMAP.md cites these values.
+#
+# `rust_tests`, `cases_claimed` and `universe_cases_claimed` are deliberately
+# absent, here and per family. All three move whenever a parity test or a cited
+# case is added, so storing them put always-conflicting lines in the one file
+# every parity PR edits, while a reader acts on none of them at ±1. The
+# inventory test recomputes all three; `--nocapture` prints them. The
+# per-target `tests` row below stays, since that one is local to a file and
+# catches a test silently appearing or vanishing.
 [summary]
 targets = 91
-rust_tests = 673
 pins = 1
 oracle_files = 390
 oracle_cases = 5753
-cases_claimed = 313
 cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 301
 universe_cases_diverged = 1
 universe_pending_files = 331
 
 [summary.families."animation"]
 targets = 7
-rust_tests = 37
-cases_claimed = 15
 cases_diverged = 0
 pins = 0
 
 [summary.families."flex"]
 targets = 5
-rust_tests = 35
-cases_claimed = 21
 cases_diverged = 0
 pins = 0
 
 [summary.families."focus"]
 targets = 2
-rust_tests = 26
-cases_claimed = 7
 cases_diverged = 0
 pins = 0
 
 [summary.families."framework"]
 targets = 6
-rust_tests = 27
-cases_claimed = 13
 cases_diverged = 0
 pins = 0
 
 [summary.families."gesture"]
 targets = 5
-rust_tests = 70
-cases_claimed = 17
 cases_diverged = 0
 pins = 0
 
 [summary.families."layout"]
 targets = 22
-rust_tests = 134
-cases_claimed = 79
 cases_diverged = 0
 pins = 0
 
 [summary.families."navigation"]
 targets = 4
-rust_tests = 26
-cases_claimed = 17
 cases_diverged = 0
 pins = 0
 
 [summary.families."painting"]
 targets = 6
-rust_tests = 60
-cases_claimed = 19
 cases_diverged = 0
 pins = 0
 
 [summary.families."pointer"]
 targets = 3
-rust_tests = 45
-cases_claimed = 19
 cases_diverged = 0
 pins = 0
 
 [summary.families."scroll"]
 targets = 8
-rust_tests = 76
-cases_claimed = 36
 cases_diverged = 0
 pins = 0
 
 [summary.families."sliver"]
 targets = 16
-rust_tests = 94
-cases_claimed = 44
 cases_diverged = 1
 pins = 1
 
 [summary.families."stack"]
 targets = 1
-rust_tests = 7
-cases_claimed = 5
 cases_diverged = 0
 pins = 0
 
 [summary.families."table"]
 targets = 1
-rust_tests = 19
-cases_claimed = 16
 cases_diverged = 0
 pins = 0
 
 [summary.families."text"]
 targets = 3
-rust_tests = 12
-cases_claimed = 0
 cases_diverged = 0
 pins = 0
 
 [summary.families."text-input"]
 targets = 2
-rust_tests = 5
-cases_claimed = 5
 cases_diverged = 0
 pins = 0

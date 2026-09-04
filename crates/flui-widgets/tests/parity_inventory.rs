@@ -165,19 +165,31 @@ struct OracleFile {
     status: String,
 }
 
+/// The derived figures the manifest stores and this file re-checks.
+///
+/// Deliberately *not* here: `rust_tests`, `cases_claimed`, and its universe
+/// counterpart `universe_cases_claimed`. All three move whenever a parity test
+/// or a cited case is added, so storing them put always-conflicting lines in a
+/// file every parity PR touches — a lockfile conflict without a lockfile's
+/// tooling — while a reader acts on none of them at ±1. What stays is what a
+/// wrong number would actually mislead someone about: the universe size, how
+/// much of it is still untouched, and the divergence pins.
+///
+/// The three are still recomputed below and printed. Libtest captures stdout
+/// for a passing test, so seeing them takes
+/// `cargo test -p flui-widgets --test parity_inventory -- --nocapture`
+/// (or `cargo nextest run … --no-capture`); the doc comments that mention them
+/// name that flag rather than implying an ordinary run shows them.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Summary {
     targets: usize,
-    rust_tests: usize,
     pins: usize,
     oracle_files: usize,
     oracle_cases: usize,
-    cases_claimed: usize,
     cases_diverged: usize,
     universe_files: usize,
     universe_cases: usize,
-    universe_cases_claimed: usize,
     universe_cases_diverged: usize,
     universe_pending_files: usize,
     families: BTreeMap<String, FamilySummary>,
@@ -187,8 +199,6 @@ struct Summary {
 #[serde(deny_unknown_fields)]
 struct FamilySummary {
     targets: usize,
-    rust_tests: usize,
-    cases_claimed: usize,
     cases_diverged: usize,
     pins: usize,
 }
@@ -888,20 +898,24 @@ fn oracle_rows_and_summary_recompute() {
     }
 
     let s = &manifest.summary;
-    let rust_tests: usize = manifest.targets.iter().map(|t| t.tests).sum();
     let pins: usize = manifest.targets.iter().map(|t| t.pins.len()).sum();
+    // Recomputed, never stored — see `Summary`. Visible only under
+    // `--nocapture`, which is what the docs that mention these figures say.
+    let rust_tests: usize = manifest.targets.iter().map(|t| t.tests).sum();
     let cases_claimed: usize = claimed.values().sum();
+    println!(
+        "parity inventory: {rust_tests} rust tests claiming {cases_claimed} oracle cases \
+         ({} of them inside the `widgets/` universe)",
+        uni.2
+    );
     let expected = [
         ("targets", manifest.targets.len(), s.targets),
-        ("rust_tests", rust_tests, s.rust_tests),
         ("pins", pins, s.pins),
         ("oracle_files", totals.0, s.oracle_files),
         ("oracle_cases", totals.1, s.oracle_cases),
-        ("cases_claimed", cases_claimed, s.cases_claimed),
         ("cases_diverged", totals.3, s.cases_diverged),
         ("universe_files", uni.0, s.universe_files),
         ("universe_cases", uni.1, s.universe_cases),
-        ("universe_cases_claimed", uni.2, s.universe_cases_claimed),
         ("universe_cases_diverged", uni.3, s.universe_cases_diverged),
         ("universe_pending_files", uni.4, s.universe_pending_files),
     ];
@@ -913,14 +927,12 @@ fn oracle_rows_and_summary_recompute() {
     }
 
     // per-family recompute
-    let mut fams: BTreeMap<&str, (usize, usize, usize, usize, usize)> = BTreeMap::new();
+    let mut fams: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
     for t in &manifest.targets {
         let e = fams.entry(t.family.as_str()).or_default();
         e.0 += 1;
-        e.1 += t.tests;
-        e.2 += t.claims.iter().map(|c| c.cases.len()).sum::<usize>();
-        e.3 += t.pins.iter().map(|p| p.cases.len()).sum::<usize>();
-        e.4 += t.pins.len();
+        e.1 += t.pins.iter().map(|p| p.cases.len()).sum::<usize>();
+        e.2 += t.pins.len();
     }
     let stored_fams: BTreeSet<&str> = s.families.keys().map(String::as_str).collect();
     let computed_fams: BTreeSet<&str> = fams.keys().copied().collect();
@@ -928,20 +940,13 @@ fn oracle_rows_and_summary_recompute() {
         stored_fams, computed_fams,
         "[summary.families] keys disagree with target families"
     );
-    for (family, (targets, tests, cases, diverged, pins)) in fams {
+    for (family, (targets, diverged, pins)) in fams {
         let f = &s.families[family];
         assert_eq!(
-            (
-                f.targets,
-                f.rust_tests,
-                f.cases_claimed,
-                f.cases_diverged,
-                f.pins
-            ),
-            (targets, tests, cases, diverged, pins),
+            (f.targets, f.cases_diverged, f.pins),
+            (targets, diverged, pins),
             "[summary.families.\"{family}\"] is stale; recomputed \
-             (targets, rust_tests, cases_claimed, cases_diverged, pins) = \
-             ({targets}, {tests}, {cases}, {diverged}, {pins})"
+             (targets, cases_diverged, pins) = ({targets}, {diverged}, {pins})"
         );
     }
 }
@@ -1118,19 +1123,20 @@ fn the_roadmap_cites_the_inventorys_own_counts() {
         "{BEGIN}\n\
          <!-- Generated: `cargo test -p flui-widgets --test parity_inventory` recomputes these \
          from `tests/parity/manifest.toml` and fails on drift. Do not hand-edit. -->\n\
-         **{} targets / {} tests**, claiming **{} oracle cases with citations** \
-         ({} diverged, counted separately and never as parity), against a \
-         **{}-file / {}-case** `test/widgets` universe of which **{}** remain pending. \
-         **{}** `#[ignore]` divergence pins remain, each owned by an issue or a decision.\n\
+         **{} parity targets** against a **{}-file / {}-case** `test/widgets` universe, \
+         of which **{}** files remain entirely untouched. Divergence pins on record: \
+         **{}** — `#[ignore]`d, each owned by an issue or a decision. Oracle cases \
+         recorded as diverged: **{}** — tracked apart from the claims, never as parity. \
+         Per-target \
+         test and claimed-case counts live in \
+         `crates/flui-widgets/tests/parity/manifest.toml`.\n\
          {END}",
         s.targets,
-        s.rust_tests,
-        s.cases_claimed,
-        s.cases_diverged,
         s.universe_files,
         s.universe_cases,
         s.universe_pending_files,
         s.pins,
+        s.cases_diverged,
     );
 
     let roadmap_path = crate_root().join("../../docs/ROADMAP.md");
