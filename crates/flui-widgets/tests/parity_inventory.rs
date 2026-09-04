@@ -1090,3 +1090,71 @@ fn manifest_matches_pinned_reference() {
          manifest rows whose upstream file is gone: {vanished:?}"
     );
 }
+
+// ============================================================================
+// The prose that cites these counts is checked too
+// ============================================================================
+
+/// `docs/ROADMAP.md` quotes the inventory's headline numbers, and nothing
+/// checked them — so they were three weeks stale while the gate below them was
+/// green, and every count in the sentence was wrong.
+///
+/// The manifest's `[summary]` block is the single source; this test asserts
+/// that the prose citing it agrees, and prints the exact replacement block on
+/// failure so updating it is mechanical rather than arithmetic. Removing the
+/// numbers from the prose entirely was the alternative and was rejected: a
+/// reader wants the scale without opening a TOML, and a figure that CI
+/// verifies is worth more than no figure at all.
+///
+/// The block is delimited by HTML comments so it renders as ordinary prose.
+#[test]
+fn the_roadmap_cites_the_inventorys_own_counts() {
+    const BEGIN: &str = "<!-- parity-counts:begin -->";
+    const END: &str = "<!-- parity-counts:end -->";
+
+    let manifest = load_manifest();
+    let s = &manifest.summary;
+    let expected = format!(
+        "{BEGIN}\n\
+         <!-- Generated: `cargo test -p flui-widgets --test parity_inventory` recomputes these \
+         from `tests/parity/manifest.toml` and fails on drift. Do not hand-edit. -->\n\
+         **{} targets / {} tests**, claiming **{} oracle cases with citations** \
+         ({} diverged, counted separately and never as parity), against a \
+         **{}-file / {}-case** `test/widgets` universe of which **{}** remain pending. \
+         **{}** `#[ignore]` divergence pins remain, each owned by an issue or a decision.\n\
+         {END}",
+        s.targets,
+        s.rust_tests,
+        s.cases_claimed,
+        s.cases_diverged,
+        s.universe_files,
+        s.universe_cases,
+        s.universe_pending_files,
+        s.pins,
+    );
+
+    let roadmap_path = crate_root().join("../../docs/ROADMAP.md");
+    let roadmap = fs::read_to_string(&roadmap_path).unwrap_or_else(|e| {
+        panic!(
+            "ROADMAP.md must be readable at {}: {e}",
+            roadmap_path.display()
+        )
+    });
+
+    let begin = roadmap.find(BEGIN).unwrap_or_else(|| {
+        panic!(
+            "ROADMAP.md carries no `{BEGIN}` marker. The parity counts it quotes \
+             are generated; wrap them in the marker pair and paste:\n\n{expected}\n"
+        )
+    });
+    let end = roadmap[begin..].find(END).map_or_else(
+        || panic!("ROADMAP.md has `{BEGIN}` with no matching `{END}`"),
+        |offset| begin + offset + END.len(),
+    );
+
+    let actual = &roadmap[begin..end];
+    assert_eq!(
+        actual, expected,
+        "ROADMAP.md's parity counts are stale. Replace the marked block with:\n\n{expected}\n",
+    );
+}
