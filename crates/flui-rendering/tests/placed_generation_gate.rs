@@ -1,0 +1,158 @@
+//! A child a layout pass did not lay out is skipped by paint.
+//!
+//! Every multi-child render object that lays out a *subset* of its children —
+//! a lazy sliver's band, anything virtualised — leaves the rest holding an
+//! offset and a size from an earlier pass. Painting them there puts content
+//! where the tree no longer says anything is.
+//!
+//! Nothing at the render-object level can prevent it: `PaintCx` exposes
+//! neither parent data nor a child's index, so an object cannot tell paint
+//! which of its children this pass actually placed. Until now the hazard was
+//! closed one layer up, per object, by discipline — the eager grid tracked its
+//! own `laid_out_band`, and the lazy slivers rely on the frame evicting
+//! out-of-band residents before paint runs (ADR-0017's amendment).
+//!
+//! It is now structural. A layout stamps its own generation onto the children
+//! it laid out, and the paint driver skips any child carrying a different one,
+//! so every multi-child object gets the property whether or not it remembered
+//! to ask for it.
+//!
+//! The fixture lays out a subset that SHRINKS between two passes, because that
+//! is the only shape where the defect is observable: a child never laid out at
+//! all has size zero and paints nothing regardless, so a single-pass test
+//! passes with the gate removed. (It did — that version was written first.)
+
+use flui_objects::RenderColoredBox;
+use flui_rendering::{
+    constraints::BoxConstraints,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    testing::{Probe, RenderTester, box_node},
+    traits::RenderBox,
+};
+use flui_tree::Variable;
+use flui_types::{Offset, Size, geometry::px};
+
+/// Lays out and positions children `0..laid_out`, stacked vertically, and
+/// leaves the rest untouched — the shape of any virtualising parent.
+#[derive(Debug)]
+struct LaysOutFirstN {
+    laid_out: usize,
+}
+
+impl flui_foundation::Diagnosticable for LaysOutFirstN {}
+
+impl RenderBox for LaysOutFirstN {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
+        let constraints = *ctx.constraints();
+        let count = ctx.child_count().min(self.laid_out);
+        for i in 0..count {
+            let size = ctx.layout_child(i, constraints);
+            ctx.position_child(i, Offset::new(px(0.0), px(i as f32 * size.height.get())));
+        }
+        constraints.constrain(Size::new(px(100.0), px(100.0)))
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+        // Descends into every child unconditionally — the gate under test must
+        // be the pipeline's, not this fixture's own bookkeeping. An object
+        // that tracked its own laid-out band would hide the defect. The count is
+        // hard-coded because the hit-test context exposes none — and asking
+        // the fixture for its own would reintroduce the bookkeeping.
+        // Reverse order, first hit wins — the ordinary multi-child shape.
+        for index in (0..2usize).rev() {
+            if ctx.hit_test_child_at_layout_offset(index) {
+                return true;
+            }
+        }
+        // The parent itself does not claim the hit, so the path below reflects
+        // only which child answered.
+        false
+    }
+}
+
+#[test]
+fn a_child_dropped_from_a_later_layout_pass_stops_painting() {
+    let mut run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 2 })
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("kept"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("dropped")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_frame();
+
+    let root = run.root();
+    // Frame one laid both out, so the second has a real size and offset to go
+    // stale — without this the test proves nothing, since a child never laid
+    // out has size zero and paints nothing regardless.
+    let first_frame = run.display_commands();
+    assert!(
+        first_frame
+            .iter()
+            .any(|c| c.line.contains("DrawRect") && c.line.contains("#00FF00FF")),
+        "the second child must paint in frame one; commands: {first_frame:#?}"
+    );
+
+    // Frame two lays out only the first.
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 1);
+    let run = run.run_frame_again();
+
+    let commands = run.display_commands();
+    let paints = |colour: &str| {
+        commands
+            .iter()
+            .any(|command| command.line.contains("DrawRect") && command.line.contains(colour))
+    };
+
+    assert!(
+        paints("#FF0000FF"),
+        "the child this pass laid out must still paint; commands: {commands:#?}"
+    );
+    assert!(
+        !paints("#00FF00FF"),
+        "a child dropped from this pass must not paint at the offset the \
+         previous pass left; commands: {commands:#?}"
+    );
+}
+
+/// The same child stops being hit-testable, not just invisible.
+///
+/// Gating paint alone would be worse than gating nothing: a child that no
+/// longer appears but still answers a hit is something the user can click and
+/// cannot see. Both walks read the same stamp for that reason.
+#[test]
+fn a_child_dropped_from_a_later_layout_pass_stops_being_hit() {
+    let mut run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 2 })
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("kept"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("dropped")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .run_layout();
+
+    let root = run.root();
+    let dropped = run.id("dropped");
+    // The second child sits at y = 40..80 after pass one, so a hit there must
+    // reach it — otherwise the pass-two assertion proves nothing.
+    assert!(
+        run.hit(20.0, 60.0).contains(&dropped),
+        "precondition: the second child is hit-testable while it is laid out"
+    );
+
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 1);
+    run.relayout();
+
+    assert!(
+        !run.hit(20.0, 60.0).contains(&dropped),
+        "a child dropped from this pass must not answer a hit at the position \
+         the previous pass gave it"
+    );
+    assert!(
+        run.hit(20.0, 20.0).contains(&run.id("kept")),
+        "the child this pass laid out is still hit-testable"
+    );
+}

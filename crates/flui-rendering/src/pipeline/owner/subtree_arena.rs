@@ -950,6 +950,10 @@ unsafe fn layout_subtree_borrowed_impl(
     if is_repaint_boundary {
         arena.laid_out.lock().push(id);
     }
+    // A fresh generation for this pass. Children this node lays out are
+    // stamped with it at commit; children it skips keep the previous value and
+    // fall out of `was_placed_by`, which is what paint, hit-test and semantics
+    // read to leave them alone.
 
     // -----------------------------------------------------------------------
     // Phase 1b — seed child states while NO &mut to the parent slot is live.
@@ -1384,6 +1388,16 @@ unsafe fn layout_subtree_borrowed_impl(
     // an atomic store through `&self`.  The `&*child_ptr.0` shared reborrow is
     // the only live borrow of that child slot at this point.
     // -----------------------------------------------------------------------
+    // Advance HERE, in the same block that stamps the children. Advancing at
+    // layout entry instead lets any early return in between (a protocol error,
+    // a poisoned descendant) move the parent forward while stamping nobody,
+    // which unplaces every child and stops the whole subtree painting.
+    let parent_generation = arena.get(id).map_or(0, |ptr| {
+        // SAFETY: as for the child reborrows below — no `&mut` to this slot is
+        // live at this point in the walk.
+        let node: &RenderNode = unsafe { &*ptr.0 };
+        node.advance_layout_generation()
+    });
     for cs in &child_states {
         // Skip slots whose &mut is live on an ancestor frame (see above).
         if arena.is_in_flight(cs.id) {
@@ -1394,6 +1408,14 @@ unsafe fn layout_subtree_borrowed_impl(
             // ancestor frame holds a live &mut to this slot.
             let child_node: &RenderNode = unsafe { &*child_ptr.0 };
             child_node.set_offset(cs.offset);
+            // Stamp only the children this pass actually laid out. A child the
+            // parent skipped keeps its previous stamp and is skipped in turn by
+            // paint, hit-test and semantics, which is what keeps a lazy
+            // sliver's out-of-band residents from being painted at an offset
+            // no longer describing the tree.
+            if cs.laid_out_this_pass {
+                child_node.set_placed_generation(parent_generation);
+            }
         }
     }
 
@@ -1715,6 +1737,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     if is_repaint_boundary {
         arena.laid_out.lock().push(id);
     }
+    // A fresh generation for this pass. Children this node lays out are
+    // stamped with it at commit; children it skips keep the previous value and
+    // fall out of `was_placed_by`, which is what paint, hit-test and semantics
+    // read to leave them alone.
 
     // No early-return here for the empty case: a lazy sliver (e.g.
     // `RenderSliverList`) starts with zero attached children and must
@@ -2005,6 +2031,13 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // their slots carry no live borrow from this call level.  `set_offset` is
     // an atomic store through `&self`.
     // -----------------------------------------------------------------------
+    // Advance HERE — see the box walk's commit for why this cannot move to
+    // layout entry.
+    let parent_generation = arena.get(id).map_or(0, |ptr| {
+        // SAFETY: as for the child reborrows below.
+        let node: &crate::storage::RenderNode = unsafe { &*ptr.0 };
+        node.advance_layout_generation()
+    });
     for cs in &child_states {
         // Skip slots whose &mut is live on an ancestor frame.
         if arena.is_in_flight(cs.id) {
@@ -2014,6 +2047,11 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             // SAFETY: child `cs.id` is NOT in-flight (guard above).
             let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
             child_node.set_offset(cs.offset);
+            // See the box walk's commit: only children this pass laid out are
+            // stamped, and paint, hit-test and semantics skip the rest.
+            if cs.laid_out_this_pass {
+                child_node.set_placed_generation(parent_generation);
+            }
         }
     }
 

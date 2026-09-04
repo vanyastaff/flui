@@ -112,4 +112,58 @@ impl<P: Protocol> RenderState<P> {
     pub fn set_offset(&self, offset: Offset) {
         self.offset.store(offset);
     }
+
+    /// This node's current layout generation — bumped once per real layout of
+    /// this node, and stamped onto the children it lays out.
+    #[inline]
+    pub fn layout_generation(&self) -> u64 {
+        self.layout_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Advance to a fresh generation and return it.
+    ///
+    /// Called at the layout **commit**, in the same block that stamps the
+    /// children — deliberately not at layout entry. Splitting the two lets any
+    /// early return between them (a protocol error, a poisoned descendant)
+    /// advance the parent while stamping nobody, which silently unplaces every
+    /// child and makes the whole subtree stop painting. Advancing here means
+    /// the parent's value and its children's stamps are always written
+    /// together or not at all.
+    ///
+    /// Wrapping is deliberate and harmless: the comparison is equality against
+    /// the parent's *current* value, so a wrap would have to coincide with a
+    /// child untouched for exactly 2^64 of its parent's layouts.
+    #[inline]
+    pub fn advance_layout_generation(&self) -> u64 {
+        let next = self
+            .layout_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(1);
+        self.layout_generation
+            .store(next, std::sync::atomic::Ordering::Relaxed);
+        next
+    }
+
+    /// Record that `parent_generation` laid this node out as one of its
+    /// children.
+    #[inline]
+    pub fn set_placed_generation(&self, parent_generation: u64) {
+        self.placed_generation
+            .store(parent_generation, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether this node was laid out as a child during the parent's current
+    /// pass.
+    ///
+    /// `false` for a child a multi-child object skipped — a lazy sliver's
+    /// out-of-band item, an indexed stack's hidden pages once they stop being
+    /// laid out — so paint, hit-test and semantics can leave it alone rather
+    /// than reading an offset from a pass that no longer describes the tree.
+    #[inline]
+    pub fn was_placed_by(&self, parent_generation: u64) -> bool {
+        self.placed_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == parent_generation
+    }
 }

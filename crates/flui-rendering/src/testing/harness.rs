@@ -555,12 +555,37 @@ impl FrameRun {
         mark_needs_paint(&mut self.owner, id);
     }
 
+    /// Drive a SECOND frame over the same tree.
+    ///
+    /// The single-frame runs answer "what does this tree render"; this answers
+    /// "what changes when it renders again", which is the only way to observe
+    /// anything that goes stale — a child a later layout pass stops laying
+    /// out, a cached value a second pass should invalidate. A one-frame test
+    /// of such a property passes whether or not the property holds, because
+    /// there is no previous pass for the second to contradict.
+    pub fn run_frame_again(self) -> Self {
+        let Self {
+            owner,
+            root_id,
+            registry,
+            ..
+        } = self;
+        let (owner, result) = owner.run_frame();
+        let layer_tree = result.expect("run_frame must succeed for a well-formed test tree");
+        Self {
+            owner,
+            root_id,
+            registry,
+            layer_tree,
+        }
+    }
+
     /// Serializes the most recent frame's layer tree to a stable indented
     /// text form, or returns `"<no layer tree>"` when nothing was painted.
     ///
     /// Use with `insta::assert_snapshot!` to pin the layer structure over
-    /// time. The format is stable across runs (2-decimal floats, insertion-order
-    /// children, no hash iteration).
+    /// time. The format is stable across runs (2-decimal floats,
+    /// insertion-order children, no hash iteration).
     #[must_use]
     pub fn snapshot(&self) -> String {
         super::snapshot::snapshot_tree(self.layer_tree.as_ref())
