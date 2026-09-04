@@ -99,10 +99,16 @@ fn summarize_paint(paint: &Paint) -> String {
         PaintStyle::Stroke => "stroke",
     };
     let color = hex_color(paint.color);
+    // Only the NON-default is printed. Anti-aliasing is on for almost every
+    // command, so printing it always would add a constant to every line of
+    // every snapshot and change all of them at once; printing only the
+    // deviation keeps existing snapshots untouched while making a paint that
+    // opted out visible to any test reading these lines.
+    let aliased = if paint.anti_alias { "" } else { " aliased" };
     if matches!(paint.style, PaintStyle::Stroke) {
-        format!("{style} {color} stroke={}", f(paint.stroke_width))
+        format!("{style} {color} stroke={}{aliased}", f(paint.stroke_width))
     } else {
-        format!("{style} {color}")
+        format!("{style} {color}{aliased}")
     }
 }
 

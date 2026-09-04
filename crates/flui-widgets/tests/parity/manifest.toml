@@ -163,7 +163,7 @@ cases = [
 rust = "colored_box_test"
 family = "layout"
 oracles = ["widgets/basic_test.dart"]
-tests = 5
+tests = 6
 
 [[targets.claims]]
 oracle = "widgets/basic_test.dart"
@@ -172,6 +172,11 @@ cases = [
     "ColoredBox - no size, child",
     "ColoredBox - size, no child",
     "ColoredBox - size, child",
+    # Both anti-alias cases are covered by one Rust test, which asserts the
+    # same value each of them does (`Paint.isAntiAlias`) off the composited
+    # layer tree rather than a mock canvas.
+    "ColoredBox - default isAntiAlias",
+    "ColoredBox - passing isAntiAlias = false",
 ]
 
 [[targets]]
@@ -1254,7 +1259,7 @@ cases = [
 "widgets/backdrop_filter_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/banner_test.dart" = { cases = 14, claimed = 0, status = "pending" }
 "widgets/baseline_test.dart" = { cases = 5, claimed = 0, status = "pending" }
-"widgets/basic_test.dart" = { cases = 56, claimed = 10, status = "partial" }
+"widgets/basic_test.dart" = { cases = 56, claimed = 12, status = "partial" }
 "widgets/binding_attach_root_widget_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/binding_cannot_schedule_frame_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/binding_deferred_first_frame_test.dart" = { cases = 2, claimed = 0, status = "pending" }
@@ -1610,15 +1615,15 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 91
-rust_tests = 664
+rust_tests = 665
 pins = 1
 oracle_files = 390
 oracle_cases = 5753
-cases_claimed = 308
+cases_claimed = 310
 cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 296
+universe_cases_claimed = 298
 universe_cases_diverged = 1
 universe_pending_files = 331
 
@@ -1659,8 +1664,8 @@ pins = 0
 
 [summary.families."layout"]
 targets = 22
-rust_tests = 131
-cases_claimed = 76
+rust_tests = 132
+cases_claimed = 78
 cases_diverged = 0
 pins = 0
 

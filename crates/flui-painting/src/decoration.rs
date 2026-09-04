@@ -102,6 +102,37 @@ fn resolve_silhouette(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) ->
     }
 }
 
+/// How a decoration is rasterized, as opposed to what it depicts.
+///
+/// Separate from [`BoxDecoration`] on purpose: that type describes an
+/// appearance and is serializable, while this is a rendering-quality hint the
+/// render object owns — the same split Flutter makes by putting
+/// `isAntiAlias` on `_RenderColoredBox` rather than on any decoration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DecorationPaintOptions {
+    /// Whether the decoration's own edges are anti-aliased.
+    ///
+    /// `true` by default, matching Flutter's `Paint.isAntiAlias`. Turning it
+    /// off is for a box whose edges are already pixel-aligned, where the
+    /// feathered edge is a blur rather than a smoothing.
+    pub anti_alias: bool,
+}
+
+impl Default for DecorationPaintOptions {
+    fn default() -> Self {
+        Self { anti_alias: true }
+    }
+}
+
+impl DecorationPaintOptions {
+    /// Options with `anti_alias` set to `value`.
+    #[must_use]
+    pub const fn with_anti_alias(value: bool) -> Self {
+        Self { anti_alias: value }
+    }
+}
+
 /// Paints `decoration` into `rect` on `canvas` in Flutter's order:
 /// shadows, then background color/gradient, then the decoration image,
 /// then the border.
@@ -109,6 +140,7 @@ pub fn paint_box_decoration(
     canvas: &mut Canvas,
     rect: Rect<Pixels>,
     decoration: &BoxDecoration<Pixels>,
+    options: DecorationPaintOptions,
 ) {
     let silhouette = resolve_silhouette(rect, decoration);
 
@@ -175,14 +207,22 @@ pub fn paint_box_decoration(
                 // (`wgpu/backend.rs`); a solid fallback color here would
                 // make the circle the only gradient-silhouette that paints
                 // something visible from a stopless shader.
-                let paint = Paint::fill(Color::TRANSPARENT).with_shader(shader);
+                let paint = Paint::fill(Color::TRANSPARENT)
+                    .with_shader(shader)
+                    .with_anti_alias(options.anti_alias);
                 canvas.draw_circle(circle.center, circle.radius, &paint);
             }
             Silhouette::RRect(rrect) => canvas.draw_gradient_rrect(*rrect, shader),
             Silhouette::Rect => canvas.draw_gradient(rect, shader),
         }
     } else if let Some(color) = decoration.color {
-        let paint = Paint::fill(color);
+        // `options.anti_alias` reaches the BACKGROUND only. Flutter's
+        // `isAntiAlias` is a `ColoredBox` parameter, and a `ColoredBox` has no
+        // border, shadow or image; nothing in the oracle asks what those
+        // should do when it is off, so they keep the default rather than
+        // being changed on a guess. The options struct is the seam if a
+        // caller ever needs them to follow.
+        let paint = Paint::fill(color).with_anti_alias(options.anti_alias);
         match &silhouette {
             Silhouette::Circle(circle) => canvas.draw_circle(circle.center, circle.radius, &paint),
             Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),

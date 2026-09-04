@@ -190,7 +190,9 @@ pub use binding::{CachedImage, ImageCache, ImageHandle, PaintingBinding};
 // Primary API types
 pub use canvas::Canvas;
 pub use clip_context::ClipContext;
-pub use decoration::{box_decoration_hit_test, paint_box_decoration, resolve_gradient};
+pub use decoration::{
+    DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration, resolve_gradient,
+};
 pub use display_list::{
     DisplayList, DisplayListCore, DisplayListExt, DisplayListStats, DrawCommand,
 };

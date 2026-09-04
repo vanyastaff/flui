@@ -13124,3 +13124,51 @@ fn harness_table_fill_collapses_a_row_that_intrinsic_height_would_size() {
          behaviour), where the identical IntrinsicHeight row is 90 tall",
     );
 }
+
+/// The background fill carries the render object's anti-alias setting, and
+/// carries `true` by default.
+///
+/// Flutter parity: `basic_test.dart`'s `'ColoredBox - default isAntiAlias'`
+/// and `'ColoredBox - passing isAntiAlias = false'` assert exactly this, on
+/// `mockCanvas.paints.single.isAntiAlias`. FLUI's `ColoredBox` realizes as a
+/// `RenderDecoratedBox`, so the flag lives here — where Flutter also keeps it
+/// (`_RenderColoredBox`), rather than on the serializable `BoxDecoration`.
+#[test]
+fn harness_decorated_box_background_carries_the_anti_alias_flag() {
+    let painted_aa = |anti_alias: bool| {
+        let mut render_object = RenderDecoratedBox::new(BoxDecoration::with_color(Color::RED));
+        let _ = render_object.set_anti_alias(anti_alias);
+        let run = RenderTester::mount(box_node(render_object))
+            .with_size(Size::new(px(40.0), px(20.0)))
+            .run_frame();
+        run.display_commands()
+            .into_iter()
+            .map(|cmd| cmd.line)
+            .filter(|line| line.contains("DrawRect"))
+            .collect::<Vec<_>>()
+    };
+
+    let default_aa = RenderDecoratedBox::new(BoxDecoration::with_color(Color::RED)).anti_alias();
+    assert!(
+        default_aa,
+        "the default matches Flutter's `isAntiAlias: true`"
+    );
+
+    let on = painted_aa(true);
+    let off = painted_aa(false);
+    assert_eq!(on.len(), 1, "one fill command either way; got {on:?}");
+    assert_eq!(off.len(), 1, "one fill command either way; got {off:?}");
+    assert_ne!(
+        on, off,
+        "the flag must reach the recorded paint — if these agree it was \
+         dropped somewhere between the render object and the canvas",
+    );
+    assert!(
+        off[0].contains("aliased"),
+        "the aliased fill must say so in its recorded command: {off:?}",
+    );
+    assert!(
+        !on[0].contains("aliased"),
+        "and the default must not: {on:?}",
+    );
+}

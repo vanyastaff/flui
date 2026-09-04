@@ -6,8 +6,8 @@
 //! same contract the fragment paint model relies on.
 
 use flui_painting::{
-    Canvas, DisplayListCore, DrawCommand, box_decoration_hit_test, paint_box_decoration,
-    resolve_gradient,
+    Canvas, DecorationPaintOptions, DisplayListCore, DrawCommand, box_decoration_hit_test,
+    paint_box_decoration, resolve_gradient,
 };
 use flui_types::{
     Offset, Pixels, Point,
@@ -34,7 +34,12 @@ fn commands(decoration: &BoxDecoration<Pixels>) -> Vec<DrawCommand> {
 /// about non-degenerate vs. degenerate sizes.
 fn commands_in(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Vec<DrawCommand> {
     let mut canvas = Canvas::new();
-    paint_box_decoration(&mut canvas, rect, decoration);
+    paint_box_decoration(
+        &mut canvas,
+        rect,
+        decoration,
+        DecorationPaintOptions::default(),
+    );
     canvas.finish().commands().cloned().collect()
 }
 
