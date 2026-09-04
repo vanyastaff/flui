@@ -35,7 +35,7 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
-### The set-position pair is published, and the delegates do not wrap
+### The set POSITION is published; the set size waits, and the delegates do not wrap
 
 **Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
 Flutter carries the two halves separately — `SemanticsConfiguration.indexInParent` on the item and
@@ -74,11 +74,12 @@ a derivation from the logical index alone announces separators as members and gi
 positions 1, 3, 5. Correcting that needs a semantic index carried beside the logical one through
 `ElementCore::sliver_slot` and both stamp sites, which is its own change. Tracked on #837.
 
-**Replacement test:** `an_indexed_item_publishes_its_position_and_the_sliver_its_set_size`
+**Replacement test:** `an_indexed_item_publishes_its_position_in_the_set`
 (`crates/flui-widgets/tests/semantics.rs`), asserting on the published AccessKit nodes rather than
 the framework configuration — the whole chain existed in pieces before this and connected to
-nothing, so the near end proves nothing about what a reader receives. Each half is separately
-load-bearing. Plus
+nothing, so the near end proves nothing about what a reader receives. It also asserts that
+*nothing* publishes a set size, so the deferral is a checked state rather than an oversight and
+the assertion fails the moment one is added without revisiting this entry. Plus
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 (`crates/flui-objects/tests/render_object_harness.rs`), including that an unchanged index requests
 no semantics update.

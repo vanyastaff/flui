@@ -302,8 +302,8 @@ impl flui_view::View for RowBody {
 /// An `IndexedSemantics` publishes its child's position within the set.
 ///
 /// That is the "12" a screen reader reads out in "item 12 of 100". The "100"
-/// is not published yet — see the assertion at the end for why the obvious
-/// place for it is the wrong one.
+/// is not published at all yet — see the assertion at the end for why the
+/// obvious place for it is the wrong one.
 ///
 /// The oracle is `position_in_set`/`size_of_set` on the published AccessKit
 /// nodes rather than the framework-side configuration: the whole chain
@@ -368,11 +368,14 @@ fn an_indexed_item_publishes_its_position_in_the_set() {
     // a three-item list.
     //
     // Both belong on the item node, from a semantic child count that travels
-    // with the semantic index — the same threading #837 needs — so this
-    // asserts the absence rather than pinning a wrong value as the contract.
+    // alongside the semantic index — one cannot land without the other,
+    // because the count a delegate should announce is the count of the items
+    // it indexes, not the render children it interleaves. So this asserts the
+    // absence rather than pinning a wrong value as the contract.
     let sizes: Vec<usize> = tree.nodes().filter_map(|node| node.size_of_set()).collect();
     assert!(
         sizes.is_empty(),
-        "no set size is published yet (see #837); found {sizes:?}",
+        "no set size is published until it can be put on the item node with a \
+         semantic child count; found {sizes:?}",
     );
 }
