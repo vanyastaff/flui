@@ -1520,9 +1520,11 @@ pub type HitTestChildCallback<'a> =
 /// # Reaching the driver
 ///
 /// `composed_transform` used to be purely local bookkeeping: nothing ever
-/// read it except [`BoxHitTestCtx::add_self`], which is itself dead in
-/// production (render objects use [`HitTestContext::register_self_hit_entry`]
-/// instead — see that method's doc). [`hit_test_child`](Self::hit_test_child)
+/// read it except an `add_self` that was itself dead in production, and which
+/// has since been deleted along with every other writer into the protocol-level
+/// hit result (issue #844) — render objects register through
+/// [`HitTestContext::register_self_hit_entry`], which the driver reads.
+/// [`hit_test_child`](Self::hit_test_child)
 /// and [`hit_test_child_at_layout_offset`](Self::hit_test_child_at_layout_offset)
 /// now hand `composed_transform` to the driver's [`HitTestChildCallback`]
 /// on every call, so a push made via `push_transform`/`push_offset` (or
@@ -1619,13 +1621,6 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
             Some(self.composed_transform)
         }
     }
-
-    /// Adds self as a hit target with the given render ID.
-    pub fn add_self(&mut self, target_id: RenderId) {
-        let transform = self.current_transform();
-        self.result
-            .add(BoxHitTestEntry::new(target_id.as_u64(), transform));
-    }
 }
 
 impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
@@ -1633,18 +1628,6 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
 {
     fn position(&self) -> &Offset {
         &self.position
-    }
-
-    fn result(&self) -> &BoxHitTestResult {
-        &self.result
-    }
-
-    fn result_mut(&mut self) -> &mut BoxHitTestResult {
-        &mut self.result
-    }
-
-    fn add_hit(&mut self, entry: BoxHitTestEntry) {
-        self.result.add(entry);
     }
 
     fn is_hit(&self, bounds: Rect) -> bool {

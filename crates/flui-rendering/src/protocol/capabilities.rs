@@ -158,9 +158,22 @@ pub trait HitTestCapability: Send + Sync + 'static {
     type Position: Clone + Debug + Default + Send + Sync + 'static;
 
     /// Hit test result accumulator.
+    ///
+    /// **Vocabulary only, with no accumulator behind it today.** Every
+    /// accessor that read or wrote a protocol-level result was deleted with
+    /// issue #844: nothing outside the protocol modules ever read one, so an
+    /// `add_self` that wrote into it compiled, ran, and did nothing — the
+    /// driver builds the real path from `register_self_hit_entry`, which needs
+    /// no id because the driver already has one.
+    ///
+    /// These two types are kept, rather than deleted with the accessors,
+    /// because a sliver assembling its own hit path is a coherent future
+    /// consumer and this is the shape it would use. If that consumer arrives,
+    /// wiring it means the DRIVER BRIDGE reads the result and a test fails
+    /// when it stops — anything less recreates exactly what was deleted.
     type Result: Default + Send + Sync + 'static;
 
-    /// Individual hit test entry.
+    /// Individual hit test entry. See [`Self::Result`] for its current status.
     type Entry: Clone + Debug + Send + Sync + 'static;
 
     /// Hit test context with Generic Associated Type.
@@ -173,15 +186,6 @@ pub trait HitTestCapability: Send + Sync + 'static {
 pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: ParentData> {
     /// Gets the hit test position in local coordinates.
     fn position(&self) -> &H::Position;
-
-    /// Gets the hit test result accumulator.
-    fn result(&self) -> &H::Result;
-
-    /// Gets mutable reference to hit test result.
-    fn result_mut(&mut self) -> &mut H::Result;
-
-    /// Adds a hit entry to the result.
-    fn add_hit(&mut self, entry: H::Entry);
 
     /// Checks if position is inside the given bounds.
     fn is_hit(&self, bounds: flui_types::Rect) -> bool;

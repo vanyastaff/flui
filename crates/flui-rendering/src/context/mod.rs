@@ -43,7 +43,7 @@
 //!         if !ctx.is_within_size(self.size.width, self.size.height) {
 //!             return false;
 //!         }
-//!         ctx.add_self(self.id);
+//!         ctx.register_self_hit_entry();
 //!         true
 //!     }
 //! }
