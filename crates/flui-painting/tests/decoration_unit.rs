@@ -598,28 +598,27 @@ fn circle_ignores_border_radius_and_still_paints_the_circle() {
 fn circle_zero_size_and_negative_area_rects_do_not_panic() {
     let decoration = BoxDecoration::with_color(Color::RED).set_shape(BoxShape::Circle);
 
-    // (rect, expected center, expected radius). Pinning the resolved
-    // geometry (not just "did not panic") is what actually exercises
-    // `shortest_side`'s `.abs()` branch -- an assertion-free version of
-    // this test would pass even if the degenerate cases silently produced
-    // a negative radius or NaN center.
+    // (rect, expected geometry). `None` means the background pass records
+    // nothing at all, which is the contract for a rect covering zero area
+    // (see `paint_box_decoration`'s background guard). Pinning the resolved
+    // geometry of the cases that DO paint, rather than only "did not panic",
+    // is what actually exercises `shortest_side`'s `.abs()` branch -- an
+    // assertion-free version of this test would pass even if the degenerate
+    // cases silently produced a negative radius or a NaN center.
     let cases = [
+        // The three zero-extent shapes cover no area, so the background is
+        // not recorded — Flutter's `size > Size.zero` guard, applied to the
+        // fill rather than to a caller.
+        (Rect::from_ltrb(px(0.0), px(0.0), px(0.0), px(0.0)), None),
         (
-            Rect::from_ltrb(px(0.0), px(0.0), px(0.0), px(0.0)),
-            Point::new(px(0.0), px(0.0)),
-            px(0.0),
-        ),
-        (
-            // Zero height: shortest_side is 0 regardless of the 100-wide side.
+            // Zero height, 100 wide.
             Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(0.0)),
-            Point::new(px(50.0), px(0.0)),
-            px(0.0),
+            None,
         ),
         (
-            // Zero width: symmetric to the above.
+            // Zero width, 100 tall: symmetric to the above.
             Rect::from_ltrb(px(0.0), px(0.0), px(0.0), px(100.0)),
-            Point::new(px(0.0), px(50.0)),
-            px(0.0),
+            None,
         ),
         (
             // Inverted (min > max on both axes): `width()`/`height()`
@@ -628,19 +627,22 @@ fn circle_zero_size_and_negative_area_rects_do_not_panic() {
             // it this would resolve to a negative radius instead of the
             // r=50 an upright 100x100 rect produces.
             Rect::from_ltrb(px(100.0), px(100.0), px(0.0), px(0.0)),
-            Point::new(px(50.0), px(50.0)),
-            px(50.0),
+            Some((Point::new(px(50.0), px(50.0)), px(50.0))),
         ),
     ];
 
-    for (rect, expected_center, expected_radius) in cases {
+    for (rect, expected) in cases {
         let cmds = commands_in(rect, &decoration); // must not panic
-        match cmds.as_slice() {
-            [DrawCommand::DrawCircle { center, radius, .. }] => {
+        match (cmds.as_slice(), expected) {
+            ([], None) => {}
+            (
+                [DrawCommand::DrawCircle { center, radius, .. }],
+                Some((expected_center, expected_radius)),
+            ) => {
                 assert_eq!(*center, expected_center, "rect: {rect:?}");
                 assert_eq!(*radius, expected_radius, "rect: {rect:?}");
             }
-            other => panic!("expected a single DrawCircle, got {other:?}; rect: {rect:?}"),
+            (other, expected) => panic!("rect {rect:?}: expected {expected:?}, got {other:?}"),
         }
         // Must not panic on the hit-test path either.
         let _ = box_decoration_hit_test(rect, &decoration, Offset::new(px(0.0), px(0.0)));
