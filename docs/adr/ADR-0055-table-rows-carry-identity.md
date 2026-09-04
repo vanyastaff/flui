@@ -101,14 +101,29 @@ and `columns.len()` respectively — and each warns once naming the lengths invo
 grid its last layout positioned, so a direct consumer of the lower layer gets the same
 self-consistency between what is drawn and what is touchable.
 
-**Why repair rather than reject.** An earlier design (recorded in the issue's spec as D1/D4) made
-the invalid grid unrepresentable: a `TableRows` collection with a fallible `push`, and a
-`RenderTable` owning `Vec<Option<RenderId>>` sized `columns * rows`. Both were dropped during
-implementation. The render-side half fights this crate's own recorded rule that render objects do
-not own child-adoption bookkeeping, and a shadow copy of the child list can desync from the tree
-that actually owns it — a worse failure than the one it prevents. The widget-side half would have
-pushed a `Result` through 31 call sites, inside `build` methods that cannot propagate one, to
-prevent a mistake the library can correct deterministically.
+**Why repair rather than reject.** Issue #544 asks for "a fallible constructor or validated builder
+for caller-controlled structural errors", and the spec designed one (D1/D4): a `TableRows`
+collection with a fallible `push`, and a `RenderTable` owning `Vec<Option<RenderId>>` sized
+`columns * rows`. This is a deliberate override of that ask, not an oversight, and the reason is
+the issue's own next criterion.
+
+**A fallible constructor here becomes a panic.** `Table::new` and `DataTable::new` are called
+inside `build`, which returns a view and cannot propagate a `Result`. Every real call site would
+therefore write `.expect(...)`, so a `Result` does not remove the panic — it relocates it from the
+library to the caller and makes it unconditional in release, where today's `debug_assert!` at
+least compiled out. Issue #544's fifth acceptance criterion is "No caller input causes a caught
+internal layout panic"; a fallible constructor in a `build` method satisfies the first criterion by
+violating the fifth. Repair satisfies both. This is the argument, not the migration cost — the
+project explicitly allows breaking changes, so 31 call sites would not on its own be a reason.
+
+The render-side half was dropped for an unrelated reason: it fights this crate's own recorded rule
+that render objects do not own child-adoption bookkeeping. `RenderTable`'s children are attached by
+the element tree, and a shadow copy of that list can desync from the tree that actually owns it —
+a worse failure than the one it prevents.
+
+**What repair costs.** A padded row is a caller mistake the developer now sees only in a log line,
+where a panic would have been impossible to miss. That is the real trade, and it is why the warning
+names the expected and found lengths rather than saying something went wrong.
 
 Repair with a warning is the rule this codebase already follows for caller configuration:
 `RenderViewport::set_anchor` clamps an out-of-range anchor rather than asserting, and `RenderTable`
