@@ -35,6 +35,45 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### A lazy sliver's items get their set position from parent data, not a wrapper
+
+**Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
+Flutter produces the "12" by having each lazy delegate wrap every materialised item in an
+`IndexedSemantics` (`addSemanticIndexes`, on by default), which is a
+`SingleChildRenderObjectWidget` whose `RenderIndexedSemantics` sets
+`SemanticsConfiguration.indexInParent`.
+
+**Choice:** the semantics assembler reads the index the sliver *already* stamped in
+`SliverMultiBoxAdaptorParentData` and sets `index_in_parent` from it, when nothing above already
+set one. `IndexedSemantics` exists here too, as a public widget for content a sliver does not
+own, and an explicit one wins — it runs through `describe_semantics_configuration` first, so a
+caller who set an index deliberately is not overwritten.
+
+**Alternatives considered:** transcribing the wrapper — rejected on two counts. It costs an
+element and a render object per materialised item, measured directly (a three-item `ListView`
+went from 8 render nodes to 11 while the wrapper version was in the tree). And the wrapper's
+index is captured when the item is *built*, while the sliver's is maintained by the band walk, so
+the two can disagree about where a row actually sits; reading the maintained one cannot drift by
+construction.
+
+**Trade-off accepted:** the announced position is the item's logical index, so a delegate cannot
+declare an item to be *outside* the set — Flutter's `semanticIndexCallback` returning `null`, the
+case a separator uses. FLUI has no separated-list constructor yet; when one lands it needs a way
+to say "not a member", and that is when this gets revisited rather than now, on speculation.
+
+**Improvement at the platform boundary too:** Flutter carries `indexInParent` and
+`scrollChildCount` as separate fields and leaves each platform bridge to reconcile them into that
+platform's set-position concept. AccessKit has the concept directly, so `accesskit_translation`
+emits the pair — `position_in_set` (one-based, converted there from the framework's zero-based
+index) and `size_of_set` — and drops a negative index rather than publishing a nonsensical
+position.
+
+**Replacement test:** `lazy_list_items_carry_their_set_position_without_a_wrapper`
+(`crates/flui-widgets/tests/semantics.rs`), plus
+`harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
+(`crates/flui-objects/tests/render_object_harness.rs`) for the public widget's render object,
+including that an unchanged index requests no semantics update.
+
 ### Layout marks semantics once per walk, at the dirty root
 
 **Rule:** Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in *both* of

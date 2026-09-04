@@ -311,6 +311,7 @@ impl SemanticsNode {
             scroll_extent_min: self.config.scroll_extent_min(),
             scroll_index: self.config.scroll_index(),
             scroll_child_count: self.config.scroll_child_count(),
+            index_in_parent: self.config.index_in_parent(),
         }
     }
 

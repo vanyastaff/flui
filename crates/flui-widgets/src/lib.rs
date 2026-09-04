@@ -229,7 +229,7 @@ pub use scroll::{
     SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
-pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
+pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{
     DefaultTextStyle, EditableText, EditableTextState, RichText, Text, TextEditingController,
@@ -320,24 +320,24 @@ pub mod prelude {
         FocusScope, FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
         GestureDetector, GridView, Hero, HeroController, HeroMode, Icon, IconData, IconTheme,
         IconThemeData, IgnoreBaseline, IgnorePointer, Image, ImageAlignment, ImageFit,
-        ImageProvider, IndexedStack, InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth,
-        LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations,
-        LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator,
-        NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox,
-        OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle, Padding,
-        PageController, PageRoute, PageScrollPhysics, PageView, PhysicalModel, PhysicalShape,
-        PopScope, PopupRoute, Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction,
-        PreviousFocusIntent, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
-        ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport,
-        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table, TableCell, TableRow, Text,
-        TextEditingController, TextField, TextFieldState, TickerMode, Transform, UnconstrainedBox,
-        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
-        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
-        WidgetsApp, WidgetsLocalizations, Wrap,
+        ImageProvider, IndexedSemantics, IndexedStack, InheritedTheme, Intent, IntrinsicHeight,
+        IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener,
+        Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics,
+        MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage,
+        Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle,
+        Padding, PageController, PageRoute, PageScrollPhysics, PageView, PhysicalModel,
+        PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize, PreferredSizeView,
+        PreviousFocusAction, PreviousFocusIntent, RepaintBoundary, RichText, RotatedBox, Row,
+        SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
+        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table,
+        TableCell, TableRow, Text, TextEditingController, TextField, TextFieldState, TickerMode,
+        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
+        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

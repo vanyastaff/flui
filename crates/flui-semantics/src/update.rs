@@ -111,6 +111,16 @@ pub struct SemanticsNodeData {
     pub scroll_index: Option<i32>,
     /// Scroll child count.
     pub scroll_child_count: Option<i32>,
+    /// This node's zero-based index among its parent's semantic children, as
+    /// an `IndexedSemantics` ancestor declared it (Flutter's
+    /// `SemanticsConfiguration.indexInParent`).
+    ///
+    /// Zero-based here and converted at the platform boundary — AccessKit's
+    /// `position_in_set` is one-based and pairs with the container's
+    /// `size_of_set`. Keeping the framework side zero-based matches every
+    /// other index in the codebase and matches the reference, so a delegate's
+    /// `semantic_index_offset` arithmetic reads the same as Flutter's.
+    pub index_in_parent: Option<i32>,
     /// The node's explicit accessibility role.
     ///
     /// Carried separately from [`Self::flags`] because the two encode role at
@@ -148,6 +158,7 @@ impl Default for SemanticsNodeData {
             scroll_extent_min: None,
             scroll_index: None,
             scroll_child_count: None,
+            index_in_parent: None,
         }
     }
 }

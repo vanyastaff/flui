@@ -298,3 +298,57 @@ impl flui_view::View for RowBody {
         flui_view::element::ElementKind::stateless(self)
     }
 }
+
+/// A lazy list's items carry their set position with no wrapper widget.
+///
+/// A screen reader announces "item 12 of 100" from AccessKit's
+/// `position_in_set`. Flutter produces that by wrapping every materialised
+/// item in an `IndexedSemantics` — a `SingleChildRenderObjectWidget`, so one
+/// extra element and render object per item, carrying an index captured when
+/// the item was built. FLUI reads the index the sliver already stamps in
+/// `SliverMultiBoxAdaptorParentData`, so it costs nothing and cannot drift
+/// from where the row actually sits.
+///
+/// The render-node count is asserted precisely because "nothing extra" is the
+/// claim: a wrapper-based implementation would pass every other assertion here
+/// while adding one node per item.
+#[test]
+fn lazy_list_items_carry_their_set_position_without_a_wrapper() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    let controller = ScrollController::new();
+    controller.update_dimensions(200.0, 0.0, 400.0);
+    let mut laid = lay_out(
+        Viewport::new((SliverList::new(
+            3,
+            100.0,
+            std::rc::Rc::new(|i: usize| {
+                (i < 3).then(|| {
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("row {i}"))
+                        .child(SizedBox::new(200.0, 100.0))
+                        .boxed()
+                })
+            }),
+        ),))
+        .position(controller.position()),
+        crate::common::tight(200.0, 200.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    for (index, label) in [(1usize, "row 0"), (2, "row 1")] {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        assert_eq!(
+            node.position_in_set(),
+            Some(index),
+            "{label} must announce a one-based set position derived from the \
+             sliver's own logical index",
+        );
+    }
+}

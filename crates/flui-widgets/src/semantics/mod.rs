@@ -4,7 +4,10 @@
 //! objects in `flui-objects`, matching Flutter's `Semantics`,
 //! `MergeSemantics`, and `ExcludeSemantics` split.
 
-use flui_objects::{RenderExcludeSemantics, RenderMergeSemantics, RenderSemanticsAnnotations};
+use flui_objects::{
+    RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
+    RenderSemanticsAnnotations,
+};
 use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{SemanticsConfiguration, SemanticsProperties, SemanticsRole, TextDirection},
@@ -384,6 +387,64 @@ impl RenderView for MergeSemantics {
 }
 
 impl_render_view!(MergeSemantics);
+
+/// Annotates its child's semantics node with a zero-based index among its
+/// siblings.
+///
+/// A lazy sliver delegate wraps every item in one of these, so a screen reader
+/// can announce "item 12 of 100" instead of just reading the row. The count in
+/// that phrase comes from the scrollable's own child count, not from here.
+///
+/// Flutter's `IndexedSemantics`. The index is zero-based on both sides; the
+/// one-based conversion AccessKit's `position_in_set` wants happens once, at
+/// the platform boundary.
+#[derive(Clone, Debug, Default)]
+pub struct IndexedSemantics {
+    index: i32,
+    child: Child,
+}
+
+impl IndexedSemantics {
+    /// Creates an indexed-semantics widget for a zero-based `index`.
+    #[must_use]
+    pub fn new(index: i32) -> Self {
+        Self {
+            index,
+            child: Child::empty(),
+        }
+    }
+
+    /// Set the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
+    }
+}
+
+impl RenderView for IndexedSemantics {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderIndexedSemantics;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderIndexedSemantics::new(self.index)
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_index(self.index)
+    }
+
+    flui_view::single_child_view_children!();
+}
+
+impl_render_view!(IndexedSemantics);
 
 /// Drops descendant semantics while keeping layout, paint, and hit testing.
 #[derive(Clone, Debug)]
