@@ -178,6 +178,16 @@ impl PipelineOwner<PaintPhase> {
                 // layout short-circuits and requeues nothing, and without this
                 // eviction the stale capture would be grafted.
                 self.retained_boundaries.remove(&dirty_node.id);
+                // …and every capture that EMBEDS it. `mark_needs_paint` stops
+                // at the nearest established boundary, so an enclosing one is
+                // clean by construction, and its capture replays this
+                // boundary's old layers wholesale. The graft-time
+                // `nested_boundaries` check that normally prevents that reuse
+                // is keyed on the inner boundary still being dirty — which the
+                // clear above has just undone, so the check can no longer
+                // fire and the eviction has to stand in for it.
+                self.retained_boundaries
+                    .retain(|_, subtree| !subtree.nested_boundaries.contains(&dirty_node.id));
             }
         }
         // `clear()` retains capacity (preserve Vec backing across frames).

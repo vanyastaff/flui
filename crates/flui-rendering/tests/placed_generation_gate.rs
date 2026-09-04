@@ -269,3 +269,65 @@ fn a_stamp_from_one_parent_is_not_accepted_by_another() {
          would look like"
     );
 }
+
+/// Evicting a skipped boundary's capture is not enough: the captures that
+/// EMBED it must go too.
+///
+/// A capture replays every repaint boundary nested inside it, flattened. So
+/// when a nested boundary is invalidated while hidden and the residue scan
+/// clears its flag, an enclosing boundary is left clean — `mark_needs_paint`
+/// stops at the nearest boundary, so it never became dirty — holding a capture
+/// of the nested boundary's OLD layers. Placing the outer one again grafts
+/// them and the update is lost for good.
+///
+/// The graft-time `nested_boundaries` check that normally prevents this reuse
+/// is keyed on the inner boundary still being dirty, which the residue scan has
+/// just undone; the eviction has to stand in for it.
+#[test]
+fn evicting_a_skipped_capture_also_evicts_the_ones_embedding_it() {
+    use flui_objects::RenderRepaintBoundary;
+
+    let mut run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 2 })
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("kept"))
+            .child(
+                box_node(RenderRepaintBoundary::new()).label("outer").child(
+                    box_node(RenderRepaintBoundary::new())
+                        .label("inner")
+                        .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("dropped")),
+                ),
+            ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_frame();
+
+    let root = run.root();
+    let dropped = run.id("dropped");
+    let paints = |run: &flui_rendering::testing::FrameRun, colour: &str| {
+        run.display_commands()
+            .iter()
+            .any(|c| c.line.contains("DrawRect") && c.line.contains(colour))
+    };
+    assert!(
+        paints(&run, "#00FF00FF"),
+        "frame one paints the nested content"
+    );
+
+    // Invalidate the INNER boundary's content while the OUTER one is unplaced.
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 1);
+    run.update_paint::<RenderColoredBox>(dropped, |object| {
+        let _ = object.set_color([0.0, 0.0, 1.0, 1.0]);
+    });
+    let mut run = run.run_frame_again();
+    assert!(!paints(&run, "#0000FFFF") && !paints(&run, "#00FF00FF"));
+
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 2);
+    let run = run.run_frame_again();
+    assert!(
+        paints(&run, "#0000FFFF"),
+        "the outer boundary must not graft a capture holding the inner \
+         boundary's stale layers: {:#?}",
+        run.display_commands()
+    );
+}
