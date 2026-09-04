@@ -129,7 +129,22 @@ guard. Decision 3 landed third:
   genuinely grows in both directions from one scroll offset, the hook is cheap to re-add with a
   real caller at that point.
 
-Decision 4 lands next as a separate change; decision 5 needs no code.
+Decision 4 landed in two parts. The first is `clip_behavior` itself: both viewports carry it
+(default `HardEdge`), and each clips only when its content overflows **and** the behaviour is not
+`Clip::None`, which produces no clip layer at all — pinned structurally by
+`viewport_clip_behavior_controls_the_clip_layer`, which reads the composited layer kinds for the
+overflowing-clipped, overflowing-unclipped and fitting cases. `Viewport`, `ShrinkWrappingViewport`
+and `CustomScrollView` all expose the knob. Recorded gap: the wgpu backend ignores a clip layer's
+`Clip` mode (`push_clip_rect` takes it and discards it), so `None` versus clipped is observable on
+screen but the clipped modes are not distinguishable from one another; per-mode pixel evidence
+belongs to the engine's own readback suite, not here.
+
+The second part — the paint and semantics clips a child sees
+(`describeApproximatePaintClip`/`describeSemanticsClip`, and the assembler dropping a node outside
+the semantics clip and marking hidden one outside the paint clip) — is deliberately **not** in that
+change: the hooks would have had no consumer until the assembler reads them, and a hook nothing
+calls is the defect class this repo names. It lands with the assembler work. Decision 5 needs no
+code.
 
 The degradation query is deliberately a count-since-context-creation rather than a failure flag:
 the pipeline catches a failure in the failing node's own walk frame and hands the parent a

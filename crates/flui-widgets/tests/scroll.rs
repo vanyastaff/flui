@@ -3049,3 +3049,58 @@ fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
         "a ctrl tick over the bare list scrolls like any other (Flutter parity)"
     );
 }
+
+/// A viewport clips overflowing content, and `Clip::None` turns that off.
+///
+/// Flutter's `Viewport.clipBehavior` (default `hardEdge`): the clip exists
+/// only when the content actually overflows, and `Clip::None` means no clip
+/// layer at all — a sliver may then paint outside the viewport's bounds.
+#[test]
+fn viewport_clip_behavior_controls_the_clip_layer() {
+    use flui_types::painting::Clip;
+    use flui_view::BoxedView;
+    use flui_widgets::SliverFixedExtentList;
+
+    let overflowing = |clip: Clip| {
+        // 4 × 200 px of content in a 200 px viewport: it overflows.
+        let rows: Vec<BoxedView> = (0..4)
+            .map(|i| {
+                SizedBox::new(200.0, 200.0)
+                    .child(ColoredBox::new(Color::rgb(10 * i as u8, 20, 30)))
+                    .boxed()
+            })
+            .collect();
+        CustomScrollView::new((SliverFixedExtentList::new(200.0, rows),)).clip_behavior(clip)
+    };
+
+    let mut laid = lay_out(overflowing(Clip::HardEdge), tight(200.0, 200.0));
+    laid.pump();
+    assert!(
+        laid.layer_kinds().contains(&"ClipRect"),
+        "overflowing content is clipped by default; layers: {:?}",
+        laid.layer_kinds()
+    );
+
+    let mut laid = lay_out(overflowing(Clip::None), tight(200.0, 200.0));
+    laid.pump();
+    assert!(
+        !laid.layer_kinds().contains(&"ClipRect"),
+        "Clip::None must produce no clip layer at all; layers: {:?}",
+        laid.layer_kinds()
+    );
+
+    // And with content that fits, there is nothing to clip either way.
+    let fitting = SizedBox::new(200.0, 50.0)
+        .child(ColoredBox::new(Color::rgb(1, 2, 3)))
+        .boxed();
+    let mut laid = lay_out(
+        CustomScrollView::new((SliverFixedExtentList::new(50.0, vec![fitting]),)),
+        tight(200.0, 200.0),
+    );
+    laid.pump();
+    assert!(
+        !laid.layer_kinds().contains(&"ClipRect"),
+        "content that fits is never clipped; layers: {:?}",
+        laid.layer_kinds()
+    );
+}
