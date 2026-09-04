@@ -131,19 +131,25 @@ pub trait LazyMultiBoxRender:
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact;
 }
 
-/// Whether an update replaced the delegate: the builder or key callback by
-/// identity (`Rc::ptr_eq`), or the count. Config changes reach the render
-/// object through `update_render_object` and need no resident refresh.
+/// Whether an update must re-consult the delegate for the resident children.
+///
+/// A builder delegate always must: it is an opaque closure that may read
+/// state the adaptor cannot see, so a reused `Rc` says nothing about its
+/// output (Flutter's `SliverChildBuilderDelegate.shouldRebuild` is always
+/// `true`). A static delegate's output is a function of its identity, so two
+/// adaptors over the same [`StaticChildren`] (same builder and key callback
+/// `Rc`s, same count) are the same delegate (`SliverChildListDelegate.
+/// shouldRebuild` is `children != oldDelegate.children`). Config changes
+/// reach the render object through `update_render_object` and need no
+/// resident refresh.
 fn delegate_changed<R: LazyMultiBoxRender>(
     old: &SliverMultiBoxAdaptor<R>,
     new: &SliverMultiBoxAdaptor<R>,
 ) -> bool {
-    let same_callback = match (&old.find_index_by_key, &new.find_index_by_key) {
-        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-        (None, None) => true,
-        _ => false,
-    };
-    !Rc::ptr_eq(&old.builder, &new.builder) || !same_callback || old.item_count != new.item_count
+    match (&old.static_children, &new.static_children) {
+        (Some(a), Some(b)) => !Rc::ptr_eq(a, b) || old.item_count != new.item_count,
+        _ => true,
+    }
 }
 
 // ============================================================================
@@ -167,6 +173,12 @@ pub struct StaticChildren {
     /// say). The key map reads the raw children, so a wrapper that salts
     /// the key stays matchable through the unsalted callback key.
     map: Option<Rc<dyn Fn(BoxedView) -> BoxedView>>,
+    /// The builder and key callback handed to adaptors, created once: two
+    /// adaptors built over one delegate carry the same `Rc`s, which is what
+    /// the adaptor's update compares to decide whether the residents need
+    /// a refresh (Flutter's `SliverChildListDelegate.shouldRebuild` is
+    /// `children != oldDelegate.children` — identity).
+    delegate_pair: std::cell::OnceCell<(ItemBuilder, FindIndexByKey)>,
 }
 
 impl StaticChildren {
@@ -177,6 +189,7 @@ impl StaticChildren {
             children,
             key_to_index: std::cell::OnceCell::new(),
             map: None,
+            delegate_pair: std::cell::OnceCell::new(),
         })
     }
 
@@ -191,6 +204,7 @@ impl StaticChildren {
             children,
             key_to_index: std::cell::OnceCell::new(),
             map: Some(Rc::new(map)),
+            delegate_pair: std::cell::OnceCell::new(),
         })
     }
 
@@ -243,17 +257,24 @@ impl StaticChildren {
         })
     }
 
-    /// The builder and key callback an adaptor takes.
+    /// The builder and key callback an adaptor takes — the same pair every
+    /// time for one delegate, so adaptors built over it compare as unchanged.
     fn delegate_pair(self: &Rc<Self>) -> (ItemBuilder, FindIndexByKey) {
-        let builder: ItemBuilder = {
-            let this = Rc::clone(self);
-            Rc::new(move |index: usize| this.build(index))
-        };
-        let find: FindIndexByKey = {
-            let this = Rc::clone(self);
-            Rc::new(move |key: &dyn ViewKey| this.find_index_by_key(key))
-        };
-        (builder, find)
+        let (builder, find) = self.delegate_pair.get_or_init(|| {
+            // The closures hold a weak reference: a strong one would keep
+            // the delegate alive through its own cache, a cycle nothing
+            // could break.
+            let weak = Rc::downgrade(self);
+            let builder: ItemBuilder = {
+                let weak = weak.clone();
+                Rc::new(move |index: usize| weak.upgrade().and_then(|this| this.build(index)))
+            };
+            let find: FindIndexByKey = Rc::new(move |key: &dyn ViewKey| {
+                weak.upgrade().and_then(|this| this.find_index_by_key(key))
+            });
+            (builder, find)
+        });
+        (Rc::clone(builder), Rc::clone(find))
     }
 }
 
@@ -270,6 +291,7 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
     /// found by the delegate's key map.
     fn over_static_children(mut self, children: &Rc<StaticChildren>) -> Self {
         let (builder, find) = children.delegate_pair();
+        self.static_children = Some(Rc::clone(children));
         self.item_count = children.len();
         self.builder = builder;
         self.find_index_by_key = Some(find);
@@ -303,6 +325,13 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// Render-object-specific configuration (the per-item extent estimate
     /// for a list, the grid delegate for a grid, …).
     pub(crate) config: R::Config,
+    /// The [`StaticChildren`] delegate `builder` serves, when it is one:
+    /// the adaptor keeps it alive (its closures hold only weak references)
+    /// and compares it by identity on update. `None` for an opaque builder
+    /// closure, which may read state the adaptor cannot see and is
+    /// re-consulted on every update (Flutter's
+    /// `SliverChildBuilderDelegate.shouldRebuild` is always `true`).
+    pub(crate) static_children: Option<Rc<StaticChildren>>,
     /// Total number of items in the data source.
     pub(crate) item_count: usize,
     /// Given a logical index, produces the item's view. Returns `None` when
@@ -320,6 +349,7 @@ impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
+            static_children: self.static_children.clone(),
             item_count: self.item_count,
             builder: Rc::clone(&self.builder),
             find_index_by_key: self.find_index_by_key.clone(),
@@ -355,6 +385,7 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
     ) -> Self {
         Self {
             config,
+            static_children: None,
             item_count,
             builder,
             find_index_by_key: None,
@@ -1120,12 +1151,7 @@ impl SliverGridLazy {
         item_count: usize,
         builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
-        Self {
-            config: grid_delegate,
-            item_count,
-            builder,
-            find_index_by_key: None,
-        }
+        SliverMultiBoxAdaptor::with_config(grid_delegate, item_count, builder)
     }
 
     /// A grid over a fixed list of children, served lazily by index with the
@@ -1522,6 +1548,59 @@ mod tests {
             view.create_element(),
             crate::element::ElementKind::RenderVariable(_)
         ));
+    }
+
+    /// The identity rule: a builder delegate is re-consulted on every update
+    /// even when its `Rc` is reused (its output may depend on state the
+    /// adaptor cannot see); a static delegate handed over unchanged is not.
+    #[test]
+    fn delegate_changed_distinguishes_builder_from_static_delegates() {
+        let builder = make_builder(3);
+        let a = SliverList::new(3, 48.0, Rc::clone(&builder));
+        let b = SliverList::new(3, 48.0, builder);
+        assert!(
+            delegate_changed(&a, &b),
+            "a reused builder closure still refreshes"
+        );
+
+        let children = StaticChildren::new(vec![
+            BoxedView(Box::new(ItemView)),
+            BoxedView(Box::new(ItemView)),
+        ]);
+        let c = SliverList::over(48.0, &children);
+        let d = SliverList::over(48.0, &children);
+        assert!(
+            !delegate_changed(&c, &d),
+            "two adaptors over one static delegate are the same delegate"
+        );
+        let other = StaticChildren::new(vec![BoxedView(Box::new(ItemView))]);
+        let e = SliverList::over(48.0, &other);
+        assert!(
+            delegate_changed(&c, &e),
+            "a different static delegate refreshes"
+        );
+    }
+
+    /// The pair a static delegate hands out is created once, so identity
+    /// survives across adaptor builds — and holds no strong reference back
+    /// to the delegate.
+    #[test]
+    fn static_delegate_pair_is_stable_and_does_not_leak() {
+        let children = StaticChildren::new(vec![BoxedView(Box::new(ItemView))]);
+        let (b1, f1) = children.delegate_pair();
+        let (b2, f2) = children.delegate_pair();
+        assert!(Rc::ptr_eq(&b1, &b2) && Rc::ptr_eq(&f1, &f2));
+        assert!(b1(0).is_some());
+        let weak = Rc::downgrade(&children);
+        drop(children);
+        assert!(
+            weak.upgrade().is_none(),
+            "the cached closures must not keep the delegate alive"
+        );
+        assert!(
+            b1(0).is_none(),
+            "a closure outliving its delegate answers None"
+        );
     }
 
     #[test]

@@ -60,8 +60,16 @@ impl SliverFixedExtentList {
     /// The same list over an already shared delegate — two views built over
     /// one delegate compare as unchanged on update, so the resident children
     /// are not rebuilt.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `item_extent` is not finite or not greater than zero.
     #[must_use]
     pub fn over(item_extent: f32, children: Rc<StaticChildren>) -> Self {
+        assert!(
+            item_extent.is_finite() && item_extent > 0.0,
+            "item_extent must be finite and positive, got {item_extent}",
+        );
         Self {
             item_extent,
             source: Source::Static(children),
@@ -166,6 +174,12 @@ mod tests {
         };
         assert!(Rc::ptr_eq(a_children, b_children));
         assert_eq!(a.item_extent(), 30.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "item_extent must be finite and positive")]
+    fn over_rejects_a_zero_extent() {
+        let _ = SliverFixedExtentList::over(0.0, StaticChildren::new(Vec::new()));
     }
 
     #[test]
