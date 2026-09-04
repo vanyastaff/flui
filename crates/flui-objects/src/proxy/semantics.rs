@@ -212,6 +212,72 @@ impl RenderBox for RenderSemanticsAnnotations {
     }
 }
 
+/// A render object that annotates its child's semantics node with an index
+/// among its siblings.
+///
+/// Flutter's `RenderIndexedSemantics` (`rendering/proxy_box.dart`). The index
+/// is the "12" a screen reader announces in "item 12 of 100", and is
+/// **zero-based** as the reference's is; the one-based conversion AccessKit's
+/// `position_in_set` wants happens once, at the platform boundary.
+#[derive(Debug, Clone)]
+pub struct RenderIndexedSemantics {
+    index: i32,
+    has_child: bool,
+}
+
+impl RenderIndexedSemantics {
+    /// Creates an indexed-semantics render object.
+    #[must_use]
+    pub const fn new(index: i32) -> Self {
+        Self {
+            index,
+            has_child: false,
+        }
+    }
+
+    /// The zero-based index this node reports.
+    #[must_use]
+    pub const fn index(&self) -> i32 {
+        self.index
+    }
+
+    /// Sets the index, reporting whether semantics must be republished.
+    ///
+    /// An unchanged index reports [`RenderUpdateImpact::NONE`](flui_rendering::RenderUpdateImpact::NONE) — Flutter's
+    /// setter returns early on the same comparison. Index churn is the norm on
+    /// a scrolling list (every item's wrapper is rebuilt as the band moves),
+    /// so a setter that always marked would republish the whole subtree's
+    /// semantics on every frame of a scroll.
+    pub fn set_index(&mut self, index: i32) -> flui_rendering::RenderUpdateImpact {
+        if self.index == index {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.index = index;
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+}
+
+impl flui_foundation::Diagnosticable for RenderIndexedSemantics {
+    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+        builder.add("index", i64::from(self.index));
+    }
+}
+
+impl RenderBox for RenderIndexedSemantics {
+    type Arity = Single;
+    type ParentData = BoxParentData;
+
+    flui_rendering::forward_single_child_box_layout!();
+
+    flui_rendering::forward_single_child_box_queries!();
+
+    flui_rendering::forward_single_child_box_hit_test!();
+
+    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+        config.set_index_in_parent(self.index);
+    }
+}
+
 /// A render object that merges all descendant semantics into one node.
 #[derive(Debug, Clone, Default)]
 pub struct RenderMergeSemantics {

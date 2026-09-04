@@ -44,6 +44,7 @@
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
 //! | `RenderSubtreeAnchor` | `harness_subtree_anchor_*` | yes | yes | yes | yes | attach/detach identity |
 //! | `RenderSemanticsAnnotations` | `harness_semantics_annotations_*` | yes | — | — | yes | semantics |
+//! | `RenderIndexedSemantics` | `harness_indexed_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderMergeSemantics` | `harness_merge_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderExcludeSemantics` | `harness_exclude_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
@@ -185,6 +186,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderRepaintBoundary",
     "RenderSubtreeAnchor",
     "RenderSemanticsAnnotations",
+    "RenderIndexedSemantics",
     "RenderMergeSemantics",
     "RenderExcludeSemantics",
     "RenderMetaData",
@@ -3550,6 +3552,45 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
     assert!(node.config().is_button());
     assert_eq!(node.config().is_enabled(), Some(true));
     assert_eq!(node.config().is_toggled(), Some(false));
+}
+
+#[test]
+fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() {
+    let run = RenderTester::mount(
+        box_node(RenderIndexedSemantics::new(11))
+            .label("indexed")
+            .child(box_node(RenderSemanticsAnnotations::new(
+                SemanticsProperties::new().with_label("Row"),
+            ))),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("indexed semantics root");
+    let node = owner.get(root_id).expect("root id must resolve");
+    assert_eq!(
+        node.config().index_in_parent(),
+        Some(11),
+        "the index reaches the semantics configuration zero-based, as the \
+         reference carries it",
+    );
+
+    // The setter's early return is not a micro-optimisation: an item's wrapper
+    // is rebuilt every time the band moves, so a setter that always marked
+    // would republish the subtree's semantics on every frame of a scroll.
+    let mut object = RenderIndexedSemantics::new(11);
+    assert_eq!(
+        object.set_index(11),
+        flui_rendering::RenderUpdateImpact::NONE,
+        "an unchanged index must not request a semantics update",
+    );
+    assert_eq!(
+        object.set_index(12),
+        flui_rendering::RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(object.index(), 12);
 }
 
 #[test]

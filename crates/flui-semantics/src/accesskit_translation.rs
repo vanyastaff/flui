@@ -369,6 +369,29 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         node.set_scroll_y_min(min);
     }
 
+    // AccessKit's set-position pair, which is what a screen reader reads out
+    // as "item 12 of 100". `position_in_set` is ONE-based and documented as
+    // never exceeding the container's `size_of_set`, so the zero-based
+    // framework index converts here and a negative one (a caller's own
+    // arithmetic underflowing an offset) is dropped rather than published as
+    // a nonsensical position.
+    //
+    // Divergence from the reference, recorded in flui-semantics'
+    // `## Mapping decisions`: Flutter carries `indexInParent` and
+    // `scrollChildCount` as separate fields and leaves each platform bridge to
+    // reconcile them into whatever that platform's set-position concept is.
+    // AccessKit has the concept directly, so the pair is emitted here.
+    if let Some(index) = data.index_in_parent
+        && index >= 0
+    {
+        node.set_position_in_set(index as usize + 1);
+    }
+    if let Some(count) = data.scroll_child_count
+        && count >= 0
+    {
+        node.set_size_of_set(count as usize);
+    }
+
     apply_state(&mut node, data.flags);
     apply_actions(&mut node, data.actions);
 

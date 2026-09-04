@@ -275,6 +275,25 @@ impl<'a> A11yNode<'a> {
         self.node.bounds()
     }
 
+    /// The node's one-based position within its set, if it has one.
+    ///
+    /// This is what a screen reader reads out as the "12" in "item 12 of 100"
+    /// — paired with the container's [`size_of_set`](Self::size_of_set). It is
+    /// one-based here because AccessKit's `position_in_set` is; the framework
+    /// side keeps the reference's zero-based index and converts once, at the
+    /// translation boundary.
+    #[must_use]
+    pub fn position_in_set(&self) -> Option<usize> {
+        self.node.position_in_set()
+    }
+
+    /// The total number of items in this node's set, if it declares one — the
+    /// "100" in "item 12 of 100".
+    #[must_use]
+    pub fn size_of_set(&self) -> Option<usize> {
+        self.node.size_of_set()
+    }
+
     /// The node's children, in tree order.
     #[must_use]
     pub fn child_ids(&self) -> &'a [NodeId] {

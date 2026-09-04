@@ -35,6 +35,7 @@ use flui_rendering::{
     constraints::SliverGeometry,
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverMultiBoxAdaptorParentData,
+    semantics::SemanticsConfiguration,
     traits::RenderSliver,
     virtualization::Virtualizer,
 };
@@ -233,6 +234,19 @@ impl RenderSliver for RenderSliverList {
         // outside the band.
         ctx.emit_retain_band(cache_first, cache_last);
         geometry
+    }
+
+    /// Publish the list's length as the set size a screen reader reads out.
+    ///
+    /// This is the "100" in "item 12 of 100" — AccessKit's `size_of_set` on
+    /// the container, paired with each item's `position_in_set`. Without it a
+    /// reader can announce which row it is on but not how many there are, and
+    /// a virtualised list cannot supply that from the materialised children:
+    /// only the sliver knows the full count.
+    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+        if let Ok(count) = i32::try_from(self.item_count) {
+            config.set_scroll_child_count(count);
+        }
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
