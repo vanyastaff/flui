@@ -179,6 +179,10 @@ mod align_test;
 //    subject) ────────────────────────────────────────────────────────────
 mod viewport_test;
 
+// ── ADR-0054 decision 3 — Flutter's center/anchor model, paint/hit-test
+//    order (rendering/viewport_test.dart) ───────────────────────────────────
+mod render_viewport_test;
+
 // ── Business.1 fidelity front — SliverList scrollOffsetCorrection parity
 //    (slivers_test.dart SliverList scroll-offset-correction subject) ──────
 mod sliver_list_correction_test;

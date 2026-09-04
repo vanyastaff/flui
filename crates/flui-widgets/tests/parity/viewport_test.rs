@@ -19,20 +19,18 @@
 //!    interpretation or harness addition was needed for the paint-observability
 //!    question this unit was scoped to investigate — `LaidOut::sliver_geometry`
 //!    already exposes the identical field.
-//! 2. `'Viewport anchor test'` — **out-of-scope-by-missing-feature, no pin
-//!    possible**: FLUI's `RenderViewport` does carry center-sliver
-//!    reverse-side layout (`set_center_sliver_index` splits the children
-//!    into forward/reverse groups in `perform_layout` — its module doc
-//!    predates that and still claims otherwise), but Flutter's `anchor`
-//!    fraction has no equivalent anywhere: the center offset derives from
-//!    the scroll offset alone, with no `mainAxisExtent * anchor` term
-//!    (Flutter's `RenderViewport`, `rendering/viewport.dart`, tag `3.44.0`),
-//!    and the `Viewport` widget (`crates/flui-widgets/src/scroll/viewport.rs`)
-//!    exposes neither `anchor` nor `center` — there is no parameter to pass
-//!    a value into, so unlike a behavior gap this can't even be pinned with
-//!    an `#[ignore]`d red test. Filed as a Cross.H "Known gap" entry in
-//!    `docs/ROADMAP.md` (root cause, file:line, and this ledger as the
-//!    tracking reference) instead of a test stub.
+//! 2. `'Viewport anchor test'` — **ported, real green** (landed with
+//!    ADR-0054 decision 3 — `Viewport::anchor` did not exist when this
+//!    ledger was first written, and the entry below was filed as
+//!    out-of-scope-by-missing-feature; the note is corrected, not deleted,
+//!    so the history of the gap stays legible):
+//!    [`viewport_anchor_test_reports_size_offsets_and_visibility_at_four_scroll_offsets`].
+//!    The oracle's `test(tester, offset, anchor: 100.0)` divides its raw
+//!    pixel `anchor` by the 600px viewport height before constructing
+//!    `Viewport(anchor: ...)`; FLUI's `Viewport::anchor` takes the fraction
+//!    directly, so the port passes `100.0 / 600.0` once and reuses case 1's
+//!    `five_400px_slivers` scene and `viewport_child_offsets_and_visibility`
+//!    reader unchanged — same tree, same assertions, only the anchor differs.
 //! 3. `'Multiple grids and lists'` — **ported, real green**:
 //!    [`multiple_grids_and_lists_scrolling_reveals_each_groups_text_and_clamps_at_max_extent`].
 //!    The oracle drives this with `tester.startGesture`/`gesture.moveBy` pan
@@ -54,7 +52,7 @@
 //!    `resizing_the_viewport_reclamps_an_already_scrolled_position` in
 //!    `scroll_controller_test.rs`.)
 //!
-//! **Total: 3 case names = 3 accounted for above (2 ported green, 0 pinned, 1
+//! **Total: 3 case names = 3 accounted for above (3 ported green, 0 pinned, 0
 //! out-of-scope-by-missing-feature) — no case narrowed, silently dropped, or
 //! laundered as passing.**
 //!
@@ -259,6 +257,99 @@ fn assert_viewport_state(
     assert_eq!(
         visibility_flags, expected_visible,
         "child sliver geometry.visible at scroll offset {scroll_offset}"
+    );
+}
+
+// ============================================================================
+// Case 2 — 'Viewport anchor test'
+// ============================================================================
+
+/// Flutter parity: `slivers_test.dart` `'Viewport anchor test'` (tag
+/// `3.44.0`) — the same 5×400px `SliverToBoxAdapter` scene as case 1
+/// (`five_400px_slivers`), with `anchor: 100.0 / 600.0` shifting the
+/// zero-scroll line 100px into the 600px-tall viewport at every offset.
+/// Every offset/visibility constant below is copied verbatim from the
+/// oracle, per this module's own house rule (see case 1's doc).
+#[test]
+fn viewport_anchor_test_reports_size_offsets_and_visibility_at_four_scroll_offsets() {
+    const ANCHOR: f32 = 100.0 / 600.0;
+
+    let mut laid = lay_out(
+        Viewport::new(five_400px_slivers())
+            .offset(0.0)
+            .anchor(ANCHOR),
+        tight(800.0, 600.0),
+    );
+    assert_eq!(
+        laid.size(laid.root()),
+        size(800.0, 600.0),
+        "the viewport sizes to its incoming (bounded) constraints"
+    );
+    assert_viewport_state(
+        &laid,
+        0.0,
+        [
+            offset(0.0, 100.0),
+            offset(0.0, 500.0),
+            offset(0.0, 900.0),
+            offset(0.0, 1300.0),
+            offset(0.0, 1700.0),
+        ],
+        [true, true, false, false, false],
+    );
+
+    laid.pump_widget(
+        Viewport::new(five_400px_slivers())
+            .offset(200.0)
+            .anchor(ANCHOR),
+    );
+    assert_viewport_state(
+        &laid,
+        200.0,
+        [
+            offset(0.0, -100.0),
+            offset(0.0, 300.0),
+            offset(0.0, 700.0),
+            offset(0.0, 1100.0),
+            offset(0.0, 1500.0),
+        ],
+        [true, true, false, false, false],
+    );
+
+    laid.pump_widget(
+        Viewport::new(five_400px_slivers())
+            .offset(600.0)
+            .anchor(ANCHOR),
+    );
+    assert_viewport_state(
+        &laid,
+        600.0,
+        [
+            offset(0.0, -500.0),
+            offset(0.0, -100.0),
+            offset(0.0, 300.0),
+            offset(0.0, 700.0),
+            offset(0.0, 1100.0),
+        ],
+        [false, true, true, false, false],
+    );
+
+    laid.pump_widget(
+        Viewport::new(five_400px_slivers())
+            .offset(900.0)
+            .anchor(ANCHOR),
+    );
+    assert_viewport_state(
+        &laid,
+        900.0,
+        [
+            offset(0.0, -800.0),
+            offset(0.0, -400.0),
+            offset(0.0, 0.0),
+            offset(0.0, 400.0),
+            offset(0.0, 800.0),
+        ],
+        [false, false, true, true, false],
     );
 }
 

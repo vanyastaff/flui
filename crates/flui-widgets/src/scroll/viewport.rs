@@ -5,7 +5,7 @@ use std::fmt;
 
 use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
 use flui_rendering::protocol::BoxProtocol;
-use flui_rendering::view::{CacheExtentStyle, ScrollPosition};
+use flui_rendering::view::{CacheExtentStyle, ScrollPosition, SliverPaintOrder};
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
@@ -62,6 +62,9 @@ pub struct Viewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
     offset_source: OffsetSource,
     cache_extent: Option<(f32, CacheExtentStyle)>,
+    paint_order: SliverPaintOrder,
+    anchor: f32,
+    center: Option<usize>,
     children: C,
 }
 
@@ -72,6 +75,9 @@ impl<C> Viewport<C> {
             axis_direction: AxisDirection::TopToBottom,
             offset_source: OffsetSource::Pixels(0.0),
             cache_extent: None,
+            paint_order: SliverPaintOrder::FirstIsTop,
+            anchor: 0.0,
+            center: None,
             children,
         }
     }
@@ -118,6 +124,37 @@ impl<C> Viewport<C> {
         self
     }
 
+    /// Set the sliver paint order (default [`SliverPaintOrder::FirstIsTop`]).
+    /// Hit testing uses the opposite order — see
+    /// [`RenderViewport::set_paint_order`](flui_objects::RenderViewport::set_paint_order).
+    #[must_use]
+    pub fn paint_order(mut self, paint_order: SliverPaintOrder) -> Self {
+        self.paint_order = paint_order;
+        self
+    }
+
+    /// Set where the zero-scroll line sits along the main axis, as a
+    /// fraction of the viewport's extent from the leading edge (default
+    /// `0.0`). Flutter's `Viewport.anchor`; see
+    /// [`RenderViewport::set_anchor`](flui_objects::RenderViewport::set_anchor)
+    /// for the formulas this drives.
+    #[must_use]
+    pub fn anchor(mut self, anchor: f32) -> Self {
+        self.anchor = anchor;
+        self
+    }
+
+    /// Set the index of the first forward child (Flutter's `Viewport.center`,
+    /// index-based here — a key-based `center` is a follow-up). `None` (the
+    /// default) means every child grows forward from the leading edge; see
+    /// [`RenderViewport::set_center`](flui_objects::RenderViewport::set_center)
+    /// for the full contract, including why an out-of-range index is invalid.
+    #[must_use]
+    pub fn center(mut self, center: Option<usize>) -> Self {
+        self.center = center;
+        self
+    }
+
     fn build_render_object(&self) -> RenderViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
@@ -135,6 +172,12 @@ impl<C> Viewport<C> {
             // here made that call panic in every debug and test build.
             let _ = render_object.set_cache_extent(extent, style);
         }
+        // Same rationale: a caller may pass the render object's own defaults
+        // (`FirstIsTop`, `0.0`, `None`), for which each setter correctly
+        // reports `NONE` before the node has even joined a tree.
+        let _ = render_object.set_paint_order(self.paint_order);
+        let _ = render_object.set_anchor(self.anchor);
+        let _ = render_object.set_center(self.center);
         render_object
     }
 }
@@ -145,6 +188,9 @@ impl<C: ViewSeq> fmt::Debug for Viewport<C> {
             .field("axis_direction", &self.axis_direction)
             .field("offset_source", &self.offset_source)
             .field("cache_extent", &self.cache_extent)
+            .field("paint_order", &self.paint_order)
+            .field("anchor", &self.anchor)
+            .field("center", &self.center)
             .field("children", &self.children.len())
             .finish()
     }
@@ -176,6 +222,9 @@ where
         if let Some((extent, style)) = self.cache_extent {
             impact |= render_object.set_cache_extent(extent, style);
         }
+        impact |= render_object.set_paint_order(self.paint_order);
+        impact |= render_object.set_anchor(self.anchor);
+        impact |= render_object.set_center(self.center);
         match &self.offset_source {
             OffsetSource::Pixels(pixels) => {
                 // Compat with today's behavior: push the new value into the
@@ -234,6 +283,7 @@ generic_render_view_element!(Viewport);
 pub struct ShrinkWrappingViewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
     offset_source: OffsetSource,
+    paint_order: SliverPaintOrder,
     children: C,
 }
 
@@ -243,6 +293,7 @@ impl<C> ShrinkWrappingViewport<C> {
         Self {
             axis_direction: AxisDirection::TopToBottom,
             offset_source: OffsetSource::Pixels(0.0),
+            paint_order: SliverPaintOrder::FirstIsTop,
             children,
         }
     }
@@ -280,17 +331,32 @@ impl<C> ShrinkWrappingViewport<C> {
         self
     }
 
+    /// Set the sliver paint order (default [`SliverPaintOrder::FirstIsTop`]).
+    /// Hit testing uses the opposite order — see
+    /// [`RenderShrinkWrappingViewport::set_paint_order`](flui_objects::RenderShrinkWrappingViewport::set_paint_order).
+    #[must_use]
+    pub fn paint_order(mut self, paint_order: SliverPaintOrder) -> Self {
+        self.paint_order = paint_order;
+        self
+    }
+
     fn build_render_object(&self) -> RenderShrinkWrappingViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
             OffsetSource::Pixels(pixels) => ScrollPosition::new(*pixels),
             OffsetSource::Position(position) => position.clone(),
         };
-        RenderShrinkWrappingViewport::with_offset(
+        let mut render_object = RenderShrinkWrappingViewport::with_offset(
             self.axis_direction,
             cross_axis_direction,
             position,
-        )
+        );
+        // The setter runs; its returned impact is what is dropped. This is
+        // before the node joins a tree, so there is nothing to invalidate —
+        // and a caller may pass the render object's own default
+        // (`FirstIsTop`), for which the setter correctly reports `NONE`.
+        let _ = render_object.set_paint_order(self.paint_order);
+        render_object
     }
 }
 
@@ -299,6 +365,7 @@ impl<C: ViewSeq> fmt::Debug for ShrinkWrappingViewport<C> {
         f.debug_struct("ShrinkWrappingViewport")
             .field("axis_direction", &self.axis_direction)
             .field("offset_source", &self.offset_source)
+            .field("paint_order", &self.paint_order)
             .field("children", &self.children.len())
             .finish()
     }
@@ -328,6 +395,7 @@ where
         // (not just the scroll offset) — otherwise layout keeps the stale axis
         // from construction.
         impact |= render_object.set_axis_direction(self.axis_direction);
+        impact |= render_object.set_paint_order(self.paint_order);
         match &self.offset_source {
             OffsetSource::Pixels(pixels) => {
                 // See `Viewport::update_render_object`'s matching arm for the

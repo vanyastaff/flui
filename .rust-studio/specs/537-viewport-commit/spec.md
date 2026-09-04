@@ -44,7 +44,7 @@ follows the review: D3 → D1 → D2 → D4/D5.
   resumes publishing.
 - Also: `child_count` is read once per layout and bounds hit-test — unchanged here (#834 retires it).
 
-## D2 (third PR) — Flutter's center model (breaking) + anchor
+## D2 (third PR) — Flutter's center model (breaking) + anchor (landed)
 - Rename `center_sliver_index` → `center` (`set_center(Option<usize>)`, `center()`), Flutter's
   semantics: `center` is the first FORWARD child (default 0 = `children.first`; `None` = 0), the
   reverse group is the prefix `[0, center)` walked backwards and laid out first, its correction

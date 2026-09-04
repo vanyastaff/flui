@@ -1,9 +1,13 @@
 //! `RenderViewport` — Box render object that drives sliver children.
 //!
-//! This is the first Core.2 W3.4 slice: a forward, non-shrink-wrapping
-//! viewport with a bounded correction loop. It is intentionally smaller than
-//! Flutter's full `RenderViewport`: center/anchor reverse-side layout,
-//! shrink-wrap, `showOnScreen`, and lazy child creation stay out of this PR.
+//! `RenderViewport` ports Flutter's `center`/`anchor` model in full
+//! (`rendering/viewport.dart`'s `_attemptLayout`): `center` names the first
+//! FORWARD child, the prefix before it is the reverse group (walked
+//! backwards, laid out first), and `anchor` places the zero-scroll line at
+//! `main_axis_extent * anchor` from the leading edge. `showOnScreen` and lazy
+//! child creation stay out of this file. `RenderShrinkWrappingViewport` has
+//! no `center`/`anchor` in Flutter either — it always lays out every child
+//! forward from the first.
 
 use std::sync::Arc;
 
@@ -30,8 +34,6 @@ use flui_rendering::{
 
 const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
 const DEFAULT_CACHE_EXTENT: f32 = 250.0;
-/// Scroll correction returned when layout accepts the current offset unchanged.
-const NO_SCROLL_CORRECTION: f32 = 0.0;
 
 /// A registered [`ViewportOffset`] listener [`Arc`], wrapped so
 /// [`RenderViewport`]/[`RenderShrinkWrappingViewport`]'s `#[derive(Debug)]`
@@ -128,6 +130,40 @@ struct LayoutChildSequenceParams {
     cache_origin: f32,
     child_start: usize,
     child_end: usize,
+    /// Whether this walk visits `[child_start, child_end)` back-to-front —
+    /// Flutter's reverse group (`advance: childBefore`). `false` walks
+    /// front-to-back, the only order `RenderShrinkWrappingViewport` ever uses.
+    reversed: bool,
+}
+
+/// Iterates `[start, end)` either front-to-back or back-to-front, so
+/// [`RenderViewport::layout_child_sequence`] can share one loop body for
+/// both the forward and reverse groups (Flutter's `advance: childAfter` /
+/// `advance: childBefore`).
+enum ChildIndexWalk {
+    Forward(std::ops::Range<usize>),
+    Reverse(std::iter::Rev<std::ops::Range<usize>>),
+}
+
+impl ChildIndexWalk {
+    fn new(start: usize, end: usize, reversed: bool) -> Self {
+        if reversed {
+            Self::Reverse((start..end).rev())
+        } else {
+            Self::Forward(start..end)
+        }
+    }
+}
+
+impl Iterator for ChildIndexWalk {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            Self::Forward(range) => range.next(),
+            Self::Reverse(range) => range.next(),
+        }
+    }
 }
 
 /// Where a pass decided a child goes, in the viewport's logical coordinates.
@@ -167,9 +203,24 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     cache_extent: f32,
     cache_extent_style: CacheExtentStyle,
     paint_order: SliverPaintOrder,
-    /// When set, children before this index use forward growth; from this index
-    /// onward use reverse growth (Flutter `center` sliver partition, W3.2 slice).
-    center_sliver_index: Option<usize>,
+    /// The index of the first FORWARD child (Flutter's `center`). Children
+    /// before it grow in reverse, walked backwards and laid out first;
+    /// `None` (the default) means index `0` — every child grows forward,
+    /// matching Flutter's `children.first` default. `Some(n)` is only valid
+    /// for `n < child_count`: Flutter's center is always a direct child, so
+    /// `set_center` and `attempt_layout` treat `n >= child_count` as
+    /// misconfiguration (see `clamp_center`).
+    center: Option<usize>,
+    /// Where the zero-scroll line sits along the main axis, as a fraction of
+    /// `main_axis_extent` from the leading edge (`0.0`..=`1.0`). Flutter's
+    /// `RenderViewport.anchor`; `RenderShrinkWrappingViewport` has no
+    /// equivalent — it has no center to anchor.
+    anchor: f32,
+    /// Set once `clamp_center` has warned about an out-of-range `center`, so
+    /// a misconfigured viewport does not spam a warning every frame.
+    invalid_center_warned: bool,
+    /// Latches the out-of-range `anchor` warning, cleared by a usable value.
+    invalid_anchor_warned: bool,
     child_count: usize,
     min_scroll_extent: f32,
     max_scroll_extent: f32,
@@ -219,7 +270,10 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             cache_extent: DEFAULT_CACHE_EXTENT,
             cache_extent_style: CacheExtentStyle::Pixel,
             paint_order: SliverPaintOrder::FirstIsTop,
-            center_sliver_index: None,
+            center: None,
+            anchor: 0.0,
+            invalid_center_warned: false,
+            invalid_anchor_warned: false,
             child_count: 0,
             min_scroll_extent: 0.0,
             max_scroll_extent: 0.0,
@@ -321,28 +375,110 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Sets the index of the center sliver for forward/reverse growth partitioning.
+    /// Sets the index of the first forward child (Flutter's `center`).
     ///
-    /// `None` (default) lays out all children with forward growth. When set to
-    /// `Some(index)`, children `[0..index)` use forward growth and `[index..)` use
-    /// reverse growth from the trailing edge.
+    /// `None` (the default) means index `0`: every child grows forward, from
+    /// the leading edge. `Some(index)` makes children `[0, index)` grow in
+    /// reverse (walked backwards, laid out before the forward group) and
+    /// `[index, child_count)` grow forward, starting at `index` itself.
+    ///
+    /// `index` must be `< child_count` once the viewport has children —
+    /// Flutter's center is always a direct child, so `index == child_count`
+    /// (this render object's former "no center" spelling) has no meaning
+    /// under this model; use `None` for that. An out-of-range `index` is
+    /// caught by a `debug_assert!` in `perform_layout` and clamped (with a
+    /// one-time warning) in release.
     #[inline]
-    pub fn set_center_sliver_index(
-        &mut self,
-        index: Option<usize>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        if self.center_sliver_index == index {
+    pub fn set_center(&mut self, index: Option<usize>) -> flui_rendering::RenderUpdateImpact {
+        if self.center == index {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        self.center_sliver_index = index;
+        self.center = index;
+        // A new value gets its own chance to warn: the latch suppresses one
+        // value's warning every frame, not every future mistake.
+        self.invalid_center_warned = false;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Returns the configured center sliver index, if any.
+    /// Returns the configured first-forward-child index, if any.
     #[inline]
     #[must_use]
-    pub fn center_sliver_index(&self) -> Option<usize> {
-        self.center_sliver_index
+    pub fn center(&self) -> Option<usize> {
+        self.center
+    }
+
+    /// Sets where the zero-scroll line sits along the main axis, as a
+    /// fraction of `main_axis_extent` from the leading edge.
+    ///
+    /// Flutter's `RenderViewport.anchor`, default `0.0` (the leading edge — no
+    /// room for a reverse group at rest).
+    ///
+    /// A value outside `0.0..=1.0`, or a non-finite one, is caller input, not
+    /// an internal invariant: it is clamped (a non-finite value to `0.0`) and
+    /// warned about once, never asserted. Flutter asserts here; this library
+    /// does not panic on a configuration gap — the same rule `RenderTable`
+    /// follows for a baseline alignment with no text baseline. Letting `NaN`
+    /// through would poison every offset the layout derives from it, and a
+    /// viewport that renders nothing is a worse answer than one anchored at
+    /// its leading edge.
+    #[inline]
+    pub fn set_anchor(&mut self, anchor: f32) -> flui_rendering::RenderUpdateImpact {
+        let usable = if anchor.is_finite() {
+            anchor.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if usable == anchor {
+            // A later bad value gets its own warning.
+            self.invalid_anchor_warned = false;
+        } else if !self.invalid_anchor_warned {
+            self.invalid_anchor_warned = true;
+            tracing::warn!(
+                requested = anchor,
+                used = usable,
+                "RenderViewport: anchor must be finite and in 0.0..=1.0; using the \
+                 clamped value so layout can proceed"
+            );
+        }
+        if self.anchor == usable {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.anchor = usable;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Returns the configured anchor fraction.
+    #[inline]
+    #[must_use]
+    pub const fn anchor(&self) -> f32 {
+        self.anchor
+    }
+
+    /// Resolves `center` against `child_count`, clamping (and warning once)
+    /// an out-of-range index — Flutter's center is always a direct child, so
+    /// `Some(n) >= child_count` cannot be honored. `None` resolves to `0`.
+    fn clamp_center(&mut self, child_count: usize) -> usize {
+        let Some(index) = self.center else {
+            return 0;
+        };
+        debug_assert!(
+            index < child_count,
+            "BUG: RenderViewport::center ({index}) must be < child_count ({child_count}); \
+             Flutter's center is always a direct child"
+        );
+        if index < child_count {
+            return index;
+        }
+        if !self.invalid_center_warned {
+            self.invalid_center_warned = true;
+            tracing::warn!(
+                center = index,
+                child_count,
+                "RenderViewport: center is out of range (must be < child_count); \
+                 clamping to the last child so layout can proceed"
+            );
+        }
+        child_count.saturating_sub(1)
     }
 
     /// Last total scroll extent reported by the forward sliver sequence.
@@ -366,23 +502,36 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         self.max_scroll_obstruction_extent
     }
 
-    /// Total obstruction extent contributed by slivers before `child_index`.
+    /// Total obstruction extent contributed by the slivers between `center`
+    /// and `child_index`, in growth-direction order.
     ///
-    /// This mirrors Flutter's `maxScrollObstructionExtentBefore` shape for
-    /// FLUI's current direct-child, forward-sequence viewport.
+    /// Mirrors Flutter's `maxScrollObstructionExtentBefore`
+    /// (`rendering/viewport.dart:1905`): a FORWARD child (`child_index >=
+    /// center`) sums indices `[center, child_index)`; a REVERSE child
+    /// (`child_index < center`) sums indices `(child_index, center)` — the
+    /// slivers *closer to center* than it, which for a reverse-growth child
+    /// are the ones at higher indices. `sliver_obstruction_extents` is
+    /// slot-indexed (written by absolute child index, not layout-walk
+    /// order — see `update_out_of_band_data`), so this reads correctly
+    /// regardless of which group `layout_child_sequence` visited first.
     #[inline]
     #[must_use]
     pub fn max_scroll_obstruction_extent_before(&self, child_index: usize) -> Option<f32> {
-        if child_index >= self.sliver_obstruction_extents.len() {
+        let len = self.sliver_obstruction_extents.len();
+        if child_index >= len {
             return None;
         }
 
-        Some(
-            self.sliver_obstruction_extents
+        let center = self.center.unwrap_or(0).min(len.saturating_sub(1));
+        Some(if child_index >= center {
+            self.sliver_obstruction_extents[center..child_index]
                 .iter()
-                .take(child_index)
-                .sum(),
-        )
+                .sum()
+        } else {
+            self.sliver_obstruction_extents[child_index + 1..center]
+                .iter()
+                .sum()
+        })
     }
 
     /// Whether the last layout pass reported visual overflow.
@@ -447,111 +596,95 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         self.min_scroll_extent = 0.0;
         self.max_scroll_extent = 0.0;
         self.max_scroll_obstruction_extent = 0.0;
-        self.sliver_obstruction_extents.clear();
         self.has_visual_overflow = false;
 
-        let center_offset = -corrected_offset;
-        let cache_extent = self.calculated_cache_extent(main_axis_extent);
-        let full_cache_extent = main_axis_extent + 2.0 * cache_extent;
-        let center_cache_offset = center_offset + cache_extent;
-        let remaining_cache_extent =
-            (full_cache_extent - center_cache_offset).clamp(0.0, full_cache_extent);
-
         let child_count = ctx.child_count();
-        let center = match self.center_sliver_index {
-            None => child_count,
-            Some(index) => {
-                debug_assert!(
-                    index <= child_count,
-                    "center_sliver_index ({index}) must be <= child_count ({child_count})"
-                );
-                index.min(child_count)
-            }
-        };
+        // Slot-indexed (not layout-walk order): `update_out_of_band_data`
+        // writes `sliver_obstruction_extents[index]` directly, so
+        // `max_scroll_obstruction_extent_before` reads correctly regardless
+        // of which group — forward or reverse — this pass visits first.
+        self.sliver_obstruction_extents.clear();
+        self.sliver_obstruction_extents.resize(child_count, 0.0);
 
-        // Oracle (`rendering/viewport.dart:1810-1834`): the forward sequence's
-        // `overlap` is `min(0.0, -centerOffset)` — i.e. `corrected_offset.min(0.0)`
-        // here, since `center_offset == -corrected_offset` — ONLY when there is no
-        // reverse-growth sliver group ahead of it (`leadingNegativeChild == null`);
-        // otherwise BOTH the forward and reverse sequences pin `overlap` to `0.0`
-        // unconditionally. The previous formula, `center_offset.min(0.0)`, had the
-        // opposite sign whenever `corrected_offset` was positive (a scrolled-forward
-        // viewport with no reverse group always reported a negative `overlap`
-        // instead of `0.0`) — see the closure note in
-        // docs/research/widget-renderobject-map.md ("Two pre-existing
-        // infrastructure defects").
-        let has_reverse_group = center < child_count;
-        let forward_overlap = if has_reverse_group {
-            0.0
-        } else {
-            corrected_offset.min(0.0)
-        };
+        let center = self.clamp_center(child_count);
 
-        // Oracle (`rendering/viewport.dart:1831-1846`): the forward sequence
-        // starts at the ZERO-SCROLL LINE, not the viewport's leading edge —
-        // `centerOffset` clamped into the viewport (and unclamped once fully
-        // past it), with the paint budget shrunk by the same amount. The two
-        // differ from the previous constants (`0.0` / `main_axis_extent`)
-        // exactly when `center_offset > 0`: an overscrolled-at-the-start
-        // viewport, where every sliver shifts down by the overscroll and the
-        // gap opens below a persistent header's negative `paint_origin`.
-        let forward_layout_offset = if center_offset >= main_axis_extent {
-            center_offset
-        } else {
-            center_offset.clamp(0.0, main_axis_extent)
-        };
+        // Oracle (`rendering/viewport.dart:1767-1846`, `_attemptLayout`,
+        // ported line for line): `center_offset` is the distance from the
+        // viewport's leading edge to the zero-scroll line — the anchor
+        // point, shifted by the current scroll position.
+        let cache_extent = self.calculated_cache_extent(main_axis_extent);
+        let center_offset = main_axis_extent * self.anchor - corrected_offset;
+        let reverse_remaining_paint_extent = center_offset.clamp(0.0, main_axis_extent);
         let forward_remaining_paint_extent =
             (main_axis_extent - center_offset).clamp(0.0, main_axis_extent);
 
-        let sequence_base = LayoutChildSequenceParams {
-            scroll_offset: corrected_offset.max(0.0),
-            overlap: forward_overlap,
-            layout_offset: forward_layout_offset,
-            remaining_paint_extent: forward_remaining_paint_extent,
-            main_axis_extent,
-            cross_axis_extent,
-            growth_direction: GrowthDirection::Forward,
-            remaining_cache_extent,
-            cache_origin: center_offset.clamp(-cache_extent, 0.0),
-            child_start: 0,
-            child_end: center,
-        };
+        let full_cache_extent = main_axis_extent + 2.0 * cache_extent;
+        let center_cache_offset = center_offset + cache_extent;
+        let reverse_remaining_cache_extent = center_cache_offset.clamp(0.0, full_cache_extent);
+        let forward_remaining_cache_extent =
+            (full_cache_extent - center_cache_offset).clamp(0.0, full_cache_extent);
 
-        if center > 0 {
-            let correction = self.layout_child_sequence(ctx, sequence_base);
-            if correction != 0.0 {
-                return correction;
+        // `leadingNegativeChild == null` in the oracle: no children precede
+        // `center`, so there is no reverse group at all.
+        let has_reverse_group = center > 0;
+
+        if has_reverse_group {
+            // Oracle (`rendering/viewport.dart:1808-1828`): the reverse group
+            // — the prefix before `center` — is laid out FIRST, walking
+            // backwards from `center - 1` to `0`. A non-zero correction is
+            // returned NEGATED: a scroll correction is always expressed in
+            // the forward (caller's) coordinate system.
+            let result = self.layout_child_sequence(
+                ctx,
+                LayoutChildSequenceParams {
+                    scroll_offset: center_offset.max(main_axis_extent) - main_axis_extent,
+                    overlap: 0.0,
+                    layout_offset: forward_remaining_paint_extent,
+                    remaining_paint_extent: reverse_remaining_paint_extent,
+                    main_axis_extent,
+                    cross_axis_extent,
+                    growth_direction: GrowthDirection::Reverse,
+                    remaining_cache_extent: reverse_remaining_cache_extent,
+                    cache_origin: (main_axis_extent - center_offset).clamp(-cache_extent, 0.0),
+                    child_start: 0,
+                    child_end: center,
+                    reversed: true,
+                },
+            );
+            if result != 0.0 {
+                return -result;
             }
         }
 
-        if has_reverse_group {
-            // Known gap: the reverse pass reuses the forward pass's cache
-            // window; Flutter derives the reverse pass's own cache parameters
-            // from the forward results (`rendering/viewport.dart:1812-1825`).
-            let reverse_params = LayoutChildSequenceParams {
-                growth_direction: GrowthDirection::Reverse,
-                // Oracle: the reverse sequence always lays out with `overlap: 0.0`
-                // unconditionally (`rendering/viewport.dart:1818`), independent of
-                // `forward_overlap` above — stated explicitly so this invariant
-                // survives future changes to the `has_reverse_group` branch.
-                overlap: 0.0,
-                // Same known gap as the cache note above: the reverse pass
-                // keeps the leading-edge origin and full paint budget it has
-                // always used, rather than inheriting the forward pass's
-                // center-line values — Flutter derives the reverse pass's own
-                // window (`rendering/viewport.dart:1812-1825`). Pinned here so
-                // the forward-sequence fix cannot change reverse behavior as a
-                // side effect.
-                layout_offset: 0.0,
-                remaining_paint_extent: main_axis_extent,
+        // Oracle (`rendering/viewport.dart:1830-1845`): the forward group
+        // starts AT `center` and always runs, even when the reverse group is
+        // empty — `overlap` folds in the leading-edge overscroll only when
+        // there is no reverse group ahead of it to have already claimed it.
+        self.layout_child_sequence(
+            ctx,
+            LayoutChildSequenceParams {
+                scroll_offset: (-center_offset).max(0.0),
+                overlap: if has_reverse_group {
+                    0.0
+                } else {
+                    (-center_offset).min(0.0)
+                },
+                layout_offset: if center_offset >= main_axis_extent {
+                    center_offset
+                } else {
+                    reverse_remaining_paint_extent
+                },
+                remaining_paint_extent: forward_remaining_paint_extent,
+                main_axis_extent,
+                cross_axis_extent,
+                growth_direction: GrowthDirection::Forward,
+                remaining_cache_extent: forward_remaining_cache_extent,
+                cache_origin: center_offset.clamp(-cache_extent, 0.0),
                 child_start: center,
                 child_end: child_count,
-                ..sequence_base
-            };
-            self.layout_child_sequence(ctx, reverse_params)
-        } else {
-            NO_SCROLL_CORRECTION
-        }
+                reversed: false,
+            },
+        )
     }
 
     #[must_use = "correction value must be checked; 0.0 means layout accepted"]
@@ -572,6 +705,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             mut cache_origin,
             child_start,
             child_end,
+            reversed,
         } = params;
         let initial_layout_offset = layout_offset;
         let adjusted_user_scroll_direction =
@@ -582,7 +716,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         let mut max_paint_offset = layout_offset + overlap;
         let mut preceding_scroll_extent = 0.0;
 
-        for index in child_start..child_end {
+        for index in ChildIndexWalk::new(child_start, child_end, reversed) {
             let sliver_scroll_offset = if scroll_offset <= 0.0 {
                 0.0
             } else {
@@ -647,7 +781,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                 cache_origin = (corrected_cache_origin + geometry.cache_extent).min(0.0);
             }
 
-            self.update_out_of_band_data(growth_direction, &geometry);
+            self.update_out_of_band_data(growth_direction, index, &geometry);
         }
 
         0.0
@@ -656,6 +790,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     fn update_out_of_band_data(
         &mut self,
         growth_direction: GrowthDirection,
+        index: usize,
         geometry: &SliverGeometry,
     ) {
         match growth_direction {
@@ -667,8 +802,13 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             }
         }
         self.max_scroll_obstruction_extent += geometry.max_scroll_obstruction_extent;
-        self.sliver_obstruction_extents
-            .push(geometry.max_scroll_obstruction_extent);
+        // Slot-indexed (see `max_scroll_obstruction_extent_before`): each
+        // child is visited exactly once per accepted pass, so writing by its
+        // absolute index is equivalent to the old push-in-visit-order when
+        // that order was ascending, and correct when it isn't.
+        if let Some(slot) = self.sliver_obstruction_extents.get_mut(index) {
+            *slot = geometry.max_scroll_obstruction_extent;
+        }
         if geometry.has_visual_overflow {
             self.has_visual_overflow = true;
         }
@@ -734,8 +874,9 @@ impl<O: ViewportOffset + 'static> Diagnosticable for RenderViewport<O> {
         properties.add_double("cache_extent", self.cache_extent, Some("px"));
         properties.add_enum("cache_extent_style", self.cache_extent_style);
         properties.add_enum("paint_order", self.paint_order);
-        if let Some(center) = self.center_sliver_index {
-            properties.add_int("center_sliver_index", center as i64, None);
+        properties.add_double("anchor", self.anchor, None);
+        if let Some(center) = self.center {
+            properties.add_int("center", center as i64, None);
         }
     }
 }
@@ -814,11 +955,16 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 continue;
             }
 
+            // Oracle (`rendering/viewport.dart:1732-1735`): the anchor shifts
+            // both ends of the published scroll range by the room it opens
+            // on each side of the zero-scroll line — an anchor > 0 lets the
+            // reverse group scroll `main_axis_extent * anchor` further
+            // before `min_scroll_extent` clamps, and symmetrically shrinks
+            // how far the forward group can scroll before `max_scroll_extent`
+            // clamps.
             if self.offset.apply_content_dimensions(
-                // Reverse-side slivers accumulate negative min_scroll_extent; report
-                // it so scroll-range semantics match Flutter (pre-W3.2 hardcoded 0.0).
-                self.min_scroll_extent,
-                (self.max_scroll_extent - main_axis_extent).max(0.0),
+                (self.min_scroll_extent + main_axis_extent * self.anchor).min(0.0),
+                (self.max_scroll_extent - main_axis_extent * (1.0 - self.anchor)).max(0.0),
             ) {
                 accepted = true;
                 break;
@@ -1172,6 +1318,9 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
                 cache_origin: -cache_extent,
                 child_start: 0,
                 child_end: ctx.child_count(),
+                // `RenderShrinkWrappingViewport` has no `center`/`anchor` in
+                // Flutter either — every child grows forward, front-to-back.
+                reversed: false,
             },
         )
     }
@@ -1194,8 +1343,13 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             mut cache_origin,
             child_start,
             child_end,
+            reversed,
         } = params;
         debug_assert_eq!(growth_direction, GrowthDirection::Forward);
+        debug_assert!(
+            !reversed,
+            "BUG: RenderShrinkWrappingViewport has no center/anchor; every walk is forward"
+        );
         let initial_layout_offset = layout_offset;
         let adjusted_user_scroll_direction =
             flui_rendering::constraints::apply_growth_direction_to_scroll_direction(

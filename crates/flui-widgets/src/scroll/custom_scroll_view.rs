@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use flui_rendering::view::SliverPaintOrder;
 use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
@@ -49,6 +50,9 @@ pub struct CustomScrollView {
     scroll_direction: Axis,
     offset: f32,
     shrink_wrap: bool,
+    center: Option<usize>,
+    anchor: f32,
+    paint_order: SliverPaintOrder,
     slivers: Vec<BoxedView>,
 }
 
@@ -59,6 +63,9 @@ impl CustomScrollView {
             scroll_direction: Axis::Vertical,
             offset: 0.0,
             shrink_wrap: false,
+            center: None,
+            anchor: 0.0,
+            paint_order: SliverPaintOrder::FirstIsTop,
             slivers: slivers.into_boxed_vec(),
         }
     }
@@ -87,6 +94,37 @@ impl CustomScrollView {
         self.shrink_wrap = shrink_wrap;
         self
     }
+
+    /// Set the index of the first forward child (Flutter's
+    /// `ScrollView.center`, index-based here — a key-based `center` is a
+    /// follow-up). Has no effect when [`CustomScrollView::shrink_wrap`] is
+    /// set: Flutter's `ShrinkWrappingViewport` has no `center` either. See
+    /// [`Viewport::center`] for the full contract.
+    #[must_use]
+    pub fn center(mut self, center: Option<usize>) -> Self {
+        self.center = center;
+        self
+    }
+
+    /// Set where the zero-scroll line sits along the main axis, as a
+    /// fraction of the viewport's extent from the leading edge (default
+    /// `0.0`). Has no effect when [`CustomScrollView::shrink_wrap`] is set:
+    /// Flutter's `ShrinkWrappingViewport` has no `anchor` either. See
+    /// [`Viewport::anchor`] for the formulas this drives.
+    #[must_use]
+    pub fn anchor(mut self, anchor: f32) -> Self {
+        self.anchor = anchor;
+        self
+    }
+
+    /// Set the sliver paint order (default [`SliverPaintOrder::FirstIsTop`]).
+    /// Hit testing uses the opposite order; applies whether or not
+    /// [`CustomScrollView::shrink_wrap`] is set.
+    #[must_use]
+    pub fn paint_order(mut self, paint_order: SliverPaintOrder) -> Self {
+        self.paint_order = paint_order;
+        self
+    }
 }
 
 impl fmt::Debug for CustomScrollView {
@@ -95,6 +133,9 @@ impl fmt::Debug for CustomScrollView {
             .field("scroll_direction", &self.scroll_direction)
             .field("offset", &self.offset)
             .field("shrink_wrap", &self.shrink_wrap)
+            .field("center", &self.center)
+            .field("anchor", &self.anchor)
+            .field("paint_order", &self.paint_order)
             .field("sliver_count", &self.slivers.len())
             .finish()
     }
@@ -113,11 +154,15 @@ impl StatelessView for CustomScrollView {
             ShrinkWrappingViewport::new(self.slivers.clone())
                 .axis_direction(axis_direction)
                 .offset(self.offset)
+                .paint_order(self.paint_order)
                 .boxed()
         } else {
             Viewport::new(self.slivers.clone())
                 .axis_direction(axis_direction)
                 .offset(self.offset)
+                .center(self.center)
+                .anchor(self.anchor)
+                .paint_order(self.paint_order)
                 .boxed()
         }
     }

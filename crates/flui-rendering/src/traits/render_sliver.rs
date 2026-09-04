@@ -97,20 +97,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     // Positioning
     // ========================================================================
 
-    /// Returns the scroll offset adjustment for center slivers.
-    ///
-    /// This is used by viewports with a center sliver to adjust the
-    /// scroll offset to account for slivers that grow in both directions.
-    /// Only the center sliver and slivers before it should return a non-zero
-    /// value.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.centerOffsetAdjustment` in Flutter.
-    fn center_offset_adjustment(&self) -> f32 {
-        0.0
-    }
-
     /// Computes how much of the `[from, to]` range lies inside the viewport
     /// paint window `[scroll_offset, scroll_offset + remaining_paint_extent]`.
     ///

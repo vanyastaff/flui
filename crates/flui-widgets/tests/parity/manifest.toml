@@ -34,6 +34,21 @@ oracle = "widgets/slivers_test.dart"
 case = "SliverList.list can build children"
 occurrences = 2
 
+# `rendering/viewport_test.dart` has two adjacent `group()`s ('Viewport paint
+# order', 'Viewport hit-test order') that each declare a `testWidgets` named
+# 'default (firstIsTop)' and one named 'lastIsTop' — the dart-case scanner is
+# group-blind (it lists every testWidgets/test call site in the file, flat),
+# so each literal name occurs twice.
+[[shared_cases]]
+oracle = "rendering/viewport_test.dart"
+case = "default (firstIsTop)"
+occurrences = 2
+
+[[shared_cases]]
+oracle = "rendering/viewport_test.dart"
+case = "lastIsTop"
+occurrences = 2
+
 [[targets]]
 rust = "align_test"
 family = "layout"
@@ -1125,11 +1140,33 @@ cases = [
 rust = "viewport_test"
 family = "sliver"
 oracles = ["widgets/slivers_test.dart"]
-tests = 2
+tests = 3
 
 [[targets.claims]]
 oracle = "widgets/slivers_test.dart"
-cases = ["Viewport basic test", "Multiple grids and lists"]
+cases = ["Viewport basic test", "Viewport anchor test", "Multiple grids and lists"]
+
+[[targets]]
+rust = "render_viewport_test"
+family = "sliver"
+oracles = ["rendering/viewport_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "rendering/viewport_test.dart"
+cases = ["default (firstIsTop)"]
+
+[[targets.claims]]
+oracle = "rendering/viewport_test.dart"
+cases = ["lastIsTop"]
+
+[[targets.claims]]
+oracle = "rendering/viewport_test.dart"
+cases = ["default (firstIsTop)"]
+
+[[targets.claims]]
+oracle = "rendering/viewport_test.dart"
+cases = ["lastIsTop"]
 
 [[targets]]
 rust = "visibility_test"
@@ -1177,6 +1214,7 @@ cases = [
 "rendering/flex_test.dart" = { cases = 37, claimed = 5, status = "partial" }
 "rendering/offstage_test.dart" = { cases = 1, claimed = 1, status = "ported" }
 "rendering/table_test.dart" = { cases = 13, claimed = 1, status = "partial" }
+"rendering/viewport_test.dart" = { cases = 57, claimed = 4, status = "partial" }
 "widgets/absorb_pointer_test.dart" = { cases = 4, claimed = 1, status = "partial" }
 "widgets/accessibility_evaluations_service_extension_test.dart" = { cases = 11, claimed = 0, status = "pending" }
 "widgets/accessibility_evaluations_test.dart" = { cases = 29, claimed = 0, status = "pending" }
@@ -1509,7 +1547,7 @@ cases = [
 "widgets/slivers_keepalive_test.dart" = { cases = 12, claimed = 0, status = "pending" }
 "widgets/slivers_padding_test.dart" = { cases = 16, claimed = 9, status = "partial" }
 "widgets/slivers_protocol_test.dart" = { cases = 1, claimed = 0, status = "pending" }
-"widgets/slivers_test.dart" = { cases = 38, claimed = 24, diverged = 1, status = "partial" }
+"widgets/slivers_test.dart" = { cases = 38, claimed = 25, diverged = 1, status = "partial" }
 "widgets/sliversemantics_test.dart" = { cases = 41, claimed = 0, status = "pending" }
 "widgets/slotted_render_object_widget_test.dart" = { cases = 5, claimed = 0, status = "pending" }
 "widgets/snapshot_widget_test.dart" = { cases = 11, claimed = 0, status = "pending" }
@@ -1563,16 +1601,16 @@ cases = [
 # Derived counts. The inventory test recomputes every number here and fails
 # on drift; ROADMAP.md cites these values.
 [summary]
-targets = 90
-rust_tests = 657
+targets = 91
+rust_tests = 662
 pins = 1
-oracle_files = 389
-oracle_cases = 5696
-cases_claimed = 302
+oracle_files = 390
+oracle_cases = 5753
+cases_claimed = 307
 cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 294
+universe_cases_claimed = 295
 universe_cases_diverged = 1
 universe_pending_files = 331
 
@@ -1647,9 +1685,9 @@ cases_diverged = 0
 pins = 0
 
 [summary.families."sliver"]
-targets = 15
-rust_tests = 88
-cases_claimed = 39
+targets = 16
+rust_tests = 93
+cases_claimed = 44
 cases_diverged = 1
 pins = 1
 
