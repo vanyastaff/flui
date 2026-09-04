@@ -1462,18 +1462,52 @@ impl LayerStateStack for Backend<'_> {
     // the cost is one branch per layer-stack call -- negligible
     // versus the save_layer/clip_path GPU work that follows.
 
-    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, _clip_behavior: flui_types::painting::Clip) {
+    /// A rect clip is a hardware scissor by default, which is a hard edge by
+    /// construction — a whole pixel is in or out. An anti-aliased one is routed
+    /// through the rounded-rect path with zero radii instead: `clip_rrect` sets
+    /// the same coarse scissor *and* fills the SDF clip slot, so the boundary
+    /// is evaluated per fragment and the edge feathers. Nothing new is needed
+    /// for it; the shader has evaluated that SDF for rounded clips all along.
+    ///
+    /// `AntiAliasWithSaveLayer` is treated as `AntiAlias`. The mode's whole
+    /// point is to render the subtree to an offscreen first so the blend
+    /// against the clip edge is correct where the content overlaps itself, and
+    /// this backend allocates no such offscreen — so it renders the edge as
+    /// well as it can and does not pretend otherwise. Named in issue #848
+    /// rather than left to be discovered from the pixels.
+    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
+        use flui_types::painting::Clip;
         self.flush_active_transform();
         self.painter.save();
-        self.painter.clip_rect(*rect);
+        match clip_behavior {
+            Clip::AntiAlias | Clip::AntiAliasWithSaveLayer => {
+                self.painter
+                    .clip_rrect(RRect::from_rect_circular(*rect, Pixels(0.0)));
+            }
+            // `Clip::None` never reaches here — a render object choosing it
+            // pushes no clip layer at all.
+            Clip::None | Clip::HardEdge => self.painter.clip_rect(*rect),
+        }
     }
 
+    /// A rounded clip always takes the SDF path, whatever the mode.
+    ///
+    /// `HardEdge` on a rounded rectangle would mean jagged corners, which is
+    /// what Flutter produces and what nothing in this codebase asks for: the
+    /// mode exists there to buy back the cost of the anti-aliased path, and
+    /// here the SDF is the only way to clip to a rounded boundary at all — a
+    /// scissor is axis-aligned and rectangular. So the choice is between
+    /// smooth corners and no rounding, and smooth wins. Recorded in
+    /// flui-engine's `## Mapping decisions`.
     fn push_clip_rrect(&mut self, rrect: &RRect, _clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
         self.painter.clip_rrect(*rrect);
     }
 
+    /// A path clip is tessellated and takes no per-mode branch: the mode would
+    /// have to reach the tessellator's own edge handling, which this backend
+    /// does not expose. Unhandled rather than silently accepted — see #848.
     fn push_clip_path(&mut self, path: &Path, _clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();

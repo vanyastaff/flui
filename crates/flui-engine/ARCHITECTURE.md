@@ -179,6 +179,46 @@ Per-frame `Arc::clone` removal and `Arc<Mutex<TexturePoolInner>>` removal were *
 
 ---
 
+### 7. A clip layer's `Clip` mode selects the mechanism; a rounded clip ignores it
+
+**Rule:** Flutter's three clipped modes are genuinely different — `hardEdge` is a scissor,
+`antiAlias` feathers the boundary, `antiAliasWithSaveLayer` renders the subtree offscreen first
+so the blend against the edge is correct where content overlaps itself.
+
+**Choice:** `push_clip_rect` branches on the mode. `HardEdge` installs a hardware scissor, which
+is whole-pixel and therefore a hard edge by construction. `AntiAlias` routes through
+`clip_rrect` with zero radii instead — that path sets the same coarse scissor *and* fills the SDF
+clip slot, so the boundary is evaluated per fragment and feathers. Nothing new was needed for it;
+the shader has evaluated that SDF for rounded clips all along.
+
+`push_clip_rrect` ignores the mode and always takes the SDF path. A scissor is axis-aligned and
+rectangular, so it cannot express a rounded boundary at all — the choice for a rounded clip is
+between smooth corners and no rounding, not between smooth and jagged. `push_clip_path` likewise
+takes no per-mode branch: the mode would have to reach the tessellator's own edge handling, which
+this backend does not expose.
+
+**Alternatives:** honour `HardEdge` on a rounded clip by adding a clip-side aliased lane beside
+the paint's (`RectInstance.clip_kind[1]`) and stepping the SDF instead of smoothing it — rejected
+for now. It buys jagged corners, and the mode exists in the reference to buy back the *cost* of
+the anti-aliased path, which the SDF here pays either way.
+
+**Trade-off accepted:** `AntiAliasWithSaveLayer` is treated as `AntiAlias`. Its whole point is
+the offscreen, and this backend allocates none; it is named at the call site and in the readback
+suite's module doc rather than left to be discovered from the pixels.
+
+**Related fix:** the coarse scissor a rounded/SDF clip installs is now rounded *outward* to whole
+pixels. `clip_rect` truncates the right and bottom edges, which for a fractional boundary made
+the scissor tighter than the shape it pre-rejects for — a clip ending at y = 32.5 scissored away
+all of row 32, so the SDF never saw the fragments it would have feathered and the edge came out
+hard regardless of mode. A coarse pass may only ever be too generous.
+
+**Replacement test:** `an_anti_aliased_rect_clip_feathers_its_edge_and_a_hard_one_does_not`
+(`src/wgpu/clip_layer_readback_tests.rs`), on a **fractional** clip boundary. An integer one
+lands on the same pixel grid under both mechanisms and would pass against the mode-discarding
+backend too. Each half of the fix is separately load-bearing: reverting either the mode branch or
+the outward rounding makes it fail.
+
+
 ## Record/replay boundary
 
 This section documents the decomposition of `WgpuPainter` performed in PRs #231–#232. The governing decision is recorded in [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](../../docs/adr/ADR-0006-c-ir-record-replay-seam.md).

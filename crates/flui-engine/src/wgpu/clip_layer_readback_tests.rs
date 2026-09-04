@@ -8,11 +8,15 @@
 //! the widget test reads layer kinds and never a pixel, and this one knows
 //! nothing about viewports. Together they say what a user sees.
 //!
-//! **What this cannot show.** The three clipped modes — `HardEdge`,
-//! `AntiAlias`, `AntiAliasWithSaveLayer` — are pixel-identical here, because
-//! the wgpu backend takes a clip layer's `Clip` value and discards it
-//! (`push_clip_rect`'s `_clip_behavior` in `backend.rs`). That gap is tracked
-//! rather than papered over with a test that would pass either way.
+//! **What the modes do and do not distinguish.** `HardEdge` and `AntiAlias`
+//! now produce different pixels for a rect clip, which
+//! `an_anti_aliased_rect_clip_feathers_its_edge_and_a_hard_one_does_not`
+//! pins — on a *fractional* boundary, since an integer one lands on the same
+//! pixel grid either way and would pass against the old
+//! discard-the-mode backend too. `AntiAliasWithSaveLayer` is still identical
+//! to `AntiAlias`: this backend allocates no offscreen, which is stated at
+//! `push_clip_rect` rather than left in the pixels. A rounded clip takes the
+//! SDF path under every mode — see that function's siblings.
 
 use flui_layer::{LayerTree, SceneBuilder};
 use flui_painting::{Canvas, Paint};
@@ -175,5 +179,70 @@ fn an_aliased_paint_hardens_the_edge_the_default_smooths() {
         hard, 0,
         "an aliased paint must leave every pixel fully in or fully out; \
          found {hard} partial-coverage pixels",
+    );
+}
+
+/// An anti-aliased rect clip feathers its edge; a hard-edge one does not.
+///
+/// The discriminator is a **fractional** clip boundary. A hardware scissor is
+/// whole-pixel by construction, so it snaps a boundary at y = 32.5 to a pixel
+/// row and every pixel ends up fully in or fully out. The SDF path evaluates
+/// the boundary per fragment, so the row the edge crosses comes out partially
+/// covered.
+///
+/// An integer boundary would prove nothing: both paths land on the same pixel
+/// grid there, and the test would pass with `push_clip_rect` ignoring its mode
+/// again — which is exactly what it did before #848.
+#[test]
+fn an_anti_aliased_rect_clip_feathers_its_edge_and_a_hard_one_does_not() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    // Half a pixel past a row boundary, so the edge cuts row 32 in two.
+    const FRACTIONAL_BOTTOM: f32 = 32.5;
+
+    let render = |mode: Clip| {
+        let mut tree = LayerTree::new();
+        {
+            let mut builder = SceneBuilder::new(&mut tree);
+            builder.push_clip_rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(FRACTIONAL_BOTTOM)),
+                mode,
+            );
+            builder.add_picture(full_surface_content());
+            builder.build();
+        }
+        renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a two-layer tree")
+    };
+
+    // Count pixels on the boundary row that are neither the solid blue content
+    // nor the white ground. Only a feathered edge produces them.
+    let partial_on_boundary_row = |pixels: &[u8]| {
+        (0..SIDE)
+            .filter(|&x| {
+                let px = sample(pixels, x, 32);
+                let solid_blue = px[0] < 8 && px[1] < 8 && px[2] > 248;
+                let ground = px[0] > 248 && px[1] > 248 && px[2] > 248;
+                !solid_blue && !ground
+            })
+            .count()
+    };
+
+    let smoothed = partial_on_boundary_row(&render(Clip::AntiAlias));
+    let hard = partial_on_boundary_row(&render(Clip::HardEdge));
+
+    assert!(
+        smoothed > 0,
+        "Clip::AntiAlias must feather a fractional clip edge; found no \
+         partial-coverage pixels on the boundary row",
+    );
+    assert_eq!(
+        hard, 0,
+        "Clip::HardEdge must leave every pixel fully in or fully out; found \
+         {hard} partial-coverage pixels on the boundary row",
     );
 }

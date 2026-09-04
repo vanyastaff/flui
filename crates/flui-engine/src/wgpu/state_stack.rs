@@ -533,7 +533,15 @@ impl GpuStateStack {
         // under rotation — `clip_rect` takes the AABB of all four transformed
         // corners — which is exactly what a coarse pre-pass should be now that
         // the SDF does the precise work.
-        self.clip_rect(rrect.rect, surface_size);
+        //
+        // Rounded OUTWARD to whole pixels first. `clip_rect` truncates the
+        // right and bottom edges (`x as u32`), which for a fractional boundary
+        // makes the scissor *tighter* than the shape it is meant to
+        // pre-reject for: a clip ending at y = 32.5 scissors away all of row
+        // 32, so the SDF never sees the fragments it would have feathered and
+        // the edge comes out hard. A coarse pass may only ever be too
+        // generous.
+        self.clip_rect(outward_pixel_bounds(rrect.rect), surface_size);
     }
 
     /// Invert the CTM's 2D affine part into the `[a, b, c, d, tx, ty]` column
@@ -662,6 +670,20 @@ impl GpuStateStack {
     ) -> I {
         instance.with_clip(self.active_clip())
     }
+}
+
+/// Grow `rect` to the whole-pixel bounds that contain it.
+///
+/// The coarse scissor a rounded/SDF clip installs must never reject a fragment
+/// the SDF would have kept, so a fractional edge rounds away from the shape:
+/// left/top down, right/bottom up.
+fn outward_pixel_bounds(rect: Rect<Pixels>) -> Rect<Pixels> {
+    Rect::from_ltrb(
+        Pixels(rect.left().0.floor()),
+        Pixels(rect.top().0.floor()),
+        Pixels(rect.right().0.ceil()),
+        Pixels(rect.bottom().0.ceil()),
+    )
 }
 
 // =============================================================================
