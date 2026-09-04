@@ -12,13 +12,12 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// The transform affects painting and hit-testing but not layout — the child
 /// is laid out as if untransformed.
 ///
-/// `alignment` defaults to [`Alignment::CENTER`] — matching Flutter's
-/// `Transform.rotate`/`Transform.scale`/`Transform.flip` factory defaults,
-/// but **not** Flutter's bare `Transform(transform:, origin:)` constructor,
-/// whose `alignment` defaults to `null` (no contribution at all). An
-/// `origin` set here without an explicit [`alignment`](Self::alignment) call
-/// therefore combines with the CENTER default instead of acting alone —
-/// see `docs/ROADMAP.md` Cross.H for the parity-port finding this surfaced.
+/// `alignment` follows the reference per constructor: [`new`](Self::new) has
+/// none, so an [`origin`](Self::origin) set alone acts alone, while
+/// [`scale`](Self::scale) and [`rotation`](Self::rotation) pivot about the
+/// centre. That is Flutter's own split — its bare `Transform(transform:,
+/// origin:)` leaves `alignment` null and its `rotate`/`scale`/`flip`
+/// factories pass `Alignment.center` explicitly.
 // `transform` names the Flutter-parity concept the struct wraps (matches
 // `RenderTransform`'s own field of the same name); renaming it to dodge the
 // lint would trade a clear name for a weaker one.
@@ -26,8 +25,9 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct Transform {
     transform: Matrix4,
-    alignment: Alignment,
+    alignment: Option<Alignment>,
     origin: Option<Offset>,
+    transform_hit_tests: bool,
     child: Child,
 }
 
@@ -36,8 +36,9 @@ impl Transform {
     pub fn new(transform: Matrix4) -> Self {
         Self {
             transform,
-            alignment: Alignment::CENTER,
+            alignment: None,
             origin: None,
+            transform_hit_tests: true,
             child: Child::empty(),
         }
     }
@@ -47,14 +48,14 @@ impl Transform {
         Self::new(*RenderTransform::translate(x, y).transform())
     }
 
-    /// Scale the child by `(sx, sy)`.
+    /// Scale the child by `(sx, sy)`, about its centre.
     pub fn scale(sx: f32, sy: f32) -> Self {
-        Self::new(*RenderTransform::scale(sx, sy).transform())
+        Self::new(*RenderTransform::scale(sx, sy).transform()).alignment(Alignment::CENTER)
     }
 
-    /// Rotate the child by `radians` about the Z axis.
+    /// Rotate the child by `radians` about the Z axis, about its centre.
     pub fn rotation(radians: f32) -> Self {
-        Self::new(*RenderTransform::rotation(radians).transform())
+        Self::new(*RenderTransform::rotation(radians).transform()).alignment(Alignment::CENTER)
     }
 
     /// Sets the alignment of the transform's pivot, relative to the child's
@@ -62,7 +63,20 @@ impl Transform {
     /// [`origin`](Self::origin) when both are set.
     #[must_use]
     pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = alignment;
+        self.alignment = Some(alignment);
+        self
+    }
+
+    /// Whether hit-testing goes through the transform. `true` by default.
+    ///
+    /// With `false` the child is hit where it was LAID OUT rather than where
+    /// it paints — what a decorative transform wants, so the moved pixels do
+    /// not move the touch target. Painting and the global coordinates a hit
+    /// entry carries are unaffected either way (Flutter parity:
+    /// `Transform.transformHitTests`).
+    #[must_use]
+    pub const fn transform_hit_tests(mut self, value: bool) -> Self {
+        self.transform_hit_tests = value;
         self
     }
 
@@ -87,7 +101,11 @@ impl Transform {
         // call, not a field-merge), so it must run BEFORE `with_origin`.
         // Reversing this — `.with_origin(..)` then `.with_alignment(..)` —
         // would silently drop any explicit `origin` this widget was given.
-        let render_object = RenderTransform::new(self.transform).with_alignment(self.alignment);
+        let render_object = match self.alignment {
+            Some(alignment) => RenderTransform::new(self.transform).with_alignment(alignment),
+            None => RenderTransform::new(self.transform),
+        }
+        .with_transform_hit_tests(self.transform_hit_tests);
         match self.origin {
             Some(origin) => render_object.with_origin(origin),
             None => render_object,
@@ -114,6 +132,7 @@ impl RenderView for Transform {
         render_object.set_transform(self.transform)
             | render_object.set_alignment(self.alignment)
             | render_object.set_origin(self.origin)
+            | render_object.set_transform_hit_tests(self.transform_hit_tests)
     }
 
     flui_view::single_child_view_children!();
