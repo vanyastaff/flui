@@ -18,6 +18,8 @@ use flui_objects::{
     RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
     RenderSliverFixedExtentList, RenderStack, RenderViewport,
 };
+use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
+use flui_rendering::testing::ParentDataSeed;
 use flui_rendering::{
     constraints::BoxConstraints,
     parent_data::{FlexParentData, StackParentData},
@@ -366,11 +368,29 @@ fn box_run_layout_commits_geometry_without_a_frame() {
 fn sliver_run_layout_fixed_extent_list_geometry_and_child_sizes() {
     let run = RenderTester::mount(
         box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(
-            sliver_node(RenderSliverFixedExtentList::new(30.0))
+            sliver_node(RenderSliverFixedExtentList::new(30.0, 3))
                 .label("list")
-                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0"))
-                .child(box_node(RenderColoredBox::green(300.0, 1000.0)))
-                .child(box_node(RenderColoredBox::blue(300.0, 1000.0))),
+                .child(
+                    box_node(RenderColoredBox::red(300.0, 1000.0))
+                        .label("item0")
+                        .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(0),
+                        )),
+                )
+                .child(
+                    box_node(RenderColoredBox::green(300.0, 1000.0)).with_parent_data_seed(
+                        ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(1),
+                        ),
+                    ),
+                )
+                .child(
+                    box_node(RenderColoredBox::blue(300.0, 1000.0)).with_parent_data_seed(
+                        ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(2),
+                        ),
+                    ),
+                ),
         ),
     )
     .with_size(Size::new(px(300.0), px(100.0)))
@@ -394,9 +414,21 @@ fn sliver_run_layout_fixed_extent_list_geometry_and_child_sizes() {
 fn sliver_run_frame_viewport_paints() {
     let run = RenderTester::mount(
         box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(
-            sliver_node(RenderSliverFixedExtentList::new(30.0))
-                .child(box_node(RenderColoredBox::red(300.0, 1000.0)))
-                .child(box_node(RenderColoredBox::green(300.0, 1000.0))),
+            sliver_node(RenderSliverFixedExtentList::new(30.0, 2))
+                .child(
+                    box_node(RenderColoredBox::red(300.0, 1000.0)).with_parent_data_seed(
+                        ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(0),
+                        ),
+                    ),
+                )
+                .child(
+                    box_node(RenderColoredBox::green(300.0, 1000.0)).with_parent_data_seed(
+                        ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(1),
+                        ),
+                    ),
+                ),
         ),
     )
     .with_size(Size::new(px(300.0), px(100.0)))

@@ -99,3 +99,22 @@ The two managers and two behaviors differ only in the render-object type (`Rende
 - Widgets keep calling `SliverList::new` / `SliverGridLazy::new` (`list_view.rs:253`, `grid_view.rs:257`).
 - Tests: the module's unit tests (`service_returns_*`, constructors) move onto the generic types;
   `lazy_grid.rs` / `lazy_list.rs` are the behaviour pins and must not change.
+
+## PR D design notes (fixed-extent on the request strategy, list delegate, widgets)
+- Flutter floor read 2026-09-03 (`sliver_fixed_extent_list.dart:326-500`, `scroll_delegate.dart:633-795`):
+  `firstIndex = getMinChildIndexForScrollOffset(scrollOffset + cacheOrigin)`, `targetLastIndex` from
+  `scrollOffset + remainingCacheExtent` (null when infinite → lay out to the end), garbage outside
+  `[first, last]`, leading-insert failure → `scrollOffsetCorrection = index × extent` (FLUI: clamp
+  contract instead, recorded), trailing-insert failure → `estimatedMaxScrollOffset = index × extent`,
+  `hasVisualOverflow = lastIndex >= targetLastIndexForPaint || scrollOffset > 0`,
+  `setDidUnderflow(estimatedMax == trailing)`.
+- `SliverChildListDelegate`: `_keyToIndex` filled lazily with a cursor (`_keyToIndex[null]`), keys
+  unsalted before lookup, `shouldRebuild = children != oldDelegate.children` (identity). FLUI:
+  `SliverList::list`'s `Rc<Vec<BoxedView>>` gets a `OnceCell`-style map keyed by `key_hash` with
+  `key_eq` inside the bucket, and `should_rebuild = !Rc::ptr_eq`; the adaptor's render update drops
+  the unconditional `LAYOUT` only for that delegate (builder delegates stay opaque).
+- Widgets: `ListView::new(extent, children)` → `SliverFixedExtentList` over the list delegate
+  (`list_view.rs:269`); `GridView::count/extent` → grid over the list delegate (`grid_view.rs:278`);
+  `SliverFixedExtentList` view moves to the adaptor (`sliver_fixed_extent_list.rs`).
+- Un-ignore `sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin`
+  (its doc + manifest + ROADMAP Cross.H entry rewritten); gate list from spec §12 #14.

@@ -107,7 +107,7 @@ pub(crate) fn wrap_builder_in_repaint_boundaries(
 /// with `KeyedSubtree`; FLUI carries it on the boundary itself, because a lazy
 /// sliver child must own a render node and a stateless `KeyedSubtree`
 /// equivalent has none — see `RepaintBoundary::salted_child_key`.
-fn wrap_in_repaint_boundary(child: BoxedView) -> BoxedView {
+pub(crate) fn wrap_in_repaint_boundary(child: BoxedView) -> BoxedView {
     BoxedView(Box::new(
         crate::paint::RepaintBoundary::new()
             .child(child)

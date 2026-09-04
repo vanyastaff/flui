@@ -850,21 +850,19 @@ tests = 3
 rust = "sliver_fixed_extent_list_test"
 family = "sliver"
 oracles = ["widgets/slivers_test.dart"]
-tests = 3
+tests = 8
 
 [[targets.claims]]
 oracle = "widgets/slivers_test.dart"
 cases = [
+    "SliverFixedExtentList correctly clears garbage",
+    "SliverFixedExtentList handles underflow when its children changes",
     "SliverFixedExtentList Correctly layout children after rearranging",
+    "SliverFixedExtentList with SliverChildBuilderDelegate auto-correct scroll offset - super fast",
+    "SliverFixedExtentList with SliverChildBuilderDelegate auto-correct scroll offset - reasonable",
+    "SliverFixedExtentList.builder can build children",
     "SliverList.list can build children",
 ]
-
-[[targets.pins]]
-test = "sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin"
-capability = "lazy sliver child manager that builds only the visible window"
-issue = 530
-oracle = "widgets/slivers_test.dart"
-cases = ["SliverFixedExtentList handles underflow when its children changes"]
 
 [[targets]]
 rust = "sliver_grid_test"
@@ -1517,7 +1515,7 @@ cases = [
 "widgets/slivers_keepalive_test.dart" = { cases = 12, claimed = 0, status = "pending" }
 "widgets/slivers_padding_test.dart" = { cases = 16, claimed = 9, status = "partial" }
 "widgets/slivers_protocol_test.dart" = { cases = 1, claimed = 0, status = "pending" }
-"widgets/slivers_test.dart" = { cases = 38, claimed = 19, diverged = 2, status = "partial" }
+"widgets/slivers_test.dart" = { cases = 38, claimed = 24, diverged = 1, status = "partial" }
 "widgets/sliversemantics_test.dart" = { cases = 41, claimed = 0, status = "pending" }
 "widgets/slotted_render_object_widget_test.dart" = { cases = 5, claimed = 0, status = "pending" }
 "widgets/snapshot_widget_test.dart" = { cases = 11, claimed = 0, status = "pending" }
@@ -1572,16 +1570,16 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 650
-pins = 3
+rust_tests = 655
+pins = 2
 oracle_files = 389
 oracle_cases = 5696
-cases_claimed = 296
-cases_diverged = 3
+cases_claimed = 301
+cases_diverged = 2
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 288
-universe_cases_diverged = 3
+universe_cases_claimed = 293
+universe_cases_diverged = 2
 universe_pending_files = 331
 
 [summary.families."animation"]
@@ -1656,10 +1654,10 @@ pins = 0
 
 [summary.families."sliver"]
 targets = 15
-rust_tests = 83
-cases_claimed = 34
-cases_diverged = 2
-pins = 2
+rust_tests = 88
+cases_claimed = 39
+cases_diverged = 1
+pins = 1
 
 [summary.families."stack"]
 targets = 1

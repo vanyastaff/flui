@@ -106,7 +106,10 @@ objects, so their materialised child count was unbounded, and the parity pin for
 
 ## Status of the decisions
 
-Decision 1 lands with the unification; decision 4 landed with ADR-0017's amendment; decisions 2,
-3 and 5 land with the fixed-extent port and the static delegate (the same issue's next changes),
-which also fill in the numbers above. A reader finding one of them missing from the tree should
-read this record as the target and the issue's closing evidence table as the proof.
+Decision 1 landed with the unification and decision 4 with ADR-0017's amendment. Decisions 2, 3
+and 5 landed with the fixed-extent port (`RenderSliverFixedExtentList` on the request strategy,
+`StaticChildren`, `ListView::new` over it, the un-ignored residency pin and the clamp-contract
+ports of the two auto-correct cases). What remains is the grid: the eager `RenderSliverGrid` and
+`SliverGridParentData` are deleted and the lazy grid takes the `RenderSliverGrid` / `SliverGrid`
+names once `GridView::count|extent` route over `StaticChildren`; until then `SliverGridLazy` is
+the lazy grid's name.

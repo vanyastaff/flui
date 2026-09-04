@@ -612,6 +612,22 @@ fn viewport(sliver: TreeNode) -> TreeNode {
     viewport_multi([sliver])
 }
 
+/// A request-strategy fixed-extent list over `children`, each seeded with the
+/// logical index of its position — the parent data the element tree would
+/// have stamped at adoption.
+fn fixed_extent_list(item_extent: f32, children: Vec<TreeNode>) -> TreeNode {
+    let count = children.len();
+    let mut node = sliver_node(RenderSliverFixedExtentList::new(item_extent, count));
+    for (index, child) in children.into_iter().enumerate() {
+        node = node.child(
+            child.with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                SliverMultiBoxAdaptorParentData::new(index),
+            )),
+        );
+    }
+    node
+}
+
 fn viewport_with_scroll(offset: f32, sliver: TreeNode) -> TreeNode {
     use flui_rendering::view::ScrollableViewportOffset;
 
@@ -6206,10 +6222,14 @@ fn harness_ignore_pointer_lets_hits_pass_to_sibling_below() {
 #[test]
 fn harness_sliver_fixed_extent_list_geometry() {
     let run = RenderTester::mount(viewport(
-        sliver_node(RenderSliverFixedExtentList::new(25.0))
-            .label("list")
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0"))
-            .child(box_node(RenderColoredBox::green(300.0, 1000.0))),
+        fixed_extent_list(
+            25.0,
+            vec![
+                box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0"),
+                box_node(RenderColoredBox::green(300.0, 1000.0)),
+            ],
+        )
+        .label("list"),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_layout();
@@ -6226,26 +6246,163 @@ fn harness_sliver_fixed_extent_list_geometry() {
     assert_has_committed_geometry(sliver);
 }
 
+/// Reads and clears the request and retain-band sinks the last layout pass
+/// left on the owner, as the element tree's child manager would.
+fn drain_lazy_sinks(
+    run: &mut flui_rendering::testing::LayoutRun,
+) -> (Vec<usize>, Vec<(usize, usize)>) {
+    let owner = run.owner_mut();
+    let mut requests: Vec<usize> = owner
+        .take_pending_child_requests()
+        .into_iter()
+        .map(|(_sliver, index)| index)
+        .collect();
+    requests.sort_unstable();
+    requests.dedup();
+    let bands: Vec<(usize, usize)> = owner
+        .take_pending_retain_bands()
+        .into_iter()
+        .map(|(_sliver, first, last)| (first, last))
+        .collect();
+    (requests, bands)
+}
+
+/// An empty source is zero geometry and an empty band: nothing to build,
+/// everything attached to evict.
+#[test]
+fn harness_sliver_fixed_extent_list_empty_source_reports_zero_geometry_and_empty_band() {
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverFixedExtentList::new(25.0, 0)).label("list"),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+    assert_eq!(
+        run.sliver_geometry(run.id("list")),
+        flui_rendering::constraints::SliverGeometry::ZERO
+    );
+    let (requests, bands) = drain_lazy_sinks(&mut run);
+    assert!(requests.is_empty(), "nothing to request: {requests:?}");
+    assert_eq!(bands, vec![(0, 0)]);
+}
+
+/// The window's absent indices are requested and the window is the retain
+/// band: a 100 px viewport with the default cache over 25 px items asks for
+/// items 0–13 (350 px) and retains exactly them.
+#[test]
+fn harness_sliver_fixed_extent_list_requests_the_window_and_retains_it() {
+    let mut run = RenderTester::mount(viewport(
+        fixed_extent_list(
+            25.0,
+            vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0")],
+        )
+        .label("list"),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+    // The seeded resident declares a count of 1; raise it to a real source.
+    let list_id = run.id("list");
+    run.update::<RenderSliverFixedExtentList>(list_id, |list| {
+        assert!(!list.set_item_count(1000).is_none());
+    });
+    run.relayout();
+    let (requests, bands) = drain_lazy_sinks(&mut run);
+    assert_eq!(
+        requests,
+        (1..14).collect::<Vec<_>>(),
+        "absent window indices"
+    );
+    assert_eq!(
+        bands.last().copied(),
+        Some((0, 14)),
+        "the window is the band"
+    );
+    assert_eq!(run.sliver_geometry(list_id).scroll_extent, 25_000.0);
+    assert_eq!(run.box_geometry(run.id("item0")).height, px(25.0));
+}
+
+/// A resident is positioned at `index × extent − scroll`, from index math
+/// alone: item 7 of 25 px items scrolled by 60 px paints at 115 px.
+#[test]
+fn harness_sliver_fixed_extent_list_positions_residents_by_index() {
+    let mut list = sliver_node(RenderSliverFixedExtentList::new(25.0, 1000)).label("list");
+    list = list.child(
+        box_node(RenderColoredBox::red(300.0, 1000.0))
+            .label("item7")
+            .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                SliverMultiBoxAdaptorParentData::new(7),
+            )),
+    );
+    let run = RenderTester::mount(viewport_with_scroll(60.0, list))
+        .with_size(Size::new(px(300.0), px(100.0)))
+        .run_layout();
+    assert_eq!(run.offset(run.id("item7")).dy, px(115.0));
+    let geometry = run.sliver_geometry(run.id("list"));
+    assert!(
+        geometry.has_visual_overflow,
+        "content continues past the viewport"
+    );
+    assert_eq!(geometry.paint_extent, 100.0);
+}
+
+/// A window that starts past the last item reports the extent the count
+/// implies (the viewport clamps its pixels from that) and an empty band, so
+/// every attached child is evicted. Flutter's `addInitialChild` failing for
+/// `firstIndex > 0` reports the same pair.
+#[test]
+fn harness_sliver_fixed_extent_list_window_past_the_end_reports_extent_and_empty_band() {
+    let mut run = RenderTester::mount(viewport_with_scroll(
+        5_000.0,
+        sliver_node(RenderSliverFixedExtentList::new(25.0, 10)).label("list"),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+    // The viewport clamps 5 000 → 250 − 100 = 150 and re-lays out; observe the
+    // sliver's own answer to the out-of-range window by reading the pass at
+    // the un-clamped offset through its geometry: the extent is the count's.
+    assert_eq!(run.sliver_geometry(run.id("list")).scroll_extent, 250.0);
+    let (requests, bands) = drain_lazy_sinks(&mut run);
+    assert!(
+        bands.iter().any(|&(first, last)| first == last),
+        "the past-the-end pass emitted an empty band: {bands:?}"
+    );
+    assert!(
+        requests.iter().all(|&i| i < 10),
+        "no index past the count is ever requested: {requests:?}"
+    );
+}
+
+/// A declined index shrinks the count in the same pass: the extent reported
+/// is the real one, so the viewport clamps without a scroll-offset
+/// correction (the clamp contract that replaces Flutter's teleport).
+#[test]
+fn harness_sliver_fixed_extent_list_count_clamp_shrinks_the_extent() {
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverFixedExtentList::new(25.0, 1000)).label("list"),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+    let list_id = run.id("list");
+    assert_eq!(run.sliver_geometry(list_id).scroll_extent, 25_000.0);
+    run.update::<RenderSliverFixedExtentList>(list_id, |list| {
+        assert!(!list.set_item_count(4).is_none());
+    });
+    run.relayout();
+    let geometry = run.sliver_geometry(list_id);
+    assert_eq!(geometry.scroll_extent, 100.0);
+    assert_eq!(geometry.scroll_offset_correction, None);
+    let (_, bands) = drain_lazy_sinks(&mut run);
+    assert_eq!(bands.last().copied(), Some((0, 4)));
+}
+
 // Render-level parity oracle: `rendering/sliver_fixed_extent_layout_test.dart`
-// (tag `3.44.0`) has 12 `RenderSliverFixedExtentList`/
-// `RenderSliverFixedExtentBoxAdaptor`-subject cases (the 9-case
-// `group('getMaxChildIndexForScrollOffset')`, the two `'... correctly
-// references itemExtent, ...'` cases, and `'RenderSliverMultiBoxAdaptor has
-// calculate leading and trailing garbage'`). None are portable here: every
-// one needs API this type does not have at all —
-// `indexToLayoutOffset`/`getMinChildIndexForScrollOffset`/
-// `getMaxChildIndexForScrollOffset`/`computeMaxScrollOffset`/
-// `calculateLeadingGarbage`/`calculateTrailingGarbage` are absent from
-// `RenderSliverFixedExtentList` (`crates/flui-objects/src/sliver/
-// sliver_fixed_extent_list.rs` — the type carries only `item_extent`/
-// `child_count` and lays out every attached child unconditionally, no
-// scroll-offset-driven index range or child-manager protocol at all), and
-// this harness's own `viewport()`/`sliver_node()` builders construct a
-// fully-eager render tree with no lazy child-manager concept to even set up
-// a "only some children attach" scenario against. Filed as a Cross.H entry
-// in `docs/ROADMAP.md` (see `crates/flui-widgets/tests/parity/
-// sliver_fixed_extent_list_test.rs`'s module doc for the paired
-// widget-level ledger and the one divergence pin that IS constructible).
+// (tag `3.44.0`). Its `group('getMaxChildIndexForScrollOffset')` (9 cases),
+// the two `'… correctly references itemExtent …'` cases and the rounding-error
+// layout test are ported as unit tests on the index helpers inside
+// `crates/flui-objects/src/sliver/sliver_fixed_extent_list.rs` (the tolerance
+// nudges are `f32`-scaled there, see that module's mapping decisions). The
+// `'Implements paintsChild correctly'` and leading/trailing-garbage cases are
+// about a child manager's residency, which the pins above cover through the
+// request and retain-band sinks instead.
 
 // ── RenderSliverGrid ─────────────────────────────────────────────────────────
 
@@ -6910,10 +7067,10 @@ fn harness_sliver_padding_insets_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverPadding::symmetric(10.0, 0.0))
             .label("pad")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(20.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-            ),
+            .child(fixed_extent_list(
+                20.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_layout();
@@ -7060,10 +7217,10 @@ fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverIgnorePointer::new(true))
             .label("ignore")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("item")),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("item")],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_frame();
@@ -7080,10 +7237,10 @@ fn harness_sliver_ignore_pointer_passes_hits_when_inactive() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverIgnorePointer::new(false))
             .label("ignore")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("item")),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("item")],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_frame();
@@ -7453,10 +7610,10 @@ fn harness_sliver_offstage_hidden_reports_zero_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::hidden())
             .label("off")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_layout();
@@ -7473,10 +7630,10 @@ fn harness_sliver_offstage_visible_reports_child_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::visible())
             .label("off")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("item")),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("item")],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_layout();
@@ -7489,10 +7646,10 @@ fn harness_sliver_opacity_repaints_on_paint_mutation() {
     let mut run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOpacity::new(1.0))
             .label("opacity")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_frame();
@@ -7524,10 +7681,10 @@ fn harness_sliver_opacity_passes_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOpacity::new(0.5))
             .label("opacity")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_layout();
@@ -7578,10 +7735,10 @@ fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOpacity::transparent()) // alpha = 0
             .label("opacity")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_frame();
@@ -7620,10 +7777,10 @@ fn harness_sliver_opacity_always_needs_compositing_reaches_pipeline() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOpacity::new(0.5)) // alpha = 128 — partial, needs compositing
             .label("opacity")
-            .child(
-                sliver_node(RenderSliverFixedExtentList::new(30.0))
-                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-            ),
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+            )),
     ))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_to_compositing();
@@ -7651,10 +7808,10 @@ fn animated_opacity_sliver_spec(controller: AnimationController) -> TreeNode {
         false,
     ))
     .label("opacity")
-    .child(
-        sliver_node(RenderSliverFixedExtentList::new(30.0))
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-    )
+    .child(fixed_extent_list(
+        30.0,
+        vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+    ))
 }
 
 #[test]
@@ -7765,10 +7922,10 @@ fn harness_opacity_alpha_zero_emits_no_opacity_layer() {
 
 #[test]
 fn harness_viewport_self_describes() {
-    let run = RenderTester::mount(viewport(
-        sliver_node(RenderSliverFixedExtentList::new(20.0))
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
-    ))
+    let run = RenderTester::mount(viewport(fixed_extent_list(
+        20.0,
+        vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+    )))
     .with_size(Size::new(px(300.0), px(100.0)))
     .run_layout();
 
@@ -7782,9 +7939,8 @@ fn harness_viewport_self_describes() {
 #[test]
 fn harness_viewport_stacks_two_slivers() {
     let run = RenderTester::mount(viewport_multi([
-        sliver_node(RenderSliverFixedExtentList::new(20.0))
-            .label("header")
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+        fixed_extent_list(20.0, vec![box_node(RenderColoredBox::red(300.0, 1000.0))])
+            .label("header"),
         sliver_node(RenderSliverFillRemaining::new())
             .label("body")
             .child(box_node(RenderColoredBox::green(300.0, 10.0)).label("fill_child")),
@@ -7875,10 +8031,14 @@ fn harness_viewport_reverse_group_overlap_is_always_zero() {
 #[test]
 fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_axis() {
     let run = RenderTester::mount(shrink_wrapping_viewport(
-        sliver_node(RenderSliverFixedExtentList::new(25.0))
-            .label("list")
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0"))
-            .child(box_node(RenderColoredBox::green(300.0, 1000.0)).label("item1")),
+        fixed_extent_list(
+            25.0,
+            vec![
+                box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0"),
+                box_node(RenderColoredBox::green(300.0, 1000.0)).label("item1"),
+            ],
+        )
+        .label("list"),
     ))
     .with_constraints(BoxConstraints::new(
         px(300.0),
@@ -7924,12 +8084,16 @@ fn harness_shrink_wrapping_viewport_empty_uses_cross_axis_max_and_main_axis_min(
 #[test]
 fn harness_shrink_wrapping_viewport_clamps_to_bounded_max_extent() {
     let run = RenderTester::mount(shrink_wrapping_viewport(
-        sliver_node(RenderSliverFixedExtentList::new(50.0))
-            .label("list")
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0)))
-            .child(box_node(RenderColoredBox::green(300.0, 1000.0)))
-            .child(box_node(RenderColoredBox::blue(300.0, 1000.0)))
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+        fixed_extent_list(
+            50.0,
+            vec![
+                box_node(RenderColoredBox::red(300.0, 1000.0)),
+                box_node(RenderColoredBox::green(300.0, 1000.0)),
+                box_node(RenderColoredBox::blue(300.0, 1000.0)),
+                box_node(RenderColoredBox::red(300.0, 1000.0)),
+            ],
+        )
+        .label("list"),
     ))
     .with_constraints(BoxConstraints::new(
         px(300.0),
@@ -7971,12 +8135,16 @@ fn harness_shrink_wrapping_viewport_flushes_content_extents_into_an_injected_scr
     ))
     .label("shrink_viewport")
     .child(
-        sliver_node(RenderSliverFixedExtentList::new(50.0))
-            .label("list")
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0)))
-            .child(box_node(RenderColoredBox::green(300.0, 1000.0)))
-            .child(box_node(RenderColoredBox::blue(300.0, 1000.0)))
-            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+        fixed_extent_list(
+            50.0,
+            vec![
+                box_node(RenderColoredBox::red(300.0, 1000.0)),
+                box_node(RenderColoredBox::green(300.0, 1000.0)),
+                box_node(RenderColoredBox::blue(300.0, 1000.0)),
+                box_node(RenderColoredBox::red(300.0, 1000.0)),
+            ],
+        )
+        .label("list"),
     );
 
     // 4 rows at 50px = 200px content, bounded to a 120px main-axis max —

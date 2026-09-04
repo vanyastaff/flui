@@ -76,120 +76,75 @@
 //! cases, and `'RenderSliverMultiBoxAdaptor has calculate leading and
 //! trailing garbage'` (constructed via `createRenderSliverFixedExtentList`).
 //!
-//! # The headline finding
+//! # Status
 //!
-//! FLUI's `SliverFixedExtentList` (`crates/flui-widgets/src/scroll/
-//! sliver_fixed_extent_list.rs`) is **fully eager** — unlike `SliverList`/
-//! `SliverGrid` (both routed through the lazy `SparseChildren` adaptor,
-//! `crates/flui-view/src/element/sliver_adaptor.rs`, and the subject of the
-//! lazy-adaptor builder-refresh fix — the `needs_resident_refresh` flag +
-//! `SparseChildren::refresh_resident`), `SliverFixedExtentList` never
-//! touches that adaptor at all — confirmed by grepping `sliver_adaptor.rs`
-//! for `FixedExtent` (zero hits). Its render counterpart,
-//! `RenderSliverFixedExtentList` (`crates/flui-objects/src/sliver/
-//! sliver_fixed_extent_list.rs`), lays out every attached child
-//! unconditionally on every `perform_layout` (`for index in
-//! 0..self.child_count`) — there is no scroll-offset-driven index range, no
-//! child-manager request/build/dispose protocol, and no `.builder`
-//! constructor (`SliverFixedExtentList::new(item_extent, children: C:
-//! ViewSeq)` is the *only* constructor — confirmed by grepping this crate
-//! for `fn builder` inside `sliver_fixed_extent_list.rs`: zero hits). None of
-//! `RenderSliverMultiBoxAdaptor`'s public surface
-//! (`indexToLayoutOffset`/`getMinChildIndexForScrollOffset`/
-//! `getMaxChildIndexForScrollOffset`/`computeMaxScrollOffset`/
-//! `calculateLeadingGarbage`/`calculateTrailingGarbage`/`paintsChild`) exists
-//! on FLUI's type at all.
+//! `SliverFixedExtentList` is lazy: its children are a delegate served by
+//! index through the one lazy multi-box adaptor (ADR-0053), so only the
+//! viewport's cache window is built and everything outside it is evicted —
+//! the same lifecycle `SliverList` and the lazy grid have. The render object
+//! carries Flutter's index math (`crates/flui-objects/src/sliver/
+//! sliver_fixed_extent_list.rs`, whose unit tests port the render-level
+//! oracle's index cases). What it deliberately does NOT carry is
+//! `scrollOffsetCorrection`: a source that shrinks under the viewport clamps
+//! the count and the viewport clamps its pixels (the clamp contract, ADR-0053
+//! decision 3), which is the divergence cases 4 and 5 below record.
 //!
-//! So: **not** "shares the merged builder-refresh path" and **not** "has its
-//! own copy of the pre-fix staleness bug" — the lazy-adaptor builder-refresh
-//! fix is categorically inapplicable here, because there is no lazy adaptor for it
-//! to apply to. This is a new, broader finding, filed as its own Cross.H
-//! entry in `docs/ROADMAP.md` (not a re-file of the existing "no per-item
-//! key API" gap-1, which this port does not need — see case 3 below).
+//! # Ledger (9 widget-level subject cases)
 //!
-//! # Ledger (9 widget-level subject cases; recounted against the 9 bullets
-//! immediately below — totals match)
-//!
-//! 1. `'SliverFixedExtentList correctly clears garbage'` — **out of scope**:
-//!    needs `SliverFixedExtentList.builder`, which does not exist in FLUI,
-//!    and exercises lazy garbage collection, a concept FLUI's eager render
-//!    object has no equivalent of at all.
+//! 1. `'SliverFixedExtentList correctly clears garbage'` — **ported**:
+//!    [`sliver_fixed_extent_list_clears_garbage_across_a_head_insert`].
+//!    `tester.drag` substitutes with `jump_to` (the standing Finding-3
+//!    substitution in this directory); FLUI has no `AutomaticKeepAlive`, so
+//!    the oracle's kept-alive leading items are simply evicted — its own
+//!    assertions (`findsNothing` for them, since `find.text` skips offstage)
+//!    read the same either way.
 //! 2. `'SliverFixedExtentList handles underflow when its children changes'`
-//!    — **out of scope, but pinned**: uses `.list(...)`, which maps to
-//!    FLUI's `::new(...)`, so the call itself compiles — see
-//!    [`sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin`]
-//!    (`#[ignore]`d, verified failing) below, which demonstrates the
-//!    divergence directly rather than merely asserting it can't be
-//!    expressed.
+//!    — **ported in two halves**:
+//!    [`sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window`]
+//!    (residency at the settled tail: the items above the window are never
+//!    built) and
+//!    [`sliver_fixed_extent_list_shrinking_children_clamps_the_position`]
+//!    (the children shrink under the viewport; the position clamps to the
+//!    new extent and only the remaining tail is built).
 //! 3. `'SliverFixedExtentList Correctly layout children after rearranging'`
-//!    — **ported, real green**:
+//!    — **ported**:
 //!    [`sliver_fixed_extent_list_lays_out_children_in_order_after_rearranging`].
-//!    Despite superficially resembling the keyed-identity family (the
-//!    oracle's children carry `Key('0')`/`Key('2')`/etc.), this case's own
-//!    assertions check only FINAL presence and relative vertical order after
-//!    the second `pumpWidget` — never identity/state preservation ACROSS
-//!    the swap. Re-verified by reading the case body (not assumed from the
-//!    name): no `initState` spy, no scroll-position carry-over, no check
-//!    that a specific element survived the reorder — so it does not
-//!    actually require the still-open no-key-API gap (the "no per-item
-//!    view-key API" entry in `docs/ROADMAP.md`'s Cross.H, filed by
-//!    `sliver_list_test.rs`) to port faithfully; a positional `Text`-by-Text
-//!    reconciliation produces the identical observable outcome. Ported as a
-//!    genuine, non-vacuous pass — not a weakened substitute.
-//! 4. `'SliverFixedExtentList with SliverChildBuilderDelegate auto-correct
-//!    scroll offset - super fast'` — **out of scope**: needs `.builder`.
-//! 5. `'SliverFixedExtentList with SliverChildBuilderDelegate auto-correct
-//!    scroll offset - reasonable'` — **out of scope**: needs `.builder`.
+//!    Its assertions check final presence and relative order only (re-read,
+//!    not assumed from the name: no `initState` spy, no identity check), so
+//!    a positional reconcile is a faithful port.
+//! 4. `'SliverFixedExtentList with SliverChildBuilderDelegate auto-correct scroll
+//!    offset - super fast'` — **ported as the clamp contract**: [`sliver_fixed_extent_list_far_jump_past_the_end_clamps_to_the_real_extent`].
+//!    Flutter discovers the builder's end by bisecting the delegate and
+//!    corrects the offset in one frame; FLUI discovers it by the requests
+//!    the window makes (the first `None` clamps the count) and the viewport
+//!    clamps the pixels — the same settled offset (`7 × 200 − 600 = 800`)
+//!    over a few layout passes instead of one. Recorded divergence.
+//! 5. `'SliverFixedExtentList with SliverChildBuilderDelegate auto-correct scroll
+//!    offset - reasonable'` — **ported as the clamp contract**: [`sliver_fixed_extent_list_overscroll_past_the_end_clamps_to_the_real_extent`].
+//!    Flutter animates the over-scroll back; FLUI clamps. Same settled
+//!    offset (800), no animation.
 //! 6. `'SliverFixedExtentList.builder should respect semanticIndexOffset'`
-//!    — **out of scope, two independent reasons**: needs `.builder` (absent);
-//!    also no `IndexedSemantics`/`semanticIndexOffset` concept and no
-//!    semantics-tree assertion capability exist anywhere in `flui-widgets`'
-//!    headless harness — the same standing gap every other port in this
-//!    directory that touches semantics already cites.
-//! 7. `'SliverFixedExtentList.builder can build children'` — **out of
-//!    scope**: needs `.builder`.
+//!    — **out of scope**: no `IndexedSemantics`/`semanticIndexOffset`
+//!    concept and no semantics-tree assertion in the headless harness — the
+//!    standing gap every semantics-touching port here cites.
+//! 7. `'SliverFixedExtentList.builder can build children'` — **ported**:
+//!    [`sliver_fixed_extent_list_builder_hit_tests_children_by_position`].
 //! 8. `'RenderSliverFixedExtentBoxAdaptor.layoutDimensions reflects the
-//!    current constraints'` — **out of scope**: constructs its sliver with
-//!    an explicit `SliverChildBuilderDelegate` (the same lazy-delegate
-//!    machinery `.builder` sugars over) and asserts a `layoutDimensions`
-//!    getter that does not exist on FLUI's `RenderSliverFixedExtentList` at
-//!    all (confirmed by reading the type: only `item_extent()`/
-//!    `set_item_extent()` are public — see this file's module doc on the
-//!    "2B field dedup" comment in the render object's own source, which
-//!    explains transient layout inputs are deliberately not retained on
-//!    `self`).
-//! 9. `'SliverList.list can build children'` (line 1387 — misleadingly
-//!    named; its body constructs `SliverFixedExtentList.list`, see the
-//!    content-sweep note above) — **ported, real green**:
-//!    [`sliver_fixed_extent_list_hit_tests_children_by_position`]. Two
-//!    `itemExtent: 100` items, each wrapped in its own tap target; the
-//!    oracle's mutual-exclusion assertions (tapping item 0 fires only its
-//!    own counter, tapping item 1 fires only its own) are fully expressible
-//!    against FLUI's real hit-test path (`GestureDetector::on_tap` +
-//!    `LaidOut::dispatch_pointer_down`/`dispatch_pointer_up`) — no gap here
-//!    at all, eager or otherwise: hit-testing an attached child by position
-//!    does not touch any of the missing lazy-adaptor machinery the other
-//!    cases above are blocked on.
+//!    current constraints'` — **out of scope**: asserts a `layoutDimensions`
+//!    getter FLUI's render object does not retain (transient layout inputs
+//!    are deliberately not kept on `self`).
+//! 9. `'SliverList.list can build children'` (its body constructs
+//!    `SliverFixedExtentList.list`) — **ported**:
+//!    [`sliver_fixed_extent_list_hit_tests_children_by_position`].
 //!
-//! **Total: 9 subject cases found = 9 accounted for above (2 ported green —
-//! rearrange + hit-test — 1 pinned red, 6 out-of-scope-by-missing-API).**
-//!
-//! Render-level oracle (12 subject cases, all out of scope for the same
-//! root cause named above): documented in `render_object_harness.rs`
-//! adjacent to the existing `harness_sliver_fixed_extent_list_geometry`
-//! test rather than repeated here — no new harness tests were addable, since
-//! every one of the 12 cases needs API (`indexToLayoutOffset`,
-//! `getMinChildIndexForScrollOffset`/`getMaxChildIndexForScrollOffset`,
-//! `computeMaxScrollOffset`, `calculateLeadingGarbage`/
-//! `calculateTrailingGarbage`) that does not exist on FLUI's render object,
-//! and the harness's own `viewport()`/`sliver_node()` builders construct a
-//! fully-eager tree with no lazy child-manager concept to even set up a
-//! "some children never attach" scenario against.
+//! **Total: 9 subject cases = 7 ported (two of them as the recorded clamp
+//! divergence) + 2 out of scope by missing API.**
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::RenderId;
+use flui_rendering::view::CacheExtentStyle;
 use flui_types::Color;
 use flui_types::layout::AxisDirection;
 use flui_view::{BoxedView, View, ViewExt};
@@ -198,15 +153,14 @@ use flui_widgets::{
     Viewport,
 };
 
+use crate::common::{self, LaidOut};
 use crate::harness;
 
 /// Mirrors the oracle's `TestSliverFixedExtentList` helper (a
 /// `CustomScrollView` over one `SliverFixedExtentList.list`): every label
-/// becomes a direct `Text` sliver child (no wrapping box needed — unlike the
-/// lazy `SliverList`'s `SparseChildren::ensure` invariant, this eager
-/// adaptor has no "child must own its own render node" requirement, so a
-/// bare `Text` composes fine, matching the oracle's own bare `Text(...,
-/// key: ...)` children).
+/// becomes a direct `Text` sliver child, matching the oracle's own bare
+/// `Text(..., key: ...)` children (a composite lazy child is stamped at
+/// adoption, so it needs no wrapping box).
 fn fixed_extent_list_scene(item_extent: f32, labels: &[&str]) -> impl View {
     let children: Vec<BoxedView> = labels
         .iter()
@@ -354,48 +308,16 @@ fn sliver_fixed_extent_list_lays_out_children_in_order_after_rearranging() {
 // ============================================================================
 
 /// Flutter parity: `slivers_test.dart` `'SliverFixedExtentList handles
-/// underflow when its children changes'` (tag `3.44.0`).
-///
-/// **`#[ignore]`d divergence pin, verified failing for the stated reason.**
-/// Named for the oracle behavior it asserts (offscreen children are *not
-/// built*), not for FLUI's divergent one. The oracle's first-phase
-/// assertion: with 6 items of `itemExtent: 900` scrolled to
-/// `max_scroll_extent` (`5400 - 600 = 4800`), only the single onstage tail
-/// item ever has its `State` initialized — each child is a
-/// `StateInitSpy(item, () => initializedChild.add(item), ...)`, and the
-/// oracle asserts `listEquals<String>(initializedChild, <String>['6'])` —
-/// Flutter's real `SliverMultiBoxAdaptorElement` never builds an off-window
-/// child at all, so `find.text('1')` through `find.text('5')` are
-/// `findsNothing` (a genuine RESIDENCY absence, not merely an offstage one —
-/// no `is_onstage_text` nuance applies here). FLUI's `SliverFixedExtentList`
-/// mounts and lays out every child unconditionally (module doc's headline
-/// finding), so all 6 items are found in the tree regardless of scroll
-/// position — this assertion is expected to, and does, fail.
-///
-/// **Scope: this pin reproduces only the oracle's initial-window phase**,
-/// deliberately not its second phase (`jumpTo(0)` + swapping `children[0]`
-/// with `children[5]` then re-pumping, which the oracle expects to keep
-/// `initializedChild == ['6']` because the keyed `'6'` element is reused at
-/// the new head while the rest still never build). That second phase is
-/// omitted, not overlooked: (1) FLUI is fully eager, so the initial-window
-/// assertion above already diverges — a later child swap cannot change that
-/// outcome, and (2) the second phase's keyed-identity-preservation half
-/// additionally needs the still-open no-per-item-view-key API (the separate
-/// Cross.H gap the `SliverList` port filed), which `SliverFixedExtentList`'s
-/// bare-`ViewSeq` children cannot express today. Scoping the pin to
-/// initial-window laziness keeps it honest rather than adding a swap step
-/// that would be a no-op against an eager, keyless type; the name reflects
-/// that scope so a future reader does not unignore it expecting
-/// child-change/underflow coverage it never had.
-///
-/// See the Cross.H entry this pin references (`docs/ROADMAP.md`) for the
-/// architectural gap (no lazy child-manager for this render object) that
-/// would need closing before the first-phase assertion could pass.
+/// underflow when its children changes'` — the residency half of the case:
+/// scrolled to the settled tail position, the five items above the window
+/// are never built at all (their `State` never initialises); only the
+/// onstage tail item exists. The static children go through the lazy
+/// delegate, so the fixed-extent list builds only its window (ADR-0053).
+/// The second half of the oracle (the child list shrinking under the
+/// viewport and the underflow that follows) is
+/// `sliver_fixed_extent_list_shrinking_children_clamps_the_position`.
 #[test]
-#[ignore = "divergence pin: SliverFixedExtentList is eager (no lazy child-manager) — \
-            see the 'SliverFixedExtentList/RenderSliverFixedExtentList is a fully eager' \
-            Cross.H entry in docs/ROADMAP.md"]
-fn sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin() {
+fn sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window() {
     const ITEM_EXTENT: f32 = 900.0;
     const VIEWPORT_HEIGHT: f32 = 600.0;
     // 6 items * 900px = 5400px total scroll extent; max_scroll_extent =
@@ -412,9 +334,8 @@ fn sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_p
     for absent in ["1", "2", "3", "4", "5"] {
         assert!(
             laid.find_text(absent).is_none(),
-            "Flutter's oracle expects item '{absent}' to never be built at all \
-             (a residency absence — its State never initializes); FLUI's eager \
-             SliverFixedExtentList mounts it regardless of scroll position"
+            "item '{absent}' sits above the window and must never be built \
+             (a residency absence — its State never initialises)"
         );
     }
     assert!(
@@ -502,4 +423,224 @@ fn sliver_fixed_extent_list_hit_tests_children_by_position() {
         1,
         "tapping item 1's center must fire its own counter"
     );
+}
+
+// ============================================================================
+// CASE 1 — correctly clears garbage
+// ============================================================================
+
+/// Flutter parity: `slivers_test.dart` `'SliverFixedExtentList correctly
+/// clears garbage'`. Three drags (−1200, −1200, −800) become one `jump_to`
+/// of 3200 px; 900 px items in a 600 px viewport. After the jump items 4–5
+/// are the window and 1–3 are gone; inserting '0' at the head shifts every
+/// index by one, and the window at the same offset now reads 3–4 while
+/// 0–2 are never built — the leading and trailing garbage the oracle asserts.
+#[test]
+fn sliver_fixed_extent_list_clears_garbage_across_a_head_insert() {
+    const ITEM_EXTENT: f32 = 900.0;
+    const VIEWPORT_HEIGHT: f32 = 600.0;
+    let controller = ScrollController::new();
+    let items = ["1", "2", "3", "4", "5", "6"];
+    let mut laid = harness::pump_widget(
+        fixed_extent_underflow_scene(&items, ITEM_EXTENT, &controller),
+        harness::screen_of(800.0, VIEWPORT_HEIGHT),
+    );
+    controller.jump_to(3200.0);
+    laid.pump();
+    common::settle_lazy(&mut laid);
+    for gone in ["1", "2", "3"] {
+        assert!(
+            laid.find_text(gone).is_none(),
+            "'{gone}' scrolled out and was evicted"
+        );
+    }
+    for present in ["4", "5"] {
+        assert!(
+            laid.find_text(present).is_some(),
+            "'{present}' is in the window"
+        );
+    }
+
+    let shifted = ["0", "1", "2", "3", "4", "5", "6"];
+    laid.pump_widget(fixed_extent_underflow_scene(
+        &shifted,
+        ITEM_EXTENT,
+        &controller,
+    ));
+    common::settle_lazy(&mut laid);
+    for gone in ["0", "1", "2"] {
+        assert!(
+            laid.find_text(gone).is_none(),
+            "'{gone}' is leading garbage"
+        );
+    }
+    for present in ["3", "4"] {
+        assert!(
+            laid.find_text(present).is_some(),
+            "'{present}' fills the window after the shift"
+        );
+    }
+}
+
+// ============================================================================
+// CASE 2 (second half) — the children shrink under the viewport
+// ============================================================================
+
+/// Flutter parity: `slivers_test.dart` `'SliverFixedExtentList handles
+/// underflow when its children changes'`, the underflow half: settled at the
+/// tail of six 900 px items, the list shrinks to three. The position clamps
+/// to the new extent (`3 × 900 − 600 = 2100`) and only the remaining tail
+/// item is built.
+#[test]
+fn sliver_fixed_extent_list_shrinking_children_clamps_the_position() {
+    const ITEM_EXTENT: f32 = 900.0;
+    const VIEWPORT_HEIGHT: f32 = 600.0;
+    let controller = ScrollController::with_initial_scroll_offset(4800.0);
+    let mut laid = harness::pump_widget(
+        fixed_extent_underflow_scene(&["1", "2", "3", "4", "5", "6"], ITEM_EXTENT, &controller),
+        harness::screen_of(800.0, VIEWPORT_HEIGHT),
+    );
+    assert!(laid.find_text("6").is_some());
+
+    laid.pump_widget(fixed_extent_underflow_scene(
+        &["1", "2", "3"],
+        ITEM_EXTENT,
+        &controller,
+    ));
+    settle_pixels(&mut laid, &controller);
+    assert_eq!(
+        controller.pixels(),
+        2100.0,
+        "clamped to the shrunken extent"
+    );
+    assert!(laid.find_text("3").is_some(), "the new tail item is built");
+    assert!(laid.find_text("6").is_none(), "the removed item is gone");
+}
+
+// ============================================================================
+// CASES 4 and 5 — the clamp contract where Flutter auto-corrects
+// ============================================================================
+
+/// Seven 200 px pages built on demand (the builder alone knows the end), a
+/// 600 px viewport with no cache, starting at 600 px — the oracle's scene.
+fn on_demand_pages(controller: &ScrollController) -> impl View {
+    let sliver = SliverFixedExtentList::builder(200.0, usize::MAX, |index| {
+        (index <= 6).then(|| Text::new(format!("Page {index}")).boxed())
+    });
+    Viewport::new((sliver,))
+        .axis_direction(AxisDirection::TopToBottom)
+        .cache_extent(0.0, CacheExtentStyle::Pixel)
+        .position(controller.position())
+}
+
+/// Pump until the position stops moving (a far jump past an end the builder
+/// has not revealed yet settles over a few layout passes: each pass's
+/// requests reveal the end, the count clamps, the viewport clamps).
+fn settle_pixels(laid: &mut LaidOut, controller: &ScrollController) {
+    for _ in 0..8 {
+        let before = controller.pixels();
+        laid.pump();
+        common::settle_lazy(laid);
+        if controller.pixels() == before {
+            return;
+        }
+    }
+}
+
+/// Flutter parity: `slivers_test.dart` `'SliverFixedExtentList with
+/// SliverChildBuilderDelegate auto-correct scroll offset - super fast'`,
+/// as the clamp contract (ADR-0053): a jump of 1000 px from 600 px lands
+/// past the end; the settled offset is the real maximum, `7 × 200 − 600`.
+#[test]
+fn sliver_fixed_extent_list_far_jump_past_the_end_clamps_to_the_real_extent() {
+    let controller = ScrollController::with_initial_scroll_offset(600.0);
+    let mut laid = harness::pump_widget(
+        on_demand_pages(&controller),
+        harness::screen_of(800.0, 600.0),
+    );
+    assert!(laid.find_text("Page 0").is_none());
+    assert!(laid.find_text("Page 6").is_none());
+
+    controller.jump_to(1600.0);
+    settle_pixels(&mut laid, &controller);
+    assert_eq!(controller.pixels(), 800.0);
+    assert!(laid.find_text("Page 0").is_none());
+    assert!(laid.find_text("Page 6").is_some());
+    // Settled: another pump moves nothing.
+    laid.pump();
+    assert_eq!(controller.pixels(), 800.0);
+}
+
+/// Flutter parity: `slivers_test.dart` `'SliverFixedExtentList with
+/// SliverChildBuilderDelegate auto-correct scroll offset - reasonable'` as the
+/// clamp contract: a 10 px over-scroll past the end clamps to the real
+/// maximum; Flutter animates back to the same 800 px.
+#[test]
+fn sliver_fixed_extent_list_overscroll_past_the_end_clamps_to_the_real_extent() {
+    let controller = ScrollController::with_initial_scroll_offset(600.0);
+    let mut laid = harness::pump_widget(
+        on_demand_pages(&controller),
+        harness::screen_of(800.0, 600.0),
+    );
+    controller.jump_to(810.0);
+    settle_pixels(&mut laid, &controller);
+    assert_eq!(controller.pixels(), 800.0);
+}
+
+// ============================================================================
+// CASE 7 — builder can build children
+// ============================================================================
+
+/// Flutter parity: `slivers_test.dart` `'SliverFixedExtentList.builder can
+/// build children'`: two on-demand tap targets, each firing only its own
+/// counter.
+#[test]
+fn sliver_fixed_extent_list_builder_hit_tests_children_by_position() {
+    const ITEM_EXTENT: f32 = 100.0;
+    let counters = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+    let scene = {
+        let counters = counters.clone();
+        CustomScrollView::new((SliverFixedExtentList::builder(
+            ITEM_EXTENT,
+            2,
+            move |index| {
+                let counter = Arc::clone(&counters[index]);
+                Some(
+                    GestureDetector::new()
+                        .on_tap(move || {
+                            counter.fetch_add(1, Ordering::SeqCst);
+                        })
+                        .child(
+                            Container::new()
+                                .color(if index == 0 {
+                                    Color::rgb(0, 255, 0)
+                                } else {
+                                    Color::rgb(255, 0, 0)
+                                })
+                                .child(Text::new(format!("Index {index}"))),
+                        )
+                        .boxed(),
+                )
+            },
+        ),))
+    };
+    let laid = harness::pump_widget(scene, harness::screen());
+    let center_of = |id: RenderId| {
+        let offset = laid.absolute_offset(id);
+        let extent = laid.size(id);
+        (
+            offset.dx.get() + extent.width.get() / 2.0,
+            offset.dy.get() + extent.height.get() / 2.0,
+        )
+    };
+    let (x0, y0) = center_of(laid.find_text("Index 0").expect("'Index 0' is built"));
+    let (x1, y1) = center_of(laid.find_text("Index 1").expect("'Index 1' is built"));
+    laid.dispatch_pointer_down(x0, y0);
+    laid.dispatch_pointer_up(x0, y0);
+    assert_eq!(counters[0].load(Ordering::SeqCst), 1);
+    assert_eq!(counters[1].load(Ordering::SeqCst), 0);
+    laid.dispatch_pointer_down(x1, y1);
+    laid.dispatch_pointer_up(x1, y1);
+    assert_eq!(counters[0].load(Ordering::SeqCst), 1);
+    assert_eq!(counters[1].load(Ordering::SeqCst), 1);
 }

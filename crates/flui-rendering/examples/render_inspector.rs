@@ -18,7 +18,8 @@
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderPadding, RenderSliverFixedExtentList, RenderViewport,
 };
-use flui_rendering::testing::{Probe, RenderTester, box_node, sliver_node};
+use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
+use flui_rendering::testing::{ParentDataSeed, Probe, RenderTester, box_node, sliver_node};
 use flui_types::{Size, geometry::px, layout::AxisDirection};
 
 fn header(title: &str) {
@@ -82,11 +83,29 @@ fn sliver_layout_only() {
 
     let run = RenderTester::mount(
         box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(
-            sliver_node(RenderSliverFixedExtentList::new(30.0))
+            sliver_node(RenderSliverFixedExtentList::new(30.0, 3))
                 .label("list")
-                .child(box_node(RenderColoredBox::red(300.0, 1000.0)))
-                .child(box_node(RenderColoredBox::green(300.0, 1000.0)))
-                .child(box_node(RenderColoredBox::blue(300.0, 1000.0))),
+                .child(
+                    box_node(RenderColoredBox::red(300.0, 1000.0)).with_parent_data_seed(
+                        ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(0),
+                        ),
+                    ),
+                )
+                .child(
+                    box_node(RenderColoredBox::green(300.0, 1000.0)).with_parent_data_seed(
+                        ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(1),
+                        ),
+                    ),
+                )
+                .child(
+                    box_node(RenderColoredBox::blue(300.0, 1000.0)).with_parent_data_seed(
+                        ParentDataSeed::SliverMultiBoxAdaptor(
+                            SliverMultiBoxAdaptorParentData::new(2),
+                        ),
+                    ),
+                ),
         ),
     )
     .with_size(Size::new(px(300.0), px(100.0)))
