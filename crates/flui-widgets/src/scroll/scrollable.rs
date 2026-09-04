@@ -3,11 +3,20 @@
 //! `Scrollable` composes:
 //! - A [`GestureDetector`] that translates pan events into offset mutations on
 //!   the [`ScrollController`].
-//! - An [`AnimatedBuilder`] driven by the controller's [`Listenable`]: every
-//!   time `set_pixels` fires `notify_listeners`, the inner subtree rebuilds
-//!   with the current scroll offset, giving the illusion of continuous motion.
-//! - A [`SingleChildScrollView`] as the layout/paint host, receiving the live
-//!   `controller.pixels()` as its programmatic offset.
+//! - A [`SingleChildScrollView`] as the layout/paint host, sharing the
+//!   controller's `ScrollPosition` (not a pushed pixel value).
+//!
+//! # Scrolling is a layout event, not a build event
+//!
+//! `RenderViewport` subscribes to the offset and marks itself needing layout
+//! (`crates/flui-objects/src/sliver/viewport.rs`, Flutter's
+//! `offset.addListener(markNeedsLayout)`), so a scroll re-lays out the
+//! viewport and rebuilds nothing. `Scrollable` used to *also* wrap the whole
+//! viewport in an `AnimatedBuilder` on the controller's notify, which
+//! re-created every sliver view — and every delegate closure — on every
+//! `set_pixels`. The one thing that genuinely needed the notify is servicing
+//! an `animate_to`/`jump_to` command, which is now a listener installed
+//! alongside the fling ones (`install_command_listener`).
 //!
 //! # Fling ballistic simulation
 //!
@@ -34,8 +43,8 @@
 //!
 //! [`ScrollController::animate_to`]/[`jump_to`](ScrollController::jump_to)
 //! don't drive the fling controller directly — they queue a command (see
-//! `scroll_controller.rs`'s module docs) that this widget's `build` closure
-//! services on every rebuild the controller's notify triggers, via
+//! `scroll_controller.rs`'s module docs) that this widget services from a
+//! listener on the controller's own notify, via
 //! [`ScrollController::service_pending_command`]. Reusing the SAME
 //! `AnimationController` the ballistic fling above drives means `on_pan_start`
 //! cancels a running `animate_to` for free — it stops whichever of the two
@@ -63,7 +72,7 @@ use flui_view::{BoxedView, BuildContext, BuildContextExt, Child, IntoView, ViewE
 use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{AnimatedBuilder, GestureDetector, Listener, SingleChildScrollView};
+use crate::{GestureDetector, Listener, SingleChildScrollView};
 use flui_interaction::events::ScrollEventData;
 use flui_interaction::routing::EventPropagation;
 use flui_scheduler::PostFrameHandle;
@@ -91,15 +100,18 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// on the given [`ScrollController`], including a ballistic fling simulation
 /// after the user lifts their finger.
 ///
-/// Rebuild is driven reactively: the controller implements [`Listenable`], so
-/// every call to [`ScrollController::set_pixels`] schedules a rebuild of only
-/// the inner [`AnimatedBuilder`] subtree — the outer `Scrollable` element does
-/// not rebuild on each frame.
+/// Scrolling rebuilds nothing. [`ScrollController::set_pixels`] notifies the
+/// shared [`ScrollPosition`], and `RenderViewport` — which subscribes to it
+/// directly — marks itself needing layout; no element in the subtree is
+/// dirtied. See this module's docs.
 ///
 /// A [`VsyncScope`] must be above the `Scrollable` in the tree (or provided
-/// by the application's binding) for fling animations to be driven
-/// deterministically; without one the fling controller falls back to its own
-/// wall-clock scheduler.
+/// by the application's binding) for fling animations to run at all. There is
+/// no wall-clock fallback: the fling controller is built with
+/// `AnimationController::without_ticker_bounds`, so with no `VsyncScope` to
+/// register it, nothing ever advances it — a fling or an `animate_to` sets up
+/// and then stays put. Drag and wheel scrolling are unaffected, since both
+/// write the position directly.
 ///
 /// # Example
 ///
@@ -285,6 +297,22 @@ pub struct ScrollableState {
     /// `ScrollPosition` idle when the ballistic run settles or is stopped.
     /// Same install/remove lifecycle as `fling_listener_id`.
     fling_status_listener_id: Option<ListenerId>,
+    /// Listener ID on the *scroll* controller that services an
+    /// `animate_to`/`jump_to`-queued command
+    /// ([`ScrollController::service_pending_command`]). Installed by
+    /// [`install_command_listener`](ScrollableState::install_command_listener)
+    /// alongside the fling listeners, re-run on `did_update_view` so a
+    /// controller swap moves it, removed in `dispose`.
+    ///
+    /// This is the *only* thing `Scrollable` still needs a scroll notify for.
+    /// The viewport's own re-layout comes from the render side, where
+    /// `RenderViewport` subscribes to the offset directly.
+    ///
+    /// Stored *with* the listenable it was installed on, not just its id:
+    /// `did_update_view` reassigns `scroll_controller` before the installers
+    /// run, so a removal that read the field would detach from the incoming
+    /// controller and leave the outgoing one holding the listener forever.
+    command_listener: Option<(Arc<dyn Listenable>, ListenerId)>,
     /// Post-frame capability for the wheel-scroll activity pulse — acquired
     /// in `init_state`/`did_change_dependencies` (never from `build`), per
     /// the frame-capability scope rule. A wheel tick raises the scroll
@@ -331,6 +359,7 @@ impl StatefulView for Scrollable {
             fling_listener_id: None,
             fling_status_listener_id: None,
             post_frame: None,
+            command_listener: None,
             vsync: None,
             vsync_registration: None,
         }
@@ -395,6 +424,47 @@ impl ScrollableState {
         self.fling_listener_id = Some(listener_id);
     }
 
+    /// Installs the listener that services an `animate_to`/`jump_to`-queued
+    /// command when the controller notifies (ADR-0037's "notify path").
+    ///
+    /// This used to happen inside the `build` closure of an `AnimatedBuilder`
+    /// wrapping the whole viewport, which meant every scroll pixel rebuilt
+    /// the viewport and every sliver view underneath it. Servicing the queue
+    /// is the one thing that genuinely needed the notify, so it moved here
+    /// and the rebuild went away.
+    ///
+    /// Re-entrancy: the notifier snapshots its listener list and wraps each
+    /// callback, so a command that writes back through the same controller
+    /// cannot disturb the notify in flight.
+    fn install_command_listener(&mut self) {
+        self.remove_command_listener();
+        let scroll_ref = self.scroll_controller.clone();
+        let fling_ref = self.fling_controller.clone();
+        let listenable = self.scroll_controller.as_listenable();
+        let listener_id = listenable.add_listener(Arc::new(move || {
+            scroll_ref.service_pending_command(&fling_ref);
+        }));
+        self.command_listener = Some((listenable, listener_id));
+        // Drain once on install. A command queued before this listener existed
+        // — `animate_to` on a controller that is not attached to a mounted
+        // `Scrollable` yet, or one handed over by a rebuild — already fired
+        // its notify with nobody listening, and nothing guarantees a second
+        // one: if the first layout's dimensions match what the controller
+        // already held, it notifies nothing at all and the command waits
+        // forever. The `AnimatedBuilder` this replaced serviced the queue on
+        // its initial build, which covered the same case implicitly.
+        self.scroll_controller
+            .service_pending_command(&self.fling_controller);
+    }
+
+    /// Detach the command listener from whichever listenable it was installed
+    /// on. Idempotent.
+    fn remove_command_listener(&mut self) {
+        if let Some((listenable, id)) = self.command_listener.take() {
+            listenable.remove_listener(id);
+        }
+    }
+
     /// Installs the status listener that ends the position's scroll
     /// activity when the ballistic run settles (`Completed`) or is stopped
     /// by a grab or teardown (`Dismissed`). The activity signal is what a
@@ -426,6 +496,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.install_stop_hook();
         self.install_fling_listener();
         self.install_fling_status_listener();
+        self.install_command_listener();
 
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame — the same pattern used by
@@ -463,15 +534,16 @@ impl ViewState<Scrollable> for ScrollableState {
         let fling_controller = self.fling_controller.clone();
         let post_frame = self.post_frame.clone();
 
-        AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
-            // Service any `animate_to`/`jump_to`-queued command BEFORE
-            // building this rebuild's subtree — this closure reruns on every
-            // notify the controller fires (ADR-0037's "notify path"),
-            // exactly the trigger `ScrollController::animate_to`/`jump_to`
-            // fire after queuing a command. See `scroll_controller.rs`'s
-            // module docs and `ScrollController::service_pending_command`.
-            scroll_controller.service_pending_command(&fling_controller);
-
+        // The viewport re-lays itself out from the render side:
+        // `RenderViewport` subscribes to the offset and marks needs-layout
+        // (`crates/flui-objects/src/sliver/viewport.rs`, Flutter's
+        // `offset.addListener(markNeedsLayout)`). So this build runs when the
+        // *configuration* changes, never per scroll pixel — the
+        // `AnimatedBuilder` that used to wrap it rebuilt the viewport and
+        // every sliver view underneath on every `set_pixels`. What genuinely
+        // needed the notify — servicing an `animate_to`/`jump_to` command —
+        // is a listener now (`install_command_listener`).
+        {
             // Clones for the gesture callbacks; each closure needs its own
             // `Arc`-counted handle (no refcount bump at call time).
             let fling_stop = fling_controller.clone();
@@ -708,7 +780,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     EventPropagation::Stop
                 })
                 .child(gestures)
-        })
+        }
     }
 
     fn did_update_view(&mut self, _old_view: &Scrollable, new_view: &Scrollable) {
@@ -740,6 +812,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // — its pixels would never move.
         self.install_fling_listener();
         self.install_fling_status_listener();
+        self.install_command_listener();
 
         // Re-install the stop hook on the (possibly new) controller —
         // `install_stop_hook` is idempotent (see its doc), so this is cheap
@@ -766,6 +839,7 @@ impl ViewState<Scrollable> for ScrollableState {
         if let Some(id) = self.fling_status_listener_id.take() {
             self.fling_controller.remove_status_listener(id);
         }
+        self.remove_command_listener();
         // Release the vsync registration so the binding does not hold a
         // reference to the disposed controller.
         if let (Some(vsync), Some(registration)) =

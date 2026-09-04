@@ -809,7 +809,7 @@ cases = ["ScrollController control test"]
 rust = "scrollable_test"
 family = "scroll"
 oracles = ["widgets/scrollable_test.dart"]
-tests = 6
+tests = 8
 
 [[targets]]
 rust = "scrollbar_test"

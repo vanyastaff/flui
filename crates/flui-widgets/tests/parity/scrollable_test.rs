@@ -519,3 +519,129 @@ fn scrollable_axis_direction_override_governs_the_fling_velocity_not_ambient_dir
          release={rtl_at_release:.1}, after_pump={rtl_after_pump:.1}"
     );
 }
+
+// ── The viewport does not rebuild on scroll ────────────────────────────────
+
+/// A view that counts its own builds, so a test can tell a re-layout from a
+/// rebuild of the subtree.
+#[derive(Clone)]
+struct BuildCounter {
+    builds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl flui_view::view::StatelessView for BuildCounter {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        self.builds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        SizedBox::new(300.0, 2000.0)
+    }
+}
+
+impl flui_view::View for BuildCounter {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+/// Scrolling must not rebuild the viewport's subtree.
+///
+/// `RenderViewport` subscribes to the offset and marks itself needing layout
+/// (`crates/flui-objects/src/sliver/viewport.rs`, Flutter's
+/// `offset.addListener(markNeedsLayout)`), so a scroll is a layout event, not
+/// a build event. `Scrollable` used to *also* wrap the whole viewport in an
+/// `AnimatedBuilder` on the controller's notify, so every `set_pixels`
+/// re-created every sliver view underneath it — the delegate closures
+/// included, which is why a builder delegate's residents were re-consulted on
+/// every scroll pixel.
+///
+/// The oracle is the build count, not the pixel value: a scroll that moved
+/// content while rebuilding nothing is the whole point, so the test asserts
+/// both.
+#[test]
+fn scrolling_relayouts_the_viewport_without_rebuilding_its_subtree() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 2000.0);
+    let builds = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let scrollable = Scrollable::new()
+        .controller(controller.clone())
+        .child(BuildCounter {
+            builds: std::sync::Arc::clone(&builds),
+        });
+    let mut laid = lay_out(scrollable, tight(300.0, 300.0));
+
+    let after_mount = builds.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(after_mount >= 1, "the content built at least once on mount");
+
+    // `tick` drives a frame WITHOUT dirtying the root, so it rebuilds only
+    // what a listenable actually scheduled into the build inbox. `pump` would
+    // mark the root dirty itself and rebuild the subtree either way — it
+    // measures the harness, not the scroll.
+    for _ in 0..4 {
+        laid.tick();
+    }
+    assert_eq!(
+        builds.load(std::sync::atomic::Ordering::SeqCst),
+        after_mount,
+        "an idle frame rebuilds nothing — the control for the scroll below"
+    );
+
+    for pixels in [10.0, 25.0, 60.0, 125.0] {
+        controller.set_pixels(pixels);
+        laid.tick();
+    }
+
+    assert_eq!(
+        builds.load(std::sync::atomic::Ordering::SeqCst),
+        after_mount,
+        "four scroll writes must rebuild the viewport's subtree zero times"
+    );
+    assert_eq!(
+        controller.pixels(),
+        125.0,
+        "the scroll itself still took effect"
+    );
+}
+
+/// An `animate_to` queued *before* the `Scrollable` mounts must still run.
+///
+/// The command is a queue drained on the controller's notify, and a call made
+/// while no `Scrollable` is attached fires that notify with nobody listening.
+/// Nothing guarantees a second one: if the first layout's dimensions match
+/// what the controller already holds, `update_dimensions` notifies nothing at
+/// all and the command would wait forever. So the listener drains once when it
+/// is installed — the `AnimatedBuilder` this replaced covered the same case
+/// implicitly, by servicing the queue on its initial build.
+#[test]
+fn an_animate_to_queued_before_mount_still_runs() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 500.0);
+
+    // Queued with no Scrollable in the tree: this notify reaches no listener.
+    controller.animate_to(
+        200.0,
+        Duration::from_millis(100),
+        Arc::new(flui_animation::Linear),
+    );
+    assert_eq!(
+        controller.pixels(),
+        0.0,
+        "nothing has driven the animation yet"
+    );
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 800.0));
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    for _ in 0..12 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    assert!(
+        controller.pixels() > 0.0,
+        "the queued animate_to must have been picked up on mount; pixels = {}",
+        controller.pixels()
+    );
+}

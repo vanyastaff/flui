@@ -26,15 +26,14 @@
 //! controller has no `AnimationController` of its own to animate with.
 //! `Scrollable`'s `ScrollableState` (`scrollable.rs`) already owns one (the
 //! vsync-registered fling controller its module docs describe) and services
-//! the queued command from its `AnimatedBuilder` rebuild closure, which
-//! reruns on every notify this controller fires. A user grab (`on_pan_start`)
-//! cancels the run for free, since it `stop()`s that same controller;
-//! [`jump_to`](ScrollController::jump_to) cancels through a SECOND, synchronous path — a
-//! `stop_hook` installed the same way — because a merely queued cancellation
-//! would only take effect on the next rebuild, one frame after
-//! `flui-testing`'s `pump_frame` has already ticked the not-yet-cancelled
-//! controller (Flutter parity: `ScrollPosition.jumpTo` calls `goIdle()`
-//! unconditionally and synchronously, even when the value doesn't change).
+//! the queued command from a listener on this controller's notify. A user
+//! grab (`on_pan_start`) cancels the run for free, since it `stop()`s that
+//! same controller; [`jump_to`](ScrollController::jump_to) cancels through a
+//! SECOND path as well — a `stop_hook` installed the same way — which fires
+//! even when `jump_to` writes a pixel value equal to the current one and so
+//! notifies nothing at all (Flutter parity: `ScrollPosition.jumpTo` calls
+//! `goIdle()` unconditionally and synchronously, even when the value doesn't
+//! change).
 //!
 //! **Divergence: no `Future`.** The oracle's `ScrollController.animateTo`
 //! returns `Future<void>` so a caller can `await` completion
@@ -76,7 +75,7 @@ type StopHook = Arc<dyn Fn() + Send + Sync>;
 
 /// A command queued by [`ScrollController::animate_to`]/[`jump_to`](ScrollController::jump_to)
 /// for [`ScrollController::service_pending_command`] to act on, called from
-/// `ScrollableState`'s notify-triggered `AnimatedBuilder` rebuild closure
+/// `ScrollableState`'s notify-triggered command listener
 /// (`scrollable.rs`).
 ///
 /// One slot, not a queue: a later command always supersedes an earlier,
@@ -470,9 +469,9 @@ impl ScrollController {
     /// Services one queued command (if any) against `fling` — the same
     /// `AnimationController` `Scrollable`'s `on_pan_end` drives for ballistic
     /// flings. Called from `ScrollableState`'s notify-triggered
-    /// `AnimatedBuilder` rebuild closure (`scrollable.rs`) on every rebuild,
-    /// so an `animate_to`/`jump_to` call made between rebuilds is picked up
-    /// on the very next one.
+    /// command listener (`scrollable.rs`), so a command queued by
+    /// `animate_to`/`jump_to` is serviced on the notify that follows it
+    /// rather than waiting for a rebuild.
     pub(crate) fn service_pending_command(&self, fling: &AnimationController) {
         let Some(command) = self.take_pending_command() else {
             return;
