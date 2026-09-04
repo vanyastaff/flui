@@ -707,3 +707,103 @@ fn object_exactly_matches_container_width_avoids_a_spurious_extra_run() {
         vec![offset(0.0, 0.0), offset(400.0, 0.0)]
     );
 }
+
+/// A `Wrap` clips only when it actually overflows AND a behaviour was asked
+/// for.
+///
+/// Flutter parity: `wrap_test.dart` `'Visual overflow generates a clip'`
+/// (3.44.0), whose two legs are `isNot(paints..clipRect())` for content that
+/// fits and `paints..clipRect()` for content that does not under
+/// `clipBehavior: Clip.hardEdge`. Read here as composited layer kinds, which
+/// is the same question one layer out.
+///
+/// `RenderWrap` carried no `clip_behavior` at all before this, and no `paint`
+/// either — it inherited the paint-all default, so an overflowing wrap drew
+/// past its own bounds with nothing a caller could do about it.
+///
+/// The third case is the one that keeps the pair honest: overflowing content
+/// with the DEFAULT `Clip::None` must still produce no clip layer, or the
+/// test would pass against an implementation that clips whenever it
+/// overflows and ignores the knob.
+#[test]
+fn wrap_clips_only_when_overflowing_and_asked_to() {
+    use flui_types::painting::Clip;
+    use flui_view::ViewExt as _;
+
+    // One 500x500 child in an 800x600 screen fits; two of them do not, since
+    // they wrap onto two runs of 500 each against a 600-tall box.
+    let fitting = || Wrap::new(vec![SizedBox::new(500.0, 500.0).boxed()]);
+    let overflowing = || {
+        Wrap::new(vec![
+            SizedBox::new(500.0, 500.0).boxed(),
+            SizedBox::new(500.0, 500.0).boxed(),
+        ])
+    };
+
+    let mut laid = harness::pump_widget(fitting(), harness::screen());
+    laid.pump();
+    assert!(
+        !laid.layer_kinds().contains(&"ClipRect"),
+        "content that fits produces no clip layer; got {:?}",
+        laid.layer_kinds(),
+    );
+
+    let mut laid = harness::pump_widget(
+        overflowing().clip_behavior(Clip::HardEdge),
+        harness::screen(),
+    );
+    laid.pump();
+    assert!(
+        laid.layer_kinds().contains(&"ClipRect"),
+        "overflowing content under HardEdge is clipped; got {:?}",
+        laid.layer_kinds(),
+    );
+
+    let mut laid = harness::pump_widget(overflowing(), harness::screen());
+    laid.pump();
+    assert!(
+        !laid.layer_kinds().contains(&"ClipRect"),
+        "the default is Clip::None, so overflow alone must not clip — a wrap \
+         is a layout, not a viewport; got {:?}",
+        laid.layer_kinds(),
+    );
+}
+
+/// A wrap that overflowed and then loses every child must stop clipping.
+///
+/// `has_visual_overflow` is written by `perform_layout`, and the zero-child
+/// path returns before the run arithmetic that computes it. Leaving the flag
+/// alone there would keep a stale `true` from the last non-empty pass, so the
+/// wrap would go on pushing a clip layer for a subtree that no longer exists.
+/// An early return that skips the only writer of a field is an early return
+/// that lies.
+#[test]
+fn wrap_stops_clipping_once_it_has_no_children_left() {
+    use flui_types::painting::Clip;
+    use flui_view::ViewExt as _;
+
+    let children = |count: usize| {
+        Wrap::new(
+            (0..count)
+                .map(|_| SizedBox::new(500.0, 500.0).boxed())
+                .collect::<Vec<_>>(),
+        )
+        .clip_behavior(Clip::HardEdge)
+    };
+
+    let mut laid = harness::pump_widget(children(2), harness::screen());
+    laid.pump();
+    assert!(
+        laid.layer_kinds().contains(&"ClipRect"),
+        "precondition: the overflowing wrap clips; got {:?}",
+        laid.layer_kinds(),
+    );
+
+    laid.pump_widget(children(0));
+    assert!(
+        !laid.layer_kinds().contains(&"ClipRect"),
+        "an empty wrap cannot overflow, so the clip must go with the children; \
+         got {:?}",
+        laid.layer_kinds(),
+    );
+}
