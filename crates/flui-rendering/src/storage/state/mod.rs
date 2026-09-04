@@ -235,7 +235,7 @@ pub struct RenderState<P: Protocol> {
     /// descendant's configuration regardless of geometry, so excluding an
     /// unplaced child loses its label and role as well as its position.
     /// Excluding a stale rect and excluding a stale label are different
-    /// trades; the second needs its own decision. Tracked on issue #834.
+    /// trades; the second needs its own decision. Tracked on issue #881.
     placed_generation: AtomicU64,
 
     /// The [`RenderId`](flui_foundation::RenderId) of the parent that issued
