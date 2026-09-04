@@ -1108,6 +1108,12 @@ pub enum ItemCount {
     /// escalates to another search. A builder with side effects therefore sees
     /// `2·log₂(n)` calls at mount, one per rebuild, and another `2·log₂(n)`
     /// on each growth.
+    ///
+    /// One exception, and it is observable to a side-effectful builder: a
+    /// source the initial search classified as *endless* — every index answers
+    /// `Some`, so the length is `usize::MAX` — costs **zero** calls per
+    /// rebuild. It cannot grow, so there is nothing to ask about, and asking
+    /// would mean handing user code the index `usize::MAX`.
     Unknown,
 }
 
