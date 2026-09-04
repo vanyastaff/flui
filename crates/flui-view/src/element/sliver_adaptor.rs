@@ -956,9 +956,8 @@ where
                     .map(R::item_count)
             });
             if let Some(current) = current
-                && super::sparse_children::build_item_or_error(builder, current).is_some()
+                && let Some(grown) = regrown_item_count(current, builder)
             {
-                let grown = probe_item_count(builder);
                 pipeline.with_mut(|pipeline_owner| {
                     if let Some(render_object) = pipeline_owner
                         .render_tree_mut()
@@ -1060,6 +1059,35 @@ impl LazyMultiBoxRender for RenderSliverList {
     }
 }
 
+/// The new length of an [`ItemCount::Unknown`] source that has grown past
+/// `current`, or `None` when it has not.
+///
+/// Costs **one** builder call in the common case: the index just past the
+/// known end either exists (the source grew, and only then is a full
+/// [`probe_item_count`] search worth running) or does not (unchanged, or
+/// shrank — which the adaptor's own clamp already handles). That bound is the
+/// point. `on_view_updated` runs this on every rebuild, because a builder
+/// delegate is a fresh closure each build and so always compares as changed,
+/// so anything heavier here restores the per-rebuild search that resolving at
+/// mount exists to avoid.
+///
+/// An already-unbounded `current` short-circuits to `None` without calling the
+/// builder at all. The sentinel cannot grow; an endless builder would answer
+/// `Some` at that index and send every rebuild through the full search; and
+/// asking user code for index `usize::MAX` is a plausible way to overflow
+/// arithmetic inside it.
+fn regrown_item_count(
+    current: usize,
+    builder: &dyn Fn(usize) -> Option<BoxedView>,
+) -> Option<usize> {
+    if current == usize::MAX {
+        return None;
+    }
+    super::sparse_children::build_item_or_error(builder, current)
+        .is_some()
+        .then(|| probe_item_count(builder))
+}
+
 /// How many items a lazy sliver has, when the caller knows.
 ///
 /// [`Unknown`](ItemCount::Unknown) is for a source whose length only its
@@ -1073,6 +1101,13 @@ pub enum ItemCount {
     /// Only the builder knows. It must answer `None` for every index past the
     /// end and `Some` for every index before it — a builder that is `None` in
     /// the middle of its range truncates there.
+    ///
+    /// The length is searched for once at mount. After that each rebuild costs
+    /// **one** builder call — asking whether the index just past the known end
+    /// exists — and only a `Some` there, meaning the source actually grew,
+    /// escalates to another search. A builder with side effects therefore sees
+    /// `2·log₂(n)` calls at mount, one per rebuild, and another `2·log₂(n)`
+    /// on each growth.
     Unknown,
 }
 
@@ -2288,6 +2323,42 @@ mod probe_tests {
         assert!(
             made < 4 * (usize::BITS - len.leading_zeros()) as usize,
             "probe made {made} builder calls for {len} items; expected O(log n)",
+        );
+    }
+
+    #[test]
+    fn the_growth_check_costs_one_call_and_none_at_all_when_unbounded() {
+        use super::regrown_item_count;
+
+        let calls = RefCell::new(Vec::new());
+        // Unchanged: one call, no growth.
+        assert_eq!(regrown_item_count(4, &counting(4, &calls)), None);
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &[4],
+            "the check asks for exactly the index past the end"
+        );
+
+        // Grown: the one call finds a child, and only then does it search.
+        let calls = RefCell::new(Vec::new());
+        assert_eq!(regrown_item_count(4, &counting(9, &calls)), Some(9));
+        assert!(
+            calls.borrow().len() > 1,
+            "a grown source escalates to the full search"
+        );
+
+        // Already unbounded: no builder call at all. An endless builder would
+        // answer `Some` at `usize::MAX` and send every rebuild through the
+        // whole search — and being asked for that index is its own hazard.
+        let calls = RefCell::new(Vec::new());
+        assert_eq!(
+            regrown_item_count(usize::MAX, &counting(usize::MAX, &calls)),
+            None
+        );
+        assert!(
+            calls.borrow().is_empty(),
+            "an unbounded source must not be asked anything: {:?}",
+            calls.borrow()
         );
     }
 
