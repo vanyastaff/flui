@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use flui_foundation::{ValueKey, ViewKey};
 use flui_objects::RenderTable;
 use flui_rendering::parent_data::TableCellParentData;
 use flui_rendering::protocol::BoxProtocol;
@@ -10,8 +11,8 @@ use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 use flui_types::styling::{BoxDecoration, TableBorder};
 use flui_types::typography::TextBaseline;
 use flui_view::{
-    BoxedView, IntoView, ParentDataView, RenderView, View, ViewExt, impl_parent_data_view,
-    impl_render_view,
+    BoxedView, BuildContext, IntoView, ParentDataView, RenderView, StatelessView, View, ViewExt,
+    impl_parent_data_view, impl_render_view,
 };
 
 /// One row of a [`Table`]: an optional background decoration plus its cells.
@@ -20,10 +21,20 @@ use flui_view::{
 /// — [`Table`] derives its column count from the first row and
 /// debug-asserts every other row matches it (Flutter parity: `Table`
 /// requires every `TableRow.children` to have the same length).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TableRow {
     decoration: Option<BoxDecoration<Pixels>>,
     cells: Vec<BoxedView>,
+    key: Option<Box<dyn ViewKey>>,
+}
+
+impl std::fmt::Debug for TableRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TableRow")
+            .field("cells", &self.cells.len())
+            .field("keyed", &self.key.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl TableRow {
@@ -32,7 +43,31 @@ impl TableRow {
         Self {
             decoration: None,
             cells,
+            key: None,
         }
+    }
+
+    /// Builder: give this row an identity that survives reordering.
+    ///
+    /// A keyed row keeps its cells' elements — and so their state — when the
+    /// rows around it move, are inserted, or are removed. Unkeyed rows are
+    /// matched to each other in order, among the unkeyed rows only, which is
+    /// what lets a keyed row move past them without disturbing them
+    /// (Flutter's `_TableElement.update`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is a `GlobalKey`: a row is not an element, so there is
+    /// nothing for a global key to address. Key the cell instead.
+    #[must_use]
+    pub fn key(mut self, key: impl ViewKey + 'static) -> Self {
+        assert!(
+            !key.is_global_key(),
+            "TableRow::key takes a local key: a row is not an element, so a \
+             GlobalKey has nothing to address here — key the cell instead",
+        );
+        self.key = Some(Box::new(key));
+        self
     }
 
     /// Builder: paint `decoration` behind this row's cells.
@@ -43,6 +78,71 @@ impl TableRow {
     }
 }
 
+/// One cell, carrying the identity of the row it belongs to.
+///
+/// `RenderTable`'s children are one flat row-major list, so the element tree
+/// reconciles them as one flat list too. Giving each cell a key derived from
+/// `(row identity, column index)` makes that flat reconcile behave exactly as
+/// Flutter's row-scoped `_TableElement.update` does: a cell is matched to the
+/// cell that held the same position in the same row, wherever that row has
+/// moved to, and a row with no counterpart is disposed whole.
+///
+/// The wrapper owns no render object, so the cell's own render node still
+/// attaches directly to `RenderTable`, and a `TableCell` inside it is still
+/// the nearest parent-data ancestor of that node.
+#[derive(Clone)]
+struct KeyedCell {
+    key: ValueKey<CellIdentity>,
+    child: BoxedView,
+}
+
+/// A cell's position in the table, as identity rather than as coordinates.
+///
+/// `row` is the row's own key hash when it has a key, and its ordinal among
+/// the *unkeyed* rows otherwise — the two are kept apart by `keyed` so a hash
+/// can never collide with an ordinal. Matching unkeyed rows by their ordinal
+/// among unkeyed rows (not by their index in the table) is what lets a keyed
+/// row move past them without disturbing them.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct CellIdentity {
+    keyed: bool,
+    row: u64,
+    column: usize,
+}
+
+impl KeyedCell {
+    fn new(identity: CellIdentity, child: BoxedView) -> Self {
+        Self {
+            key: ValueKey::new(identity),
+            child,
+        }
+    }
+}
+
+impl std::fmt::Debug for KeyedCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyedCell")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
+impl View for KeyedCell {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatelessView for KeyedCell {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.child.clone()
+    }
+}
+
 /// Lays out `rows` in a grid: `RenderTable` resolves each column's width
 /// (fixed/flex/fraction/intrinsic) and sizes each row to its tallest cell.
 ///
@@ -50,14 +150,20 @@ impl TableRow {
 /// match Flutter: `default_column_width = Flex(1.0)`,
 /// `default_vertical_alignment = Top`, no border, no explicit text baseline.
 ///
-/// Reconciliation uses the same flat multi-child element
-/// (`ElementKind::render_variable`) `Stack`/`Flow` already use — not
-/// Flutter's bespoke per-row keyed `_TableElement` diffing (deliberately out
-/// of scope for this slice; see the render-table research plan). Wrap a cell
-/// in [`TableCell`] to override its vertical alignment.
+/// Rows carry identity. `RenderTable`'s children are one flat row-major list,
+/// so the element tree reconciles them as one flat list — but each cell is
+/// keyed by its row's identity and its column, which makes that reconcile
+/// behave as Flutter's row-scoped `_TableElement.update` does: a keyed row
+/// keeps its cells wherever it moves to, unkeyed rows are matched to each
+/// other in order, and a row with no counterpart is disposed whole. Wrap a
+/// cell in [`TableCell`] to override its vertical alignment.
 #[derive(Clone, Debug)]
 pub struct Table {
     rows: Vec<TableRow>,
+    /// `rows`' cells in row-major order, each carrying its row's identity.
+    /// Built once with the table rather than per visit, so a rebuild costs
+    /// no more cloning than the rows themselves already do.
+    cells: Vec<KeyedCell>,
     column_widths: HashMap<usize, TableColumnWidth>,
     default_column_width: TableColumnWidth,
     default_vertical_alignment: TableCellVerticalAlignment,
@@ -70,6 +176,7 @@ impl Table {
     /// border, and no explicit text baseline.
     pub fn new(rows: Vec<TableRow>) -> Self {
         Self {
+            cells: identified_cells(&rows),
             rows,
             column_widths: HashMap::new(),
             default_column_width: TableColumnWidth::Flex(1.0),
@@ -127,6 +234,37 @@ impl Table {
     }
 }
 
+/// `rows`' cells in row-major order, each keyed by its row's identity.
+///
+/// A keyed row is identified by its key's hash; an unkeyed row by its ordinal
+/// among the unkeyed rows, so inserting or removing a keyed row does not
+/// renumber the unkeyed ones (Flutter matches its unkeyed rows by sequence
+/// among themselves for the same reason).
+fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
+    let mut unkeyed_ordinal = 0u64;
+    let mut cells = Vec::new();
+    for row in rows {
+        let (keyed, row_identity) = if let Some(key) = &row.key {
+            (true, key.key_hash())
+        } else {
+            let ordinal = unkeyed_ordinal;
+            unkeyed_ordinal += 1;
+            (false, ordinal)
+        };
+        for (column, cell) in row.cells.iter().enumerate() {
+            cells.push(KeyedCell::new(
+                CellIdentity {
+                    keyed,
+                    row: row_identity,
+                    column,
+                },
+                cell.clone(),
+            ));
+        }
+    }
+    cells
+}
+
 impl RenderView for Table {
     type Protocol = BoxProtocol;
     type RenderObject = RenderTable;
@@ -177,13 +315,12 @@ impl RenderView for Table {
     }
 
     fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        // Row-major flattening — the exact order `RenderTable`'s flat
-        // child list expects (`row = index / column_count`, `col = index %
-        // column_count`).
-        for row in &self.rows {
-            for cell in &row.cells {
-                visitor(cell);
-            }
+        // Row-major, the exact order `RenderTable`'s flat child list expects
+        // (`row = index / column_count`, `col = index % column_count`), each
+        // cell carrying its row's identity so the flat reconcile preserves
+        // rows the way Flutter's row-scoped one does.
+        for cell in &self.cells {
+            visitor(cell);
         }
     }
 }

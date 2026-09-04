@@ -1023,7 +1023,7 @@ tests = 2
 rust = "table_test"
 family = "table"
 oracles = ["rendering/table_test.dart", "widgets/table_test.dart"]
-tests = 16
+tests = 18
 
 [[targets.claims]]
 oracle = "rendering/table_test.dart"
@@ -1043,16 +1043,10 @@ cases = [
     "Table widget - intrinsic sizing test, changing column widths",
     "Table widget - Default textBaseline is null",
     "Table widget requires all TableRows to have same number of children",
+    "Table widget - changing table dimensions",
     "Does not crash if a child RenderObject is replaced by another RenderObject of a different type",
     "Can replace child with a different RenderObject type",
 ]
-
-[[targets.pins]]
-test = "changing_row_and_column_count_reuses_and_discards_cells_by_flat_position"
-capability = "row-scoped keyed Table reconciliation"
-issue = 544
-oracle = "widgets/table_test.dart"
-cases = ["Table widget - changing table dimensions"]
 
 [[targets]]
 rust = "text_editing_controller_test"
@@ -1529,7 +1523,7 @@ cases = [
 "widgets/stretch_effect_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/syncing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
 "widgets/system_context_menu_test.dart" = { cases = 30, claimed = 0, status = "pending" }
-"widgets/table_test.dart" = { cases = 27, claimed = 13, diverged = 1, status = "partial" }
+"widgets/table_test.dart" = { cases = 27, claimed = 14, status = "partial" }
 "widgets/tap_region_test.dart" = { cases = 16, claimed = 0, status = "pending" }
 "widgets/test_page_tester_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/text_golden_test.dart" = { cases = 21, claimed = 0, status = "pending" }
@@ -1570,16 +1564,16 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 655
-pins = 2
+rust_tests = 657
+pins = 1
 oracle_files = 389
 oracle_cases = 5696
-cases_claimed = 301
-cases_diverged = 2
+cases_claimed = 302
+cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 293
-universe_cases_diverged = 2
+universe_cases_claimed = 294
+universe_cases_diverged = 1
 universe_pending_files = 331
 
 [summary.families."animation"]
@@ -1668,10 +1662,10 @@ pins = 0
 
 [summary.families."table"]
 targets = 1
-rust_tests = 16
-cases_claimed = 14
-cases_diverged = 1
-pins = 1
+rust_tests = 18
+cases_claimed = 15
+cases_diverged = 0
+pins = 0
 
 [summary.families."text"]
 targets = 3
