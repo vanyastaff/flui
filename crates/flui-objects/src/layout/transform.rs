@@ -414,11 +414,26 @@ impl RenderBox for RenderTransform {
     }
 
     fn hit_test_transform(&self, size: Size) -> Option<Matrix4> {
-        // Reports the transform even when `transform_hit_tests` is off. The
-        // flag governs where the child is HIT; the global-coordinate mapping
-        // a hit entry carries still has to describe where the child actually
-        // paints, which is what Flutter means by leaving `applyPaintTransform`
-        // unconditional.
+        // `None` when hit-testing is untransformed, and the two halves have to
+        // agree or the flag is worse than useless.
+        //
+        // This hook feeds the hit ENTRY's transform stack — the global-to-local
+        // mapping a delivered event is localized through
+        // (`PipelineOwner::hit_test_subtree` pushes its inverse). It is the
+        // analogue of the `transform:` argument Flutter passes to
+        // `addWithPaintTransform`, which is exactly what
+        // `transformHitTests: false` sets to null — NOT of
+        // `applyPaintTransform`, which stays unconditional because it answers
+        // a different question (where the child paints, for `localToGlobal`).
+        //
+        // Reporting the matrix here while hit-testing untransformed would hand
+        // the child a `local_position` mapped through a transform its hit did
+        // not use, and a singular matrix would make delivery drop the entry
+        // outright — so the target the flag promises would be hit and then
+        // receive nothing.
+        if !self.transform_hit_tests {
+            return None;
+        }
         Some(self.effective_transform(size))
     }
 }
