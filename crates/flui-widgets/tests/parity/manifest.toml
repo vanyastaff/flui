@@ -1038,7 +1038,7 @@ tests = 2
 rust = "table_test"
 family = "table"
 oracles = ["rendering/table_test.dart", "widgets/table_test.dart"]
-tests = 18
+tests = 19
 
 [[targets.claims]]
 oracle = "rendering/table_test.dart"
@@ -1068,6 +1068,7 @@ cases = [
     "Table widget - changing table dimensions",
     "Does not crash if a child RenderObject is replaced by another RenderObject of a different type",
     "Can replace child with a different RenderObject type",
+    "Set defaultVerticalAlignment to intrinsic height and check their heights",
 ]
 
 [[targets]]
@@ -1568,7 +1569,7 @@ cases = [
 "widgets/stretch_effect_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/syncing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
 "widgets/system_context_menu_test.dart" = { cases = 30, claimed = 0, status = "pending" }
-"widgets/table_test.dart" = { cases = 27, claimed = 14, status = "partial" }
+"widgets/table_test.dart" = { cases = 27, claimed = 15, status = "partial" }
 "widgets/tap_region_test.dart" = { cases = 16, claimed = 0, status = "pending" }
 "widgets/test_page_tester_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/text_golden_test.dart" = { cases = 21, claimed = 0, status = "pending" }
@@ -1609,15 +1610,15 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 91
-rust_tests = 663
+rust_tests = 664
 pins = 1
 oracle_files = 390
 oracle_cases = 5753
-cases_claimed = 307
+cases_claimed = 308
 cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 295
+universe_cases_claimed = 296
 universe_cases_diverged = 1
 universe_pending_files = 331
 
@@ -1707,8 +1708,8 @@ pins = 0
 
 [summary.families."table"]
 targets = 1
-rust_tests = 18
-cases_claimed = 15
+rust_tests = 19
+cases_claimed = 16
 cases_diverged = 0
 pins = 0
 

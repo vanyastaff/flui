@@ -13113,3 +13113,61 @@ fn harness_sliver_main_axis_group_hit_routes_to_the_child_under_the_position() {
         "a hit over the second child's strip resolves to its box"
     );
 }
+
+/// `IntrinsicHeight` cells are measured AND stretched; `Fill` cells are only
+/// stretched. That is the whole difference between the two, and it is what
+/// decides how tall the row is.
+///
+/// Oracle: `rendering/table.dart` groups `intrinsicHeight` with
+/// `top`/`middle`/`bottom` in the measure pass (`:1401-1405`) and with `fill`
+/// in the position pass (`:1437-1441`).
+#[test]
+fn harness_table_intrinsic_height_measures_the_row_then_stretches_every_cell_to_it() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderTable::new(2)
+                .with_default_vertical_alignment(TableCellVerticalAlignment::IntrinsicHeight),
+        )
+        .child(box_node(RenderColoredBox::red(100.0, 40.0)).label("short"))
+        .child(box_node(RenderColoredBox::green(100.0, 90.0)).label("tall")),
+    )
+    .with_constraints(table_tight_width_loose_height(200.0, 800.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(200.0), px(90.0)),
+        "the row is as tall as its tallest cell — the short cell was measured, \
+         so it took part in deciding that, and the tall one set it",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("short")).height,
+        px(90.0),
+        "and the short cell is then stretched to the row it helped size",
+    );
+    assert_eq!(run.box_geometry(run.id("tall")).height, px(90.0));
+    assert_eq!(run.offset(run.id("short")), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.offset(run.id("tall")), Offset::new(px(100.0), px(0.0)));
+}
+
+/// The contrast that makes the variant worth having: the same two cells under
+/// `Fill` collapse the row to nothing, because `Fill` is never measured.
+#[test]
+fn harness_table_fill_collapses_a_row_that_intrinsic_height_would_size() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderTable::new(2).with_default_vertical_alignment(TableCellVerticalAlignment::Fill),
+        )
+        .child(box_node(RenderColoredBox::red(100.0, 40.0)).label("short"))
+        .child(box_node(RenderColoredBox::green(100.0, 90.0)).label("tall")),
+    )
+    .with_constraints(table_tight_width_loose_height(200.0, 800.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(200.0), px(0.0)),
+        "a row of only-Fill cells has zero height (table.dart's own documented \
+         behaviour), where the identical IntrinsicHeight row is 90 tall",
+    );
+}

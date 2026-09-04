@@ -1000,3 +1000,52 @@ fn a_single_cells_render_object_type_can_be_swapped_without_disturbing_siblings(
         "the toggled cell must now be a RenderParagraph showing 'CRASHHH'"
     );
 }
+
+/// Every cell in a row ends up as tall as that row's tallest cell, and rows
+/// with different content end up different heights.
+///
+/// Flutter parity: `'Set defaultVerticalAlignment to intrinsic height and
+/// check their heights'` (`widgets/table_test.dart`) — the same 2×2 scene
+/// (100/200 over 200/300) and the same three assertions, including the last
+/// one, which is what separates `IntrinsicHeight` from a table that simply
+/// makes every row equal: row 1 is taller than row 0 because each row is
+/// sized by its own tallest cell.
+#[test]
+fn default_vertical_alignment_intrinsic_height_makes_each_row_as_tall_as_its_tallest_cell() {
+    let laid = harness::pump_widget(
+        Table::new(vec![
+            TableRow::new(vec![
+                SizedBox::height(100.0).child(Text::new("A")).boxed(),
+                SizedBox::height(200.0).child(Text::new("B")).boxed(),
+            ]),
+            TableRow::new(vec![
+                SizedBox::height(200.0).child(Text::new("C")).boxed(),
+                SizedBox::height(300.0).child(Text::new("D")).boxed(),
+            ]),
+        ])
+        .default_vertical_alignment(TableCellVerticalAlignment::IntrinsicHeight),
+        harness::screen(),
+    );
+
+    let height_of = |label: &str| {
+        laid.size(
+            laid.find_text(label)
+                .unwrap_or_else(|| panic!("cell {label} must be laid out")),
+        )
+        .height
+    };
+
+    assert_eq!(
+        height_of("A"),
+        height_of("B"),
+        "A and B share a row, so both end up its height even though B was taller",
+    );
+    assert_eq!(height_of("C"), height_of("D"), "and so do C and D");
+    assert!(
+        height_of("D") > height_of("A"),
+        "each row is sized by its OWN tallest cell, so row 1 (300) is taller \
+         than row 0 (200) — got {:?} and {:?}",
+        height_of("D"),
+        height_of("A"),
+    );
+}

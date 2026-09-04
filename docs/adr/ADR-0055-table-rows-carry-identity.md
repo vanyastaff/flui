@@ -81,9 +81,8 @@ key would have nothing to address. Key the cell instead.
   `table` parity family drops to zero pins and zero diverged cases.
 - `TableRow`'s `Debug` no longer prints its cells (it prints their count and whether the row is
   keyed) because `BoxedView` has no `Debug`.
-- Still open, and tracked in #544: `TableCellVerticalAlignment::IntrinsicHeight`, and the
-  baseline/`textBaseline` pairing as a type-level invariant rather than the recorded degradation it
-  is today.
+- Still open, and tracked in #544: the baseline/`textBaseline` pairing as a type-level invariant
+  rather than the recorded degradation it is today.
 
 ## Amendment (2026-09-04): a ragged grid is repaired where it is supplied
 
@@ -102,14 +101,29 @@ and `columns.len()` respectively — and each warns once naming the lengths invo
 grid its last layout positioned, so a direct consumer of the lower layer gets the same
 self-consistency between what is drawn and what is touchable.
 
-**Why repair rather than reject.** An earlier design (recorded in the issue's spec as D1/D4) made
-the invalid grid unrepresentable: a `TableRows` collection with a fallible `push`, and a
-`RenderTable` owning `Vec<Option<RenderId>>` sized `columns * rows`. Both were dropped during
-implementation. The render-side half fights this crate's own recorded rule that render objects do
-not own child-adoption bookkeeping, and a shadow copy of the child list can desync from the tree
-that actually owns it — a worse failure than the one it prevents. The widget-side half would have
-pushed a `Result` through 31 call sites, inside `build` methods that cannot propagate one, to
-prevent a mistake the library can correct deterministically.
+**Why repair rather than reject.** Issue #544 asks for "a fallible constructor or validated builder
+for caller-controlled structural errors", and the spec designed one (D1/D4): a `TableRows`
+collection with a fallible `push`, and a `RenderTable` owning `Vec<Option<RenderId>>` sized
+`columns * rows`. This is a deliberate override of that ask, not an oversight, and the reason is
+the issue's own next criterion.
+
+**A fallible constructor here becomes a panic.** `Table::new` and `DataTable::new` are called
+inside `build`, which returns a view and cannot propagate a `Result`. Every real call site would
+therefore write `.expect(...)`, so a `Result` does not remove the panic — it relocates it from the
+library to the caller and makes it unconditional in release, where today's `debug_assert!` at
+least compiled out. Issue #544's fifth acceptance criterion is "No caller input causes a caught
+internal layout panic"; a fallible constructor in a `build` method satisfies the first criterion by
+violating the fifth. Repair satisfies both. This is the argument, not the migration cost — the
+project explicitly allows breaking changes, so 31 call sites would not on its own be a reason.
+
+The render-side half was dropped for an unrelated reason: it fights this crate's own recorded rule
+that render objects do not own child-adoption bookkeeping. `RenderTable`'s children are attached by
+the element tree, and a shadow copy of that list can desync from the tree that actually owns it —
+a worse failure than the one it prevents.
+
+**What repair costs.** A padded row is a caller mistake the developer now sees only in a log line,
+where a panic would have been impossible to miss. That is the real trade, and it is why the warning
+names the expected and found lengths rather than saying something went wrong.
 
 Repair with a warning is the rule this codebase already follows for caller configuration:
 `RenderViewport::set_anchor` clamps an out-of-range anchor rather than asserting, and `RenderTable`
@@ -121,3 +135,27 @@ Pinned by `table_pads_a_short_row_and_drops_a_long_rows_extra_cells` (the padded
 slot instead of shifting the grid, and every row still contributes its height) and
 `data_table_squares_up_a_row_that_does_not_match_its_columns` (red with the repair removed: an
 index-out-of-bounds panic).
+
+## Amendment (2026-09-04): `TableCellVerticalAlignment::IntrinsicHeight`
+
+The variant Flutter has and FLUI did not. A cell with it is measured with `Top`/`Middle`/`Bottom`,
+so its own content contributes to how tall the row becomes, and is then re-laid-out tight to the
+settled row height with `Fill` (`rendering/table.dart:1401-1405` and `:1437-1441`). The contrast
+with `Fill` is which pass sees it: a row whose cells are all `Fill` has zero height because none
+of them is measured, while a row whose cells are all `IntrinsicHeight` is as tall as its tallest
+cell and every cell in it ends up that tall.
+
+Four sites in `RenderTable`, one of which was not a `match`: `compute_dry_baseline` tested
+`alignment == Baseline`, which silently absorbs any new variant. It happened to want the same
+answer this variant needs, by luck rather than by design, so it is now a `match` and the next
+variant added to this enum is a compile error there instead of a silent default.
+
+`TableCellVerticalAlignment` is deliberately not `#[non_exhaustive]`, so adding a variant is a
+breaking change for an external matcher. That is accepted: the enum is small, closed in concept,
+and exhaustive matching on it is what just caught three of the four sites that needed updating.
+
+Pinned by the ported oracle case
+(`default_vertical_alignment_intrinsic_height_makes_each_row_as_tall_as_its_tallest_cell`, from
+`widgets/table_test.dart`'s "Set defaultVerticalAlignment to intrinsic height and check their
+heights", including its third assertion that rows differ from each other) and by two harness tests
+that put `IntrinsicHeight` and `Fill` side by side on the same two cells: 90 tall versus zero.

@@ -109,4 +109,15 @@ pub enum TableCellVerticalAlignment {
     ///
     /// Useful when mixing text of different sizes in a row.
     Baseline,
+
+    /// Size the cell to the row's tallest cell.
+    ///
+    /// The difference from [`Fill`](Self::Fill) is which pass the cell takes
+    /// part in. An `IntrinsicHeight` cell is measured first, so its own
+    /// content contributes to how tall the row becomes, and is then stretched
+    /// to that height. A `Fill` cell is not measured at all — it only
+    /// stretches — so a row whose cells are all `Fill` has zero height, while
+    /// a row whose cells are all `IntrinsicHeight` is as tall as its tallest
+    /// cell and every cell in it ends up that tall.
+    IntrinsicHeight,
 }
