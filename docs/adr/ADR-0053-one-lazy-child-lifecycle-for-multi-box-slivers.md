@@ -106,11 +106,22 @@ objects, so their materialised child count was unbounded, and the parity pin for
   the caller's window bound it — the same answer the unbounded-window path above already gives.
 
   Resolution happens at **mount**, not at view construction: a view value is rebuilt every frame,
-  so probing in the constructor would repeat the search — and its side effects — on every one.
+  so probing in the constructor would repeat the search — and its side effects — on every one. A
+  source that GROWS after mount is still found, because the manager's clamp can only shrink: a
+  changed delegate triggers a single `builder(current_count)` call, and only a `Some` there — the
+  source gained items — escalates to a full re-search. `delegate_changed` is true on every rebuild
+  for a builder delegate, so anything more than O(1) there would restore the per-rebuild search.
+  Every probe runs through `build_item_or_error`, the same boundary the adaptor's own builder
+  calls use, so a panicking builder does not unwind out of the mount; a panicking index counts as
+  PRESENT, because truncating a list when one row throws is the worse failure and the error view
+  is displayable there.
   Pinned by `an_unknown_item_count_is_probed_once_per_mount_not_per_rebuild`, whose oracle is
-  differential (an `Unknown` list must cost the same per rebuild as an `Exact` one) because an
-  absolute call-count bound encodes whatever the reconcile currently does, and because asserting
-  the extent proves nothing — a per-rebuild probe produces the right extent every time.
+  differential — an `Unknown` list may cost at most ONE builder call per rebuild more than an
+  `Exact` one, that call being the growth check — because an absolute call-count bound encodes
+  whatever the reconcile currently does, and because asserting the extent proves nothing: a
+  per-rebuild probe produces the right extent every time. An already-unbounded source
+  (`usize::MAX`) skips even the growth check; the sentinel cannot grow, and its builder would
+  answer `Some` at that index and send every rebuild through a full search.
 - `semanticBounds` fallback, `addAutomaticKeepAlives`, `addSemanticIndexes`: not ported;
   follow-ups.
 - The eager grid's stale-tile harness pins are replaced by the frame-level deferral tests: the

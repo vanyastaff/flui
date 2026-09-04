@@ -445,13 +445,10 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
             // The declaration still names an exact length: push it, so a data
             // source that shrank or grew is honoured.
             ItemCount::Exact(count) => render_object.set_item_count(count),
-            // Unknown: the render object's count was resolved at mount and is
-            // maintained from there by the manager's clamp. Re-probing on
-            // every rebuild is the cost this whole arrangement exists to
-            // avoid, and re-probing only when the builder changed needs an
-            // identity for the builder that `Rc<dyn Fn>` does not give us
-            // cheaply — `on_view_updated` already flags a changed delegate and
-            // marks this object for layout, which re-runs the clamp.
+            // Unknown: resolved at mount, and re-probed by `on_view_updated`
+            // when the delegate actually changes. Re-probing here instead
+            // would run the search on every rebuild, which is the cost this
+            // whole arrangement exists to avoid.
             ItemCount::Unknown => flui_rendering::RenderUpdateImpact::NONE,
         };
         count_impact | render_object.update(&self.config)
@@ -930,6 +927,50 @@ where
             .clone_from(&core.view().find_index_by_key);
         manager.needs_resident_refresh = true;
         drop(manager);
+
+        // A changed delegate under `ItemCount::Unknown` may mean a changed
+        // length, and nothing else can discover a GROWN one: the manager's
+        // clamp only ever shrinks the count (it fires when a requested index
+        // returns `None`), so a paged feed that gained a page — the case this
+        // variant's own doc names — would never have its new indices
+        // requested.
+        //
+        // The check is ONE builder call, not a re-search. `delegate_changed`
+        // is true on every rebuild for a builder delegate (a fresh closure
+        // never compares equal, exactly as `SliverChildBuilderDelegate.
+        // shouldRebuild` is always true), so re-probing here unconditionally
+        // would restore the per-rebuild search this design exists to avoid.
+        // Asking the builder for the index one past the end is O(1) and
+        // answers the only question that matters: `None` means the length is
+        // unchanged or shrank, and the clamp already handles shrinking;
+        // `Some` means it grew, and only then is a full search worth running.
+        if core.view().item_count == ItemCount::Unknown
+            && let (Some(render_id), Some(pipeline)) = (self.inner.render_id, core.pipeline_owner())
+        {
+            let builder = &*core.view().builder;
+            let current = pipeline.with(|pipeline_owner| {
+                pipeline_owner
+                    .render_tree()
+                    .get(render_id)
+                    .and_then(|node| node.downcast_render_object::<R>())
+                    .map(R::item_count)
+            });
+            if let Some(current) = current
+                && let Some(grown) = regrown_item_count(current, builder)
+            {
+                pipeline.with_mut(|pipeline_owner| {
+                    if let Some(render_object) = pipeline_owner
+                        .render_tree_mut()
+                        .get_mut(render_id)
+                        .and_then(|node| node.downcast_render_object_mut::<R>())
+                    {
+                        let impact = render_object.set_item_count(grown);
+                        pipeline_owner.apply_render_update_impact(render_id, impact);
+                    }
+                });
+            }
+        }
+
         // The refresh runs in the service pass after a layout: a delegate
         // swap with an unchanged count and config would otherwise leave the
         // sliver clean and the residents stale until something else laid it
@@ -1018,6 +1059,35 @@ impl LazyMultiBoxRender for RenderSliverList {
     }
 }
 
+/// The new length of an [`ItemCount::Unknown`] source that has grown past
+/// `current`, or `None` when it has not.
+///
+/// Costs **one** builder call in the common case: the index just past the
+/// known end either exists (the source grew, and only then is a full
+/// [`probe_item_count`] search worth running) or does not (unchanged, or
+/// shrank — which the adaptor's own clamp already handles). That bound is the
+/// point. `on_view_updated` runs this on every rebuild, because a builder
+/// delegate is a fresh closure each build and so always compares as changed,
+/// so anything heavier here restores the per-rebuild search that resolving at
+/// mount exists to avoid.
+///
+/// An already-unbounded `current` short-circuits to `None` without calling the
+/// builder at all. The sentinel cannot grow; an endless builder would answer
+/// `Some` at that index and send every rebuild through the full search; and
+/// asking user code for index `usize::MAX` is a plausible way to overflow
+/// arithmetic inside it.
+fn regrown_item_count(
+    current: usize,
+    builder: &dyn Fn(usize) -> Option<BoxedView>,
+) -> Option<usize> {
+    if current == usize::MAX {
+        return None;
+    }
+    super::sparse_children::build_item_or_error(builder, current)
+        .is_some()
+        .then(|| probe_item_count(builder))
+}
+
 /// How many items a lazy sliver has, when the caller knows.
 ///
 /// [`Unknown`](ItemCount::Unknown) is for a source whose length only its
@@ -1031,6 +1101,19 @@ pub enum ItemCount {
     /// Only the builder knows. It must answer `None` for every index past the
     /// end and `Some` for every index before it — a builder that is `None` in
     /// the middle of its range truncates there.
+    ///
+    /// The length is searched for once at mount. After that each rebuild costs
+    /// **one** builder call — asking whether the index just past the known end
+    /// exists — and only a `Some` there, meaning the source actually grew,
+    /// escalates to another search. A builder with side effects therefore sees
+    /// `2·log₂(n)` calls at mount, one per rebuild, and another `2·log₂(n)`
+    /// on each growth.
+    ///
+    /// One exception, and it is observable to a side-effectful builder: a
+    /// source the initial search classified as *endless* — every index answers
+    /// `Some`, so the length is `usize::MAX` — costs **zero** calls per
+    /// rebuild. It cannot grow, so there is nothing to ask about, and asking
+    /// would mean handing user code the index `usize::MAX`.
     Unknown,
 }
 
@@ -1071,20 +1154,31 @@ impl From<usize> for ItemCount {
 ///   reports `usize::MAX` and lets the caller's window bound it — the same
 ///   answer the unbounded-window path already gives.
 ///
-/// The `None` returned for a probed index is discarded. A builder with side
-/// effects per index therefore sees calls for indices that are never mounted,
-/// which is true of Flutter's search too and is why both document the count as
-/// the cheaper option.
+/// Every probe goes through `build_item_or_error`, the same boundary the
+/// adaptor's own builder calls use, so a panicking builder does not unwind out
+/// of the mount and abort the whole sliver. A panic counts the index as
+/// **present**, because that is what the boundary does with it: the item
+/// exists and renders the registered error view. Truncating the list at a
+/// panicking index instead would silently shorten it because one row threw,
+/// which is the worse failure — and the search's own upper bound still caps a
+/// builder that panics everywhere.
+///
+/// The view a probe builds is discarded. A builder with side effects per index
+/// therefore sees calls for indices that are never mounted, which is true of
+/// Flutter's search too and is why both document supplying the count as the
+/// cheaper option.
 #[must_use]
 pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
     // `lo` is a count known to be reachable (every index below it exists);
     // `hi` is a count known to be past the end, once the loop settles.
-    if builder(0).is_none() {
+    let exists =
+        |index: usize| super::sparse_children::build_item_or_error(builder, index).is_some();
+    if !exists(0) {
         return 0;
     }
     let mut lo: usize = 1;
     let mut hi: usize = 2;
-    while builder(hi - 1).is_some() {
+    while exists(hi - 1) {
         lo = hi;
         // On overflow, clamp the upper bound to `usize::MAX` and let the
         // bisection below decide. Returning `usize::MAX` here instead would
@@ -1092,7 +1186,7 @@ pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
         // top half of the range: at this point only index `hi - 1` has been
         // shown to exist, and nothing above it has been tested at all.
         hi = hi.saturating_mul(2);
-        if hi == usize::MAX && builder(usize::MAX - 1).is_some() {
+        if hi == usize::MAX && exists(usize::MAX - 1) {
             // Even the last representable index yields a child, so the source
             // is unbounded in any sense that matters. Flutter raises a
             // `FlutterError` here; an always-`Some` builder is a legitimate
@@ -1104,7 +1198,7 @@ pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
     // Invariant: index `lo - 1` exists, index `hi - 1` does not.
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
-        if builder(mid - 1).is_some() {
+        if exists(mid - 1) {
             lo = mid;
         } else {
             hi = mid;
@@ -2235,6 +2329,69 @@ mod probe_tests {
         assert!(
             made < 4 * (usize::BITS - len.leading_zeros()) as usize,
             "probe made {made} builder calls for {len} items; expected O(log n)",
+        );
+    }
+
+    #[test]
+    fn the_growth_check_costs_one_call_and_none_at_all_when_unbounded() {
+        use super::regrown_item_count;
+
+        let calls = RefCell::new(Vec::new());
+        // Unchanged: one call, no growth.
+        assert_eq!(regrown_item_count(4, &counting(4, &calls)), None);
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &[4],
+            "the check asks for exactly the index past the end"
+        );
+
+        // Grown: the one call finds a child, and only then does it search.
+        let calls = RefCell::new(Vec::new());
+        assert_eq!(regrown_item_count(4, &counting(9, &calls)), Some(9));
+        assert!(
+            calls.borrow().len() > 1,
+            "a grown source escalates to the full search"
+        );
+
+        // Already unbounded: no builder call at all. An endless builder would
+        // answer `Some` at `usize::MAX` and send every rebuild through the
+        // whole search — and being asked for that index is its own hazard.
+        let calls = RefCell::new(Vec::new());
+        assert_eq!(
+            regrown_item_count(usize::MAX, &counting(usize::MAX, &calls)),
+            None
+        );
+        assert!(
+            calls.borrow().is_empty(),
+            "an unbounded source must not be asked anything: {:?}",
+            calls.borrow()
+        );
+    }
+
+    #[test]
+    fn a_panicking_builder_does_not_unwind_out_of_the_probe() {
+        // Every probe goes through the same boundary the adaptor's own builder
+        // calls use, so a panic becomes the registered error view rather than
+        // an unwind out of `create_render_object` that would abort mounting
+        // the whole sliver — the per-item recovery `ItemCount::Unknown` must
+        // not quietly disable.
+        //
+        // A panic counts the index as PRESENT, which is what the boundary does
+        // with it: truncating the list because one row threw would silently
+        // shorten it, and the error view is displayable at that index.
+        //
+        // Index 3 is chosen because the search actually visits it. For a
+        // 5-item source the probe asks for 0, 1, 3, 7, 5, 4 — a panic at 2
+        // would never be reached and the test would pass with the boundary
+        // removed, which the first version of it did.
+        let builder = |index: usize| -> Option<BoxedView> {
+            assert!(index != 3, "boom at index 3");
+            (index < 5).then(|| BoxedView(Box::new(super::tests::ItemView)))
+        };
+        assert_eq!(
+            probe_item_count(&builder),
+            5,
+            "a panic at one index must neither escape nor truncate the search"
         );
     }
 

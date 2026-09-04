@@ -365,14 +365,93 @@ fn an_unknown_item_count_is_probed_once_per_mount_not_per_rebuild() {
     let (exact_mount, exact_rebuilds) = measure(ItemCount::Exact(ROWS));
     let (unknown_mount, unknown_rebuilds) = measure(ItemCount::Unknown);
 
-    assert_eq!(
-        unknown_rebuilds, exact_rebuilds,
-        "rebuilds must cost an unknown-count list exactly what they cost an \
-         exact-count one; a re-probe per rebuild shows up here and nowhere else"
+    // An unknown-count list pays ONE extra builder call per rebuild: the O(1)
+    // check for whether the source grew past its known end. What it must not
+    // pay is another SEARCH, which for this list is about a dozen calls — so
+    // the bound is per-rebuild and tight enough that a re-probe cannot hide
+    // under it.
+    let extra_per_rebuild = 1;
+    assert!(
+        unknown_rebuilds <= exact_rebuilds + 4 * extra_per_rebuild,
+        "rebuilds must cost an unknown-count list at most one extra builder \
+         call each (the growth check), not another search: {unknown_rebuilds} \
+         vs {exact_rebuilds} for an exact count"
     );
     assert!(
         unknown_mount > exact_mount,
         "the probe must have run at mount ({unknown_mount} calls vs \
          {exact_mount} for an exact count)"
+    );
+}
+
+/// An unknown-count source that GROWS is discovered.
+///
+/// The manager's clamp only ever shrinks the count — it fires when a requested
+/// index answers `None` — so nothing else can find a source that gained items
+/// after mount. A paged feed is exactly that, and it is the case
+/// `ItemCount::Unknown`'s own documentation names, so leaving it undiscovered
+/// would make the variant useless for its stated purpose.
+///
+/// The oracle is `max_scroll_extent`: the rows themselves render correctly at
+/// any count, and only the advertised extent says whether the list knows how
+/// long it is.
+#[test]
+fn an_unknown_item_count_that_grows_is_rediscovered_on_the_next_build() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::ItemCount;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    const ROW: f32 = 40.0;
+    let rows = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(3));
+    let controller = ScrollController::new();
+
+    #[derive(Clone)]
+    struct Feed {
+        rows: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        position: flui_rendering::view::ScrollPosition,
+    }
+
+    impl flui_view::view::StatelessView for Feed {
+        fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+            let rows = std::sync::Arc::clone(&self.rows);
+            Viewport::new((SliverList::new(
+                ItemCount::Unknown,
+                ROW,
+                std::rc::Rc::new(move |i: usize| {
+                    (i < rows.load(std::sync::atomic::Ordering::SeqCst))
+                        .then(|| SizedBox::new(200.0, ROW).boxed())
+                }),
+            ),))
+            .position(self.position.clone())
+        }
+    }
+
+    impl flui_view::View for Feed {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+
+    let mut laid = lay_out(
+        Feed {
+            rows: std::sync::Arc::clone(&rows),
+            position: controller.position(),
+        },
+        tight(200.0, 80.0),
+    );
+    assert_eq!(
+        controller.max_scroll_extent(),
+        3.0 * ROW - 80.0,
+        "the initial probe found three rows"
+    );
+
+    // The feed gained a page.
+    rows.store(9, std::sync::atomic::Ordering::SeqCst);
+    laid.pump();
+
+    assert_eq!(
+        controller.max_scroll_extent(),
+        9.0 * ROW - 80.0,
+        "a grown source must be rediscovered; the clamp alone can only shrink"
     );
 }
