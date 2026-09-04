@@ -891,6 +891,48 @@ pub struct SemanticsRun {
 }
 
 impl SemanticsRun {
+    /// Edit the render object at `id` and drive a SECOND pass through layout,
+    /// compositing, paint and semantics.
+    ///
+    /// The single-pass runs answer "what does this tree publish"; this answers
+    /// "what changes when it publishes again", which is the only way to observe
+    /// anything that goes stale. A child a parent has NEVER laid out is not the
+    /// same as one it laid out and then stopped laying out — the placed-
+    /// generation gate distinguishes exactly those two, and only the second is
+    /// observable across a pair of passes.
+    #[must_use]
+    pub fn edit_and_run_again<T: 'static>(self, id: RenderId, edit: impl FnOnce(&mut T)) -> Self {
+        let Self {
+            owner,
+            root_id,
+            registry,
+        } = self;
+        let mut owner = owner.finish();
+        edit_object(&mut owner, id, edit);
+        owner.mark_needs_layout(id);
+        let mut owner = owner.into_layout();
+        owner
+            .run_layout()
+            .expect("run_layout must succeed for a well-formed test tree");
+        let mut owner = owner.into_compositing();
+        owner
+            .run_compositing()
+            .expect("run_compositing must succeed for a well-formed test tree");
+        let mut owner = owner.into_paint();
+        owner
+            .run_paint()
+            .expect("run_paint must succeed for a well-formed test tree");
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("run_semantics must succeed for a well-formed test tree");
+        Self {
+            owner,
+            root_id,
+            registry,
+        }
+    }
+
     /// The root node's id.
     #[must_use]
     pub fn root(&self) -> RenderId {

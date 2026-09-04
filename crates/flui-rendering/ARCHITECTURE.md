@@ -124,16 +124,20 @@ Marked paths: box `layout_child`/`position_child` (typed and erased), sliver the
 cross-protocol methods (`layout_sliver_child` on the box side, `layout_box_child` on the sliver
 side). The last two were found by test failures, not by reading.
 
-**Semantics is deliberately NOT gated.** The same rule there drops a child's *content*, not
-merely its stale rect: `harness_merge_semantics_collapses_descendant_boundaries` loses a
-descendant's `is_button` when its parent stops laying it out, because a merge folds configuration
-regardless of geometry. Excluding a stale *rect* and excluding a stale *label* are different
-trades, and the second needs its own decision rather than inheriting this one. Tracked on #881 —
-and the reasoning is weaker than it looked: for the case that motivates the gate, a lazy sliver's
-out-of-band resident, Flutter publishes no semantics for such a child at all, so announcing one at
-a stale rect is not a different trade but a worse outcome. The harness case that forced the
-deferral mounts two children under a `Single`-arity object, which is a malformed tree rather than
-a contract worth preserving.
+**All three walks are gated.** Semantics was deferred at first, because
+`harness_merge_semantics_collapses_descendant_boundaries` lost a descendant's `is_button` under
+the gate — a merge folds a descendant's configuration regardless of geometry, so excluding an
+unplaced child loses its label and role as well as its position.
+
+That objection dissolved once the stamp carried the issuing parent's identity (constraint 3
+above). A child its parent has **never** laid out reads as placed, because `placed_by` is still
+`0`; only a child a parent once laid out and then *stopped* laying out is excluded. The merge
+harness has the first kind — a `Single`-arity object mounted with two children — and is untouched.
+
+And for the case the gate exists for, a lazy sliver's out-of-band resident, exclusion is not a
+worse trade but the reference's own behaviour: Flutter removes an off-screen or kept-alive child
+from the render child list, so it publishes no semantics at all. Announcing one at a rect from a
+pass that no longer holds sends a screen reader somewhere with nothing on it.
 
 **A skip must drop the cached output too.** `run_paint`'s residue scan clears the dirty flag of
 any node the descent did not reach — it has always done that, with a warning, for multi-root and
