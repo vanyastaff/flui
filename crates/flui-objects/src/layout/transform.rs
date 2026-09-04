@@ -37,8 +37,15 @@ use flui_rendering::{
 pub struct RenderTransform {
     /// The transformation matrix.
     transform: Matrix4,
-    /// Origin for the transformation as alignment.
-    alignment: Alignment,
+    /// Origin for the transformation as alignment, or `None` for no
+    /// alignment contribution at all.
+    ///
+    /// `None` is not the same as `Alignment::TOP_LEFT`: it means the
+    /// alignment term is absent from the pivot, so an `origin` set alone acts
+    /// alone. Flutter's `alignment` is nullable for exactly this reason, and
+    /// its bare `Transform(...)` constructor leaves it null while the
+    /// `rotate`/`scale`/`flip` factories pass `Alignment.center` explicitly.
+    alignment: Option<Alignment>,
     /// Explicit origin offset, added to (not overriding) `alignment`'s own
     /// contribution — see `compute_origin`'s doc comment for the additive
     /// pivot formula.
@@ -47,6 +54,14 @@ pub struct RenderTransform {
     has_child: bool,
     /// Whether to use compositing layers.
     needs_compositing: bool,
+    /// Whether hit-testing goes through the transform.
+    ///
+    /// `true` by default. With `false` the child is hit where it was LAID
+    /// OUT rather than where it paints — what a decorative transform wants,
+    /// so the moved pixels do not move the touch target. Paint and
+    /// `hit_test_transform`-derived global coordinates are unaffected either
+    /// way (Flutter's `transformHitTests`).
+    transform_hit_tests: bool,
 }
 
 impl RenderTransform {
@@ -54,11 +69,38 @@ impl RenderTransform {
     pub fn new(transform: Matrix4) -> Self {
         Self {
             transform,
-            alignment: Alignment::CENTER,
+            // Flutter's bare constructor leaves `alignment` null; the named
+            // factories below opt into CENTER the way its own do.
+            alignment: None,
             origin: None,
             has_child: false,
             needs_compositing: true,
+            transform_hit_tests: true,
         }
+    }
+
+    /// Whether hit-testing goes through the transform. `true` by default.
+    #[must_use]
+    pub const fn transform_hit_tests(&self) -> bool {
+        self.transform_hit_tests
+    }
+
+    /// Sets whether hit-testing goes through the transform.
+    pub fn set_transform_hit_tests(&mut self, value: bool) -> flui_rendering::RenderUpdateImpact {
+        if self.transform_hit_tests == value {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.transform_hit_tests = value;
+        // Hit-testing reads this live from the render object; nothing painted
+        // or laid out changes.
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
+    /// Sets whether hit-testing goes through the transform.
+    #[must_use]
+    pub const fn with_transform_hit_tests(mut self, value: bool) -> Self {
+        self.transform_hit_tests = value;
+        self
     }
 
     /// Creates an identity transform (no transformation).
@@ -67,13 +109,21 @@ impl RenderTransform {
     }
 
     /// Creates a translation transform.
+    ///
+    /// No alignment, matching `Transform.translate`, which takes none: a
+    /// translation is pivot-invariant, so an alignment term would cancel out
+    /// anyway.
     pub fn translate(x: f32, y: f32) -> Self {
         Self::new(Matrix4::translation(x, y, 0.0))
     }
 
-    /// Creates a scale transform.
+    /// Creates a scale transform about the box's centre.
+    ///
+    /// Centre, not the bare constructor's absent alignment — `Transform.scale`
+    /// passes `Alignment.center` explicitly, and a scale about the top-left
+    /// corner is almost never what a caller means.
     pub fn scale(sx: f32, sy: f32) -> Self {
-        Self::new(Matrix4::scaling(sx, sy, 1.0))
+        Self::new(Matrix4::scaling(sx, sy, 1.0)).with_alignment(Alignment::CENTER)
     }
 
     /// Creates a uniform scale transform.
@@ -87,7 +137,9 @@ impl RenderTransform {
     ///
     /// * `radians` - Rotation angle in radians.
     pub fn rotation(radians: f32) -> Self {
-        Self::new(Matrix4::rotation_z(radians))
+        // `Transform.rotate` passes `Alignment.center` explicitly, for the
+        // same reason `scale` does.
+        Self::new(Matrix4::rotation_z(radians)).with_alignment(Alignment::CENTER)
     }
 
     /// Creates a rotation transform from degrees.
@@ -110,7 +162,10 @@ impl RenderTransform {
     }
 
     /// Updates the alignment-relative pivot without replacing layout state.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_alignment(
+        &mut self,
+        alignment: Option<Alignment>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.alignment == alignment {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -135,8 +190,16 @@ impl RenderTransform {
     /// `origin` still combines with whatever `alignment` is set here, it's
     /// only a prior `with_origin` call that this clears).
     pub fn with_alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = alignment;
+        self.alignment = Some(alignment);
         self.origin = None;
+        self
+    }
+
+    /// Removes the alignment contribution, leaving `origin` (if any) as the
+    /// whole pivot — Flutter's null `alignment`.
+    #[must_use]
+    pub const fn without_alignment(mut self) -> Self {
+        self.alignment = None;
         self
     }
 
@@ -158,8 +221,8 @@ impl RenderTransform {
         flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
     }
 
-    /// Returns the alignment.
-    pub fn alignment(&self) -> Alignment {
+    /// Returns the alignment, or `None` when the pivot has no alignment term.
+    pub fn alignment(&self) -> Option<Alignment> {
         self.alignment
     }
 
@@ -178,9 +241,14 @@ impl RenderTransform {
     /// `origin` is optional. The prior code returned `origin` alone whenever it
     /// was set, silently dropping the alignment contribution.
     fn compute_origin(&self, size: Size) -> Offset {
-        let align_x = size.width * f32::midpoint(self.alignment.x, 1.0);
-        let align_y = size.height * f32::midpoint(self.alignment.y, 1.0);
         let origin = self.origin.unwrap_or(Offset::ZERO);
+        let Some(alignment) = self.alignment else {
+            // No alignment term: an `origin` set alone acts alone
+            // (`_effectiveTransform`'s `resolvedAlignment == null` branch).
+            return origin;
+        };
+        let align_x = size.width * f32::midpoint(alignment.x, 1.0);
+        let align_y = size.height * f32::midpoint(alignment.y, 1.0);
         Offset::new(align_x + origin.dx, align_y + origin.dy)
     }
 
@@ -206,7 +274,7 @@ impl Default for RenderTransform {
 impl flui_foundation::Diagnosticable for RenderTransform {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
         properties.add("transform", format!("{:?}", self.transform));
-        properties.add_enum("alignment", self.alignment);
+        properties.add_optional("alignment", self.alignment.map(|a| format!("{a:?}")));
         properties.add_optional("origin", self.origin.map(|o| format!("{o:?}")));
     }
 }
@@ -243,6 +311,14 @@ impl RenderBox for RenderTransform {
         // though this node's laid-out size is 40×40.
         if !self.has_child {
             return false;
+        }
+        if !self.transform_hit_tests {
+            // The child is hit where it was LAID OUT, not where it paints —
+            // Flutter's `transformHitTests: false`, which passes a null
+            // transform to `addWithPaintTransform`. A degenerate matrix does
+            // not disqualify the child here either: nothing is being
+            // inverted, so there is nothing to be singular.
+            return ctx.hit_test_child(0, *ctx.position());
         }
         let Some(inverse) = self.effective_transform(ctx.own_size()).try_inverse() else {
             // A degenerate (non-invertible) matrix collapses the subtree
@@ -338,6 +414,26 @@ impl RenderBox for RenderTransform {
     }
 
     fn hit_test_transform(&self, size: Size) -> Option<Matrix4> {
+        // `None` when hit-testing is untransformed, and the two halves have to
+        // agree or the flag is worse than useless.
+        //
+        // This hook feeds the hit ENTRY's transform stack — the global-to-local
+        // mapping a delivered event is localized through
+        // (`PipelineOwner::hit_test_subtree` pushes its inverse). It is the
+        // analogue of the `transform:` argument Flutter passes to
+        // `addWithPaintTransform`, which is exactly what
+        // `transformHitTests: false` sets to null — NOT of
+        // `applyPaintTransform`, which stays unconditional because it answers
+        // a different question (where the child paints, for `localToGlobal`).
+        //
+        // Reporting the matrix here while hit-testing untransformed would hand
+        // the child a `local_position` mapped through a transform its hit did
+        // not use, and a singular matrix would make delivery drop the entry
+        // outright — so the target the flag promises would be hit and then
+        // receive nothing.
+        if !self.transform_hit_tests {
+            return None;
+        }
         Some(self.effective_transform(size))
     }
 }
@@ -480,7 +576,7 @@ mod tests {
     #[test]
     fn test_transform_with_alignment() {
         let transform = RenderTransform::scale(2.0, 2.0).with_alignment(Alignment::TOP_LEFT);
-        assert_eq!(transform.alignment(), Alignment::TOP_LEFT);
+        assert_eq!(transform.alignment(), Some(Alignment::TOP_LEFT));
     }
 
     #[test]
@@ -495,7 +591,7 @@ mod tests {
         let mut transform = RenderTransform::identity();
         transform.has_child = true;
         let impact = transform.set_transform(Matrix4::scaling(2.0, 2.0, 1.0))
-            | transform.set_alignment(Alignment::BOTTOM_RIGHT)
+            | transform.set_alignment(Some(Alignment::BOTTOM_RIGHT))
             | transform.set_origin(Some(Offset::new(px(2.0), px(3.0))));
         assert_eq!(
             impact,

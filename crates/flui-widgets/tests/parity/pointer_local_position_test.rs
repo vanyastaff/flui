@@ -462,3 +462,43 @@ fn fitted_box_localises_the_delivered_position_through_the_scale() {
         "the recorded position must be LOCAL to the child, not the raw dispatch position"
     );
 }
+
+/// `Transform::transform_hit_tests(false)` must localise against the child's
+/// laid-out box, not through the paint transform.
+///
+/// The two halves of the flag have to agree or it is worse than useless.
+/// `hit_test` deciding the child is hit at its laid-out position while
+/// `hit_test_transform` still reports the matrix would hand the child a
+/// `local_position` mapped through a transform its hit never used — and for a
+/// singular matrix, delivery drops the entry outright, so the target the flag
+/// promises would be hit and then receive nothing.
+///
+/// A 200×200 box scaled 0.5 about its centre paints over `(50, 50)..(150,
+/// 150)`. With the flag off, a tap at `(30, 40)` is inside the LAID-OUT box
+/// and must arrive as `(30, 40)` — through the transform it would have been
+/// `(-40, -20)`, which is outside the child entirely.
+///
+/// The sibling `RenderFractionalTranslation` has carried this contract for
+/// longer; see `fractional_translation_false_localises_to_the_unshifted_child`
+/// directly above.
+#[test]
+fn transform_hit_tests_false_localises_to_the_laid_out_child() {
+    let (recorded, listener) = recording_listener();
+
+    let laid = harness::pump_widget(
+        Transform::scale(0.5, 0.5)
+            .transform_hit_tests(false)
+            .child(listener.child(target())),
+        tight(200.0, 200.0),
+    );
+
+    laid.dispatch_pointer_down(30.0, 40.0);
+
+    let local = recorded.get().expect("on_pointer_down must have fired");
+    assert_close(
+        local,
+        (30.0, 40.0),
+        "transform_hit_tests(false) must localise against the child's laid-out \
+         box, not through the paint transform",
+    );
+}

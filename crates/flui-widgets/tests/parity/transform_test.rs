@@ -962,41 +962,27 @@ fn a_pure_translation_composites_no_transform_layer() {
     );
 }
 
-/// The composited transform layer's matrix folds in the alignment pivot, not
-/// just the raw scale.
+/// The composited transform layer carries the oracle's own translation.
 ///
 /// Flutter parity: `transform_test.dart` `'Composited transform offset'`
-/// (3.44.0). Upstream retains the `TransformLayer`s, expects two (the first
-/// being the render view's), and asserts the second carries translation
-/// `(100, 75)` — a `Matrix4.diagonal3Values(0.5, 0.5, 1)` over a 400×300 box
-/// under the default `CENTER` alignment.
+/// (3.44.0), whose expectation is `(100, 75)` for a
+/// `Matrix4.diagonal3Values(0.5, 0.5, 1)` over a 400x300 box centred on an
+/// 800x600 screen.
 ///
-/// **The number does not port, and the reason is a layer-space convention, not
-/// a defect.** Measured on this exact tree, FLUI's layers carry *global*
-/// geometry: the `ClipRect` layer's rect is `(200,150)..(600,450)` and the
-/// inner offset layer holds `(200,150)`, both absolute. Upstream's are
-/// parent-relative, so its `ClipRectLayer` absorbs the placement and the
-/// transform beneath it sees a zero paint offset — leaving only the pivot's
-/// contribution, `(100, 75)`. FLUI conjugates about the *global* pivot
-/// instead, so the same widget yields `(200, 150)`. Both compose to the same
-/// thing on screen; only the split between layers differs.
+/// **This case used to be documented as a divergence, and the diagnosis was
+/// wrong.** It asserted `(200, 150)` and explained the gap as a layer-space
+/// convention — FLUI's layers carrying global geometry where upstream's are
+/// parent-relative. The real cause was FLUI's bare `Transform::new` defaulting
+/// `alignment` to `CENTER` where the oracle's bare constructor has none, so a
+/// pivot term nothing asked for was folded into the matrix. With the default
+/// corrected the number matches exactly, which also settles what `(100, 75)`
+/// IS: not a pivot contribution, but the raw scale conjugated about the paint
+/// offset — `offset - scale * offset` = `(200,150) - (100,75)`.
 ///
-/// So this asserts the contract with an expectation derived from the widget
-/// geometry rather than copied from the oracle: the box sits at global
-/// `(200, 150)` and is 400×300, so its `CENTER` pivot is global `(400, 300)`,
-/// and a scale of `0.5` about that pivot translates by
-/// `pivot * (1 - scale) = (200, 150)`. Asserting the raw `0.5` scale alone
-/// would pass on a matrix that ignored the pivot entirely, which is the
-/// mistake this case exists to catch.
-///
-/// The red check makes the convention difference exact rather than argued:
-/// dropping the pivot from `RenderTransform::compute_origin` yields
-/// **`(100, 75)`** — upstream's own expected value. The two frameworks differ
-/// by precisely the global-origin conjugation term, which is what the layer
-/// geometry measured above says and what this arithmetic confirms
-/// independently.
+/// The expectation below is still derived rather than copied, so it fails on a
+/// matrix that ignored the paint offset entirely.
 #[test]
-fn the_composited_transform_layer_folds_in_the_alignment_pivot() {
+fn composited_transform_offset_matches_the_oracle_translation() {
     const SCALE: f32 = 0.5;
 
     let mut laid =
@@ -1033,19 +1019,19 @@ fn the_composited_transform_layer_folds_in_the_alignment_pivot() {
     let matrix = matrices[0];
 
     // Derived from the widget geometry, not read back from the render object:
-    // an 800×600 screen centres a 400×300 box at (200, 150), whose CENTER
-    // pivot is therefore global (400, 300).
-    let pivot_x = 200.0 + 400.0 / 2.0;
-    let pivot_y = 150.0 + 300.0 / 2.0;
-    let expected_x = pivot_x * (1.0 - SCALE);
-    let expected_y = pivot_y * (1.0 - SCALE);
+    // an 800×600 screen centres a 400×300 box at (200, 150), and the layer
+    // conjugates the scale about that paint offset — `offset - scale*offset`.
+    let offset_x = 200.0;
+    let offset_y = 150.0;
+    let expected_x = offset_x * (1.0 - SCALE);
+    let expected_y = offset_y * (1.0 - SCALE);
 
     const TOLERANCE: f32 = 1e-3;
     assert!(
         (matrix.m[12] - expected_x).abs() < TOLERANCE
             && (matrix.m[13] - expected_y).abs() < TOLERANCE,
-        "the composited matrix must translate by pivot * (1 - scale) = \
-         ({expected_x}, {expected_y}); got ({}, {})",
+        "the composited matrix must translate by offset * (1 - scale) = \
+         ({expected_x}, {expected_y}) — the oracle's own (100, 75); got ({}, {})",
         matrix.m[12],
         matrix.m[13],
     );
@@ -1057,4 +1043,137 @@ fn the_composited_transform_layer_folds_in_the_alignment_pivot() {
         matrix.m[0],
         matrix.m[5],
     );
+}
+
+/// An `origin` set on the bare constructor acts ALONE — nothing adds a
+/// centre pivot underneath it.
+///
+/// Flutter parity: `transform_test.dart` `'Transform origin'` (3.44.0),
+/// ported faithfully at last. The oracle passes `origin: Offset(100, 50)` and
+/// no alignment; both of its taps are here.
+///
+/// This case could not be ported before: FLUI's bare `Transform::new`
+/// defaulted `alignment` to `CENTER`, so `origin` combined with a pivot the
+/// caller never asked for. The neighbouring `'Transform offset + alignment'`
+/// port works around exactly that by decomposing this oracle's pivot into an
+/// equivalent `CENTER_LEFT` + `(100, 0)` pair. With the default corrected the
+/// oracle's own arguments work directly, and the workaround pair stays
+/// because it is a real case of its own.
+///
+/// The geometry: a 100×100 box at (100, 100) scaled 0.5 about local
+/// `(100, 50)` paints over local `(50, 25)..(100, 75)`, i.e. global
+/// `(150, 125)..(200, 175)`.
+#[test]
+fn transform_origin_alone_hit_test_misses_outside_the_scaled_child() {
+    let did_tap = Arc::new(AtomicBool::new(false));
+    let tap_cb = Arc::clone(&did_tap);
+
+    let laid = pump_widget(
+        positioned_100_square(
+            Transform::new(Matrix4::scaling(0.5, 0.5, 1.0))
+                .origin(Offset::new(px(100.0), px(50.0)))
+                .child(
+                    GestureDetector::new()
+                        .behavior(HitTestBehavior::Opaque)
+                        .on_tap(move || tap_cb.store(true, Ordering::SeqCst)),
+                ),
+        ),
+        screen(),
+    );
+
+    laid.dispatch_pointer_down(110.0, 110.0);
+    laid.dispatch_pointer_up(110.0, 110.0);
+
+    assert!(
+        !did_tap.load(Ordering::SeqCst),
+        "the oracle's first tap: (110, 110) is outside the child's global \
+         span (150, 125)..(200, 175) and must not reach it",
+    );
+}
+
+/// The other leg of [`transform_origin_alone_hit_test_misses_outside_the_scaled_child`].
+///
+/// Flutter parity: `transform_test.dart` `'Transform origin'` (3.44.0), the
+/// `tapAt(190.0, 150.0)` leg. This is the assertion that fails under a
+/// spurious centre pivot: with `CENTER` added to the oracle's `origin` the
+/// child lands over `(175, 150)..(225, 200)` and the tap misses.
+#[test]
+fn transform_origin_alone_hit_test_hits_inside_the_scaled_child() {
+    let did_tap = Arc::new(AtomicBool::new(false));
+    let tap_cb = Arc::clone(&did_tap);
+
+    let laid = pump_widget(
+        positioned_100_square(
+            Transform::new(Matrix4::scaling(0.5, 0.5, 1.0))
+                .origin(Offset::new(px(100.0), px(50.0)))
+                .child(
+                    GestureDetector::new()
+                        .behavior(HitTestBehavior::Opaque)
+                        .on_tap(move || tap_cb.store(true, Ordering::SeqCst)),
+                ),
+        ),
+        screen(),
+    );
+
+    laid.dispatch_pointer_down(190.0, 150.0);
+    laid.dispatch_pointer_up(190.0, 150.0);
+
+    assert!(
+        did_tap.load(Ordering::SeqCst),
+        "the oracle's second tap: (190, 150) is inside the child's global \
+         span and must reach it",
+    );
+}
+
+/// `transform_hit_tests(false)` hits the child where it was LAID OUT, not
+/// where it paints.
+///
+/// Flutter parity: `RenderTransform.hitTestChildren` passes a null transform
+/// to `addWithPaintTransform` when `transformHitTests` is false. Flutter's own
+/// widget suite has no case for it, so both legs here are derived from the
+/// contract: the child is laid out over global `(100, 100)..(200, 200)` and
+/// painted, scaled by half about its centre, over `(125, 125)..(175, 175)`.
+///
+/// `(110, 110)` is inside the laid-out square and outside the painted one,
+/// which is precisely the point the flag decides — and the point that stays
+/// silent if the flag is only stored and never read.
+#[test]
+fn transform_hit_tests_false_hits_the_laid_out_child_not_the_painted_one() {
+    let hit_at = |transform_hit_tests: bool, x: f32, y: f32| {
+        let did_tap = Arc::new(AtomicBool::new(false));
+        let tap_cb = Arc::clone(&did_tap);
+        let laid = pump_widget(
+            positioned_100_square(
+                Transform::new(Matrix4::scaling(0.5, 0.5, 1.0))
+                    .alignment(Alignment::CENTER)
+                    .transform_hit_tests(transform_hit_tests)
+                    .child(
+                        GestureDetector::new()
+                            .behavior(HitTestBehavior::Opaque)
+                            .on_tap(move || tap_cb.store(true, Ordering::SeqCst)),
+                    ),
+            ),
+            screen(),
+        );
+        laid.dispatch_pointer_down(x, y);
+        laid.dispatch_pointer_up(x, y);
+        did_tap.load(Ordering::SeqCst)
+    };
+
+    assert!(
+        !hit_at(true, 110.0, 110.0),
+        "with the transform applied, (110, 110) is outside the painted \
+         (125, 125)..(175, 175) and misses",
+    );
+    assert!(
+        hit_at(false, 110.0, 110.0),
+        "with `transform_hit_tests(false)` the same point is inside the \
+         LAID-OUT (100, 100)..(200, 200) and hits",
+    );
+    assert!(
+        hit_at(true, 150.0, 150.0),
+        "the centre hits either way — a test that only checked the centre \
+         would pass whatever the flag did",
+    );
+    assert!(hit_at(false, 150.0, 150.0));
 }
