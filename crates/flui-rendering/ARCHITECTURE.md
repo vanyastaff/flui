@@ -116,9 +116,19 @@ descendant's `is_button` when its parent stops laying it out, because a merge fo
 regardless of geometry. Excluding a stale *rect* and excluding a stale *label* are different
 trades, and the second needs its own decision rather than inheriting this one. Tracked on #834.
 
-**Replacement tests:** `a_child_dropped_from_a_later_layout_pass_stops_painting` and
-`…_stops_being_hit` (`crates/flui-rendering/tests/placed_generation_gate.rs`), each verified red
-with its own gate reverted. Both need **two frames**: a child never laid out at all has size zero
+**A skip must drop the cached output too.** `run_paint`'s residue scan clears the dirty flag of
+any node the descent did not reach — it has always done that, with a warning, for multi-root and
+detached subtrees — and this gate makes a third case reach it: a child that received a paint-only
+update while unplaced. Clearing the flag while keeping the node's retained capture is what makes
+that lossy, because a child placed again under unchanged constraints short-circuits its own layout
+and requeues nothing, so the stale capture is grafted and the update is gone for good. The scan
+now evicts the capture alongside the flag, which also closes the pre-existing detached-subtree
+case it had only been warning about.
+
+**Replacement tests:** `a_child_dropped_from_a_later_layout_pass_stops_painting`,
+`…_stops_being_hit`, and `a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture`
+(`crates/flui-rendering/tests/placed_generation_gate.rs`), each verified red with its own change
+reverted. Both need **two frames**: a child never laid out at all has size zero
 and paints nothing regardless, so a single-frame version passes with the gate removed — which the
 first draft did. `FrameRun::run_frame_again` is added for it.
 

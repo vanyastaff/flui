@@ -204,8 +204,8 @@ pub struct RenderState<P: Protocol> {
     ///
     /// Paired with [`placed_generation`](Self::placed_generation) on this
     /// node's children: a child is part of this pass's layout exactly when its
-    /// `placed_generation` equals this value. Paint, hit-test and semantics
-    /// read that comparison and skip the rest.
+    /// `placed_generation` equals this value. **Paint and hit-test** read that
+    /// comparison and skip the rest.
     ///
     /// Starts at 1 so a child stamped in its parent's first layout differs
     /// from a never-stamped child's 0.
@@ -221,6 +221,13 @@ pub struct RenderState<P: Protocol> {
     /// preceded it. A parent that never lays out its children at all — served
     /// entirely from cache, or laying out through some path of its own — would
     /// otherwise take its whole subtree off the screen.
+    ///
+    /// **Semantics is deliberately not gated on this.** The same rule there
+    /// drops a child's *content*, not merely its stale rect: a merge folds a
+    /// descendant's configuration regardless of geometry, so excluding an
+    /// unplaced child loses its label and role as well as its position.
+    /// Excluding a stale rect and excluding a stale label are different
+    /// trades; the second needs its own decision. Tracked on issue #834.
     placed_generation: AtomicU64,
 
     /// Per-node layout calculation cache (Flutter `_LayoutCacheStorage`):

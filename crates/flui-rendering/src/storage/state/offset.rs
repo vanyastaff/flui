@@ -158,7 +158,7 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// `false` for a child a multi-child object skipped — a lazy sliver's
     /// out-of-band item, an indexed stack's hidden pages once they stop being
-    /// laid out — so paint, hit-test and semantics can leave it alone rather
+    /// laid out — so paint and hit-test can leave it alone rather
     /// than reading an offset from a pass that no longer describes the tree.
     #[inline]
     pub fn was_placed_by(&self, parent_generation: u64) -> bool {

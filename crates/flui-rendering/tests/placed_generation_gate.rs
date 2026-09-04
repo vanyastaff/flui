@@ -156,3 +156,72 @@ fn a_child_dropped_from_a_later_layout_pass_stops_being_hit() {
         "the child this pass laid out is still hit-testable"
     );
 }
+
+/// A skipped child's cached paint output is not reused once its invalidation
+/// has been dropped.
+///
+/// The gate skips an unplaced child, so a paint-only update it receives while
+/// unplaced never reaches the descent. `run_paint`'s residue scan then clears
+/// the queued dirty flag — it has always done that, with a warning, for
+/// multi-root and detached subtrees — and the gate makes a third case reach it.
+/// Clearing the flag without dropping the cached output is the hazard: when the
+/// parent places the child again with unchanged constraints its layout
+/// short-circuits and requeues nothing, so the stale capture would be grafted
+/// and the update lost for good.
+///
+/// The child is wrapped in a repaint boundary because only a boundary owns a
+/// retained capture; without one there is nothing to go stale and the test
+/// would pass either way.
+#[test]
+fn a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture() {
+    use flui_objects::RenderRepaintBoundary;
+
+    let mut run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 2 })
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("kept"))
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("boundary")
+                    .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("dropped")),
+            ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_frame();
+
+    let root = run.root();
+    let dropped = run.id("dropped");
+    let paints = |run: &flui_rendering::testing::FrameRun, colour: &str| {
+        run.display_commands()
+            .iter()
+            .any(|c| c.line.contains("DrawRect") && c.line.contains(colour))
+    };
+    assert!(
+        paints(&run, "#00FF00FF"),
+        "frame one paints the green child"
+    );
+
+    // Drop it from layout AND repaint it while it is unplaced: the update
+    // lands in the residue scan.
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 1);
+    run.update_paint::<RenderColoredBox>(dropped, |object| {
+        let _ = object.set_color([0.0, 0.0, 1.0, 1.0]);
+    });
+    let mut run = run.run_frame_again();
+    assert!(
+        !paints(&run, "#0000FFFF") && !paints(&run, "#00FF00FF"),
+        "while unplaced the child paints nothing"
+    );
+
+    // Place it again. Its constraints are unchanged, so its own layout
+    // short-circuits and requeues no paint — the capture is all that stands
+    // between the user and the update.
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 2);
+    let run = run.run_frame_again();
+    assert!(
+        paints(&run, "#0000FFFF"),
+        "the child must repaint with the colour it was given while unplaced, \
+         not graft the capture from before it: {:#?}",
+        run.display_commands()
+    );
+}
