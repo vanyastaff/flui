@@ -201,14 +201,19 @@ struct ChildSliverLayoutFields {
 }
 
 /// Pushes `rect`'s leading edge in by `amount`, along `direction`.
+///
+/// The moved edge stops at the opposite one. An overlap wider than the
+/// viewport would otherwise invert the rect, and `Rect` does not normalize:
+/// an inverted clip is a value every consumer has to reason about separately,
+/// where a collapsed one already means "nothing survives" everywhere.
 fn shrink_leading_edge(rect: Rect<Pixels>, direction: AxisDirection, amount: f32) -> Rect<Pixels> {
     let (mut left, mut top) = (rect.min.x.get(), rect.min.y.get());
     let (mut right, mut bottom) = (rect.max.x.get(), rect.max.y.get());
     match direction {
-        AxisDirection::TopToBottom => top += amount,
-        AxisDirection::BottomToTop => bottom -= amount,
-        AxisDirection::LeftToRight => left += amount,
-        AxisDirection::RightToLeft => right -= amount,
+        AxisDirection::TopToBottom => top = (top + amount).min(bottom),
+        AxisDirection::BottomToTop => bottom = (bottom - amount).max(top),
+        AxisDirection::LeftToRight => left = (left + amount).min(right),
+        AxisDirection::RightToLeft => right = (right - amount).max(left),
     }
     Rect::from_ltrb(px(left), px(top), px(right), px(bottom))
 }
@@ -2235,6 +2240,32 @@ mod paint_clip_direction_tests {
             (0.0, 70.0),
             "a reverse child grows from the far edge, so its clip loses THAT one",
         );
+    }
+
+    /// An overlap wider than the viewport collapses the clip instead of
+    /// inverting it.
+    ///
+    /// `Rect::from_ltrb` does not normalize, so pushing the leading edge past
+    /// the trailing one would hand every consumer a rect whose min exceeds its
+    /// max — a second empty-ish state to reason about beside the collapsed
+    /// one. A pinned header taller than the viewport it is pinned in is the
+    /// case that produces it.
+    #[test]
+    fn an_overlap_wider_than_the_viewport_collapses_the_clip_rather_than_inverting_it() {
+        let mut viewport =
+            viewport_with_committed_child(AxisDirection::TopToBottom, GrowthDirection::Forward);
+        viewport.committed_clips.child_clips[0].correction = 400.0;
+
+        let clip = viewport
+            .describe_approximate_paint_clip(0)
+            .expect("a clipping viewport reports a paint clip");
+
+        assert_eq!(
+            (clip.min.y.get(), clip.max.y.get()),
+            (100.0, 100.0),
+            "the pushed edge stops at the opposite one, leaving an empty clip",
+        );
+        assert!(clip.is_empty(), "and an empty clip is what keeps nothing");
     }
 
     /// `Clip::None` means no clip at all, not a clip the size of the viewport:

@@ -2074,3 +2074,49 @@ fn an_inner_semantics_clip_replaces_the_inherited_one() {
          outer 0..60 clip it would not have survived under an intersection",
     );
 }
+
+/// An inherited semantics clip and a paint-only clip that do not overlap leave
+/// NOTHING, and "nothing" has to stay a clip.
+///
+/// `Rect::intersect` answers `None` for a disjoint pair, and `None` in the
+/// accumulated clips means "no clip at all" — so folding the raw result would
+/// republish the whole subtree unclipped at exactly the point it should have
+/// disappeared. The empty rect is the honest carrier for that state.
+#[test]
+fn a_semantics_clip_disjoint_from_an_inner_paint_clip_leaves_nothing_visible() {
+    let run = RenderTester::mount(
+        box_node(
+            SemanticsContainer::default()
+                .with_side(200.0)
+                .with_semantics_clip(0.0, 40.0),
+        )
+        .child(
+            box_node(
+                SemanticsContainer::default()
+                    .with_side(200.0)
+                    // Disjoint from the 0..40 the ancestor granted.
+                    .with_paint_clip(120.0, 200.0),
+            )
+            .child(box_node(SemanticsLeaf::new(30.0).with_label("Nowhere"))),
+        ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root forms a node");
+    let labels: Vec<&str> = owner
+        .get(root_id)
+        .expect("root resolves")
+        .children()
+        .iter()
+        .filter_map(|&id| owner.get(id).and_then(|node| node.label()))
+        .collect();
+
+    assert!(
+        !labels.contains(&"Nowhere"),
+        "the two clips leave no region at all, so the leaf inside them has no \
+         accessibility presence; published labels: {labels:?}",
+    );
+}

@@ -290,9 +290,18 @@ impl SemanticsClips {
 
     /// The clips a child of this node inherits.
     ///
-    /// The paint clips intersect; a semantics clip REPLACES the inherited one
-    /// (Flutter's rule) so a nested viewport re-grants its own cache area to
-    /// its own children instead of being confined to its parent's.
+    /// Paint clips always intersect. The semantics clip follows Flutter's
+    /// three-way rule:
+    ///
+    /// - a node that declares one REPLACES whatever it inherited, so a nested
+    ///   viewport re-grants its own cache area to its own children instead of
+    ///   being confined to its parent's;
+    /// - a node that declares only a paint clip NARROWS the inherited
+    ///   semantics clip by it — a clip that hides paint also limits how far
+    ///   an ancestor's cache area reaches through it;
+    /// - a node that declares neither passes the inherited one through, and a
+    ///   node with no inherited semantics clip stays unclipped whatever its
+    ///   paint clip says.
     fn descend(
         self,
         local_paint: Option<Rect<Pixels>>,
@@ -302,7 +311,12 @@ impl SemanticsClips {
         let semantics = match local_semantics {
             Some(replacement) => Some(replacement),
             None => match (self.semantics, local_paint) {
-                (Some(inherited), Some(narrowing)) => inherited.intersect(&narrowing),
+                // Disjoint means nothing survives, which is an EMPTY clip —
+                // `None` here would read as "no clip at all" and republish
+                // the whole subtree unclipped.
+                (Some(inherited), Some(narrowing)) => {
+                    Some(inherited.intersect(&narrowing).unwrap_or(Rect::ZERO))
+                }
                 (Some(inherited), None) => Some(inherited),
                 (None, _) => None,
             },

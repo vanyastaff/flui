@@ -181,6 +181,13 @@ Three departures from Flutter, all deliberate:
   accessibility rects for content it paints over. That is an unshipped consumer of a now-general
   hook, not a regression. Tracked as issue #847.
 
+The clips are applied when semantics is ASSEMBLED, and FLUI does not re-assemble after a
+layout-only change: nothing marks a node's semantics dirty when it lays out, where Flutter calls
+`markNeedsSemanticsUpdate()` immediately after every `performLayout()` (`rendering/object.dart`,
+both layout entry points). So a scroll leaves the tree describing where the content was. The
+defect is older than these clips and is not introduced here, but the clip is what makes it
+describable, so it is named rather than left implicit: issue #850.
+
 Decision 5 needs no code.
 
 The degradation query is deliberately a count-since-context-creation rather than a failure flag:
