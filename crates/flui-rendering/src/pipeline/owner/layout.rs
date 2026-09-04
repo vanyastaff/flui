@@ -449,14 +449,10 @@ impl PipelineOwner<Layout> {
         // `subtree_arena::SubtreeArena`; this call site is safe.  The arena
         // also borrows the poison table read-only for the walk so poisoned
         // nodes are skipped in place.
-        // Read before the `&mut self.render_tree` borrow below. Semantics
-        // cannot be toggled mid-walk — enabling it needs `&mut PipelineOwner`.
-        let record_for_semantics = self.semantics_enabled();
         let arena = SubtreeArena::from_tree(
             &mut self.render_tree,
             id,
             &self.layout_poison,
-            record_for_semantics,
             #[cfg(any(test, feature = "testing"))]
             &self.parent_data_seeds,
         )?;
@@ -475,7 +471,6 @@ impl PipelineOwner<Layout> {
         let layout_failures = arena.take_layout_failures();
         let layout_successes = arena.take_layout_successes();
         let laid_out = arena.take_laid_out();
-        let laid_out_for_semantics = arena.take_laid_out_for_semantics();
         drop(arena);
 
         // Flutter marks needs-paint per object at the end of
@@ -488,15 +483,22 @@ impl PipelineOwner<Layout> {
 
         // Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in
         // both of `RenderObject`'s layout entry points, so a node that lays out
-        // re-publishes its semantics geometry — which is what makes a scroll
-        // update the accessibility tree at all, since the viewport's offset
-        // listener requests layout and nothing else. Same rule here, applied
-        // once per walk. The list is empty unless semantics was enabled when
-        // the walk began, so a session with no accessibility client attached
-        // pays nothing for it.
-        for id in laid_out_for_semantics {
-            self.mark_needs_semantics(id);
-        }
+        // re-publishes its semantics geometry. Without it a frame that only
+        // re-laid-out publishes nothing, and a scroll — which is exactly that
+        // frame, since the viewport's offset listener requests layout and
+        // nothing else — leaves the accessibility tree describing where the
+        // content used to be.
+        //
+        // ONE mark, on the dirty root, not one per laid-out node. The arena
+        // walks the subtree of `id`, so every node that laid out is under it,
+        // and `try_graft_pass` re-assembles a marked node's whole subtree —
+        // marking each descendant as well would be strictly redundant while
+        // costing a `fire_need_visual_update` per node (each of which asks the
+        // platform to redraw) and a per-node ancestor walk in the graft, i.e.
+        // O(N·depth) for a deep relayout. `mark_needs_semantics` is itself a
+        // no-op while semantics is disabled, so a session with no
+        // accessibility client attached pays one predictable branch.
+        self.mark_needs_semantics(id);
 
         // Poison bookkeeping for the walk's descendant failures/successes.
         // A success clears the node's failure record; failures are deduped

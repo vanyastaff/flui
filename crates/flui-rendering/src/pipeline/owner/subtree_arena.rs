@@ -202,31 +202,6 @@ pub(super) struct SubtreeArena<'tree> {
     ///
     /// Same `Mutex` discipline and post-walk drain as the sinks above.
     laid_out: Mutex<Vec<flui_foundation::RenderId>>,
-    /// Ids of EVERY node this walk laid out, recorded only while semantics is
-    /// enabled.
-    ///
-    /// Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in
-    /// both layout entry points (`rendering/object.dart`, `layoutWithoutResize`
-    /// and `layout`), so a node that lays out re-publishes its semantics
-    /// geometry and a scroll updates the accessibility tree by construction.
-    /// This list is that pairing expressed as one drain per walk rather than a
-    /// call per object.
-    ///
-    /// Unlike [`Self::laid_out`] it cannot filter to repaint boundaries: a
-    /// node's semantics rect moves whether or not it is a boundary. Recording
-    /// every laid-out node is what the boundary filter exists to avoid — it
-    /// measured ~5% on `layout/flat/1000` — so it is gated on
-    /// [`Self::record_for_semantics`] and costs nothing at all when no
-    /// accessibility client is attached, which is the ordinary case.
-    /// **Improvement over the reference:** Flutter marks unconditionally and
-    /// pays for it whether or not a client is listening.
-    laid_out_for_semantics: Mutex<Vec<flui_foundation::RenderId>>,
-    /// Whether the owner had semantics enabled when this walk began, which is
-    /// the only condition under which [`Self::laid_out_for_semantics`] is
-    /// worth filling — `PipelineOwner::mark_needs_semantics` discards every
-    /// id otherwise. Read once at construction: semantics cannot be toggled
-    /// mid-walk, since enabling it goes through `&mut PipelineOwner`.
-    record_for_semantics: bool,
     /// Read-only view of the owner's layout-poison table for the whole
     /// walk.  Consulted at the top of each recursion level: a node
     /// poisoned under the *same* constraints it is now offered is
@@ -292,7 +267,6 @@ impl<'tree> SubtreeArena<'tree> {
         ids: &[RenderId],
         refs: Vec<&'tree mut RenderNode>,
         layout_poison: &'tree LayoutPoison,
-        record_for_semantics: bool,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> Self {
         debug_assert_eq!(
@@ -324,8 +298,6 @@ impl<'tree> SubtreeArena<'tree> {
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
-            laid_out_for_semantics: Mutex::new(Vec::new()),
-            record_for_semantics,
             layout_poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
@@ -403,12 +375,6 @@ impl<'tree> SubtreeArena<'tree> {
     }
 
     /// Drains the ids this walk actually laid out — see [`Self::laid_out`].
-    /// Drain the ids of every node this walk laid out (empty unless semantics
-    /// was enabled — see [`Self::laid_out_for_semantics`]).
-    pub(super) fn take_laid_out_for_semantics(&self) -> Vec<flui_foundation::RenderId> {
-        std::mem::take(&mut self.laid_out_for_semantics.lock())
-    }
-
     pub(super) fn take_laid_out(&self) -> Vec<flui_foundation::RenderId> {
         std::mem::take(&mut *self.laid_out.lock())
     }
@@ -557,7 +523,6 @@ impl<'tree> SubtreeArena<'tree> {
         render_tree: &'tree mut RenderTree,
         id: RenderId,
         layout_poison: &'tree LayoutPoison,
-        record_for_semantics: bool,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> crate::error::RenderResult<Self> {
         let subtree_ids = render_tree.collect_subtree_ids(id);
@@ -571,7 +536,6 @@ impl<'tree> SubtreeArena<'tree> {
             &subtree_ids,
             node_refs,
             layout_poison,
-            record_for_semantics,
             #[cfg(any(test, feature = "testing"))]
             all_seeds,
         ))
@@ -985,9 +949,6 @@ unsafe fn layout_subtree_borrowed_impl(
     // that genuinely entered layout.
     if is_repaint_boundary {
         arena.laid_out.lock().push(id);
-    }
-    if arena.record_for_semantics {
-        arena.laid_out_for_semantics.lock().push(id);
     }
 
     // -----------------------------------------------------------------------
@@ -1754,9 +1715,6 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     if is_repaint_boundary {
         arena.laid_out.lock().push(id);
     }
-    if arena.record_for_semantics {
-        arena.laid_out_for_semantics.lock().push(id);
-    }
 
     // No early-return here for the empty case: a lazy sliver (e.g.
     // `RenderSliverList`) starts with zero attached children and must
@@ -2092,7 +2050,6 @@ mod tests {
             &[],
             vec![],
             &poison,
-            false,
             #[cfg(any(test, feature = "testing"))]
             &FxHashMap::default(),
         );
@@ -2122,7 +2079,6 @@ mod tests {
             &[id_a, id_b],
             vec![], // wrong length
             &poison,
-            false,
             #[cfg(any(test, feature = "testing"))]
             &FxHashMap::default(),
         );
@@ -2183,8 +2139,6 @@ mod tests {
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
-            laid_out_for_semantics: Mutex::new(Vec::new()),
-            record_for_semantics: false,
             layout_poison: &poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
@@ -2225,8 +2179,6 @@ mod tests {
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
-            laid_out_for_semantics: Mutex::new(Vec::new()),
-            record_for_semantics: false,
             layout_poison: &poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
