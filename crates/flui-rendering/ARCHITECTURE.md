@@ -128,7 +128,12 @@ side). The last two were found by test failures, not by reading.
 merely its stale rect: `harness_merge_semantics_collapses_descendant_boundaries` loses a
 descendant's `is_button` when its parent stops laying it out, because a merge folds configuration
 regardless of geometry. Excluding a stale *rect* and excluding a stale *label* are different
-trades, and the second needs its own decision rather than inheriting this one. Tracked on #834.
+trades, and the second needs its own decision rather than inheriting this one. Tracked on #881 —
+and the reasoning is weaker than it looked: for the case that motivates the gate, a lazy sliver's
+out-of-band resident, Flutter publishes no semantics for such a child at all, so announcing one at
+a stale rect is not a different trade but a worse outcome. The harness case that forced the
+deferral mounts two children under a `Single`-arity object, which is a malformed tree rather than
+a contract worth preserving.
 
 **A skip must drop the cached output too.** `run_paint`'s residue scan clears the dirty flag of
 any node the descent did not reach — it has always done that, with a warning, for multi-root and
