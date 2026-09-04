@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_objects::{PathClipSourceToken, RenderPhysicalShape};
+use flui_objects::{ClipSourceToken, RenderPhysicalShape};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Color;
 use flui_types::Size;
@@ -37,7 +37,7 @@ type PathClipper = Rc<dyn Fn(Size) -> Path>;
 #[derive(Clone)]
 pub struct PhysicalShape {
     clipper: PathClipper,
-    clip_source_token: PathClipSourceToken,
+    clip_source_token: ClipSourceToken,
     clip_behavior: Clip,
     elevation: f32,
     color: Color,
@@ -53,7 +53,7 @@ impl PhysicalShape {
     pub fn new(clipper: impl Fn(Size) -> Path + 'static, color: Color) -> Self {
         Self {
             clipper: Rc::new(clipper),
-            clip_source_token: PathClipSourceToken::fresh(),
+            clip_source_token: ClipSourceToken::fresh(),
             clip_behavior: Clip::None,
             elevation: 0.0,
             color,

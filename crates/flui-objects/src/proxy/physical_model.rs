@@ -66,7 +66,7 @@ use flui_rendering::{
     traits::RenderBox,
 };
 
-use super::clip::PathClipSourceToken;
+use super::clip::ClipSourceToken;
 
 // =============================================================================
 // PhysicalClipShape — shape-level operations (RRect, Path)
@@ -290,7 +290,7 @@ pub struct PathClip {
     /// whole-box rect.
     pub target: Option<PathClipTarget>,
     /// Stable identity of the widget-owned source registered at `target`.
-    source_token: Option<PathClipSourceToken>,
+    source_token: Option<ClipSourceToken>,
     /// Effective declarative configuration for clippers that can compare
     /// their source by value rather than callback identity.
     configuration: Option<PathClipConfiguration>,
@@ -590,7 +590,7 @@ impl RenderPhysicalModelBase<PathClip> {
 
     /// Builder: records the widget-owned path source identity.
     #[must_use]
-    pub fn with_path_clip_source_token(mut self, source_token: PathClipSourceToken) -> Self {
+    pub fn with_path_clip_source_token(mut self, source_token: ClipSourceToken) -> Self {
         self.clip_source.source_token = Some(source_token);
         self
     }
@@ -598,7 +598,7 @@ impl RenderPhysicalModelBase<PathClip> {
     /// Replaces the widget-owned path source identity.
     pub fn set_path_clip_source_token(
         &mut self,
-        source_token: &PathClipSourceToken,
+        source_token: &ClipSourceToken,
     ) -> RenderUpdateImpact {
         if self.clip_source.source_token.as_ref() == Some(source_token) {
             return RenderUpdateImpact::NONE;
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn set_path_clip_source_token_returns_exact_impact() {
-        let source_token = PathClipSourceToken::fresh();
+        let source_token = ClipSourceToken::fresh();
         let mut node =
             RenderPhysicalShape::new(Color::BLUE).with_path_clip_source_token(source_token.clone());
 
@@ -1008,7 +1008,7 @@ mod tests {
             RenderUpdateImpact::NONE
         );
         assert_eq!(
-            node.set_path_clip_source_token(&PathClipSourceToken::fresh()),
+            node.set_path_clip_source_token(&ClipSourceToken::fresh()),
             RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
         );
     }

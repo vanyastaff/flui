@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_objects::{PathClipSourceToken, RenderClipPath};
+use flui_objects::{ClipSourceToken, RenderClipPath};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Size;
 use flui_types::painting::{Clip, Path};
@@ -23,7 +23,7 @@ type PathClipper = Rc<dyn Fn(Size) -> Path>;
 #[derive(Clone)]
 pub struct ClipPath {
     clipper: PathClipper,
-    clip_source_token: PathClipSourceToken,
+    clip_source_token: ClipSourceToken,
     clip_behavior: Clip,
     child: Child,
 }
@@ -31,13 +31,51 @@ pub struct ClipPath {
 impl ClipPath {
     /// Clip to the path returned by `clipper` for the laid-out size, with
     /// Flutter's default anti-aliased clip behavior.
+    ///
+    /// # Repaint identity
+    ///
+    /// **Each call mints a NEW clip identity, and that costs a repaint.**
+    /// Rust cannot compare two closures, so the render object is told the clip
+    /// changed whenever the identity does — and under the ordinary pattern of
+    /// building a view fresh on every rebuild, that is every frame the
+    /// surrounding tree rebuilds. `RenderClip` has no cache of its own, so the
+    /// cost is a full repaint of the clipped subtree, not a cheap
+    /// invalidation.
+    ///
+    /// Two ways to avoid it, in order of preference:
+    ///
+    /// * Build the `ClipPath` once and `clone()` it. A clone shares the
+    ///   identity, so an update reports no impact.
+    /// * Hold a [`ClipSourceToken`] alongside your own state and pass it to
+    ///   [`with_source`](Self::with_source), which reuses it. Use this when
+    ///   the closure must be rebuilt (it captures changing state) but the clip
+    ///   it produces has not actually changed.
+    ///
+    /// Flutter has the same problem and forces the answer: `CustomClipper`'s
+    /// `shouldReclip` is abstract, so every clipper author must decide. This
+    /// is the same decision, made visible at the call site instead.
     pub fn new(clipper: impl Fn(Size) -> Path + 'static) -> Self {
+        Self::with_source(ClipSourceToken::fresh(), clipper)
+    }
+
+    /// Like [`new`](Self::new), but reuses an existing clip identity.
+    ///
+    /// Supplying the same token across rebuilds tells the render object the
+    /// clip is unchanged, so it does not repaint. Supplying a fresh one says
+    /// it changed. See [`new`](Self::new)'s *Repaint identity* section.
+    pub fn with_source(source: ClipSourceToken, clipper: impl Fn(Size) -> Path + 'static) -> Self {
         Self {
             clipper: Rc::new(clipper),
-            clip_source_token: PathClipSourceToken::fresh(),
+            clip_source_token: source,
             clip_behavior: Clip::AntiAlias,
             child: Child::empty(),
         }
+    }
+
+    /// This clip's source identity, for reuse across a rebuild.
+    #[must_use]
+    pub fn source(&self) -> ClipSourceToken {
+        self.clip_source_token.clone()
     }
 
     /// Set the clip behavior (anti-aliasing / save-layer policy).
@@ -204,6 +242,44 @@ mod tests {
             ),
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    /// A rebuilt `ClipPath` that reuses its source reports NO impact, even
+    /// though its closure is a different allocation.
+    ///
+    /// This is the escape hatch from the cost the sibling test above
+    /// demonstrates: `ClipPath::new` mints a fresh identity, so under the
+    /// ordinary pattern of building a view fresh each rebuild it repaints the
+    /// clipped subtree every frame. `with_source` says "same clip, new
+    /// closure" — the answer Rust cannot derive because closures do not
+    /// compare, and the one Flutter forces every `CustomClipper` author to
+    /// give through an abstract `shouldReclip`.
+    #[test]
+    fn a_reused_source_reports_no_impact_across_a_rebuild() {
+        let widget = clip_path();
+        let source = widget.source();
+        let mut render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
+
+        // A different closure allocation, the same declared identity.
+        let rebuilt = ClipPath::with_source(source, |size| {
+            let mut path = Path::new();
+            path.add_rect(flui_types::geometry::Rect::from_origin_size(
+                flui_types::Point::ZERO,
+                size,
+            ));
+            path
+        });
+
+        assert_eq!(
+            rebuilt.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "reusing the source must not repaint — that is the whole point of \
+             being able to supply one",
         );
     }
 
