@@ -119,6 +119,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use flui_foundation::ValueKey;
 use flui_types::geometry::px;
 use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 // `prelude::*` covers `SizedBox`/`Table`/`TableRow`/`Text`/`ViewExt` and the
@@ -373,36 +374,24 @@ fn table_border_paints_without_crashing() {
     assert!(laid.size(table_id).width.get() > 0.0);
 }
 
-/// Shrinking a table from 3 rows × 3 columns to 2 rows × 4 columns reuses
-/// the cell at flat index 0 (`A` → `a`) but does NOT preserve the cell that
-/// used to be at flat index 6 (`G`) — a different element now occupies that
-/// slot (`g`), because FLUI's flat multi-child element matches purely by
-/// index, not Flutter's per-row `_TableElement` diffing.
+/// Flutter parity: `widgets/table.dart` `'Table widget - changing table
+/// dimensions'` — `expect(boxA1, equals(boxA2)); expect(boxG1,
+/// isNot(equals(boxG2)));`.
 ///
-/// Flutter parity: `'Table widget - changing table dimensions'` —
-/// `expect(boxA1, equals(boxA2)); expect(boxG1, isNot(equals(boxG2)));`.
-/// Flutter's real result comes from ROW-scoped matching: row 0 and row 1
-/// both survive (their own cells are reused position-by-position within the
-/// row), but row 2 (`G`,`H`,`I`) has no counterpart row in the 2-row tree,
-/// so it is entirely disposed; `g` is actually a reuse of the OLD row 1's
-/// third slot (which held `F`), not row 2's first slot (`G`) — they were
-/// never the same element in Flutter either. `RenderTable::compute_dry_baseline`
-/// row-major-flat-list-in-Vec: FLUI's `Table` (`flui-widgets/src/layout/table.rs`
-/// module doc) reconciles as ONE flat, position-indexed child list instead —
-/// documented and out of scope for this slice ("Reconciliation uses the same
-/// flat multi-child element ... not Flutter's bespoke per-row keyed
-/// `_TableElement` diffing"). Under flat-index matching, flat index 6 in the
-/// OLD 3×3 tree (`G`) and flat index 6 in the NEW 2×4 tree (`g`) are the SAME
-/// slot, so FLUI reuses that element too — contradicting the oracle's
-/// `isNot(equals())`. Kept `#[ignore]`d with the oracle's real expectation
-/// rather than silently dropped or rewritten to match FLUI's divergent
-/// behavior. Un-ignore when Table grows row-scoped (not flat-index) child
-/// reconciliation. Filed to Cross.H.
+/// The oracle's result comes from row-scoped matching: rows 0 and 1 both
+/// survive (their cells are reused position-by-position within the row), row
+/// 2 (`G`,`H`,`I`) has no counterpart in the two-row tree and is disposed
+/// whole, and `g` is a reuse of the OLD row 1's third cell (which held `F`).
+/// FLUI reaches the same result through the flat reconciler by keying each
+/// cell with its row's identity and its column: `(row 0, column 0)` matches
+/// `A` to `a`, `(row 1, column 2)` matches `F` to `g`, and `G`'s
+/// `(row 2, column 0)` has no counterpart, so its element is disposed.
+///
+/// `find_text` returns the `RenderParagraph`'s id, and render ids are
+/// generational, so a disposed-and-recreated node never reads as the same id
+/// as the node it replaced.
 #[test]
-#[ignore = "documented divergence: FLUI's Table reconciles by flat child \
-            index, not Flutter's row-scoped _TableElement diffing — see \
-            doc comment; filed to Cross.H"]
-fn changing_row_and_column_count_reuses_and_discards_cells_by_flat_position() {
+fn changing_row_and_column_count_reuses_and_discards_cells_by_row_identity() {
     let mut laid = harness::pump_widget(
         Table::new(vec![
             TableRow::new(vec![
@@ -445,12 +434,93 @@ fn changing_row_and_column_count_reuses_and_discards_cells_by_flat_position() {
 
     assert_eq!(
         box_a1, box_a2,
-        "flat index 0 is reused across the rebuild (A -> a, same element)"
+        "row 0's first cell is reused across the rebuild (A -> a, same element)"
     );
     assert_ne!(
         box_g1, box_g2,
         "the oracle's real expectation: the element that held G is not the \
          same element that now holds g (row-scoped matching in Flutter)"
+    );
+}
+
+/// A keyed row that moves keeps its cells' elements; the unkeyed rows it
+/// moves past keep theirs too.
+///
+/// Flutter matches keyed rows by key and unkeyed rows by their sequence among
+/// the unkeyed rows only (`_TableElement.update`), which is exactly what a
+/// keyed row moving through a table needs. FLUI reaches it by keying each
+/// cell with `(row identity, column)`, where an unkeyed row's identity is its
+/// ordinal among the unkeyed rows — so moving the keyed row does not renumber
+/// them.
+#[test]
+fn a_keyed_row_moving_past_unkeyed_rows_keeps_every_row_s_cells() {
+    let keyed_row = |label: &str| {
+        TableRow::new(vec![Text::new(label.to_string()).boxed()]).key(ValueKey::new("keyed"))
+    };
+    let plain = |label: &str| TableRow::new(vec![Text::new(label.to_string()).boxed()]);
+
+    let mut laid = harness::pump_widget(
+        Table::new(vec![plain("first"), keyed_row("keyed"), plain("last")]),
+        harness::screen(),
+    );
+    let first_before = laid.find_text("first").expect("first is mounted");
+    let keyed_before = laid.find_text("keyed").expect("keyed is mounted");
+    let last_before = laid.find_text("last").expect("last is mounted");
+
+    // The keyed row moves to the end; the two unkeyed rows keep their order.
+    laid.pump_widget(Table::new(vec![
+        plain("first"),
+        plain("last"),
+        keyed_row("keyed"),
+    ]));
+
+    assert_eq!(
+        laid.find_text("keyed"),
+        Some(keyed_before),
+        "the keyed row's cell keeps its element wherever the row moves to"
+    );
+    assert_eq!(
+        laid.find_text("first"),
+        Some(first_before),
+        "the first unkeyed row is still the first unkeyed row"
+    );
+    assert_eq!(
+        laid.find_text("last"),
+        Some(last_before),
+        "the second unkeyed row is still the second unkeyed row — matching \
+         unkeyed rows among themselves is what keeps them off the keyed row's \
+         path"
+    );
+}
+
+/// Removing a row disposes exactly that row's cells; the rows after it keep
+/// their elements rather than shifting into the gap.
+#[test]
+fn removing_a_middle_row_disposes_only_that_row() {
+    let row = |label: &str| TableRow::new(vec![Text::new(label.to_string()).boxed()]);
+    let keyed = |label: &str| {
+        TableRow::new(vec![Text::new(label.to_string()).boxed()])
+            .key(ValueKey::new(label.to_string()))
+    };
+
+    let mut laid = harness::pump_widget(
+        Table::new(vec![keyed("top"), row("middle"), keyed("bottom")]),
+        harness::screen(),
+    );
+    let top_before = laid.find_text("top").expect("top is mounted");
+    let bottom_before = laid.find_text("bottom").expect("bottom is mounted");
+
+    laid.pump_widget(Table::new(vec![keyed("top"), keyed("bottom")]));
+
+    assert!(
+        laid.find_text("middle").is_none(),
+        "the removed row's cell is gone"
+    );
+    assert_eq!(laid.find_text("top"), Some(top_before));
+    assert_eq!(
+        laid.find_text("bottom"),
+        Some(bottom_before),
+        "the row after the removed one keeps its element"
     );
 }
 
