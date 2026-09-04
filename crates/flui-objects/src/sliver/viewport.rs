@@ -680,17 +680,21 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
         size: Size,
     ) {
-        for staged in std::mem::take(&mut self.staged_positions) {
+        // Taken out and put back so the vector keeps its capacity across
+        // frames: this runs on every scroll pixel.
+        let mut staged = std::mem::take(&mut self.staged_positions);
+        for position in staged.drain(..) {
             ctx.position_child(
-                staged.slot,
+                position.slot,
                 self.compute_absolute_paint_offset(
-                    px(staged.layout_offset),
-                    staged.growth_direction,
-                    px(staged.paint_extent),
+                    px(position.layout_offset),
+                    position.growth_direction,
+                    px(position.paint_extent),
                     size,
                 ),
             );
         }
+        self.staged_positions = staged;
     }
 
     fn compute_absolute_paint_offset(
@@ -1251,17 +1255,21 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
         size: Size,
     ) {
-        for staged in std::mem::take(&mut self.staged_positions) {
+        // Taken out and put back so the vector keeps its capacity across
+        // frames: this runs on every scroll pixel.
+        let mut staged = std::mem::take(&mut self.staged_positions);
+        for position in staged.drain(..) {
             ctx.position_child(
-                staged.slot,
+                position.slot,
                 self.compute_absolute_paint_offset(
-                    px(staged.layout_offset),
-                    staged.growth_direction,
-                    px(staged.paint_extent),
+                    px(position.layout_offset),
+                    position.growth_direction,
+                    px(position.paint_extent),
                     size,
                 ),
             );
         }
+        self.staged_positions = staged;
     }
 
     fn compute_absolute_paint_offset(
