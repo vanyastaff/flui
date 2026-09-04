@@ -768,3 +768,42 @@ fn wrap_clips_only_when_overflowing_and_asked_to() {
         laid.layer_kinds(),
     );
 }
+
+/// A wrap that overflowed and then loses every child must stop clipping.
+///
+/// `has_visual_overflow` is written by `perform_layout`, and the zero-child
+/// path returns before the run arithmetic that computes it. Leaving the flag
+/// alone there would keep a stale `true` from the last non-empty pass, so the
+/// wrap would go on pushing a clip layer for a subtree that no longer exists.
+/// An early return that skips the only writer of a field is an early return
+/// that lies.
+#[test]
+fn wrap_stops_clipping_once_it_has_no_children_left() {
+    use flui_types::painting::Clip;
+    use flui_view::ViewExt as _;
+
+    let children = |count: usize| {
+        Wrap::new(
+            (0..count)
+                .map(|_| SizedBox::new(500.0, 500.0).boxed())
+                .collect::<Vec<_>>(),
+        )
+        .clip_behavior(Clip::HardEdge)
+    };
+
+    let mut laid = harness::pump_widget(children(2), harness::screen());
+    laid.pump();
+    assert!(
+        laid.layer_kinds().contains(&"ClipRect"),
+        "precondition: the overflowing wrap clips; got {:?}",
+        laid.layer_kinds(),
+    );
+
+    laid.pump_widget(children(0));
+    assert!(
+        !laid.layer_kinds().contains(&"ClipRect"),
+        "an empty wrap cannot overflow, so the clip must go with the children; \
+         got {:?}",
+        laid.layer_kinds(),
+    );
+}

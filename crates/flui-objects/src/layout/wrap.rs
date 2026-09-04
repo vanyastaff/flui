@@ -534,6 +534,8 @@ impl flui_foundation::Diagnosticable for RenderWrap {
         properties.add_enum("run_alignment", self.run_alignment);
         properties.add_default_double("run_spacing", self.run_spacing, 0.0, Some("px"));
         properties.add_enum("cross_axis_alignment", self.cross_axis_alignment);
+        properties.add_enum("clip_behavior", self.clip_behavior);
+        properties.add("has_visual_overflow", self.has_visual_overflow.to_string());
     }
 }
 
@@ -560,7 +562,14 @@ impl RenderBox for RenderWrap {
         let sized = self.compute_runs(constraints, child_count, |i, c| ctx.layout_child(i, c));
 
         // Zero-child fast path: compute_runs already returns constraints.smallest().
+        //
+        // The flag is cleared BEFORE returning, not left over from the last
+        // non-empty pass. Nothing can overflow a wrap with no children, and a
+        // stale `true` here would keep clipping a subtree that no longer
+        // exists — `perform_layout` is the only writer, so an early return
+        // that skips it is an early return that lies.
         if child_count == 0 {
+            self.has_visual_overflow = false;
             return sized.container;
         }
 

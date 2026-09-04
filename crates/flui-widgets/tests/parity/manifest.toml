@@ -1199,7 +1199,7 @@ cases = ["Visibility"]
 rust = "wrap_test"
 family = "layout"
 oracles = ["widgets/wrap_test.dart"]
-tests = 12
+tests = 13
 
 [[targets.claims]]
 oracle = "widgets/wrap_test.dart"
@@ -1620,15 +1620,15 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 91
-rust_tests = 669
+rust_tests = 671
 pins = 1
 oracle_files = 390
 oracle_cases = 5753
-cases_claimed = 311
+cases_claimed = 312
 cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 299
+universe_cases_claimed = 300
 universe_cases_diverged = 1
 universe_pending_files = 331
 
@@ -1669,7 +1669,7 @@ pins = 0
 
 [summary.families."layout"]
 targets = 22
-rust_tests = 133
+rust_tests = 134
 cases_claimed = 79
 cases_diverged = 0
 pins = 0
