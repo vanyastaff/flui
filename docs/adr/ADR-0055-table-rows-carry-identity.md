@@ -81,7 +81,43 @@ key would have nothing to address. Key the cell instead.
   `table` parity family drops to zero pins and zero diverged cases.
 - `TableRow`'s `Debug` no longer prints its cells (it prints their count and whether the row is
   keyed) because `BoxedView` has no `Debug`.
-- Still open, and tracked in #544: validated construction (empty and irregular rows are debug-only
-  assertions today, and `DataTable` indexes its cells behind one), `RenderTable`'s inferred
-  `row_count = child_count / column_count` versus the reference's rectangular-by-construction
-  `List<RenderBox?>`, and `TableCellVerticalAlignment::IntrinsicHeight`.
+- Still open, and tracked in #544: `TableCellVerticalAlignment::IntrinsicHeight`, and the
+  baseline/`textBaseline` pairing as a type-level invariant rather than the recorded degradation it
+  is today.
+
+## Amendment (2026-09-04): a ragged grid is repaired where it is supplied
+
+Row lengths that disagreed were two `debug_assert!`s and nothing else — one in
+`Table::update_render_object`, one in `RenderTable::perform_layout` — so a release build carried
+the ragged rows all the way down. The render object floor-divides for its row count, which left a
+trailing partial row that layout skipped, hit-test ignored, and paint was still handed. `DataTable`
+was worse: `row.cells[col_index]` panics with an index-out-of-bounds in release, no assert
+involved, which is a public API that panics on caller data.
+
+`Table::new` and `DataTable::new` now square their rows up where the caller supplies them — a short
+row is padded with empty cells, a long row's extras are dropped, against the first row's cell count
+and `columns.len()` respectively — and each warns once naming the lengths involved. Both
+`debug_assert!`s are gone because the state they described can no longer be constructed.
+`RenderTable` keeps a release-safe warning in place of its own assertion and bounds `paint` to the
+grid its last layout positioned, so a direct consumer of the lower layer gets the same
+self-consistency between what is drawn and what is touchable.
+
+**Why repair rather than reject.** An earlier design (recorded in the issue's spec as D1/D4) made
+the invalid grid unrepresentable: a `TableRows` collection with a fallible `push`, and a
+`RenderTable` owning `Vec<Option<RenderId>>` sized `columns * rows`. Both were dropped during
+implementation. The render-side half fights this crate's own recorded rule that render objects do
+not own child-adoption bookkeeping, and a shadow copy of the child list can desync from the tree
+that actually owns it — a worse failure than the one it prevents. The widget-side half would have
+pushed a `Result` through 31 call sites, inside `build` methods that cannot propagate one, to
+prevent a mistake the library can correct deterministically.
+
+Repair with a warning is the rule this codebase already follows for caller configuration:
+`RenderViewport::set_anchor` clamps an out-of-range anchor rather than asserting, and `RenderTable`
+already degrades a baseline alignment with no text baseline, both with a recorded rationale and a
+green test. Flutter asserts on all of these; the divergence is deliberate, and the warning is what
+keeps it from being silent.
+
+Pinned by `table_pads_a_short_row_and_drops_a_long_rows_extra_cells` (the padded cell holds its
+slot instead of shifting the grid, and every row still contributes its height) and
+`data_table_squares_up_a_row_that_does_not_match_its_columns` (red with the repair removed: an
+index-out-of-bounds panic).

@@ -122,6 +122,9 @@ pub struct RenderTable {
     /// The first row's baseline distance, if any cell in it resolved to
     /// `TableCellVerticalAlignment::Baseline` with a real baseline value.
     baseline_distance: Option<Pixels>,
+    /// Latches the irregular-grid warning, cleared by a child count that
+    /// divides evenly again.
+    irregular_grid_warned: bool,
 }
 
 impl RenderTable {
@@ -141,6 +144,7 @@ impl RenderTable {
             column_lefts: Vec::new(),
             table_width: Pixels::ZERO,
             baseline_distance: None,
+            irregular_grid_warned: false,
         }
     }
 
@@ -619,13 +623,25 @@ impl RenderBox for RenderTable {
         }
 
         let row_count = child_count / column_count;
-        debug_assert_eq!(
-            row_count * column_count,
-            child_count,
-            "RenderTable requires child_count ({child_count}) to be an exact \
-             multiple of column_count ({column_count}) — every row must \
-             contribute exactly column_count cells"
-        );
+        // A caller-supplied grid that does not divide evenly is a
+        // configuration gap, not a broken internal invariant, so this warns
+        // and degrades rather than panicking — the rule this render object
+        // already follows for a baseline alignment with no text baseline. The
+        // trailing partial row is not laid out, and `paint` skips exactly the
+        // same children, so nothing is drawn at an offset no pass computed.
+        if row_count * column_count == child_count {
+            self.irregular_grid_warned = false;
+        } else if !self.irregular_grid_warned {
+            self.irregular_grid_warned = true;
+            tracing::warn!(
+                child_count,
+                column_count,
+                laid_out = row_count * column_count,
+                "RenderTable: the child count is not a multiple of the column \
+                 count; the trailing partial row is neither laid out nor \
+                 painted. Supply every row's full complement of cells."
+            );
+        }
 
         let widths = self.compute_column_widths(
             row_count,
@@ -990,8 +1006,14 @@ impl RenderBox for RenderTable {
             }
         }
 
-        // 2. Children, row-major order == paint order.
-        ctx.paint_children();
+        // 2. Children, row-major order == paint order. Bounded by the grid
+        // the last layout actually positioned: a trailing partial row was
+        // never given an offset, and painting it would put it at whatever
+        // stale or default offset it happened to carry. `hit_test` bounds
+        // itself the same way, so what is drawn and what is touchable agree.
+        for index in 0..row_count * self.column_count {
+            ctx.paint_child(index);
+        }
 
         // 3. Table border, on top of everything (table.dart:1508-1525).
         if let Some(border) = &self.border {

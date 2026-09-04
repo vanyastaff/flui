@@ -72,7 +72,40 @@ absorbs a new variant silently — it happens to give Flutter's answer, so make 
 next variant cannot pass unnoticed. The enum is not `#[non_exhaustive]`: adding a variant is
 semver-breaking for external matchers, which is allowed and recorded.
 
-### D4 — the grid is rectangular by construction (ALT-2, replaces the deleted intrinsics work)
+### D4 — REASSESSED during implementation (2026-09-04): repair at construction, not a new render-side shape
+
+What follows was the plan; it is kept for the reasoning, but it is NOT what shipped. Two things
+turned up while building it:
+
+1. **The render object cannot own the shape.** `RenderTable`'s children are attached by the
+   element tree, not held by the render object; `crates/flui-objects/src/layout/table.rs`'s own
+   module doc records that as deliberate ("render objects never own their own child-adoption
+   bookkeeping"). A `Vec<Option<RenderId>>` field would shadow that ownership and could desync
+   from it, which is a worse failure than the one it prevents.
+2. **The ragged grid was already unreachable in debug and reachable in release, from BOTH ends.**
+   `Table::update_render_object` and `RenderTable::perform_layout` each carried a `debug_assert!`
+   and nothing else, so a release build carried the ragged rows all the way down: the render
+   object floor-divides for its row count, leaving a trailing partial row that layout skipped,
+   hit-test ignored, and paint was still handed. `DataTable` was worse still — `row.cells[col_index]`
+   panics with an index-out-of-bounds in release, with no assert involved.
+
+What shipped instead squares the rows up where the caller supplies them: `Table::new` pads a short
+row and drops a long row's extras against the first row's cell count, `DataTable::new` does the
+same against `columns.len()`, and both warn once naming the lengths. `RenderTable` keeps a
+release-safe warning in place of its `debug_assert!` and bounds `paint` to the grid it laid out, so
+the lower layer stays self-consistent for a direct consumer.
+
+That is repair rather than rejection, which is this library's established rule for caller
+configuration — `RenderViewport::set_anchor` clamps an out-of-range anchor, and `RenderTable`
+already degrades a baseline alignment with no text baseline, both with a recorded rationale and a
+green test. It is also what keeps `Table::new` usable inside a declarative `build`: `TableRows`
+with a `Result` would have pushed an `.expect()` through 31 call sites to prevent a mistake the
+library can correct deterministically. Flutter asserts; the divergence is deliberate and the
+warning is what keeps it from being silent.
+
+The original plan, for the record:
+
+### D4 (superseded) — the grid is rectangular by construction (ALT-2, replaces the deleted intrinsics work)
 `RenderTable` takes `columns` + `Vec<Option<RenderId>>` sized `columns * rows`, installed
 atomically (Flutter's `setFlatChildren`), instead of inferring `row_count = child_count /
 column_count` at six sites (`:621,778,829,849,869,934`). A hole becomes representable — today a

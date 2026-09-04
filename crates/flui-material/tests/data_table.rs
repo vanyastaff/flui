@@ -437,3 +437,43 @@ fn a_row_with_no_handler_swallows_a_checkbox_tap() {
         "a non-selectable row's checkbox tap must fire no handler at all"
     );
 }
+
+/// A row with fewer cells than the table has columns used to reach
+/// `row.cells[col_index]` and panic with an index-out-of-bounds — in release
+/// too, since the only guard was a `debug_assert!`. The row is squared up at
+/// construction now, so the index cannot go out of range.
+#[test]
+fn data_table_squares_up_a_row_that_does_not_match_its_columns() {
+    let laid = common::lay_out(
+        themed(
+            ThemeData::light(),
+            DataTable::new(
+                vec![
+                    DataColumn::new(Text::new("A")),
+                    DataColumn::new(Text::new("B")),
+                    DataColumn::new(Text::new("C")),
+                ],
+                vec![
+                    DataRow::new(vec![
+                        DataCell::new(Text::new("1")),
+                        DataCell::new(Text::new("2")),
+                        DataCell::new(Text::new("3")),
+                    ]),
+                    // One cell for three columns: padded, not a panic.
+                    DataRow::new(vec![DataCell::new(Text::new("only"))]),
+                ],
+            )
+            .show_checkbox_column(false),
+        ),
+        loose(600.0),
+    );
+
+    assert!(
+        laid.find_text("only").is_some(),
+        "the short row's real cell still renders",
+    );
+    assert!(
+        laid.find_text("3").is_some(),
+        "and the full row above it is untouched",
+    );
+}
