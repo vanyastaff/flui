@@ -73,9 +73,12 @@ impl DrawBatcher {
                         state.apply_transform(Point::new(rect.right(), rect.bottom()));
                     let device_rect =
                         Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-                    let instance = state.apply_active_clip(
-                        super::super::instancing::RectInstance::rect(device_rect, color),
-                    );
+                    let mut instance =
+                        super::super::instancing::RectInstance::rect(device_rect, color);
+                    if !paint.anti_alias {
+                        instance = instance.aliased();
+                    }
+                    let instance = state.apply_active_clip(instance);
                     Self::begin_phase(segment, draw_order, Phase::Rect);
                     let _ = segment.rect_batch.add(instance);
                     DrawSegment::push_scissor_region(
@@ -94,15 +97,18 @@ impl DrawBatcher {
                     let translation = [m.w_axis.x, m.w_axis.y];
                     let local_bounds =
                         [rect.left().0, rect.top().0, rect.width().0, rect.height().0];
-                    let instance = state.apply_active_clip(
+                    let mut instance =
                         super::super::instancing::RectInstance::with_affine_transform(
                             local_bounds,
                             color,
                             [0.0; 4],
                             linear_cols,
                             translation,
-                        ),
-                    );
+                        );
+                    if !paint.anti_alias {
+                        instance = instance.aliased();
+                    }
+                    let instance = state.apply_active_clip(instance);
                     Self::begin_phase(segment, draw_order, Phase::Rect);
                     let _ = segment.rect_batch.add(instance);
                     // Scissor = the active damage/clip region, exactly as the

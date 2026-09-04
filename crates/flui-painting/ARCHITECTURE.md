@@ -170,10 +170,25 @@ anti-aliasing is a rasterization-quality hint that belongs to whoever is doing t
 Serializing a rendering hint beside colours and radii would make the style data carry something
 that is not style.
 
-**Scope, stated:** the flag reaches the BACKGROUND fill only. A `ColoredBox` has no border, shadow
-or image, so nothing in the reference says what those should do when it is off; they keep the
-default rather than being changed on a guess. `DecorationPaintOptions` is the seam if a caller ever
-needs them to follow, and it is `#[non_exhaustive]` so growing it is additive.
+**Scope, stated:** the flag reaches the SOLID COLOUR fill and nothing else. Borders, shadows and
+images keep the default because a `ColoredBox` has none of them, so the reference says nothing
+about what they should do when it is off. Gradient backgrounds keep it for a different reason —
+`DrawGradient`/`DrawGradientRRect` carry a shader and no `Paint`, so there is nowhere to put the
+flag without widening the closed `DrawCommand` enum that is the trust boundary with the wgpu
+backend (mapping decision 1). The circle-gradient silhouette COULD carry it, since it goes through
+a `Paint`, and deliberately does not: one gradient shape smoothing differently from its rect and
+rrect neighbours is worse than a limitation that holds uniformly. `DecorationPaintOptions` is
+`#[non_exhaustive]`, so growing it is additive if a consumer appears.
+
+**It reaches the GPU, and that took wiring.** `Paint::anti_alias` had existed as metadata for a
+long time with nothing reading it: `DrawBatcher`'s rect path never looked, and
+`rect_instanced.wgsl` always applied `sdfToAlpha`, so a rect drawn with the flag off rasterized
+identically. The batcher now marks the instance and the shader takes coverage from `step(dist, 0)`
+instead of the smoothstep ramp. The flag rides in lane 1 of the existing `clip_kind` attribute —
+no new vertex attribute, no stride change — with `0` meaning anti-aliased, because every
+construction site zeroes that attribute and the opposite polarity would have silently turned AA
+off everywhere. `ClippableInstance::with_clip` assigns that attribute LANE BY LANE for the same
+reason: it used to write the whole vector, which dropped the paint's bit, and did so silently.
 
 **Alternatives:**
 - `BoxDecoration::anti_alias` — rejected per the above. It is additive (`#[non_exhaustive]`) and
