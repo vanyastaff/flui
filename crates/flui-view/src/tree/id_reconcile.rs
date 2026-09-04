@@ -609,68 +609,15 @@ fn remove_child(
     // (`framework.dart:3188`).
     owner.forget_global_key_reservation(parent_id, id);
 
-    // A keyed top soft-removes into the inactive queue instead of freeing
-    // outright, leaving descendants untouched for `finalize_tree`'s deferred
-    // drain (same-frame GlobalKey retake window). Check this FIRST: it needs
-    // no subtree walk, and a keyed top never uses the snapshot below, so
-    // collecting it before checking would be wasted work for every keyed-top
-    // removal.
-    if tree
-        .get(id)
-        .is_some_and(|node| node.registered_global_key_hash().is_some())
-    {
-        tree.remove(id, owner);
-        return;
-    }
-
-    // Unkeyed top: snapshot the subtree pre-order (parent before children)
-    // BEFORE touching the top, while every `child_ids` list is still
-    // intact. Owned `Vec` → no slab borrow is held across the removals
-    // (extract-then-apply).
-    let mut subtree = Vec::new();
-    collect_subtree_preorder(tree, id, &mut subtree);
-
-    // Free the descendants deepest-first — `subtree[0]` is the top itself
-    // (removed last, below); reverse of pre-order visits every parent
-    // after all of its descendants.
-    for &descendant in subtree[1..].iter().rev() {
-        tree.remove_finalized(descendant, owner);
-    }
-    tree.remove(id, owner);
-}
-
-/// Collect `id` and its whole subtree in pre-order (parent before
-/// children, children in `child_ids` slot order).
-///
-/// The caller removes the collected ids in REVERSE (deepest-first) so no
-/// parent slot is freed before its children — pre-order guarantees a
-/// parent always precedes every one of its descendants. Mirrors
-/// [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) +
-/// `collect_elements_to_unmount`.
-///
-/// The walk is driven by an explicit `Vec` work-stack instead of
-/// recursion: the element tree nests several times deeper than the
-/// render tree, and a recursive shape overflowed the 1 MiB Windows
-/// main-thread stack on deep chains (the failure class PR #177 closed
-/// for the render-tree walks). To preserve the recursive shape's visit
-/// order on a LIFO stack, children are pushed in reverse slot order so
-/// the leftmost child is popped next — same discipline as
-/// `WidgetsBinding::collect_all_elements`.
-///
-/// Complexity: O(n) time over the subtree size n, average and worst case
-/// (each node pushed/popped exactly once); the work-stack peaks at O(n)
-/// heap in the degenerate all-siblings case and O(subtree height) for a
-/// chain. Call-stack usage is constant.
-fn collect_subtree_preorder(tree: &ElementTree, id: ElementId, out: &mut Vec<ElementId>) {
-    let mut stack: Vec<ElementId> = vec![id];
-    while let Some(id) = stack.pop() {
-        out.push(id);
-        // The `tree.get` shared borrow ends with the statement; the
-        // extend writes only into the local stack, never the slab.
-        if let Some(node) = tree.get(id) {
-            stack.extend(node.child_ids().iter().rev().copied());
-        }
-    }
+    // One implementation, two callers. This used to carry its own copy of
+    // the subtree walk, and the copies drifted: `remove_subtree` learned to
+    // stop at a `GlobalKey`'d descendant (issue #838) while this one — the
+    // path an ORDINARY dense parent takes — kept freeing them, so the fix was
+    // described as tree-wide while covering only the sparse and root cases.
+    //
+    // `remove_subtree` handles the keyed-top case identically (it soft-removes
+    // and returns without walking), so delegating loses nothing.
+    tree.remove_subtree(id, owner, super::SubtreeRemoval::DeactivateKeyed);
 }
 
 /// Refresh the `slot` metadata of the surviving child `id` to `slot`

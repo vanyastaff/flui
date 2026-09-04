@@ -114,13 +114,31 @@ laid out.
   re-requests the next index inside the same frame's fixpoint. `updateChild`'s
   layout-offset preservation across a render swap is covered by the walk
   rewriting every in-band offset from the virtualizer each pass.
-- **Gap recorded, not closed here.** A `GlobalKey`'d *descendant* of an
-  unkeyed subtree that a parent removes is unmounted at once; Flutter
-  deactivates the subtree and lets another parent retake the descendant before
-  `finalizeTree`. This is a tree-wide property (dense parents too), so a lazy
-  item under the per-item boundary cannot yet be grafted to another list with
-  its state; without the boundary — the keyed item as the resident root — it
-  can, and that path is tested.
+- **Gap recorded here, closed by issue #838 (2026-09-04).** A `GlobalKey`'d
+  *descendant* of an unkeyed subtree that a parent removes used to be unmounted
+  at once, where Flutter deactivates the subtree and lets another parent retake
+  the descendant before `finalizeTree`. It was tree-wide (dense parents too),
+  and it surfaced here because the per-item `RepaintBoundary` is itself an
+  unkeyed wrapper: a lazy item under one could not be grafted to another list
+  with its state, so the graft test had to turn boundaries off to run at all.
+  `remove_subtree` now stops its walk at a keyed descendant and routes it
+  through the soft-remove path instead — not descending is the other half,
+  since a retaken element keeps its own children. The graft test runs with the
+  default boundary on, which is what an app would actually write, and is red
+  without the change.
+
+  Two things the first draft of that change got wrong, both caught in review.
+  It described itself as tree-wide while covering only the sparse and root
+  paths: an ordinary DENSE parent removes through
+  `id_reconcile::remove_child`, which carried its own copy of the same subtree
+  walk and kept freeing keyed descendants. The copies are gone — that path
+  delegates to `remove_subtree`, so there is one implementation and it cannot
+  drift again. And deactivation is not right for every caller:
+  `detach_root_widget` is permanent teardown with no frame after it, so a
+  deactivated element would sit in the inactive queue with `dispose` never
+  run and a later attach could retake stale state. `SubtreeRemoval` makes the
+  two cases explicit at the call site rather than assuming one behaviour fits
+  both.
 
 ## Alternatives considered
 

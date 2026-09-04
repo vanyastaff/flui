@@ -1472,17 +1472,18 @@ fn lazy_list_view_builder_duplicate_local_keys_first_wins_second_remounts() {
 /// building in the same frame moves between them — the second list's mount
 /// retakes it (from the first list's still-active resident, or from the
 /// inactive queue if the first list already let it go) — and the first list
-/// forgets it (Flutter's `forgetChild`), so its later band eviction never
-/// reaches into the other list's subtree. Observable: exactly one element,
+/// drops its own bookkeeping entry for it (Flutter's `forgetChild` — the
+/// list forgets the child, the child keeps its state), so the first list's
+/// later band eviction never reaches into the other list's subtree. Observable: exactly one element,
 /// its state intact, and both lists still evicting cleanly afterwards.
 ///
-/// The lists run without the per-item repaint boundary so the keyed item
-/// *is* the resident root. With the boundary on, the root is the boundary
-/// (carrying a salted, non-global key) and an eviction unmounts its whole
-/// subtree at once — FLUI has no equivalent of Flutter's deactivate-then-
-/// retake for a `GlobalKey`'d *descendant* of a removed unkeyed subtree, in
-/// lazy and dense trees alike. That gap is recorded in the design notes
-/// for #530; it is not this slice's.
+/// The lists keep the per-item repaint boundary — the default, and what an
+/// app would actually write — so the resident root is the boundary (carrying
+/// a salted, non-global key) and the keyed item is a *descendant* of the
+/// subtree an eviction removes. Reaching it therefore depends on the removal
+/// walk stopping at a `GlobalKey`'d descendant and deactivating it rather
+/// than unmounting the subtree wholesale, which is the behaviour this file's
+/// fixture exists to pin.
 #[derive(Clone)]
 struct TwoLists {
     keyed_in_second: Arc<AtomicBool>,
@@ -1566,7 +1567,6 @@ impl ViewState<TwoLists> for TwoListsState {
                     }
                 })
             })
-            .repaint_boundaries(false)
         };
         Column::new((
             SizedBox::new(200.0, 100.0).child(list(
@@ -1589,8 +1589,16 @@ impl flui_view::View for TwoLists {
     }
 }
 
+/// The default per-item `RepaintBoundary` stays ON here, and that is the
+/// point: it used to have to be turned off.
+///
+/// The boundary is an UNKEYED wrapper, and `remove_subtree` hard-removed every
+/// descendant of one — including a `GlobalKey`'d element, which lost its
+/// identity the moment the boundary was evicted. Issue #838. With the keyed
+/// descendant deactivated instead, a lazy item can carry a `GlobalKey` under
+/// the default configuration, which is what an app would actually write.
 #[test]
-fn lazy_list_view_builder_forgets_a_global_keyed_item_grafted_to_another_list() {
+fn lazy_list_view_builder_preserves_a_global_keyed_item_grafted_to_another_list() {
     let keyed_in_second = Arc::new(AtomicBool::new(false));
     let log: Arc<parking_lot::Mutex<Vec<&'static str>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));

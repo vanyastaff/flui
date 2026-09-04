@@ -2050,7 +2050,11 @@ mod tests {
         }
 
         // Unmount: `on_unmount` must unregister the ChildManager.
-        tree.remove_subtree(sliver_id, &mut build_owner.element_owner_mut());
+        tree.remove_subtree(
+            sliver_id,
+            &mut build_owner.element_owner_mut(),
+            crate::tree::SubtreeRemoval::DeactivateKeyed,
+        );
 
         {
             let registry = build_owner.child_manager_registry.lock();
