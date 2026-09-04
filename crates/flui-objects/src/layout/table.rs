@@ -48,7 +48,7 @@
 
 use std::collections::HashMap;
 
-use flui_painting::{paint_box_decoration, paint_table_border};
+use flui_painting::{DecorationPaintOptions, paint_box_decoration, paint_table_border};
 use flui_tree::Variable;
 use flui_types::{
     Offset, Pixels, Rect, Size,
@@ -1024,7 +1024,12 @@ impl RenderBox for RenderTable {
                     self.table_width,
                     self.row_tops[y + 1],
                 );
-                paint_box_decoration(ctx.canvas(), rect, decoration);
+                paint_box_decoration(
+                    ctx.canvas(),
+                    rect,
+                    decoration,
+                    DecorationPaintOptions::default(),
+                );
             }
         }
 

@@ -17,6 +17,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct ColoredBox {
     color: Color,
+    anti_alias: bool,
     child: Child,
 }
 
@@ -25,8 +26,20 @@ impl ColoredBox {
     pub fn new(color: Color) -> Self {
         Self {
             color,
+            anti_alias: true,
             child: Child::empty(),
         }
+    }
+
+    /// Whether the box's edges are anti-aliased. `true` by default.
+    ///
+    /// Turn it off for a box whose edges already land on pixel boundaries,
+    /// where the feathered edge reads as a blur rather than as smoothing.
+    /// Flutter parity: `ColoredBox(isAntiAlias:)`.
+    #[must_use]
+    pub const fn anti_alias(mut self, value: bool) -> Self {
+        self.anti_alias = value;
+        self
     }
 
     /// Set the child painted over the color.
@@ -49,7 +62,11 @@ impl RenderView for ColoredBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderDecoratedBox::new(self.decoration())
+        let mut render_object = RenderDecoratedBox::new(self.decoration());
+        // The impact is dropped deliberately: there is nothing to invalidate
+        // before this node joins a tree.
+        let _ = render_object.set_anti_alias(self.anti_alias);
+        render_object
     }
 
     fn update_render_object(
@@ -59,6 +76,7 @@ impl RenderView for ColoredBox {
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_decoration(self.decoration());
+        impact |= render_object.set_anti_alias(self.anti_alias);
         impact
     }
 

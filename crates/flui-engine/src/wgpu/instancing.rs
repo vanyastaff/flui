@@ -88,8 +88,19 @@ pub struct RectInstance {
     ///   superellipse's separate-axis rx/ry per corner).
     ///
     /// Stored as `[u32; 4]` for 16-byte alignment with surrounding vec4
-    /// instance attributes. Only the `.x` lane carries the kind; the other
-    /// three lanes are padding.
+    /// instance attributes. The `.x` lane carries the kind and the `.y` lane
+    /// carries an ALIASED flag (`1` = hard edge, `0` = the anti-aliased
+    /// default); the remaining two lanes are padding.
+    ///
+    /// Two owners write this attribute: the clip owns lane 0 and the paint
+    /// owns lane 1, and `with_clip` assigns lane by lane for that reason.
+    ///
+    /// The polarity is deliberate. Every construction site zeroes this
+    /// attribute, so `0` has to mean the behaviour they all had before —
+    /// anti-aliased. A flag meaning "anti-alias me" would have silently
+    /// turned AA off for every existing instance. Reusing a lane also keeps
+    /// the vertex stride and the WGSL attribute list unchanged; a new `vec4`
+    /// for one boolean costs 16 bytes per instance.
     pub clip_kind: [u32; 4],
     /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
     ///
@@ -129,6 +140,29 @@ impl RectInstance {
             clip_local_origin: [0.0; 4],
             transform_translate: [0.0; 4],
         }
+    }
+
+    /// Marks this instance's own edge as hard, skipping the SDF's
+    /// anti-aliasing (`Paint::anti_alias == false`).
+    ///
+    /// Affects the SHAPE's edge only; an SDF clip applied to it keeps its own
+    /// smoothing, which is the clip's contract rather than the paint's.
+    #[must_use]
+    pub const fn aliased(mut self) -> Self {
+        self.clip_kind[1] = 1;
+        self
+    }
+
+    /// Whether this instance's own edge is hard.
+    ///
+    /// `cfg(test)`: production writes this lane and the shader reads it, but
+    /// nothing on the CPU side reads it back. It exists so the polarity is
+    /// named in one place instead of `clip_kind[1] == 1` appearing in every
+    /// assertion.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn is_aliased(&self) -> bool {
+        self.clip_kind[1] == 1
     }
 
     // `RectInstance::rounded_rect(rect, color, single_radius)` (the
@@ -791,7 +825,11 @@ pub trait ClippableInstance {
 impl ClippableInstance for RectInstance {
     fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
         self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
+        // Lane 1 is the paint's aliased flag, not the clip's — assigning
+        // `clip.kind` wholesale would silently drop it, and it did until this
+        // line existed. Two owners share this attribute; each writes only the
+        // lanes it owns, so the order the two are applied in cannot matter.
+        self.clip_kind = [clip.kind[0], self.clip_kind[1], 0, 0];
         self.clip_device_to_local = [
             clip.device_to_local[0],
             clip.device_to_local[1],
@@ -1113,6 +1151,55 @@ impl<T> InstanceBatch<T> {
 impl<T> Default for InstanceBatch<T> {
     fn default() -> Self {
         Self::new(1024) // Default: 1024 instances per batch
+    }
+}
+
+#[cfg(test)]
+mod aliased_lane_tests {
+    use super::*;
+    use crate::wgpu::state_stack::ResolvedClip;
+    use flui_types::{Color, Rect, geometry::px};
+
+    fn unit_rect() -> RectInstance {
+        RectInstance::rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Color::RED,
+        )
+    }
+
+    /// Applying a clip must not clear the paint's aliased flag.
+    ///
+    /// `clip_kind` is one attribute with two owners: lane 0 is the clip's
+    /// kind, lane 1 is the paint's aliased bit. `with_clip` used to assign
+    /// the whole vector, which dropped lane 1 — silently, and only for
+    /// clipped draws, which is the shape of a bug that reaches production and
+    /// then cannot be reproduced in isolation.
+    #[test]
+    fn a_clip_does_not_clear_the_paint_aliased_flag() {
+        let clip = ResolvedClip {
+            rrect: [0.0, 0.0, 10.0, 10.0, 2.0, 2.0, 2.0, 2.0],
+            kind: [1, 0, 0, 0],
+            device_to_local: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        };
+
+        let clipped = unit_rect().aliased().with_clip(clip);
+        assert!(
+            clipped.is_aliased(),
+            "the paint's lane must survive a clip being applied over it",
+        );
+        assert_eq!(
+            clipped.clip_kind[0], 1,
+            "and the clip's own lane must still arrive",
+        );
+    }
+
+    /// The default is anti-aliased, because every construction site zeroes
+    /// this attribute and `0` therefore has to mean the pre-existing
+    /// behaviour.
+    #[test]
+    fn the_default_instance_is_not_aliased() {
+        assert!(!unit_rect().is_aliased());
+        assert!(!unit_rect().with_clip(ResolvedClip::NONE).is_aliased());
     }
 }
 

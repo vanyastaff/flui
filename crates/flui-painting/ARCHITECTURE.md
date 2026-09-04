@@ -156,6 +156,59 @@ precisely the reason the guard was worth adding for `ColoredBox` in the first pl
 (`crates/flui-objects/tests/render_object_harness.rs`) covers all three degenerate shapes. The twin
 that pinned the old unconditional behaviour is deleted rather than left contradicting it.
 
+### 8. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
+
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #2 — pick the best-known shape and say
+where it comes from.
+
+**Choice:** `paint_box_decoration` takes a `DecorationPaintOptions` alongside the decoration, and
+`RenderDecoratedBox` owns the flag. `BoxDecoration` is untouched.
+
+**Why:** Flutter puts `isAntiAlias` on `_RenderColoredBox`, not on any decoration, and the reason
+generalizes: a decoration DESCRIBES an appearance and is `serde`-serializable here, while
+anti-aliasing is a rasterization-quality hint that belongs to whoever is doing the rasterizing.
+Serializing a rendering hint beside colours and radii would make the style data carry something
+that is not style.
+
+**Scope, stated:** the flag reaches the SOLID COLOUR fill and nothing else. Borders, shadows and
+images keep the default because a `ColoredBox` has none of them, so the reference says nothing
+about what they should do when it is off. Gradient backgrounds keep it for a different reason —
+`DrawGradient`/`DrawGradientRRect` carry a shader and no `Paint`, so there is nowhere to put the
+flag without widening the closed `DrawCommand` enum that is the trust boundary with the wgpu
+backend (mapping decision 1). The circle-gradient silhouette COULD carry it, since it goes through
+a `Paint`, and deliberately does not: one gradient shape smoothing differently from its rect and
+rrect neighbours is worse than a limitation that holds uniformly. `DecorationPaintOptions` is
+`#[non_exhaustive]`, so growing it is additive if a consumer appears.
+
+**It reaches the GPU, and that took wiring.** `Paint::anti_alias` had existed as metadata for a
+long time with nothing reading it: `DrawBatcher`'s rect path never looked, and
+`rect_instanced.wgsl` always applied `sdfToAlpha`, so a rect drawn with the flag off rasterized
+identically. The batcher now marks the instance and the shader takes coverage from `step(dist, 0)`
+instead of the smoothstep ramp. The flag rides in lane 1 of the existing `clip_kind` attribute —
+no new vertex attribute, no stride change — with `0` meaning anti-aliased, because every
+construction site zeroes that attribute and the opposite polarity would have silently turned AA
+off everywhere. `ClippableInstance::with_clip` assigns that attribute LANE BY LANE for the same
+reason: it used to write the whole vector, which dropped the paint's bit, and did so silently.
+
+**Alternatives:**
+- `BoxDecoration::anti_alias` — rejected per the above. It is additive (`#[non_exhaustive]`) and
+  would have avoided the signature change, which is exactly why it was tempting.
+- A bare `bool` fourth parameter — rejected for boolean blindness at the call site:
+  `paint_box_decoration(c, r, d, false)` does not say false what.
+- A second `paint_box_decoration_aliased` entry point — rejected; two names for one operation, and
+  it does not extend to the next option.
+
+**Replacement tests:** `harness_decorated_box_background_carries_the_anti_alias_flag` (render
+level, red when the flag is dropped between the render object and the canvas) and
+`colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint` (widget level, the two oracle
+cases from `basic_test.dart`, reading the composited layer tree's own `DrawRect`).
+
+**Test-support note:** the harness's paint summary
+(`flui_rendering::testing::snapshot::summarize_paint`) now prints ` aliased` for a paint that opted
+out, and nothing for the default. Printing it unconditionally would have added a constant to every
+line of every snapshot and changed all of them at once; printing only the deviation keeps existing
+snapshots untouched while making the opt-out visible to any test reading those lines.
+
 ### Net unsafe delta: 0
 
 The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before and after the chain. Zero `unsafe` blocks introduced; zero removed. Distinct from the `flui-layer` chain's -39 net delta (flui-layer had 39 cargo-cult `unsafe impl Send + Sync` blocks to delete; flui-painting never had them).

@@ -8,7 +8,7 @@
 //! geometry (rounded corners exclude the rect's corners), then to the
 //! child.
 
-use flui_painting::{box_decoration_hit_test, paint_box_decoration};
+use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 use flui_tree::Single;
 use flui_types::{Offset, Pixels, Point, Rect, Size, styling::BoxDecoration};
 
@@ -36,6 +36,10 @@ pub struct RenderDecoratedBox {
     decoration: BoxDecoration<Pixels>,
     /// Behind or in front of the child.
     position: DecorationPosition,
+    /// Whether the decoration's background edges are anti-aliased. Flutter
+    /// keeps this on the render object rather than on the decoration
+    /// (`_RenderColoredBox.isAntiAlias`), and so does this.
+    anti_alias: bool,
     /// Whether we have a child.
     has_child: bool,
 }
@@ -46,8 +50,29 @@ impl RenderDecoratedBox {
         Self {
             decoration,
             position: DecorationPosition::Background,
+            anti_alias: true,
             has_child: false,
         }
+    }
+
+    /// Whether the background's edges are anti-aliased.
+    #[must_use]
+    pub const fn anti_alias(&self) -> bool {
+        self.anti_alias
+    }
+
+    /// Sets whether the background's edges are anti-aliased.
+    ///
+    /// Reaches the background fill only — the border, shadow and image passes
+    /// keep the default. Flutter's `isAntiAlias` is a `ColoredBox` parameter,
+    /// and a `ColoredBox` has none of those, so nothing in the reference says
+    /// what they should do when it is off.
+    pub fn set_anti_alias(&mut self, value: bool) -> flui_rendering::RenderUpdateImpact {
+        if self.anti_alias == value {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.anti_alias = value;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Sets where the decoration paints relative to the child.
@@ -127,13 +152,23 @@ impl RenderBox for RenderDecoratedBox {
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         let rect = Self::paint_rect(ctx.size());
         if self.position == DecorationPosition::Background {
-            paint_box_decoration(ctx.canvas(), rect, &self.decoration);
+            paint_box_decoration(
+                ctx.canvas(),
+                rect,
+                &self.decoration,
+                DecorationPaintOptions::with_anti_alias(self.anti_alias),
+            );
         }
         if self.has_child {
             ctx.paint_child();
         }
         if self.position == DecorationPosition::Foreground {
-            paint_box_decoration(ctx.canvas(), rect, &self.decoration);
+            paint_box_decoration(
+                ctx.canvas(),
+                rect,
+                &self.decoration,
+                DecorationPaintOptions::with_anti_alias(self.anti_alias),
+            );
         }
     }
 

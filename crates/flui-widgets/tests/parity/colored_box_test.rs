@@ -87,7 +87,17 @@
 //! caller — `paint_box_decoration` records no background when either
 //! dimension is zero — so `ColoredBox` matches the oracle exactly while
 //! `DecoratedBox`'s border, shadow and image passes still run on a
-//! degenerate box. The anti-alias gap below is still open.
+//! degenerate box.
+//!
+//! ### Cases 3-4: the anti-alias knob
+//!
+//! `ColoredBox::anti_alias(bool)` (default `true`) landed 2026-09-04 and both
+//! oracle cases are ported below. The flag lives on `RenderDecoratedBox` and
+//! travels through `DecorationPaintOptions`, not on `BoxDecoration` — a
+//! decoration describes an appearance and is serializable, while
+//! anti-aliasing is a rasterization hint. It reaches the BACKGROUND fill
+//! only; a `ColoredBox` has no border, shadow or image, so nothing in the
+//! oracle says what those should do when it is off.
 //!
 //! ### Cases 6-7: missing anti-alias knob
 //!
@@ -325,5 +335,69 @@ fn colored_box_debug_fill_properties_carries_the_painted_color() {
         first.value().contains(&format!("{COLOR_TO_PAINT:?}")),
         "the decoration property must carry the painted color; got {:?}",
         first.value()
+    );
+}
+
+/// The widget's `anti_alias` reaches the recorded paint, and defaults to on.
+///
+/// Flutter parity: `basic_test.dart`'s `'ColoredBox - default isAntiAlias'`
+/// and `'ColoredBox - passing isAntiAlias = false'`, which assert
+/// `mockCanvas.paints.single.isAntiAlias` after driving `paint` directly.
+/// Here the assertion reads the composited layer tree's own `DrawRect`
+/// instead of a mock canvas — the same value, one layer further out, and it
+/// covers the widget→render-object wiring the render-level pin cannot see.
+#[test]
+fn colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint() {
+    use flui_painting::DrawCommand;
+    use flui_rendering::layer::Layer;
+
+    fn recorded_anti_alias(laid: &LaidOut) -> Vec<bool> {
+        let mut flags = Vec::new();
+        let Some(tree) = laid.layer_tree() else {
+            return flags;
+        };
+        let Some(root) = tree.root() else {
+            return flags;
+        };
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let Some(layer) = tree.get_layer(id) else {
+                continue;
+            };
+            let commands = match layer {
+                Layer::Picture(picture) => Some(picture.picture()),
+                Layer::Canvas(canvas) => Some(canvas.display_list()),
+                _ => None,
+            };
+            if let Some(commands) = commands {
+                for command in commands {
+                    if let DrawCommand::DrawRect { paint, .. } = command {
+                        flags.push(paint.anti_alias);
+                    }
+                }
+            }
+            stack.extend(tree.children(id).iter().flat_map(|ids| ids.iter().copied()));
+        }
+        flags
+    }
+
+    let laid = harness::pump_widget(
+        SizedBox::new(40.0, 20.0).child(ColoredBox::new(Color::RED)),
+        harness::screen(),
+    );
+    assert_eq!(
+        recorded_anti_alias(&laid),
+        vec![true],
+        "the default matches the oracle's `isAntiAlias: true`",
+    );
+
+    let laid = harness::pump_widget(
+        SizedBox::new(40.0, 20.0).child(ColoredBox::new(Color::RED).anti_alias(false)),
+        harness::screen(),
+    );
+    assert_eq!(
+        recorded_anti_alias(&laid),
+        vec![false],
+        "and `anti_alias(false)` reaches the paint the layer tree records",
     );
 }

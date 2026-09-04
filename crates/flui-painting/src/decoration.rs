@@ -102,6 +102,43 @@ fn resolve_silhouette(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) ->
     }
 }
 
+/// How a decoration is rasterized, as opposed to what it depicts.
+///
+/// Separate from [`BoxDecoration`] on purpose: that type describes an
+/// appearance and is serializable, while this is a rendering-quality hint the
+/// render object owns — the same split Flutter makes by putting
+/// `isAntiAlias` on `_RenderColoredBox` rather than on any decoration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DecorationPaintOptions {
+    /// Whether the decoration's solid-colour background is anti-aliased.
+    ///
+    /// `true` by default, matching Flutter's `Paint.isAntiAlias`. Turning it
+    /// off is for a box whose edges are already pixel-aligned, where the
+    /// feathered edge is a blur rather than a smoothing.
+    ///
+    /// **Reaches the colour fill only.** Borders, shadows and images keep the
+    /// default because the reference says nothing about them here; gradient
+    /// backgrounds keep it because `DrawGradient`/`DrawGradientRRect` carry a
+    /// shader and no `Paint`, leaving nowhere to put the flag. Both limits are
+    /// stated at the call site in `paint_box_decoration`.
+    pub anti_alias: bool,
+}
+
+impl Default for DecorationPaintOptions {
+    fn default() -> Self {
+        Self { anti_alias: true }
+    }
+}
+
+impl DecorationPaintOptions {
+    /// Options with `anti_alias` set to `value`.
+    #[must_use]
+    pub const fn with_anti_alias(value: bool) -> Self {
+        Self { anti_alias: value }
+    }
+}
+
 /// Paints `decoration` into `rect` on `canvas` in Flutter's order:
 /// shadows, then background color/gradient, then the decoration image,
 /// then the border.
@@ -109,6 +146,7 @@ pub fn paint_box_decoration(
     canvas: &mut Canvas,
     rect: Rect<Pixels>,
     decoration: &BoxDecoration<Pixels>,
+    options: DecorationPaintOptions,
 ) {
     let silhouette = resolve_silhouette(rect, decoration);
 
@@ -175,6 +213,12 @@ pub fn paint_box_decoration(
                 // (`wgpu/backend.rs`); a solid fallback color here would
                 // make the circle the only gradient-silhouette that paints
                 // something visible from a stopless shader.
+                // Deliberately NOT `options.anti_alias`: see the scope note
+                // on the colour arm below. This silhouette could carry it —
+                // it goes through a `Paint` — but its rect and rrect
+                // neighbours cannot, and one gradient shape smoothing
+                // differently from the others is worse than a limitation
+                // that holds uniformly.
                 let paint = Paint::fill(Color::TRANSPARENT).with_shader(shader);
                 canvas.draw_circle(circle.center, circle.radius, &paint);
             }
@@ -182,7 +226,21 @@ pub fn paint_box_decoration(
             Silhouette::Rect => canvas.draw_gradient(rect, shader),
         }
     } else if let Some(color) = decoration.color {
-        let paint = Paint::fill(color);
+        // `options.anti_alias` reaches THIS arm — the solid colour fill — and
+        // nothing else.
+        //
+        // Not the border, shadow or image: Flutter's `isAntiAlias` is a
+        // `ColoredBox` parameter and a `ColoredBox` has none of those, so
+        // nothing in the reference says what they should do when it is off.
+        //
+        // Not the gradients either, and that one is a capability limit rather
+        // than a choice: `DrawGradient`/`DrawGradientRRect` carry a shader and
+        // no `Paint`, so there is nowhere to put the flag without widening the
+        // closed `DrawCommand` enum that is the trust boundary with the wgpu
+        // backend. A gradient-filled `ColoredBox` does not exist — the widget
+        // is colour-only — so the only reachable case is a `DecoratedBox`
+        // gradient, where the reference has no anti-alias knob at all.
+        let paint = Paint::fill(color).with_anti_alias(options.anti_alias);
         match &silhouette {
             Silhouette::Circle(circle) => canvas.draw_circle(circle.center, circle.radius, &paint),
             Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
