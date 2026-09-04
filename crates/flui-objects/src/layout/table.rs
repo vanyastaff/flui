@@ -1011,7 +1011,9 @@ impl RenderBox for RenderTable {
         // never given an offset, and painting it would put it at whatever
         // stale or default offset it happened to carry. `hit_test` bounds
         // itself the same way, so what is drawn and what is touchable agree.
-        ctx.paint_children();
+        for index in 0..row_count * self.column_count {
+            ctx.paint_child(index);
+        }
 
         // 3. Table border, on top of everything (table.dart:1508-1525).
         if let Some(border) = &self.border {
