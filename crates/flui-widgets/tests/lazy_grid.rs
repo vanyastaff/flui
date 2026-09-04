@@ -24,9 +24,10 @@ fn two_column_delegate() -> Arc<dyn SliverGridDelegate> {
 // ============================================================================
 
 /// A 2-column grid over 4 items whose combined extent (2 rows × 100 px = 200
-/// px) fits within a 200 px-tall viewport must have exactly 4 tile render
-/// nodes after settling, plus 1 for `RenderViewport` and 1 for
-/// `RenderSliverGrid`.
+/// px) fits within a 200 px-tall viewport must have exactly 4 tiles after
+/// settling — each a `RenderRepaintBoundary` over its `RenderSizedBox`, since
+/// `GridView` wraps items in repaint boundaries by default — plus 1 for
+/// `RenderViewport` and 1 for `RenderSliverGrid`: 10 render nodes.
 #[test]
 fn lazy_grid_view_builder_builds_visible_tiles() {
     let mut laid = lay_out(
@@ -45,7 +46,8 @@ fn lazy_grid_view_builder_builds_visible_tiles() {
     // tick2: sliver dirty → laid out with real tiles.
     laid.tick();
 
-    // Expected: 1 (RenderViewport) + 1 (RenderSliverGrid) + 4 (tiles) = 6.
+    // Expected: 1 (RenderViewport) + 1 (RenderSliverGrid) + 4 tiles × 2
+    // (`RenderRepaintBoundary` over `RenderSizedBox`) = 10.
     let nodes_after_settle = laid.render_node_count();
     assert_eq!(
         nodes_after_settle, 10,
