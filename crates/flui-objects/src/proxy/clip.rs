@@ -214,6 +214,16 @@ pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'sta
     /// shape is unreachable.
     fn contains(&self, position: Point<Pixels>) -> bool;
 
+    /// An axis-aligned rect that CONTAINS this clip, in local coordinates.
+    ///
+    /// A conservative superset is allowed and expected — "approximate" is the
+    /// reference's own word for it, and the semantics walk that consumes this
+    /// only needs to know what is certainly outside. Returning something
+    /// SMALLER than the true clip would drop content from the accessibility
+    /// tree that is really on screen, which is the one direction that is a
+    /// defect rather than a missed optimisation.
+    fn approximate_bounds(&self, size: Size) -> Rect<Pixels>;
+
     /// Resolves an owner-local path clip target for this geometry, when the
     /// shape supports it.
     ///
@@ -254,6 +264,10 @@ pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'sta
 impl ClipGeometry for Rect<Pixels> {
     const DIAGNOSTIC_NAME: &'static str = "RenderClipRect";
 
+    fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
+        *self
+    }
+
     fn default_for_size(size: Size) -> Self {
         Rect::from_origin_size(Point::ZERO, size)
     }
@@ -276,6 +290,12 @@ impl ClipGeometry for Rect<Pixels> {
 
 impl ClipGeometry for RRect {
     const DIAGNOSTIC_NAME: &'static str = "RenderClipRRect";
+
+    fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
+        // The corners round INWARD, so the bounding rect is a superset — the
+        // allowed direction.
+        self.bounding_rect()
+    }
 
     fn default_for_size(size: Size) -> Self {
         RRect::from_rect(Rect::from_origin_size(Point::ZERO, size))
@@ -369,6 +389,11 @@ impl ClipGeometry for RRect {
 impl ClipGeometry for Oval {
     const DIAGNOSTIC_NAME: &'static str = "RenderClipOval";
 
+    fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
+        // The inscribed ellipse is contained by its own bounding rect.
+        self.bounds
+    }
+
     fn default_for_size(size: Size) -> Self {
         Oval::from_size(size)
     }
@@ -398,6 +423,17 @@ impl ClipGeometry for Oval {
 
 impl ClipGeometry for Path {
     const DIAGNOSTIC_NAME: &'static str = "RenderClipPath";
+
+    fn approximate_bounds(&self, size: Size) -> Rect<Pixels> {
+        // The whole box, not the path's own bounds. `Path::bounds` takes
+        // `&mut self` because it memoizes, and this hook has `&self` — so the
+        // honest options were a conservative superset or a lock. A superset is
+        // what the contract asks for, and it is safe in the direction that
+        // matters: a `ClipPath` narrows no accessibility rect it should have
+        // narrowed, rather than dropping one it should have kept. Tightening
+        // it means giving `Path` a `&self` bounds accessor first.
+        Rect::from_origin_size(Point::ZERO, size)
+    }
 
     fn default_for_size(size: Size) -> Self {
         // A path-shaped default is the rectangle outline of `size`.
@@ -679,6 +715,29 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         let size = ctx.size();
         self.resolve_clip(size)
             .with_clip_scope(ctx, self.clip_behavior, |ctx| ctx.paint_child());
+    }
+
+    /// Content this clip paints over carries no accessibility presence.
+    ///
+    /// Oracle: `_RenderCustomClip.describeApproximatePaintClip`
+    /// (`rendering/proxy_box.dart`) returns the clip when the behaviour is not
+    /// `none`. Without this the semantics walk saw the trait's `None` default,
+    /// so a `ClipRect` published full-size rects for children it visibly cut
+    /// in half — the clip was honoured by paint and by hit-test, and by
+    /// nothing a screen reader could see.
+    ///
+    /// No `describe_semantics_clip` counterpart: a clip keeps no cache area
+    /// the way a viewport does, so it has nothing wider than its paint clip to
+    /// grant. Content it clips away is gone, not merely off-screen.
+    fn describe_approximate_paint_clip(
+        &self,
+        _child_slot: usize,
+        size: Size,
+    ) -> Option<Rect<Pixels>> {
+        if self.clip_behavior == Clip::None {
+            return None;
+        }
+        Some(self.resolve_clip(size).approximate_bounds(size))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

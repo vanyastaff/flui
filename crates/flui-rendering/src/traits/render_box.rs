@@ -532,6 +532,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     fn describe_approximate_paint_clip(
         &self,
         _child_slot: usize,
+        _size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
         None
     }
@@ -543,6 +544,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
+        _size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
         None
     }
@@ -856,15 +858,17 @@ where
     fn describe_approximate_paint_clip(
         &self,
         child_slot: usize,
+        size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
-        <T as RenderBox>::describe_approximate_paint_clip(self, child_slot)
+        <T as RenderBox>::describe_approximate_paint_clip(self, child_slot, size)
     }
 
     fn describe_semantics_clip(
         &self,
         child_slot: usize,
+        size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
-        <T as RenderBox>::describe_semantics_clip(self, child_slot)
+        <T as RenderBox>::describe_semantics_clip(self, child_slot, size)
     }
 
     fn reassemble(&mut self) {

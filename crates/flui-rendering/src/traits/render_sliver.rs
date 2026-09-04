@@ -456,6 +456,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn describe_approximate_paint_clip(
         &self,
         _child_slot: usize,
+        _size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
         None
     }
@@ -467,6 +468,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
+        _size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
         None
     }
@@ -631,15 +633,17 @@ where
     fn describe_approximate_paint_clip(
         &self,
         child_slot: usize,
+        size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
-        <T as RenderSliver>::describe_approximate_paint_clip(self, child_slot)
+        <T as RenderSliver>::describe_approximate_paint_clip(self, child_slot, size)
     }
 
     fn describe_semantics_clip(
         &self,
         child_slot: usize,
+        size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
-        <T as RenderSliver>::describe_semantics_clip(self, child_slot)
+        <T as RenderSliver>::describe_semantics_clip(self, child_slot, size)
     }
 
     fn reassemble(&mut self) {

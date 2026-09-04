@@ -174,12 +174,19 @@ Three departures from Flutter, all deliberate:
   the clip; FLUI has no `SliverEnsureSemantics` to set it, so shipping the flag would be a seam
   with no consumer. It plugs into `describe_semantics_clip`'s early return when that widget is
   ported.
-- **The hooks take a child SLOT, not a child object.** Flutter passes the `RenderObject` and the
-  viewport reads `child.constraints`; FLUI's committed result already holds the per-slot value, so
-  the slot is enough and no downcast is needed.
-- **`RenderClip` does not implement them yet.** A `ClipRect` widget therefore still publishes
-  accessibility rects for content it paints over. That is an unshipped consumer of a now-general
-  hook, not a regression. Tracked as issue #847.
+- **The hooks take a child SLOT and the node's own SIZE, not a child object.** Flutter passes the
+  `RenderObject` and the viewport reads `child.constraints`; FLUI's committed result already holds
+  the per-slot value, so the slot is enough and no downcast is needed. The size parameter arrived
+  with the second implementor (`RenderClip`, issue #847): a clip is always a function of the box it
+  clips, and without it every implementor has to commit its own copy of a value the semantics walk
+  already holds — and keep that copy honest across every layout path. The viewport's own
+  `committed_clips.size` was deleted when the parameter landed; only the resolved cache extent,
+  which the walk cannot derive, is still committed.
+- **`RenderClip` implements the paint clip since issue #847.** It reports its resolved shape's
+  approximate bounds, and `None` for `Clip::None` — the same rule the paint side follows. There is
+  no `describe_semantics_clip` counterpart: a clip keeps no cache area the way a viewport does, so
+  it has nothing wider than its paint clip to grant. Content a clip cuts away is gone, not merely
+  off-screen.
 
 The clips are applied when semantics is ASSEMBLED, and FLUI does not re-assemble after a
 layout-only change: nothing marks a node's semantics dirty when it lays out, where Flutter calls

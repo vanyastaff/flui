@@ -705,6 +705,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     fn describe_approximate_paint_clip(
         &self,
         _child_slot: usize,
+        _size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
         None
     }
@@ -729,6 +730,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
+        _size: flui_types::Size,
     ) -> Option<flui_types::Rect<flui_types::Pixels>> {
         None
     }
