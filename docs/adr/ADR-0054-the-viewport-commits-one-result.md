@@ -51,12 +51,14 @@ committed that loop's result were inconsistent with each other and with Flutter
    viewport or content dimensions to the scroll position, so the user's offset survives a broken
    child; publishing resumes when the child recovers. Its size is always what the current
    constraints admit, never a stored size a new constraint might reject.
-3. **Flutter's center model, `anchor`, and the wired `center_offset_adjustment`.** `center` is the
-   first forward child; the reverse group is the prefix before it, walked backwards and laid out
-   first, its correction negated; `anchor` places the center at `main_axis_extent × anchor`; the
-   content dimensions carry the anchor terms; a `center` past the last child is invalid. The name
-   changes (`center_sliver_index` → `center`) so every caller of the old semantics is found by the
-   compiler. The sliver hook `center_offset_adjustment`, which existed unwired, joins the loop.
+3. **Flutter's center model and `anchor`.** `center` is the first forward child; the reverse group
+   is the prefix before it, walked backwards and laid out first, its correction negated; `anchor`
+   places the center at `main_axis_extent × anchor`; the content dimensions carry the anchor
+   terms; a `center` past the last child is invalid. The name changes (`center_sliver_index` →
+   `center`) so every caller of the old semantics is found by the compiler. The sliver hook
+   `center_offset_adjustment` — unwired, with zero overrides anywhere in the codebase or in
+   Flutter's own sliver family — is deleted rather than wired; see "Status of the decisions" for
+   the reasoning.
 4. **`clip_behavior`** on both viewports (default `HardEdge`, `None` clips nothing); the paint clip
    a child sees is the viewport's bounds shrunk by the previous sliver's overlap (Flutter's
    `describeApproximatePaintClip`); the semantics clip is the bounds extended by the cache extent
@@ -85,7 +87,44 @@ next: the walk counts every degradation event (a layout that failed and handed i
 stand-in, or a poisoned node that served one), a layout context reports whether that count moved
 during its node's pass, and both viewports publish no scroll dimensions from such a pass — pinned
 at one level and at two levels below the viewport, each reading a clamped offset without the
-guard. Decisions 3 and 4 land in that order as separate changes; decision 5 needs no code.
+guard. Decision 3 landed third:
+
+- `RenderViewport`'s `center_sliver_index: Option<usize>` (forward prefix, reverse suffix) is
+  renamed `center: Option<usize>` and re-meant to Flutter's model: the first FORWARD child: the
+  prefix `[0, center)` is the reverse group, walked backwards (`center - 1` down to `0`) and laid
+  out FIRST, its correction returned negated; the suffix `[center, child_count)` is the forward
+  group, laid out second, always. `None` still means "every child forward" (`center == 0`).
+  `Some(n) == child_count` — FLUI's old "no center" spelling — is no longer meaningful under this
+  model (Flutter's center is always a direct child): `debug_assert!`ed and, in release, clamped
+  to the last child with a one-time warning.
+  `anchor: f32` (default `0.0`) is new alongside it, driving `_attemptLayout`'s formulas verbatim
+  (`centerOffset`, the reverse/forward remaining-paint/cache-extent splits, the reverse group's
+  hardcoded `overlap: 0.0`, the forward group's `overlap` folding in the leading-edge overscroll
+  only when there is no reverse group ahead of it) and the anchor terms in
+  `applyContentDimensions`'s accepted range. `RenderShrinkWrappingViewport` gets neither — Flutter
+  gives it no `center`/`anchor` either, and it keeps its all-forward, no-center layout unchanged.
+- The obstruction bookkeeping (`sliver_obstruction_extents`, `max_scroll_obstruction_extent_before`)
+  is re-keyed from layout-visit order (a push per child, in the order `layout_child_sequence`
+  happened to walk them) to absolute child-slot order (an index-sized `Vec` written by index),
+  and the query is direction-aware: a forward child sums `[center, child_index)`, a reverse child
+  sums `(child_index, center)` — the slivers closer to `center` than it. A pin
+  (`viewport_max_scroll_obstruction_extent_before_is_keyed_by_slot_not_layout_order`) exercises a
+  3-child, `center: Some(2)` tree where visit order and index order actually disagree and shows
+  the push-order/`.take(child_index)` reading swaps what indices 0 and 1 report.
+- `RenderSliver::center_offset_adjustment` — the sliver hook `viewport.dart`'s loop reads once per
+  frame (`offset.pixels + centerOffsetAdjustment`) — is DELETED rather than wired. It had exactly
+  one implementation in the whole codebase (the trait's own `0.0` default) and zero overrides
+  anywhere in FLUI's port of Flutter's own sliver family either (Flutter's base `RenderSliver`
+  also just returns `0.0`; nothing in `rendering/*.dart` overrides it) — wiring it would mean a
+  new cross-protocol callback (a `SliverCenterOffsetAdjustmentCallback` alongside
+  `SliverLayoutChildCallback`, threaded through `ErasedBoxLayoutCtx`, `BoxLayoutCtxErased`,
+  `LayoutContext`, and `layout_dirty_root`'s closure construction) for a value that can only ever
+  evaluate to `0.0` today. Deleting the always-zero hook and using `self.offset.pixels()` directly
+  is behaviorally identical to wiring it, so nothing observable changes; if a future sliver family
+  genuinely grows in both directions from one scroll offset, the hook is cheap to re-add with a
+  real caller at that point.
+
+Decision 4 lands next as a separate change; decision 5 needs no code.
 
 The degradation query is deliberately a count-since-context-creation rather than a failure flag:
 the pipeline catches a failure in the failing node's own walk frame and hands the parent a

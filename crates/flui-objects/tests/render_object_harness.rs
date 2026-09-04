@@ -7722,33 +7722,77 @@ fn harness_viewport_forward_overlap_is_zero_without_leading_reverse_group() {
     );
 }
 
+// Under FLUI's old `center_sliver_index`, `Some(1)` split the two children
+// [0,1) forward / [1,2) reverse — child 0 ("forward_filler") was forward,
+// child 1 ("fill") was reverse, and the forward group's own absolute scroll
+// offset (`corrected_offset.max(0.0)`) fed straight into "fill"'s
+// `sliver_scroll_offset`. Under Flutter's model `center` is the first
+// FORWARD child, so `center: Some(1)` now makes child 0 the REVERSE group
+// and child 1 ("fill") the FORWARD group instead — and a forward group's own
+// `sliver_scroll_offset` is `(-center_offset).max(0.0)`, which is `0.0`
+// whenever `center_offset >= 0.0`. With only "fill" in the forward group
+// (whose `scroll_extent` is pinned to `viewport_main_axis_extent`), the
+// accepted-offset upper bound is exactly `main_axis_extent * anchor`, the
+// same point where `center_offset` reaches `0.0` — so THIS sliver, alone,
+// can never see a nonzero `sliver_scroll_offset` at a settled offset, and a
+// wrongly-negative `overlap` becomes numerically invisible (`to = extent`
+// saturates against `b` either way; a first attempt with this shape
+// confirmed 100.0 both before and after deliberately reintroducing the sign
+// bug). A second forward sibling AFTER "fill" (contributing its own
+// `scroll_extent` to `max_scroll_extent`) raises that bound past
+// `main_axis_extent * anchor`, so a legitimate offset can push
+// `center_offset` negative and give "fill" — still the FIRST forward
+// child, still the one `overlap` is computed for — a real nonzero
+// `sliver_scroll_offset`.
+//
+// Hand arithmetic (`anchor: 0.5`, `offset: 70.0`, 100px viewport,
+// `reverse_filler` 250px, `fill`, `trailing_filler` 60px):
+//   max_scroll_extent = 100 (fill, pinned) + 60 (trailing_filler) = 160
+//   accepted range: min = (-250 + 100*0.5).min(0) = -200,
+//                   max = (160 - 100*0.5).max(0) = 110 — 70 is within it,
+//                   so the offset settles at 70 unclamped.
+//   center_offset = 100*0.5 - 70 = -20
+//   forward group's own scroll_offset = (-(-20)).max(0) = 20 (nonzero!)
+//   forward_remaining_paint_extent = clamp(100-(-20), 0, 100) = 100
+//   "fill" is the first forward child: remaining_paint_extent == 100,
+//     overlap == 0 (has_reverse_group hardcodes it), sliver_scroll_offset == 20
+//   extent = remaining_paint_extent - overlap.min(0.0) = 100 - 0 = 100
+//   paint_extent = (100.min(20+100) - 0.max(20)).max(0) = 100 - 20 = 80
+// A wrongly-negative overlap (say -30, reintroducing the old sign bug)
+// would inflate `extent` to 130, but `to.min(b)` caps it at `b = 20+100 =
+// 120`, giving `paint_extent = 120 - 20 = 100` — a different, provably
+// wrong number this assertion catches.
 #[test]
 fn harness_viewport_reverse_group_overlap_is_always_zero() {
     let mut viewport = RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
-        ScrollableViewportOffset::new(50.0),
+        ScrollableViewportOffset::new(70.0),
     );
-    // `center_sliver_index(1)` splits the two children: child 0 (a plain
-    // filler) lays out with forward growth, giving the viewport real forward
-    // scroll range so `50.0` is a valid, unclamped offset; child 1 lays out
-    // with reverse growth — the oracle's `leadingNegativeChild` case, where
-    // `overlap` must be `0.0` for BOTH sequences (not just the forward one).
     assert_eq!(
-        viewport.set_center_sliver_index(Some(1)),
+        viewport.set_center(Some(1)),
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    );
+    assert_eq!(
+        viewport.set_anchor(0.5),
         flui_rendering::RenderUpdateImpact::LAYOUT
     );
     let node = box_node(viewport)
         .label("viewport")
         .child(
             sliver_node(RenderSliverToBoxAdapter::new())
-                .label("forward_filler")
-                .child(box_node(RenderColoredBox::red(300.0, 250.0)).label("forward_child")),
+                .label("reverse_filler")
+                .child(box_node(RenderColoredBox::red(300.0, 250.0)).label("reverse_child")),
         )
         .child(
             sliver_node(RenderSliverFillRemainingWithScrollable::new())
                 .label("fill")
                 .child(box_node(RenderColoredBox::green(300.0, 10.0)).label("fill_child")),
+        )
+        .child(
+            sliver_node(RenderSliverToBoxAdapter::new())
+                .label("trailing_filler")
+                .child(box_node(RenderColoredBox::blue(300.0, 60.0)).label("trailing_child")),
         );
 
     let run = RenderTester::mount(node)
@@ -7757,12 +7801,12 @@ fn harness_viewport_reverse_group_overlap_is_always_zero() {
 
     assert_eq!(
         run.sliver_geometry(run.id("fill")).paint_extent,
-        50.0,
-        "the reverse sequence must also report overlap == 0.0 (oracle: \
-         unconditionally, `rendering/viewport.dart:1818`); before the fix \
-         this reverse-group sliver saw the same wrongly-negative overlap \
-         (inherited from the forward sequence's buggy value) and reported an \
-         un-clamped paint_extent of 100.0",
+        80.0,
+        "the forward sequence must report overlap == 0.0 whenever a reverse \
+         group exists (oracle: unconditionally, `rendering/viewport.dart:1818`, \
+         mirrored onto the forward branch by `has_reverse_group`); a \
+         wrongly-negative overlap would inflate this to 100.0 (see the \
+         hand arithmetic above)",
     );
 }
 

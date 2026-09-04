@@ -206,8 +206,19 @@ fn viewport_hit_direction_matrix_matches_box_host_semantics() {
         AxisDirection::LeftToRight,
         ScrollableViewportOffset::zero(),
     );
+    // Flutter's `center` is always a direct child, so a lone reverse-growth
+    // sliver (FLUI's old `center_sliver_index(Some(0))` == "all reverse") is
+    // unrepresentable — it becomes a reverse child (index 0) before a
+    // forward filler (index 1), with `anchor: 1.0` giving the reverse group
+    // the WHOLE viewport (`center_offset == main_axis_extent`). That
+    // reproduces the exact same paint offset (y = 100*anchor - extent = 60)
+    // as the old all-reverse layout, so the hit position below is unchanged.
     assert_eq!(
-        viewport.set_center_sliver_index(Some(0)),
+        viewport.set_center(Some(1)),
+        flui_rendering::RenderUpdateImpact::LAYOUT,
+    );
+    assert_eq!(
+        viewport.set_anchor(1.0),
         flui_rendering::RenderUpdateImpact::LAYOUT,
     );
     let root_id = owner.insert(Box::new(viewport));
@@ -218,6 +229,13 @@ fn viewport_hit_direction_matrix_matches_box_host_semantics() {
             Box::new(MainAxisBandSliver::new(40.0, 0.0, 15.0)) as BoxedSliverObject,
         )
         .expect("sliver");
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(MainAxisBandSliver::new(20.0, 0.0, 15.0)) as BoxedSliverObject,
+        )
+        .expect("forward filler — laid out with zero remaining_paint_extent under anchor 1.0");
 
     let owner = laid_out(owner, root_id);
 
