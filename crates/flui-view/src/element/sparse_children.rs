@@ -384,23 +384,33 @@ impl SparseChildren {
                         );
                         any_work = true;
                     }
-                    tree.update(resident.id, view, owner);
+                    let live = match update_or_replace_resident(
+                        resident.id,
+                        *index,
+                        view,
+                        host,
+                        tree,
+                        owner,
+                        pipeline,
+                    ) {
+                        Ok(()) => resident.id,
+                        Err(replacement) => {
+                            any_work = true;
+                            replacement
+                        }
+                    };
                     // Mirrors the dense reconciler's post-update scheduling
                     // (`tree/id_reconcile.rs`): an update that left the child
                     // clean (its own `should_skip_rebuild` memoization fired)
                     // must not be pushed onto the build heap.
-                    if let Some(node) = tree.get(resident.id)
+                    if let Some(node) = tree.get(live)
                         && node.element().is_dirty()
                     {
                         let depth = node.depth();
-                        owner.schedule_build_for(
-                            resident.id,
-                            depth,
-                            crate::RebuildReason::ParentUpdate,
-                        );
+                        owner.schedule_build_for(live, depth, crate::RebuildReason::ParentUpdate);
                         any_work = true;
                     }
-                    next.insert(*index, resident.id);
+                    next.insert(*index, live);
                 }
             } else if in_band(*index) {
                 let child = mount_sparse_child(*index, view, host, tree, owner, pipeline);
@@ -449,7 +459,33 @@ pub(crate) struct ReconcileOutcome {
     pub(crate) end_reached_at: Option<usize>,
 }
 
-/// Mount `view` at `logical_index` under `host` and stamp its render node(s).
+/// Mount `view` at `logical_index`, substituting the registered `ErrorView`
+/// when the mount itself panics — the boundary one level up from
+/// [`build_item_or_error`], which bounds only the *builder*.
+///
+/// The panic this exists for is a user `View::create_render_object`, which
+/// `ElementTree::insert` reaches through `RenderBehavior::on_mount`. An item's
+/// `build` is already bounded a level below, by `build_or_recover` in the
+/// stateless/stateful behaviours, so this covers what that one cannot see.
+///
+/// # Why the tree is usable again after the catch
+///
+/// A panic out of `mount` strands a node that is in the slab and parented,
+/// and announced nowhere: the `Mount` event, the `GlobalKey` registration,
+/// the ancestor parent-data pass and the render-reorder flag all come *after*
+/// `mount` in `insert`, and `insert` never writes the parent's `child_ids`
+/// (a sparse host tracks residency itself, in `by_logical_index`). So the
+/// only reference to it is the id `insert_reporting_id` hands back, and
+/// `remove_finalized` retires exactly that much. The pipeline is not poisoned
+/// either — `PipelineCell::with_mut` holds a `RefMut` that drops on unwind,
+/// so the owner is free again.
+///
+/// For the case this bounds there is nothing else to undo: a user
+/// `create_render_object` runs *before* the `with_mut` that inserts into the
+/// render tree, so a panic there leaves no render node behind. A panic from
+/// inside that `with_mut` (adoption, the sliver-index stamp) would strand one
+/// render node; those are FLUI-internal `BUG:` paths, not user code, and this
+/// boundary does not pretend to make them recoverable.
 fn mount_sparse_child(
     logical_index: usize,
     view: &dyn View,
@@ -457,6 +493,111 @@ fn mount_sparse_child(
     tree: &mut ElementTree,
     owner: &mut ElementOwner<'_>,
     pipeline: &PipelineCell,
+) -> ElementId {
+    let mut minted = None;
+    let mounted = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        mount_sparse_child_unbounded(
+            logical_index,
+            view,
+            host,
+            tree,
+            owner,
+            pipeline,
+            &mut minted,
+        )
+    }));
+    match mounted {
+        Ok(child) => child,
+        Err(payload) => {
+            if let Some(stranded) = minted.take() {
+                tree.remove_finalized(stranded, owner);
+            }
+            let error = crate::view::FlutterError::from_panic(
+                payload.as_ref(),
+                format!("mounting lazy sliver child {logical_index}"),
+            );
+            tracing::error!(
+                logical_index,
+                "lazy sliver child panicked while mounting; substituting ErrorView: {}",
+                error.message
+            );
+            let recovery = recovery_view_for(&error);
+            // Deliberately unbounded: if the registered error-view factory
+            // panics on mount too, there is nothing left to substitute, and
+            // the crash names a broken factory instead of hiding it.
+            mount_sparse_child_unbounded(
+                logical_index,
+                recovery.0.as_ref(),
+                host,
+                tree,
+                owner,
+                pipeline,
+                &mut None,
+            )
+        }
+    }
+}
+
+/// Apply `view` to the resident at `resident_id`, substituting the registered
+/// `ErrorView` when the update panics.
+///
+/// Returns `Err(replacement)` with the id of the freshly mounted error child
+/// when it had to substitute; the caller re-points its residency map at it.
+///
+/// The panic this bounds is a user `View::update_render_object`, which runs
+/// inside `RenderBehavior::on_update`'s `with_mut` — half-applied, and with
+/// `apply_render_update_impact` never reached, so the render object can be
+/// left carrying part of a new configuration that nothing marked dirty. That
+/// is why the recovery removes the resident outright rather than keeping it:
+/// a silently stale subtree is the one outcome worse than a visible error.
+fn update_or_replace_resident(
+    resident_id: ElementId,
+    logical_index: usize,
+    view: &dyn View,
+    host: ElementId,
+    tree: &mut ElementTree,
+    owner: &mut ElementOwner<'_>,
+    pipeline: &PipelineCell,
+) -> Result<(), ElementId> {
+    let updated = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        tree.update(resident_id, view, owner);
+    }));
+    match updated {
+        Ok(()) => Ok(()),
+        Err(payload) => {
+            let error = crate::view::FlutterError::from_panic(
+                payload.as_ref(),
+                format!("updating lazy sliver child {logical_index}"),
+            );
+            tracing::error!(
+                logical_index,
+                "lazy sliver child panicked while updating; substituting ErrorView: {}",
+                error.message
+            );
+            tree.remove_subtree(resident_id, owner, crate::tree::SubtreeRemoval::Finalize);
+            let recovery = recovery_view_for(&error);
+            Err(mount_sparse_child_unbounded(
+                logical_index,
+                recovery.0.as_ref(),
+                host,
+                tree,
+                owner,
+                pipeline,
+                &mut None,
+            ))
+        }
+    }
+}
+
+/// Mount `view` at `logical_index` under `host` and stamp its render node(s).
+fn mount_sparse_child_unbounded(
+    logical_index: usize,
+    view: &dyn View,
+    host: ElementId,
+    tree: &mut ElementTree,
+    owner: &mut ElementOwner<'_>,
+    pipeline: &PipelineCell,
+    minted: &mut Option<ElementId>,
 ) -> ElementId {
     // Declare `host` as the parent being reconciled for the duration of
     // this insert. `ElementTree::insert` refuses to relocate an active
@@ -469,7 +610,7 @@ fn mount_sparse_child(
     // installs — which `begin_reconcile` asserts against.
     let child = {
         let _reconcile_guard = tree.begin_reconcile(host);
-        tree.insert(view, host, logical_index, owner)
+        tree.insert_reporting_id(view, host, logical_index, owner, minted)
     };
     stamp_logical_index(tree, pipeline, child, logical_index);
 
@@ -523,19 +664,26 @@ pub(crate) fn build_item_or_error(
                 "lazy sliver builder panicked; substituting ErrorView: {}",
                 error.message
             );
-            let recovered = crate::view::ErrorView::build_error_view(&error);
-            // A recovered item must be unkeyed, whatever the registered
-            // error-view factory returned: a keyed one would take part in the
-            // reconcile's key matching, and a `GlobalKey` would trigger a
-            // retake, instead of staying isolated to the failed index.
-            if recovered.key().is_some() {
-                Some(BoxedView(Box::new(UnkeyedRecovery {
-                    inner: BoxedView(recovered),
-                })))
-            } else {
-                Some(BoxedView(recovered))
-            }
+            Some(recovery_view_for(&error))
         }
+    }
+}
+
+/// The substitute view for an item that failed at `index`, whatever the stage
+/// it failed at (builder, mount, or update).
+///
+/// A recovered item must be unkeyed, whatever the registered error-view
+/// factory returned: a keyed one would take part in the reconcile's key
+/// matching, and a `GlobalKey` would trigger a retake, instead of staying
+/// isolated to the failed index.
+fn recovery_view_for(error: &crate::view::FlutterError) -> BoxedView {
+    let recovered = crate::view::ErrorView::build_error_view(error);
+    if recovered.key().is_some() {
+        BoxedView(Box::new(UnkeyedRecovery {
+            inner: BoxedView(recovered),
+        }))
+    } else {
+        BoxedView(recovered)
     }
 }
 
@@ -1222,6 +1370,8 @@ mod reconcile_tests {
     //! residents, a swap), plus the panic boundary.
 
     use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use flui_foundation::{ValueKey, ViewKey};
     use flui_objects::RenderSizedBox;
@@ -1229,7 +1379,7 @@ mod reconcile_tests {
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     use flui_types::geometry::px;
 
-    use super::{ReconcileSource, SparseChildren, build_item_or_error};
+    use super::{ReconcileOutcome, ReconcileSource, SparseChildren, build_item_or_error};
     use crate::view::{RenderView, View};
     use crate::{BoxedView, BuildOwner, ElementTree};
 
@@ -1598,6 +1748,221 @@ mod reconcile_tests {
             recovered.0.key().is_none(),
             "the recovered item must be unkeyed"
         );
+    }
+
+    /// A render view whose `create_render_object` panics — the user code
+    /// `ElementTree::insert` reaches through `RenderBehavior::on_mount`, one
+    /// level past the builder boundary.
+    #[derive(Clone)]
+    struct PanicsOnCreate;
+
+    impl RenderView for PanicsOnCreate {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            panic!("create_render_object boom")
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for PanicsOnCreate {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    /// A render view whose `update_render_object` panics once `armed` is set,
+    /// so one reconcile can mount it cleanly and the next can fail it.
+    #[derive(Clone)]
+    struct PanicsOnUpdate {
+        armed: Arc<AtomicBool>,
+    }
+
+    impl RenderView for PanicsOnUpdate {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            assert!(
+                !self.armed.load(Ordering::SeqCst),
+                "update_render_object boom"
+            );
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for PanicsOnUpdate {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    /// The type of the view an element was mounted from.
+    fn view_type_of(fx: &Fixture, id: flui_foundation::ElementId) -> std::any::TypeId {
+        fx.tree
+            .get(id)
+            .expect("a live element")
+            .element()
+            .view_type_id()
+    }
+
+    fn reconcile_with(
+        fx: &mut Fixture,
+        builder: &dyn Fn(usize) -> Option<BoxedView>,
+        item_count: usize,
+    ) -> ReconcileOutcome {
+        let mut element_owner = fx.owner.element_owner_mut();
+        fx.sparse.reconcile(
+            ReconcileSource {
+                builder,
+                find_index_by_key: None,
+                item_count,
+                retain_band: (0, usize::MAX),
+            },
+            fx.host,
+            &mut fx.tree,
+            &mut element_owner,
+            &fx.pipeline,
+        )
+    }
+
+    /// The boundary one level up from the builder: a panic inside the item's
+    /// own `create_render_object` substitutes the error view at that index and
+    /// leaves every other index mounted. Without it the panic unwinds out of
+    /// `reconcile`, through the service pass, and takes the frame down.
+    /// Mount `view` at `index` the way the band walker does.
+    fn ensure_at(fx: &mut Fixture, index: usize, view: &dyn View) -> flui_foundation::ElementId {
+        let mut element_owner = fx.owner.element_owner_mut();
+        fx.sparse.ensure(
+            index,
+            view,
+            fx.host,
+            &mut fx.tree,
+            &mut element_owner,
+            &fx.pipeline,
+        )
+    }
+
+    #[test]
+    fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
+        let mut fx = fixture();
+        ensure_at(&mut fx, 0, &KeyedBox::new(0));
+        ensure_at(&mut fx, 1, &PanicsOnCreate);
+        ensure_at(&mut fx, 2, &KeyedBox::new(2));
+
+        assert_eq!(fx.sparse.len(), 3, "every index is resident");
+        let failed = fx.sparse.get(1).expect("index 1 is resident");
+        assert_eq!(
+            view_type_of(&fx, failed),
+            std::any::TypeId::of::<crate::view::ErrorView>(),
+            "the failing index carries the error view"
+        );
+        for index in [0, 2] {
+            let ok = fx.sparse.get(index).expect("neighbour is resident");
+            assert_eq!(
+                view_type_of(&fx, ok),
+                std::any::TypeId::of::<KeyedBox>(),
+                "a neighbour of the failing index is untouched"
+            );
+        }
+    }
+
+    /// The stranded node a panicking mount leaves in the slab is retired, not
+    /// leaked: the tree holds the host, the two good children and the one
+    /// error child, and nothing else.
+    #[test]
+    fn a_panicking_mount_leaves_no_stranded_element_behind() {
+        let mut fx = fixture();
+        ensure_at(&mut fx, 0, &KeyedBox::new(0));
+        ensure_at(&mut fx, 2, &KeyedBox::new(2));
+        let clean = fx.tree.len();
+
+        ensure_at(&mut fx, 1, &PanicsOnCreate);
+        let recovered = fx.tree.len();
+
+        // The error child is one element (plus whatever its own view builds
+        // on a later pass, which has not run here). The half-mounted node the
+        // panic stranded would push this higher, and it is reachable through
+        // nothing but the id `insert_reporting_id` reports.
+        assert_eq!(
+            recovered,
+            clean + 1,
+            "the failed mount contributed exactly the error child"
+        );
+    }
+
+    /// A panic inside `update_render_object` cannot be left in place: the
+    /// render object is half-configured and `apply_render_update_impact` never
+    /// ran, so nothing marked it dirty. The resident is removed outright and
+    /// the error view takes its index.
+    #[test]
+    fn a_child_panicking_in_update_render_object_is_replaced_at_that_index() {
+        let mut fx = fixture();
+        let armed = Arc::new(AtomicBool::new(false));
+        let builder = {
+            let armed = Arc::clone(&armed);
+            move |i: usize| -> Option<BoxedView> {
+                Some(if i == 1 {
+                    BoxedView(Box::new(PanicsOnUpdate {
+                        armed: Arc::clone(&armed),
+                    }))
+                } else {
+                    BoxedView(Box::new(KeyedBox::new(i as u32)))
+                })
+            }
+        };
+
+        ensure_at(&mut fx, 0, &KeyedBox::new(0));
+        ensure_at(
+            &mut fx,
+            1,
+            &PanicsOnUpdate {
+                armed: Arc::clone(&armed),
+            },
+        );
+        ensure_at(&mut fx, 2, &KeyedBox::new(2));
+        let before = fx.sparse.get(1).expect("index 1 mounted cleanly");
+        assert_eq!(
+            view_type_of(&fx, before),
+            std::any::TypeId::of::<PanicsOnUpdate>()
+        );
+
+        armed.store(true, Ordering::SeqCst);
+        reconcile_with(&mut fx, &builder, 3);
+
+        let after = fx.sparse.get(1).expect("index 1 is still resident");
+        assert_ne!(after, before, "the failed resident was replaced, not kept");
+        assert_eq!(
+            view_type_of(&fx, after),
+            std::any::TypeId::of::<crate::view::ErrorView>(),
+            "the failing index carries the error view"
+        );
+        assert!(
+            fx.tree.get(before).is_none(),
+            "the failed resident left the tree"
+        );
+        for index in [0, 2] {
+            let ok = fx.sparse.get(index).expect("neighbour is resident");
+            assert_eq!(view_type_of(&fx, ok), std::any::TypeId::of::<KeyedBox>());
+        }
     }
 
     #[test]

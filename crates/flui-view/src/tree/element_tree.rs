@@ -447,6 +447,23 @@ pub(crate) enum SubtreeRemoval {
     Finalize,
 }
 
+/// The partial child order a reconcile has committed so far, which the
+/// `GlobalKey` retake preflight consults to decide whether a candidate can be
+/// relocated into this parent. Empty for an insert outside a reconcile.
+#[derive(Clone, Copy)]
+struct ProvisionalOrder<'a> {
+    reconciled_prefix: &'a [ElementId],
+    unclaimed_old_slots: &'a [Option<ElementId>],
+}
+
+impl ProvisionalOrder<'_> {
+    /// No order committed yet — a fresh insert with nothing to preflight.
+    const NONE: Self = Self {
+        reconciled_prefix: &[],
+        unclaimed_old_slots: &[],
+    };
+}
+
 impl ElementTree {
     /// Create a new empty ElementTree.
     pub fn new() -> Self {
@@ -707,7 +724,48 @@ impl ElementTree {
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
-        self.insert_with_provisional_order(view, parent, slot, owner, &[], &[])
+        self.insert_with_provisional_order(
+            view,
+            parent,
+            slot,
+            owner,
+            ProvisionalOrder::NONE,
+            &mut None,
+        )
+    }
+
+    /// [`insert`](Self::insert), reporting the freshly minted [`ElementId`]
+    /// through `minted` the instant the node enters the slab — *before* the
+    /// element mounts, and so before any user `create_render_object` runs.
+    ///
+    /// A caller that bounds mount panics needs the id to clean up with: a
+    /// panic out of `mount` leaves a node that is in the slab, parented, and
+    /// never announced (no `Mount` event, no `GlobalKey` registration, and no
+    /// entry in the parent's `child_ids` — `insert` never writes those). It is
+    /// reachable only through this report, and `remove_finalized` is the
+    /// primitive that retires it.
+    ///
+    /// `minted` stays `None` when a `GlobalKey` retake satisfied the insert:
+    /// that path returns an *existing* element, which the caller must not
+    /// remove. Panics from inside the retake itself are out of scope here —
+    /// they are FLUI-internal, not user code, and leave relocation state that
+    /// no caller can reason about.
+    pub(crate) fn insert_reporting_id(
+        &mut self,
+        view: &dyn View,
+        parent: ElementId,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+        minted: &mut Option<ElementId>,
+    ) -> ElementId {
+        self.insert_with_provisional_order(
+            view,
+            parent,
+            slot,
+            owner,
+            ProvisionalOrder::NONE,
+            minted,
+        )
     }
 
     pub(super) fn insert_during_reconcile(
@@ -724,8 +782,11 @@ impl ElementTree {
             parent,
             slot,
             owner,
-            reconciled_prefix,
-            unclaimed_old_slots,
+            ProvisionalOrder {
+                reconciled_prefix,
+                unclaimed_old_slots,
+            },
+            &mut None,
         )
     }
 
@@ -735,9 +796,13 @@ impl ElementTree {
         parent: ElementId,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
-        reconciled_prefix: &[ElementId],
-        unclaimed_old_slots: &[Option<ElementId>],
+        order: ProvisionalOrder<'_>,
+        minted: &mut Option<ElementId>,
     ) -> ElementId {
+        let ProvisionalOrder {
+            reconciled_prefix,
+            unclaimed_old_slots,
+        } = order;
         // ADV-1 state migration. Before creating a fresh element,
         // check whether `view` has a `GlobalKey` that points at an
         // existing element. If it is inactive, pull it back; if it is still
@@ -830,6 +895,11 @@ impl ElementTree {
 
         // Same self-id stamping as mount_root.
         self.nodes[slab_index].element_mut().set_self_id(id);
+
+        // Report before `mount` — everything from here on can panic through
+        // user code (`View::create_render_object`), and this is the only
+        // handle to the node that would otherwise be stranded.
+        *minted = Some(id);
 
         // Resolve this child's inherited scope from the parent's now that the
         // element knows whether it is itself a provider (`as_inherited`) and
