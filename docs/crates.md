@@ -56,7 +56,7 @@ These crates compose the rendering and platform substrate largely without knowin
 |-------|--------|---------|
 | `flui-engine` | ✅ ACTIVE | GPU pipeline (build → layout → paint → composite). Owns all `wgpu` state. |
 | `flui-rendering` | ✅ ACTIVE | `RenderObject`, `RenderBox<Arity>`, layout protocol, paint context |
-| `flui-objects` | ✅ ACTIVE | Concrete `RenderBox` / `RenderSliver` catalog. Wrapped by `flui-widgets`, and named directly by `flui-view` for framework machinery whose element and render halves cooperate (`RenderLayoutBuilder`, `RenderSliverList`, `RenderSliverGridLazy`) |
+| `flui-objects` | ✅ ACTIVE | Concrete `RenderBox` / `RenderSliver` catalog. Wrapped by `flui-widgets`, and named directly by `flui-view` for framework machinery whose element and render halves cooperate (`RenderLayoutBuilder`, `RenderSliverList`, `RenderSliverGrid`) |
 
 ## Layer 5 — Framework spine
 

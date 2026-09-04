@@ -424,7 +424,13 @@ impl RenderSliver for RenderSliverGrid {
         // Use the `logical_to_slot` map from step 4; no new arena children are
         // added during a request-strategy layout pass (the element tree inserts
         // them between frames).
-        self.attached_child_count = ctx.child_count();
+        // The hit-test snapshot is committed only for a pass whose geometry
+        // the pipeline will accept: a rejected pass keeps the previous
+        // pass's child offsets, so a resident attached since then has no
+        // committed position and must not be reachable by index.
+        if geometry.validation_error().is_none() {
+            self.attached_child_count = ctx.child_count();
+        }
 
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {

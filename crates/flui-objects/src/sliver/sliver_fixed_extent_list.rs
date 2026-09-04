@@ -375,7 +375,10 @@ impl RenderSliver for RenderSliverFixedExtentList {
             ..SliverGeometry::ZERO
         };
 
-        self.attached_child_count = ctx.child_count();
+        // Committed only for a pass the pipeline will accept (see the grid).
+        if geometry.validation_error().is_none() {
+            self.attached_child_count = ctx.child_count();
+        }
 
         for logical_index in first..=last {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {

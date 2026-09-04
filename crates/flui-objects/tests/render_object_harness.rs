@@ -6712,6 +6712,21 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
     // success on the OVERALL frame — this render object returns NORMALLY
     // here, no panic; only the pipeline's post-return geometry validation
     // rejects it).
+    // Between the passes the element tree attaches one more resident (the
+    // window's next tile, index 4), as a service pass would. Pass 2 lays it
+    // out — its own geometry commits in its own walk — but the rejected pass
+    // never commits an offset for it, so it sits at the origin with real
+    // geometry. The hit-test snapshot must not reach it: it is committed only
+    // for a pass whose geometry validates.
+    let late_tile = run
+        .owner_mut()
+        .insert_child_render_object(grid_id, Box::new(RenderColoredBox::green(100.0, 100.0)))
+        .expect("the grid accepts another child");
+    run.owner_mut()
+        .render_tree_mut()
+        .get_mut(late_tile)
+        .expect("just inserted")
+        .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(4)));
     run.update::<RenderSliverGrid>(grid_id, |grid| {
         let impact = grid.set_grid_delegate(Arc::new(NegativeMainAxisStrideDelegate));
         assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
@@ -6744,7 +6759,8 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
         run.hit_first(50.0, 50.0),
         Some(tile0),
         "hit_test must keep resolving against the LAST VALID pass's committed \
-         offsets after a geometry-rejected relayout",
+         offsets after a geometry-rejected relayout — not the late resident \
+         sitting unpositioned at the origin",
     );
 }
 
