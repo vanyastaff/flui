@@ -380,9 +380,18 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
     #[must_use]
     pub fn with_config(
         config: R::Config,
-        item_count: usize,
+        item_count: impl Into<ItemCount>,
         builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
+        // `Unknown` is resolved here, once, rather than discovered a band at a
+        // time. Before this, an unknown length was spelled `usize::MAX` and the
+        // first `None` clamped the count in the pass that met it — so a jump
+        // past the end converged over several layout passes, and the reported
+        // scroll extent was absurd until it did.
+        let item_count = match item_count.into() {
+            ItemCount::Exact(count) => count,
+            ItemCount::Unknown => probe_item_count(&*builder),
+        };
         Self {
             config,
             static_children: None,
@@ -991,6 +1000,80 @@ impl LazyMultiBoxRender for RenderSliverList {
     }
 }
 
+/// How many items a lazy sliver has, when the caller knows.
+///
+/// [`Unknown`](ItemCount::Unknown) is for a source whose length only its
+/// builder can answer — a paged feed, a generator. It is resolved once, by
+/// probing the builder, rather than discovered a band at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemCount {
+    /// The caller knows the length. Always prefer this: it costs nothing,
+    /// where [`Unknown`](Self::Unknown) costs `2·log₂(n)` builder calls once.
+    Exact(usize),
+    /// Only the builder knows. It must answer `None` for every index past the
+    /// end and `Some` for every index before it — a builder that is `None` in
+    /// the middle of its range truncates there.
+    Unknown,
+}
+
+impl From<usize> for ItemCount {
+    fn from(count: usize) -> Self {
+        Self::Exact(count)
+    }
+}
+
+/// Resolve an [`ItemCount::Unknown`] by probing `builder` for its end.
+///
+/// Doubling search for an upper bound, then bisection — Flutter's
+/// `SliverMultiBoxAdaptorElement.childCount`, which does the same walk. Two
+/// differences, both deliberate:
+///
+/// * **It probes, it does not build.** Flutter's search calls `_build`, which
+///   inflates a widget inside a `buildScope` for every probe; the reference's
+///   own doc tells callers to supply a count "to avoid the cost of searching".
+///   Here the builder returns a view *value* and nothing is mounted, so the
+///   search costs `2·log₂(n)` closure calls and the allocations they make.
+/// * **The overflow case cannot throw.** Flutter raises a `FlutterError` when
+///   even `i64::MAX` yields a child. A builder that answers `Some` for every
+///   index is infinite, which is a legitimate thing to write, so the search
+///   reports `usize::MAX` and lets the caller's window bound it — the same
+///   answer the unbounded-window path already gives.
+///
+/// The `None` returned for a probed index is discarded. A builder with side
+/// effects per index therefore sees calls for indices that are never mounted,
+/// which is true of Flutter's search too and is why both document the count as
+/// the cheaper option.
+#[must_use]
+pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
+    // `lo` is a count known to be reachable (every index below it exists);
+    // `hi` is a count known to be past the end, once the loop settles.
+    if builder(0).is_none() {
+        return 0;
+    }
+    let mut lo: usize = 1;
+    let mut hi: usize = 2;
+    while builder(hi - 1).is_some() {
+        lo = hi;
+        let Some(doubled) = hi.checked_mul(2) else {
+            // Every probe up to `usize::MAX - 1` produced a child. Treat the
+            // source as unbounded rather than erroring: the caller's window
+            // bounds it, exactly as the sentinel path already did.
+            return usize::MAX;
+        };
+        hi = doubled;
+    }
+    // Invariant: index `lo - 1` exists, index `hi - 1` does not.
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if builder(mid - 1).is_some() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// The canonical lazy-sliver adaptor over [`RenderSliverList`].
 ///
 /// See [`SliverMultiBoxAdaptor`]'s type-level doc for the shared lifecycle;
@@ -1006,7 +1089,7 @@ impl SliverList {
     /// Panics if `item_extent_estimate` is not finite and positive — a zero or
     /// negative estimate seeds the virtualizer with an invalid band width.
     pub fn new(
-        item_count: usize,
+        item_count: impl Into<ItemCount>,
         item_extent_estimate: f32,
         builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
@@ -1285,7 +1368,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[derive(Clone)]
-    struct ItemView;
+    pub(super) struct ItemView;
 
     impl RenderView for ItemView {
         type Protocol = BoxProtocol;
@@ -2063,5 +2146,64 @@ mod tests {
                 "ChildManager must be removed from the BuildOwner registry after on_unmount"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::{ItemCount, probe_item_count};
+    use crate::BoxedView;
+    use std::cell::RefCell;
+
+    /// A builder over `0..len` that records every index it was asked for.
+    fn counting(len: usize, calls: &RefCell<Vec<usize>>) -> impl Fn(usize) -> Option<BoxedView> {
+        move |index| {
+            calls.borrow_mut().push(index);
+            (index < len).then(|| BoxedView(Box::new(super::tests::ItemView)))
+        }
+    }
+
+    #[test]
+    fn the_probe_finds_the_exact_end_for_every_small_length() {
+        // Exhaustive over the range where the doubling and bisection phases
+        // interleave differently — off-by-one here is the whole risk.
+        for len in 0..=64 {
+            let calls = RefCell::new(Vec::new());
+            assert_eq!(
+                probe_item_count(&counting(len, &calls)),
+                len,
+                "probe disagreed for len {len}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_probe_is_logarithmic_not_linear() {
+        let calls = RefCell::new(Vec::new());
+        let len = 100_000;
+        assert_eq!(probe_item_count(&counting(len, &calls)), len);
+        let made = calls.borrow().len();
+        // Doubling to pass the end, then bisecting: about 2·log2(n). The bound
+        // is what distinguishes this from a walk — a linear scan would make
+        // 100_001 calls and still pass an equality assertion on the result.
+        assert!(
+            made < 4 * (usize::BITS - len.leading_zeros()) as usize,
+            "probe made {made} builder calls for {len} items; expected O(log n)",
+        );
+    }
+
+    #[test]
+    fn an_endless_builder_reports_unbounded_instead_of_erroring() {
+        // Flutter raises a `FlutterError` here. An always-`Some` builder is a
+        // legitimate infinite source, so this reports the sentinel the
+        // unbounded-window path already handles.
+        let endless = |_: usize| Some(BoxedView(Box::new(super::tests::ItemView)));
+        assert_eq!(probe_item_count(&endless), usize::MAX);
+    }
+
+    #[test]
+    fn item_count_is_copy_and_compares_by_value() {
+        assert_eq!(ItemCount::Exact(3), ItemCount::Exact(3));
+        assert_ne!(ItemCount::Exact(3), ItemCount::Unknown);
     }
 }

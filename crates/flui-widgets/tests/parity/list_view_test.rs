@@ -247,3 +247,47 @@ fn horizontal_under_rtl_directionality_lays_the_first_item_out_at_the_right_edge
         );
     }
 }
+
+/// A list whose length only its builder knows reports an honest scroll extent
+/// on the FIRST frame.
+///
+/// `ItemCount::Unknown` resolves once, by probing the builder — doubling then
+/// bisecting, the same walk as `SliverMultiBoxAdaptorElement.childCount`.
+/// Before this, an unknown length was spelled `usize::MAX` and the first `None`
+/// clamped the count in whichever layout pass happened to meet it, so the
+/// reported extent was absurd until the band walked that far.
+///
+/// The oracle is `max_scroll_extent` rather than a rendered row: a list that
+/// materialises its visible rows correctly while advertising a scroll range of
+/// billions is exactly the defect, and every row-level assertion passes
+/// through it.
+#[test]
+fn an_unknown_item_count_reports_its_real_extent_on_the_first_frame() {
+    use flui_view::element::ItemCount;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    const ROWS: usize = 7;
+    const ROW_HEIGHT: f32 = 40.0;
+
+    let controller = ScrollController::new();
+    let laid = lay_out(
+        Viewport::new((SliverList::new(
+            ItemCount::Unknown,
+            ROW_HEIGHT,
+            std::rc::Rc::new(|i: usize| {
+                (i < ROWS).then(|| SizedBox::new(200.0, ROW_HEIGHT).boxed())
+            }),
+        ),))
+        .position(controller.position()),
+        tight(200.0, 100.0),
+    );
+    let _ = laid;
+
+    // 7 rows × 40 px of content in a 100 px viewport.
+    assert_eq!(
+        controller.max_scroll_extent(),
+        ROWS as f32 * ROW_HEIGHT - 100.0,
+        "an unknown count must be resolved before the first layout, not \
+         clamped over later passes",
+    );
+}

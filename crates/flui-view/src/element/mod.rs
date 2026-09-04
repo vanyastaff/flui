@@ -72,8 +72,8 @@ pub use root::{RootElement, RootElementImpl};
 // constructing `SliverMultiBoxAdaptor::with_config` (ADR-0053). `SliverList`,
 // `SliverGrid`, and `SliverFixedExtentList` are the in-tree instantiations.
 pub use sliver_adaptor::{
-    FixedExtentConfig, LazyMultiBoxRender, ListConfig, SliverFixedExtentList, SliverGrid,
-    SliverList, SliverMultiBoxAdaptor, StaticChildren,
+    FixedExtentConfig, ItemCount, LazyMultiBoxRender, ListConfig, SliverFixedExtentList,
+    SliverGrid, SliverList, SliverMultiBoxAdaptor, StaticChildren, probe_item_count,
 };
 pub use sliver_persistent_header::{
     FloatingPersistentHeaderView, FloatingPinnedPersistentHeaderView, PersistentHeaderView,
