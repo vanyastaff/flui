@@ -5,10 +5,12 @@
 # under it too, and reviewed automatically until CodeRabbit introduced the gate
 # between 2026-08-05 and 2026-08-16.
 #
-# So the trigger it does honour is asked for here, once per pull request, in
-# place of the "Trigger review" checkbox a human would otherwise click.
-# Incremental reviews on later pushes are left to CodeRabbit's own
-# auto_incremental_review rather than a comment per push.
+# So the trigger it does honour is asked for here, on each event that opens a
+# pull request for review — opened, reopened, or a draft marked ready — in
+# place of the "Trigger review" checkbox a human would otherwise click. A
+# reopened pull request is asked again on purpose: its code may have moved
+# since it was closed. Incremental reviews on later pushes are left to
+# CodeRabbit's own auto_incremental_review rather than a comment per push.
 #
 # Delete this workflow once flui passes ten stars, or if the repository is ever
 # moved somewhere the gate does not apply.
@@ -32,12 +34,17 @@ jobs:
   # Display name is the job key, as every job in this repository is.
   request-review:
     # A pull request from a fork gets a read-only token, so the comment would
-    # fail; those keep the manual checkbox. Drafts are excluded here and in
-    # .coderabbit.yaml, and reach this workflow through ready_for_review.
+    # fail; those keep the manual checkbox. Dependabot is excluded for the same
+    # reason — GitHub gives its pull_request workflows a read-only token even
+    # though the branch lives in this repository, so without this the two
+    # weekly dependency pull requests would each leave a failed run. Drafts are
+    # excluded here and in .coderabbit.yaml, and reach this workflow through
+    # ready_for_review.
     if: >-
       github.repository == 'vanyastaff/flui' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
