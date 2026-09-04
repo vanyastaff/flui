@@ -1556,10 +1556,10 @@ mod tests {
     #[test]
     fn delegate_changed_distinguishes_builder_from_static_delegates() {
         let builder = make_builder(3);
-        let a = SliverList::new(3, 48.0, Rc::clone(&builder));
-        let b = SliverList::new(3, 48.0, builder);
+        let with_builder = SliverList::new(3, 48.0, Rc::clone(&builder));
+        let with_same_builder = SliverList::new(3, 48.0, builder);
         assert!(
-            delegate_changed(&a, &b),
+            delegate_changed(&with_builder, &with_same_builder),
             "a reused builder closure still refreshes"
         );
 
@@ -1567,16 +1567,16 @@ mod tests {
             BoxedView(Box::new(ItemView)),
             BoxedView(Box::new(ItemView)),
         ]);
-        let c = SliverList::over(48.0, &children);
-        let d = SliverList::over(48.0, &children);
+        let over_children = SliverList::over(48.0, &children);
+        let over_same_children = SliverList::over(48.0, &children);
         assert!(
-            !delegate_changed(&c, &d),
+            !delegate_changed(&over_children, &over_same_children),
             "two adaptors over one static delegate are the same delegate"
         );
         let other = StaticChildren::new(vec![BoxedView(Box::new(ItemView))]);
-        let e = SliverList::over(48.0, &other);
+        let over_other = SliverList::over(48.0, &other);
         assert!(
-            delegate_changed(&c, &e),
+            delegate_changed(&over_children, &over_other),
             "a different static delegate refreshes"
         );
     }
