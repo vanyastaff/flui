@@ -552,7 +552,7 @@ cases = [
 rust = "list_view_test"
 family = "scroll"
 oracles = ["widgets/list_view_test.dart"]
-tests = 4
+tests = 6
 
 [[targets.claims]]
 oracle = "widgets/list_view_test.dart"

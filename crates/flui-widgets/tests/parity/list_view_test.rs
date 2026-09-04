@@ -247,3 +247,132 @@ fn horizontal_under_rtl_directionality_lays_the_first_item_out_at_the_right_edge
         );
     }
 }
+
+/// A list whose length only its builder knows reports an honest scroll extent
+/// on the FIRST frame.
+///
+/// `ItemCount::Unknown` resolves once, by probing the builder — doubling then
+/// bisecting, the same walk as `SliverMultiBoxAdaptorElement.childCount`.
+/// Before this, an unknown length was spelled `usize::MAX` and the first `None`
+/// clamped the count in whichever layout pass happened to meet it, so the
+/// reported extent was absurd until the band walked that far.
+///
+/// The oracle is `max_scroll_extent` rather than a rendered row: a list that
+/// materialises its visible rows correctly while advertising a scroll range of
+/// billions is exactly the defect, and every row-level assertion passes
+/// through it.
+#[test]
+fn an_unknown_item_count_reports_its_real_extent_on_the_first_frame() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::ItemCount;
+    use flui_widgets::{SliverList, Viewport};
+
+    const ROWS: usize = 7;
+    const ROW_HEIGHT: f32 = 40.0;
+
+    let controller = ScrollController::new();
+    // Bound, not dropped: the layout state the assertion reads lives in this
+    // harness, and `let _ = ...` would drop it before the assertion runs.
+    let _laid = lay_out(
+        Viewport::new((SliverList::new(
+            ItemCount::Unknown,
+            ROW_HEIGHT,
+            std::rc::Rc::new(|i: usize| {
+                (i < ROWS).then(|| SizedBox::new(200.0, ROW_HEIGHT).boxed())
+            }),
+        ),))
+        .position(controller.position()),
+        tight(200.0, 100.0),
+    );
+    // 7 rows × 40 px of content in a 100 px viewport.
+    assert_eq!(
+        controller.max_scroll_extent(),
+        ROWS as f32 * ROW_HEIGHT - 100.0,
+        "an unknown count must be resolved before the first layout, not \
+         clamped over later passes",
+    );
+}
+
+/// The probe runs once per mount, not once per rebuild.
+///
+/// A view value is reconstructed on every build, so resolving `Unknown` in the
+/// view's constructor would repeat `2·log₂(n)` builder calls every frame — and
+/// a builder with side effects would see every one of them. The resolution
+/// belongs at `create_render_object`, which runs once.
+///
+/// The oracle is DIFFERENTIAL: the same tree declared `Exact` and declared
+/// `Unknown` must call the builder the same number of times *per rebuild*. An
+/// absolute bound cannot work — a rebuild legitimately re-consults the builder
+/// for every resident, so the count grows either way, and picking a threshold
+/// by hand just encodes whatever the current reconcile happens to do. Asserting
+/// the extent again would prove nothing at all: a per-rebuild probe produces
+/// the right extent every time.
+#[test]
+fn an_unknown_item_count_is_probed_once_per_mount_not_per_rebuild() {
+    use flui_view::element::ItemCount;
+    use flui_widgets::{SliverList, Viewport};
+
+    const ROWS: usize = 7;
+
+    // The list is constructed INSIDE a `build`, which is the only shape where
+    // per-rebuild view construction is observable: a view value handed to
+    // `lay_out` directly is built once and never again, so a fixture like that
+    // passes whether the probe is in the constructor or at mount. (It did.)
+    #[derive(Clone)]
+    struct ListHost {
+        declared: ItemCount,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl flui_view::view::StatelessView for ListHost {
+        fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+            let calls = std::sync::Arc::clone(&self.calls);
+            Viewport::new((SliverList::new(
+                self.declared,
+                40.0,
+                std::rc::Rc::new(move |i: usize| {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    (i < ROWS).then(|| SizedBox::new(200.0, 40.0).boxed())
+                }),
+            ),))
+        }
+    }
+
+    impl flui_view::View for ListHost {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+
+    // Builder calls at mount, and the additional calls four rebuilds cost.
+    let measure = |declared: ItemCount| -> (usize, usize) {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut laid = lay_out(
+            ListHost {
+                declared,
+                calls: std::sync::Arc::clone(&calls),
+            },
+            tight(200.0, 100.0),
+        );
+        let at_mount = calls.load(std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..4 {
+            laid.pump();
+        }
+        let total = calls.load(std::sync::atomic::Ordering::SeqCst);
+        (at_mount, total - at_mount)
+    };
+
+    let (exact_mount, exact_rebuilds) = measure(ItemCount::Exact(ROWS));
+    let (unknown_mount, unknown_rebuilds) = measure(ItemCount::Unknown);
+
+    assert_eq!(
+        unknown_rebuilds, exact_rebuilds,
+        "rebuilds must cost an unknown-count list exactly what they cost an \
+         exact-count one; a re-probe per rebuild shows up here and nowhere else"
+    );
+    assert!(
+        unknown_mount > exact_mount,
+        "the probe must have run at mount ({unknown_mount} calls vs \
+         {exact_mount} for an exact count)"
+    );
+}
