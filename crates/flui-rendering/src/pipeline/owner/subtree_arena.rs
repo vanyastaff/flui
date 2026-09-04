@@ -385,6 +385,18 @@ impl<'tree> SubtreeArena<'tree> {
     /// `err`; `attempt` carries the constraints of the failed layout
     /// (`None` for intrinsic-query failures).  Read by `layout_dirty_root`
     /// after the walk to feed the poison counters.
+    /// The walk's degradation count so far (see [`Self::degradation_events`]).
+    fn degradation_count(&self) -> u64 {
+        self.degradation_events
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Count one degradation event (see [`Self::degradation_events`]).
+    fn note_degradation(&self) {
+        self.degradation_events
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn note_layout_failure(
         &self,
         parent: RenderId,
@@ -858,6 +870,7 @@ unsafe fn layout_subtree_borrowed_impl(
         child_ids,
         needs_layout_flag,
         cached_geometry,
+        geometry_degraded,
         node_protocol,
         is_leaf,
         is_repaint_boundary,
@@ -889,6 +902,7 @@ unsafe fn layout_subtree_borrowed_impl(
                 .then(|| entry.state().geometry())
                 .flatten()
         };
+        let geometry_degraded = entry.state().geometry_degraded();
         let is_leaf = child_ids.is_empty();
         // Snapshotted here, in the block that already holds the shared borrow,
         // so the record below costs a branch rather than another node read.
@@ -897,6 +911,7 @@ unsafe fn layout_subtree_borrowed_impl(
             child_ids,
             needs_layout_flag,
             cached_geometry,
+            geometry_degraded,
             node_protocol,
             is_leaf,
             is_repaint_boundary,
@@ -909,6 +924,12 @@ unsafe fn layout_subtree_borrowed_impl(
     // (Flutter rendering/object.dart:2852: early return before recurse)
     if !needs_layout_flag {
         if let Some(geometry) = cached_geometry {
+            // Serving a cache built by a degraded pass is itself a
+            // degradation: the broken descendant is never walked on a cache
+            // hit, so without this the pass above would look healthy.
+            if geometry_degraded {
+                arena.note_degradation();
+            }
             return Ok(geometry);
         }
         // Constraints matched but geometry was absent — invariant violation.
@@ -983,6 +1004,7 @@ unsafe fn layout_subtree_borrowed_impl(
                 let child_node: &RenderNode = unsafe { &*child_ptr.0 };
                 cs.offset = child_node.offset();
                 cs.needs_layout = child_node.needs_layout();
+                cs.geometry_degraded = child_node.geometry_degraded();
                 // Seed parent data from the child's persistent RenderState.
                 cs.parent_data = child_node.parent_data().map(dyn_clone::clone_box);
                 if let Some(sliver_entry) = child_node.as_sliver() {
@@ -1255,6 +1277,10 @@ unsafe fn layout_subtree_borrowed_impl(
         // surface as RenderError::Poisoned instead of unwinding out of
         // layout_dirty_root).  Capture debug_name BEFORE the &mut reborrow.
         let debug_name = entry.render_object().debug_name();
+        // Every degradation counted from here to the end of this node's own
+        // `perform_layout` happened inside this node's subtree (the walk is
+        // depth-first and synchronous), which is what the flag below records.
+        let events_before = arena.degradation_count();
         let render_object = entry.render_object_mut();
         let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_object.perform_layout_raw(erased)
@@ -1287,6 +1313,12 @@ unsafe fn layout_subtree_borrowed_impl(
         <BoxProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
         <BoxProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
+        // Record whether this node's own pass read a stand-in, so a later
+        // pass that serves the geometry it is about to commit cannot mistake
+        // it for healthy.
+        entry
+            .state()
+            .set_geometry_degraded(arena.degradation_count() > events_before);
         entry.state_mut().set_geometry(geometry);
         entry.state_mut().set_constraints(constraints);
 
@@ -1895,6 +1927,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 
         let debug_name = entry.render_object().debug_name();
+        // See the box twin: the delta over this call is this subtree's.
+        let events_before = arena.degradation_count();
         let render_object = entry.render_object_mut();
         let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_object.perform_layout_raw(erased)
@@ -1920,6 +1954,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         <SliverProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
         <SliverProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
+        // See the box twin.
+        entry
+            .state()
+            .set_geometry_degraded(arena.degradation_count() > events_before);
         entry.state_mut().set_geometry(geometry);
         entry.state_mut().set_constraints(constraints);
 

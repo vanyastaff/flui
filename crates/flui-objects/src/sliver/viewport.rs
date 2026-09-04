@@ -765,6 +765,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         let main_axis_extent = self.main_axis_extent(size);
         let cross_axis_extent = self.cross_axis_extent(size);
         self.child_count = ctx.child_count();
+        // Flutter publishes the viewport dimension before laying anything
+        // out, and a `ScrollPosition` may move `pixels` to answer it (a page
+        // position keeps its fractional page across a resize). That is
+        // correct for a healthy pass; for a degraded one it would move the
+        // user's offset in a frame that is supposed to publish nothing, so
+        // the offset is restored below if the pass turns out degraded. The
+        // dimension itself is kept: it comes from this viewport's
+        // constraints, which no stand-in touched.
+        let pixels_before_pass = self.offset.pixels();
         let _ = self.offset.apply_viewport_dimension(main_axis_extent);
 
         if ctx.child_count() == 0 {
@@ -816,6 +825,11 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             }
         }
         if degraded {
+            // Undo any offset movement `apply_viewport_dimension` made above.
+            let drift = pixels_before_pass - self.offset.pixels();
+            if drift != 0.0 {
+                self.offset.correct_by(drift);
+            }
             tracing::warn!(
                 child_count = ctx.child_count(),
                 "RenderViewport laid out over a degraded descendant; scroll \
@@ -1507,6 +1521,15 @@ fn cached_clean_sliver_geometry(
     constraints: SliverConstraints,
 ) -> Option<SliverGeometry> {
     if ctx.sliver_child_needs_layout(index) {
+        return None;
+    }
+    // A child whose geometry came from a degraded pass is laid out again
+    // rather than served from the cache: the walk must reach the broken
+    // descendant, which is what tells this viewport its own pass is degraded.
+    // For a poisoned descendant that re-layout is the skip that serves its
+    // stand-in — cheap, and the only thing that keeps the scroll position
+    // from being published off collapsed content on every later frame.
+    if ctx.sliver_child_geometry_degraded(index) {
         return None;
     }
     let (cached_constraints, cached_geometry) = ctx.cached_sliver_child_layout(index)?;

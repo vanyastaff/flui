@@ -368,6 +368,14 @@ impl RenderNode {
         with_entry!(self, entry => entry.needs_layout())
     }
 
+    /// Whether this node's last committed geometry came from a degraded pass
+    /// (see `RenderFlags::GEOMETRY_DEGRADED`).
+    #[inline]
+    #[must_use]
+    pub fn geometry_degraded(&self) -> bool {
+        with_entry!(self, entry => entry.state().geometry_degraded())
+    }
+
     /// Returns true if paint is needed.
     #[inline]
     pub fn needs_paint(&self) -> bool {

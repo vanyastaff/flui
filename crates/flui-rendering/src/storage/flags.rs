@@ -283,6 +283,17 @@ bitflags! {
         /// dirty-queue signal). `NEEDS_COMPOSITING` aligns with
         /// Flutter's per-node `needsCompositing` computed-property.
         const NEEDS_COMPOSITING_BITS_UPDATE = 1 << 11;
+
+        /// The geometry this node last committed came from a pass that read a
+        /// stand-in: a descendant's layout failed and its caller continued on
+        /// a substitute, or a poisoned descendant served one.
+        ///
+        /// Sticky across frames, because the geometry is: a later pass that
+        /// serves this node's cached geometry (clean, same constraints) never
+        /// walks the broken descendant and would otherwise look healthy. It is
+        /// cleared the first time the node completes a pass in which nothing
+        /// below it degraded.
+        const GEOMETRY_DEGRADED = 1 << 12;
     }
 }
 
@@ -909,6 +920,24 @@ impl AtomicRenderFlags {
     #[inline]
     pub fn has_overflow(&self) -> bool {
         self.contains(RenderFlags::HAS_OVERFLOW)
+    }
+
+    /// Whether the last committed geometry came from a degraded pass
+    /// ([`RenderFlags::GEOMETRY_DEGRADED`]).
+    #[inline]
+    pub fn geometry_degraded(&self) -> bool {
+        self.contains(RenderFlags::GEOMETRY_DEGRADED)
+    }
+
+    /// Records whether the pass that just committed this node's geometry read
+    /// a stand-in ([`RenderFlags::GEOMETRY_DEGRADED`]).
+    #[inline]
+    pub fn set_geometry_degraded(&self, degraded: bool) {
+        if degraded {
+            self.insert(RenderFlags::GEOMETRY_DEGRADED);
+        } else {
+            self.remove(RenderFlags::GEOMETRY_DEGRADED);
+        }
     }
 
     /// Checks if the render object is dirty (needs any processing).

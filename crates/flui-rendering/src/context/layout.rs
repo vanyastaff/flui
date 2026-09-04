@@ -373,6 +373,19 @@ where
         )
     }
 
+    /// Whether the sliver child at `index` committed its geometry in a
+    /// degraded pass — a descendant of it failed and its caller continued on
+    /// a stand-in. A parent that caches child geometry must re-layout such a
+    /// child rather than serve the cache, or the broken descendant is never
+    /// walked and the pass looks healthy.
+    #[must_use]
+    pub fn sliver_child_geometry_degraded(&self, index: usize) -> bool {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::sliver_child_geometry_degraded(
+            &self.inner,
+            index,
+        )
+    }
+
     /// Returns whether a sliver child is still marked as needing layout.
     pub fn sliver_child_needs_layout(&self, index: usize) -> bool {
         crate::protocol::box_protocol::BoxLayoutCtxErased::sliver_child_needs_layout(

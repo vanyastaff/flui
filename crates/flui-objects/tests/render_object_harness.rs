@@ -8044,6 +8044,183 @@ fn harness_viewport_degraded_pass_sees_a_failure_two_levels_down() {
         "a failure below a direct child still degrades the viewport's pass"
     );
     assert_eq!(position.max_scroll_extent(), 800.0);
+
+    // Pass 3: only the viewport is marked. The box below is poisoned by now,
+    // so the walk reaches it and serves its stand-in with no failure
+    // recorded — the arm a failure flag would miss, two levels down.
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert_eq!(
+        position.pixels(),
+        500.0,
+        "the poisoned frame after the failure is degraded at depth too"
+    );
+    assert_eq!(position.max_scroll_extent(), 800.0);
+}
+
+/// A degraded pass must not move the offset through the viewport dimension
+/// either.
+///
+/// Flutter publishes the viewport dimension before laying anything out, and a
+/// page position moves `pixels` to keep its fractional page across a resize.
+/// That is right for a healthy pass; in a degraded frame it would move the
+/// user's offset in a frame that publishes nothing else, so the offset is
+/// restored. The position outlives the tree here — the way a scroll
+/// controller outlives a rebuild — so the second mount is a resize from 400
+/// to 200 in the same pass its middle sliver panics.
+#[test]
+fn harness_viewport_degraded_pass_does_not_move_the_offset_through_a_resize() {
+    use flui_rendering::view::{DimensionChangePolicy, ScrollPosition, ViewportOffset};
+
+    let position = ScrollPosition::new(500.0);
+    position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+        viewport_fraction: 1.0,
+        initial_page: None,
+    });
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let scene = |position: &ScrollPosition, layouts: &Arc<std::sync::atomic::AtomicUsize>| {
+        box_node(RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .label("viewport")
+        .child(
+            fixed_extent_list(
+                400.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("head")],
+            )
+            .label("first"),
+        )
+        .child(
+            sliver_node(PanicAfterNLayouts {
+                extent: 400.0,
+                layouts: Arc::clone(layouts),
+                healthy_layouts: 1,
+            })
+            .label("fragile"),
+        )
+        .child(
+            fixed_extent_list(
+                400.0,
+                vec![box_node(RenderColoredBox::green(300.0, 1000.0)).label("tail")],
+            )
+            .label("third"),
+        )
+    };
+
+    let _healthy = RenderTester::mount(scene(&position, &layouts))
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
+    assert_eq!(position.pixels(), 500.0);
+    assert_eq!(position.viewport_dimension(), 400.0);
+
+    // The same position, a 200 px viewport, and a sliver that panics on this
+    // pass: `apply_viewport_dimension(200)` would recompute pixels from the
+    // kept fractional page before the guard could see the degradation.
+    let _degraded = RenderTester::mount(scene(&position, &layouts))
+        .with_size(Size::new(px(300.0), px(200.0)))
+        .run_layout();
+    assert!(
+        layouts.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "the fragile sliver laid out again and panicked"
+    );
+    assert_eq!(
+        position.pixels(),
+        500.0,
+        "the resize's page recompute must be undone for a degraded pass"
+    );
+}
+
+/// A viewport skips laying out a child that is entirely beyond its window and
+/// serves that child's cached geometry instead. When the cache was built by a
+/// degraded pass, serving it would hide the breakage: the broken descendant is
+/// never walked, the pass looks healthy, and the collapsed content extent is
+/// published.
+///
+/// Four 400 px children (1 600 px of content) in a 400 px viewport: the third
+/// is an adapter over a box that panics after its first layout. The window
+/// plus its 250 px cache reaches 650 px, so that adapter — at 800..1200 — is
+/// beyond it and is exactly the child the cache path serves.
+#[test]
+fn harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass() {
+    use flui_rendering::view::ScrollPosition;
+
+    let position = ScrollPosition::new(0.0);
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let node = box_node(RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        position.clone(),
+    ))
+    .label("viewport")
+    .child(
+        fixed_extent_list(
+            400.0,
+            vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("head")],
+        )
+        .label("first"),
+    )
+    .child(
+        fixed_extent_list(
+            400.0,
+            vec![box_node(RenderColoredBox::blue(300.0, 1000.0)).label("second_cell")],
+        )
+        .label("second"),
+    )
+    .child(
+        sliver_node(RenderSliverToBoxAdapter::new())
+            .label("far_adapter")
+            .child(
+                box_node(PanicAfterNBoxLayouts {
+                    size: Size::new(px(300.0), px(400.0)),
+                    layouts: Arc::clone(&layouts),
+                    healthy_layouts: 1,
+                })
+                .label("far_box"),
+            ),
+    )
+    .child(
+        fixed_extent_list(
+            400.0,
+            vec![box_node(RenderColoredBox::green(300.0, 1000.0)).label("tail")],
+        )
+        .label("fourth"),
+    );
+    let mut run = RenderTester::mount(node)
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
+    assert_eq!(
+        position.max_scroll_extent(),
+        1200.0,
+        "the healthy mount publishes 1 600 px of content in a 400 px viewport"
+    );
+
+    // Pass 2: the far box panics. Its adapter returns a collapsed geometry
+    // and is marked as having committed it in a degraded pass.
+    let far_box = run.id("far_box");
+    let viewport = run.id("viewport");
+    run.owner_mut().mark_needs_layout(far_box);
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert!(layouts.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+    assert_eq!(
+        position.max_scroll_extent(),
+        1200.0,
+        "a degraded pass publishes nothing"
+    );
+
+    // Pass 3: only the viewport is marked. The adapter is clean, its
+    // constraints are unchanged and it sits beyond the window, so the
+    // viewport's own child-geometry cache would answer for it — collapsed —
+    // without ever walking to the poisoned box.
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert_eq!(
+        position.max_scroll_extent(),
+        1200.0,
+        "a cache built by a degraded pass must not be served as healthy"
+    );
 }
 
 #[test]

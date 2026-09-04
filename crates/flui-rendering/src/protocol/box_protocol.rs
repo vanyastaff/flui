@@ -838,6 +838,17 @@ pub trait BoxLayoutCtxErased {
         true
     }
 
+    /// Whether the sliver child at `index` committed its geometry in a
+    /// degraded pass. A parent that caches a child's geometry must not serve
+    /// that cache as if the pass were healthy — the broken descendant is
+    /// never walked on a cache hit, so nothing else would notice.
+    ///
+    /// Conservative default `false`: contexts the production walk did not
+    /// build run no walk at all.
+    fn sliver_child_geometry_degraded(&self, _index: usize) -> bool {
+        false
+    }
+
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
 
@@ -1002,6 +1013,16 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     }
 
     #[inline]
+    fn sliver_child_geometry_degraded(&self, index: usize) -> bool {
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => false,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.sliver_child_geometry_degraded(index)
+            }
+        }
+    }
+
+    #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
         <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset);
     }
@@ -1100,6 +1121,10 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
 /// production layout.
 #[derive(Debug)]
 pub struct ErasedChildState {
+    /// Whether this child's committed geometry came from a degraded pass
+    /// (see `RenderFlags::GEOMETRY_DEGRADED`). A parent that would serve this
+    /// child's cached geometry must not treat the pass as healthy.
+    pub geometry_degraded: bool,
     /// Render ID of this child.
     pub id: flui_foundation::RenderId,
     /// Computed size after layout.
@@ -1120,6 +1145,7 @@ impl ErasedChildState {
     /// Creates an empty child slot.
     pub fn new(id: flui_foundation::RenderId) -> Self {
         Self {
+            geometry_degraded: false,
             id,
             size: Size::ZERO,
             offset: Offset::ZERO,
@@ -1312,6 +1338,12 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         self.children
             .get(index)
             .is_none_or(|slot| slot.needs_layout)
+    }
+
+    fn sliver_child_geometry_degraded(&self, index: usize) -> bool {
+        self.children
+            .get(index)
+            .is_some_and(|slot| slot.geometry_degraded)
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {
