@@ -1620,10 +1620,11 @@ cases = [
 # Derived counts. The inventory test recomputes every number here and fails
 # on drift; ROADMAP.md cites these values.
 #
-# `rust_tests` and `cases_claimed` are deliberately absent, here and per
-# family. Both move whenever any parity test is added, so storing them put an
-# always-conflicting line in the one file every parity PR edits, while a reader
-# acts on neither at ±1. The inventory test recomputes and prints them; the
+# `rust_tests`, `cases_claimed` and `universe_cases_claimed` are deliberately
+# absent, here and per family. All three move whenever a parity test or a cited
+# case is added, so storing them put always-conflicting lines in the one file
+# every parity PR edits, while a reader acts on none of them at ±1. The
+# inventory test recomputes all three; `--nocapture` prints them. The
 # per-target `tests` row below stays, since that one is local to a file and
 # catches a test silently appearing or vanishing.
 [summary]
@@ -1634,7 +1635,6 @@ oracle_cases = 5753
 cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 301
 universe_cases_diverged = 1
 universe_pending_files = 331
 

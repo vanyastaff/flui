@@ -167,13 +167,19 @@ struct OracleFile {
 
 /// The derived figures the manifest stores and this file re-checks.
 ///
-/// Deliberately *not* here: `rust_tests` and `cases_claimed`. Both move
-/// whenever any parity test is added, so storing them put an
-/// always-conflicting line in a file every parity PR touches — a lockfile
-/// conflict without a lockfile's tooling — while a reader acts on neither
-/// figure at ±1. They are recomputed and reported below instead. What stays
-/// is what a wrong number would actually mislead someone about: the universe
-/// size, how much of it is still untouched, and the divergence pins.
+/// Deliberately *not* here: `rust_tests`, `cases_claimed`, and its universe
+/// counterpart `universe_cases_claimed`. All three move whenever a parity test
+/// or a cited case is added, so storing them put always-conflicting lines in a
+/// file every parity PR touches — a lockfile conflict without a lockfile's
+/// tooling — while a reader acts on none of them at ±1. What stays is what a
+/// wrong number would actually mislead someone about: the universe size, how
+/// much of it is still untouched, and the divergence pins.
+///
+/// The three are still recomputed below and printed. Libtest captures stdout
+/// for a passing test, so seeing them takes
+/// `cargo test -p flui-widgets --test parity_inventory -- --nocapture`
+/// (or `cargo nextest run … --no-capture`); the doc comments that mention them
+/// name that flag rather than implying an ordinary run shows them.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Summary {
@@ -184,7 +190,6 @@ struct Summary {
     cases_diverged: usize,
     universe_files: usize,
     universe_cases: usize,
-    universe_cases_claimed: usize,
     universe_cases_diverged: usize,
     universe_pending_files: usize,
     families: BTreeMap<String, FamilySummary>,
@@ -894,10 +899,15 @@ fn oracle_rows_and_summary_recompute() {
 
     let s = &manifest.summary;
     let pins: usize = manifest.targets.iter().map(|t| t.pins.len()).sum();
-    // Reported, never stored — see `Summary`.
+    // Recomputed, never stored — see `Summary`. Visible only under
+    // `--nocapture`, which is what the docs that mention these figures say.
     let rust_tests: usize = manifest.targets.iter().map(|t| t.tests).sum();
     let cases_claimed: usize = claimed.values().sum();
-    println!("parity inventory: {rust_tests} rust tests claiming {cases_claimed} oracle cases");
+    println!(
+        "parity inventory: {rust_tests} rust tests claiming {cases_claimed} oracle cases \
+         ({} of them inside the `widgets/` universe)",
+        uni.2
+    );
     let expected = [
         ("targets", manifest.targets.len(), s.targets),
         ("pins", pins, s.pins),
@@ -906,7 +916,6 @@ fn oracle_rows_and_summary_recompute() {
         ("cases_diverged", totals.3, s.cases_diverged),
         ("universe_files", uni.0, s.universe_files),
         ("universe_cases", uni.1, s.universe_cases),
-        ("universe_cases_claimed", uni.2, s.universe_cases_claimed),
         ("universe_cases_diverged", uni.3, s.universe_cases_diverged),
         ("universe_pending_files", uni.4, s.universe_pending_files),
     ];
@@ -1116,8 +1125,9 @@ fn the_roadmap_cites_the_inventorys_own_counts() {
          from `tests/parity/manifest.toml` and fails on drift. Do not hand-edit. -->\n\
          **{} parity targets** against a **{}-file / {}-case** `test/widgets` universe, \
          of which **{}** files remain entirely untouched. Divergence pins on record: \
-         **{}** — `#[ignore]`d, each owned by an issue or a decision. Claimed cases \
-         recorded as diverged: **{}** — counted separately, never as parity. Per-target \
+         **{}** — `#[ignore]`d, each owned by an issue or a decision. Oracle cases \
+         recorded as diverged: **{}** — tracked apart from the claims, never as parity. \
+         Per-target \
          test and claimed-case counts live in \
          `crates/flui-widgets/tests/parity/manifest.toml`.\n\
          {END}",
