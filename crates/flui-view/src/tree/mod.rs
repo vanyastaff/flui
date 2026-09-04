@@ -20,6 +20,6 @@ pub mod reconcile_event;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
-pub(crate) use element_tree::SubtreeRemoval;
 pub use element_tree::{ElementNode, ElementTree};
+pub(crate) use element_tree::{InsertedChild, SubtreeRemoval};
 pub use reconcile_event::{RECONCILE_TARGET, ReconcileEvent, ReconcileEventKind};

@@ -475,8 +475,14 @@ pub(crate) struct ReconcileOutcome {
 /// the ancestor parent-data pass and the render-reorder flag all come *after*
 /// `mount` in `insert`, and `insert` never writes the parent's `child_ids`
 /// (a sparse host tracks residency itself, in `by_logical_index`). So the
-/// only reference to it is the id `insert_reporting_id` hands back, and
-/// `remove_finalized` retires exactly that much. The pipeline is not poisoned
+/// only reference to it is what `insert_reporting_child` hands back, and
+/// `discard_unannounced` retires exactly that much — silently, because no
+/// observer ever saw the node mount.
+///
+/// A `GlobalKey` retake is the other panic site the same catch covers: it
+/// relocates an existing element and runs its `update` (user
+/// `update_render_object` with it), so the report distinguishes the two and
+/// the recovery removes the relocated subtree the ordinary way. The pipeline is not poisoned
 /// either — `PipelineCell::with_mut` holds a `RefMut` that drops on unwind,
 /// so the owner is free again.
 ///
@@ -494,7 +500,7 @@ fn mount_sparse_child(
     owner: &mut ElementOwner<'_>,
     pipeline: &PipelineCell,
 ) -> ElementId {
-    let mut minted = None;
+    let mut inserted = None;
     let mounted = std::panic::catch_unwind(AssertUnwindSafe(|| {
         mount_sparse_child_unbounded(
             logical_index,
@@ -503,14 +509,24 @@ fn mount_sparse_child(
             tree,
             owner,
             pipeline,
-            &mut minted,
+            &mut inserted,
         )
     }));
     match mounted {
         Ok(child) => child,
         Err(payload) => {
-            if let Some(stranded) = minted.take() {
-                tree.remove_finalized(stranded, owner);
+            // Undo whatever the insert had committed. A minted node was never
+            // announced, so it is discarded silently; a retaken one was
+            // announced as a reparent and carries a subtree, so it goes out
+            // the ordinary way.
+            match inserted.take() {
+                Some(crate::tree::InsertedChild::Minted(stranded)) => {
+                    tree.discard_unannounced(stranded, owner);
+                }
+                Some(crate::tree::InsertedChild::Retaken(retaken)) => {
+                    tree.remove_subtree(retaken, owner, crate::tree::SubtreeRemoval::Finalize);
+                }
+                None => {}
             }
             let error = crate::view::FlutterError::from_panic(
                 payload.as_ref(),
@@ -597,7 +613,7 @@ fn mount_sparse_child_unbounded(
     tree: &mut ElementTree,
     owner: &mut ElementOwner<'_>,
     pipeline: &PipelineCell,
-    minted: &mut Option<ElementId>,
+    inserted: &mut Option<crate::tree::InsertedChild>,
 ) -> ElementId {
     // Declare `host` as the parent being reconciled for the duration of
     // this insert. `ElementTree::insert` refuses to relocate an active
@@ -610,7 +626,7 @@ fn mount_sparse_child_unbounded(
     // installs — which `begin_reconcile` asserts against.
     let child = {
         let _reconcile_guard = tree.begin_reconcile(host);
-        tree.insert_reporting_id(view, host, logical_index, owner, minted)
+        tree.insert_reporting_child(view, host, logical_index, owner, inserted)
     };
     stamp_logical_index(tree, pipeline, child, logical_index);
 
@@ -1277,6 +1293,196 @@ mod tests {
         );
     }
 
+    /// A `GlobalKey`'d leaf whose `update_render_object` panics once armed.
+    ///
+    /// The retake path applies the incoming view to the element it pulled
+    /// back (`element_mut().update(view, owner)`), so a retake runs this user
+    /// code with the relocation already committed — a second panic site
+    /// behind the same `insert` call as `create_render_object`.
+    #[derive(Clone)]
+    struct GlobalKeyedPanicsOnUpdate {
+        key: GlobalKey<Self>,
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl RenderView for GlobalKeyedPanicsOnUpdate {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(4.0)), Some(px(4.0)))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            assert!(
+                !self.armed.load(std::sync::atomic::Ordering::SeqCst),
+                "retake update_render_object boom"
+            );
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for GlobalKeyedPanicsOnUpdate {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+        fn key(&self) -> Option<&dyn ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    /// Records every mount/unmount an owner announces, so a test can check
+    /// that the two stay causally ordered.
+    #[derive(Default)]
+    struct MountLedger {
+        mounted: parking_lot::Mutex<Vec<flui_foundation::ElementId>>,
+        unmounted: parking_lot::Mutex<Vec<flui_foundation::ElementId>>,
+    }
+
+    impl flui_foundation::observe::TreeObserver for MountLedger {
+        fn element_mounted(&self, event: &flui_foundation::observe::ElementMounted) {
+            self.mounted.lock().push(event.element);
+        }
+        fn element_unmounted(&self, event: &flui_foundation::observe::ElementUnmounted) {
+            self.unmounted.lock().push(event.element);
+        }
+    }
+
+    /// A mount that panicked was never announced, so its cleanup must not
+    /// announce an unmount either.
+    ///
+    /// `insert` emits `Mount` only after `mount` returns, so an observer never
+    /// sees the abandoned node appear; reporting its removal would hand that
+    /// observer an id out of nowhere and break the causal ordering ADR-0040
+    /// promises. `discard_unannounced` is the silent counterpart of
+    /// `remove_finalized` for exactly this node.
+    #[test]
+    fn an_abandoned_mount_announces_neither_a_mount_nor_an_unmount() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+        let ledger = Arc::new(MountLedger::default());
+        build_owner.set_tree_observer(
+            Arc::clone(&ledger) as Arc<dyn flui_foundation::observe::TreeObserver>
+        );
+
+        let mut children = SparseChildren::new();
+        let recovered = children.ensure(
+            0,
+            &PanicsOnCreateRenderObject,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        let unmounted = ledger.unmounted.lock().clone();
+        assert!(
+            unmounted.is_empty(),
+            "the abandoned node was never announced as mounted, so nothing may \
+             be announced as unmounted: got {unmounted:?}"
+        );
+        let mounted = ledger.mounted.lock().clone();
+        assert_eq!(
+            mounted,
+            vec![recovered],
+            "only the recovery child is announced"
+        );
+    }
+
+    /// A render view whose `create_render_object` panics.
+    #[derive(Clone)]
+    struct PanicsOnCreateRenderObject;
+
+    impl RenderView for PanicsOnCreateRenderObject {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            panic!("create_render_object boom")
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for PanicsOnCreateRenderObject {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    /// A panic in the *retake* half of a mount is undone too.
+    ///
+    /// The mount boundary's report distinguishes a freshly minted node from a
+    /// retaken one precisely for this: an evicted `GlobalKey`'d child pulled
+    /// back from the inactive queue is already reparented and reactivated by
+    /// the time its `update` runs, so recovering by "remove the node this
+    /// insert minted" would remove nothing and leave a broken, half-updated
+    /// element parented here with the error view beside it.
+    #[test]
+    fn a_panicking_retake_removes_the_reactivated_element_instead_of_stranding_it() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+        let item = GlobalKeyedPanicsOnUpdate {
+            key: GlobalKey::<GlobalKeyedPanicsOnUpdate>::new(),
+            armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+
+        let mut children = SparseChildren::new();
+        let first = children.ensure(
+            0,
+            &item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        // Evict: the `GlobalKey` makes this a soft removal, so the element
+        // waits in the inactive queue for a retake instead of being freed.
+        children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
+        assert!(
+            tree.get(first).is_some(),
+            "a globally-keyed eviction is a soft removal — the slab entry survives"
+        );
+
+        item.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let recovered = children.ensure(
+            0,
+            &item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert_ne!(
+            recovered, first,
+            "the reactivated element was removed, not handed back broken"
+        );
+        assert!(
+            tree.get(first).is_none(),
+            "the half-updated element must not stay parented under the host"
+        );
+        assert_eq!(
+            tree.get(recovered)
+                .expect("a live element")
+                .element()
+                .view_type_id(),
+            std::any::TypeId::of::<crate::view::ErrorView>(),
+            "the index carries the error view"
+        );
+    }
+
     #[test]
     fn evicted_globally_keyed_child_freed_by_finalize_tree() {
         let (mut tree, mut build_owner, pipeline, host) = host_tree();
@@ -1901,7 +2107,7 @@ mod reconcile_tests {
         // The error child is one element (plus whatever its own view builds
         // on a later pass, which has not run here). The half-mounted node the
         // panic stranded would push this higher, and it is reachable through
-        // nothing but the id `insert_reporting_id` reports.
+        // nothing but the report `insert_reporting_child` hands back.
         assert_eq!(
             recovered,
             clean + 1,

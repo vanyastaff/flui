@@ -447,6 +447,23 @@ pub(crate) enum SubtreeRemoval {
     Finalize,
 }
 
+/// What an insert did with the child it was asked to produce, reported
+/// *before* any user code runs so a caller that bounds mount panics knows
+/// what there is to undo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InsertedChild {
+    /// A fresh node entered the slab at this id. Until `mount` returns it is
+    /// announced nowhere — no `Mount` event, no `GlobalKey` registration, no
+    /// entry in the parent's `child_ids` — so this report is the only handle
+    /// to it.
+    Minted(ElementId),
+    /// An existing element was relocated here by a `GlobalKey` retake. It was
+    /// already announced (as a `Reparent`), carries user state, and its own
+    /// `update` — user `update_render_object` included — runs inside the
+    /// retake.
+    Retaken(ElementId),
+}
+
 /// The partial child order a reconcile has committed so far, which the
 /// `GlobalKey` retake preflight consults to decide whether a candidate can be
 /// relocated into this parent. Empty for an insert outside a reconcile.
@@ -734,29 +751,29 @@ impl ElementTree {
         )
     }
 
-    /// [`insert`](Self::insert), reporting the freshly minted [`ElementId`]
-    /// through `minted` the instant the node enters the slab — *before* the
-    /// element mounts, and so before any user `create_render_object` runs.
+    /// [`insert`](Self::insert), reporting through `inserted` what it did with
+    /// the child — and reporting it *before* any user code runs, so a caller
+    /// that bounds mount panics knows what there is to undo.
     ///
-    /// A caller that bounds mount panics needs the id to clean up with: a
-    /// panic out of `mount` leaves a node that is in the slab, parented, and
-    /// never announced (no `Mount` event, no `GlobalKey` registration, and no
-    /// entry in the parent's `child_ids` — `insert` never writes those). It is
-    /// reachable only through this report, and `remove_finalized` is the
-    /// primitive that retires it.
+    /// The two dispositions differ in what an undo owes them, which is why
+    /// [`InsertedChild`] distinguishes them rather than handing back a bare
+    /// id. A `Minted` node is announced nowhere until `mount` returns, so it
+    /// is reachable through this report alone and must be discarded without
+    /// an unmount observation (no observer ever saw it mount). A `Retaken`
+    /// one was already announced as a reparent and carries user state; its
+    /// own `update` — user `update_render_object` included — runs inside the
+    /// retake, so it is a panic site too, and undoing it is an ordinary
+    /// subtree removal.
     ///
-    /// `minted` stays `None` when a `GlobalKey` retake satisfied the insert:
-    /// that path returns an *existing* element, which the caller must not
-    /// remove. Panics from inside the retake itself are out of scope here —
-    /// they are FLUI-internal, not user code, and leave relocation state that
-    /// no caller can reason about.
-    pub(crate) fn insert_reporting_id(
+    /// `inserted` is cleared on entry, so the report always describes this
+    /// call and never a previous one.
+    pub(crate) fn insert_reporting_child(
         &mut self,
         view: &dyn View,
         parent: ElementId,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
-        minted: &mut Option<ElementId>,
+        inserted: &mut Option<InsertedChild>,
     ) -> ElementId {
         self.insert_with_provisional_order(
             view,
@@ -764,7 +781,7 @@ impl ElementTree {
             slot,
             owner,
             ProvisionalOrder::NONE,
-            minted,
+            inserted,
         )
     }
 
@@ -797,12 +814,16 @@ impl ElementTree {
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
         order: ProvisionalOrder<'_>,
-        minted: &mut Option<ElementId>,
+        inserted: &mut Option<InsertedChild>,
     ) -> ElementId {
         let ProvisionalOrder {
             reconciled_prefix,
             unclaimed_old_slots,
         } = order;
+        // Clear on entry so the report always describes THIS call. A caller
+        // reusing one slot across inserts would otherwise carry a stale id
+        // into a recovery path and remove the wrong element.
+        *inserted = None;
         // ADV-1 state migration. Before creating a fresh element,
         // check whether `view` has a `GlobalKey` that points at an
         // existing element. If it is inactive, pull it back; if it is still
@@ -810,6 +831,7 @@ impl ElementTree {
         // it here. In both cases the `ElementId` and state survive.
         if let Some(key) = global_key_of(view) {
             let destination = RetakeDestination {
+                inserted,
                 parent,
                 slot,
                 reconciled_prefix,
@@ -899,7 +921,7 @@ impl ElementTree {
         // Report before `mount` — everything from here on can panic through
         // user code (`View::create_render_object`), and this is the only
         // handle to the node that would otherwise be stranded.
-        *minted = Some(id);
+        *inserted = Some(InsertedChild::Minted(id));
 
         // Resolve this child's inherited scope from the parent's now that the
         // element knows whether it is itself a provider (`as_inherited`) and
@@ -1713,7 +1735,9 @@ impl ElementTree {
     ///    orphaning its interaction-lane registration for the life of the
     ///    owner. Processing descendants first makes each one's own render
     ///    removal a no-op by the time the root's cascade reaches it.
-    /// 4. Remove the root via `remove`.
+    /// 4. Remove the root: `remove` under `DeactivateKeyed` (so a keyed root
+    ///    soft-removes and stays retakeable), `remove_finalized` under
+    ///    `Finalize` (nothing survives, including a keyed root).
     ///
     /// Complexity: O(n) time + O(n) peak heap for the work-stack (n = subtree
     /// size), O(h) call-stack for the constant-stack iterative walk — paid
@@ -1791,7 +1815,20 @@ impl ElementTree {
         for &descendant in subtree[1..].iter().rev() {
             self.remove_finalized(descendant, owner);
         }
-        self.remove(id, owner);
+        // The root goes out by the same rule as the rest of the subtree.
+        // Under `Finalize` nothing survives — a keyed root soft-removed here
+        // would sit in the inactive queue with no frame coming to drain it,
+        // which is the leak this mode exists to prevent; and a root removed
+        // because its own update panicked must never be retakeable, or the
+        // half-configured render object resurfaces on the next retake.
+        match mode {
+            SubtreeRemoval::Finalize => {
+                self.remove_finalized(id, owner);
+            }
+            SubtreeRemoval::DeactivateKeyed => {
+                self.remove(id, owner);
+            }
+        }
     }
 
     /// Fully remove an element that has already been unmounted (e.g.
@@ -1806,6 +1843,30 @@ impl ElementTree {
         &mut self,
         id: ElementId,
         owner: &mut crate::ElementOwner<'_>,
+    ) -> Option<ElementNode> {
+        self.remove_finalized_inner(id, owner, true)
+    }
+
+    /// Retire a node that `insert` minted but never finished mounting.
+    ///
+    /// Identical teardown to [`remove_finalized`](Self::remove_finalized) with
+    /// the unmount observation suppressed: `insert` emits its `Mount` only
+    /// *after* `mount` returns, so a node abandoned mid-mount was never
+    /// announced, and reporting an unmount for it would hand an observer an
+    /// id it never saw appear (ADR-0040's causal ordering).
+    pub(crate) fn discard_unannounced(
+        &mut self,
+        id: ElementId,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Option<ElementNode> {
+        self.remove_finalized_inner(id, owner, false)
+    }
+
+    fn remove_finalized_inner(
+        &mut self,
+        id: ElementId,
+        owner: &mut crate::ElementOwner<'_>,
+        announce: bool,
     ) -> Option<ElementNode> {
         // Staleness-checked entry (mirror of `remove`).
         let index = self.resolve_index(id)?;
@@ -1824,9 +1885,11 @@ impl ElementTree {
 
         // ADR-0040: the second of the two unmount primitives (finalize
         // drains, subtree evictions, root detach all bottom out here).
-        crate::owner::emit_observation(owner.tree_observer, |o| {
-            o.element_unmounted(&flui_foundation::observe::ElementUnmounted::new(id));
-        });
+        if announce {
+            crate::owner::emit_observation(owner.tree_observer, |o| {
+                o.element_unmounted(&flui_foundation::observe::ElementUnmounted::new(id));
+            });
+        }
 
         let node = self.nodes.remove(index);
         // Slot freed → bump its generation (ABA guard, see `remove`).
@@ -2016,8 +2079,12 @@ enum GlobalKeyRetake {
     Rejected,
 }
 
-#[derive(Clone, Copy)]
 struct RetakeDestination<'a> {
+    /// Where the retake reports that it committed the relocation, so a caller
+    /// bounding the retaken element's `update` (user `update_render_object`)
+    /// knows there is a live, reparented element to undo. Written after the
+    /// relocation lands and BEFORE that update runs.
+    inserted: &'a mut Option<InsertedChild>,
     parent: ElementId,
     slot: usize,
     reconciled_prefix: &'a [ElementId],
@@ -2275,6 +2342,12 @@ fn retake_inactive_global_key(
     }
     attach_render_relocation(&mut relocation);
 
+    // The relocation is committed; the element is live and parented here.
+    // Report it before running its `update`, which is user code and can
+    // panic — the caller's recovery has to know to remove THIS element
+    // rather than looking for a node this insert never minted.
+    *destination.inserted = Some(InsertedChild::Retaken(candidate_id));
+
     {
         let node = tree.get_mut(candidate_id)?;
         node.element_mut().update(view, owner);
@@ -2434,6 +2507,11 @@ fn retake_active_global_key(
         tree.reset_ancestor_parent_data(element_id);
     }
     attach_render_relocation(&mut relocation);
+
+    // See the sibling retake path: report the committed relocation before the
+    // element's own `update` runs.
+    *destination.inserted = Some(InsertedChild::Retaken(candidate_id));
+
     {
         let node = tree.get_mut(candidate_id)?;
         node.element_mut().update(view, owner);
@@ -3763,6 +3841,7 @@ mod tests {
             registered_key,
             &keyed_view,
             RetakeDestination {
+                inserted: &mut None,
                 parent: destination,
                 slot: 0,
                 reconciled_prefix: &[],
