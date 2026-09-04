@@ -50,8 +50,8 @@ pub struct ChildState<P: ParentData + Default> {
     ///
     /// Set by `layout_child` and `position_child`, and committed after the
     /// parent's geometry validates as the child's placed generation — which
-    /// paint and hit-test compare against the parent's own (semantics is
-    /// deliberately not gated; see `RenderState::placed_generation`).
+    /// paint, hit-test and semantics each compare against the parent's own
+    /// (see `RenderState::placed_generation`).
     ///
     /// Keyed on `layout_child`, not `position_child` alone: a dozen
     /// single-child proxies (`Opacity`, `RepaintBoundary`, `Transform`, …) lay
@@ -1157,8 +1157,8 @@ pub struct ErasedChildState {
     ///
     /// Set by `layout_child` and `position_child`, and committed after the
     /// parent's geometry validates as the child's placed generation — which
-    /// paint and hit-test compare against the parent's own (semantics is
-    /// deliberately not gated; see `RenderState::placed_generation`).
+    /// paint, hit-test and semantics each compare against the parent's own
+    /// (see `RenderState::placed_generation`).
     ///
     /// Keyed on `layout_child`, not `position_child` alone: a dozen
     /// single-child proxies (`Opacity`, `RepaintBoundary`, `Transform`, …) lay
