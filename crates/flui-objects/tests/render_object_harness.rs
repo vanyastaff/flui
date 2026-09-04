@@ -7943,6 +7943,27 @@ impl flui_foundation::Diagnosticable for PanicAfterNBoxLayouts {}
 /// teleport the view. The third pass repeats the check for the frame after:
 /// the child is poisoned by then and its stand-in is served without any
 /// failure being recorded, which is the arm a failure-flag design misses.
+/// An anchor outside `0.0..=1.0`, or a non-finite one, is caller input: it is
+/// clamped rather than propagated, because `NaN` would poison every offset
+/// the layout derives from it and a viewport that renders nothing is a worse
+/// answer than one anchored at its leading edge.
+#[test]
+fn harness_viewport_clamps_an_unusable_anchor() {
+    let mut viewport = RenderViewport::new(AxisDirection::TopToBottom);
+
+    assert!(!viewport.set_anchor(0.25).is_none());
+    assert_eq!(viewport.anchor(), 0.25);
+
+    // Out of range: clamped to the nearest usable value.
+    let _ = viewport.set_anchor(4.0);
+    assert_eq!(viewport.anchor(), 1.0);
+
+    // Non-finite: the leading edge, never `NaN`.
+    let _ = viewport.set_anchor(f32::NAN);
+    assert_eq!(viewport.anchor(), 0.0);
+    assert!(viewport.anchor().is_finite());
+}
+
 #[test]
 fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
     use flui_rendering::view::{ScrollPosition, ViewportOffset};

@@ -97,7 +97,12 @@ guard. Decision 3 landed third:
   `Some(n) == child_count` — FLUI's old "no center" spelling — is no longer meaningful under this
   model (Flutter's center is always a direct child): `debug_assert!`ed and, in release, clamped
   to the last child with a one-time warning.
-  `anchor: f32` (default `0.0`) is new alongside it, driving `_attemptLayout`'s formulas verbatim
+  `anchor: f32` (default `0.0`) is new alongside it. An out-of-range or non-finite `anchor` is
+  **clamped rather than asserted** (non-finite to `0.0`), with a one-time warning: it is caller
+  input, not an internal invariant, and this library does not panic on a configuration gap — the
+  same rule `RenderTable` follows for a baseline alignment with no text baseline. Flutter asserts;
+  `NaN` would otherwise poison every offset the layout derives from it. The anchor drives
+  `_attemptLayout`'s formulas verbatim
   (`centerOffset`, the reverse/forward remaining-paint/cache-extent splits, the reverse group's
   hardcoded `overlap: 0.0`, the forward group's `overlap` folding in the leading-edge overscroll
   only when there is no reverse group ahead of it) and the anchor terms in

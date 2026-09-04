@@ -219,6 +219,8 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// Set once `clamp_center` has warned about an out-of-range `center`, so
     /// a misconfigured viewport does not spam a warning every frame.
     invalid_center_warned: bool,
+    /// Latches the out-of-range `anchor` warning, cleared by a usable value.
+    invalid_anchor_warned: bool,
     child_count: usize,
     min_scroll_extent: f32,
     max_scroll_extent: f32,
@@ -271,6 +273,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             center: None,
             anchor: 0.0,
             invalid_center_warned: false,
+            invalid_anchor_warned: false,
             child_count: 0,
             min_scroll_extent: 0.0,
             max_scroll_extent: 0.0,
@@ -391,6 +394,9 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.center = index;
+        // A new value gets its own chance to warn: the latch suppresses one
+        // value's warning every frame, not every future mistake.
+        self.invalid_center_warned = false;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
@@ -404,19 +410,40 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// Sets where the zero-scroll line sits along the main axis, as a
     /// fraction of `main_axis_extent` from the leading edge.
     ///
-    /// Must be finite and within `0.0..=1.0` (`debug_assert!`ed); Flutter's
-    /// `RenderViewport.anchor`, default `0.0` (the leading edge — no room for
-    /// a reverse group at rest).
+    /// Flutter's `RenderViewport.anchor`, default `0.0` (the leading edge — no
+    /// room for a reverse group at rest).
+    ///
+    /// A value outside `0.0..=1.0`, or a non-finite one, is caller input, not
+    /// an internal invariant: it is clamped (a non-finite value to `0.0`) and
+    /// warned about once, never asserted. Flutter asserts here; this library
+    /// does not panic on a configuration gap — the same rule `RenderTable`
+    /// follows for a baseline alignment with no text baseline. Letting `NaN`
+    /// through would poison every offset the layout derives from it, and a
+    /// viewport that renders nothing is a worse answer than one anchored at
+    /// its leading edge.
     #[inline]
     pub fn set_anchor(&mut self, anchor: f32) -> flui_rendering::RenderUpdateImpact {
-        debug_assert!(
-            anchor.is_finite() && (0.0..=1.0).contains(&anchor),
-            "BUG: RenderViewport::anchor must be finite and in 0.0..=1.0, got {anchor}"
-        );
-        if self.anchor == anchor {
+        let usable = if anchor.is_finite() {
+            anchor.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if usable == anchor {
+            // A later bad value gets its own warning.
+            self.invalid_anchor_warned = false;
+        } else if !self.invalid_anchor_warned {
+            self.invalid_anchor_warned = true;
+            tracing::warn!(
+                requested = anchor,
+                used = usable,
+                "RenderViewport: anchor must be finite and in 0.0..=1.0; using the \
+                 clamped value so layout can proceed"
+            );
+        }
+        if self.anchor == usable {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        self.anchor = anchor;
+        self.anchor = usable;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 

@@ -351,9 +351,10 @@ impl<C> ShrinkWrappingViewport<C> {
             cross_axis_direction,
             position,
         );
-        // Deliberately dropped: this runs before the node joins a tree, and a
-        // caller may pass the render object's own default (`FirstIsTop`),
-        // for which `set_paint_order` correctly reports `NONE`.
+        // The setter runs; its returned impact is what is dropped. This is
+        // before the node joins a tree, so there is nothing to invalidate —
+        // and a caller may pass the render object's own default
+        // (`FirstIsTop`), for which the setter correctly reports `NONE`.
         let _ = render_object.set_paint_order(self.paint_order);
         render_object
     }
