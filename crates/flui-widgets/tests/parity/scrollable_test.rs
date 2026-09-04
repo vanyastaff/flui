@@ -602,3 +602,46 @@ fn scrolling_relayouts_the_viewport_without_rebuilding_its_subtree() {
         "the scroll itself still took effect"
     );
 }
+
+/// An `animate_to` queued *before* the `Scrollable` mounts must still run.
+///
+/// The command is a queue drained on the controller's notify, and a call made
+/// while no `Scrollable` is attached fires that notify with nobody listening.
+/// Nothing guarantees a second one: if the first layout's dimensions match
+/// what the controller already holds, `update_dimensions` notifies nothing at
+/// all and the command would wait forever. So the listener drains once when it
+/// is installed — the `AnimatedBuilder` this replaced covered the same case
+/// implicitly, by servicing the queue on its initial build.
+#[test]
+fn an_animate_to_queued_before_mount_still_runs() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 500.0);
+
+    // Queued with no Scrollable in the tree: this notify reaches no listener.
+    controller.animate_to(
+        200.0,
+        Duration::from_millis(100),
+        Arc::new(flui_animation::Linear),
+    );
+    assert_eq!(
+        controller.pixels(),
+        0.0,
+        "nothing has driven the animation yet"
+    );
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 800.0));
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    for _ in 0..12 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    assert!(
+        controller.pixels() > 0.0,
+        "the queued animate_to must have been picked up on mount; pixels = {}",
+        controller.pixels()
+    );
+}

@@ -106,9 +106,12 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// dirtied. See this module's docs.
 ///
 /// A [`VsyncScope`] must be above the `Scrollable` in the tree (or provided
-/// by the application's binding) for fling animations to be driven
-/// deterministically; without one the fling controller falls back to its own
-/// wall-clock scheduler.
+/// by the application's binding) for fling animations to run at all. There is
+/// no wall-clock fallback: the fling controller is built with
+/// `AnimationController::without_ticker_bounds`, so with no `VsyncScope` to
+/// register it, nothing ever advances it — a fling or an `animate_to` sets up
+/// and then stays put. Drag and wheel scrolling are unaffected, since both
+/// write the position directly.
 ///
 /// # Example
 ///
@@ -442,6 +445,16 @@ impl ScrollableState {
             scroll_ref.service_pending_command(&fling_ref);
         }));
         self.command_listener = Some((listenable, listener_id));
+        // Drain once on install. A command queued before this listener existed
+        // — `animate_to` on a controller that is not attached to a mounted
+        // `Scrollable` yet, or one handed over by a rebuild — already fired
+        // its notify with nobody listening, and nothing guarantees a second
+        // one: if the first layout's dimensions match what the controller
+        // already held, it notifies nothing at all and the command waits
+        // forever. The `AnimatedBuilder` this replaced serviced the queue on
+        // its initial build, which covered the same case implicitly.
+        self.scroll_controller
+            .service_pending_command(&self.fling_controller);
     }
 
     /// Detach the command listener from whichever listenable it was installed
