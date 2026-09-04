@@ -46,6 +46,17 @@ pub struct ChildState<P: ParentData + Default> {
     pub size: Size,
     /// Position offset set by parent.
     pub offset: Offset,
+    /// Whether the parent laid this child out during this pass.
+    ///
+    /// Set by `layout_child` and `position_child`, and committed after the
+    /// parent's geometry validates as the child's placed generation — which
+    /// paint, hit-test and semantics then compare against the parent's own.
+    ///
+    /// Keyed on `layout_child`, not `position_child` alone: a dozen
+    /// single-child proxies (`Opacity`, `RepaintBoundary`, `Transform`, …) lay
+    /// their child out and never position it, because the offset is implicitly
+    /// zero. Gating on positioning would drop every one of them from paint.
+    pub laid_out_this_pass: bool,
     /// Parent data for this child.
     pub parent_data: P,
 }
@@ -57,6 +68,7 @@ impl<P: ParentData + Default> ChildState<P> {
             id,
             size: Size::ZERO,
             offset: Offset::ZERO,
+            laid_out_this_pass: false,
             parent_data: P::default(),
         }
     }
@@ -67,6 +79,7 @@ impl<P: ParentData + Default> ChildState<P> {
             id,
             size: Size::ZERO,
             offset: Offset::ZERO,
+            laid_out_this_pass: false,
             parent_data,
         }
     }
@@ -639,6 +652,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                     if let Some(children) = children.as_mut()
                         && let Some(child) = children.get_mut(index)
                     {
+                        child.laid_out_this_pass = true;
                         child.size = size;
                     }
 
@@ -680,6 +694,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 if let Some(children) = children.as_mut()
                     && let Some(child) = children.get_mut(index)
                 {
+                    child.laid_out_this_pass = true;
                     child.offset = offset;
                 }
             }
@@ -1137,6 +1152,17 @@ pub struct ErasedChildState {
     pub sliver_geometry: Option<SliverGeometry>,
     /// Whether the child still needs layout in the backing render tree.
     pub needs_layout: bool,
+    /// Whether the parent laid this child out during this pass.
+    ///
+    /// Set by `layout_child` and `position_child`, and committed after the
+    /// parent's geometry validates as the child's placed generation — which
+    /// paint, hit-test and semantics compare against the parent's own.
+    ///
+    /// Keyed on `layout_child`, not `position_child` alone: a dozen
+    /// single-child proxies (`Opacity`, `RepaintBoundary`, `Transform`, …) lay
+    /// their child out and never position it, because the offset is implicitly
+    /// zero. Gating on positioning would drop every one of them from paint.
+    pub laid_out_this_pass: bool,
     /// Parent data, created on demand by the typed bridge.
     pub parent_data: Option<Box<dyn ParentData>>,
 }
@@ -1152,6 +1178,7 @@ impl ErasedChildState {
             sliver_constraints: None,
             sliver_geometry: None,
             needs_layout: true,
+            laid_out_this_pass: false,
             parent_data: None,
         }
     }
@@ -1292,6 +1319,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         };
         let size = (self.layout_child_callback)(child_id, constraints);
         if let Some(slot) = self.children.get_mut(index) {
+            slot.laid_out_this_pass = true;
             slot.size = size;
         }
         size
@@ -1319,6 +1347,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
             None => SliverGeometry::ZERO,
         };
         if let Some(slot) = self.children.get_mut(index) {
+            slot.laid_out_this_pass = true;
             slot.sliver_constraints = Some(constraints);
             slot.sliver_geometry = Some(geometry);
             slot.needs_layout = false;
@@ -1348,6 +1377,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
 
     fn position_child(&mut self, index: usize, offset: Offset) {
         if let Some(slot) = self.children.get_mut(index) {
+            slot.laid_out_this_pass = true;
             slot.offset = offset;
         }
     }

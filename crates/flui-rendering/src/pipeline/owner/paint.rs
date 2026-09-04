@@ -222,6 +222,10 @@ impl PipelineOwner<PaintPhase> {
         let layer_blend = render_node.paint_layer_blend();
         let transform = render_node.paint_transform();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
+        // The generation this node's most recent layout stamped onto the
+        // children it laid out; a child carrying anything else was not part of
+        // that pass and is skipped at the splice below.
+        let parent_generation = render_node.layout_generation();
 
         // Written unconditionally PRE-paint (Flutter object.dart:3560):
         // a node flipping boundary→non-boundary leaves exactly one
@@ -355,6 +359,16 @@ impl PipelineOwner<PaintPhase> {
                     let Some(child_node) = self.render_tree.get(child_id) else {
                         continue;
                     };
+                    // Skip a child this pass did not lay out. Its committed
+                    // offset describes a pass that no longer holds — a lazy
+                    // sliver's out-of-band resident is the case that makes it
+                    // visible — and painting it there puts content where
+                    // nothing is. `parent_generation` is the parent's current
+                    // layout generation; a child it laid out was stamped with
+                    // that value at the layout commit.
+                    if !child_node.was_placed_by(parent_generation) {
+                        continue;
+                    }
                     if child_node
                         .as_sliver()
                         .and_then(|entry| entry.state().geometry())

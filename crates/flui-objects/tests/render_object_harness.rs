@@ -6454,10 +6454,15 @@ fn harness_render_sliver_grid_pre_seeded_tiles_lay_out_correctly() {
 // The two former stale-out-of-band `hit_test`/`paint` pins
 // (`hit_test_ignores_stale_out_of_band_offset`, `paint_ignores_stale_out_of_band_tile`)
 // pinned an object-level `laid_out_band` gate that only the now-deleted eager
-// grid carried — this render object keeps no such band. The same stale-rect
-// hazard is closed one layer up instead: the frame-level fixpoint evicts a
-// sliver's out-of-band residents before paint runs (ADR-0017's amendment). See
-// `crates/flui-widgets/tests/lazy_list.rs::lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint`.
+// grid carried — this render object keeps no such band, and cannot: `PaintCx`
+// exposes neither parent data nor a child's logical index. The hazard is
+// closed at the PIPELINE instead, and structurally rather than by discipline:
+// a layout stamps its own generation onto the children it laid out, and the
+// paint driver skips any child carrying a different one. Every multi-child
+// object gets the property for free, not just the ones that remembered to
+// track a band. See `harness_sliver_list_out_of_band_resident_does_not_paint`
+// below, and the frame-level eviction that still runs above it
+// (`crates/flui-widgets/tests/lazy_list.rs::lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint`).
 
 /// Regression for a NARROWER, review-caught defect ported from the eager
 /// grid's original fix: what a poisoned relayout must not lose is the
