@@ -9,6 +9,7 @@ impl ViewState<Async> for AsyncState {
         self.post_frame = ctx.post_frame_handle();
         self.local_post_frame = ctx.local_post_frame_handle();
         self.text_input = ctx.text_input_handle();
+        self.hit_test = ctx.hit_test_handle();
         self.focus = Some(ctx.focus_manager());
     }
 
@@ -17,6 +18,7 @@ impl ViewState<Async> for AsyncState {
         self.post_frame = ctx.post_frame_handle();
         self.local_post_frame = ctx.local_post_frame_handle();
         self.text_input = ctx.text_input_handle();
+        self.hit_test = ctx.hit_test_handle();
         self.focus = Some(ctx.focus_manager());
     }
 

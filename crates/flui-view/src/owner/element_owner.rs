@@ -233,6 +233,10 @@ pub struct ElementOwner<'a> {
     /// threaded into render-object lifecycle contexts.
     pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,
 
+    /// This presentation's fresh-hit-test capability, threaded into every
+    /// `BuildCtx` the same way `text_input_handle` is.
+    pub(crate) hit_test_handle: &'a Option<flui_interaction::HitTestHandle>,
+
     /// This owner's identity for [`GlobalKeyScope`] claim tagging (ADR-0043).
     /// `Copy`, so every split-borrow construction site just copies it — no
     /// second borrow of `BuildOwner` needed.

@@ -1203,7 +1203,15 @@ fi
 #   `GlobalWidgetsLocalizations`) behind the trait every `Localizations::of`
 #   caller depends on — Flutter parity: `Localizations.of<WidgetsLocalizations>`
 #   is keyed by the abstract interface, never the concrete runtime class.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|TreeObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|TreeObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations|HitTestProbe)\b'
+
+# `HitTestProbe` (issue #541) is a layer-INVERSION seam, and dyn is what makes
+# it one: `HitTestResult` is defined in flui-interaction, but the render tree
+# that fills one lives two layers up, so the capability is declared where its
+# realm identity lives and implemented where the tree is. A generic parameter
+# would infect `InteractionLane` — and through it `UiRealm` — with a type the
+# lane exists precisely not to know; an enum cannot name a type from a crate
+# above it at all.
 
 # Framework crates under enforcement.
 fr036_scope=(

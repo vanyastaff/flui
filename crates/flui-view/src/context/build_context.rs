@@ -149,6 +149,28 @@ pub trait BuildContext {
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
 
+    /// The realm's fresh-hit-test capability, if a binding installed an
+    /// interaction lane.
+    ///
+    /// Answers "what is under this global position **right now**" — which is
+    /// not a question pointer dispatch can answer. Dispatch resolves a
+    /// hit-test path once, at `PointerDown`, and replays that cached route for
+    /// every later `Move`/`Up`, so a gesture that moves over something new
+    /// never learns about it. `DragTarget` discovery is the case that needs
+    /// this: the reference re-tests at the pointer's *current* position on
+    /// every move, deliberately independent of where the drag went down.
+    ///
+    /// The snapshot returned is owned and immediately stale — the ids in it
+    /// name render objects that a later frame may have moved or dropped.
+    /// Dispatch from it synchronously; do not store it.
+    ///
+    /// `None` when no binding installed an interaction lane (a bare
+    /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
+    /// (`init_state` / `did_change_dependencies`), never in
+    /// `build`/layout/paint — port-check trigger #22. Mid-frame the answer
+    /// would describe a tree the asking phase is still mutating.
+    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle>;
+
     /// Take a keep-alive hold on the lazy sliver child this element lives
     /// inside, so it survives scrolling out of the cache band.
     ///

@@ -57,16 +57,17 @@
 #                       `Focus::init_state` (`install_rect_provider`) and
 #                       `InteractiveViewerState::init_state`.
 #
-# Seven tokens, six `BuildContext` methods: `rebuild_handle`,
-# `local_post_frame_handle`, `post_frame_handle`, `text_input_handle`,
-# `focus_manager`, and `pipeline_owner` are all `BuildContext` methods;
-# `owner_platform` is the odd one out — a free function in flui-app, not a
-# `BuildContext` method at all — and the scanner is a textual token match,
-# not a method-call parse, so both shapes are caught the same way. All seven
-# must be acquired in `ViewState::init_state` / `did_change_dependencies` (the
-# six `BuildContext` methods) or outside any guarded body entirely
-# (`owner_platform`, which is composition-root-only, `pub(crate)` to
-# `flui-app`'s app module), stored, and fired later from a callback. A stored
+# The authoritative token list is the `capabilities=` line below; this comment
+# describes the SHAPE, not the membership, so it cannot drift out of date (it
+# said "seven tokens" for a list of nine before this note replaced the count).
+#
+# Most tokens are `BuildContext` methods and must be acquired in
+# `ViewState::init_state` / `did_change_dependencies`, stored, and fired later
+# from a callback. `owner_platform` is the odd one out — a free function in
+# flui-app, composition-root-only and `pub(crate)` to its app module, not a
+# `BuildContext` method at all — and must simply stay outside any guarded body.
+# The scanner is a textual token match rather than a method-call parse, so both
+# shapes are caught the same way. A stored
 # capability's OWN variable/field name must avoid the literal guarded token
 # too (e.g. `pipeline_cell`, not `pipeline_owner`) — this scanner does not
 # parse method calls, so a mere re-clone of an already-acquired value under
@@ -98,7 +99,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guarded_fns='build|build_into_views|perform_layout|layout_node_with_children|paint|paint_raw|run_paint|run_layout|run_compositing|compose|composite'
 
 # The capabilities themselves. Adding one here is the whole cost of guarding it.
-capabilities='rebuild_handle|local_post_frame_handle|post_frame_handle|text_input_handle|focus_manager|keep_alive_lease|keep_alive_handle|owner_platform|pipeline_owner'
+capabilities='rebuild_handle|local_post_frame_handle|post_frame_handle|text_input_handle|focus_manager|keep_alive_lease|keep_alive_handle|owner_platform|pipeline_owner|hit_test_handle'
 
 scan() {
   awk -v guarded="${guarded_fns}" -v caps="${capabilities}" '
@@ -144,17 +145,17 @@ self_test() {
     scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | sed 's/^/  /' || true
     local found
     found=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | wc -l || true)
-    if [[ "${found}" -ne 12 ]]; then
-      echo "  FAIL: expected 12 violations across all nine lifecycle-only capability tokens, got ${found}"
+    if [[ "${found}" -ne 13 ]]; then
+      echo "  FAIL: expected 13 violations across all ten lifecycle-only capability tokens, got ${found}"
       status=1
     else
-      echo "  ok: 12 violations reported"
+      echo "  ok: 13 violations reported"
     fi
     # Every capability token must actually be named — a scanner can otherwise
     # report the expected count while silently leaving a newer capability open.
     local reported
     reported=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null || true)
-    for cap in rebuild_handle local_post_frame_handle post_frame_handle text_input_handle focus_manager keep_alive_lease keep_alive_handle owner_platform pipeline_owner; do
+    for cap in rebuild_handle local_post_frame_handle post_frame_handle text_input_handle focus_manager keep_alive_lease keep_alive_handle owner_platform pipeline_owner hit_test_handle; do
       if ! grep -q "${cap}()" <<<"${reported}"; then
         echo "  FAIL: scanner never reported a ${cap}() violation"
         status=1

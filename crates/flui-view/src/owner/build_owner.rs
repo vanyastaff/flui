@@ -410,6 +410,7 @@ pub struct BuildOwner {
     /// `None` means the owner was built detached from a runtime interaction lane;
     /// render-object lifecycle contexts report that as a typed inactive realm.
     pub(crate) interaction_dispatch: Option<flui_interaction::InteractionDispatchHandle>,
+    pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
 
     /// This owner's identity for [`GlobalKeyScope`] claim tagging (ADR-0043).
     ///
@@ -535,6 +536,7 @@ impl BuildOwner {
             local_post_frame_handle: None,
             text_input_handle: None,
             interaction_dispatch: None,
+            hit_test_handle: None,
             owner_tag: OwnerTag::fresh(),
             global_key_scope: None,
         }
@@ -602,6 +604,17 @@ impl BuildOwner {
         handle: flui_interaction::InteractionDispatchHandle,
     ) {
         self.interaction_dispatch = Some(handle);
+    }
+
+    /// Install this presentation's fresh-hit-test capability.
+    ///
+    /// Called during presentation assembly with a handle pairing the realm's
+    /// dispatch ticket with a probe over THIS presentation's pipeline.
+    /// `HeadlessBinding` installs none, so headless-tree tests observe
+    /// `BuildContext::hit_test_handle() == None` honestly rather than reading
+    /// some other tree.
+    pub fn set_hit_test_handle(&mut self, handle: flui_interaction::HitTestHandle) {
+        self.hit_test_handle = Some(handle);
     }
 
     /// Install the realm's shared `GlobalKey` uniqueness domain (ADR-0043).
@@ -687,6 +700,18 @@ impl BuildOwner {
     #[must_use]
     pub fn local_post_frame_handle(&self) -> Option<&flui_scheduler::LocalPostFrameHandle> {
         self.local_post_frame_handle.as_ref()
+    }
+
+    /// This owner's fresh-hit-test capability, if a presentation installed one.
+    ///
+    /// Stored per owner, not derived from the realm-wide interaction dispatch
+    /// handle: a realm may host several presentations, each with its own
+    /// `PipelineOwner`, and a hit test must read the tree of the presentation
+    /// that asked. A realm-scoped probe would answer every one of them with
+    /// whichever tree was installed first.
+    #[must_use]
+    pub fn hit_test_handle(&self) -> Option<&flui_interaction::HitTestHandle> {
+        self.hit_test_handle.as_ref()
     }
 
     /// The binding's IME/text-input attach-detach capability, if one was
@@ -964,6 +989,7 @@ impl BuildOwner {
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
+            hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
@@ -1389,6 +1415,7 @@ impl BuildOwner {
                     local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     interaction_dispatch: &self.interaction_dispatch,
+                    hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
@@ -1485,6 +1512,7 @@ impl BuildOwner {
                 local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
+                hit_test_handle: &self.hit_test_handle,
                 global_key_scope: &mut self.global_key_scope,
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
@@ -1734,6 +1762,7 @@ impl BuildOwner {
                 local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
+                hit_test_handle: &self.hit_test_handle,
                 global_key_scope: &mut self.global_key_scope,
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
@@ -1933,6 +1962,7 @@ impl BuildOwner {
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
+            hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,

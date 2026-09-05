@@ -20,7 +20,7 @@ use flui_types::geometry::Matrix4;
 use flui_types::painting::{Path, Shader};
 use flui_types::{Offset, Pixels, Rect, Size};
 
-use super::hit_test::{EventPropagation, HitTestEntry, transform_pointer_event};
+use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
 use crate::pan_zoom::PointerPanZoomEvent;
 
@@ -67,6 +67,9 @@ pub enum InteractionDispatchError {
     /// A cached route has already been released.
     #[error("resolved interaction route is stale")]
     StaleRoute,
+    /// The render tree is checked out by a frame phase and cannot be read.
+    #[error("the render tree is busy and cannot answer a hit test right now")]
+    TreeBusy,
 }
 
 /// Opaque data-plane identity for an ordinary pointer event target.
@@ -601,6 +604,71 @@ impl fmt::Debug for RoutePanic {
     }
 }
 
+/// Runs a fresh hit test against a live render tree.
+///
+/// The lane cannot perform a hit test itself: [`HitTestResult`] is defined
+/// here, but the render tree that fills one lives two layers up
+/// (`flui_rendering::PipelineOwner`), and this crate must not depend upward to
+/// reach it. So the capability is *declared* here, where its realm identity and
+/// thread affinity already live, and *installed* by whoever owns the tree —
+/// the same division `TextInputHandle` uses.
+pub trait HitTestProbe {
+    /// Fill `result` with everything under `position`, leaf-first.
+    ///
+    /// `position` is a GLOBAL position in logical pixels, the same space
+    /// pointer events arrive in.
+    ///
+    /// # Errors
+    ///
+    /// [`InteractionDispatchError::TreeBusy`] when a frame phase holds the
+    /// tree and it cannot be read. Answering an empty path there would be a
+    /// lie a caller cannot detect — a drag over a live target would read as a
+    /// drag over nothing.
+    fn probe(
+        &self,
+        position: Offset<Pixels>,
+        result: &mut HitTestResult,
+    ) -> Result<(), InteractionDispatchError>;
+}
+
+/// An owned answer to one hit test, detached from the tree that produced it.
+///
+/// Owned rather than borrowed on purpose. The issue this implements asks for a
+/// result "valid for immediate synchronous dispatch only", and a borrow would
+/// enforce that by making the tree unusable for the borrow's whole life —
+/// which is the opposite of what a drag needs, since dispatching to a target
+/// is exactly when the tree must be free again. Owning the entries instead
+/// makes a stale snapshot *useless* rather than *unsound*: the ids in it name
+/// render objects that may since have moved or gone, so acting on one across a
+/// frame boundary addresses the past, and nothing in the type system pretends
+/// otherwise. Take one, dispatch from it, drop it.
+#[derive(Debug, Clone)]
+pub struct HitTestSnapshot {
+    position: Offset<Pixels>,
+    path: Vec<HitTestEntry>,
+}
+
+impl HitTestSnapshot {
+    /// The global position this snapshot was taken at.
+    #[must_use]
+    pub fn position(&self) -> Offset<Pixels> {
+        self.position
+    }
+
+    /// Everything under [`Self::position`], leaf-first — the same order and
+    /// the same entries a pointer-down route would have resolved.
+    #[must_use]
+    pub fn path(&self) -> &[HitTestEntry] {
+        &self.path
+    }
+
+    /// Whether anything at all was hit.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.path.is_empty()
+    }
+}
+
 struct LocalLaneInner {
     ticket: LaneTicket,
     target_ids: MonotonicIdSource,
@@ -676,6 +744,72 @@ impl InteractionLane {
             _lane: self,
         };
         callback()
+    }
+}
+
+/// The fresh-hit-test capability, and only that.
+///
+/// Reached from widget code as `BuildContext::hit_test_handle()`. Acquire it
+/// in `init_state` / `did_change_dependencies` and call it from a gesture
+/// callback; the frame-capability scope guard rejects acquisition inside
+/// `build`, layout, or paint, because a hit test mid-frame reads a tree that
+/// phase is still mutating.
+///
+/// It pairs two things that belong to different scopes: realm identity, from
+/// the realm-wide dispatch handle, and the tree, from the **presentation** that
+/// minted this handle. A realm may host several presentations, each with its
+/// own `PipelineOwner`, so a probe held once per realm would answer every
+/// presentation with the first one's tree.
+#[derive(Clone)]
+pub struct HitTestHandle {
+    dispatch: InteractionDispatchHandle,
+    probe: Rc<dyn HitTestProbe>,
+}
+
+impl HitTestHandle {
+    /// Pair a realm ticket with the probe for one presentation's tree.
+    #[must_use]
+    pub fn new(dispatch: InteractionDispatchHandle, probe: Rc<dyn HitTestProbe>) -> Self {
+        Self { dispatch, probe }
+    }
+
+    /// Run a fresh hit test at `position` and return an owned snapshot.
+    ///
+    /// This is the capability a drag needs: the reference's `_DragAvatar`
+    /// re-tests at the pointer's *current* global position on every move,
+    /// deliberately ignoring wherever the drag's own pointer went down. FLUI's
+    /// dispatch resolves a route once at `PointerDown` and replays it, so
+    /// without this there is no way to discover a target the drag has since
+    /// moved over.
+    ///
+    /// `position` is GLOBAL, in logical pixels — the space pointer events
+    /// arrive in.
+    ///
+    /// # Errors
+    ///
+    /// The realm checks [`InteractionDispatchHandle::check_realm`] makes, plus
+    /// [`TreeBusy`](InteractionDispatchError::TreeBusy) when a frame phase
+    /// holds the render tree and
+    /// [`OwnerGone`](InteractionDispatchError::OwnerGone) when the
+    /// presentation has closed.
+    pub fn hit_test_at(
+        &self,
+        position: Offset<Pixels>,
+    ) -> Result<HitTestSnapshot, InteractionDispatchError> {
+        self.dispatch.check_realm()?;
+
+        let mut result = HitTestResult::new();
+        self.probe.probe(position, &mut result)?;
+        Ok(HitTestSnapshot {
+            position,
+            path: result.path().to_vec(),
+        })
+    }
+}
+
+impl fmt::Debug for HitTestHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HitTestHandle").finish_non_exhaustive()
     }
 }
 
@@ -777,6 +911,22 @@ impl InteractionDispatchHandle {
             Some(ticket) if ticket != self.ticket => Err(InteractionDispatchError::WrongRealm),
             Some(_) => Ok(lane),
         }
+    }
+
+    /// Confirm this handle may act on the currently active realm.
+    ///
+    /// The whole of the realm contract in one call — right thread, a realm
+    /// active, that realm is this one, and its lane is still alive — for
+    /// capabilities minted from this handle that do their own work.
+    ///
+    /// # Errors
+    ///
+    /// [`WrongThread`](InteractionDispatchError::WrongThread),
+    /// [`InactiveRealm`](InteractionDispatchError::InactiveRealm),
+    /// [`WrongRealm`](InteractionDispatchError::WrongRealm), or
+    /// [`OwnerGone`](InteractionDispatchError::OwnerGone).
+    pub fn check_realm(&self) -> Result<(), InteractionDispatchError> {
+        self.active_lane().map(|_lane| ())
     }
 
     fn validate_lane(&self, lane_id: LaneId) -> Result<(), InteractionDispatchError> {

@@ -4529,6 +4529,203 @@ mod tests {
         );
     }
 
+    /// A realm's fresh hit test reads its own live render tree.
+    ///
+    /// Every layer here is separately capable of being wired to nothing: the
+    /// lane declares the capability but cannot perform one, the probe can but
+    /// is inert until installed, and the handle is realm-scoped but useless if
+    /// it addresses a different presentation's tree. So the oracle is the
+    /// ANSWER — a position over the mounted content hits, one past it does not
+    /// — rather than the handle merely being obtainable, which every unwired
+    /// arrangement above also satisfies.
+    ///
+    /// The content is wrapped in an OPAQUE `Listener` deliberately. A bare
+    /// `SizedBox` is not hit-testable (`forward_hit_test` returns false with no
+    /// child, matching `RenderProxyBox`), and `Listener`'s own default
+    /// `DeferToChild` inherits that miss — both correct, and both enough to
+    /// make this pass against a probe wired to nothing.
+    #[test]
+    fn a_realms_fresh_hit_test_reads_its_own_live_tree() {
+        use flui_types::{Offset, Pixels};
+
+        let realm = new_runtime(noop_wake()).expect("realm claims cleanly");
+        realm
+            .attach_root_widget_with_size(
+                &flui_widgets::Listener::new()
+                    .behavior(flui_interaction::HitTestBehavior::Opaque)
+                    .child(SizedBox::new(40.0, 20.0)),
+                40.0,
+                20.0,
+            )
+            .expect("mounts");
+        // Tight 200x200 root constraints, so the mounted content fills the
+        // view rather than staying at its 40x20 request.
+        let _ = realm.draw_frame(coexistence_constraints());
+
+        let handle = realm
+            .presentations
+            .primary()
+            .widgets()
+            .with_build_owner(|owner| owner.hit_test_handle().cloned())
+            .expect("a presentation installs its own hit-test handle at assembly");
+
+        let probe_at = |x: f32, y: f32| {
+            realm
+                .interaction_lane
+                .enter(|| handle.hit_test_at(Offset::new(Pixels(x), Pixels(y))))
+        };
+
+        let inside = probe_at(5.0, 5.0).expect("realm active");
+        assert!(
+            !inside.is_empty(),
+            "a position over the mounted content must hit it; an empty path \
+             means the probe is reading some tree other than the one this \
+             presentation's frame just laid out, or none at all"
+        );
+
+        let outside = probe_at(500.0, 500.0).expect("realm active");
+        assert!(
+            outside.is_empty(),
+            "a position past the 200x200 view must hit nothing — if this also \
+             reports hits, the probe is answering from position-independent \
+             state rather than testing the position it was given"
+        );
+
+        // Realm-scoped, not process-global: another realm refuses the handle.
+        let other = new_runtime(noop_wake()).expect("second realm");
+        assert_eq!(
+            other
+                .interaction_lane
+                .enter(|| handle.hit_test_at(Offset::new(Pixels(5.0), Pixels(5.0))))
+                .unwrap_err(),
+            flui_interaction::InteractionDispatchError::WrongRealm
+        );
+    }
+
+    /// Two presentations in ONE realm read their own trees.
+    ///
+    /// The realm's interaction lane is shared by every presentation it hosts,
+    /// but each has its own `PipelineOwner`. A probe held once per realm would
+    /// answer the second presentation with the first one's tree — and would
+    /// report the tree gone once the FIRST presentation closed, while the
+    /// second was still live. Hence the handle is minted per presentation, at
+    /// assembly, pairing the realm's ticket with that presentation's pipeline.
+    #[test]
+    fn two_presentations_in_one_realm_do_not_share_a_hit_test_tree() {
+        use flui_types::{Offset, Pixels};
+
+        let mut realm = UiRealm::for_test();
+        let second_id = realm.install_second_presentation_for_test();
+        let first_id = realm.presentation_id();
+        assert_ne!(first_id, second_id);
+
+        let handle_for = |id: PresentationId| {
+            realm
+                .presentations
+                .get(id)
+                .expect("installed")
+                .widgets()
+                .with_build_owner(|owner| owner.hit_test_handle().cloned())
+                .expect("each presentation installs its own handle")
+        };
+
+        // Content in the FIRST presentation only. Its tree hits; the second
+        // presentation's tree is empty and must say so.
+        realm
+            .attach_root_widget_with_size(
+                &flui_widgets::Listener::new()
+                    .behavior(flui_interaction::HitTestBehavior::Opaque)
+                    .child(SizedBox::new(40.0, 20.0)),
+                40.0,
+                20.0,
+            )
+            .expect("mounts into the primary presentation");
+        let _ = realm.draw_frame(coexistence_constraints());
+
+        let at_origin = Offset::new(Pixels(5.0), Pixels(5.0));
+        let (from_first, from_second) = realm.interaction_lane.enter(|| {
+            (
+                handle_for(first_id).hit_test_at(at_origin),
+                handle_for(second_id).hit_test_at(at_origin),
+            )
+        });
+
+        assert!(
+            !from_first.expect("first answers").is_empty(),
+            "the presentation that owns the mounted content must hit it"
+        );
+        assert!(
+            from_second.expect("second answers").is_empty(),
+            "the second presentation has no content — reporting a hit here \
+             means it is reading the first presentation's tree"
+        );
+    }
+
+    /// A closed presentation refuses hit tests even while its tree is held.
+    ///
+    /// Under `SharedRealm` the realm outlives any one presentation, so the
+    /// realm ticket alone cannot say "closed". Neither can the pipeline's
+    /// allocation: `BuildContext::pipeline_owner()` hands out a STRONG
+    /// `PipelineCell`, so a widget that stored one keeps the tree alive past
+    /// the close — and a probe reading liveness from the allocation would go
+    /// on answering from a detached tree with nothing to catch it.
+    ///
+    /// Hence the presentation owns a token, and this test holds the tree the
+    /// way such a widget would.
+    #[test]
+    fn a_closed_presentations_hit_test_refuses_while_its_tree_is_still_held() {
+        use flui_interaction::InteractionDispatchError;
+        use flui_types::{Offset, Pixels};
+
+        let mut realm = UiRealm::for_test();
+        let second_id = realm.install_second_presentation_for_test();
+        let closing_id = realm.presentation_id();
+
+        let handle = realm
+            .presentations
+            .get(closing_id)
+            .expect("installed")
+            .widgets()
+            .with_build_owner(|owner| owner.hit_test_handle().cloned())
+            .expect("assembly installs a handle");
+
+        // Stand in for a widget that stored `pipeline_owner()`: a strong
+        // reference outliving the presentation it came from.
+        let retained_tree = realm
+            .presentations
+            .get(closing_id)
+            .expect("installed")
+            .pipeline()
+            .clone();
+
+        let at = Offset::new(Pixels(5.0), Pixels(5.0));
+        assert!(
+            realm
+                .interaction_lane
+                .enter(|| handle.hit_test_at(at))
+                .is_ok(),
+            "precondition: the handle answers while its presentation is open"
+        );
+
+        assert!(realm.close_presentation_entered(closing_id));
+        assert!(
+            realm.presentations.get(second_id).is_some(),
+            "the sibling presentation keeps the realm -- and its ticket -- alive, \
+             which is what makes the realm check unable to catch this"
+        );
+
+        assert_eq!(
+            realm
+                .interaction_lane
+                .enter(|| handle.hit_test_at(at))
+                .unwrap_err(),
+            InteractionDispatchError::OwnerGone,
+            "a closed presentation must report itself gone even though its \
+             tree is still allocated and its realm is still live"
+        );
+        drop(retained_tree);
+    }
+
     #[test]
     fn two_realms_coexist_same_thread() {
         use std::cell::Cell;

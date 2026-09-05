@@ -143,6 +143,18 @@ pub(crate) struct PresentationState {
     id: PresentationId,
     lifecycle: Cell<PresentationLifecycle>,
     pipeline: PipelineCell,
+    /// This presentation's liveness, as a token others may watch weakly.
+    ///
+    /// Dropping the presentation drops it, which is the point: nothing else
+    /// reliably says "closed". The pipeline's own allocation does not —
+    /// `BuildContext::pipeline_owner()` hands out a strong `PipelineCell`, so
+    /// a widget that stores one keeps the tree alive past the close — and
+    /// under `SharedRealm` the realm outlives any single presentation too.
+    #[expect(
+        dead_code,
+        reason = "a liveness token: its VALUE is never read, only its lifetime                   observed through the weak handles handed out at construction.                   Dropping the presentation drops it, which is the whole signal."
+    )]
+    alive: Rc<()>,
     window: Weak<dyn PlatformWindow>,
     gestures: GestureBinding,
     focus: Rc<FocusManager>,
@@ -439,6 +451,7 @@ impl PresentationState {
         capabilities: RealmCapabilities<'_>,
     ) -> Self {
         let gestures = Self::build_gestures(id, &window);
+        let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(window.text_input());
 
@@ -449,8 +462,22 @@ impl PresentationState {
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(PostFrameHandle::new(capabilities.scheduler));
             owner.set_local_post_frame_handle(capabilities.local_post_frame_handle);
-            owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle);
+            owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle.clone());
             owner.set_text_input_handle(text_input.handle());
+            // Paired here, the one place holding both halves: the realm's
+            // dispatch ticket (identity) and THIS presentation's pipeline
+            // (the tree). A realm may host several presentations, each with
+            // its own `PipelineOwner`, so a probe installed once per realm
+            // would answer every presentation with the first one's tree.
+            owner.set_hit_test_handle(flui_interaction::HitTestHandle::new(
+                capabilities.interaction_dispatch_handle,
+                Rc::new(
+                    flui_rendering::pipeline::hit_test_probe::PipelineHitTestProbe::new(
+                        &pipeline,
+                        Rc::downgrade(&alive),
+                    ),
+                ),
+            ));
         });
 
         let renderer =
@@ -505,6 +532,7 @@ impl PresentationState {
             id,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             pipeline,
+            alive,
             window: Arc::downgrade(&window),
             gestures,
             focus,
@@ -545,6 +573,7 @@ impl PresentationState {
         window: Arc<dyn PlatformWindow>,
     ) -> Self {
         let gestures = Self::build_gestures(id, &window);
+        let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(window.text_input());
 
@@ -563,6 +592,7 @@ impl PresentationState {
             id,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             pipeline,
+            alive,
             window: Arc::downgrade(&window),
             gestures,
             focus,

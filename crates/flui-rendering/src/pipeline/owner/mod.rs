@@ -22,7 +22,7 @@ mod reassemble;
 mod relocation;
 mod semantics;
 
-pub use cell::PipelineCell;
+pub use cell::{PipelineCell, WeakPipelineCell};
 pub use relocation::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
