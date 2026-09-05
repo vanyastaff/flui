@@ -415,6 +415,26 @@ fn a_rounded_clip_honours_hard_edge_and_anti_alias_differently() {
         "a hard rounded clip must threshold its corners rather than feather them: \
          hard={hard} smooth={smooth}"
     );
+
+    // The feather must reach LOW coverage, not merely exist.
+    //
+    // The clip shader discards fully clipped-out fragments, and the threshold
+    // for that has to be exactly zero. A "small" threshold — discarding
+    // anything under, say, 0.5 coverage — still leaves a feather, just a
+    // truncated one, so the comparison above stays true and says nothing.
+    // Blue over white at coverage c reads `(255(1-c), 255(1-c), 255)`, so a
+    // faint fringe pixel is one whose red channel is still high.
+    let faint = render(Clip::AntiAlias)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| (200..=250).contains(&p[0]) && p[2] > 250)
+        .count();
+    assert!(
+        faint > 0,
+        "the anti-aliased fringe must include faint, low-coverage pixels; \
+         none means the clip is discarding fragments it should still blend"
+    );
 }
 
 /// `Clip::None` through the CANVAS api applies no clip at all.
@@ -471,5 +491,98 @@ fn a_canvas_clip_with_mode_none_does_not_clip() {
         none[0] < 64,
         "Clip::None must not clip: content below the rect should still be painted \
          blue, got {none:?}"
+    );
+}
+
+/// A destructive blend mode must not escape a rounded clip's corners.
+///
+/// The SDF clip modulates alpha rather than discarding: the shader ends in
+/// `color.a * alpha * clip_alpha`, and `clip_alpha` is `0.0` outside the clip.
+/// For `SrcOver` that is indistinguishable from being clipped — zero alpha
+/// contributes nothing. For a destination-destructive mode it is not, because
+/// the blend factors clear or replace the destination regardless of source
+/// alpha.
+///
+/// So a full-surface `Clear` through a rounded clip wipes the clip's whole
+/// BOUNDING BOX, corners included, instead of only the rounded region.
+///
+/// Both draws share ONE canvas on purpose. A `push_clip_rrect` LAYER isolates
+/// its content, so an eraser inside it cannot reach a ground painted outside
+/// it — the layer composites back with `SrcOver` and the ground survives for a
+/// reason that has nothing to do with the clip. The canvas-level clip keeps
+/// both in the same pass, which is where the escape is observable.
+///
+/// The oracle samples the CORNER: inside the rounded region both the correct
+/// and the broken renderer clear, and outside the bounding box neither does.
+/// Only the corner — inside the box, outside the round — tells them apart,
+/// which is why every existing clip oracle missed this. They all fill with
+/// `SrcOver`.
+#[test]
+fn a_destructive_blend_does_not_escape_a_rounded_clip() {
+    use flui_types::painting::{BlendMode, ClipOp};
+
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        let mut canvas = Canvas::new();
+
+        // Opaque red ground, unclipped.
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+            &Paint::fill(Color::rgb(255, 0, 0)).with_anti_alias(false),
+        );
+
+        // Then a full-surface CLEAR through a rounded clip, same pass.
+        canvas.save();
+        canvas.clip_rrect_ext(
+            flui_types::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
+                px(16.0),
+            ),
+            ClipOp::Intersect,
+            Clip::HardEdge,
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+            &Paint::fill(Color::rgb(0, 0, 0))
+                .with_anti_alias(false)
+                .with_blend_mode(BlendMode::Clear),
+        );
+        canvas.restore();
+
+        builder.add_picture(canvas.finish());
+        builder.build();
+    }
+
+    let pixels = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+
+    let at = |x: usize, y: usize| {
+        let i = (y * SIDE as usize + x) * 4;
+        (pixels[i], pixels[i + 1], pixels[i + 2])
+    };
+
+    // (32, 32) is the centre — well inside the round, so the clear must land.
+    let centre = at(32, 32);
+    // (9, 9) is inside the clip's bounding box but outside its rounded corner
+    // (radius 16 from the box origin at 8,8), so the ground must survive.
+    let corner = at(9, 9);
+
+    assert!(
+        centre.0 < 250,
+        "premise: the clear must take effect inside the rounded region, \
+         got {centre:?} at the centre — without that this proves nothing"
+    );
+    assert!(
+        corner.0 > 250 && corner.1 < 5 && corner.2 < 5,
+        "the ground must survive OUTSIDE the rounded corner: a destructive \
+         blend that only zeroes alpha still clears the whole bounding box, \
+         got {corner:?} at (9, 9)"
     );
 }
