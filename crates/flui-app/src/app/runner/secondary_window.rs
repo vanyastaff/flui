@@ -242,6 +242,16 @@ thread_local! {
     /// that poll. Queuing here and draining once the checkout restores
     /// applies to BOTH policies uniformly, one completion path rather than a
     /// policy-specific carve-out.
+    ///
+    /// Gated exactly like [`PendingCompletion`] itself: the type does not
+    /// exist on the targets that have no secondary-window path (Android,
+    /// iOS, wasm32), and a `thread_local!` naming it there is a build error
+    /// only the wasm-check job ever sees.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     static PENDING_SECONDARY_WINDOW_COMPLETIONS: std::cell::RefCell<Vec<PendingCompletion>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }

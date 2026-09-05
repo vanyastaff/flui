@@ -186,7 +186,18 @@ pub enum CloseResponse {
 ///   registered the handler**, which would mean a backend broke
 ///   [`PlatformWindow`]'s own same-thread callback contract.
 #[derive(Clone)]
-pub struct CloseRequestHandler(Arc<dyn Fn(&CloseRequest) -> CloseResponse + Send + Sync>);
+pub struct CloseRequestHandler(
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reached only through install_close_request_wiring, whose production callers \
+                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
+                      no close-request wiring yet"
+        )
+    )]
+    Arc<dyn Fn(&CloseRequest) -> CloseResponse + Send + Sync>,
+);
 
 impl CloseRequestHandler {
     /// Wrap a callback as a registerable handler.
@@ -194,6 +205,15 @@ impl CloseRequestHandler {
         Self(Arc::new(handler))
     }
 
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reached only through install_close_request_wiring, whose production callers \
+                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
+                      no close-request wiring yet"
+        )
+    )]
     fn call(&self, request: &CloseRequest) -> CloseResponse {
         (self.0)(request)
     }
@@ -259,6 +279,15 @@ pub enum CloseRequestError {
 /// test that installs a custom panic hook (as the handler-panic test must,
 /// to keep the default output quiet) suppresses the only other place the
 /// payload would have surfaced.
+#[cfg_attr(
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    expect(
+        dead_code,
+        reason = "reached only through install_close_request_wiring, whose production callers \
+                  (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
+                  no close-request wiring yet"
+    )
+)]
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
     payload
         .downcast_ref::<&'static str>()
@@ -279,6 +308,15 @@ struct PresentationCloseEntry {
     /// alive past the teardown ordering issue #713's Wayland crash
     /// established.
     window: Weak<dyn PlatformWindow>,
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reached only through install_close_request_wiring, whose production callers \
+                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
+                      no close-request wiring yet"
+        )
+    )]
     handler: Option<CloseRequestHandler>,
     /// The thread that registered this entry. Every `PlatformWindow`
     /// callback must be invoked on the thread that registered it (see the
@@ -335,6 +373,15 @@ impl CloseRequestRouter {
     /// generational, so this can only ever be a genuine re-registration of
     /// the same live presentation, never a stale incarnation colliding with
     /// a fresh one.
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reached only through install_close_request_wiring, whose production callers \
+                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
+                      no close-request wiring yet"
+        )
+    )]
     pub(crate) fn register(
         &self,
         address: PresentationAddress,
@@ -373,6 +420,15 @@ impl CloseRequestRouter {
     /// per-realm teardown ever names. Since a second `Platform::run` on the
     /// same thread reuses this `AppRuntime`, those would otherwise be
     /// consulted by the NEXT loop's windows.
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reached only through install_close_request_wiring, whose production callers \
+                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
+                      no close-request wiring yet"
+        )
+    )]
     pub(crate) fn clear(&self) {
         self.entries.lock().clear();
     }
@@ -398,6 +454,15 @@ impl CloseRequestRouter {
     ///
     /// An unregistered address answers [`CloseResponse::Close`], matching
     /// the platform seam's own "no callback means close is allowed".
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reached only through install_close_request_wiring, whose production callers \
+                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
+                      no close-request wiring yet"
+        )
+    )]
     pub(crate) fn consult(&self, address: PresentationAddress) -> CloseResponse {
         // Clone the handler out from under the lock before invoking it
         // (ADR-0039): application code may re-enter this router — closing a

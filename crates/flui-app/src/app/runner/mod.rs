@@ -72,6 +72,14 @@ use web::run_web;
 /// [`CloseRequestRouter::consult`](crate::app::close_request::CloseRequestRouter::consult)'s
 /// own doc.
 #[cfg(not(target_os = "ios"))]
+#[cfg_attr(
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    expect(
+        dead_code,
+        reason = "its production callers (run_desktop, open_secondary_window) are desktop-only \
+                  -- android/wasm32 have no close-request wiring yet"
+    )
+)]
 pub(crate) fn install_close_request_wiring(
     address: flui_foundation::PresentationAddress,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
