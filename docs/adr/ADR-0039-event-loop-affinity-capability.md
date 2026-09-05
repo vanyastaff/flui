@@ -285,6 +285,14 @@ The compile-time capability cannot land first — it requires the `PlatformReady
 
 **Honest scope statement (Definition of Done):** CI proves *compilation only* for everything in items 2–3: the macOS/Windows backends are exercised solely by cross-typecheck (which runs nothing), **and** `flui-platform`'s own test suite is excluded from the CI gate (STATUS_HEAP_CORRUPTION investigation) — so no assert wiring in that crate is executed by CI either. That is exactly why the primitive itself lives in `flui-foundation`: its behavior is CI-verified even though its backend wiring is not. Backend wiring is verified locally (`just test-crate flui-platform` on the respective OS); re-including even a targeted subset of `flui-platform` tests in CI is blocked on the STATUS_HEAP_CORRUPTION investigation and stays out of this ADR's scope.
 
+> **Update (2026-09-05) — one fact above is stale; the conclusion it supports still holds.**
+>
+> **Stale:** `flui-platform`'s test suite is no longer "excluded from the CI gate". `ci.yml`'s `test` job carries a dedicated flui-platform step (`cargo nextest run -p flui-platform --all-features`) under `FLUI_HEADLESS=1` and `xvfb-run`, and it has not been blocked on the STATUS_HEAP_CORRUPTION investigation for some time — that crash is Windows-only, so it never stood in the way of the Linux subset. The deferral outlived its reason.
+>
+> **Still accurate, and the reason to keep this paragraph:** no assert wiring in this crate is executed by CI. `OwnerAffinity` and `debug_assert_owner` are wired only into the macOS (`platforms/macos/platform.rs`) and Windows (`platforms/windows/platform.rs`) backends — both `cfg`-gated to their own OS, so a Linux runner never compiles them, let alone runs them. Item 4 above says why: winit and headless need no asserts, winit already returning typed state errors keyed by `owner_thread`. The Linux step runs useful platform tests; it does not and cannot exercise this safety backstop, which remains verified locally and by `cross-typecheck`'s lint-only pass.
+>
+> So the Definition of Done stands as written for items 2–3. What changed is only which subset of the crate CI compiles and runs at all.
+
 ### Slice 2: `OwnerPlatform` + callback flip — every backend, every embedder, one PR
 
 `OwnerPlatform`, `PlatformProxy`, and the claim-slot reply protocol land wrapping the *unchanged* `Platform` trait (each backend converts to `Arc<Self>` at `run` entry, as winit already does — `winit/platform.rs:877`). Flipping `PlatformReadyCallback` breaks `run` in **all six backends in the same PR** — winit, macOS (`macos/platform.rs:122`), Windows (`windows/platform.rs:896`), web (`web/platform.rs:124`), Android (`android/mod.rs:172`), headless (`headless/platform.rs:97`) — because cross-typecheck forces the Win32/AppKit edits to compile immediately; this is the deliberate cost of a single-signature seam. Also in this slice:
