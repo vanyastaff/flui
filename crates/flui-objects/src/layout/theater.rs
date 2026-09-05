@@ -36,25 +36,23 @@
 //!   unbounded theater falls back to `constraints.smallest()`, matching
 //!   `RenderStack`'s own no-non-positioned-children fallback rather than panicking
 //!   — see [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md).
-//! * **Skipped entries leave the semantics tree only once they have been laid
-//!   out.** Flutter's `visitChildrenForSemantics` walks `_childrenInPaintOrder()`
-//!   (`overlay.dart:1427-1428`), so an offstage entry is absent from the semantics
-//!   tree unconditionally. FLUI's `RenderBox` has no per-child semantics visitor —
-//!   only the whole-subtree `excludes_semantics_subtree` — so exclusion here is a
-//!   side effect of the placed-generation stamp instead: a skipped entry is not
-//!   laid out, its stamp goes stale, and the semantics walk drops it along with
-//!   paint and hit-test.
+//! * **Offstage entries publish no semantics**, matching the reference, but by
+//!   two mechanisms rather than Flutter's one. Flutter's
+//!   `visitChildrenForSemantics` walks `_childrenInPaintOrder()`
+//!   (`overlay.dart:1427-1428`) and that is the whole story there.
 //!
-//!   Both halves are now covered, by two different mechanisms. The stamp gets
-//!   the transition this widget performs — an entry laid out while visible, then
-//!   skipped when an opaque entry is pushed above it. It cannot get an entry
-//!   skipped from its very first pass: nothing ever stamped that one, and an
-//!   unstamped child reads as placed by design (the stamp may only remove a child
-//!   a parent demonstrably *stopped* laying out, or a parent laying out through a
-//!   path of its own would hide its whole subtree). That half is
-//!   `visits_child_for_semantics`, which answers from `skip_count` directly and
-//!   is therefore history-independent — Flutter's
-//!   `RenderTheater.visitChildrenForSemantics` over `_childrenInPaintOrder()`.
+//!   Here, `visits_child_for_semantics` answers from `skip_count` directly, so
+//!   an entry offstage from its very first pass is excluded regardless of
+//!   layout history — that is the equivalent of Flutter's override. The
+//!   placed-generation stamp independently excludes an entry that was laid out
+//!   while visible and then covered, since its stamp goes stale.
+//!
+//!   The stamp alone was not enough, which is why the visitor exists: it may
+//!   only remove a child a parent demonstrably *stopped* laying out (otherwise
+//!   a parent laying out through a path of its own would hide its whole
+//!   subtree), so a child skipped from pass one was never stamped and read as
+//!   placed. An app starting with an opaque entry above another announced a
+//!   route the user could neither see nor touch.
 
 use flui_tree::Variable;
 use flui_types::{Offset, Size};

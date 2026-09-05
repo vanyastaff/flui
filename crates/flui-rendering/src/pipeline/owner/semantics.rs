@@ -348,6 +348,8 @@ fn visits_child_for_semantics(node: &RenderNode, child_slot: usize) -> bool {
     }
 }
 
+/// The clips `node` imposes on the child in `child_slot`, moved from the
+/// node's own coordinates into the walk's root coordinates.
 fn child_clips_of(
     node: &RenderNode,
     origin: Offset,

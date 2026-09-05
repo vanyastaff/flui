@@ -449,6 +449,21 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         false
     }
 
+    /// Whether the child in `child_slot` reaches the semantics tree at all.
+    ///
+    /// The per-CHILD counterpart of [`Self::excludes_semantics_subtree`]: that
+    /// one answers "none of my descendants", this one "this child of mine". A
+    /// sliver that keeps children it does not present overrides it.
+    ///
+    /// Default: `true`. See
+    /// [`RenderBox::visits_child_for_semantics`](crate::traits::RenderBox::visits_child_for_semantics)
+    /// for why the placed-generation stamp cannot answer this — it excludes a
+    /// child a parent *stopped* laying out, so one skipped from its very first
+    /// pass was never stamped and reads as placed.
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        true
+    }
+
     /// The rect, in this sliver's coordinates, outside which child paint is
     /// not visible.
     ///
@@ -624,6 +639,10 @@ where
         config: &mut crate::semantics::SemanticsConfiguration,
     ) {
         <T as RenderSliver>::describe_semantics_configuration(self, config);
+    }
+
+    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
+        <T as RenderSliver>::visits_child_for_semantics(self, child_slot)
     }
 
     fn excludes_semantics_subtree(&self) -> bool {
