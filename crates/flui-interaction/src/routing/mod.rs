@@ -45,8 +45,9 @@ pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PanZoomTarget, PathClipTarget,
-    PointerTarget, ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
-    ScrollTarget, ShaderMaskTarget, resolve_path_clip_target, resolve_shader_mask_target,
+    PointerDispatch, PointerTarget, ResolvedRouteToken, RoutePanic, RouteResolution,
+    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, resolve_path_clip_target,
+    resolve_shader_mask_target,
 };
 pub use mouse_tracker::{
     CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,

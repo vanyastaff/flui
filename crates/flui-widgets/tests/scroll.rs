@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, offset, size, tight};
 use flui_animation::{Curves, Vsync};
-use flui_interaction::events::{PointerEvent, PointerEventExt as _};
+use flui_interaction::PointerDispatch;
+use flui_interaction::events::PointerEventExt as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_types::Color;
@@ -2030,8 +2031,8 @@ type RecordedPosition = Rc<Cell<Option<(f32, f32)>>>;
 fn recording_listener() -> (RecordedPosition, Listener) {
     let recorded = Rc::new(Cell::new(None));
     let probe = Rc::clone(&recorded);
-    let listener = Listener::new().on_pointer_down(move |event: &PointerEvent| {
-        let position = event.position();
+    let listener = Listener::new().on_pointer_down(move |dispatch: PointerDispatch<'_>| {
+        let position = dispatch.local.position();
         probe.set(Some((position.dx.get(), position.dy.get())));
     });
     (recorded, listener)

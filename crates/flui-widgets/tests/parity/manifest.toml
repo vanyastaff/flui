@@ -711,7 +711,7 @@ cases = ["Events bubble up the tree"]
 rust = "pointer_local_position_test"
 family = "pointer"
 oracles = ["widgets/listener_test.dart"]
-tests = 8
+tests = 10
 
 [[targets.claims]]
 oracle = "widgets/listener_test.dart"

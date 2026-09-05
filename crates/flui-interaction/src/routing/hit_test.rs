@@ -1166,7 +1166,7 @@ mod tests {
         lane.enter(|| {
             let position_probe = Rc::clone(&observed);
             let target = handle
-                .register_pointer(move |event| position_probe.set(event.position()))
+                .register_pointer(move |dispatch| position_probe.set(dispatch.local.position()))
                 .expect("register");
             let mut result = HitTestResult::new();
             // The entry sits in a subtree translated by (10, 20): the handler
@@ -1202,7 +1202,7 @@ mod tests {
         lane.enter(|| {
             let position_probe = Rc::clone(&observed);
             let target = handle
-                .register_pointer(move |event| position_probe.set(event.position()))
+                .register_pointer(move |dispatch| position_probe.set(dispatch.local.position()))
                 .expect("register");
             let mut result = HitTestResult::new();
             // The entry sits in a subtree scaled 2x from its parent --

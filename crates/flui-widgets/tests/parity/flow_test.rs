@@ -65,6 +65,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::{Color, Matrix4, Size};
@@ -264,8 +265,9 @@ fn flow_child_transform_localises_the_delivered_pointer_position() {
             Arc::new(TranslateFlowDelegate { dx: 20.0, dy: 30.0 }),
             row![
                 Listener::new()
-                    .on_pointer_down(move |event: &flui_widgets::prelude::PointerEvent| {
-                        probe.set(Some((event.position().dx.get(), event.position().dy.get())));
+                    .on_pointer_down(move |dispatch: PointerDispatch<'_>| {
+                        let position = dispatch.local.position();
+                        probe.set(Some((position.dx.get(), position.dy.get())));
                     })
                     .child(SizedBox::new(100.0, 100.0).child(ColoredBox::new(Color::BLUE)))
             ],

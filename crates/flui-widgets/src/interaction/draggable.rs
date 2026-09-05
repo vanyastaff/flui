@@ -40,18 +40,26 @@
 //!    **The divergence is where the position comes from.** Flutter's
 //!    `PointerEvent` carries `position` (global) *and* `localPosition`, so a
 //!    widget always has both. FLUI's pointer events are `ui_events` types with
-//!    room for one position, and dispatch rewrites it into the receiving
-//!    entry's local space (`HitTestResult`'s per-entry
-//!    `transform_pointer_event`) — so a gesture callback knows only where the
-//!    pointer is inside its *own* node. A hit test needs the root's space. The
-//!    conversion between exactly those two spaces is
-//!    `PipelineOwner::local_to_global`, which needs the `RenderId` of the node
-//!    the local point belongs to, and [`DragOrigin`] — a payload-free view
-//!    mounted as the `Listener`'s direct child — is how this widget learns it:
-//!    its `find_render_object()` stops at the `Listener`'s own render node,
-//!    the node dispatch localized against. The conversion composes the whole
-//!    ancestor chain, so it is exact under scale and rotation, not just
-//!    translation.
+//!    room for one position, so dispatch delivers the pair beside the event
+//!    instead, as a `PointerDispatch` — but that pair stops at the `Listener`.
+//!    This widget does not read pointer events itself: it feeds them to a
+//!    `MultiDragGestureRecognizer`, and the `GestureRecognizer` contract still
+//!    carries a single space, as do the `Drag*Details` structs it produces. So
+//!    this drag still knows only where the pointer is inside its *own* node,
+//!    and a hit test needs the root's space. The conversion between exactly
+//!    those two spaces is `PipelineOwner::local_to_global`, which needs the
+//!    `RenderId` of the node the local point belongs to, and [`DragOrigin`] —
+//!    a payload-free view mounted as the `Listener`'s direct child — is how
+//!    this widget learns it: its `find_render_object()` stops at the
+//!    `Listener`'s own render node, the node dispatch localized against. The
+//!    conversion composes the whole ancestor chain, so it is exact under scale
+//!    and rotation, not just translation.
+//!
+//!    Handing the recognizer the global event instead would not remove the
+//!    probe honestly — it would make `global_position` truthful and
+//!    `local_position` a lie. What removes it is giving the recognizers
+//!    Flutter's `OffsetPair`, which is its own change; see mapping decision 3
+//!    in `crates/flui-widgets/ARCHITECTURE.md` for what that costs.
 //!
 //!    Two consequences worth naming rather than discovering later. A drag
 //!    carrying **no data** discovers nothing at all: a target's
@@ -128,7 +136,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_interaction::{
     DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
-    MultiDragUpdateDetails, PointerEvent, PointerEventExt as _, PointerId, Velocity,
+    MultiDragUpdateDetails, PointerEventExt as _, PointerId, Velocity,
 };
 use flui_types::{
     Offset,
@@ -709,11 +717,12 @@ fn restrict_axis_delta(delta: Offset<PixelDelta>, axis: Option<Axis>) -> Offset<
 /// Publishes the `RenderId` of the node whose coordinate space a
 /// `Draggable`'s pointer events arrive in.
 ///
-/// Pointer dispatch rewrites each event's position into the receiving entry's
-/// LOCAL space (`HitTestResult`'s per-entry `transform_pointer_event`), and
-/// `PointerEvent` is a `ui_events` type with nowhere to keep the global one
-/// alongside. A drag therefore knows only where the pointer is inside its own
-/// `Listener`; a hit test needs where it is in the root's space.
+/// Pointer dispatch carries both spaces to a `Listener` callback, but the
+/// gesture recognizers below it still take a single-space `PointerEvent`, and
+/// this widget reads its position from a recognizer's `Drag*Details` rather
+/// than from the event. A drag therefore knows only where the pointer is
+/// inside its own `Listener`; a hit test needs where it is in the root's
+/// space.
 ///
 /// `PipelineOwner::local_to_global` converts between exactly those two spaces
 /// — given the `RenderId` of the node the local point belongs to. This view is
@@ -1329,17 +1338,23 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let cancel_recognizer = recognizer;
 
         let listener = Listener::new()
-            .on_pointer_down(move |event: &PointerEvent| {
+            // `dispatch.local` throughout: the multi-drag recognizer tracks a
+            // single space, and everything downstream of it — `DragSession`'s
+            // accumulated position, `to_global`, the `DragOrigin` probe — is
+            // built on that being the `Listener`'s own space. See the module's
+            // divergence note 2 for why the global half stops here.
+            .on_pointer_down(move |dispatch| {
                 if let Some(max) = max
                     && active_count.load(Ordering::Acquire) >= max
                 {
                     return;
                 }
+                let event = dispatch.local;
                 down_recognizer.add_pointer(event.pointer_id(), event.position());
             })
-            .on_pointer_move(move |event| move_recognizer.handle_event(event))
-            .on_pointer_up(move |event| up_recognizer.handle_event(event))
-            .on_pointer_cancel(move |event| cancel_recognizer.handle_event(event));
+            .on_pointer_move(move |dispatch| move_recognizer.handle_event(dispatch.local))
+            .on_pointer_up(move |dispatch| up_recognizer.handle_event(dispatch.local))
+            .on_pointer_cancel(move |dispatch| cancel_recognizer.handle_event(dispatch.local));
 
         let currently_active = self.active_count.load(Ordering::Acquire);
         let showing_child_when_dragging =

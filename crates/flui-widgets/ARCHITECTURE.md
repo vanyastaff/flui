@@ -104,28 +104,43 @@ feedbackOffset` on every move. Flutter's `PointerEvent` carries `position`
 `Listener`-local pointer positions to the root's space with
 `PipelineOwner::local_to_global` before probing.
 
-**Why:** FLUI's pointer events are `ui_events` types with room for exactly one
-position, and dispatch rewrites it into the receiving entry's local space
-(`HitTestResult`'s per-entry `transform_pointer_event`). A gesture callback
-therefore knows only where the pointer is inside its own node, and a hit test
-needs the root's space. `local_to_global` is the sanctioned conversion between
-exactly those two spaces; the only missing input was the `RenderId` it keys
-on, and a probe mounted under the `Listener` is the cheapest way to learn it.
-The probe contributes no render node, so the mounted render tree keeps the same
-shape.
+**Why, and why the probe survived the dispatch fix.** Pointer dispatch now
+carries both spaces: a `Listener` callback receives a `PointerDispatch` whose
+`global` half is the platform's own value, never re-derived from a transform.
+That closed the general defect — but it did not reach this widget, because
+`Draggable` does not consume pointer events directly. It feeds them to a
+`MultiDragGestureRecognizer`, and the `GestureRecognizer` contract
+(`add_pointer`, `handle_event`) still carries a *single* space, as does every
+`Drag*Details` struct it produces. `DragSession`'s accumulated position, its
+axis restriction, and `to_global` are all built on that one space being the
+`Listener`'s. Handing the recognizer the global event instead would make
+`global_position` truthful and `local_position` a lie — the same defect
+relabelled — so the probe stays until the recognizers carry the pair.
+
+**What the recognizers need, so the follow-up is not re-derived from scratch:**
+Flutter's answer is `OffsetPair` (`gestures/events.dart`), which
+`DragGestureRecognizer` threads through `_initialPosition` and `_lastPosition`
+(`gestures/monodrag.dart:417`, `:686`) and hands to every detail struct; the
+velocity tracker samples the *local* half (`:664`) and deltas are mapped to
+global via `PointerEvent.transformDeltaViaPositions`. Porting that means the
+trait signatures, `RecognizerBase`'s tracked position, and each of the ten
+recognizers' internal position plumbing — a change of its own size, with its
+own per-recognizer parity evidence.
 
 **Alternatives rejected:**
 
-- Reading `DragUpdateDetails::global_position` — that field is fed the
-  already-localized value, so it is a global position in name only.
+- Reading `DragUpdateDetails::global_position` — that field is still fed the
+  already-localized value, so it is a global position in name only. It is the
+  named remaining half of issue #908.
 - Assuming translation-only ancestors and adding a remembered origin — wrong
   under any `Transform`, and wrong silently.
-- Preserving the global position through dispatch (a second handler parameter,
-  or an ambient per-entry dispatch context) — the right long-term fix and what
-  the oracle effectively has, but a change to `flui-interaction`'s pointer
-  handler contract that ripples through `flui-view`, `flui-objects` and every
-  `Listener` consumer. It deserves its own design record rather than arriving
-  as a side effect of wiring one widget.
+- Stashing the `Listener`'s `dispatch.global` in a cell and having
+  `DragSession::to_global` read it instead of converting — exact only under
+  translation-only ancestors, because the session converts its *accumulated,
+  axis-restricted* position rather than the raw event position. That trades
+  exactness under scale and rotation for exactness across a mid-contact
+  transform change, which is not a clear win, and it fixes only this widget
+  while `GestureDetector`'s drag details keep lying.
 
 **Consequences named rather than left to be discovered:**
 
@@ -134,18 +149,17 @@ shape.
   that state has no representation here.
 - `axis` restriction applies to deltas in the `Listener`'s space rather than the
   root's, which differs from the oracle only under a rotating ancestor.
-- **A transform that changes mid-contact is converted inconsistently.** Pointer
-  dispatch localizes with the `HitTestEntry` transform captured in the route
-  resolved at `PointerDown`, while `local_to_global` converts with the tree's
-  *current* transform. A frame that moves or scales the `Listener` between two
-  moves therefore has the drag convert a stale local point through a fresh
-  matrix, and the probe lands off the pointer until the contact ends. This is
-  not a separate defect from the round-trip above — it is the same root cause,
-  dispatch destroying the global position (issue #908), showing up on the
-  return leg. The real fix is carrying the global position through dispatch,
-  which is the rejected alternative below; recovering it per-widget cannot fix
-  it, because the widget has no access to the transform its event was actually
-  localized with. Not attempted here, and not worked around.
+- **A transform that changes mid-contact is still converted inconsistently.**
+  Pointer dispatch localizes with the `HitTestEntry` transform captured in the
+  route resolved at `PointerDown`, while `local_to_global` converts with the
+  tree's *current* transform. A frame that moves or scales the `Listener`
+  between two moves therefore has the drag convert a stale local point through
+  a fresh matrix, and the probe lands off the pointer until the contact ends.
+  The value that fixes this now exists and is proven correct at the dispatch
+  boundary — `a_mid_contact_transform_change_does_not_move_the_reported_global_position`
+  in `tests/parity/pointer_local_position_test.rs` pins it — but it stops at
+  the `Listener`, one layer above where this widget reads its position. Not
+  worked around.
 
 **Replacement tests:** group 4 of `tests/parity/draggable_test.rs` drives real
 pointer input across a tree where the draggable and the targets are at

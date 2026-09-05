@@ -165,8 +165,8 @@ fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() 
         SlideTransition::new(
             position,
             Listener::new()
-                .on_pointer_down(move |event| {
-                    let local = event.position();
+                .on_pointer_down(move |dispatch| {
+                    let local = dispatch.local.position();
                     probe.set(Some((local.dx.get(), local.dy.get())));
                 })
                 .child(SizedBox::new(100.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),

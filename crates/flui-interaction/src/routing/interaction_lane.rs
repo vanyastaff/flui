@@ -284,7 +284,51 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
     Ok(LaneId(non_zero))
 }
 
-type PointerHandler = Rc<dyn Fn(&PointerEvent) + 'static>;
+/// One pointer event as delivered to one hit-test target, in both of the
+/// coordinate spaces a handler can legitimately need.
+///
+/// Flutter's `PointerEvent` carries `position` (the root's space) and
+/// `localPosition` (the receiving target's space) on the same object, so a
+/// widget always has both. FLUI's pointer events are [`ui_events`] types with
+/// room for exactly one position, and dispatch rewrites that one into the
+/// receiving entry's space, so the pair is carried side by side instead.
+///
+/// Both fields borrow values the dispatch already owns, so building one costs
+/// no clone and no matrix work beyond the localisation dispatch performs
+/// anyway.
+///
+/// [`ui_events`]: https://docs.rs/ui-events
+#[derive(Clone, Copy, Debug)]
+pub struct PointerDispatch<'a> {
+    /// The event rewritten into the receiving target's own space — the value
+    /// a handler wants for anything measured against its own box.
+    pub local: &'a PointerEvent,
+    /// The event exactly as the platform delivered it, in the root's space.
+    ///
+    /// Never re-derived from a transform, so a frame that moves the receiving
+    /// target between one event and the next cannot shift it.
+    pub global: &'a PointerEvent,
+}
+
+impl<'a> PointerDispatch<'a> {
+    /// A dispatch to a target sitting in the root's own space, where the two
+    /// spaces coincide.
+    ///
+    /// This is the honest spelling for a caller that genuinely has one
+    /// untransformed event — a synthetic event in a test, or an entry whose
+    /// hit-test path composed no transform at all. It is never the right way
+    /// to pass an already-localised event: that would claim a local point is
+    /// a global one, which is the defect this type exists to prevent.
+    #[must_use]
+    pub fn at_root(event: &'a PointerEvent) -> Self {
+        Self {
+            local: event,
+            global: event,
+        }
+    }
+}
+
+type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
 type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
 type PanZoomHandler = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
@@ -502,8 +546,17 @@ impl ResolvedHitRoute {
                 LocalEventTransform::NonInvertible => continue,
             };
             let handler = entry.handler_cell.snapshot();
+            // No localised event means the entry composed no transform, so its
+            // own space IS the root's.
+            let dispatch = match local_event.as_ref() {
+                Some(local) => PointerDispatch {
+                    local,
+                    global: event,
+                },
+                None => PointerDispatch::at_root(event),
+            };
             let delivered = RoutePanic::capture(|| {
-                handler(local_event.as_ref().unwrap_or(event));
+                handler(dispatch);
             });
             RoutePanic::preserve_first(&mut first_panic, delivered, "pointer target");
 
@@ -940,7 +993,7 @@ impl InteractionDispatchHandle {
     /// Register an ordinary pointer handler in the active owner lane.
     pub fn register_pointer(
         &self,
-        handler: impl Fn(&PointerEvent) + 'static,
+        handler: impl Fn(PointerDispatch<'_>) + 'static,
     ) -> Result<PointerTarget, InteractionDispatchError> {
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
@@ -957,7 +1010,7 @@ impl InteractionDispatchHandle {
     pub fn replace_pointer(
         &self,
         target: PointerTarget,
-        handler: impl Fn(&PointerEvent) + 'static,
+        handler: impl Fn(PointerDispatch<'_>) + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -1630,8 +1683,15 @@ impl InteractionDispatchHandle {
                 };
                 if !matches!(transform, LocalEventTransform::NonInvertible) {
                     let handler = cell.snapshot();
+                    let dispatch = match local_event.as_ref() {
+                        Some(local) => PointerDispatch {
+                            local,
+                            global: event,
+                        },
+                        None => PointerDispatch::at_root(event),
+                    };
                     let delivered = RoutePanic::capture(|| {
-                        handler(local_event.as_ref().unwrap_or(event));
+                        handler(dispatch);
                     });
                     RoutePanic::preserve_first(
                         &mut first_panic,
