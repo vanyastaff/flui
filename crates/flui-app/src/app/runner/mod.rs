@@ -106,26 +106,67 @@ pub(crate) fn install_close_request_wiring(
 /// same reason (AppKit's `-close` does not send `windowShouldClose:`;
 /// Win32's `DestroyWindow` does not send `WM_CLOSE`).
 ///
-/// Owner-thread only, like every other operation on a hosted realm.
+/// Owner-thread only, like every other operation on a hosted realm — a
+/// call from a worker thread is REFUSED with a typed error rather than
+/// silently doing nothing. That matters for the deferral case above: the
+/// work an application finishes before calling this often finishes on a
+/// worker, and `AppRuntime` is thread-local, so a worker would otherwise
+/// look at its own empty runtime and report "nothing registered". Marshal
+/// back to the thread that ran the handler.
+///
+/// The check is thread-scoped rather than process-scoped because "the
+/// owner thread" is not a process-wide fact: a process may host several
+/// event loops on several threads, each with its own `AppRuntime`. Merely
+/// reading this thread's slot is side-effect-free by construction (see
+/// `AppRuntime::new`'s own doc) — it resolves no services and constructs
+/// no singletons.
+///
+/// # Backend completeness (issue #919)
+///
+/// This resolves the close fully on the **headless**, **Win32** and
+/// **AppKit** backends, whose `PlatformWindow::close` performs a real
+/// close. On **winit** it does NOT: `WinitWindow::close` fires the
+/// window's `on_close` (so the presentation IS torn down) and hides the
+/// window, but never removes it from the backend's own window map and
+/// never re-consults the exit policy — so a winit application that
+/// defers its last window's close and then resolves it here ends up with
+/// no visible window and a process that does not exit. Stated rather than
+/// implied: this function introduces the path that depends on that fix.
+/// On **web** and **Android** the veto itself is inert (neither backend
+/// consults `dispatch_should_close`), so there is nothing to resolve.
 ///
 /// # Errors
 ///
+/// [`CloseRequestError::NoHostedRuntime`](crate::CloseRequestError::NoHostedRuntime)
+/// when the calling thread hosts no FLUI runtime,
+/// [`CloseRequestError::WrongThread`](crate::CloseRequestError::WrongThread)
+/// when it hosts one but not the presentation's,
 /// [`CloseRequestError::UnknownPresentation`](crate::CloseRequestError::UnknownPresentation)
 /// when no presentation is registered at `address` (never installed, or
-/// already closed), [`CloseRequestError::WindowGone`](crate::CloseRequestError::WindowGone)
-/// when its native window is already destroyed, and
-/// [`CloseRequestError::WrongThread`](crate::CloseRequestError::WrongThread)
-/// when called from anywhere but the thread that hosts the presentation.
+/// already closed), and
+/// [`CloseRequestError::WindowGone`](crate::CloseRequestError::WindowGone)
+/// when its native window is already destroyed.
 #[cfg(not(target_os = "ios"))]
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
 ) -> Result<(), crate::app::close_request::CloseRequestError> {
-    // The router is taken out of the thread-local BEFORE the close is
-    // issued: `PlatformWindow::close` fires the window's own `on_close`,
-    // which re-enters `APP_RUNTIME` through `close_this_window`.
-    host::APP_RUNTIME
-        .with(|slot| slot.borrow().close_requests())
-        .request_close(address)
+    use crate::app::close_request::CloseRequestError;
+
+    // Read the owner thread and the router in ONE visit, then leave the
+    // thread-local: `PlatformWindow::close` fires the window's own
+    // `on_close`, which re-enters `APP_RUNTIME` through
+    // `close_this_window`. A thread that hosts no loop has `owner_thread`
+    // unset — that, not an empty router, is what distinguishes "you are on
+    // the wrong thread" from "that presentation is gone".
+    let (owner_thread, router) = host::APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        (state.owner_thread, state.close_requests())
+    });
+    match owner_thread {
+        None => Err(CloseRequestError::NoHostedRuntime),
+        Some(owner) if owner != std::thread::current().id() => Err(CloseRequestError::WrongThread),
+        Some(_) => router.request_close(address),
+    }
 }
 
 /// Run a FLUI application with default configuration.

@@ -73,6 +73,24 @@
 //!   `impl_window_callback_setters!` macro) but no code path in either
 //!   calls `dispatch_should_close`, so a handler registered there is inert.
 //!   That is a property of those backends, not of this module.
+//! - **Resolving a deferred close does not complete on winit** (issue
+//!   #919). `WinitWindow::close` fires the window's `on_close` and hides
+//!   it, but never removes it from the backend's own window map and never
+//!   re-consults the exit policy — so on the primary desktop backend a
+//!   deferred close tears the presentation down and the window vanishes,
+//!   while the process stays alive even when that was the last window.
+//!   This module's own path is what makes that reachable, so it is stated
+//!   here and at
+//!   [`request_presentation_close`](crate::request_presentation_close)
+//!   rather than left to the reader. The fix is not the teardown
+//!   extraction it looks like: `WinitWindow` (declared in
+//!   `flui-platform`'s `traits/window.rs`, holding only its winit handle
+//!   and callbacks) has no back-reference into the winit backend's private
+//!   platform state or its control lane, and giving it one — or adding a
+//!   per-window close request to that lane — is a flui-platform design
+//!   change with its own review. It IS testable there: `build_test_event_loop`
+//!   plus `wait_for_map_len` already drive a real window close under a live
+//!   event loop, and that suite runs in CI on Linux.
 
 use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
@@ -132,6 +150,11 @@ pub enum CloseResponse {
     /// when the work is done; one that answered because the user said
     /// "don't quit" does nothing further, and the next close request is
     /// put to the handler afresh.
+    ///
+    /// On winit, resolving the close that way does not currently exit the
+    /// process — see
+    /// [`request_presentation_close`](crate::request_presentation_close)'s
+    /// backend-completeness section (issue #919).
     KeepOpen,
 }
 
@@ -202,9 +225,45 @@ pub enum CloseRequestError {
         address: PresentationAddress,
     },
     /// Closing a window is an owner-thread operation; this call arrived on
-    /// another thread.
+    /// another thread. Distinct from [`Self::NoHostedRuntime`]: the
+    /// presentation is registered and this process hosts it, just on a
+    /// different thread than the caller.
     #[error("a close must be requested from the owner thread")]
     WrongThread,
+    /// The calling thread hosts no FLUI runtime at all, so it has no
+    /// presentations to close.
+    ///
+    /// The common cause is calling from a worker thread after finishing
+    /// the work a [`CloseResponse::KeepOpen`] answer deferred. Marshal
+    /// back to the thread that ran the handler and call from there.
+    ///
+    /// Reported instead of [`Self::UnknownPresentation`] because the two
+    /// are genuinely different failures and a caller can act on the
+    /// difference. It is thread-scoped rather than process-scoped on
+    /// purpose: a process may host several event loops on several threads
+    /// (`AppRuntime` is thread-local by design), so "the owner thread" is
+    /// not a process-wide fact this call could consult.
+    #[error(
+        "this thread hosts no FLUI runtime; request the close from the thread that runs the \
+         presentation's event loop"
+    )]
+    NoHostedRuntime,
+}
+
+/// The text of a panic payload, when it has any — `panic!("...")` and
+/// `panic!("{}", x)` produce `&'static str` and `String` respectively, and
+/// nothing else is recoverable as text.
+///
+/// Its own function so the extraction is testable directly: the only other
+/// evidence a panicking close handler leaves is a `tracing` field, and a
+/// test that installs a custom panic hook (as the handler-panic test must,
+/// to keep the default output quiet) suppresses the only other place the
+/// payload would have surfaced.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
+    payload
+        .downcast_ref::<&'static str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
 }
 
 // ============================================================================
@@ -306,6 +365,18 @@ impl CloseRequestRouter {
         self.entries.lock().retain(|e| e.address.realm_id != realm);
     }
 
+    /// Drop every registration, for full loop-exit teardown.
+    ///
+    /// Not reachable by realm-by-realm removal: an explicit platform quit,
+    /// or a bootstrap that fails after a window is wired but before its
+    /// realm is installed, both leave this loop with registrations no
+    /// per-realm teardown ever names. Since a second `Platform::run` on the
+    /// same thread reuses this `AppRuntime`, those would otherwise be
+    /// consulted by the NEXT loop's windows.
+    pub(crate) fn clear(&self) {
+        self.entries.lock().clear();
+    }
+
     /// Ask the application whether the window at `address` may close.
     ///
     /// # Ordering against the keep-alive (process-exit) veto
@@ -357,9 +428,10 @@ impl CloseRequestRouter {
         let request = CloseRequest { address };
         let answered =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.call(&request)));
-        answered.unwrap_or_else(|_| {
+        answered.unwrap_or_else(|payload| {
             tracing::error!(
                 ?address,
+                panic = panic_message(&*payload).unwrap_or("<non-string panic payload>"),
                 "close-request handler panicked; vetoing the close (a panicking handler cannot \
                  be read as consent to discard unsaved work)"
             );
@@ -372,6 +444,15 @@ impl CloseRequestRouter {
     ///
     /// This is how a [`CloseResponse::KeepOpen`] answer is finished: the
     /// application saved its work and now wants the close it deferred.
+    ///
+    /// **Completes on headless, Win32 and AppKit; does NOT complete on
+    /// winit** (issue #919), because `WinitWindow::close` hides the window
+    /// and fires its `on_close` without removing it from the backend's own
+    /// window map or re-consulting the exit policy. On winit the
+    /// presentation is therefore torn down and the window disappears, but
+    /// the process does not exit even when this was the last window. See
+    /// [`request_presentation_close`](crate::request_presentation_close)
+    /// for the full statement.
     /// Bypassing the handler is the point — every backend's own
     /// `PlatformWindow::close` bypasses its native close-request path for
     /// the same reason (AppKit's `-close` does not send
@@ -544,11 +625,29 @@ mod tests {
             })),
         );
 
+        // A quiet hook is exactly why the payload has to be carried into
+        // the `tracing` field: with the default output suppressed, the
+        // reported field is the ONLY evidence of what went wrong, so the
+        // capture below is asserting the sole surviving diagnostic.
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let vetoed = router.consult(a);
+        let (vetoed, log) = flui_testing::log_capture::capture(|| router.consult(a));
         std::panic::set_hook(previous_hook);
         assert_eq!(vetoed, CloseResponse::KeepOpen);
+
+        assert!(
+            !log.is_empty(),
+            "vacuous-pass guard: the containment must have logged something"
+        );
+        let reported = log
+            .records()
+            .iter()
+            .find_map(|record| record.field("panic"))
+            .expect("the containment must report the panic payload, not discard it");
+        assert!(
+            reported.contains("deliberate handler panic under test"),
+            "the reported payload must be the handler's own message, got {reported:?}"
+        );
 
         panics.store(false, Ordering::SeqCst);
         assert_eq!(
@@ -657,6 +756,66 @@ mod tests {
             router.consult(realm_two),
             CloseResponse::KeepOpen,
             "a realm uninstall must not drop a sibling realm's entries"
+        );
+    }
+
+    /// The text a panicking handler leaves behind must survive
+    /// `catch_unwind` — both shapes `panic!` produces, and an honest
+    /// `None` for anything else.
+    #[test]
+    fn a_panic_payload_keeps_its_message() {
+        let borrowed = std::panic::catch_unwind(|| panic!("unsaved work check exploded"))
+            .expect_err("the closure panics");
+        assert_eq!(
+            panic_message(&*borrowed),
+            Some("unsaved work check exploded"),
+            "a `panic!(\"literal\")` payload is a &'static str"
+        );
+
+        let owned = std::panic::catch_unwind(|| panic!("document {} is dirty", 7))
+            .expect_err("the closure panics");
+        assert_eq!(
+            panic_message(&*owned),
+            Some("document 7 is dirty"),
+            "a formatted `panic!` payload is a String"
+        );
+
+        let opaque = std::panic::catch_unwind(|| std::panic::panic_any(41_u8))
+            .expect_err("the closure panics");
+        assert_eq!(
+            panic_message(&*opaque),
+            None,
+            "a non-string payload has no text to report, and must not be guessed at"
+        );
+    }
+
+    /// Full loop-exit teardown drops registrations no per-realm removal
+    /// names — the same `AppRuntime` serves a second `Platform::run` on
+    /// this thread, so a survivor would answer the NEXT loop's windows.
+    #[test]
+    fn clear_drops_every_registration() {
+        let router = CloseRequestRouter::new();
+        let keep_open = CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
+        let first = address(1, 1);
+        let second = address(2, 1);
+        let live_first = window(1);
+        let live_second = window(2);
+        router.register(first, &live_first, Some(keep_open.clone()));
+        router.register(second, &live_second, Some(keep_open));
+        assert_eq!(router.consult(first), CloseResponse::KeepOpen);
+
+        router.clear();
+
+        assert_eq!(
+            router.consult(first),
+            CloseResponse::Close,
+            "a cleared registration must not veto the next loop's close"
+        );
+        assert_eq!(router.consult(second), CloseResponse::Close);
+        assert_eq!(
+            router.request_close(second),
+            Err(CloseRequestError::UnknownPresentation { address: second }),
+            "and the programmatic route must not still hold the window"
         );
     }
 

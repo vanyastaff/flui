@@ -262,7 +262,7 @@ where
         let hot_reload_sender = ui_realm.command_sender();
         let realm_dispatch = install_platform_realm(ui_realm, &window);
 
-        // 3b0. Wire this presentation into the close-request seam (issue
+        // 3c1. Wire this presentation into the close-request seam (issue
         // #558): the application's own answer to "may this window close?",
         // plus the entry that makes the window closable programmatically
         // afterwards. One shared implementation with
@@ -275,7 +275,7 @@ where
         *rebuild_registration_slot.borrow_mut() =
             Some(worker_reload.register_rebuild_hook(hot_reload_sender));
 
-        // 3c1. Start config-declared application services (issue #558) now
+        // 3c2. Start config-declared application services (issue #558) now
         // that the realm install above has resolved the loop's execution
         // services. Started here — not before the install — so a service's
         // spawned tasks land on the same pools (host-injected or default)
@@ -667,7 +667,7 @@ where
             drop(released);
         }));
 
-        // No `on_should_close` registration here: step 3b0 above installed
+        // No `on_should_close` registration here: step 3c1 above installed
         // it, together with the router entry it consults, so the two can
         // never be wired apart.
 

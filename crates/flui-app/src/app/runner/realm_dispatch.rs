@@ -1444,6 +1444,14 @@ pub(super) fn teardown_platform_realm() {
                 "BUG: window_registry teardown read did not include the installed address"
             );
         }
+        // Close-request registrations go with the loop, not with any one
+        // realm (issue #558). Per-realm teardown already drops a realm's
+        // own entries, but an explicit platform quit, or a bootstrap that
+        // wired a window and then failed before installing its realm,
+        // leaves entries no realm removal ever names — and this same
+        // `AppRuntime` serves a SECOND `Platform::run` on this thread, so a
+        // survivor would be consulted by the next loop's windows.
+        state.close_requests().clear();
         state.owner_thread = None;
         state.dispatched_scheduler = None;
         state.dispatched_realm_id = None;
@@ -6046,5 +6054,112 @@ mod realm_dispatch_tests {
             }
             teardown_platform_realm();
         }
+    }
+
+    /// A worker thread resolving a deferred close must be REFUSED with a
+    /// reason, never silently do nothing. `AppRuntime` is thread-local, so
+    /// without the owner-thread check the worker reads its own fresh,
+    /// empty runtime and the call reports "no such presentation" about an
+    /// address that is perfectly live — indistinguishable, to the caller,
+    /// from a window that already closed.
+    ///
+    /// The premise is asserted rather than assumed: after the refusal the
+    /// SAME address closes successfully from the owner thread, so the
+    /// worker's error was about the thread, not about the address.
+    ///
+    /// If reverted: drop the `owner_thread` match from
+    /// `request_presentation_close` and the worker gets
+    /// `UnknownPresentation` instead.
+    #[test]
+    fn resolving_a_deferred_close_from_a_worker_thread_is_a_typed_refusal() {
+        use crate::app::close_request::CloseRequestError;
+
+        let (_dispatcher_a, _window_a, _quit_calls, _clear_guard) =
+            install_realm_a_with_exit_policy_and_quit_counter();
+
+        let (dispatcher_b, window_b) =
+            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("the deferred-close window must open")
+                .expect("headless open_window is always Ready, never Pending");
+        install_close_request_wiring(dispatcher_b.address, &window_b, None);
+        assert!(
+            presentation_is_hosted(dispatcher_b.address),
+            "premise: the presentation is hosted, so the only thing wrong with the worker's \
+             call below is the thread it is on"
+        );
+
+        let address = dispatcher_b.address;
+        let refused = std::thread::spawn(move || request_presentation_close(address))
+            .join()
+            .expect("the worker thread must not panic");
+        assert_eq!(
+            refused,
+            Err(CloseRequestError::NoHostedRuntime),
+            "a worker thread hosts no runtime; it must learn that, not be told the presentation \
+             does not exist"
+        );
+        assert!(
+            presentation_is_hosted(address),
+            "and the refusal must leave the presentation exactly as it was"
+        );
+
+        request_presentation_close(address).expect("the owner thread closes the very same address");
+        assert!(!presentation_is_hosted(address));
+
+        teardown_platform_realm();
+    }
+
+    /// Close-request registrations must not outlive the loop. Per-realm
+    /// teardown drops a realm's own entries, but full loop-exit teardown
+    /// does not go through that path at all — and this same thread-local
+    /// `AppRuntime` serves a SECOND `Platform::run` on this thread, so a
+    /// survivor would be consulted by the next loop's windows.
+    ///
+    /// Two shapes in one run: a live presentation's entry, and an entry for
+    /// an address whose realm was never installed at all (the bootstrap
+    /// that wires a window and then fails), which no realm removal could
+    /// ever name.
+    ///
+    /// If reverted: remove the `close_requests().clear()` call from
+    /// `teardown_platform_realm` and both assertions fail.
+    #[test]
+    fn full_loop_teardown_clears_close_request_registrations() {
+        use crate::app::close_request::{CloseRequestHandler, CloseResponse};
+
+        let (dispatcher_a, window_a, _quit_calls, _clear_guard) =
+            install_realm_a_with_exit_policy_and_quit_counter();
+
+        let keep_open = CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
+        install_close_request_wiring(dispatcher_a.address, &window_a, Some(keep_open.clone()));
+
+        // The bootstrap-failure shape: a window wired before its realm
+        // exists, under an address no realm teardown will ever mention.
+        let orphan = flui_foundation::PresentationAddress {
+            realm_id: flui_foundation::RealmId::new(9_999),
+            presentation_id: flui_foundation::PresentationId::new(9_999),
+        };
+        install_close_request_wiring(orphan, &window_a, Some(keep_open));
+
+        let router = APP_RUNTIME.with(|slot| slot.borrow().close_requests());
+        assert_eq!(
+            router.consult(dispatcher_a.address),
+            CloseResponse::KeepOpen,
+            "premise: both entries answer before teardown"
+        );
+        assert_eq!(router.consult(orphan), CloseResponse::KeepOpen);
+
+        teardown_platform_realm();
+
+        let router = APP_RUNTIME.with(|slot| slot.borrow().close_requests());
+        assert_eq!(
+            router.consult(dispatcher_a.address),
+            CloseResponse::Close,
+            "a registration must not survive the loop that made it"
+        );
+        assert_eq!(
+            router.consult(orphan),
+            CloseResponse::Close,
+            "least of all one no realm teardown could have named"
+        );
     }
 }
