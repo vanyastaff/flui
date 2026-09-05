@@ -389,7 +389,22 @@ zero windows left, app still alive) -- \
 allows_exit` and \
 `shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_ \
 the_realm_alive` are the regression pins, each mutant-verified against \
-exactly that log-only shape. `close_presentation`'s sole-presentation branch \
+exactly that log-only shape. The same hang had a second home one backend \
+down (issue #919): winit's programmatic `PlatformWindow::close` hid the \
+window and fired `on_close` but never left the backend's own tracking map, \
+against which the exit policy is consulted, so an application closing its \
+own last window lingered with nothing on screen while every compositor-route \
+and headless close check stayed green. Both routes now run ONE teardown body \
+(`WinitApp::complete_window_close`: `on_close`, map/cursor/drag removal, \
+callback clear, `WindowEvent::Closed`, exit-policy consult), the \
+programmatic route entering it from the owner control lane's non-droppable \
+per-window close set (`ControlSender::request_close_window`) so `on_close` \
+fires on the owner thread whatever thread asked and a saturated command \
+lane can never lose a close -- pinned by \
+`programmatic_close_runs_the_full_teardown_and_exits_the_loop` on a real \
+winit loop (red on the pre-fix body with `window_id_map.len() = 1`), and \
+end-to-end through the real app, GPU surface and exit-policy hook by the \
+live-smoke harnesses' `FLUI_SELF_CLOSE_ROUTE=programmatic` cycles. `close_presentation`'s sole-presentation branch \
 also now dispatches `AppLifecycleState::Detached` through the realm BEFORE \
 requesting its uninstall (cancelling in-flight pointer sequences and \
 notifying lifecycle observers before the realm and its `UpdateScheduler` are gone \
@@ -416,7 +431,13 @@ not merely delayed, and nothing re-checks afterward. \
 exit_today` pins this AS a known gap (it asserts the CURRENT, imperfect \
 outcome, and says so in its own name and doc); the tracked fix is to \
 re-consult the hook once a deferred realm-map mutation actually applies, \
-e.g. at each dispatch's own tail, not attempted here.
+e.g. at each dispatch's own tail, not attempted here. Since issue #919 this \
+gap is a HEADLESS-double shape only: the winit backend's `close()` never \
+runs its teardown synchronously (it is posted to the owner lane and run on \
+the owner's next turn, top-level, with no realm checked out), so a \
+programmatic close from inside a dispatched callback tears down un-nested \
+there and the hook sees the emptied registry. The headless `close()` stays \
+synchronous, which is what that test pins.
 
 **A second product gap this required fixing: `open_secondary_window` \
 assumed `OwnerPlatform::open_window` always resolves `Ready`.** It does, \
@@ -610,6 +631,10 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "pub fn open_secondary_window" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_exit_policy_hook" },
     { kind = "symbol", file = "crates/flui-platform/src/traits/platform.rs", contains = "fn set_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn complete_window_close" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn request_close_window" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn programmatic_close_runs_the_full_teardown_and_exits_the_loop" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn winit_control_close_request_is_nonstarvable_coalesced_per_window_and_taken_once" },
     { kind = "symbol", file = "crates/flui-platform/src/shared/handlers.rs", contains = "pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn two_realms_via_separate_windows_policy_share_nothing" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn one_realm_two_windows_policy_routes_by_presentation" },
@@ -2730,7 +2755,7 @@ kind = "trait"
 declared_in = "crates/flui-platform/src/traits/platform.rs"
 contains = "pub struct WindowId"
 classification = "transitional"
-thread_affinity = "PlatformWindow: Send + Sync; per-window callbacks deliver on the owner thread"
+thread_affinity = "PlatformWindow: Send + Sync; per-window callbacks deliver on the owner thread; winit's close() defers its whole teardown (on_close included) to the owner's next turn whatever thread called it (issue #919)"
 owner = "platform-internal native window key and handle — WindowId must never become realm-facing identity; canonical definition (this one) is the only one PlatformWindow::id() returns"
 failure_semantics = "callback installation is install-only today (no cancellation ownership)"
 consumers = [

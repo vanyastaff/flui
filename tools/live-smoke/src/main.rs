@@ -43,13 +43,20 @@
 //! 5. **clean close** — a `WM_DELETE_WINDOW` client message (a real window
 //!    close, no window manager required) makes the process exit `0` within
 //!    the timeout: no hang, no post-teardown crash.
+//! 6. **programmatic close** — a second launch closes ITSELF through
+//!    `PlatformWindow::close` (the platform's self-close hook on its
+//!    `programmatic` route) and must exit `0`: the route an application
+//!    closing its own window takes, which hid the window and never exited
+//!    while check 5 stayed green (issue #919).
 //!
-//! The wayland mode runs check 5's equivalent only (launch + clean close,
-//! several cycles) — the band where the X11-green/Wayland-segfault teardown
-//! ordering bug of issue #713 lived.
+//! The wayland mode runs checks 5 and 6's equivalents only (launch + clean
+//! close, several cycles per route) — the band where the
+//! X11-green/Wayland-segfault teardown ordering bug of issue #713 lived.
 
 #[cfg(target_os = "linux")]
 mod harness;
+#[cfg(target_os = "linux")]
+mod self_close;
 #[cfg(target_os = "linux")]
 mod wayland;
 

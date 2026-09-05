@@ -14,6 +14,8 @@ use x11rb::protocol::xtest::ConnectionExt as XTestConnectionExt;
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
+use crate::self_close::{self, CloseRoute, strip_ansi};
+
 const WINDOW_TIMEOUT: Duration = Duration::from_secs(30);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// XTEST core-pointer event codes (X11 `MotionNotify`/`ButtonPress`/
@@ -82,6 +84,80 @@ pub(crate) fn run(app_path: &str) -> Result<()> {
             for line in tail.iter().rev() {
                 eprintln!("  {line}");
             }
+        }
+    }
+    let _ = std::fs::remove_file(&log_path);
+    result?;
+
+    // Check 6: a second launch that closes ITSELF through
+    // `PlatformWindow::close` must also exit 0 — the programmatic route.
+    check_programmatic_close(app_path)
+}
+
+/// The app closes its own window programmatically (issue #919) — through the
+/// platform's harness self-close hook on its `programmatic` route, which
+/// calls `PlatformWindow::close` on the tracked window exactly as an
+/// application closing its own window does — and the process must exit 0
+/// within the timeout. Before that fix the winit `close()` hid the window
+/// but never left the backend's tracking map, so the exit policy never saw
+/// the last window go: the process lingered, invisible, forever. Every
+/// in-tree close check (the compositor `WM_DELETE_WINDOW` above, the
+/// Wayland self-close, every headless test) took a different route and
+/// stayed green. This is the only check that drives the programmatic route
+/// through the real app — real `on_close` → realm teardown → exit-policy
+/// hook — on a real GPU surface.
+fn check_programmatic_close(app_path: &str) -> Result<()> {
+    let log_path = std::env::temp_dir().join(format!(
+        "flui-live-smoke-app-programmatic-close-{}.log",
+        std::process::id()
+    ));
+    let log_file = std::fs::File::create(&log_path)
+        .with_context(|| format!("creating {}", log_path.display()))?;
+
+    let mut app = Command::new(app_path)
+        .env_remove("WAYLAND_DISPLAY")
+        .env("RUST_LOG", "warn,flui_platform=debug")
+        .env(
+            self_close::DEADLINE_ENV,
+            self_close::SELF_CLOSE_AFTER_MS.to_string(),
+        )
+        .env(self_close::ROUTE_ENV, CloseRoute::Programmatic.env_value())
+        .stdout(log_file.try_clone().context("cloning the app log handle")?)
+        .stderr(log_file)
+        .spawn()
+        .with_context(|| format!("spawning {app_path} for the programmatic-close check"))?;
+
+    let status = wait_for_exit(&mut app, EXIT_TIMEOUT)?;
+    let result = match status {
+        Some(status) if status.success() => {
+            // Exit 0 alone would also be true of the compositor route; the
+            // marker proves the deadline fired THROUGH PlatformWindow::close.
+            self_close::assert_route_observed(&log_path, CloseRoute::Programmatic).map(|()| {
+                eprintln!("live-smoke: programmatic close OK (exit 0, route observed)");
+            })
+        }
+        Some(status) => Err(anyhow::anyhow!(
+            "programmatic close check FAILED: teardown finished with {status} — a post-quit \
+             crash on the PlatformWindow::close route"
+        )),
+        None => {
+            let _ = app.kill();
+            let _ = app.wait();
+            Err(anyhow::anyhow!(
+                "programmatic close check FAILED: still running {}s after the self-close \
+                 deadline — PlatformWindow::close never reached the close teardown, so the \
+                 exit policy never saw the last window go (issue #919's shape)",
+                EXIT_TIMEOUT.as_secs()
+            ))
+        }
+    };
+    if result.is_err()
+        && let Ok(log) = std::fs::read_to_string(&log_path)
+    {
+        let tail: Vec<&str> = log.lines().rev().take(200).collect();
+        eprintln!("live-smoke: app log (last {} lines):", tail.len());
+        for line in tail.iter().rev() {
+            eprintln!("  {line}");
         }
     }
     let _ = std::fs::remove_file(&log_path);
@@ -682,26 +758,6 @@ fn check_occlusion_gating(
 
 /// Remove ANSI CSI escape sequences (`ESC [ … <final byte in @..=~>`) —
 /// everything the tracing compact formatter emits for color.
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for c2 in chars.by_ref() {
-                    if ('@'..='~').contains(&c2) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// Poll the window tree for a window whose `WM_NAME` contains "FLUI",
 /// failing early if the app dies first. Breadth-first to bounded depth: a
 /// window manager (any environment other than bare Xvfb) reparents client

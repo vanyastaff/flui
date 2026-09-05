@@ -551,13 +551,33 @@ pub enum WindowEvent {
     /// Window was created
     Created(WindowId),
 
-    /// Window close was requested (user clicked X button)
+    /// Window close was requested by the user (close button, compositor)
+    /// and the window's should-close veto passed. Not emitted for a
+    /// programmatic [`PlatformWindow::close`], which asks no veto — that
+    /// route reports only [`Closed`](Self::Closed).
+    ///
+    /// Ordering: emitted BEFORE the window's own `on_close` callback runs,
+    /// so a global handler observes the window still intact when told the
+    /// close is going ahead; [`Closed`](Self::Closed) follows once the
+    /// window has left the backend's tracking. (Earlier winit versions ran
+    /// `on_close` first — a deliberate change, made when both close routes
+    /// were unified into one teardown.)
+    ///
+    /// Wired on winit and Win32. The headless backend routes no window
+    /// lifecycle through the global handler at all (it emits only
+    /// [`Created`](Self::Created)); use the window's own `on_should_close`
+    /// / `on_close` there.
     CloseRequested {
         /// The window whose close button was activated
         window_id: WindowId,
     },
 
-    /// Window was closed
+    /// Window was closed — left the backend's tracking, whichever route
+    /// (user-initiated or programmatic) took it there. Emitted after the
+    /// window's own `on_close` callback and before the exit-policy consult.
+    ///
+    /// Wired on winit and Win32; the headless backend does not emit it (see
+    /// [`CloseRequested`](Self::CloseRequested)).
     Closed(WindowId),
 
     /// Window focus changed

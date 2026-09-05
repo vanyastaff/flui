@@ -237,7 +237,31 @@ pub trait PlatformWindow: Send + Sync {
         let _ = size;
     }
 
-    /// Close and destroy the window
+    /// Close and destroy the window — a decision already made, not a
+    /// request.
+    ///
+    /// Bypasses the should-close veto ([`on_should_close`](Self::on_should_close))
+    /// when called on the backend's owning thread — natively so: AppKit's
+    /// `-close` never sends `windowShouldClose:`, and a same-thread Win32
+    /// `DestroyWindow` never sends `WM_CLOSE`. Off the owning thread the
+    /// veto's fate is backend-defined: Win32 posts `WM_CLOSE`, whose owner-side
+    /// handler re-asks `on_should_close` before destroying, so a cross-thread
+    /// `close()` there is a close *request* (see that impl); winit defers the
+    /// whole teardown to the owner thread's next turn with no veto asked.
+    ///
+    /// Never bypasses the *bookkeeping* once the close proceeds: the backend
+    /// runs the same teardown a user-initiated close takes — the
+    /// [`on_close`](Self::on_close) callback, removal from the backend's window
+    /// tracking, cleanup of per-window input state, and the exit-policy consult
+    /// that ends the loop when this was the last window.
+    ///
+    /// Callable from any thread the native windowing API permits. On winit the
+    /// teardown, and so `on_close`, runs on the owner thread's next turn —
+    /// never synchronously within this call, whichever thread makes it. The
+    /// headless test double, by contrast, runs `on_close` synchronously
+    /// inside `close()`: a test that asserts state right after `close()`
+    /// pins that double, not this contract. AppKit's `close()` has no thread
+    /// marshaling today: call it from the main thread only.
     fn close(&self) {}
 
     /// Set the window's background appearance (backdrop material)
@@ -422,260 +446,6 @@ impl HasDisplayHandle for dyn PlatformWindow + '_ {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         PlatformWindow::display_handle(self)
     }
-}
-
-#[cfg(feature = "winit-backend")]
-/// Concrete winit window wrapper
-///
-/// Wraps `winit::window::Window` to implement `PlatformWindow`.
-/// Includes per-window callbacks for event delivery using the causal FIFO
-/// dispatch pattern for reentrancy safety.
-pub struct WinitWindow {
-    id: WindowId,
-    window: Arc<Window>,
-    is_focused: parking_lot::Mutex<bool>,
-    is_visible: parking_lot::Mutex<bool>,
-    callbacks: crate::shared::WindowCallbacks,
-    /// This window's AT-SPI announcement, created with the window so a
-    /// screen reader that attaches at any later point finds it on the bus.
-    /// Construction succeeds (and stays inert) with no session bus at all —
-    /// see [`UnixAccessibility::new`](crate::platforms::linux::UnixAccessibility::new).
-    #[cfg(all(target_os = "linux", feature = "a11y"))]
-    accessibility: Arc<crate::platforms::linux::UnixAccessibility>,
-}
-
-/// [`PlatformTextInput`] for a winit window.
-///
-/// A thin wrapper around `Arc<winit::window::Window>` rather than an impl
-/// directly on `WinitWindow`: `PlatformWindow::text_input` hands back an
-/// `Arc<dyn PlatformTextInput>` from `&self`. Cloning the exact inner
-/// `Arc<Window>` gives the capability independent ownership without cloning
-/// or forwarding the platform-window object itself.
-#[cfg(feature = "winit-backend")]
-pub struct WinitTextInput {
-    window: Arc<Window>,
-}
-
-#[cfg(feature = "winit-backend")]
-impl super::text_input::PlatformTextInput for WinitTextInput {
-    fn set_ime_allowed(&self, allowed: bool) {
-        self.window.set_ime_allowed(allowed);
-    }
-
-    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
-        use winit::dpi::{LogicalPosition, LogicalSize};
-
-        self.window.set_ime_cursor_area(
-            LogicalPosition::new(f64::from(area.origin.x.0), f64::from(area.origin.y.0)),
-            LogicalSize::new(f64::from(area.size.width.0), f64::from(area.size.height.0)),
-        );
-    }
-}
-
-#[cfg(feature = "winit-backend")]
-impl std::fmt::Debug for WinitWindow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `WindowCallbacks` holds boxed closures that don't implement
-        // `Debug`; print the focus/visibility flags only.
-        f.debug_struct("WinitWindow")
-            .field("is_focused", &*self.is_focused.lock())
-            .field("is_visible", &*self.is_visible.lock())
-            .finish_non_exhaustive()
-    }
-}
-
-#[cfg(feature = "winit-backend")]
-impl WinitWindow {
-    /// Create a new WinitWindow wrapper, addressed by the platform-minted
-    /// `id` the caller already allocated for it.
-    pub fn new(id: WindowId, window: Arc<Window>) -> Self {
-        Self {
-            id,
-            window,
-            is_focused: parking_lot::Mutex::new(true),
-            is_visible: parking_lot::Mutex::new(true),
-            callbacks: crate::shared::WindowCallbacks::new(),
-            #[cfg(all(target_os = "linux", feature = "a11y"))]
-            accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
-        }
-    }
-
-    /// Get the underlying `Arc<Window>`
-    pub fn inner(&self) -> &Arc<Window> {
-        &self.window
-    }
-
-    /// Get a reference to the per-window callbacks
-    pub fn callbacks(&self) -> &crate::shared::WindowCallbacks {
-        &self.callbacks
-    }
-
-    /// Update focus state
-    pub fn set_focused(&self, focused: bool) {
-        *self.is_focused.lock() = focused;
-    }
-
-    /// Update visibility state
-    pub fn set_visible(&self, visible: bool) {
-        *self.is_visible.lock() = visible;
-    }
-}
-
-#[cfg(feature = "winit-backend")]
-impl Drop for WinitWindow {
-    fn drop(&mut self) {
-        // Teardown-order invariant: a registered callback may own this
-        // window's GPU renderer, whose `wgpu::Surface` was created from
-        // this window's raw handles — that surface must be destroyed while
-        // the native window objects behind those handles are still alive
-        // (on Wayland, destroying the swapchain after the `wl_surface` is a
-        // use-after-free on the surface's `wl_proxy`; observed as the
-        // post-quit SIGSEGV of issue #713). `Drop::drop` runs before any
-        // field is dropped, so clearing the callbacks here guarantees the
-        // renderer dies before `self.window` regardless of field order.
-        // The winit `CloseRequested` arm also clears eagerly at close (the
-        // primary, in-loop path); this is the last-resort guarantee for a
-        // window whose final `Arc` unwinds anywhere else.
-        self.callbacks.clear();
-    }
-}
-
-#[cfg(feature = "winit-backend")]
-impl PlatformWindow for WinitWindow {
-    fn id(&self) -> WindowId {
-        self.id
-    }
-
-    fn physical_size(&self) -> Size<DevicePixels> {
-        use flui_types::geometry::device_px;
-
-        let size = self.window.inner_size();
-        Size::new(device_px(size.width as i32), device_px(size.height as i32))
-    }
-
-    fn logical_size(&self) -> Size<Pixels> {
-        use flui_types::geometry::px;
-
-        let size = self.window.inner_size();
-        let scale = self.window.scale_factor() as f32;
-        Size::new(
-            px(size.width as f32 / scale),
-            px(size.height as f32 / scale),
-        )
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        // The live winit theme, so an appearance-change consumer querying at
-        // dispatch time (and the bootstrap's initial seed) reads the REAL
-        // value — the trait default is a permanent `Light` that silently
-        // killed the whole dark-mode wire. `None` (winit cannot determine
-        // the theme on this platform) keeps the light default.
-        match self.window.theme() {
-            Some(winit::window::Theme::Dark) => WindowAppearance::Dark,
-            Some(winit::window::Theme::Light) | None => WindowAppearance::Light,
-        }
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.window.scale_factor()
-    }
-
-    fn request_redraw(&self) {
-        self.window.request_redraw();
-    }
-
-    fn is_focused(&self) -> bool {
-        *self.is_focused.lock()
-    }
-
-    fn is_visible(&self) -> bool {
-        *self.is_visible.lock()
-    }
-
-    fn set_title(&self, title: &str) {
-        self.window.set_title(title);
-    }
-
-    fn minimize(&self) {
-        self.window.set_minimized(true);
-    }
-
-    fn maximize(&self) {
-        self.window.set_maximized(true);
-    }
-
-    fn restore(&self) {
-        self.window.set_minimized(false);
-        self.window.set_maximized(false);
-    }
-
-    fn toggle_fullscreen(&self) {
-        use winit::window::Fullscreen;
-        let current = self.window.fullscreen();
-        if current.is_some() {
-            self.window.set_fullscreen(None);
-        } else {
-            self.window
-                .set_fullscreen(Some(Fullscreen::Borderless(None)));
-        }
-    }
-
-    fn close(&self) {
-        self.callbacks.dispatch_close();
-        self.window.set_visible(false);
-    }
-
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        self.window.set_cursor(cursor);
-        Ok(())
-    }
-
-    crate::shared::impl_window_callback_setters!(callbacks);
-
-    // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
-    // `HasDisplayHandle` directly — without these overrides both fall through
-    // to the trait defaults (`Err(HandleError::Unavailable)`), which is what
-    // made every wgpu surface creation on this backend fail regardless of
-    // which GPU backend was compiled in.
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        self.window.window_handle()
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        self.window.display_handle()
-    }
-
-    fn as_winit(&self) -> Option<&Arc<Window>> {
-        Some(&self.window)
-    }
-
-    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        Some(Arc::new(WinitTextInput {
-            window: Arc::clone(&self.window),
-        }))
-    }
-
-    /// The window's own AT-SPI bridge — the capability the composition
-    /// root's accessibility wire discovers. Without this override the trait
-    /// default (`None`) makes every real Linux window silently
-    /// screen-reader-invisible while the headless fake works, which is
-    /// exactly backwards.
-    #[cfg(all(target_os = "linux", feature = "a11y"))]
-    fn accessibility(&self) -> Option<Arc<dyn super::accessibility::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as _)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    // No `haptics()` override: desktop winit targets have no haptic
-    // hardware to drive, so the `PlatformWindow` trait default (`None`) is
-    // the permanent correct answer here, not a stub awaiting a backend.
 }
 
 #[cfg(test)]

@@ -150,14 +150,14 @@ test *args:
     cargo test --workspace {{args}}
 
 [group("test")]
-[doc("Live E2E smoke: a REAL windowed demo driven by REAL X11 input (XTEST) — launch, mid-drag tracking, scroll, clean WM_DELETE close. Needs xvfb-run (apt install xvfb). Covers the band synthetic tests can't: platform translation, the wake chain, teardown")]
+[doc("Live E2E smoke: a REAL windowed demo driven by REAL X11 input (XTEST) — launch, mid-drag tracking, scroll, clean WM_DELETE close, then a second launch that closes itself through PlatformWindow::close (the programmatic route, issue #919). Needs xvfb-run (apt install xvfb). Covers the band synthetic tests can't: platform translation, the wake chain, teardown")]
 live-smoke:
     cargo build --package flui --features material --example sliver_demo
     cargo build --package flui-live-smoke
     xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
 
 [group("test")]
-[doc("Wayland live-smoke: close-path teardown ordering under a headless weston compositor — the demo self-closes (FLUI_SELF_CLOSE_AFTER_MS drives the real CloseRequested arm) and must exit 0, five cycles. Catches the post-quit wl_proxy use-after-free class (issue #713) the X11 smoke can never see. SKIPs with a message when weston is absent (apt install weston)")]
+[doc("Wayland live-smoke: close-path teardown ordering under a headless weston compositor — the demo self-closes (FLUI_SELF_CLOSE_AFTER_MS drives the real CloseRequested arm) and must exit 0, five cycles, then two more cycles on the programmatic PlatformWindow::close route (issue #919). Catches the post-quit wl_proxy use-after-free class (issue #713) the X11 smoke can never see. SKIPs with a message when weston is absent (apt install weston)")]
 live-smoke-wayland:
     cargo build --package flui --features material --example sliver_demo
     cargo build --package flui-live-smoke

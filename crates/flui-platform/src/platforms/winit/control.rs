@@ -11,7 +11,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::{ClaimHandle, ClaimSlot, claim_slot};
 use parking_lot::Mutex;
 
-use crate::traits::{PlatformWindow, WindowOptions, owner::OpenWindowError};
+use crate::traits::{PlatformWindow, WindowId, WindowOptions, owner::OpenWindowError};
 
 pub(super) const CONTROL_CAPACITY: usize = 256;
 
@@ -76,6 +76,18 @@ pub(super) struct ControlSender {
     /// keep-alive service completing must be able to end a lingering
     /// zero-window loop even if the command lane is saturated.
     exit_reevaluation_requested: Arc<AtomicBool>,
+    /// Windows whose programmatic `PlatformWindow::close` is waiting for the
+    /// owner to run the close teardown (issue #919), in request order, each
+    /// at most once. Not a slot in the bounded command lane: a close is
+    /// lifecycle traffic — losing one leaves a window that is hidden but
+    /// still tracked, which is exactly the "no window visible, process
+    /// never exits" defect — so it must never be rejected for lane
+    /// capacity, and a burst of requests for one window must cost one
+    /// teardown, not several. A `Vec` with a linear membership check, not a
+    /// set type: the length is bounded by the number of open windows (a
+    /// handful), and request order is part of the contract the owner's
+    /// drain relies on.
+    close_requested: Arc<Mutex<Vec<WindowId>>>,
     // Serializes the accepting check with the non-blocking enqueue. Shutdown
     // takes the same short gate before its final queue snapshot.
     admission: Arc<Mutex<bool>>,
@@ -91,6 +103,11 @@ impl std::fmt::Debug for ControlSender {
                 "quit_requested",
                 &self.quit_requested.load(Ordering::Relaxed),
             )
+            .field(
+                "exit_reevaluation_requested",
+                &self.exit_reevaluation_requested.load(Ordering::Relaxed),
+            )
+            .field("close_requested", &*self.close_requested.lock())
             .finish_non_exhaustive()
     }
 }
@@ -100,6 +117,7 @@ pub(super) struct ControlReceiver {
     wake_pending: Arc<AtomicBool>,
     quit_requested: Arc<AtomicBool>,
     exit_reevaluation_requested: Arc<AtomicBool>,
+    close_requested: Arc<Mutex<Vec<WindowId>>>,
     admission: Arc<Mutex<bool>>,
     owner_affinity: PhantomData<Rc<()>>,
 }
@@ -109,6 +127,7 @@ pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlRece
     let wake_pending = Arc::new(AtomicBool::new(false));
     let quit_requested = Arc::new(AtomicBool::new(false));
     let exit_reevaluation_requested = Arc::new(AtomicBool::new(false));
+    let close_requested = Arc::new(Mutex::new(Vec::new()));
     let admission = Arc::new(Mutex::new(true));
 
     (
@@ -118,6 +137,7 @@ pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlRece
             wake_pending: Arc::clone(&wake_pending),
             quit_requested: Arc::clone(&quit_requested),
             exit_reevaluation_requested: Arc::clone(&exit_reevaluation_requested),
+            close_requested: Arc::clone(&close_requested),
             admission: Arc::clone(&admission),
         },
         ControlReceiver {
@@ -125,6 +145,7 @@ pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlRece
             wake_pending,
             quit_requested,
             exit_reevaluation_requested,
+            close_requested,
             admission,
             owner_affinity: PhantomData,
         },
@@ -232,6 +253,49 @@ impl ControlSender {
         }
     }
 
+    /// Asks the owner to run the close teardown for `window_id` — the
+    /// programmatic [`PlatformWindow::close`] route (issue #919). The owner
+    /// answers on its next turn with the SAME teardown a compositor close
+    /// takes after its should-close veto (per-window close callback, map
+    /// removal, cursor/drag cleanup, callback clear, exit-policy consult),
+    /// minus the veto itself — a programmatic close is a decision already
+    /// made, as on AppKit (`-close` never sends `windowShouldClose:`) and
+    /// Win32 (`DestroyWindow` never sends `WM_CLOSE`).
+    ///
+    /// Callable from **any thread**. Rides the per-window list rather than
+    /// the bounded command lane so it can never be rejected for capacity;
+    /// a second request for a window the owner has not yet torn down
+    /// coalesces (one teardown). A request after admission closed is
+    /// dropped: the loop has already stopped, so no owner turn will ever
+    /// run the teardown — that window's `on_close` does not fire, its
+    /// callbacks clear when the embedder's last `Arc` drops
+    /// (`WinitWindow::drop`), and the loop's own quit callback is the
+    /// embedder's signal that everything is over. The owner drains closes
+    /// posted BEFORE a quit ahead of the exit itself, so this is only ever
+    /// a close issued after the loop is already gone.
+    pub(super) fn request_close_window(&self, window_id: WindowId) {
+        let should_wake = {
+            let admission = self.admission.lock();
+            if !*admission {
+                tracing::debug!(
+                    ?window_id,
+                    "programmatic close after the event loop stopped; nothing left to tear down"
+                );
+                return;
+            }
+            let mut pending = self.close_requested.lock();
+            if pending.contains(&window_id) {
+                false
+            } else {
+                pending.push(window_id);
+                true
+            }
+        };
+        if should_wake {
+            self.wake_owner();
+        }
+    }
+
     fn wake_owner(&self) {
         // Successful enqueue always happens before this release/coalescing
         // transition, so observing the wake implies work is already visible.
@@ -289,6 +353,14 @@ impl ControlReceiver {
     pub(super) fn take_exit_reevaluation_requested(&self) -> bool {
         self.exit_reevaluation_requested
             .swap(false, Ordering::AcqRel)
+    }
+
+    /// Takes every window whose programmatic close is still waiting for
+    /// the owner, in request order, exactly once — the set is emptied by
+    /// the take, so a request arriving during the owner's teardown of this
+    /// batch lands in the NEXT batch with its own wake.
+    pub(super) fn take_close_requests(&self) -> Vec<WindowId> {
+        std::mem::take(&mut *self.close_requested.lock())
     }
 
     pub(super) fn stop_accepting(&self) {
@@ -682,6 +754,91 @@ mod tests {
         assert!(
             !receiver.take_quit_requested(),
             "a re-evaluation request must not masquerade as an unconditional quit"
+        );
+    }
+
+    /// The programmatic-close request (issue #919) has the same
+    /// non-starvable shape as the quit/re-evaluation flags — it must reach
+    /// the owner even with the command lane full — but is keyed per
+    /// window: a burst for ONE window coalesces into one wake and one
+    /// owner-visible entry, distinct windows each keep theirs, and the take
+    /// empties the set so nothing is torn down twice.
+    #[test]
+    fn winit_control_close_request_is_nonstarvable_coalesced_per_window_and_taken_once() {
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_count_for_callback = Arc::clone(&wake_count);
+        let wake = Arc::new(move || {
+            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
+        });
+        let (sender, receiver) = control_lane(wake);
+
+        for index in 0..CONTROL_CAPACITY {
+            let _reply = sender
+                .request_open_window(options(format!("queued-{index}")))
+                .expect("fill the bounded window lane");
+        }
+        let wakes_before = wake_count.load(Ordering::Relaxed);
+
+        sender.request_close_window(crate::traits::WindowId(7));
+        sender.request_close_window(crate::traits::WindowId(7));
+        sender.request_close_window(crate::traits::WindowId(9));
+
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            wakes_before,
+            "close requests coalesce into the wake the saturated lane already has pending"
+        );
+        assert_eq!(
+            receiver.take_close_requests(),
+            vec![crate::traits::WindowId(7), crate::traits::WindowId(9)],
+            "one entry per window, in request order, despite the full command lane"
+        );
+        assert!(
+            receiver.take_close_requests().is_empty(),
+            "the owner takes each batch exactly once"
+        );
+        assert!(
+            !receiver.take_quit_requested(),
+            "a close request must not masquerade as an unconditional quit"
+        );
+
+        // A request landing AFTER the take is a fresh batch with its own wake.
+        receiver.begin_drain();
+        sender.request_close_window(crate::traits::WindowId(7));
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            wakes_before + 1,
+            "a close after the owner's drain boundary wakes the owner again"
+        );
+        assert_eq!(
+            receiver.take_close_requests(),
+            vec![crate::traits::WindowId(7)]
+        );
+    }
+
+    /// Once admission closes (loop shutdown) a close request is dropped,
+    /// not parked: the owner is exiting and its own teardown covers every
+    /// window it still tracks, so a parked entry would only ever be a leak.
+    #[test]
+    fn winit_control_close_request_after_admission_closed_is_dropped() {
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_count_for_callback = Arc::clone(&wake_count);
+        let wake = Arc::new(move || {
+            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
+        });
+        let (sender, receiver) = control_lane(wake);
+        receiver.stop_accepting();
+
+        sender.request_close_window(crate::traits::WindowId(3));
+
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            0,
+            "no wake after shutdown"
+        );
+        assert!(
+            receiver.take_close_requests().is_empty(),
+            "nothing is parked past admission"
         );
     }
 
