@@ -5,7 +5,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use flui_view::element::StaticChildren;
+use flui_view::element::{SemanticSetMapping, StaticChildren};
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BuildContext, IntoView};
@@ -25,6 +25,11 @@ use flui_view::{BuildContext, IntoView};
 pub struct SliverFixedExtentList {
     item_extent: f32,
     source: Source,
+    /// How this sliver's children number themselves for a screen reader.
+    /// `None` leaves the adaptor's default — every child a member, at its own
+    /// logical index — which is what the reference does when
+    /// `semanticIndexCallback` and `semanticIndexOffset` are left alone.
+    semantics: Option<SemanticSetMapping>,
 }
 
 /// Where the children come from.
@@ -54,6 +59,7 @@ impl SliverFixedExtentList {
         Self {
             item_extent,
             source: Source::Static(StaticChildren::new(children.into_boxed_vec())),
+            semantics: None,
         }
     }
 
@@ -73,6 +79,7 @@ impl SliverFixedExtentList {
         Self {
             item_extent,
             source: Source::Static(children),
+            semantics: None,
         }
     }
 
@@ -98,7 +105,27 @@ impl SliverFixedExtentList {
                 item_count,
                 builder: Rc::new(builder),
             },
+            semantics: None,
         }
+    }
+
+    /// Declare how these children number themselves for a screen reader.
+    ///
+    /// The reference spells this as two separate `SliverChildDelegate`
+    /// knobs, `semanticIndexCallback` and `semanticIndexOffset`. They are one
+    /// value here on purpose: an offset without the composed set's size
+    /// announces "item 12 of 5" for the second delegate in a pair, and the
+    /// two are only ever correct when chosen together.
+    ///
+    /// Left unset, every child is a member at its own logical index, in a set
+    /// as large as the child count — the reference's default. Note the two
+    /// numbering bases: a semantic index is 0-based, and the
+    /// `position_in_set` a screen reader is handed is 1-based, so the first
+    /// child of three announces as "1 of 3".
+    #[must_use]
+    pub fn semantics(mut self, semantics: SemanticSetMapping) -> Self {
+        self.semantics = Some(semantics);
+        self
     }
 
     /// The per-child main-axis extent.
@@ -116,13 +143,14 @@ impl fmt::Debug for SliverFixedExtentList {
             Source::Static(children) => s.field("children", &children.len()),
             Source::Builder { item_count, .. } => s.field("item_count", item_count),
         };
+        s.field("semantics", &self.semantics);
         s.finish()
     }
 }
 
 impl StatelessView for SliverFixedExtentList {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        match &self.source {
+        let adaptor = match &self.source {
             Source::Static(children) => {
                 flui_view::element::SliverFixedExtentList::over(self.item_extent, children)
             }
@@ -134,6 +162,13 @@ impl StatelessView for SliverFixedExtentList {
                 *item_count,
                 Rc::clone(builder),
             ),
+        };
+        // Applied after the match so both delegate kinds carry it: a builder
+        // delegate numbers its children exactly as a static one does, and the
+        // reference's `semanticIndexCallback` is not a property of either.
+        match &self.semantics {
+            Some(mapping) => adaptor.semantics(mapping.clone()),
+            None => adaptor,
         }
     }
 }

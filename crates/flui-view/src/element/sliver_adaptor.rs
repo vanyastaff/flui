@@ -343,11 +343,21 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// moves *within* the band need no callback: the reconcile matches
     /// residents by key on its own.
     pub(crate) find_index_by_key: Option<FindIndexByKey>,
-    /// How these children map onto the semantic set a screen reader announces.
+    /// How these children map onto the semantic set a screen reader announces,
+    /// or `None` for the default — every child a member, at its own logical
+    /// index, in a set as large as `item_count`.
     ///
-    /// 1:1 by default; `SliverList::separated` overrides it, since its `2n - 1`
+    /// Deliberately unresolved rather than defaulted at construction. The
+    /// default is derived from `item_count`, and the static-children
+    /// constructors set that count *after* calling `new` — so a mapping
+    /// materialised in `new` would be frozen at the count that was known
+    /// then (zero), and announce "item 1 of 0" for the rest of the view's
+    /// life. Resolving on read means there is one source for the count and
+    /// the two cannot drift, in whatever order a caller builds.
+    ///
+    /// `SliverList::separated` sets it explicitly, since its `2n - 1`
     /// children are `n` members.
-    pub(crate) semantics: SemanticSetMapping,
+    pub(crate) semantics: Option<SemanticSetMapping>,
 }
 
 impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
@@ -396,15 +406,24 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             item_count,
             builder,
             find_index_by_key: None,
-            semantics: SemanticSetMapping::one_to_one(item_count),
+            semantics: None,
         }
     }
 
     /// Replace the semantic-set mapping — see [`SemanticSetMapping`].
     #[must_use]
     pub fn semantics(mut self, semantics: SemanticSetMapping) -> Self {
-        self.semantics = semantics;
+        self.semantics = Some(semantics);
         self
+    }
+
+    /// The mapping this view actually announces with: the one it was given,
+    /// or the count-derived default resolved against the *current*
+    /// `item_count`.
+    pub(crate) fn effective_semantics(&self) -> SemanticSetMapping {
+        self.semantics
+            .clone()
+            .unwrap_or_else(|| SemanticSetMapping::one_to_one(self.item_count))
     }
 
     /// The item count to build a render object with, probing the builder when
@@ -758,7 +777,7 @@ impl<R: LazyMultiBoxRender> SliverAdaptorBehavior<R> {
     fn new(view: &SliverMultiBoxAdaptor<R>) -> Self {
         Self {
             inner: RenderBehavior::new(),
-            semantics: view.semantics.clone(),
+            semantics: view.effective_semantics(),
             manager: Arc::new(Mutex::new(SliverAdaptorManager {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
@@ -950,8 +969,9 @@ where
         // Before the early return: the mapping can change while the delegate
         // does not — same static children, same count, a different numbering —
         // and a stale mapping announces a set that is no longer there.
-        let semantics_changed = self.semantics.differs_from(&core.view().semantics);
-        self.semantics = core.view().semantics.clone();
+        let incoming = core.view().effective_semantics();
+        let semantics_changed = self.semantics.differs_from(&incoming);
+        self.semantics = incoming;
         if semantics_changed {
             // Residents keep the slot they were stamped with until something
             // reconciles them. Nothing else here would.
