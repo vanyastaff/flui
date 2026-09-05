@@ -379,7 +379,7 @@ pub use debug::DebugBackend;
 pub use headless::HeadlessRenderer;
 // Layer rendering (external via lib.rs re-export at crate root)
 pub use layer_render::LayerRender;
-pub use painter::WgpuPainter;
+pub use painter::{ClipOutcome, WgpuPainter};
 
 // Renderer (the one and only externally-consumed wgpu/* type)
 pub use renderer::Renderer;

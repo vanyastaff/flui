@@ -1102,10 +1102,12 @@ mod blend_logic {
         }
     }
 
-    /// The overridable constant is shared with the WGSL by spelling, and a
-    /// mismatch is silent: wgpu ignores an unknown constant name, leaving the
-    /// shader on its `0.0` default and every `DstIn`/`DstATop` fringe subtly
-    /// wrong instead of failing.
+    /// The overridable constant is shared with the WGSL by spelling. A rename on
+    /// one side alone is caught here rather than on a device: naga answers a
+    /// name it cannot find with `PipelineConstantError::NotFound` and pipeline
+    /// creation fails. What no error catches is the other direction — a
+    /// pipeline that needs the constant passing none, leaving the shader on its
+    /// `0.0` default and every `DstIn`/`DstATop` fringe subtly wrong.
     ///
     /// One declaration serves every assembly — they all end in the same
     /// `common/fragment_second_source.wgsl` — so checking the shape's checks

@@ -46,6 +46,28 @@ struct VertexOutput {
 // must stay identical — a clip that rounds differently per primitive is worse
 // than no clip at all, because the seam only shows where two primitives meet.
 
+// Whether the sampled texel is PREMULTIPLIED.
+//
+// It changes what a clip's coverage has to scale. A straight-alpha texel keeps
+// its colour and scales only alpha; a premultiplied one carries its alpha in
+// every channel, so all four must scale together. Scaling only alpha on a
+// premultiplied source leaves `rgb > a`, and the premultiplied blend (src
+// factor `One`) then contributes the fringe's colour at FULL strength over a
+// destination that was only partly uncovered — a bright halo along the clip
+// edge, brightest exactly where the feather is doing its work.
+//
+// `bool`, not a scale factor: a texel is premultiplied or it is not, and a
+// numeric override would make "half premultiplied" representable and silently
+// meaningless. The host passes 1.0/0.0 and naga maps it (`Scalar::BOOL` in
+// `map_value_to_literal`).
+//
+// A pipeline-overridable constant rather than an instance lane because it is a
+// property of the PIPELINE (`instanced_texture` vs `instanced_texture_premul`
+// and the SSAA tile composites), not of any one quad. `TextureSourceAlpha` in
+// `pipelines.rs` chooses it and the blend state together; the default here is
+// the straight-alpha pipeline, which passes no constants.
+override premultiplied_source: bool = false;
+
 // Viewport uniform (for screen-space to clip-space conversion)
 struct Viewport {
     size: vec2<f32>,      // Viewport size in pixels
@@ -150,7 +172,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         in.clip_local_origin,
     );
 
-    tex_color.a = tex_color.a * clip_alpha;
+    // Premultiplied sources scale every channel by the coverage; straight-alpha
+    // ones scale alpha alone. See `premultiplied_source`.
+    let rgb_scale = select(1.0, clip_alpha, premultiplied_source);
+    tex_color = vec4<f32>(tex_color.rgb * rgb_scale, tex_color.a * clip_alpha);
 
     // Alpha test (discard fully transparent pixels for better performance).
     // Runs after the clip so fully clipped-out texels cost nothing downstream.

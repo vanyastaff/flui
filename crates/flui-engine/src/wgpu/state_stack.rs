@@ -518,31 +518,10 @@ impl GpuStateStack {
     ///
     /// Also applies a bounding-box `clip_rect` for early rasterizer rejection.
     pub(super) fn clip_rrect(&mut self, rrect: RRect, surface_size: (u32, u32), hard: bool) {
+        let resolved = self.resolve_rrect_clip(rrect, hard);
         self.current_clip_hard = hard;
-        let rect = rrect.rect;
-
-        // LOCAL bounds and radii — exactly what the caller asked for. The
-        // mapping below is what places them; see `current_clip_inv`.
-        //
-        // This slot carries ONE radius per corner, so a caller's own
-        // elliptical corner still has to collapse. That is now the only
-        // approximation left here: a corner made elliptical by a non-uniform
-        // CTM stays circular in this space and the mapping produces the
-        // ellipse, which is exact.
-        let max_radius = (rect.width().0 * 0.5).min(rect.height().0 * 0.5).max(0.0);
-        let collapse = |rx: f32, ry: f32| rx.max(ry).min(max_radius);
-
-        self.current_rrect_clip = [
-            rect.left().0,
-            rect.top().0,
-            rect.width().0,
-            rect.height().0,
-            collapse(rrect.top_left.x.0, rrect.top_left.y.0),
-            collapse(rrect.top_right.x.0, rrect.top_right.y.0),
-            collapse(rrect.bottom_right.x.0, rrect.bottom_right.y.0),
-            collapse(rrect.bottom_left.x.0, rrect.bottom_left.y.0),
-        ];
-        self.current_clip_inv = Self::device_to_local(self.current_transform);
+        self.current_rrect_clip = resolved.rrect;
+        self.current_clip_inv = resolved.device_to_local;
         // Clearing the superellipse clip prevents `apply_active_clip` from
         // continuing to apply the squircle SDF after the caller switches to a
         // plain rrect. The two clip kinds are mutually exclusive at the
@@ -569,6 +548,80 @@ impl GpuStateStack {
         // that is what #848 stays open for.
         let _ = hard;
         self.clip_rect(rrect.rect, surface_size);
+    }
+
+    /// Apply a rounded clip's bounding-box scissor and hand the clip itself
+    /// back for a GROUP COMPOSITE to apply, leaving the per-draw SDF slot
+    /// untouched.
+    ///
+    /// This is `Clip::AntiAliasWithSaveLayer`'s half of [`Self::clip_rrect`].
+    /// That mode renders the clipped subtree into an offscreen and applies the
+    /// clip's coverage ONCE, to the finished group; installing the SDF slot as
+    /// well would apply it a second time, per draw, which is the very thing the
+    /// mode exists to avoid.
+    ///
+    /// Leaving the slot alone is also what makes nesting work: an ANCESTOR's
+    /// `Clip::AntiAlias` is still in the slot and still clips every draw inside
+    /// the offscreen, exactly as it would without the layer. That is why this
+    /// does NOT clear `current_rsuperellipse_clip` the way `clip_rrect` must —
+    /// nothing here is competing for the per-instance `clip_kind`, so an
+    /// ancestor's squircle clip goes on applying to the content.
+    ///
+    /// The scissor is still applied, for the same two reasons it is in
+    /// `clip_rrect`: it bounds the offscreen's work, and it is the only clip
+    /// text ever sees.
+    pub(super) fn clip_rrect_at_composite(
+        &mut self,
+        rrect: RRect,
+        surface_size: (u32, u32),
+    ) -> ResolvedClip {
+        // Soft, always: the mode is `AntiAliasWithSaveLayer`, and a hard edge
+        // would threshold the coverage the composite exists to feather.
+        let resolved = self.resolve_rrect_clip(rrect, false);
+        self.clip_rect(rrect.rect, surface_size);
+        resolved
+    }
+
+    /// Resolve a rounded clip against the current transform WITHOUT installing
+    /// it anywhere.
+    ///
+    /// The one place the local-bounds/radii layout and the device-to-local
+    /// mapping are derived. [`Self::clip_rrect`] stores the result in the
+    /// per-draw slot; [`Self::clip_rrect_at_composite`] hands it to the layer
+    /// that will apply it once. A second copy of this arithmetic would let the
+    /// two disagree about where the same clip is, with nothing failing.
+    ///
+    /// The `kind` lane layout is shared with [`Self::active_clip`], which builds
+    /// the same value from the stored slots; a lane added to one belongs in the
+    /// other.
+    fn resolve_rrect_clip(&self, rrect: RRect, hard: bool) -> ResolvedClip {
+        let rect = rrect.rect;
+
+        // LOCAL bounds and radii — exactly what the caller asked for. The
+        // mapping below is what places them; see `current_clip_inv`.
+        //
+        // This slot carries ONE radius per corner, so a caller's own
+        // elliptical corner still has to collapse. That is now the only
+        // approximation left here: a corner made elliptical by a non-uniform
+        // CTM stays circular in this space and the mapping produces the
+        // ellipse, which is exact.
+        let max_radius = (rect.width().0 * 0.5).min(rect.height().0 * 0.5).max(0.0);
+        let collapse = |rx: f32, ry: f32| rx.max(ry).min(max_radius);
+
+        ResolvedClip {
+            rrect: [
+                rect.left().0,
+                rect.top().0,
+                rect.width().0,
+                rect.height().0,
+                collapse(rrect.top_left.x.0, rrect.top_left.y.0),
+                collapse(rrect.top_right.x.0, rrect.top_right.y.0),
+                collapse(rrect.bottom_right.x.0, rrect.bottom_right.y.0),
+                collapse(rrect.bottom_left.x.0, rrect.bottom_left.y.0),
+            ],
+            kind: [1, 0, u32::from(hard), 0],
+            device_to_local: Self::device_to_local(self.current_transform),
+        }
     }
 
     /// Invert the CTM's 2D affine part into the `[a, b, c, d, tx, ty]` column
@@ -716,6 +769,61 @@ mod tests {
 
     fn identity_stack() -> GpuStateStack {
         GpuStateStack::new()
+    }
+
+    /// `clip_rrect_at_composite` installs the scissor and NOTHING else.
+    ///
+    /// Both halves are load-bearing and neither is visible from the call site.
+    /// The scissor is where a save-layer clip's compositing bounds come from
+    /// (`WgpuPainter::clip_bounds`), and it is intersected with every ancestor
+    /// clip, which is what makes the bounds safe to shrink to. The untouched
+    /// SDF slot is what lets the group composite apply the rounded coverage
+    /// exactly once and lets an ancestor's own clip go on applying per draw.
+    #[test]
+    fn clip_rrect_at_composite_sets_only_the_scissor() {
+        let mut stack = identity_stack();
+        let surface = (64, 64);
+
+        // An enclosing per-draw clip, as `Clip::AntiAlias` would leave it.
+        let ancestor = RRect::from_rect_circular(
+            Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
+            px(16.0),
+        );
+        stack.clip_rrect(ancestor, surface, false);
+        let ancestor_clip = stack.active_clip();
+
+        let inner = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(32.0), px(64.0)),
+            px(4.0),
+        );
+        let at_composite = stack.clip_rrect_at_composite(inner, surface);
+
+        assert_eq!(
+            stack.active_clip(),
+            ancestor_clip,
+            "the per-draw SDF slot must still hold the ANCESTOR's clip: draws \
+             inside the offscreen are clipped by it, and overwriting it here \
+             would drop the outer clip's rounded corners"
+        );
+        assert_eq!(
+            at_composite.rrect[..4],
+            [0.0, 0.0, 32.0, 64.0],
+            "the returned clip must be the inner rrect — it is what the group \
+             composite applies"
+        );
+        assert_eq!(
+            at_composite.kind,
+            [1, 0, 0, 0],
+            "the composite's coverage must be FEATHERED: thresholding it would \
+             undo the anti-aliasing the mode is named for"
+        );
+        assert_eq!(
+            stack.current_scissor(),
+            Some((8, 8, 24, 48)),
+            "the scissor must be the inner clip's bounds INTERSECTED with the \
+             ancestor's, so the compositing bounds derived from it cannot \
+             admit anything an ancestor already excluded"
+        );
     }
 
     /// (1) `debug_assert_balanced` panics in debug mode on an unbalanced stack.

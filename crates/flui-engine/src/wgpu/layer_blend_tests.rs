@@ -58,6 +58,7 @@ mod unit_tests {
             BlendMode::Multiply, // advanced — the new gate condition
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
         assert!(
@@ -83,6 +84,7 @@ mod unit_tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
         assert!(
@@ -145,6 +147,7 @@ mod unit_tests {
                 mode,
                 None,
                 LayerFilterChain::new(), // no filter
+                None,                    // no clip layer
             );
             let outcome =
                 compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
@@ -164,6 +167,7 @@ mod unit_tests {
                 mode,
                 None,
                 LayerFilterChain::new(), // no filter
+                None,                    // no clip layer
             );
             let outcome =
                 compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
@@ -209,6 +213,7 @@ mod unit_tests {
             blend: BlendMode::Multiply,
             bounds: Rect::default(),
             filters: LayerFilterChain::new(),
+            composite_clip: None,
         };
         assert!(
             layer.blend.is_advanced(),
@@ -228,6 +233,7 @@ mod unit_tests {
             blend: BlendMode::SrcOver,
             bounds: Rect::default(),
             filters: LayerFilterChain::new(),
+            composite_clip: None,
         };
         assert!(
             !layer.blend.is_advanced(),

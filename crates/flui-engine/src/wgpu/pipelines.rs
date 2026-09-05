@@ -592,10 +592,13 @@ pub(super) struct QuadPipelineSpec<'a> {
     pub(super) blend: wgpu::BlendState,
     /// Pipeline-override constants the fragment stage reads.
     ///
-    /// Empty for every assembly that declares none. The coverage-correct
-    /// second-source assembly declares `destination_alpha_scale`, and wgpu
-    /// SILENTLY IGNORES an unknown constant name — so this travels beside the
-    /// blend state it must agree with rather than being set separately.
+    /// Empty for every assembly that declares none. Each name here must be
+    /// `override`-declared by `shader_source`: naga answers a name it cannot
+    /// find with `PipelineConstantError::NotFound` and pipeline creation
+    /// FAILS, so a stale name is loud rather than silent. What is silent is the
+    /// other direction — an `override` left at its default because the pipeline
+    /// that needed it passed nothing — which is why every constant travels
+    /// beside the state it must agree with rather than being set separately.
     pub(super) constants: &'a [(&'static str, f64)],
 }
 
@@ -704,52 +707,120 @@ fn create_instanced_arc_pipeline(
     )
 }
 
-fn create_instanced_texture_pipeline(
+/// The name of the overridable constant `texture_instanced.wgsl` declares,
+/// through which a texture pipeline tells the clip how its source texels carry
+/// alpha.
+///
+/// Shared with the WGSL by spelling, not by type, so
+/// `premultiplied_source_override_matches_the_shader` pins the two together.
+const PREMULTIPLIED_SOURCE_OVERRIDE: &str = "premultiplied_source";
+
+/// How a texture pipeline's source texels carry their alpha.
+///
+/// One value, because it decides TWO things that must agree — the blend state
+/// and the shader's [`PREMULTIPLIED_SOURCE_OVERRIDE`] — and setting them apart
+/// is silent in the direction that matters: a pipeline that composites
+/// premultiplied texels while the shader still scales only alpha paints a
+/// clipped layer's fringe at full colour strength, a bright halo along the clip
+/// edge. Mirrors how `pipeline::CoverageBlendSelection` returns a blend state
+/// and its `destination_alpha_scale` together.
+#[derive(Clone, Copy, Debug)]
+enum TextureSourceAlpha {
+    /// Decoded images: colour is independent of alpha, so a clip scales alpha
+    /// alone.
+    Straight,
+    /// Offscreen-layer composites and SSAA tiles: colour is already multiplied
+    /// by alpha, so a clip must scale all four channels. `blend` is the mode's
+    /// own state — every premultiplied consumer supplies one, and `src_factor`
+    /// is not a reliable witness of premultiplication (`Clear` is `(Zero,
+    /// Zero)`), which is why this is stated rather than inferred.
+    Premultiplied { blend: wgpu::BlendState },
+}
+
+impl TextureSourceAlpha {
+    /// The blend state this source requires.
+    const fn blend(self) -> wgpu::BlendState {
+        match self {
+            Self::Straight => wgpu::BlendState::ALPHA_BLENDING,
+            Self::Premultiplied { blend } => blend,
+        }
+    }
+
+    /// The override constants the shader needs to match [`Self::blend`].
+    const fn constants(self) -> &'static [(&'static str, f64)] {
+        match self {
+            // The shader's own default is the straight-alpha case, so it needs
+            // nothing said.
+            Self::Straight => &[],
+            Self::Premultiplied { .. } => &[(PREMULTIPLIED_SOURCE_OVERRIDE, 1.0)],
+        }
+    }
+}
+
+/// The one constructor for every `TEXTURE_INSTANCED` pipeline.
+///
+/// Takes the source-alpha kind rather than a blend state so the blend and the
+/// shader constant cannot disagree — see [`TextureSourceAlpha`].
+fn create_instanced_texture_pipeline_for(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
+    shader_label: &str,
+    pipeline_label: &str,
+    source: TextureSourceAlpha,
 ) -> wgpu::RenderPipeline {
     create_unit_quad_pipeline(
         device,
         surface_format,
         layout,
         &QuadPipelineSpec {
-            shader_label: "Instanced Texture Shader",
-            pipeline_label: "Instanced Texture Pipeline",
+            shader_label,
+            pipeline_label,
             shader_source: super::shaders::TEXTURE_INSTANCED,
             instance_layout: super::instancing::TextureInstance::desc(),
-            blend: wgpu::BlendState::ALPHA_BLENDING,
-            constants: &[],
+            blend: source.blend(),
+            constants: source.constants(),
         },
+    )
+}
+
+fn create_instanced_texture_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    create_instanced_texture_pipeline_for(
+        device,
+        surface_format,
+        layout,
+        "Instanced Texture Shader",
+        "Instanced Texture Pipeline",
+        TextureSourceAlpha::Straight,
     )
 }
 
 /// Creates the **premultiplied** source-over texture pipeline used exclusively
 /// for compositing offscreen layer textures (`flush_opacity_layer`).
 ///
-/// Identical to [`create_instanced_texture_pipeline`] except for the blend state:
-/// `PREMULTIPLIED_ALPHA_BLENDING` (src factor `One`) composites premultiplied
-/// texels without re-multiplying by alpha. See [`PipelineSet::instanced_texture_premul`]
-/// for the full rationale. Do not change the blend state here.
+/// Identical to [`create_instanced_texture_pipeline`] except for the source
+/// kind: `PREMULTIPLIED_ALPHA_BLENDING` (src factor `One`) composites
+/// premultiplied texels without re-multiplying by alpha, and the same value
+/// tells the shader's clip to scale all four channels. See
+/// [`PipelineSet::instanced_texture_premul`] for the full rationale. Do not
+/// change the source kind here.
 fn create_instanced_texture_premul_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
-    create_unit_quad_pipeline(
+    create_instanced_texture_pipeline_for(
         device,
         surface_format,
         layout,
-        &QuadPipelineSpec {
-            shader_label: "Instanced Texture Premultiplied Shader",
-            pipeline_label: "Instanced Texture Premultiplied Pipeline",
-            shader_source: super::shaders::TEXTURE_INSTANCED,
-            instance_layout: super::instancing::TextureInstance::desc(),
-            // PREMULTIPLIED_ALPHA_BLENDING (src factor One): composites a
-            // premultiplied-alpha texel correctly. This is the defining
-            // distinction from `create_instanced_texture_pipeline`.
+        "Instanced Texture Premultiplied Shader",
+        "Instanced Texture Premultiplied Pipeline",
+        TextureSourceAlpha::Premultiplied {
             blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-            constants: &[],
         },
     )
 }
@@ -772,19 +843,53 @@ fn create_instanced_texture_with_blend_state(
     layout: &wgpu::PipelineLayout,
     blend_state: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
-    create_unit_quad_pipeline(
+    create_instanced_texture_pipeline_for(
         device,
         surface_format,
         layout,
-        &QuadPipelineSpec {
-            shader_label: "SSAA Tile Composite Shader",
-            pipeline_label: "SSAA Tile Composite Pipeline",
-            shader_source: super::shaders::TEXTURE_INSTANCED,
-            instance_layout: super::instancing::TextureInstance::desc(),
-            blend: blend_state,
-            constants: &[],
-        },
+        "SSAA Tile Composite Shader",
+        "SSAA Tile Composite Pipeline",
+        TextureSourceAlpha::Premultiplied { blend: blend_state },
     )
+}
+
+/// The overridable constant is shared with the WGSL by spelling. A name the
+/// shader does not declare fails pipeline creation
+/// (`PipelineConstantError::NotFound`), so this catches a rename before it
+/// reaches a device.
+#[test]
+fn premultiplied_source_override_matches_the_shader() {
+    let declaration = format!("override {PREMULTIPLIED_SOURCE_OVERRIDE}:");
+    assert!(
+        super::shaders::TEXTURE_INSTANCED.contains(&declaration),
+        "no `{declaration}` in the instanced texture shader"
+    );
+}
+
+/// A straight-alpha pipeline must pass NO constants, and a premultiplied one
+/// must pass exactly the override.
+///
+/// The pairing is the point: these are the two values whose disagreement is
+/// invisible until a clipped layer's fringe is inspected.
+#[test]
+fn source_alpha_pairs_its_blend_with_its_constant() {
+    assert!(TextureSourceAlpha::Straight.constants().is_empty());
+    assert_eq!(
+        TextureSourceAlpha::Straight.blend(),
+        wgpu::BlendState::ALPHA_BLENDING
+    );
+
+    let premultiplied = TextureSourceAlpha::Premultiplied {
+        blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+    };
+    assert_eq!(
+        premultiplied.constants(),
+        &[(PREMULTIPLIED_SOURCE_OVERRIDE, 1.0)]
+    );
+    assert_eq!(
+        premultiplied.blend(),
+        wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
+    );
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
