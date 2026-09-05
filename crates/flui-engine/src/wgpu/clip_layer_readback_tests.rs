@@ -268,13 +268,20 @@ fn a_hard_clip_edge_and_a_smooth_one_differ() {
     );
 }
 
-/// `AntiAliasWithSaveLayer` currently renders as `AntiAlias`.
+/// `AntiAliasWithSaveLayer` currently renders as `AntiAlias`, which is WRONG.
 ///
-/// Asserting the two AGREE is normally how a defect gets pinned as a contract,
-/// so this is deliberate and narrow: the divergence is *recorded* (the mode's
-/// offscreen half is not implemented), and this test is what will fail — loudly
-/// and in the right place — when it is. It is paired with the test above, which
-/// proves the modes are not all one picture.
+/// This asserts a known-wrong equality, which is normally how a defect gets
+/// frozen as a contract. It is here deliberately and narrowly: the mode's
+/// offscreen half is unimplemented, issue #848 stays open for it, and this is
+/// what fails — loudly, in the right place — when it lands. Without the test
+/// the divergence goes quiet; with it, the next person to implement the mode
+/// is told exactly where to look.
+///
+/// What is actually wrong: Flutter composites the clipped subtree once, as a
+/// group, against the clip edge. Applying coverage per draw makes the edge
+/// darker or more opaque wherever the content overlaps itself or blends
+/// non-trivially. A scene without such overlap is unaffected, which is why
+/// this is a real defect and not a visible one in the common case.
 #[test]
 fn anti_alias_with_save_layer_currently_matches_plain_anti_alias() {
     let Ok(renderer) = HeadlessRenderer::new() else {
@@ -291,7 +298,70 @@ fn anti_alias_with_save_layer_currently_matches_plain_anti_alias() {
     assert_eq!(
         render(Clip::AntiAliasWithSaveLayer),
         render(Clip::AntiAlias),
-        "the save-layer mode is treated as plain anti-alias until its offscreen \
-         composite lands; when that changes, this test is the one to update"
+        "the save-layer mode is approximated by plain anti-alias until its \
+         offscreen composite lands (#848); when that changes, this test is the \
+         one to update"
+    );
+}
+
+/// A ROUNDED clip: hard thresholds its corners, smooth feathers them.
+///
+/// This is the case the rect test above cannot reach. A hard *rect* clip is
+/// the hardware scissor, so it exercises no shader code at all; only a rounded
+/// clip goes through `clipAlpha`'s hard branch and the `clip_kind.z` lane that
+/// carries the mode there. The plumbing for that lane was in fact broken when
+/// the rect test was the only oracle — `RectInstance::with_clip` rebuilt the
+/// attribute as `[kind, aliased, 0, 0]` and dropped it — so a rounded
+/// `HardEdge` clip still feathered while every test passed.
+///
+/// The clip is axis-aligned on purpose: its straight edges land on pixel
+/// boundaries and contribute nothing either way, so the corners are the only
+/// place the two modes can differ, and the count is about them.
+fn rounded_clip_scene(behavior: Clip) -> LayerTree {
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        builder.push_clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
+                px(16.0),
+            ),
+            behavior,
+        );
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+            &Paint::fill(Color::rgb(0, 0, 255)).with_anti_alias(false),
+        );
+        builder.add_picture(canvas.finish());
+        builder.build();
+    }
+    tree
+}
+
+#[test]
+fn a_rounded_clip_honours_hard_edge_and_anti_alias_differently() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |behavior: Clip| {
+        renderer
+            .render_layer_tree(&rounded_clip_scene(behavior), (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a rounded-clipped tree")
+    };
+
+    let hard = partial_coverage_pixels(&render(Clip::HardEdge));
+    let smooth = partial_coverage_pixels(&render(Clip::AntiAlias));
+
+    assert!(
+        smooth > 0,
+        "an anti-aliased rounded clip must feather its corners, got {smooth} partial pixels"
+    );
+    assert!(
+        hard * 4 < smooth,
+        "a hard rounded clip must threshold its corners rather than feather them: \
+         hard={hard} smooth={smooth}"
     );
 }

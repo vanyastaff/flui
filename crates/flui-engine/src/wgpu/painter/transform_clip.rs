@@ -133,8 +133,12 @@ impl WgpuPainter {
     /// scissor for early rasterizer rejection, and relies on
     /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
     /// outside the iOS-squircle curve.
-    pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse) {
-        self.state.clip_rsuperellipse(rse, self.size);
+    /// `hard` selects the layer's `Clip` mode, exactly as for
+    /// [`Self::clip_rrect`]: a squircle has no scissor equivalent that keeps
+    /// its corners, so both modes go through the SDF and the mode chooses
+    /// between thresholding and feathering.
+    pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse, hard: bool) {
+        self.state.clip_rsuperellipse(rse, self.size, hard);
     }
 
     /// Clip to an arbitrary path (currently unimplemented; emits a `tracing::warn!`).

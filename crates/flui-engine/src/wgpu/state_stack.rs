@@ -144,6 +144,17 @@ impl ResolvedClip {
     };
 }
 
+/// Whether a scissor's fractional bounds round to the pixels it covers exactly
+/// or to a superset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScissorRounding {
+    /// The scissor is the clip. Truncation is the `Clip::HardEdge` semantic.
+    Exact,
+    /// The scissor is an early reject in front of an SDF. It must cover every
+    /// pixel the SDF might shade, including the anti-aliased fringe.
+    Conservative,
+}
+
 impl GpuStateStack {
     /// Construct a pristine stack — identity transform, no scissor, no SDF
     /// clips, all stacks empty. Equivalent to the post-`reset()` state.
@@ -433,15 +444,47 @@ impl GpuStateStack {
     /// parameter rather than stored on the stack so the painter remains the
     /// single owner of the surface dimensions.
     pub(super) fn clip_rect(&mut self, rect: Rect<Pixels>, surface_size: (u32, u32)) {
+        self.clip_rect_with_rounding(rect, surface_size, ScissorRounding::Exact);
+    }
+
+    /// Intersect the current scissor with `rect`, rounding per `rounding`.
+    pub(super) fn clip_rect_with_rounding(
+        &mut self,
+        rect: Rect<Pixels>,
+        surface_size: (u32, u32),
+        rounding: ScissorRounding,
+    ) {
         let transform = self.current_transform;
 
         // Compute axis-aligned bounding box in screen space.
         let (x, y, width, height) = if transform == glam::Mat4::IDENTITY {
             // Fast path: no transform.
-            let x = rect.left().0.max(0.0) as u32;
-            let y = rect.top().0.max(0.0) as u32;
-            let right = rect.right().0.min(surface_size.0 as f32) as u32;
-            let bottom = rect.bottom().0.min(surface_size.1 as f32) as u32;
+            let (left, top, right_f, bottom_f) = match rounding {
+                // The scissor IS the clip: truncation is the hard edge.
+                ScissorRounding::Exact => (
+                    rect.left().0.max(0.0),
+                    rect.top().0.max(0.0),
+                    rect.right().0.min(surface_size.0 as f32),
+                    rect.bottom().0.min(surface_size.1 as f32),
+                ),
+                // The scissor is only an early reject in front of an SDF that
+                // does the precise work, so it must never cut a pixel the SDF
+                // would have shaded. Expand outward by a pixel: fractional
+                // bounds otherwise truncate (a right edge at 10.75 ends the
+                // scissor at column 10, discarding the pixel centred at 10.5
+                // that is inside the clip), and the feather itself reaches
+                // about half a pixel past the boundary.
+                ScissorRounding::Conservative => (
+                    (rect.left().0 - 1.0).floor().max(0.0),
+                    (rect.top().0 - 1.0).floor().max(0.0),
+                    (rect.right().0 + 1.0).ceil().min(surface_size.0 as f32),
+                    (rect.bottom().0 + 1.0).ceil().min(surface_size.1 as f32),
+                ),
+            };
+            let x = left as u32;
+            let y = top as u32;
+            let right = right_f as u32;
+            let bottom = bottom_f as u32;
             (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
         } else {
             // Transform all four corners and compute a conservative AABB.
@@ -553,7 +596,7 @@ impl GpuStateStack {
         // under rotation — `clip_rect` takes the AABB of all four transformed
         // corners — which is exactly what a coarse pre-pass should be now that
         // the SDF does the precise work.
-        self.clip_rect(rrect.rect, surface_size);
+        self.clip_rect_with_rounding(rrect.rect, surface_size, ScissorRounding::Conservative);
     }
 
     /// Invert the CTM's 2D affine part into the `[a, b, c, d, tx, ty]` column
@@ -604,7 +647,12 @@ impl GpuStateStack {
         &mut self,
         rse: flui_types::geometry::RSuperellipse,
         surface_size: (u32, u32),
+        hard: bool,
     ) {
+        // Assigned, not left alone: without this the squircle inherits
+        // whatever mode an enclosing rounded clip set inside the same save,
+        // which is a different clip's answer.
+        self.current_clip_hard = hard;
         let rect = rse.outer_rect();
         let tl_r = rse.tl_radius();
         let tr_r = rse.tr_radius();
@@ -630,8 +678,10 @@ impl GpuStateStack {
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
         self.current_rrect_clip = [0.0; 8];
 
-        // Bounding-box scissor for early rasterizer rejection.
-        self.clip_rect(rect, surface_size);
+        // Bounding-box scissor for early rasterizer rejection — conservative
+        // for the same reason `clip_rrect`'s is: the SDF does the precise work
+        // and this must not cut a pixel it would have shaded.
+        self.clip_rect_with_rounding(rect, surface_size, ScissorRounding::Conservative);
     }
 
     // =========================================================================

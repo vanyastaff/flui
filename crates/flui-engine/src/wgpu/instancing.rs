@@ -88,12 +88,19 @@ pub struct RectInstance {
     ///   superellipse's separate-axis rx/ry per corner).
     ///
     /// Stored as `[u32; 4]` for 16-byte alignment with surrounding vec4
-    /// instance attributes. The `.x` lane carries the kind and the `.y` lane
-    /// carries an ALIASED flag (`1` = hard edge, `0` = the anti-aliased
-    /// default); the remaining two lanes are padding.
+    /// instance attributes. Three lanes are live:
     ///
-    /// Two owners write this attribute: the clip owns lane 0 and the paint
-    /// owns lane 1, and `with_clip` assigns lane by lane for that reason.
+    /// - `.x` — the clip's kind (`0` none, `1` rrect, `2` rounded superellipse)
+    /// - `.y` — the PAINT's aliased flag (`1` = hard edge, `0` = anti-aliased)
+    /// - `.z` — the CLIP's `Clip::HardEdge` mode (`1` = threshold, `0` = feather)
+    ///
+    /// `.w` is padding. The vertex stage packs `.x` and `.z` into one varying
+    /// (`CLIP_HARD_BIT` in `shaders/common/clip.wgsl`).
+    ///
+    /// Two owners write this attribute: the clip owns lanes 0 and 2, the paint
+    /// owns lane 1, and `with_clip` assigns lane by lane for that reason. The
+    /// paint's flag and the clip's are independent — a hard-edged shape inside
+    /// a smooth clip keeps the smooth clip.
     ///
     /// The polarity is deliberate. Every construction site zeroes this
     /// attribute, so `0` has to mean the behaviour they all had before —
@@ -350,7 +357,8 @@ pub struct CircleInstance {
 
     /// Which SDF the fragment evaluates against `clip_rrect`:
     /// `[0, _, _, _]` none, `[1, _, _, _]` rounded rect, `[2, _, _, _]`
-    /// rounded superellipse. Only `.x` is read; the rest is padding.
+    /// rounded superellipse. Lane `.z` carries the clip's `Clip::HardEdge`
+    /// mode; `.y` and `.w` are padding for this instance type.
     pub clip_kind: [u32; 4],
     /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
     ///
@@ -825,11 +833,12 @@ pub trait ClippableInstance {
 impl ClippableInstance for RectInstance {
     fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
         self.clip_rrect = clip.rrect;
-        // Lane 1 is the paint's aliased flag, not the clip's — assigning
-        // `clip.kind` wholesale would silently drop it, and it did until this
-        // line existed. Two owners share this attribute; each writes only the
-        // lanes it owns, so the order the two are applied in cannot matter.
-        self.clip_kind = [clip.kind[0], self.clip_kind[1], 0, 0];
+        // Three lanes, two owners. Lane 0 (clip kind) and lane 2 (the clip's
+        // HARD-EDGE mode) belong to the clip; lane 1 is the PAINT's aliased
+        // flag. Assigning `clip.kind` wholesale drops lane 1, and zeroing the
+        // tail drops lane 2 — both have happened here. Each owner writes only
+        // its own lanes, so the order the two are applied in cannot matter.
+        self.clip_kind = [clip.kind[0], self.clip_kind[1], clip.kind[2], 0];
         self.clip_device_to_local = [
             clip.device_to_local[0],
             clip.device_to_local[1],

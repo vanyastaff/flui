@@ -1679,7 +1679,7 @@ fn clip_rsuperellipse_sdf_removes_corner_pixels() {
             px(RADIUS),
             px(RADIUS),
         );
-        painter.clip_rsuperellipse(rse);
+        painter.clip_rsuperellipse(rse, false);
 
         painter.rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),

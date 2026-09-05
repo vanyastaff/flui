@@ -525,14 +525,16 @@ impl Drop for Backend<'_> {
 /// harmless, and the cheapest path is the honest answer for "no clipping
 /// wanted".
 ///
-/// `AntiAliasWithSaveLayer` is treated as `AntiAlias` here, which is a real
-/// divergence and is stated rather than implied: Flutter renders the subtree
-/// into an offscreen first so the blend against the clip edge is correct,
-/// which matters only when the clipped content overlaps itself or blends
-/// non-trivially against the boundary. The offscreen machinery exists in this
-/// backend (`painter::save_layer_impl`, with group opacity, blend-mode
-/// propagation and a filter chain), so this is a deferral rather than a
-/// limitation; issue #848 carries the remaining half.
+/// `AntiAliasWithSaveLayer` is treated as `AntiAlias` here, and that is a real
+/// divergence, not a rounding of one. Flutter renders the subtree into an
+/// offscreen first so the group composites against the clip edge once; applying
+/// coverage per draw instead makes the edge darker or more opaque wherever the
+/// clipped content overlaps itself or blends non-trivially. The offscreen
+/// machinery exists in this backend (`painter::save_layer_impl`, with group
+/// opacity, blend-mode propagation and a filter chain), so this is a deferral
+/// rather than a limitation — and issue #848 stays OPEN for it. The mode is
+/// not supported; it is approximated, and the approximation is wrong in a way
+/// a user can see.
 const fn clip_is_hard(behavior: flui_types::painting::Clip) -> bool {
     matches!(
         behavior,
@@ -1287,7 +1289,7 @@ impl CommandRenderer for Backend<'_> {
         &mut self,
         rsuperellipse: flui_types::geometry::RSuperellipse,
         _clip_op: flui_types::painting::ClipOp,
-        _clip_behavior: flui_types::painting::Clip,
+        clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
         // Override the trait default (which routes to clip_rrect against an
@@ -1295,8 +1297,9 @@ impl CommandRenderer for Backend<'_> {
         // SDF clip, populating `current_rsuperellipse_clip` so subsequent
         // rect_instanced draws apply the iOS-squircle SDF via the
         // per-instance kind=2 path.
+        let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
-            painter.clip_rsuperellipse(rsuperellipse);
+            painter.clip_rsuperellipse(rsuperellipse, hard);
         });
     }
 
