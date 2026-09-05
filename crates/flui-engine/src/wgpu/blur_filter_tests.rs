@@ -1733,12 +1733,15 @@ mod gpu_tests {
                 sigma_y: SIGMA,
             });
             // Apply clip then draw the inset content rect (clip is nested inside).
-            painter.clip_rect(Rect::from_xywh(
-                px(CLIP_LEFT as f32),
-                px(CLIP_TOP as f32),
-                px((CLIP_RIGHT - CLIP_LEFT) as f32),
-                px((CLIP_BOTTOM - CLIP_TOP) as f32),
-            ));
+            painter.clip_rect(
+                Rect::from_xywh(
+                    px(CLIP_LEFT as f32),
+                    px(CLIP_TOP as f32),
+                    px((CLIP_RIGHT - CLIP_LEFT) as f32),
+                    px((CLIP_BOTTOM - CLIP_TOP) as f32),
+                ),
+                true,
+            );
             painter.rect(
                 Rect::from_xywh(
                     px(CONTENT_LEFT as f32),
@@ -1791,12 +1794,15 @@ mod gpu_tests {
             sigma_x: SIGMA,
             sigma_y: SIGMA,
         });
-        painter.clip_rect(Rect::from_xywh(
-            px(CLIP_LEFT as f32),
-            px(CLIP_TOP as f32),
-            px((CLIP_RIGHT - CLIP_LEFT) as f32),
-            px((CLIP_BOTTOM - CLIP_TOP) as f32),
-        ));
+        painter.clip_rect(
+            Rect::from_xywh(
+                px(CLIP_LEFT as f32),
+                px(CLIP_TOP as f32),
+                px((CLIP_RIGHT - CLIP_LEFT) as f32),
+                px((CLIP_BOTTOM - CLIP_TOP) as f32),
+            ),
+            true,
+        );
         painter.rect(
             Rect::from_xywh(
                 px(CONTENT_LEFT as f32),

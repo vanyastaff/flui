@@ -143,10 +143,19 @@ suite) rasterizes a clip layer and its absence over identical content and reads 
 past the clip's edge. Its oracle samples the RED channel on purpose: the content is blue and the
 cleared surface is white, so the two agree on blue and an assertion there would pass either way.
 
-Recorded gap: the wgpu backend takes a clip layer's `Clip` mode and discards it
-(`push_clip_rect`'s `_clip_behavior` in `backend.rs`), so the three clipped modes are
-pixel-identical. A test asserting a difference between them would fail, and one asserting they
-agree would pin the defect as if it were the contract; neither is written. Tracked as issue #848.
+The gap this recorded — the wgpu backend discarding a clip layer's `Clip` mode, leaving all three
+clipped modes pixel-identical — is **partly closed** (issue #848, still open). A **rounded** clip
+now honours `HardEdge` against `AntiAlias`, pinned by
+`a_rounded_clip_honours_hard_edge_and_anti_alias_differently`. Two modes remain deferred, each
+pinned by a test asserting the known-wrong equality so the divergence cannot go quiet:
+
+- **`AntiAlias` on a rect** renders as `HardEdge`. A rect clip is the hardware scissor, and
+  routing it to the SDF to feather it was tried and reverted: the SDF is a per-instance uniform,
+  so the swap stopped clipping text (handed to glyphon with the scissor alone), stopped
+  intersecting under nesting (one SDF slot, inner clears outer), and stopped being exact. Fixing
+  it means a clip *stack* in the shader plus routing text through the same mask.
+- **`AntiAliasWithSaveLayer`** renders as `AntiAlias`; its offscreen group composite is
+  unimplemented, so the clip edge darkens wherever content overlaps itself.
 
 The second part is the clips a child sees, and it landed with its consumer rather than ahead of
 it. Two hooks join the render-object trait family beside `excludes_semantics_subtree`:

@@ -699,7 +699,10 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
     // Clip rect with gradient
     painter.save();
-    painter.clip_rect(rect(30.0, y, 200.0, 100.0));
+    // `true` = `Clip::HardEdge`, the scissor — what every clip in this demo got
+    // before the backend learned to honour the mode. Kept so the demo's pixels
+    // are unchanged by that fix; a smooth clip is `false`.
+    painter.clip_rect(rect(30.0, y, 200.0, 100.0), true);
     let grad = Shader::simple_linear(
         ofs(0.0, y),
         ofs(500.0, y + 200.0),
@@ -718,7 +721,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
     // Clip rect with circles
     painter.save();
-    painter.clip_rect(rect(300.0, y, 200.0, 100.0));
+    painter.clip_rect(rect(300.0, y, 200.0, 100.0), true);
     for i in 0..8 {
         let cx = 300.0 + i as f32 * 30.0;
         let color = Color::rgba(
@@ -738,20 +741,20 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
     // Nested clips
     painter.save();
-    painter.clip_rect(rect(570.0, y, 250.0, 100.0));
+    painter.clip_rect(rect(570.0, y, 250.0, 100.0), true);
     painter.rect(
         rect(570.0, y, 250.0, 100.0),
         &Paint::fill(Color::rgba(40, 40, 60, 255)),
     );
     painter.save();
-    painter.clip_rect(rect(590.0, y + 10.0, 100.0, 80.0));
+    painter.clip_rect(rect(590.0, y + 10.0, 100.0, 80.0), true);
     painter.rect(
         rect(550.0, y - 10.0, 300.0, 120.0),
         &Paint::fill(Color::rgba(255, 80, 80, 200)),
     );
     painter.restore();
     painter.save();
-    painter.clip_rect(rect(700.0, y + 10.0, 100.0, 80.0));
+    painter.clip_rect(rect(700.0, y + 10.0, 100.0, 80.0), true);
     painter.rect(
         rect(550.0, y - 10.0, 300.0, 120.0),
         &Paint::fill(Color::rgba(80, 80, 255, 200)),

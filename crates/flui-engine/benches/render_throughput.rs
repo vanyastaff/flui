@@ -374,7 +374,7 @@ fn damage_scissor(c: &mut Criterion) {
     fn build(painter: &mut WgpuPainter, layers: u32, damage: Option<f32>, w: f32, h: f32) {
         painter.save();
         if let Some(side) = damage {
-            painter.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)));
+            painter.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)), true);
         }
         for i in 0..layers {
             let f = i as f32;

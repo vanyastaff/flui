@@ -71,6 +71,13 @@ pub(super) struct GpuStateStack {
 
     /// Active SDF rounded-rectangle clip uniform. All-zeros means no clip.
     current_rrect_clip: [f32; 8],
+    /// Whether the active SDF clip has a hard edge (`Clip::HardEdge`) rather
+    /// than a feathered one (`Clip::AntiAlias`).
+    ///
+    /// Saved and restored with the clip itself, so a hard clip nested inside a
+    /// smooth one does not leak its mode outward on `restore`.
+    current_clip_hard: bool,
+    clip_hard_stack: Vec<bool>,
 
     // ===== SDF RSuperellipse Clip Stack =====
     /// Saved SDF superellipse clip uniforms.
@@ -119,7 +126,10 @@ const CLIP_INV_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 pub(crate) struct ResolvedClip {
     /// `[x, y, w, h, tl, tr, br, bl]` in CLIP-LOCAL space.
     pub(crate) rrect: [f32; 8],
-    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
+    /// `[kind, _, hard, _]`: kind is 0 = none, 1 = rrect, 2 = rounded
+    /// superellipse; `hard` is 1 for `Clip::HardEdge` and 0 for
+    /// `Clip::AntiAlias`. The vertex stages pack the two into one varying —
+    /// see `CLIP_HARD_BIT` in `shaders/common/clip.wgsl`.
     pub(crate) kind: [u32; 4],
     /// Device-to-clip-local mapping — see `GpuStateStack::current_clip_inv`.
     pub(crate) device_to_local: [f32; 6],
@@ -145,6 +155,8 @@ impl GpuStateStack {
             current_scissor: None,
             rrect_clip_stack: Vec::new(),
             current_rrect_clip: [0.0; 8],
+            current_clip_hard: false,
+            clip_hard_stack: Vec::new(),
             rsuperellipse_clip_stack: Vec::new(),
             current_rsuperellipse_clip: [0.0; 12],
             clip_inv_stack: Vec::new(),
@@ -174,6 +186,8 @@ impl GpuStateStack {
         self.current_scissor = None;
         self.scissor_stack.clear();
         self.current_rrect_clip = [0.0; 8];
+        self.current_clip_hard = false;
+        self.clip_hard_stack.clear();
         self.rrect_clip_stack.clear();
         self.current_rsuperellipse_clip = [0.0; 12];
         self.rsuperellipse_clip_stack.clear();
@@ -238,6 +252,7 @@ impl GpuStateStack {
         }
 
         self.rrect_clip_stack.push(self.current_rrect_clip);
+        self.clip_hard_stack.push(self.current_clip_hard);
         self.rsuperellipse_clip_stack
             .push(self.current_rsuperellipse_clip);
         self.clip_inv_stack.push(self.current_clip_inv);
@@ -274,6 +289,10 @@ impl GpuStateStack {
             .rsuperellipse_clip_stack
             .pop()
             .expect("rsuperellipse_clip_stack parallel to transform_stack");
+        self.current_clip_hard = self
+            .clip_hard_stack
+            .pop()
+            .expect("BUG: clip_hard_stack is pushed unconditionally in save(), so it stays parallel to transform_stack");
         self.current_clip_inv = self
             .clip_inv_stack
             .pop()
@@ -498,7 +517,8 @@ impl GpuStateStack {
     /// clip (the two kinds are mutually exclusive per-instance).
     ///
     /// Also applies a bounding-box `clip_rect` for early rasterizer rejection.
-    pub(super) fn clip_rrect(&mut self, rrect: RRect, surface_size: (u32, u32)) {
+    pub(super) fn clip_rrect(&mut self, rrect: RRect, surface_size: (u32, u32), hard: bool) {
+        self.current_clip_hard = hard;
         let rect = rrect.rect;
 
         // LOCAL bounds and radii — exactly what the caller asked for. The
@@ -533,6 +553,21 @@ impl GpuStateStack {
         // under rotation — `clip_rect` takes the AABB of all four transformed
         // corners — which is exactly what a coarse pre-pass should be now that
         // the SDF does the precise work.
+        // Exact bounds, deliberately, even though this is nominally a coarse
+        // early reject in front of an SDF that does the precise work.
+        //
+        // Padding it outward so the anti-aliased fringe is never cut was tried
+        // and reverted. The scissor is not only an early reject: text is handed
+        // to glyphon with `current_scissor()` alone and never evaluates the
+        // SDF, so for every glyph the scissor IS the clip. A pixel of pad lets
+        // a glyph render outside the clip — visible — to recover half a pixel
+        // of feather at the boundary — not. The cost of exactness is that a
+        // fractional edge truncates (10.75 ends the scissor at column 10) and
+        // the outer half of the feather is lost there.
+        //
+        // The pad becomes correct the moment text routes through the same mask;
+        // that is what #848 stays open for.
+        let _ = hard;
         self.clip_rect(rrect.rect, surface_size);
     }
 
@@ -584,7 +619,12 @@ impl GpuStateStack {
         &mut self,
         rse: flui_types::geometry::RSuperellipse,
         surface_size: (u32, u32),
+        hard: bool,
     ) {
+        // Assigned, not left alone: without this the squircle inherits
+        // whatever mode an enclosing rounded clip set inside the same save,
+        // which is a different clip's answer.
+        self.current_clip_hard = hard;
         let rect = rse.outer_rect();
         let tl_r = rse.tl_radius();
         let tr_r = rse.tr_radius();
@@ -610,7 +650,8 @@ impl GpuStateStack {
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
         self.current_rrect_clip = [0.0; 8];
 
-        // Bounding-box scissor for early rasterizer rejection.
+        // Exact, for the reason spelled out in `clip_rrect`.
+        let _ = hard;
         self.clip_rect(rect, surface_size);
     }
 
@@ -636,7 +677,7 @@ impl GpuStateStack {
         if superellipse_active {
             return ResolvedClip {
                 rrect: super::instancing::reduce_superellipse_clip(self.current_rsuperellipse_clip),
-                kind: [2, 0, 0, 0],
+                kind: [2, 0, u32::from(self.current_clip_hard), 0],
                 device_to_local: self.current_clip_inv,
             };
         }
@@ -644,7 +685,7 @@ impl GpuStateStack {
         if rrect_active {
             ResolvedClip {
                 rrect: self.current_rrect_clip,
-                kind: [1, 0, 0, 0],
+                kind: [1, 0, u32::from(self.current_clip_hard), 0],
                 device_to_local: self.current_clip_inv,
             }
         } else {
@@ -963,7 +1004,7 @@ mod tests {
             px(7.5),
         );
 
-        stack.clip_rrect(rrect, (400, 400));
+        stack.clip_rrect(rrect, (400, 400), false);
 
         assert_eq!(
             stack.current_rrect_clip,
@@ -993,7 +1034,7 @@ mod tests {
         );
 
         stack.scale(2.0, 3.0);
-        stack.clip_rrect(circle, (600, 600));
+        stack.clip_rrect(circle, (600, 600), false);
 
         let clip = stack.active_clip();
         assert_eq!(
@@ -1030,7 +1071,7 @@ mod tests {
         );
 
         stack.rotate(std::f32::consts::FRAC_PI_2);
-        stack.clip_rrect(rrect, (400, 400));
+        stack.clip_rrect(rrect, (400, 400), false);
 
         let clip = stack.active_clip();
         assert_eq!(
@@ -1080,6 +1121,7 @@ mod tests {
                 px(1.0e5),
             ),
             (400, 400),
+            false,
         );
 
         let m = stack.active_clip().device_to_local;
@@ -1108,6 +1150,7 @@ mod tests {
                 px(10.0),
             ),
             (400, 400),
+            false,
         );
         assert_eq!(
             stack.active_clip().device_to_local,

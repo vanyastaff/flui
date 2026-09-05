@@ -68,7 +68,30 @@ impl WgpuPainter {
     /// coordinates clamped to `[0, viewport]`).  Subsequent draw calls are
     /// rasterised only within the resulting intersection.  Call [`Self::restore`]
     /// to pop the clip state pushed by the matching [`Self::save`].
-    pub fn clip_rect(&mut self, rect: Rect<Pixels>) {
+    /// A rectangular clip is the hardware scissor, whatever the mode.
+    ///
+    /// `Clip::AntiAlias` on a *rect* is therefore **not yet honoured** — it
+    /// renders as `HardEdge`. Routing it to the SDF instead (which is what
+    /// gives a rounded clip its feathered edge) was tried and reverted: the
+    /// SDF is a per-instance uniform and the scissor is not, so the swap
+    /// silently gave up three things the scissor does.
+    ///
+    /// - **It reaches everything.** Text is handed to glyphon with the
+    ///   scissor alone, so an SDF-only clip does not clip a label at all.
+    /// - **It intersects.** Nested clips share one SDF slot and the inner one
+    ///   clears the outer; scissors intersect by construction.
+    /// - **It is exact.** The SDF's coarse scissor is deliberately expanded,
+    ///   so pixels leak up to a pixel outside a clip that used to be tight.
+    ///
+    /// A feathered rectangular edge is not worth those three. Honouring it
+    /// properly means giving the shader a clip *stack* and routing text
+    /// through the same mask — a different piece of work, tracked on #848.
+    ///
+    /// `hard` is still taken so these call sites read like the rounded ones,
+    /// and so that the day the SDF can carry a rect clip safely, only this
+    /// body changes.
+    pub fn clip_rect(&mut self, rect: Rect<Pixels>, hard: bool) {
+        let _ = hard;
         self.state.clip_rect(rect, self.size);
     }
 
@@ -80,8 +103,12 @@ impl WgpuPainter {
     /// rounded boundary.  The SDF clip is applied per-draw rather than as a
     /// hardware stencil, so it only affects shapes that read the clip uniforms
     /// (rect/circle/arc SDF batches).
-    pub fn clip_rrect(&mut self, rrect: RRect) {
-        self.state.clip_rrect(rrect, self.size);
+    /// `hard` selects the layer's `Clip` mode: a hard edge thresholds the SDF
+    /// instead of feathering it. Both go through the SDF either way — unlike a
+    /// rect, a rounded clip has no scissor equivalent that would keep the
+    /// corners.
+    pub fn clip_rrect(&mut self, rrect: RRect, hard: bool) {
+        self.state.clip_rrect(rrect, self.size, hard);
     }
 
     /// Look up or generate a tessellated superellipse path via the
@@ -118,8 +145,12 @@ impl WgpuPainter {
     /// scissor for early rasterizer rejection, and relies on
     /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
     /// outside the iOS-squircle curve.
-    pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse) {
-        self.state.clip_rsuperellipse(rse, self.size);
+    /// `hard` selects the layer's `Clip` mode, exactly as for
+    /// [`Self::clip_rrect`]: a squircle has no scissor equivalent that keeps
+    /// its corners, so both modes go through the SDF and the mode chooses
+    /// between thresholding and feathering.
+    pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse, hard: bool) {
+        self.state.clip_rsuperellipse(rse, self.size, hard);
     }
 
     /// Clip to an arbitrary path (currently unimplemented; emits a `tracing::warn!`).

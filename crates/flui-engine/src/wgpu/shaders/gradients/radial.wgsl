@@ -142,7 +142,8 @@ fn vs_main(
     out.world_pos = world_pos;
     out.clip_bounds = instance.clip_bounds;
     out.clip_radii = instance.clip_radii;
-    out.clip_kind = instance.clip_kind.x;
+    // Bit 2 carries the clip layer's Clip mode; `clipAlpha` unpacks it.
+    out.clip_kind = instance.clip_kind.x | (instance.clip_kind.z << 2u);
     out.clip_device_to_local = instance.clip_device_to_local;
     out.clip_local_origin = instance.clip_local_origin;
 

@@ -746,7 +746,7 @@ mod gpu_tests {
         // Apply scissor; the tessellation will only emit foreground geometry for
         // the left half.  The advanced-blend pass reads the backdrop and composites
         // the trimmed foreground.
-        painter.clip_rect(clip);
+        painter.clip_rect(clip, true);
         painter.rect(
             full_bounds,
             &Paint {

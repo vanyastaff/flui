@@ -423,10 +423,13 @@ mod gpu_tests {
         let side = SURFACE_WIDTH as f32;
         let radius = side / 2.0;
         painter.save();
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)),
-            px(radius),
-        ));
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)),
+                px(radius),
+            ),
+            false,
+        );
         painter.draw_image(&source_image, full_surface_bounds(), BlendMode::SrcOver);
         painter.restore();
 
@@ -505,10 +508,13 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
         painter.scale(2.0, 2.0);
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),
-            px(logical_side / 2.0),
-        ));
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),
+                px(logical_side / 2.0),
+            ),
+            false,
+        );
         painter.draw_image(
             &source_image,
             Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),

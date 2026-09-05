@@ -75,7 +75,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             input.world_pos,
             clip.bounds,
             clip.radii,
-            clip.kind.x,
+            // Bit 2 carries the clip layer's Clip mode; `clipAlpha` unpacks it.
+            clip.kind.x | (clip.kind.z << 2u),
             clip.device_to_local,
             clip.local_origin,
         );

@@ -85,6 +85,15 @@ impl Canvas {
     /// Supports clip operations (intersect/difference) and
     /// anti-aliasing.
     pub fn clip_rect_ext(&mut self, rect: Rect<Pixels>, clip_op: ClipOp, clip_behavior: Clip) {
+        // `Clip::None` asks for no clipping, and the backend honours that by
+        // dropping the command. Recording the shape anyway would leave the CPU
+        // and GPU disagreeing: `local_clip_bounds` and `would_be_clipped` would
+        // report a clip that never happens, so a caller culling on them omits
+        // content the backend renders. `save`'s own comment names this
+        // invariant from the other direction.
+        if clip_behavior == Clip::None {
+            return;
+        }
         self.clip_stack.push(ClipShape::Rect(rect));
         self.display_list.push(DrawCommand::ClipRect {
             rect,
@@ -96,6 +105,15 @@ impl Canvas {
 
     /// Clips to a rounded rectangle with explicit options.
     pub fn clip_rrect_ext(&mut self, rrect: RRect, clip_op: ClipOp, clip_behavior: Clip) {
+        // `Clip::None` asks for no clipping, and the backend honours that by
+        // dropping the command. Recording the shape anyway would leave the CPU
+        // and GPU disagreeing: `local_clip_bounds` and `would_be_clipped` would
+        // report a clip that never happens, so a caller culling on them omits
+        // content the backend renders. `save`'s own comment names this
+        // invariant from the other direction.
+        if clip_behavior == Clip::None {
+            return;
+        }
         self.clip_stack.push(ClipShape::RRect(rrect));
         self.display_list.push(DrawCommand::ClipRRect {
             rrect,
@@ -112,6 +130,15 @@ impl Canvas {
         clip_op: ClipOp,
         clip_behavior: Clip,
     ) {
+        // `Clip::None` asks for no clipping, and the backend honours that by
+        // dropping the command. Recording the shape anyway would leave the CPU
+        // and GPU disagreeing: `local_clip_bounds` and `would_be_clipped` would
+        // report a clip that never happens, so a caller culling on them omits
+        // content the backend renders. `save`'s own comment names this
+        // invariant from the other direction.
+        if clip_behavior == Clip::None {
+            return;
+        }
         self.clip_stack
             .push(ClipShape::RSuperellipse(rsuperellipse));
         self.display_list.push(DrawCommand::ClipRSuperellipse {
@@ -124,6 +151,15 @@ impl Canvas {
 
     /// Clips to a path with explicit options.
     pub fn clip_path_ext(&mut self, path: &Path, clip_op: ClipOp, clip_behavior: Clip) {
+        // `Clip::None` asks for no clipping, and the backend honours that by
+        // dropping the command. Recording the shape anyway would leave the CPU
+        // and GPU disagreeing: `local_clip_bounds` and `would_be_clipped` would
+        // report a clip that never happens, so a caller culling on them omits
+        // content the backend renders. `save`'s own comment names this
+        // invariant from the other direction.
+        if clip_behavior == Clip::None {
+            return;
+        }
         self.clip_stack
             .push(ClipShape::Path(Box::new((*path).clone())));
         self.display_list.push(DrawCommand::ClipPath {
@@ -279,5 +315,40 @@ mod tests {
         canvas.restore();
         // Restored to the outer rect clip established before the save.
         assert_eq!(canvas.local_clip_bounds(), Some(outer));
+    }
+    /// `Clip::None` records no clip at all — not just no GPU clip.
+    ///
+    /// The backend drops a `Clip::None` command, so recording the shape here
+    /// would leave the CPU and GPU disagreeing: `local_clip_bounds` and
+    /// `would_be_clipped` would report a clip that never happens, and a caller
+    /// culling on them omits content the backend renders. That is a worse
+    /// failure than the original bug (both clipped, wrongly but consistently),
+    /// and it is one the GPU-side fix introduced on its own.
+    #[test]
+    fn clip_none_records_no_clip_on_the_cpu_side_either() {
+        let mut canvas = Canvas::new();
+        let rect = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
+
+        canvas.clip_rect_ext(rect, ClipOp::Intersect, Clip::None);
+        assert_eq!(
+            canvas.local_clip_bounds(),
+            None,
+            "Clip::None must leave the clip stack untouched"
+        );
+
+        // Far outside the rect that was passed: nothing may be reported as
+        // clipped away, because nothing is clipped.
+        let far = Rect::from_xywh(px(500.0), px(500.0), px(10.0), px(10.0));
+        assert_ne!(
+            canvas.would_be_clipped(&far),
+            Some(true),
+            "with no clip in force, culling must not claim content is clipped"
+        );
+
+        // The control: a real clip does record, so the assertions above are
+        // about Clip::None and not about the query API returning None always.
+        canvas.clip_rect_ext(rect, ClipOp::Intersect, Clip::HardEdge);
+        assert_eq!(canvas.local_clip_bounds(), Some(rect));
+        assert_eq!(canvas.would_be_clipped(&far), Some(true));
     }
 }
