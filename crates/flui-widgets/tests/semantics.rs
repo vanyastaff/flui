@@ -963,3 +963,141 @@ fn a_composed_offset_reaches_the_grid_entry_point() {
          means the mapping never reached this entry point"
     );
 }
+
+/// The composed offset reaches the fixed-extent entry point, through both of
+/// its delegate kinds.
+///
+/// This entry point is a widget-level struct that shadows the view-level
+/// adaptor alias of the same name, rather than a re-export of it like
+/// `SliverList` and `SliverGrid`. It therefore has to forward the mapping
+/// explicitly, and the two delegate arms of its `build` are two places that
+/// can forget to — hence one assertion per arm rather than one for the type.
+#[test]
+fn a_composed_offset_reaches_both_fixed_extent_delegate_kinds() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::SemanticSetMapping;
+    use flui_widgets::{ScrollController, SliverFixedExtentList, Viewport};
+
+    const ROWS: usize = 2;
+    const SET: usize = 8;
+    const OFFSET: i32 = 3;
+
+    let row = |i: usize| {
+        Semantics::new()
+            .container(true)
+            .label(format!("row {i}"))
+            .child(SizedBox::new(200.0, 60.0))
+            .boxed()
+    };
+    let mapping =
+        || SemanticSetMapping::one_to_one(ROWS.into()).composed_at(OFFSET, i32::try_from(SET).ok());
+
+    // Positions are 1-based, so the first row reads OFFSET + 1.
+    let expected = [
+        (Some(OFFSET as usize + 1), Some(SET)),
+        (Some(OFFSET as usize + 2), Some(SET)),
+    ];
+
+    let announce = |laid: &mut flui_widgets::testing::LaidOut| {
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let one = |label: &str| {
+            let node = tree
+                .find_by_label(label)
+                .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+            (node.position_in_set(), node.size_of_set())
+        };
+        [one("row 0"), one("row 1")]
+    };
+
+    // Static delegate.
+    let mut statics = lay_out(
+        Viewport::new((SliverFixedExtentList::new(60.0, (row(0), row(1))).semantics(mapping()),))
+            .position(ScrollController::new().position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    assert_eq!(
+        announce(&mut statics),
+        expected,
+        "the static delegate must carry the composed offset — `(Some(1), _)` \
+         means the mapping never reached this entry point"
+    );
+
+    // Builder delegate: the same numbering, from the other arm of `build`.
+    let mut built = lay_out(
+        Viewport::new((SliverFixedExtentList::builder(60.0, ROWS, move |i| {
+            (i < ROWS).then(|| row(i))
+        })
+        .semantics(mapping()),))
+        .position(ScrollController::new().position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    assert_eq!(
+        announce(&mut built),
+        expected,
+        "the builder delegate must number its children identically — the \
+         mapping is not a property of which delegate serves them"
+    );
+}
+
+/// A lazy sliver that declares no mapping still announces its real size.
+///
+/// The default mapping is derived from `item_count`, and every
+/// static-children constructor sets that count *after* calling the adaptor's
+/// `new`. A default materialised at construction is therefore frozen at the
+/// count known then — zero — and every row announces "item N of 0", a pair
+/// whose position exceeds its size and which AccessKit cannot represent.
+///
+/// Every other oracle in this file declares a mapping explicitly, which
+/// overrides the default and hides this. This one must not: the assertion is
+/// about the path a caller gets without asking for anything.
+#[test]
+fn a_lazy_sliver_with_no_declared_mapping_announces_its_real_set_size() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::StaticChildren;
+    use flui_widgets::{ListView, ScrollController, SliverList, Viewport};
+
+    let row = |i: usize| {
+        Semantics::new()
+            .container(true)
+            .label(format!("row {i}"))
+            .child(SizedBox::new(200.0, 60.0))
+            .boxed()
+    };
+    let announced = |laid: &mut flui_widgets::testing::LaidOut| {
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let one = |label: &str| {
+            let node = tree
+                .find_by_label(label)
+                .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+            (node.position_in_set(), node.size_of_set())
+        };
+        [one("row 0"), one("row 1")]
+    };
+
+    let mut list_view = lay_out(
+        ListView::new(60.0, (row(0), row(1))).position(ScrollController::new().position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    assert_eq!(
+        announced(&mut list_view),
+        [(Some(1), Some(2)), (Some(2), Some(2))],
+        "a two-row ListView announces a set of two — `Some(0)` is the count \
+         the adaptor was constructed with, not the one its delegate holds"
+    );
+
+    let children = StaticChildren::new(vec![row(0), row(1)]);
+    let mut sliver = lay_out(
+        Viewport::new((SliverList::over(60.0, &children),))
+            .position(ScrollController::new().position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    assert_eq!(
+        announced(&mut sliver),
+        [(Some(1), Some(2)), (Some(2), Some(2))],
+        "and so does the sliver the list view is built on"
+    );
+}
