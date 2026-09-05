@@ -1,6 +1,3 @@
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
-use super::frame_pacing::NO_PRESENT_FALLBACK_PACE;
-
 // ============================================================================
 // GPU device-loss recovery (App.1 device-recovery wake)
 // ============================================================================
@@ -126,11 +123,12 @@ struct DeviceRecoveryBackoffState {
 
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 impl DeviceRecoveryBackoff {
-    /// The base interval: the same cadence [`NO_PRESENT_FALLBACK_PACE`]
-    /// already paces a no-present frame at, reused rather than inventing a
-    /// second pacing constant for the same "roughly one frame interval"
-    /// shape.
-    const BASE: std::time::Duration = NO_PRESENT_FALLBACK_PACE;
+    /// The base interval: roughly one frame at 60 Hz. A retry cadence, not
+    /// a pacing constant — it deliberately does NOT track the display (a
+    /// device that just died is not presenting anything to pace), which is
+    /// why it stopped aliasing the frame-pacing constant when that became
+    /// display-derived (ADR-0058).
+    const BASE: std::time::Duration = std::time::Duration::from_millis(16);
     /// The ceiling: "on the order of a second", per this module's device-
     /// recovery retry policy.
     const CAP: std::time::Duration = std::time::Duration::from_secs(1);
@@ -1245,6 +1243,7 @@ mod device_recovery_tests {
                 realm.needs_redraw(),
                 realm.has_pending_work(),
                 backoff.next_attempt_at(),
+                crate::app::runner::frame_pacing::FallbackGate::default(),
             );
             assert!(
                 dirty,
@@ -1316,7 +1315,7 @@ mod device_recovery_tests {
     /// host (see `is_deadline_due`'s own module for the parts of that state
     /// machine that ARE unit-tested there, in isolation, without `run`
     /// itself). The one adjustment made here to acknowledge that gap: `now`
-    /// lands `NO_PRESENT_FALLBACK_PACE` (16ms) past each armed deadline
+    /// lands one `DeviceRecoveryBackoff::BASE` (16ms) past each armed deadline
     /// rather than exactly on it, approximating that `is_deadline_due` is
     /// polled once per ~16ms idle tick rather than actuated exactly at the
     /// instant like desktop's `ControlFlow::WaitUntil`. Do not read this
@@ -1359,6 +1358,7 @@ mod device_recovery_tests {
                 realm.needs_redraw(),
                 has_pending,
                 backoff.next_attempt_at(),
+                crate::app::runner::frame_pacing::FallbackGate::default(),
             );
             assert!(
                 dirty,
@@ -1374,7 +1374,7 @@ mod device_recovery_tests {
                 // the next ~16ms poll, not exactly at the deadline.
                 backoff.next_attempt_at().unwrap_or_else(|| {
                     panic!("wake {wake}: dirty was true with no pending poke and no armed deadline")
-                }) + super::NO_PRESENT_FALLBACK_PACE
+                }) + DeviceRecoveryBackoff::BASE
             };
 
             let mut lane = lane_over(permanently_dead_backend());

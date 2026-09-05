@@ -621,6 +621,10 @@ impl std::fmt::Debug for MockWindow {
 
 /// Mutable state for headless MockWindow
 struct MockWindowState {
+    /// How many times [`PlatformWindow::pre_present_notify`] was called —
+    /// the oracle for "the frame pump arms the compositor frame callback
+    /// once per presented frame, before the present".
+    pre_present_notifies: u64,
     title: String,
     bounds: Bounds<Pixels>,
     scale_factor: f64,
@@ -637,6 +641,7 @@ struct MockWindowState {
 impl Clone for MockWindowState {
     fn clone(&self) -> Self {
         Self {
+            pre_present_notifies: self.pre_present_notifies,
             title: self.title.clone(),
             bounds: self.bounds,
             scale_factor: self.scale_factor,
@@ -661,6 +666,7 @@ impl MockWindow {
         Self {
             id,
             state: Arc::new(Mutex::new(MockWindowState {
+                pre_present_notifies: 0,
                 title: options.title.clone(),
                 bounds: Bounds {
                     origin: Point::default(),
@@ -763,6 +769,14 @@ impl MockWindow {
         }
     }
 
+    /// How many times the frame pump has called
+    /// [`PlatformWindow::pre_present_notify`] on this window — one per
+    /// presented frame, before the present, is the contract.
+    #[must_use]
+    pub fn pre_present_notifies(&self) -> u64 {
+        self.state.lock().pre_present_notifies
+    }
+
     /// Inject a platform input event for testing.
     /// Fires the registered `on_input` callback.
     pub fn inject_event(&self, event: PlatformInput) -> DispatchEventResult {
@@ -847,6 +861,10 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn request_redraw(&self) {
         self.callbacks.dispatch_request_frame();
+    }
+
+    fn pre_present_notify(&self) {
+        self.state.lock().pre_present_notifies += 1;
     }
 
     fn is_focused(&self) -> bool {

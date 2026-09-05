@@ -5,12 +5,13 @@ use super::device_recovery::{
     DeviceRecoveryBackoff, FrameRecoveryOutcome, render_frame_with_device_recovery,
 };
 use super::frame_pacing::{
-    WakeAction, frame_is_dirty, keeps_frame_gate_open, no_present_fallback_pace, wake_action,
+    DEFAULT_DISPLAY_PERIOD, FallbackWake, WakeAction, frame_is_dirty, install_pre_present_hook,
+    keeps_frame_gate_open, wake_action,
 };
 use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, desktop_secondary_wake_deadline, install_exit_policy_hook,
-    install_owner_platform, install_wake_deadline_hook, runtime_needs_redraw_handle,
-    runtime_wake_callback, with_owner_platform,
+    install_owner_platform, install_wake_deadline_hook, merge_wake_deadlines,
+    runtime_needs_redraw_handle, runtime_wake_callback, with_owner_platform,
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmTask, close_this_window, dispatch_platform_realm, drain_owner_inbox,
@@ -171,6 +172,10 @@ where
             }
         };
         renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        // The platform's frame-pacing signal (Wayland frame callbacks) is
+        // armed by the renderer right before each present — see
+        // `install_pre_present_hook`'s own doc and ADR-0058.
+        install_pre_present_hook(&mut renderer, &window);
 
         // 3. Mount root widget at the LOGICAL size; the framework lays out
         // in logical pixels and the paint root's DPR transform maps to the
@@ -292,6 +297,24 @@ where
             }
         }
 
+        // 3c2. The frame-pacing fallback (ADR-0058): a non-blocking bound on
+        // ticker-driven wakes that present nothing, anchored to this
+        // window's own display period. Replaces the fixed 16 ms
+        // `thread::sleep` on this very thread — which was the only pacer on
+        // any stack whose present does not block at vsync, and which
+        // quantized every animation to ~60 Hz and blocked input for its
+        // duration. The period is re-read on resize (a window can change
+        // monitors); `DEFAULT_DISPLAY_PERIOD` covers a backend that cannot
+        // report one.
+        let fallback = Arc::new(FallbackWake::new(
+            window.refresh_period().unwrap_or(DEFAULT_DISPLAY_PERIOD),
+        ));
+        tracing::info!(
+            period_us = fallback.period().as_micros() as u64,
+            reported = window.refresh_period().is_some(),
+            "frame-pacing fallback period"
+        );
+
         // 3d. Wire the wall-clock-wake hook, now that `realm_dispatch`
         // exists — the winit backend's `about_to_wait` consults this every
         // idle iteration instead of blocking forever, so a pending gesture-
@@ -306,6 +329,7 @@ where
         // `next_attempt_at()`, is required.
         install_wake_deadline_hook({
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+            let fallback = Arc::clone(&fallback);
             let realm_id = realm_dispatch.address.realm_id;
             move || {
                 // The frames-enabled gate itself is `desktop_secondary_
@@ -321,10 +345,20 @@ where
                         .and_then(|realm_slot| realm_slot.realm.as_ref())
                         .is_some_and(|realm| realm.scheduler().frames_enabled())
                 });
-                desktop_secondary_wake_deadline(
+                // Both secondary sources fold through the same
+                // frames-enabled gate: a deferred ticker wake is worth
+                // nothing to a backgrounded app, and an armed deadline
+                // reported while frames are disabled is the busy-spin
+                // `desktop_secondary_wake_deadline`'s own doc names.
+                // `FallbackWake::next_wake` self-clears a deadline that has
+                // already passed, so a wake this hook asks for and never
+                // gets (a hidden Wayland surface withholds redraws) cannot
+                // be re-reported in the past forever.
+                let deadlines = merge_wake_deadlines(
                     device_recovery_backoff.next_attempt_at(),
-                    frames_enabled,
-                )
+                    fallback.next_wake(web_time::Instant::now()),
+                );
+                desktop_secondary_wake_deadline(deadlines, frames_enabled)
             }
         });
 
@@ -382,10 +416,12 @@ where
         let worker_reload_frame = worker_reload.clone();
         // Reuses the SAME backoff constructed at step 0c (already wired
         // into the wake-deadline hook above) — not a fresh one.
+        let frame_fallback = Arc::clone(&fallback);
         window.on_request_frame(Box::new(move || {
             let lane_frame = Arc::clone(&lane_frame);
             let worker_reload_frame = worker_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+            let fallback = Arc::clone(&frame_fallback);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
                 RealmTask::Frame(Box::new(move |realm| {
@@ -441,16 +477,25 @@ where
                     // `dirty` computation and the tests that pin it must run
                     // the identical code, or a regression in one is invisible
                     // to the other.
+                    // The frame-pacing deferral (ADR-0058), read ONCE per wake:
+                    // `gate` consumes a due deadline, so this is both the
+                    // "is a deferral pending" question the gate below asks and
+                    // the "this wake IS the deferred one" answer that makes it
+                    // dirty. Reading it twice would consume it in the first read
+                    // and skip the very wake it asked for.
+                    let fallback_gate = fallback.gate(now);
                     let dirty = frame_is_dirty(
                         inbox_redraw,
                         realm.needs_redraw(),
                         realm.has_pending_work(),
                         device_recovery_backoff.next_attempt_at(),
+                        fallback_gate,
                     );
                     match wake_action(
                         scheduler.frames_enabled(),
                         dirty,
                         scheduler.is_frame_scheduled(),
+                        fallback_gate,
                     ) {
                         WakeAction::Skip => return,
                         WakeAction::PumpAsync => {
@@ -473,18 +518,24 @@ where
                             // starvation hazard and why the ordering matters.
                             scheduler.finish_async_pump();
                             scheduler.drive_async_tasks();
-                            // Reuse the existing no-present throttle: a backgrounded
-                            // wake with dirty/pending work re-requesting another
-                            // wake every loop tick has the identical busy-spin risk
-                            // an un-presented frame with an open gate has, and
-                            // nothing else paces it while frames are disabled.
+                            // A backgrounded wake with dirty/pending work
+                            // re-requesting another wake every loop tick has the
+                            // identical busy-spin risk an un-presented frame with an
+                            // open gate has, and nothing else paces it while frames
+                            // are disabled — so it takes the same bound (ADR-0058),
+                            // as a deferral rather than a sleep. The wake-deadline
+                            // hook gates this source on `frames_enabled`, so the
+                            // deadline is not reported while backgrounded; what
+                            // bounds this arm is the deferral being consulted by the
+                            // dirty gate above on the next wake, which is where a
+                            // backgrounded self-re-arming task would otherwise spin.
                             let keeps_gate_open = keeps_frame_gate_open(
                                 realm.needs_redraw(),
                                 scheduler.is_frame_scheduled(),
                                 realm.has_pending_work(),
                             );
-                            if let Some(pace) = no_present_fallback_pace(false, keeps_gate_open) {
-                                std::thread::sleep(pace);
+                            if keeps_gate_open {
+                                fallback.arm_after_no_present(web_time::Instant::now());
                             }
                             return;
                         }
@@ -541,35 +592,37 @@ where
                         realm.local_post_frame_lane(),
                     );
 
-                    // No-present fallback throttle. Fifo present (the default, see
-                    // `select_present_mode`) blocks every PRESENTED frame at display
-                    // cadence — that IS the steady-state pacing, which is why the fixed
-                    // frame-budget sleep this replaced is gone. A frame that never
-                    // reaches `present()` (no damage, occluded surface, surface lost)
-                    // gets none of that blocking, so if nothing else is going to wake
-                    // this loop, an unpaced wake is harmless: the loop falls back to
-                    // `ControlFlow::Wait` and blocks on the next real event. The
-                    // busy-spin this guards against (observed: ~30 000 fps) only
-                    // happens when a ticker/animation keeps re-requesting a frame every
-                    // wake with nothing pacing it — `no_present_fallback_pace` fires
-                    // only in exactly that combination. A still-lost device armed for
-                    // a LATER retry does NOT feed this pace: `DeviceRecoveryBackoff`
-                    // paces the ATTEMPT itself (a deadline check, never a sleep — see
-                    // its own doc), and its deadline reaches the platform's own idle
-                    // wait through the wake-deadline hook wired above, not through
-                    // this fallback.
+                    // Frame-pacing fallback (ADR-0058), replacing the fixed
+                    // 16 ms sleep this thread used to take here. A frame that
+                    // reached `present()` needs no bound: the present either
+                    // blocked at vsync or the compositor is pacing our redraws
+                    // (Wayland, after `pre_present_notify`). A frame that did
+                    // NOT present — no damage, occluded surface, surface lost —
+                    // got neither, so with a ticker still re-requesting a frame
+                    // every wake, nothing would pace the loop; the deferral
+                    // below bounds it to one pipeline pass per display period,
+                    // as a wake deadline rather than a sleep, so input stays
+                    // responsive throughout. A still-lost device armed for a
+                    // LATER retry does not feed this: `DeviceRecoveryBackoff`
+                    // paces the ATTEMPT itself and reaches the loop through the
+                    // same wake-deadline hook.
                     let keeps_gate_open = keeps_frame_gate_open(
                         realm.needs_redraw(),
                         scheduler.is_frame_scheduled(),
                         realm.has_pending_work(),
                     );
-                    if let Some(pace) = no_present_fallback_pace(outcome.presented, keeps_gate_open)
-                    {
-                        // This runs on the platform event-loop thread, so the sleep
-                        // blocks input dispatch for its duration — acceptable here
-                        // because this path only fires for an occluded/undamaged
-                        // window with a ticker still running, not an interactive one.
-                        std::thread::sleep(pace);
+                    let pace_now = web_time::Instant::now();
+                    if outcome.presented {
+                        fallback.record_present(pace_now);
+                    } else if keeps_gate_open {
+                        let deadline = fallback.arm_after_no_present(pace_now);
+                        tracing::trace!(
+                            target: "flui.pace",
+                            event = "fallback_armed",
+                            in_us = deadline.saturating_duration_since(pace_now).as_micros() as u64,
+                            "frame presented nothing with the gate open; deferring the next \
+                             ticker wake"
+                        );
                     }
                 })),
             );
@@ -577,7 +630,15 @@ where
 
         // 7. Register resize callback -> typed Resized event; the applier
         // installed above (not this closure) actually touches the renderer.
+        let resize_window: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::clone(&window);
+        let resize_fallback = Arc::clone(&fallback);
         window.on_resize(Box::new(move |size, scale_factor| {
+            // A resize can also be a move to another monitor; re-read the
+            // period so the pacing fallback follows the display the window
+            // is actually on (ADR-0058).
+            if let Some(period) = resize_window.refresh_period() {
+                resize_fallback.set_period(period);
+            }
             let _ = dispatch_platform_realm(
                 realm_dispatch,
                 RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),

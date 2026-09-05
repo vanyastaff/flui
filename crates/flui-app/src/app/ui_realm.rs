@@ -2357,6 +2357,17 @@ impl UiRealm {
 
             let segment_start = presentation.clock().now();
             let decision = presentation.clock().poll(segment_start);
+            // `flui.pace`: the per-presentation produce decision, the one
+            // fact a pacing investigation needs next to the present trace
+            // (a wake that ran no segment must never be paced as if it had
+            // rendered and failed to present — ADR-0058).
+            tracing::trace!(
+                target: "flui.pace",
+                event = "segment_poll",
+                presentation = ?presentation.id(),
+                decision = ?decision,
+                "presentation segment poll"
+            );
             if !decision.should_run_segment() {
                 // Nothing to flush and nobody asked, or a gate (hidden /
                 // backpressure) is closed: skip this presentation's segment

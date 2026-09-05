@@ -17,6 +17,10 @@ use flui_types::geometry::{Pixels, Rect};
 
 use crate::error::EngineError;
 
+/// The hook a [`RasterBackend`] runs immediately before every present —
+/// see [`RasterBackend::set_pre_present_hook`].
+pub type PrePresentHook = Box<dyn FnMut() + Send>;
+
 /// Frame-driver interface for a rendering backend.
 ///
 /// Covers the per-frame and surface-management methods the application layer
@@ -77,6 +81,28 @@ pub trait RasterBackend: Send {
     /// may also be called manually when the surface needs reconfiguration
     /// (e.g. format change).
     fn reconfigure_surface(&mut self) -> Result<(), EngineError>;
+
+    /// Install the hook this backend runs immediately before every present
+    /// (`None` uninstalls). The platform frame-pacing seam: an embedder
+    /// hands in its window's `pre_present_notify`, so the windowing system
+    /// learns a present is about to happen — on Wayland that arms the
+    /// surface's frame callback, which is what makes the next redraw
+    /// request compositor-paced and an occluded surface silent. It runs
+    /// only when a present WILL follow, never on a skip path: a frame
+    /// callback requested with no commit behind it would leave winit
+    /// withholding every later `RedrawRequested` (its Wayland event loop
+    /// waits for the callback that commit would have produced).
+    ///
+    /// Runs on whichever thread presents — the owner thread on the inline
+    /// lane. A threaded lane would run it on the raster thread; ADR-0045
+    /// decision 5's rule against raster-thread platform calls is about
+    /// AppKit main-thread affinity, and this hook is inert there.
+    ///
+    /// Default: ignored. A backend that never presents (offscreen,
+    /// scripted doubles) has nothing to notify.
+    fn set_pre_present_hook(&mut self, hook: Option<PrePresentHook>) {
+        drop(hook);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +125,10 @@ impl RasterBackend for crate::wgpu::Renderer {
 
     fn mark_dirty(&mut self, rect: Rect<Pixels>) {
         self.mark_dirty(rect);
+    }
+
+    fn set_pre_present_hook(&mut self, hook: Option<PrePresentHook>) {
+        self.set_pre_present_hook(hook);
     }
 
     fn mark_full_repaint(&mut self) {

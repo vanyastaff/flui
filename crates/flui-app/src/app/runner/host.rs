@@ -198,7 +198,7 @@ pub(super) fn install_wake_deadline_hook(
 /// the realm's deadline untouched when the secondary source has nothing
 /// pending.
 #[cfg(not(target_os = "ios"))]
-fn merge_wake_deadlines(
+pub(super) fn merge_wake_deadlines(
     a: Option<web_time::Instant>,
     b: Option<web_time::Instant>,
 ) -> Option<web_time::Instant> {

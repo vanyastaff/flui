@@ -283,7 +283,7 @@ fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
     match status {
         Some(status) if status.success() => {
             eprintln!("live-smoke: clean close OK (exit 0)");
-            Ok(())
+            check_frame_signal_armed_before_every_present(app_log)
         }
         Some(status) => bail!(
             "close check FAILED: teardown finished with {status} — a post-quit \
@@ -297,6 +297,34 @@ fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
     }
 }
 
+/// The platform frame-pacing signal (`PlatformWindow::pre_present_notify`,
+/// ADR-0058) must be armed by the renderer immediately before EVERY present,
+/// and only then: on Wayland it is what makes redraws compositor-paced, and
+/// a request with no present behind it wedges the loop. Oracle: the
+/// `flui.gpu` trace carries one `pre_present_notified` event per hook run and
+/// one `present_submitted` per present; over a whole run their counts must
+/// be equal and non-zero. The headless unit test pins the wiring through a
+/// scripted backend; this is the only check that sees the real wgpu
+/// renderer do it.
+fn check_frame_signal_armed_before_every_present(app_log: &std::path::Path) -> Result<()> {
+    let log = std::fs::read_to_string(app_log).context("reading the app log")?;
+    let log = strip_ansi(&log);
+    let presents = log.matches(GPU_PRESENT_MARKER).count();
+    let notifies = log.matches(GPU_PRE_PRESENT_MARKER).count();
+    if presents == 0 {
+        bail!("frame-signal check FAILED: the run logged no presents at all");
+    }
+    if notifies != presents {
+        bail!(
+            "frame-signal check FAILED: {notifies} pre-present notifies for {presents} presents — \
+             the renderer must arm the platform's frame callback before every present and \
+             never without one"
+        );
+    }
+    eprintln!("live-smoke: frame signal armed before every present OK ({presents} frames)");
+    Ok(())
+}
+
 /// One presented frame's marker in the app log — the machine-oriented
 /// `event` field of the `flui.gpu` trace `flui-engine`'s `render_scene`
 /// emits immediately after the frame's encoders were submitted to the wgpu
@@ -306,6 +334,9 @@ fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
 /// hidden-surface criterion ("an occluded window issues zero GPU
 /// submissions"), not merely "no frame produced".
 const GPU_PRESENT_MARKER: &str = "event=\"present_submitted\"";
+/// One pre-present hook run (`flui-engine`'s `render_scene`, immediately
+/// before `present`) — paired one-to-one with [`GPU_PRESENT_MARKER`].
+const GPU_PRE_PRESENT_MARKER: &str = "event=\"pre_present_notified\"";
 /// One pointer-scroll delivery in the app log (`flui_widgets::scroll`'s own
 /// trace) — used while covered to pin the *designed* input drop: a hidden
 /// presentation refuses pointer input (`Suspended` lifecycle), so wheel

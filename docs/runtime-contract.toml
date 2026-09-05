@@ -208,7 +208,7 @@ declarations = [
     "pub use flui_layer::{ CanvasLayer, DamageRegion, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor, SceneSnapshot, ShaderMaskLayer, };",
     "pub use flui_painting::Paint;",
     "pub use traits::{CommandRenderer, LayerStateStack};",
-    "pub use raster::RasterBackend;",
+    "pub use raster::{PrePresentHook, RasterBackend};",
     "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner, RasterSubmitError, SurfaceState, };",
     "pub use raster_options::RasterOptions;",
     "pub use wgpu::DebugBackend;",
@@ -1804,8 +1804,12 @@ lane. The ordering this entry records is that baseline capture, which must \
 happen before the slice that moves surface acquisition and present onto \
 the raster thread lands -- once that slice lands there is no still-serial \
 lane left to measure it on, and the delta this amendment's exit criterion \
-depends on becomes unmeasurable after the fact. `no_present_fallback_pace` \
-is today's serial-lane fallback pacer this baseline characterizes; the \
+depends on becomes unmeasurable after the fact. `FallbackWake` (ADR-0058) \
+is today's serial-lane fallback this baseline characterizes -- and the \
+baseline it must be taken against is ADR-0058's own "after" column, not the \
+16 ms-quantized behaviour that preceded it: the fixed sleep that used to \
+play this role WAS the pacer on any stack whose present did not block, so a \
+comparand captured against it measured the sleep, not the lane; the \
 re-predicated fallback ADR-0045 decision 3 describes (separating \
 `in_flight > 0` from `in_flight == 0` with a non-presenting last \
 completion, read from the coalesced `SurfaceState` slot rather than the \
@@ -1816,7 +1820,7 @@ domain = "raster"
 owner_issue = 559
 mechanical = false
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_pace(" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "pub(super) struct FallbackWake" },
 ]
 
 [[contract]]
@@ -2105,19 +2109,71 @@ evidence = [
 [[contract]]
 key = "no-present-fallback-throttle"
 statement = """
-The fixed frame-budget sleep is deleted; a coarse fallback throttle applies \
-only when a frame did not present AND a ticker keeps the gate open. The \
-decision functions are pure and unit-tested because `run_desktop` cannot run \
-headlessly.\
+No frame path sleeps on the event-loop thread. ADR-0029's fixed 16 ms \
+`thread::sleep` fallback is deleted (ADR-0058): it had become the actual \
+pacer -- quantizing a 164.89 Hz panel to ~60 frames per second and blocking \
+input for 16 ms of every cycle -- because the swapchain it was meant to \
+back up never filled while it drained it. What bounds an un-presenting \
+ticker now is a DEADLINE: `FallbackWake` defers the next ticker-only wake \
+to 0.95 x the window's own display period after the LAST PRESENT (from \
+`PlatformWindow::refresh_period`, re-read on resize; a 60 Hz default where \
+the backend reports none) and reaches the loop through the existing \
+wake-deadline hook. Two halves make that safe, and each was a measured \
+failure before it was a rule: the frame callback's `gate` is the ONLY \
+consumer (a `next_wake` that cleared a just-passed deadline destroyed it in \
+the window between `about_to_wait` and the redraw its own poke queues -- a \
+real 164.89 Hz X11 animation froze at +11.03 s, 5 us late, for the rest of \
+the run), and the dirty predicate both ignores the realm's own post-pump \
+redraw echo while deferring and admits the due deadline itself. A deadline \
+more than one period late is abandoned rather than re-reported, which \
+bounds the one case whose wake can never arrive (a hidden Wayland surface \
+withholds redraws) at about one wasted wake. Android keeps a sleep, named \
+`BACKGROUNDED_PUMP_PACE` for its own reason: its frame source has no \
+wake-deadline hook to arm instead.\
 """
 state = "implemented"
 domain = "application"
 mechanical = true
-mechanism = "decision-function tests pinned here"
+mechanism = "decision-function and deadline-contract tests pinned here"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_pace" },
-    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_bounds_repeating_no_present_wakes" },
-    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_pace_requires_both_no_present_and_an_open_gate" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "pub(super) struct FallbackWake" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "pub(super) fn next_wake" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn the_fallback_bounds_repeating_no_present_wakes_without_sleeping_on_the_loop" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn a_due_deadline_is_consumed_once_by_whichever_side_sees_it_first" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn the_dirty_predicate_ignores_the_realms_own_echo_while_deferring_and_admits_a_due_deadline" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn the_fallback_deadline_is_anchored_to_the_last_present" },
+]
+
+[[contract]]
+key = "platform-frame-signal-armed-before-every-present"
+statement = """
+The windowing system's own frame-pacing signal is armed before every \
+present and only then (ADR-0058): the raster backend runs a pre-present \
+hook (`RasterBackend::set_pre_present_hook`, wired by \
+`install_pre_present_hook` to `PlatformWindow::pre_present_notify`) \
+immediately before `queue.present`, and never on a skip path. On Wayland \
+this is what makes redraws compositor-paced at all -- winit arms the \
+surface's frame callback there and withholds the next `RedrawRequested` \
+until it fires -- and what makes a hidden surface silent; a callback \
+requested with no commit behind it would instead withhold every later \
+redraw. FLUI never called it before this record, so ADR-0044 s4's Wayland \
+row described winit's capability rather than this tree's behaviour, as that \
+row's own honesty note half-admitted. The engine owns the WHEN (it is the \
+only component that knows a present will follow) and the app layer owns the \
+WHAT (flui-engine does not depend on flui-platform and must not). Measured \
+on a real 164.89 Hz session: Wayland went from 1298 presents in 20 s, \
+bimodal and stopping at +11 s, to 2852 presents with a 6.79 ms median.\
+"""
+state = "implemented"
+domain = "raster"
+mechanical = true
+mechanism = "symbol + test existence; the live-smoke harness asserts the one-to-one ordering against the real wgpu renderer"
+evidence = [
+    { kind = "symbol", file = "crates/flui-engine/src/raster.rs", contains = "fn set_pre_present_hook" },
+    { kind = "symbol", file = "crates/flui-platform/src/traits/window.rs", contains = "fn pre_present_notify" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "pub(super) fn install_pre_present_hook" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn install_pre_present_hook_notifies_the_window_once_per_presented_frame_only" },
+    { kind = "test", file = "tools/live-smoke/src/harness.rs", contains = "fn check_frame_signal_armed_before_every_present" },
 ]
 
 [[contract]]
