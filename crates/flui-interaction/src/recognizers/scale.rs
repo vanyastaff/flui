@@ -374,22 +374,19 @@ impl ScaleGestureRecognizer {
 
         match state.phase {
             ScalePhase::Possible => {
-                if self.should_accept(&state, current_span, kind) {
-                    state.phase = ScalePhase::Started;
-                    state.previous_span = Some(current_span);
+                let crossed = self.should_accept(&state, current_span, kind);
+                drop(state);
 
-                    let focal_point = Self::calculate_focal_point(&state.pointers);
-                    drop(state); // Release lock before callback
-
-                    // Call on_start callback
-                    if let Some(callback) = self.callbacks.borrow().on_start.clone() {
-                        let details = ScaleStartDetails {
-                            focal_point,
-                            local_focal_point: focal_point,
-                            pointer_count: self.gesture_state.lock().pointers.len(),
-                        };
-                        callback(details);
-                    }
+                // Crossing a tier is a request to win, not permission to
+                // invoke callbacks -- the same rule `DragGestureRecognizer`
+                // follows. A competitor can still take the arena, and an
+                // observer that saw `on_start` before that was decided would
+                // have acted on a gesture that then gets cancelled.
+                // `accept_gesture` is the sole start transition; the reference
+                // resolves here too (`scale.dart:749`'s
+                // `resolve(GestureDisposition.accepted)`).
+                if crossed {
+                    self.state.accept_tracked();
                 }
             }
             ScalePhase::Started => {
@@ -543,33 +540,37 @@ impl ScaleGestureRecognizer {
             return (0.0, 0.0, 0.0);
         }
 
-        let positions: Vec<&Offset<Pixels>> = pointers.values().collect();
+        // Mean deviation from the FOCAL POINT, not mean pairwise distance --
+        // `_ScaleGestureRecognizer._update` (`gestures/scale.dart`, tag
+        // `3.44.0`): "Span is the average deviation from focal point."
+        //
+        // For two pointers the two definitions differ by exactly a factor of
+        // two, which every RATIO consumer here is blind to (`current /
+        // initial` cancels it) -- which is why the pairwise form went
+        // unnoticed while the ratio was the only acceptance criterion. It
+        // stops being invisible the moment a span is compared against an
+        // ABSOLUTE threshold: `kScaleSlop` is calibrated against the
+        // reference's definition, so a pairwise span crosses it at half the
+        // real movement.
+        let focal = Self::calculate_focal_point(pointers);
 
-        // Calculate average span between all pairs
-        let mut total_distance = 0.0;
-        let mut total_h_distance = 0.0;
-        let mut total_v_distance = 0.0;
-        let mut count = 0;
+        let mut total_deviation = 0.0;
+        let mut total_h_deviation = 0.0;
+        let mut total_v_deviation = 0.0;
 
-        for i in 0..positions.len() {
-            for j in (i + 1)..positions.len() {
-                let delta = *positions[j] - *positions[i];
-                total_distance += delta.distance().0;
-                total_h_distance += delta.dx.abs().0;
-                total_v_distance += delta.dy.abs().0;
-                count += 1;
-            }
+        for position in pointers.values() {
+            let delta = focal - *position;
+            total_deviation += delta.distance().0;
+            total_h_deviation += delta.dx.abs().0;
+            total_v_deviation += delta.dy.abs().0;
         }
 
-        if count > 0 {
-            (
-                total_distance / count as f32,
-                total_h_distance / count as f32,
-                total_v_distance / count as f32,
-            )
-        } else {
-            (0.0, 0.0, 0.0)
-        }
+        let count = pointers.len() as f32;
+        (
+            total_deviation / count,
+            total_h_deviation / count,
+            total_v_deviation / count,
+        )
     }
 
     /// Calculate focal point (center of all pointers)
@@ -725,7 +726,28 @@ impl crate::recognizers::OneSequenceGestureRecognizer for ScaleGestureRecognizer
 
 impl GestureArenaMember for ScaleGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
-        // We won the arena - gesture is accepted
+        // The sole start transition. Reached once the arena has actually
+        // settled on this recognizer, which is the earliest moment
+        // `on_start` can be dispatched without the risk of a later
+        // cancellation retracting it.
+        let mut state = self.gesture_state.lock();
+        if state.phase != ScalePhase::Possible {
+            return;
+        }
+        state.phase = ScalePhase::Started;
+        state.previous_span = Some(Self::calculate_spans(&state.pointers).0);
+
+        let focal_point = Self::calculate_focal_point(&state.pointers);
+        let pointer_count = state.pointers.len();
+        drop(state);
+
+        if let Some(callback) = self.callbacks.borrow().on_start.clone() {
+            callback(ScaleStartDetails {
+                focal_point,
+                local_focal_point: focal_point,
+                pointer_count,
+            });
+        }
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
@@ -783,15 +805,19 @@ mod tests {
         let last_scale = Arc::new(Mutex::new(1.0_f32));
         let updates2 = Arc::clone(&updates);
         let last_scale2 = Arc::clone(&last_scale);
-        let recognizer = ScaleGestureRecognizer::new(arena).with_on_scale_update(move |details| {
-            updates2.fetch_add(1, Ordering::SeqCst);
-            *last_scale2.lock() = details.scale;
-        });
+        let recognizer =
+            ScaleGestureRecognizer::new(arena.clone()).with_on_scale_update(move |details| {
+                updates2.fetch_add(1, Ordering::SeqCst);
+                *last_scale2.lock() = details.scale;
+            });
 
         let finger1 = PointerId::new(2).expect("nonzero pointer id");
         let finger2 = PointerId::new(3).expect("nonzero pointer id");
         recognizer.add_pointer(finger1, Offset::new(Pixels(0.0), Pixels(0.0)));
         recognizer.add_pointer(finger2, Offset::new(Pixels(100.0), Pixels(0.0)));
+        // The start now waits on arena acceptance, so the arena must be closed
+        // for it to land -- dispatch closes it after the pointer-down burst.
+        arena.close(finger1);
 
         // Move ONLY the second finger outward through the public event path.
         let move2 = make_move_event_for_id(
@@ -799,7 +825,7 @@ mod tests {
             Offset::new(Pixels(200.0), Pixels(0.0)),
             PointerType::Touch,
         );
-        recognizer.handle_event(&move2); // crosses the 5% slop -> Started
+        recognizer.handle_event(&move2); // crosses a tier -> arena accepts -> Started
         let move2b = make_move_event_for_id(
             finger2,
             Offset::new(Pixels(220.0), Pixels(0.0)),
@@ -868,9 +894,14 @@ mod tests {
 
         let (span, h_span, v_span) = ScaleGestureRecognizer::calculate_spans(&pointers);
 
-        // Distance should be 100
-        assert!((span - 100.0).abs() < 0.01);
-        assert!((h_span - 100.0).abs() < 0.01);
+        // Mean deviation from the focal point, which for two pointers is HALF
+        // their separation -- the reference's definition
+        // (`scale.dart`'s "Span is the average deviation from focal point"),
+        // not the pairwise distance. The distinction is invisible to every
+        // ratio consumer and load-bearing for anything comparing a span
+        // against an absolute threshold like `kScaleSlop`.
+        assert!((span - 50.0).abs() < 0.01);
+        assert!((h_span - 50.0).abs() < 0.01);
         assert!(v_span.abs() < 0.01);
     }
 
@@ -895,35 +926,42 @@ mod tests {
 
         const STEP: f32 = 2.0;
         const PAIRS: usize = 10;
-        const SPAN: f32 = 100.0;
+        const SEPARATION: f32 = 100.0;
+        // Span is the mean deviation from the focal point: half the
+        // separation for two pointers.
+        const BASELINE_SPAN: f32 = SEPARATION / 2.0;
 
-        // Each half-step leaves the span STEP short of its baseline, which
-        // must stay inside both other tiers or one of them can accept instead
-        // of the focal arm. Checked at compile time so that raising a tier
-        // constant breaks the build rather than quietly making this vacuous.
+        // At each half-step only one pointer has moved, leaving the pair
+        // STEP closer together and the span STEP/2 short of its baseline.
+        // That must stay inside both other tiers or one of them can accept
+        // instead of the focal arm. Checked at compile time so that raising a
+        // tier constant breaks the build rather than quietly making this
+        // vacuous.
         const {
             assert!(
-                STEP < DEFAULT_SPAN_SLOP,
+                STEP / 2.0 < DEFAULT_SPAN_SLOP,
                 "half-step must stay under the span slop"
             );
             assert!(
-                STEP / SPAN < DEFAULT_SCALE_SLOP,
+                (STEP / 2.0) / BASELINE_SPAN < DEFAULT_SCALE_SLOP,
                 "half-step must stay under the ratio slop"
             );
         }
 
-        let recognizer = ScaleGestureRecognizer::new(GestureArena::new());
+        let arena = GestureArena::new();
+        let recognizer = ScaleGestureRecognizer::new(arena.clone());
         let (p1, p2) = (
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
         recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(p2, Offset::new(Pixels(SPAN), Pixels(0.0)));
+        recognizer.add_pointer(p2, Offset::new(Pixels(SEPARATION), Pixels(0.0)));
+        arena.close(p1);
 
         let mut max_span_drift: f32 = 0.0;
         for i in 1..=PAIRS {
             let shift = STEP * i as f32;
-            for (p, base) in [(p1, 0.0), (p2, SPAN)] {
+            for (p, base) in [(p1, 0.0), (p2, SEPARATION)] {
                 recognizer.handle_pointer_move(
                     p,
                     Offset::new(Pixels(base + shift), Pixels(0.0)),
@@ -931,14 +969,15 @@ mod tests {
                 );
                 let state = recognizer.gesture_state.lock();
                 let span = ScaleGestureRecognizer::calculate_spans(&state.pointers).0;
-                max_span_drift = max_span_drift.max((span - SPAN).abs());
+                max_span_drift = max_span_drift.max((span - BASELINE_SPAN).abs());
             }
         }
 
         // The premise, measured rather than assumed: no intermediate state
         // ever came close to the span or ratio tiers.
         assert!(
-            max_span_drift < DEFAULT_SPAN_SLOP && max_span_drift / SPAN < DEFAULT_SCALE_SLOP,
+            max_span_drift < DEFAULT_SPAN_SLOP
+                && max_span_drift / BASELINE_SPAN < DEFAULT_SCALE_SLOP,
             "the span drifted {max_span_drift} px during the pan, so a span or \
              ratio arm could be what accepted"
         );
@@ -951,88 +990,199 @@ mod tests {
         );
     }
 
-    /// A wide pinch starts on absolute movement, below the ratio tier.
+    /// The arena resolves before `on_start`, not after.
     ///
-    /// Fingers far apart travel a long way before they travel 5%. The ratio
-    /// arm alone rejects this; `spanDelta > computeScaleSlop` is what catches
-    /// it (`scale.dart:746`).
+    /// The reference resolves at the crossing (`scale.dart`'s
+    /// `resolve(GestureDisposition.accepted)`) and dispatches `onStart` only
+    /// once the arena has settled on this recognizer. FLUI advanced the phase
+    /// and fired `on_start` inline, consulting the arena not at all — so an
+    /// observer could act on a scale start that the arena had not granted, and
+    /// competitors were never told they had lost.
+    /// `DragGestureRecognizer` already follows the correct rule: "crossing
+    /// slop is a request to win, not permission to invoke callbacks".
+    ///
+    /// The oracle is ORDER, recorded from both sides: a competitor's
+    /// `reject_gesture` must land before `on_start`. Asserting only that
+    /// `on_start` eventually fires cannot fail — it fires either way, which is
+    /// exactly why the inline start went unnoticed.
     #[test]
-    fn a_wide_pinch_starts_below_the_ratio_tier() {
-        use crate::settings::{DEFAULT_SCALE_SLOP, DEFAULT_SPAN_SLOP};
+    fn the_arena_resolves_before_on_start() {
+        #[derive(Debug)]
+        struct Competitor(Arc<Mutex<Vec<&'static str>>>);
+        impl crate::sealed::arena_member::Sealed for Competitor {}
+        impl GestureArenaMember for Competitor {
+            fn accept_gesture(&self, _pointer: PointerId) {
+                self.0.lock().push("competitor accepted");
+            }
+            fn reject_gesture(&self, _pointer: PointerId) {
+                self.0.lock().push("competitor rejected");
+            }
+        }
 
-        // 1000 px apart, opened by 30 px: 3% — under the 5% ratio tier, but
-        // well past the 18 px span tier. The gap between the tiers is the only
-        // region where the two arms disagree.
-        let (initial, growth) = (1000.0_f32, 30.0_f32);
-        let ratio_delta = ((initial + growth) / initial - 1.0).abs();
-        assert!(
-            ratio_delta < DEFAULT_SCALE_SLOP && growth > DEFAULT_SPAN_SLOP,
-            "the probe must be under the ratio tier and over the span tier, or \
-             it cannot tell them apart: ratio delta {ratio_delta}, growth {growth}"
-        );
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let arena = GestureArena::new();
+        let sink = Arc::clone(&log);
+        let recognizer = ScaleGestureRecognizer::new(arena.clone())
+            .with_on_scale_start(move |_| sink.lock().push("scale started"));
 
-        let recognizer = ScaleGestureRecognizer::new(GestureArena::new());
         let (p1, p2) = (
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
         recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(p2, Offset::new(Pixels(initial), Pixels(0.0)));
+        recognizer.add_pointer(p2, Offset::new(Pixels(1000.0), Pixels(0.0)));
+        arena.add(p1, Arc::new(Competitor(Arc::clone(&log))));
+        arena.close(p1);
 
-        // Move one finger outward. The focal point shifts by half the growth
-        // (15 px), which is under the 18 px touch pan slop, so the focal arm
-        // cannot be what accepts either.
-        recognizer.handle_pointer_move(
-            p2,
-            Offset::new(Pixels(initial + growth), Pixels(0.0)),
-            PointerType::Touch,
+        assert!(
+            log.lock().is_empty(),
+            "nothing is decided by closing alone -- the arena is contested"
         );
 
+        // A symmetric spread well past every tier.
+        for (p, to) in [(p1, -100.0), (p2, 1100.0)] {
+            recognizer.handle_pointer_move(
+                p,
+                Offset::new(Pixels(to), Pixels(0.0)),
+                PointerType::Touch,
+            );
+        }
+
         assert_eq!(
-            recognizer.gesture_state.lock().phase,
+            log.lock().as_slice(),
+            &["competitor rejected", "scale started"],
+            "the crossing must resolve the arena FIRST -- turning the \
+             competitor down -- and only then dispatch the start"
+        );
+    }
+
+    /// A wide pinch starts on absolute movement, below the ratio tier.
+    ///
+    /// Fingers far apart travel a long way before they travel 5%. The ratio
+    /// arm alone rejects this; `spanDelta > computeScaleSlop` is what catches
+    /// it (`scale.dart:746`).
+    ///
+    /// The pinch is **symmetric** — both pointers move outward by the same
+    /// amount — so the focal point does not move at all and the focal arm
+    /// cannot be what accepts. Moving one pointer instead shifts the focal
+    /// point by exactly half the growth, which is the same quantity the span
+    /// changes by, so the two arms are inseparable that way.
+    #[test]
+    fn a_wide_pinch_starts_below_the_ratio_tier() {
+        use crate::settings::{DEFAULT_PAN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_SPAN_SLOP};
+
+        // Pointers 1000 px apart: span (mean deviation from the focal point)
+        // is 500. Each moves 20 px outward, so the span grows by 20 -- past
+        // the 18 px tier -- while the ratio changes by 20/500 = 4%, under the
+        // 5% tier. The gap between the tiers is the only region where the two
+        // arms disagree.
+        const SEPARATION: f32 = 1000.0;
+        const GROWTH: f32 = 20.0;
+        let baseline_span = SEPARATION / 2.0;
+
+        const {
+            assert!(GROWTH > DEFAULT_SPAN_SLOP, "must cross the span tier");
+            // Only one pointer has moved at the halfway step, which shifts the
+            // focal point by half the growth. That must stay under the pan
+            // tier or the focal arm accepts mid-walk.
+            assert!(
+                GROWTH / 2.0 < DEFAULT_PAN_SLOP,
+                "the intermediate focal shift must stay inside the pan tier"
+            );
+        }
+        assert!(
+            GROWTH / baseline_span < DEFAULT_SCALE_SLOP,
+            "and must stay under the ratio tier, or the ratio arm could be \
+             what accepts"
+        );
+
+        let arena = GestureArena::new();
+        let recognizer = ScaleGestureRecognizer::new(arena.clone());
+        let (p1, p2) = (
+            PointerId::new(2).expect("nonzero pointer id"),
+            PointerId::new(3).expect("nonzero pointer id"),
+        );
+        recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
+        recognizer.add_pointer(p2, Offset::new(Pixels(SEPARATION), Pixels(0.0)));
+        // The arena must be closed for an acceptance to land, exactly as
+        // dispatch closes it after the pointer-down burst.
+        arena.close(p1);
+
+        for (p, to) in [(p1, -GROWTH), (p2, SEPARATION + GROWTH)] {
+            recognizer.handle_pointer_move(
+                p,
+                Offset::new(Pixels(to), Pixels(0.0)),
+                PointerType::Touch,
+            );
+        }
+
+        let state = recognizer.gesture_state.lock();
+        let focal = ScaleGestureRecognizer::calculate_focal_point(&state.pointers);
+        assert!(
+            (focal.dx.0 - SEPARATION / 2.0).abs() < 0.01,
+            "premise: a symmetric pinch leaves the focal point where it was, \
+             so only the span arm can have accepted"
+        );
+        assert_eq!(
+            state.phase,
             ScalePhase::Started,
-            "a {growth} px spread past the {DEFAULT_SPAN_SLOP} px span slop must \
-             start the gesture even at {ratio_delta} ratio change"
+            "a {GROWTH} px span growth past the {DEFAULT_SPAN_SLOP} px span \
+             slop must start the gesture even at a {}% ratio change",
+            100.0 * GROWTH / baseline_span
         );
     }
 
     /// The span tier is per-kind: a mouse accepts where a finger does not.
+    ///
+    /// Symmetric again, and deliberately SMALL: the growth is picked so that
+    /// even the halfway step's focal shift stays inside the *mouse* pan slop,
+    /// which is 2 px. A larger probe would let the mouse half accept through
+    /// the focal arm instead and say nothing about the span tier.
     #[test]
     fn the_span_tier_is_kind_aware() {
-        use crate::settings::{DEFAULT_MOUSE_SPAN_SLOP, DEFAULT_SPAN_SLOP};
+        use crate::settings::{DEFAULT_MOUSE_PAN_SLOP, DEFAULT_MOUSE_SPAN_SLOP, DEFAULT_SPAN_SLOP};
 
-        // Between the two span tiers, and small enough that the focal point
-        // moves half as far again — under both pan slops — so only the span
-        // arm can differ between the two halves.
-        let growth = f32::midpoint(DEFAULT_MOUSE_SPAN_SLOP, DEFAULT_SPAN_SLOP);
-        assert!(growth > DEFAULT_MOUSE_SPAN_SLOP && growth < DEFAULT_SPAN_SLOP);
+        const SEPARATION: f32 = 1000.0;
+        const GROWTH: f32 = 2.5;
+
+        const {
+            assert!(
+                GROWTH > DEFAULT_MOUSE_SPAN_SLOP && GROWTH < DEFAULT_SPAN_SLOP,
+                "the growth must sit strictly between the two span tiers"
+            );
+            assert!(
+                GROWTH / 2.0 < DEFAULT_MOUSE_PAN_SLOP,
+                "and the halfway focal shift must stay inside even the mouse                  pan slop, or the focal arm accepts instead"
+            );
+        }
 
         let phase_after = |kind: PointerType| {
-            let recognizer = ScaleGestureRecognizer::new(GestureArena::new());
+            let arena = GestureArena::new();
+            let recognizer = ScaleGestureRecognizer::new(arena.clone());
             let (p1, p2) = (
                 PointerId::new(2).expect("nonzero pointer id"),
                 PointerId::new(3).expect("nonzero pointer id"),
             );
             recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
-            recognizer.add_pointer(p2, Offset::new(Pixels(1000.0), Pixels(0.0)));
-            recognizer.handle_pointer_move(
-                p2,
-                Offset::new(Pixels(1000.0 + growth), Pixels(0.0)),
-                kind,
-            );
+            recognizer.add_pointer(p2, Offset::new(Pixels(SEPARATION), Pixels(0.0)));
+            arena.close(p1);
+            for (p, to) in [(p1, -GROWTH), (p2, SEPARATION + GROWTH)] {
+                recognizer.handle_pointer_move(p, Offset::new(Pixels(to), Pixels(0.0)), kind);
+            }
             recognizer.gesture_state.lock().phase
         };
 
         assert_eq!(
             phase_after(PointerType::Mouse),
             ScalePhase::Started,
-            "a {growth} px spread is past the {DEFAULT_MOUSE_SPAN_SLOP} px mouse \
-             span slop"
+            "a {GROWTH} px span growth is past the {DEFAULT_MOUSE_SPAN_SLOP} px \
+             mouse span slop"
         );
         assert_eq!(
             phase_after(PointerType::Touch),
             ScalePhase::Possible,
-            "the same spread is inside the {DEFAULT_SPAN_SLOP} px touch span slop"
+            "the same growth is well inside the {DEFAULT_SPAN_SLOP} px touch \
+             span slop"
         );
     }
 
@@ -1053,7 +1203,8 @@ mod tests {
         let state = recognizer.gesture_state.lock();
         assert_eq!(state.pointers.len(), 2);
         assert!(state.initial_span.is_some());
-        assert!((state.initial_span.unwrap() - 100.0).abs() < 0.01);
+        // Half the 100 px separation -- see `test_span_calculation`.
+        assert!((state.initial_span.expect("captured") - 50.0).abs() < 0.01);
 
         // Manually test scale calculation by updating pointer and checking span
         drop(state);
@@ -1065,7 +1216,8 @@ mod tests {
 
         let state = recognizer.gesture_state.lock();
         let current_span = ScaleGestureRecognizer::calculate_spans(&state.pointers).0;
-        assert!((current_span - 200.0).abs() < 0.01);
+        // Half the 200 px separation -- mean deviation from the focal point.
+        assert!((current_span - 100.0).abs() < 0.01);
 
         // Calculate scale manually
         let scale = current_span / state.initial_span.unwrap();
