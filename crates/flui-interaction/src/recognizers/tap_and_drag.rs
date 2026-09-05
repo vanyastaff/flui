@@ -259,14 +259,25 @@ impl TapAndDragGestureRecognizer {
         *self.settings.lock() = settings;
     }
 
-    /// Drag slop threshold (uses [`GestureSettings::pan_slop`]).
-    fn drag_slop(&self) -> f32 {
-        self.settings.lock().pan_slop()
+    /// Drag slop threshold for `kind` (uses
+    /// [`GestureSettings::pan_slop_for`]).
+    ///
+    /// This recognizer drags in a free plane, so it takes the *pan* tier —
+    /// `computePanSlop`, as `TapAndPanGestureRecognizer` does
+    /// (`tap_and_drag.dart:1445`). The axis-locked variants take the plain hit
+    /// tier instead (`:1410`); if this recognizer ever grows a vertical- or
+    /// horizontal-only mode, that mode reads [`Self::tap_slop`]'s tier, not
+    /// this one.
+    fn drag_slop(&self, kind: PointerType) -> f32 {
+        self.settings.lock().pan_slop_for(kind)
     }
 
-    /// Tap slop threshold (uses [`GestureSettings::touch_slop`]).
-    fn tap_slop(&self) -> f32 {
-        self.settings.lock().touch_slop()
+    /// Tap slop threshold for `kind` (uses [`GestureSettings::hit_slop`]).
+    ///
+    /// The tap-viability check is a *hit* test, not a pan one, so it takes the
+    /// plain tier — `computeHitSlop` at `tap_and_drag.dart:532`.
+    fn tap_slop(&self, kind: PointerType) -> f32 {
+        self.settings.lock().hit_slop(kind)
     }
 
     // ========================================================================
@@ -445,7 +456,7 @@ impl TapAndDragGestureRecognizer {
         match phase {
             Phase::Down => {
                 let distance = self.distance_from_initial(position);
-                if distance > self.drag_slop() {
+                if distance > self.drag_slop(kind) {
                     // Slop crossed: lock in the drag outcome. Fire
                     // `on_tap_down` (we did get a down) then promote
                     // to drag, fire `on_drag_start` with the down
@@ -504,7 +515,7 @@ impl TapAndDragGestureRecognizer {
                             kind,
                         });
                     }
-                } else if distance > self.tap_slop() {
+                } else if distance > self.tap_slop(kind) {
                     // Past tap slop but not drag slop: the pointer wandered too
                     // far to still count as a tap (Flutter parity). Void the tap
                     // so a later up does not fire `on_tap_*`.
@@ -775,6 +786,82 @@ mod tests {
         assert!(*tap_down.lock(), "tap_down should fire on tap resolution");
         assert!(*tap_up.lock(), "tap_up should fire on tap resolution");
         assert!(!*drag_start.lock(), "drag_start must NOT fire for a tap");
+    }
+
+    /// A mouse starts dragging at a distance a finger is still tapping at.
+    ///
+    /// Both tiers of this recognizer are kind-aware, and they are *different*
+    /// tiers: the free-plane drag threshold is `computePanSlop`
+    /// (`tap_and_drag.dart:1445`), the tap-viability threshold is
+    /// `computeHitSlop` (`:532`). A single sample distance cannot pin both, so
+    /// this drives one distance per tier, each chosen to sit strictly between
+    /// that tier's mouse and touch values.
+    #[test]
+    fn a_mouse_crosses_both_slop_tiers_where_a_finger_crosses_neither() {
+        use crate::settings::{DEFAULT_MOUSE_PAN_SLOP, DEFAULT_MOUSE_SLOP};
+
+        let touch = GestureSettings::touch_defaults();
+        // Between the mouse and touch value of each tier — the only region
+        // where the assertion can distinguish which tier was read.
+        let pan_probe = f32::midpoint(DEFAULT_MOUSE_PAN_SLOP, touch.pan_slop());
+        // The hit probe carries a second constraint the pan probe does not: it
+        // must ALSO stay under the mouse *pan* slop, or a mouse starts dragging
+        // at this distance and the drag masks the tap-voiding it is meant to
+        // show. That upper bound (2 px) is tighter than the touch hit slop
+        // (18 px), so the midpoint of the two hit tiers does not qualify.
+        let hit_probe = f32::midpoint(DEFAULT_MOUSE_SLOP, DEFAULT_MOUSE_PAN_SLOP);
+        assert!(pan_probe > DEFAULT_MOUSE_PAN_SLOP && pan_probe < touch.pan_slop());
+        assert!(
+            hit_probe > DEFAULT_MOUSE_SLOP
+                && hit_probe < touch.touch_slop()
+                && hit_probe < DEFAULT_MOUSE_PAN_SLOP
+        );
+
+        // Move `dx` and report (drag_start fired, tap still viable).
+        let drive = |dx: f32, kind: PointerType| {
+            let drag_start = Arc::new(Mutex::new(false));
+            let started = drag_start.clone();
+            let rec = TapAndDragGestureRecognizer::new(GestureArena::new())
+                .with_on_drag_start(move |_| *started.lock() = true);
+
+            let origin = Offset::new(Pixels(0.0), Pixels(0.0));
+            rec.add_pointer(PointerId::PRIMARY, origin);
+            rec.handle_event(&make_move_event(Offset::new(Pixels(dx), Pixels(0.0)), kind));
+
+            let started = *drag_start.lock();
+            let tap_viable = rec.drag_state.lock().tap_viable;
+            (started, tap_viable)
+        };
+
+        // Pan tier: past the mouse pan slop, under the touch pan slop.
+        assert!(
+            drive(pan_probe, PointerType::Mouse).0,
+            "a mouse moving {pan_probe} px is past the {DEFAULT_MOUSE_PAN_SLOP} px \
+             mouse pan slop and must begin a drag"
+        );
+        assert!(
+            !drive(pan_probe, PointerType::Touch).0,
+            "a finger moving {pan_probe} px is inside the touch pan slop and \
+             must NOT begin a drag"
+        );
+
+        // Hit tier: past the mouse hit slop but under every pan slop, so this
+        // distance voids the tap without starting a drag.
+        let (mouse_started, mouse_viable) = drive(hit_probe, PointerType::Mouse);
+        assert!(
+            !mouse_started,
+            "{hit_probe} px is under the mouse pan slop -- no drag yet"
+        );
+        assert!(
+            !mouse_viable,
+            "but it IS past the {DEFAULT_MOUSE_SLOP} px mouse hit slop, so the \
+             tap must be voided"
+        );
+        assert!(
+            drive(hit_probe, PointerType::Touch).1,
+            "the same {hit_probe} px is inside the touch hit slop, so a finger \
+             keeps its tap viable"
+        );
     }
 
     #[test]
