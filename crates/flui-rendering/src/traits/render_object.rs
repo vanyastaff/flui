@@ -688,6 +688,19 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         false
     }
 
+    /// Whether the child in `child_slot` reaches the semantics tree at all.
+    ///
+    /// The per-CHILD counterpart of [`Self::excludes_semantics_subtree`], which
+    /// answers "none of my descendants". An object that keeps children it does
+    /// not present — `RenderTheater`'s entries below the topmost opaque one —
+    /// needs this one: those are real children it deliberately does not show.
+    ///
+    /// Default: `true`. Flutter parity:
+    /// `RenderObject.visitChildrenForSemantics`.
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        true
+    }
+
     /// The rect, in THIS node's coordinates, outside which a child's painted
     /// output is not visible — `None` (the default) when this node clips
     /// nothing.

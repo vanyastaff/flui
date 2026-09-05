@@ -45,16 +45,16 @@
 //!   laid out, its stamp goes stale, and the semantics walk drops it along with
 //!   paint and hit-test.
 //!
-//!   That covers the transition this widget actually performs — an entry laid out
-//!   while visible, then skipped when an opaque entry is pushed above it. It does
-//!   **not** cover an entry that is skipped from its very first pass: nothing ever
-//!   stamped it, and an unstamped child reads as placed by design (the stamp must
-//!   only ever remove a child a parent demonstrably *stopped* laying out, or a
-//!   parent that lays out through a path of its own would hide its whole subtree).
-//!   Such an entry is still announced. Full parity needs the per-child semantics
-//!   visitor FLUI lacks; tracked on issue #885. `RenderOffstage` (which a
-//!   `ModalRoute` puts around its page) suppresses semantics for the case that
-//!   matters today.
+//!   Both halves are now covered, by two different mechanisms. The stamp gets
+//!   the transition this widget performs — an entry laid out while visible, then
+//!   skipped when an opaque entry is pushed above it. It cannot get an entry
+//!   skipped from its very first pass: nothing ever stamped that one, and an
+//!   unstamped child reads as placed by design (the stamp may only remove a child
+//!   a parent demonstrably *stopped* laying out, or a parent laying out through a
+//!   path of its own would hide its whole subtree). That half is
+//!   `visits_child_for_semantics`, which answers from `skip_count` directly and
+//!   is therefore history-independent — Flutter's
+//!   `RenderTheater.visitChildrenForSemantics` over `_childrenInPaintOrder()`.
 
 use flui_tree::Variable;
 use flui_types::{Offset, Size};
@@ -160,6 +160,24 @@ impl flui_foundation::Diagnosticable for RenderTheater {
 impl RenderBox for RenderTheater {
     type Arity = Variable;
     type ParentData = StackParentData;
+
+    /// The first `skip_count` entries are offstage and publish no semantics.
+    ///
+    /// This is the whole point of the hook: an entry beneath the topmost
+    /// opaque one is a real child that is deliberately not shown, and a screen
+    /// reader must not find it. The placed-generation stamp gets the common
+    /// case for free — an entry laid out while visible and then covered has a
+    /// stale stamp — but not the one that matters most: an app that STARTS
+    /// with an opaque route above another never lays the lower one out, so
+    /// nothing ever stamps it and it reads as placed. Answering here is
+    /// history-independent.
+    ///
+    /// Flutter parity: `RenderTheater.visitChildrenForSemantics` walks
+    /// `_childrenInPaintOrder()` (`overlay.dart:1427-1428`), which is exactly
+    /// the entries from `skip_count` onward.
+    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
+        child_slot >= self.skip_count
+    }
 
     fn perform_layout(
         &mut self,

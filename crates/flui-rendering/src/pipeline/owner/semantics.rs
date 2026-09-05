@@ -336,6 +336,18 @@ fn intersect_clips(a: Option<Rect<Pixels>>, b: Option<Rect<Pixels>>) -> Option<R
 
 /// The clips `node` imposes on the child in `child_slot`, moved from the
 /// node's own coordinates into the walk's root coordinates.
+/// Whether `node` presents the child in `child_slot` to the semantics tree.
+///
+/// Dispatched the same way `child_clips_of` is, because it answers the same
+/// kind of question — one the parent knows about a particular child and the
+/// walk cannot infer.
+fn visits_child_for_semantics(node: &RenderNode, child_slot: usize) -> bool {
+    match node {
+        RenderNode::Box(entry) => entry.render_object().visits_child_for_semantics(child_slot),
+        RenderNode::Sliver(entry) => entry.render_object().visits_child_for_semantics(child_slot),
+    }
+}
+
 fn child_clips_of(
     node: &RenderNode,
     origin: Offset,
@@ -546,6 +558,14 @@ fn build_semantics_fragments_impl(
             // Announcing it would also make the accessibility tree disagree
             // with the two walks that already skip it.
             if !child.was_placed_by(id, parent_generation) {
+                continue;
+            }
+            // A child the parent structurally does not present — `RenderTheater`'s
+            // entries beneath the topmost opaque one — is dropped regardless of
+            // layout history. The stamp above cannot do this: it excludes a
+            // child a parent STOPPED laying out, so a child skipped from its
+            // very first pass was never stamped and reads as placed.
+            if !visits_child_for_semantics(node, child_slot) {
                 continue;
             }
             let child_origin = offset_add(origin, child.offset());
