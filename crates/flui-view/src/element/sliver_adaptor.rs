@@ -770,6 +770,18 @@ impl<R: LazyMultiBoxRender> SliverAdaptorBehavior<R> {
             })),
         }
     }
+
+    /// Schedules the layout that carries a resident refresh.
+    ///
+    /// Setting `needs_resident_refresh` on its own is inert: the refresh runs
+    /// *inside* the service pass that follows a layout, so a sliver left clean
+    /// keeps handing out the slots it was stamped with until something
+    /// unrelated lays it out.
+    fn schedule_resident_refresh(&self, core: &ElementCore<SliverMultiBoxAdaptor<R>, Variable>) {
+        if let (Some(render_id), Some(pipeline)) = (self.inner.render_id, core.pipeline_owner()) {
+            pipeline.with_mut(|pipeline_owner| pipeline_owner.mark_needs_layout(render_id));
+        }
+    }
 }
 
 impl<R: LazyMultiBoxRender> ElementBehavior<SliverMultiBoxAdaptor<R>, Variable>
@@ -953,6 +965,17 @@ where
             // same for a list handed over unchanged; a builder delegate is a
             // fresh closure per build and never compares equal, exactly as
             // `SliverChildBuilderDelegate.shouldRebuild` is always true.
+            //
+            // A changed mapping is the exception, and it is why this is not a
+            // bare return. The residents read the same content but must
+            // announce different positions; the refresh flagged above only
+            // runs in the service pass that follows a layout, and no layout is
+            // scheduled below this point. Without this the new numbering waits
+            // for an unrelated layout to carry it, and until one arrives every
+            // resident announces the set it was stamped with.
+            if semantics_changed {
+                self.schedule_resident_refresh(core);
+            }
             return;
         }
         let mut manager = self.manager.lock();
@@ -1010,9 +1033,7 @@ where
         // swap with an unchanged count and config would otherwise leave the
         // sliver clean and the residents stale until something else laid it
         // out.
-        if let (Some(render_id), Some(pipeline)) = (self.inner.render_id, core.pipeline_owner()) {
-            pipeline.with_mut(|pipeline_owner| pipeline_owner.mark_needs_layout(render_id));
-        }
+        self.schedule_resident_refresh(core);
     }
 
     fn render_id(&self) -> Option<RenderId> {
@@ -2490,6 +2511,15 @@ pub struct SemanticSetMapping {
     index_of: Option<Rc<dyn Fn(usize) -> Option<i32>>>,
     /// How many members the set has, or `None` when that is not known.
     set_size: Option<i32>,
+    /// Added to every position this mapping produces.
+    ///
+    /// Flutter's `semanticIndexOffset`, and for the reason its docs give:
+    /// "If multiple delegates are used in a single scroll view, then the
+    /// indexes will not be correct by default." Two slivers in one viewport
+    /// each number their own children from zero — which is the reference's
+    /// default too — so a caller composing them offsets the second by the
+    /// first's member count to make the whole scroll view read monotonically.
+    offset: i32,
 }
 
 impl fmt::Debug for SemanticSetMapping {
@@ -2497,6 +2527,7 @@ impl fmt::Debug for SemanticSetMapping {
         f.debug_struct("SemanticSetMapping")
             .field("interleaved", &self.index_of.is_some())
             .field("set_size", &self.set_size)
+            .field("offset", &self.offset)
             .finish()
     }
 }
@@ -2510,7 +2541,7 @@ impl SemanticSetMapping {
     /// comparison errs toward "changed".
     #[must_use]
     pub fn differs_from(&self, other: &Self) -> bool {
-        if self.set_size != other.set_size {
+        if self.set_size != other.set_size || self.offset != other.offset {
             return true;
         }
         match (&self.index_of, &other.index_of) {
@@ -2526,7 +2557,22 @@ impl SemanticSetMapping {
         Self {
             index_of: None,
             set_size: set_size_of(item_count),
+            offset: 0,
         }
+    }
+
+    /// Shift every position this mapping produces by `offset`, and declare the
+    /// size of the set the shifted positions belong to.
+    ///
+    /// Both together on purpose. An offset without a matching size announces
+    /// "item 12 of 5" for the second delegate in a pair — the position is now
+    /// the composed set's, while the size is still this delegate's own. A
+    /// caller composing delegates knows both; nothing else does.
+    #[must_use]
+    pub fn composed_at(mut self, offset: i32, set_size: Option<i32>) -> Self {
+        self.offset = offset;
+        self.set_size = set_size;
+        self
     }
 
     /// Members interleaved with non-members: `index_of` decides which is which,
@@ -2536,6 +2582,7 @@ impl SemanticSetMapping {
         Self {
             index_of: Some(index_of),
             set_size: i32::try_from(members).ok(),
+            offset: 0,
         }
     }
 
@@ -2554,7 +2601,19 @@ impl SemanticSetMapping {
             },
             None => SliverSlot::identity(logical),
         };
-        base.with_set_size(self.set_size)
+        // Checked, and unknown on overflow: an offset that pushes a position
+        // past `i32::MAX` has no honest answer, and a clamp announces a
+        // wrong-but-plausible one. Clamping is worse than it looks — every
+        // overflowing child collapses onto the same `i32::MAX`, so a reader
+        // hears several rows claim one position, and that position can exceed
+        // the set size the same slot publishes, which is not a pair AccessKit
+        // can represent. Declining matches `SliverSlot::identity`, which
+        // already returns `None` for an index it cannot represent.
+        let shifted = SliverSlot {
+            semantic: base.semantic.and_then(|s| s.checked_add(self.offset)),
+            ..base
+        };
+        shifted.with_set_size(self.set_size)
     }
 }
 
@@ -2569,5 +2628,54 @@ fn set_size_of(item_count: ItemCount) -> Option<i32> {
     match item_count {
         ItemCount::Exact(count) => i32::try_from(count).ok(),
         ItemCount::Unknown => None,
+    }
+}
+
+#[cfg(test)]
+mod semantic_set_mapping_tests {
+    use super::{ItemCount, SemanticSetMapping};
+
+    /// A position pushed past `i32::MAX` is unknown, not clamped.
+    ///
+    /// Clamping looks harmless per-child and is not: every overflowing child
+    /// collapses onto the same `i32::MAX`, so a reader hears several rows
+    /// claim one position, and that position can exceed the set size the same
+    /// slot publishes — a pair AccessKit cannot represent.
+    #[test]
+    fn an_overflowing_composed_position_is_declined_rather_than_clamped() {
+        let mapping = SemanticSetMapping::one_to_one(ItemCount::Exact(3))
+            .composed_at(i32::MAX - 1, Some(i32::MAX));
+
+        // In range: the offset lands exactly on the last representable value.
+        assert_eq!(mapping.slot_for(0).semantic, Some(i32::MAX - 1));
+        assert_eq!(mapping.slot_for(1).semantic, Some(i32::MAX));
+
+        assert_eq!(
+            mapping.slot_for(2).semantic,
+            None,
+            "a position past i32::MAX has no honest answer and must be unknown"
+        );
+        assert_ne!(
+            mapping.slot_for(1).semantic,
+            mapping.slot_for(2).semantic,
+            "two children must never be announced at the same position"
+        );
+    }
+
+    /// The same guard on the negative side. `one_to_one` cannot reach it —
+    /// its positions are logical indices, so they are never negative and a
+    /// shift down lands inside the range. An `interleaved` mapping can: its
+    /// callback returns whatever position the caller decides, and a negative
+    /// one plus a negative offset leaves the range at the bottom.
+    #[test]
+    fn an_underflowing_composed_position_is_declined() {
+        let mapping = SemanticSetMapping::interleaved(std::rc::Rc::new(|_| Some(i32::MIN + 1)), 2)
+            .composed_at(-2, None);
+
+        assert_eq!(
+            mapping.slot_for(0).semantic,
+            None,
+            "a position below i32::MIN is as unrepresentable as one above i32::MAX"
+        );
     }
 }
