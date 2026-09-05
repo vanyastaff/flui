@@ -1,54 +1,74 @@
 //! WGSL shader source bindings for the wgpu backend.
 //!
-//! Only shaders consumed by `painter` via `wgpu::ShaderSource::Wgsl(super::
-//! shaders::*.into())` are exposed as `pub const` aliases here. Other shader
-//! files (`masks/*.wgsl`, `effects/*.wgsl`, `gradients/*.wgsl`, `common/*.wgsl`)
-//! are loaded directly via `include_str!("shaders/...")` from their consumers
-//! (`shader_compiler.rs` for the mask/blur/morph stack; `effects_pipeline.rs`
-//! for the gradient and shadow stack); the const-alias indirection only earns
-//! its place where multiple consumers reference the same shader.
-//!
-//! Removed (commit chain on `feat/flui-engine-mythos-redesign`):
-//! 12 unused const aliases (`FILL`, `SOLID`, `LINEAR_GRADIENT`, `RADIAL_GRADIENT`,
-//! `BLUR_HORIZONTAL`, `BLUR_VERTICAL`, `BLUR_DOWNSAMPLE`, `BLUR_UPSAMPLE`,
-//! `SHADOW`, `LINEAR`, `RADIAL`, `SDF`) that pointed at WGSL files already
-//! `include_str!`-loaded by `shader_compiler.rs` / `effects_pipeline.rs`. The
-//! WGSL files themselves stay; only the redundant indirection went away.
+//! A shader appears here when its source is ASSEMBLED rather than merely read:
+//! every entry below is a concatenation whose piece order is load-bearing, and
+//! the assembly is what earns the indirection. Shaders that are a single file
+//! (`masks/*.wgsl`, `effects/*.wgsl`, the remaining `common/*.wgsl`) stay
+//! `include_str!`-loaded by their consumers — `shader_compiler.rs` for the
+//! mask/blur/morph stack, `effects_pipeline.rs` for the shadow pipeline.
 
-// Basic shapes
+// Coverage-correct assemblies
 //
-// Two assemblies of the same shader, differing only in the fragment entry
-// point, because a device without `wgpu::Features::DUAL_SOURCE_BLENDING`
-// cannot compile the second one at all: naga rejects `@blend_src` without the
-// matching validator capability. `PipelineCache` picks between them per
-// device and per blend mode.
+// Every shader whose blend mode is chosen per draw comes in TWO assemblies
+// differing only in the fragment entry point, because a device without
+// `wgpu::Features::DUAL_SOURCE_BLENDING` cannot compile the second one at all:
+// naga rejects `@blend_src` without the matching validator capability. The
+// owning pipeline cache picks between them per device and per blend mode —
+// `PipelineCache` for the tessellated shape, `GradientPipelines` for the three
+// gradients.
 //
-// Both are prepended with the shared clip block: tessellated geometry
-// evaluates the same SDF clip the instanced primitives do, from a per-batch
-// uniform.
+// The pieces are the same in every assembly and in the same order: the clip
+// block, the `ShadedFragment` contract, the module's own vertex stage and
+// `shadeFragment`, and finally one of the two entry points. The module
+// supplies `VertexOutput` and `shadeFragment`; `common/coverage.wgsl` and the
+// entry-point files supply everything else.
 
-/// Tessellated shape shader with coverage folded into the source alpha.
+/// Assemble the two variants of one coverage-correct shader from the module's
+/// own source.
 ///
-/// The only assembly on a device without dual-source blending, and the one
-/// used for every blend mode whose destination factor already absorbs
-/// `1 - coverage` (see `pipeline::destination_alpha_scale_for`).
-pub const SHAPE: &str = concat!(
-    include_str!("common/clip.wgsl"),
-    include_str!("shape.wgsl"),
-    include_str!("shape_fragment_folded.wgsl"),
-);
+/// A macro rather than four hand-written `concat!` pairs because the order of
+/// the pieces is load-bearing in one non-obvious way — the `enable` directive
+/// must precede every declaration in the module, and the clip block that would
+/// otherwise come first opens with a `const` — and eight hand-written orderings
+/// are eight chances to get it wrong once.
+macro_rules! coverage_correct_shader {
+    ($module:literal) => {
+        super::pipeline::CoverageShaderSources {
+            folded: concat!(
+                include_str!("common/clip.wgsl"),
+                include_str!("common/coverage.wgsl"),
+                include_str!($module),
+                include_str!("common/fragment_folded.wgsl"),
+            ),
+            second_source: concat!(
+                "enable dual_source_blending;\n",
+                include_str!("common/clip.wgsl"),
+                include_str!("common/coverage.wgsl"),
+                include_str!($module),
+                include_str!("common/fragment_second_source.wgsl"),
+            ),
+        }
+    };
+}
 
-/// Tessellated shape shader that emits coverage as a second blend source.
+/// Tessellated shape shader — both assemblies.
 ///
-/// The `enable` directive must precede every declaration in the module, so it
-/// is prepended here rather than written at the top of a `.wgsl` file — the
-/// clip block that follows opens with a `const`.
-pub const SHAPE_SECOND_SOURCE: &str = concat!(
-    "enable dual_source_blending;\n",
-    include_str!("common/clip.wgsl"),
-    include_str!("shape.wgsl"),
-    include_str!("shape_fragment_second_source.wgsl"),
-);
+/// Tessellated geometry has no instances to hang a clip slot on, so its clip
+/// arrives in a per-batch uniform rather than per instance; the clip block is
+/// the same either way.
+pub const SHAPE: super::pipeline::CoverageShaderSources = coverage_correct_shader!("shape.wgsl");
+
+/// Instanced linear gradient shader — both assemblies.
+pub const LINEAR_GRADIENT: super::pipeline::CoverageShaderSources =
+    coverage_correct_shader!("gradients/linear.wgsl");
+
+/// Instanced radial gradient shader — both assemblies.
+pub const RADIAL_GRADIENT: super::pipeline::CoverageShaderSources =
+    coverage_correct_shader!("gradients/radial.wgsl");
+
+/// Instanced sweep gradient shader — both assemblies.
+pub const SWEEP_GRADIENT: super::pipeline::CoverageShaderSources =
+    coverage_correct_shader!("gradients/sweep.wgsl");
 
 // Instanced rendering
 //

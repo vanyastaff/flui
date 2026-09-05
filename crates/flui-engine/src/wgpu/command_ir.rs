@@ -368,6 +368,26 @@ pub(crate) struct ScissorRegion {
     pub(crate) count: u32,
 }
 
+/// Tracks a sub-range of gradient instances that share both a scissor state and
+/// a blend mode.
+///
+/// A gradient carries its paint's blend mode all the way to the GPU, and the
+/// blend mode is pipeline state, so a run ends when EITHER changes. The
+/// non-gradient instanced batches keep [`ScissorRegion`]: their pipelines are
+/// fixed `ALPHA_BLENDING` and a blend mode on their runs would be a field
+/// nothing reads, claiming a capability those pipelines do not have.
+#[derive(Debug, Clone)]
+pub(crate) struct GradientRun {
+    pub(crate) scissor: ScissorRect,
+    /// The fixed-function blend mode this run's pipeline is keyed by.
+    ///
+    /// Never advanced: `dispatch_shader_rect` diverts those into
+    /// `DrawItem::AdvancedShape` before a run is recorded.
+    pub(crate) blend: BlendMode,
+    pub(crate) start: u32,
+    pub(crate) count: u32,
+}
+
 /// The per-batch SDF clip, in the layout `shape.wgsl`'s `ClipUniform` expects.
 ///
 /// `vec4` members because WGSL uniform layout aligns them to 16 bytes; the
@@ -545,12 +565,12 @@ pub(crate) struct DrawSegment {
     pub(crate) circle_scissors: Vec<ScissorRegion>,
     /// Scissor regions for arc instanced batch
     pub(crate) arc_scissors: Vec<ScissorRegion>,
-    /// Scissor regions for linear gradient batch
-    pub(crate) linear_grad_scissors: Vec<ScissorRegion>,
-    /// Scissor regions for radial gradient batch
-    pub(crate) radial_grad_scissors: Vec<ScissorRegion>,
-    /// Scissor regions for sweep gradient batch
-    pub(crate) sweep_grad_scissors: Vec<ScissorRegion>,
+    /// Draw runs for the linear gradient batch, split by scissor and blend mode.
+    pub(crate) linear_gradient_runs: Vec<GradientRun>,
+    /// Draw runs for the radial gradient batch, split by scissor and blend mode.
+    pub(crate) radial_gradient_runs: Vec<GradientRun>,
+    /// Draw runs for the sweep gradient batch, split by scissor and blend mode.
+    pub(crate) sweep_gradient_runs: Vec<GradientRun>,
     /// Cached image draws queued for this segment.
     ///
     /// The third element is the scissor rect active at draw time, forwarded to
@@ -642,9 +662,9 @@ impl DrawSegment {
             rect_scissors: Vec::new(),
             circle_scissors: Vec::new(),
             arc_scissors: Vec::new(),
-            linear_grad_scissors: Vec::new(),
-            radial_grad_scissors: Vec::new(),
-            sweep_grad_scissors: Vec::new(),
+            linear_gradient_runs: Vec::new(),
+            radial_gradient_runs: Vec::new(),
+            sweep_gradient_runs: Vec::new(),
             cached_images: Vec::new(),
             external_images: Vec::new(),
             text_start: 0,
@@ -681,6 +701,32 @@ impl DrawSegment {
         regions.push(ScissorRegion {
             scissor,
             start: regions.last().map_or(0, |r| r.start + r.count),
+            count: 1,
+        });
+    }
+
+    /// Record a gradient instance addition against its run tracker.
+    ///
+    /// Extends the last run when both the scissor AND the blend mode match, and
+    /// starts a new one otherwise. Same rule as [`Self::push_scissor_region`]
+    /// with one more component in the key, because a run is exactly the span of
+    /// instances one `set_scissor_rect` + `set_pipeline` pair can draw.
+    pub(crate) fn push_gradient_run(
+        runs: &mut Vec<GradientRun>,
+        scissor: ScissorRect,
+        blend: BlendMode,
+    ) {
+        if let Some(last) = runs.last_mut()
+            && last.scissor == scissor
+            && last.blend == blend
+        {
+            last.count += 1;
+            return;
+        }
+        runs.push(GradientRun {
+            scissor,
+            blend,
+            start: runs.last().map_or(0, |r| r.start + r.count),
             count: 1,
         });
     }
@@ -736,9 +782,9 @@ impl Default for DrawSegment {
             rect_scissors: Vec::new(),
             circle_scissors: Vec::new(),
             arc_scissors: Vec::new(),
-            linear_grad_scissors: Vec::new(),
-            radial_grad_scissors: Vec::new(),
-            sweep_grad_scissors: Vec::new(),
+            linear_gradient_runs: Vec::new(),
+            radial_gradient_runs: Vec::new(),
+            sweep_gradient_runs: Vec::new(),
             cached_images: Vec::new(),
             external_images: Vec::new(),
             text_start: 0,

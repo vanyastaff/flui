@@ -348,21 +348,72 @@ pub fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
 /// `override_constant_name_matches_the_shader` pins the two together.
 const DESTINATION_ALPHA_SCALE_OVERRIDE: &str = "destination_alpha_scale";
 
-/// The two assemblies of the tessellated shape shader a [`PipelineCache`]
-/// builds pipelines from.
+/// The two assemblies of one coverage-correct shader, from which a pipeline
+/// cache builds pipelines.
 ///
 /// They differ only in the fragment entry point: one folds clip coverage into
 /// the source alpha, the other emits it as a second blend source. Passed as
 /// one value rather than two `&str` parameters because swapping them compiles
 /// and then fails at pipeline creation with a message about `@blend_src`
 /// rather than about the mix-up.
+///
+/// Not shape-specific: `shaders::coverage_correct_shader!` builds one of these
+/// for the tessellated shape and for each of the three instanced gradients.
 #[derive(Debug, Clone, Copy)]
-pub struct ShapeShaderSources {
+pub struct CoverageShaderSources {
     /// Coverage folded into the source alpha. Compiles on every device.
     pub folded: &'static str,
     /// Coverage emitted as `@blend_src(1)`. Requires
     /// [`wgpu::Features::DUAL_SOURCE_BLENDING`] on the device that compiles it.
     pub second_source: &'static str,
+}
+
+/// The shader assembly a blend mode must be drawn with, and the blend state and
+/// override constants that must accompany it.
+///
+/// Generic over how the caller holds a shader — a [`wgpu::ShaderModule`] the
+/// cache compiled up front, or the `&'static str` source a lazily-built
+/// pipeline still has to compile — because the DECISION is the same for both
+/// and only the representation differs.
+pub(super) struct CoverageBlendSelection<S> {
+    /// The assembly to build the pipeline from.
+    pub(super) shader: S,
+    /// The blend state that assembly's output is valid for.
+    pub(super) blend_state: wgpu::BlendState,
+    /// Pipeline-override constants the assembly reads, empty for the folded one.
+    pub(super) constants: Vec<(&'static str, f64)>,
+}
+
+/// Pick the assembly, blend state, and constants for `mode`.
+///
+/// Passing `second_source` as an `Option` rather than a `bool` is what makes
+/// the three parts inseparable: there is no way to select the second-source
+/// blend state on a device that has no second-source assembly to pair it with,
+/// because the value the caller would return is not there to return.
+///
+/// `None` for `second_source` therefore means the folded assembly and the
+/// UNCORRECTED factors — the documented fallback of ADR-0057, not a silent
+/// downgrade.
+pub(super) fn select_coverage_blend<S>(
+    mode: BlendMode,
+    folded: S,
+    second_source: Option<S>,
+) -> CoverageBlendSelection<S> {
+    match destination_alpha_scale_for(mode).zip(second_source) {
+        Some((destination_alpha_scale, shader)) => CoverageBlendSelection {
+            shader,
+            blend_state: coverage_blend_state_for(mode),
+            constants: vec![(
+                DESTINATION_ALPHA_SCALE_OVERRIDE,
+                f64::from(destination_alpha_scale),
+            )],
+        },
+        None => CoverageBlendSelection {
+            shader: folded,
+            blend_state: blend_state_for(mode),
+            constants: Vec::new(),
+        },
+    }
 }
 
 /// Pipeline cache managing specialized pipeline variants
@@ -409,7 +460,7 @@ impl PipelineCache {
     ///
     /// # Coverage fidelity depends on the device
     ///
-    /// [`ShapeShaderSources::second_source`] is compiled only when `device`
+    /// [`CoverageShaderSources::second_source`] is compiled only when `device`
     /// enabled [`wgpu::Features::DUAL_SOURCE_BLENDING`] — naga rejects its
     /// `@blend_src` outputs otherwise. Where it is absent, the modes
     /// [`destination_alpha_scale_for`] names keep a HARD clip edge instead of a
@@ -423,7 +474,7 @@ impl PipelineCache {
     /// paint means on every backend to fix an edge on one.
     pub fn new(
         device: &wgpu::Device,
-        shader_sources: ShapeShaderSources,
+        shader_sources: CoverageShaderSources,
         format: wgpu::TextureFormat,
         viewport_bind_group_layout: wgpu::BindGroupLayout,
     ) -> Self {
@@ -526,28 +577,20 @@ impl PipelineCache {
         // partially covered fragment feathers the blend. Where that shader does
         // not exist (no `DUAL_SOURCE_BLENDING`), the mode falls back to the
         // folded shader and the uncorrected factors — see `Self::new`.
-        let coverage_correction = key
-            .is_alpha_blended()
-            .then(|| destination_alpha_scale_for(key.blend_mode()))
-            .flatten()
-            .zip(self.second_source_shader.as_ref());
-
-        let (shader, blend_state, constants) = match coverage_correction {
-            Some((destination_alpha_scale, second_source_shader)) => (
-                second_source_shader,
-                Some(coverage_blend_state_for(key.blend_mode())),
-                vec![(
-                    DESTINATION_ALPHA_SCALE_OVERRIDE,
-                    f64::from(destination_alpha_scale),
-                )],
-            ),
-            None if key.is_alpha_blended() => (
+        let (shader, blend_state, constants) = if key.is_alpha_blended() {
+            let selection = select_coverage_blend(
+                key.blend_mode(),
                 &self.shader,
-                Some(blend_state_for(key.blend_mode())),
-                Vec::new(),
-            ),
+                self.second_source_shader.as_ref(),
+            );
+            (
+                selection.shader,
+                Some(selection.blend_state),
+                selection.constants,
+            )
+        } else {
             // Opaque - no blending (faster!)
-            None => (&self.shader, None, Vec::new()),
+            (&self.shader, None, Vec::new())
         };
 
         // Configure MSAA
@@ -1063,28 +1106,50 @@ mod blend_logic {
     /// mismatch is silent: wgpu ignores an unknown constant name, leaving the
     /// shader on its `0.0` default and every `DstIn`/`DstATop` fringe subtly
     /// wrong instead of failing.
+    ///
+    /// One declaration serves every assembly — they all end in the same
+    /// `common/fragment_second_source.wgsl` — so checking the shape's checks
+    /// the gradients' too.
     #[test]
     fn override_constant_name_matches_the_shader() {
         let declaration = format!("override {DESTINATION_ALPHA_SCALE_OVERRIDE}:");
         assert!(
-            super::super::shaders::SHAPE_SECOND_SOURCE.contains(&declaration),
+            super::super::shaders::SHAPE
+                .second_source
+                .contains(&declaration),
             "no `{declaration}` in the second-source shape shader"
         );
     }
 
     /// The second-source assembly must carry the `enable` directive BEFORE any
-    /// declaration, or naga rejects the whole module.
+    /// declaration, or naga rejects the whole module — and the folded one must
+    /// not mention `@blend_src` at all, or it stops compiling on the devices it
+    /// exists to serve.
+    ///
+    /// Checked for every assembly the `coverage_correct_shader!` macro builds,
+    /// not just the shape's: the three gradients go through the same macro, and
+    /// a fourth caller getting the order wrong is exactly what it guards.
     #[test]
-    fn the_second_source_shader_enables_the_extension_first() {
-        assert!(
-            super::super::shaders::SHAPE_SECOND_SOURCE.starts_with("enable dual_source_blending;"),
-            "the enable directive must precede every declaration in the module"
-        );
-        assert!(
-            !super::super::shaders::SHAPE.contains("blend_src"),
-            "the folded assembly must compile on a device without the feature, so it \
-             may not mention @blend_src"
-        );
+    fn every_second_source_assembly_enables_the_extension_first() {
+        use super::super::shaders;
+        for (what, sources) in [
+            ("shape", shaders::SHAPE),
+            ("linear gradient", shaders::LINEAR_GRADIENT),
+            ("radial gradient", shaders::RADIAL_GRADIENT),
+            ("sweep gradient", shaders::SWEEP_GRADIENT),
+        ] {
+            assert!(
+                sources
+                    .second_source
+                    .starts_with("enable dual_source_blending;"),
+                "{what}: the enable directive must precede every declaration in the module"
+            );
+            assert!(
+                !sources.folded.contains("blend_src"),
+                "{what}: the folded assembly must compile on a device without the \
+                 feature, so it may not mention @blend_src"
+            );
+        }
     }
 
     /// Golden lock for the current routing of `pipeline_key_from_paint`.

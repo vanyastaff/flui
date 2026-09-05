@@ -1,9 +1,10 @@
 //! Device-scoped pipeline collection for `WgpuPainter`.
 //!
-//! [`PipelineSet`] is the single owner of the nine named instanced/gradient/shadow
+//! [`PipelineSet`] is the single owner of the named instanced/shadow
 //! `wgpu::RenderPipeline`s that were previously held as separate fields on
-//! [`super::painter::WgpuPainter`], plus the on-demand shape-pipeline cache
-//! ([`PipelineCache`]) composed as a sub-field.
+//! [`super::painter::WgpuPainter`], plus the two on-demand caches composed as
+//! sub-fields: the shape-pipeline cache ([`PipelineCache`]) and the gradient
+//! cache ([`GradientPipelines`]).
 //!
 //! | Previous painter field                   | Location in `PipelineSet`               |
 //! |------------------------------------------|-----------------------------------------|
@@ -13,9 +14,9 @@
 //! | `instanced_arc_pipeline`                 | `PipelineSet::instanced_arc`            |
 //! | `instanced_texture_pipeline`             | `PipelineSet::instanced_texture`        |
 //! | `instanced_texture_premul_pipeline`      | `PipelineSet::instanced_texture_premul` |
-//! | `linear_gradient_pipeline`               | `PipelineSet::linear_gradient`          |
-//! | `radial_gradient_pipeline`               | `PipelineSet::radial_gradient`          |
-//! | `sweep_gradient_pipeline`                | `PipelineSet::sweep_gradient`           |
+//! | `linear_gradient_pipeline`               | `PipelineSet::gradients` (keyed by kind and blend mode) |
+//! | `radial_gradient_pipeline`               | `PipelineSet::gradients`                |
+//! | `sweep_gradient_pipeline`                | `PipelineSet::gradients`                |
 //! | `shadow_pipeline`                        | `PipelineSet::shadow`                   |
 //! | `texture_bind_group_layout`              | `PipelineSet::texture_bind_group_layout`|
 //! | `gradient_bind_group_layout`             | `PipelineSet::gradient_bind_group_layout` (private) |
@@ -28,7 +29,7 @@
 //! colliding `PipelineCache` + `PipelineBuilder` pair with zero
 //! non-self consumers. **This file is not a resurrection of that module.** It
 //! introduces a distinct type (`PipelineSet`) that *composes* the live
-//! [`PipelineCache`] from `pipeline.rs` (singular) and adds the nine named
+//! [`PipelineCache`] from `pipeline.rs` (singular) and adds the named
 //! pipelines previously scattered across painter fields.
 //!
 //! ## Viewport bind-group layout identity (HAZARD — must read)
@@ -61,6 +62,7 @@ use super::{
     advanced_blend::AdvancedBlendPipeline,
     blur::BlurPipeline,
     color_matrix::ColorMatrixPipeline,
+    effects_pipeline::GradientPipelines,
     gamma::GammaPipeline,
     mode::ModePipeline,
     morphology::MorphologyPipeline,
@@ -88,7 +90,7 @@ pub(crate) struct PipelineSet {
     // pipelines in this set share.
     shape_cache: PipelineCache,
 
-    // ── Nine named render pipelines ──────────────────────────────────────────
+    // ── Named render pipelines ──────────────────────────────────────────
     /// Instanced rect — straight `ALPHA_BLENDING` for UI shapes.
     pub(crate) instanced_rect: wgpu::RenderPipeline,
 
@@ -118,14 +120,13 @@ pub(crate) struct PipelineSet {
     /// change this selection logic — it is a round-5c color-correctness fix.
     pub(crate) instanced_texture_premul: wgpu::RenderPipeline,
 
-    /// Linear gradient pipeline.
-    pub(crate) linear_gradient: wgpu::RenderPipeline,
-
-    /// Radial gradient pipeline.
-    pub(crate) radial_gradient: wgpu::RenderPipeline,
-
-    /// Sweep gradient pipeline.
-    pub(crate) sweep_gradient: wgpu::RenderPipeline,
+    /// The linear / radial / sweep gradient pipelines, one per blend mode drawn.
+    ///
+    /// A cache rather than three fixed pipelines because a gradient's paint
+    /// carries a blend mode and the three fixed ones hard-coded
+    /// `ALPHA_BLENDING`, so every mode rendered as `SrcOver`. See
+    /// [`GradientPipelines`].
+    pub(crate) gradients: GradientPipelines,
 
     /// Shadow pipeline — analytical shadows with single-pass rendering.
     pub(crate) shadow: wgpu::RenderPipeline,
@@ -259,10 +260,7 @@ impl PipelineSet {
         // ── Shape pipeline cache (also creates the viewport bind-group layout) ──
         let shape_cache = PipelineCache::new(
             device,
-            super::pipeline::ShapeShaderSources {
-                folded: super::shaders::SHAPE,
-                second_source: super::shaders::SHAPE_SECOND_SOURCE,
-            },
+            super::shaders::SHAPE,
             surface_format,
             create_viewport_bind_group_layout(device),
         );
@@ -309,27 +307,13 @@ impl PipelineSet {
         let gradient_stops_buffer = super::effects_pipeline::create_gradient_stops_buffer(device);
         let gradient_bind_group_layout =
             super::effects_pipeline::create_gradient_bind_group_layout(device);
-        let gradient_pipeline_layout = super::effects_pipeline::create_gradient_pipeline_layout(
+        let gradients = GradientPipelines::new(
             device,
+            surface_format,
             shape_cache.viewport_bind_group_layout(),
             &gradient_bind_group_layout,
         );
 
-        let linear_gradient = super::effects_pipeline::create_linear_gradient_pipeline(
-            device,
-            surface_format,
-            &gradient_pipeline_layout,
-        );
-        let radial_gradient = super::effects_pipeline::create_radial_gradient_pipeline(
-            device,
-            surface_format,
-            &gradient_pipeline_layout,
-        );
-        let sweep_gradient = super::effects_pipeline::create_sweep_gradient_pipeline(
-            device,
-            surface_format,
-            &gradient_pipeline_layout,
-        );
         let shadow = super::effects_pipeline::create_shadow_pipeline(
             device,
             surface_format,
@@ -366,9 +350,7 @@ impl PipelineSet {
             instanced_arc,
             instanced_texture,
             instanced_texture_premul,
-            linear_gradient,
-            radial_gradient,
-            sweep_gradient,
+            gradients,
             shadow,
             texture_bind_group_layout,
             gradient_bind_group_layout,
@@ -596,14 +578,25 @@ pub(super) fn unit_quad_vertex_buffer_layout() -> wgpu::VertexBufferLayout<'stat
 }
 
 /// Everything that distinguishes one unit-quad instanced pipeline from another.
-pub(super) struct QuadPipelineSpec {
-    pub(super) shader_label: &'static str,
-    pub(super) pipeline_label: &'static str,
+///
+/// The labels borrow rather than being `&'static str` so a per-blend-mode
+/// pipeline can name its mode: `GradientPipelines` builds one spec per
+/// (kind, mode) and the label is formatted at that point.
+pub(super) struct QuadPipelineSpec<'a> {
+    pub(super) shader_label: &'a str,
+    pub(super) pipeline_label: &'a str,
     /// WGSL source with `vs_main`/`fs_main` entry points over the shared
     /// unit-quad vertex layout (slot 0) and one instance buffer (slot 1).
     pub(super) shader_source: &'static str,
     pub(super) instance_layout: wgpu::VertexBufferLayout<'static>,
     pub(super) blend: wgpu::BlendState,
+    /// Pipeline-override constants the fragment stage reads.
+    ///
+    /// Empty for every assembly that declares none. The coverage-correct
+    /// second-source assembly declares `destination_alpha_scale`, and wgpu
+    /// SILENTLY IGNORES an unknown constant name — so this travels beside the
+    /// blend state it must agree with rather than being set separately.
+    pub(super) constants: &'a [(&'static str, f64)],
 }
 
 /// The one true unit-quad pipeline constructor: single-sample, no depth,
@@ -612,7 +605,7 @@ pub(super) fn create_unit_quad_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
-    spec: &QuadPipelineSpec,
+    spec: &QuadPipelineSpec<'_>,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(spec.shader_label),
@@ -638,7 +631,10 @@ pub(super) fn create_unit_quad_pipeline(
                 blend: Some(spec.blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: spec.constants,
+                ..Default::default()
+            },
         }),
         primitive: instanced_quad_primitive_state(),
         depth_stencil: None,
@@ -663,6 +659,7 @@ fn create_instanced_rect_pipeline(
             shader_source: super::shaders::RECT_INSTANCED,
             instance_layout: super::instancing::RectInstance::desc(),
             blend: wgpu::BlendState::ALPHA_BLENDING,
+            constants: &[],
         },
     )
 }
@@ -682,6 +679,7 @@ fn create_instanced_circle_pipeline(
             shader_source: super::shaders::CIRCLE_INSTANCED,
             instance_layout: super::instancing::CircleInstance::desc(),
             blend: wgpu::BlendState::ALPHA_BLENDING,
+            constants: &[],
         },
     )
 }
@@ -701,6 +699,7 @@ fn create_instanced_arc_pipeline(
             shader_source: super::shaders::ARC_INSTANCED,
             instance_layout: super::instancing::ArcInstance::desc(),
             blend: wgpu::BlendState::ALPHA_BLENDING,
+            constants: &[],
         },
     )
 }
@@ -720,6 +719,7 @@ fn create_instanced_texture_pipeline(
             shader_source: super::shaders::TEXTURE_INSTANCED,
             instance_layout: super::instancing::TextureInstance::desc(),
             blend: wgpu::BlendState::ALPHA_BLENDING,
+            constants: &[],
         },
     )
 }
@@ -749,6 +749,7 @@ fn create_instanced_texture_premul_pipeline(
             // premultiplied-alpha texel correctly. This is the defining
             // distinction from `create_instanced_texture_pipeline`.
             blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            constants: &[],
         },
     )
 }
@@ -781,6 +782,7 @@ fn create_instanced_texture_with_blend_state(
             shader_source: super::shaders::TEXTURE_INSTANCED,
             instance_layout: super::instancing::TextureInstance::desc(),
             blend: blend_state,
+            constants: &[],
         },
     )
 }
@@ -800,10 +802,10 @@ mod gpu_tests {
         crate::wgpu::test_support::test_device_and_queue("PipelineSet Test Device")
     }
 
-    /// `PipelineSet::new` completes without panic for `Bgra8Unorm`.
-    /// All nine named pipeline fields are reachable (live GPU handles).
+    /// `PipelineSet::new` completes without panic for `Bgra8Unorm`, and every
+    /// pipeline field is reachable (live GPU handles).
     #[test]
-    fn all_nine_pipelines_reachable_after_construction() {
+    fn every_pipeline_is_reachable_after_construction() {
         let (device, _queue) = test_device_and_queue();
         let pipeline_set = PipelineSet::new(&device, wgpu::TextureFormat::Bgra8Unorm);
 
@@ -812,9 +814,9 @@ mod gpu_tests {
         let _ = &pipeline_set.instanced_arc;
         let _ = &pipeline_set.instanced_texture;
         let _ = &pipeline_set.instanced_texture_premul;
-        let _ = &pipeline_set.linear_gradient;
-        let _ = &pipeline_set.radial_gradient;
-        let _ = &pipeline_set.sweep_gradient;
+        // The gradient pipelines are built on first draw, so there is nothing
+        // to touch here beyond the cache itself.
+        let _ = &pipeline_set.gradients;
         let _ = &pipeline_set.shadow;
     }
 

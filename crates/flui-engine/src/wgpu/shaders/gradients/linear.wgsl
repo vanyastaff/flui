@@ -155,11 +155,14 @@ fn vs_main(
 }
 
 // =============================================================================
-// Fragment Shader
+// Fragment shading
 // =============================================================================
+//
+// `common/coverage.wgsl` owns `ShadedFragment` and `premultipliedSource`, and
+// `common/fragment_folded.wgsl` / `common/fragment_second_source.wgsl` own the
+// two entry points. All this module owes them is `shadeFragment`.
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     // Check if we're inside rounded corners (for clipping)
     let centered_pos = (in.local_pos / in.rect_size - 0.5) * in.rect_size;
     let dist = sdRoundedBox(centered_pos, in.rect_size * 0.5, in.corner_radii);
@@ -185,8 +188,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Interpolate color from gradient stops
     var color = interpolateGradient(t, in.stop_count, in.stop_offset);
 
-    // Apply rounded corner alpha (derivatives dpdx/dpdy must be called from uniform control flow)
-    let alpha = sdfToAlpha(dist);
+    // The gradient's own rounded-box edge and the clip's edge are both partial
+    // coverage, and both belong on the coverage channel rather than folded into
+    // the paint's alpha — see `common/coverage.wgsl`.
+    // (`sdfToAlpha` takes derivatives, so it must be reached from uniform
+    // control flow.)
+    let edge_alpha = sdfToAlpha(dist);
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(
         in.world_pos,
@@ -196,9 +203,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         in.clip_device_to_local,
         in.clip_local_origin,
     );
-    color = vec4<f32>(color.rgb, color.a * alpha * clip_alpha);
 
-    return color;
+    var shaded: ShadedFragment;
+    shaded.color = color;
+    shaded.coverage = edge_alpha * clip_alpha;
+    return shaded;
 }
 
 // =============================================================================

@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use super::super::{
     command_ir::{DrawSegment, ScissorRect},
+    effects_pipeline::GradientKind,
     pipeline::PipelineKey,
     pipelines::PipelineSet,
     resources::GpuResources,
@@ -460,6 +461,21 @@ impl GpuReplay {
             &combined_buffer,
         );
 
+        // ===== Build every pipeline this pass will bind =====
+        //
+        // Before the pass, because the pass borrows `pipelines` immutably for
+        // its whole life and pipeline creation needs `&mut`. Same split, same
+        // reason, as `ensure_ssaa_tile_composite`.
+        for (kind, runs) in [
+            (GradientKind::Linear, &segment.linear_gradient_runs),
+            (GradientKind::Radial, &segment.radial_gradient_runs),
+            (GradientKind::Sweep, &segment.sweep_gradient_runs),
+        ] {
+            for run in runs {
+                pipelines.gradients.ensure(device, kind, run.blend);
+            }
+        }
+
         // ===== SINGLE RENDER PASS FOR ALL GRADIENTS =====
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Gradient Render Pass"),
@@ -478,10 +494,6 @@ impl GpuReplay {
             multiview_mask: None,
         });
 
-        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-        if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
-            render_pass.set_bind_group(1, gradient_bind_group, &[]);
-        }
         render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
         render_pass.set_index_buffer(
             self.unit_quad_index_buffer.slice(..),
@@ -490,61 +502,51 @@ impl GpuReplay {
 
         let (full_w, full_h) = viewport_size;
 
-        // ===== Draw Linear Gradients (per-scissor-region) =====
-        if has_linear {
-            render_pass.set_pipeline(&pipelines.linear_gradient);
-            // Re-set bind groups after pipeline switch (WebGPU invalidates bind
-            // groups when the new pipeline's PipelineLayout is a different object).
-            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-            if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
-                render_pass.set_bind_group(1, gradient_bind_group, &[]);
+        // ===== Draw each kind's runs, per scissor region and blend mode =====
+        //
+        // A run is the span of instances one `set_scissor_rect` +
+        // `set_pipeline` pair can draw, so the pipeline is bound inside the
+        // loop rather than once per kind: two gradients of the same kind with
+        // different blend modes are two runs and two pipelines.
+        for (kind, runs, offset, size) in [
+            (
+                GradientKind::Linear,
+                &segment.linear_gradient_runs,
+                linear_offset,
+                linear_size,
+            ),
+            (
+                GradientKind::Radial,
+                &segment.radial_gradient_runs,
+                radial_offset,
+                radial_size,
+            ),
+            (
+                GradientKind::Sweep,
+                &segment.sweep_gradient_runs,
+                sweep_offset,
+                sweep_size,
+            ),
+        ] {
+            if runs.is_empty() {
+                continue;
             }
+            let start = offset as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(start..start + size as u64));
 
-            let linear_start = linear_offset as u64;
-            let linear_end = linear_start + linear_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(linear_start..linear_end));
-
-            for region in &segment.linear_grad_scissors {
-                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            for run in runs {
+                render_pass.set_pipeline(pipelines.gradients.get(kind, run.blend));
+                // Re-set bind groups after every pipeline switch: WebGPU
+                // invalidates them when the new pipeline's `PipelineLayout` is
+                // a different object, and the two gradient assemblies are
+                // separate modules behind separate pipelines.
+                render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+                if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
+                    render_pass.set_bind_group(1, gradient_bind_group, &[]);
                 }
-            }
-        }
 
-        // ===== Draw Radial Gradients (per-scissor-region) =====
-        if has_radial {
-            render_pass.set_pipeline(&pipelines.radial_gradient);
-            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-            if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
-                render_pass.set_bind_group(1, gradient_bind_group, &[]);
-            }
-
-            let radial_start = radial_offset as u64;
-            let radial_end = radial_start + radial_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(radial_start..radial_end));
-
-            for region in &segment.radial_grad_scissors {
-                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
-                }
-            }
-        }
-
-        // ===== Draw Sweep Gradients (per-scissor-region) =====
-        if has_sweep {
-            render_pass.set_pipeline(&pipelines.sweep_gradient);
-            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-            if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
-                render_pass.set_bind_group(1, gradient_bind_group, &[]);
-            }
-
-            let sweep_start = sweep_offset as u64;
-            let sweep_end = sweep_start + sweep_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(sweep_start..sweep_end));
-
-            for region in &segment.sweep_grad_scissors {
-                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+                if set_clamped_scissor(&mut render_pass, run.scissor, full_w, full_h) {
+                    render_pass.draw_indexed(0..6, 0, run.start..run.start + run.count);
                 }
             }
         }
@@ -556,9 +558,9 @@ impl GpuReplay {
         segment.radial_gradient_batch.clear();
         segment.sweep_gradient_batch.clear();
         segment.current_gradient_stops.clear();
-        segment.linear_grad_scissors.clear();
-        segment.radial_grad_scissors.clear();
-        segment.sweep_grad_scissors.clear();
+        segment.linear_gradient_runs.clear();
+        segment.radial_gradient_runs.clear();
+        segment.sweep_gradient_runs.clear();
     }
 
     // =========================================================================

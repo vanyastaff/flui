@@ -1300,23 +1300,26 @@ fn blend_advanced_multiply_falls_back_to_srcover() {
     );
 }
 
-/// Phase-A gradient + non-SrcOver honesty: drawing a gradient (shader) fill
-/// with `BlendMode::Clear` must NOT panic and must render as SrcOver (the
-/// gradient pipeline ignores `blend_mode` in Phase A). The test documents
-/// the limit — a white background must remain visible (non-zero alpha)
-/// because Clear is silently downgraded to SrcOver for gradients.
+/// A gradient fill carrying `BlendMode::Clear` erases the target.
 ///
-/// Phase B will add dst-sample blended gradient support.
+/// This assertion is the inverse of the one it replaces. That one pinned the
+/// LIMIT — a gradient's blend mode was accepted, carried on the paint, and
+/// dropped, so `Clear` rendered as `SrcOver` and left the background visible —
+/// and it fired the moment the gradient pipelines became blend-mode-keyed.
+/// Its original claim is preserved verbatim in the failure message below, as
+/// the thing that must NOT be observed.
+///
+/// The arithmetic of every fixed-function mode on every gradient kind, and its
+/// behaviour under partial coverage, lives in `gradient_blend_readback_tests`.
+/// What this one keeps is the specific shape the limit was recorded against: a
+/// full-frame red-to-blue gradient over an opaque white surface.
 #[test]
-fn gradient_with_non_srcover_blend_mode_does_not_panic() {
+fn a_gradient_fill_carrying_clear_erases_the_target() {
     use flui_painting::Paint;
     use flui_types::painting::TileMode;
 
     let (device, queue) = test_device_and_queue();
 
-    // A horizontal red→blue linear gradient with BlendMode::Clear.
-    // Phase A: Clear is ignored; the gradient renders via SrcOver so the
-    // white background is partially or fully covered — NOT erased to (0,0,0,0).
     let shader = flui_painting::Shader::linear_gradient(
         flui_types::Point::new(px(0.0), px(0.0)).into(),
         flui_types::Point::new(px(64.0), px(0.0)).into(),
@@ -1331,21 +1334,20 @@ fn gradient_with_non_srcover_blend_mode_does_not_panic() {
         .with_shader(shader)
         .with_blend_mode(BlendMode::Clear);
 
-    // Must not panic. The result is SrcOver (gradient), so alpha stays 255.
-    // A working Clear would produce (0,0,0,0) — that must NOT happen here.
-    let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+    let cleared = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
         painter.rect(
             Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
             &paint,
         );
     });
 
-    // The alpha channel must be non-zero: if Clear had been honored the
-    // output would be (0,0,0,0). SrcOver of any opaque gradient keeps a=255.
-    assert!(
-        px_val[3] > 0,
-        "gradient + Clear must not erase the target to alpha=0 in Phase A \
-             (gradient blend_mode is SrcOver, not Clear). got {px_val:?}"
+    assert_eq!(
+        cleared,
+        [0, 0, 0, 0],
+        "a gradient painted with Clear must erase the surface. A non-zero pixel \
+         means the paint's blend mode was dropped and the gradient rendered as \
+         SrcOver — which is what this test used to assert, back when the \
+         gradient pipelines hard-coded ALPHA_BLENDING. got {cleared:?}"
     );
 }
 

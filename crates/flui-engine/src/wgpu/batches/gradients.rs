@@ -1,7 +1,7 @@
 //! Gradient and shader-dispatch record methods: gradient_rect, radial_gradient_rect,
 //! sweep_gradient_rect, shadow_rect, dispatch_shader_rect.
 
-use flui_painting::Paint;
+use flui_painting::{BlendMode, Paint};
 use flui_types::painting::Shader;
 use flui_types::{Point, Rect, geometry::Pixels};
 
@@ -27,6 +27,12 @@ impl DrawBatcher {
     /// * `gradient_end`    — gradient end point (local to `bounds`)
     /// * `stops`           — gradient color stops (max 8)
     /// * `corner_radii`    — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
+    /// * `blend`           — the paint's fixed-function blend mode (never advanced)
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
+                  the remaining args mirror the gradient's own parameters"
+    )]
     pub(in super::super) fn gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
@@ -35,6 +41,7 @@ impl DrawBatcher {
         gradient_end: glam::Vec2,
         stops: &[effects::GradientStop],
         corner_radii: [f32; 4],
+        blend: BlendMode,
     ) {
         use super::super::instancing::LinearGradientInstance;
 
@@ -99,9 +106,10 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.linear_gradient_batch.add(instance);
-        DrawSegment::push_scissor_region(
-            &mut segment.linear_grad_scissors,
+        DrawSegment::push_gradient_run(
+            &mut segment.linear_gradient_runs,
             state.current_scissor(),
+            blend,
         );
     }
 
@@ -118,6 +126,12 @@ impl DrawBatcher {
     /// * `radius`         — gradient radius
     /// * `stops`          — gradient color stops (max 8)
     /// * `corner_radii`   — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
+    /// * `blend`          — the paint's fixed-function blend mode (never advanced)
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
+                  the remaining args mirror the gradient's own parameters"
+    )]
     pub(in super::super) fn radial_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
@@ -126,6 +140,7 @@ impl DrawBatcher {
         radius: f32,
         stops: &[effects::GradientStop],
         corner_radii: [f32; 4],
+        blend: BlendMode,
     ) {
         use super::super::instancing::RadialGradientInstance;
 
@@ -187,9 +202,10 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.radial_gradient_batch.add(instance);
-        DrawSegment::push_scissor_region(
-            &mut segment.radial_grad_scissors,
+        DrawSegment::push_gradient_run(
+            &mut segment.radial_gradient_runs,
             state.current_scissor(),
+            blend,
         );
     }
 
@@ -207,6 +223,7 @@ impl DrawBatcher {
     /// * `end_angle`    — end angle in radians
     /// * `stops`        — gradient color stops (max 8)
     /// * `corner_radii` — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
+    /// * `blend`        — the paint's fixed-function blend mode (never advanced)
     #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
@@ -221,6 +238,7 @@ impl DrawBatcher {
         end_angle: f32,
         stops: &[effects::GradientStop],
         corner_radii: [f32; 4],
+        blend: BlendMode,
     ) {
         use super::super::instancing::SweepGradientInstance;
 
@@ -283,7 +301,11 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.sweep_gradient_batch.add(instance);
-        DrawSegment::push_scissor_region(&mut segment.sweep_grad_scissors, state.current_scissor());
+        DrawSegment::push_gradient_run(
+            &mut segment.sweep_gradient_runs,
+            state.current_scissor(),
+            blend,
+        );
     }
 
     /// Record an analytical shadow for a rectangle (Evan Wallace technique).
@@ -328,7 +350,9 @@ impl DrawBatcher {
     ///   3. The `DrawSegment` is wrapped in `DrawItem::AdvancedShape` and pushed
     ///      onto `draw_order` — `flush_advanced_layer` picks it up at replay.
     ///
-    /// The SrcOver path is byte-identical to before this PR.
+    /// Every non-advanced mode reaches the instanced gradient pipelines with
+    /// `paint.blend_mode` recorded on its draw run, which is what keys the
+    /// pipeline; `SrcOver` is one of them rather than the only one.
     ///
     /// # AA note
     ///
@@ -377,6 +401,12 @@ impl DrawBatcher {
         // Condition: must divert here because gradients bypass
         // `add_tessellated_with_key` (they are instanced, not tessellated), so
         // the diversion in that funnel does not fire.
+        //
+        // Keying the ordinary modes by pipeline did not make this branch
+        // redundant: an advanced mode has no fixed-function blend state to key
+        // a pipeline BY, which is what `blend_state_for`'s defensive SrcOver arm
+        // and `GradientPipelines::ensure`'s debug assertion both say. It stays
+        // ahead of the keyed path, and it stays first.
         if paint.blend_mode.is_advanced() {
             // Step 1: seal prior content so it lands on the surface before the
             // backdrop is sampled.
@@ -411,9 +441,16 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.linear_gradient_batch.add(instance);
-                    DrawSegment::push_scissor_region(
-                        &mut shape_segment.linear_grad_scissors,
+                    // `SrcOver` inside the isolated segment, not the paint's
+                    // mode: `flush_advanced_layer` renders this segment into an
+                    // offscreen and applies the advanced mode when compositing
+                    // it. Keying the run by the advanced mode would ask
+                    // `GradientPipelines` for a fixed-function pipeline that
+                    // cannot exist.
+                    DrawSegment::push_gradient_run(
+                        &mut shape_segment.linear_gradient_runs,
                         state.current_scissor(),
+                        BlendMode::SrcOver,
                     );
                 }
                 Shader::RadialGradient { center, radius, .. } => {
@@ -437,9 +474,16 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.radial_gradient_batch.add(instance);
-                    DrawSegment::push_scissor_region(
-                        &mut shape_segment.radial_grad_scissors,
+                    // `SrcOver` inside the isolated segment, not the paint's
+                    // mode: `flush_advanced_layer` renders this segment into an
+                    // offscreen and applies the advanced mode when compositing
+                    // it. Keying the run by the advanced mode would ask
+                    // `GradientPipelines` for a fixed-function pipeline that
+                    // cannot exist.
+                    DrawSegment::push_gradient_run(
+                        &mut shape_segment.radial_gradient_runs,
                         state.current_scissor(),
+                        BlendMode::SrcOver,
                     );
                 }
                 Shader::SweepGradient {
@@ -469,9 +513,16 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.sweep_gradient_batch.add(instance);
-                    DrawSegment::push_scissor_region(
-                        &mut shape_segment.sweep_grad_scissors,
+                    // `SrcOver` inside the isolated segment, not the paint's
+                    // mode: `flush_advanced_layer` renders this segment into an
+                    // offscreen and applies the advanced mode when compositing
+                    // it. Keying the run by the advanced mode would ask
+                    // `GradientPipelines` for a fixed-function pipeline that
+                    // cannot exist.
+                    DrawSegment::push_gradient_run(
+                        &mut shape_segment.sweep_gradient_runs,
                         state.current_scissor(),
+                        BlendMode::SrcOver,
                     );
                 }
                 Shader::Solid { .. } | _ => return false,
@@ -489,7 +540,12 @@ impl DrawBatcher {
             return true;
         }
 
-        // ── SrcOver path (unchanged by advanced-blend support) ────────────────
+        // ── Fixed-function path ───────────────────────────────────────────────
+        //
+        // Every remaining mode is expressible as a blend state, so the run
+        // carries `paint.blend_mode` and `GradientPipelines` keys the pipeline
+        // by it. Before that key existed the mode was dropped here and every
+        // gradient rendered as `SrcOver`.
 
         match shader {
             Shader::LinearGradient { from, to, .. } => {
@@ -504,6 +560,7 @@ impl DrawBatcher {
                     end,
                     &stops,
                     corner_radii,
+                    paint.blend_mode,
                 );
             }
             Shader::RadialGradient { center, radius, .. } => {
@@ -517,6 +574,7 @@ impl DrawBatcher {
                     *radius,
                     &stops,
                     corner_radii,
+                    paint.blend_mode,
                 );
             }
             Shader::SweepGradient {
@@ -536,6 +594,7 @@ impl DrawBatcher {
                     *end_angle,
                     &stops,
                     corner_radii,
+                    paint.blend_mode,
                 );
             }
             Shader::Solid { .. } | _ => return false,

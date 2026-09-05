@@ -58,27 +58,15 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 // Fragment shading
 //
-// Coverage and paint alpha are DIFFERENT quantities. `clipAlpha` reports how
-// much of the pixel the clip admits; `color.a` is how opaque the paint is.
-// Handing the blender their product as one number is exact only for a blend
-// mode whose destination factor absorbs `1 - coverage` — see
-// `pipeline::destination_alpha_scale_for` for which modes those are and what
-// the others need instead. Both fragment entry points share the shading below
-// so they cannot disagree about either quantity; they differ only in how many
-// channels they hand to the blender.
-
-/// Paint colour and clip coverage for one fragment.
-struct ShadedFragment {
-    /// Straight (NOT premultiplied) paint colour; `.a` is the paint's own alpha.
-    color: vec4<f32>,
-    /// The fraction of this pixel the clip admits, in [0, 1].
-    coverage: f32,
-}
+// `common/coverage.wgsl` owns `ShadedFragment` and `premultipliedSource`, and
+// `common/fragment_folded.wgsl` / `common/fragment_second_source.wgsl` own the
+// two entry points. All this module owes them is `shadeFragment`.
 
 fn shadeFragment(input: VertexOutput) -> ShadedFragment {
     var shaded: ShadedFragment;
     shaded.color = input.color;
-    // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
+    // Tessellated geometry has no SDF of its own, so the clip is the only
+    // source of partial coverage — see `clipAlpha` in `common/clip.wgsl`.
     shaded.coverage = clipAlpha(
         input.world_pos,
         clip.bounds,
@@ -89,22 +77,4 @@ fn shadeFragment(input: VertexOutput) -> ShadedFragment {
         clip.local_origin,
     );
     return shaded;
-}
-
-/// The first blend source: PREMULTIPLIED colour, scaled by coverage.
-///
-/// Premultiplied is the correct input form for fixed-function Porter-Duff
-/// blending, which the tessellated pipeline selects per
-/// `PipelineKey::blend_mode`. The default SrcOver case pairs this with
-/// `BlendState::PREMULTIPLIED_ALPHA_BLENDING` (src factor One).
-///
-/// Scaling the whole premultiplied source by coverage is exactly
-/// `coverage x (the full-coverage source term)` for every mode in
-/// `blend_state_for`, because no mode's SOURCE factor reads source alpha —
-/// they read `0`, `1`, `dstAlpha`, `1 - dstAlpha`, or `dst`. That is why only
-/// the DESTINATION half of the blend needs correcting for partial coverage,
-/// and why both entry points can emit the same first source.
-fn premultipliedSource(shaded: ShadedFragment) -> vec4<f32> {
-    let a = shaded.color.a * shaded.coverage;
-    return vec4<f32>(shaded.color.rgb * a, a);
 }

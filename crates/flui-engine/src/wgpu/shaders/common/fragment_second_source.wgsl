@@ -2,10 +2,12 @@
 // Fragment entry point: coverage on its own channel, as a second blend source.
 //
 // Requires `wgpu::Features::DUAL_SOURCE_BLENDING`, and the `enable
-// dual_source_blending;` directive that `shaders::SHAPE_SECOND_SOURCE`
-// prepends. Used only for the blend modes whose destination factor does NOT
-// absorb `1 - coverage` — see `pipeline::coverage_blend_state_for`, which
-// pairs it with `dst_factor = OneMinusSrc1`.
+// dual_source_blending;` directive that each assembly prepends. Used only for
+// the blend modes whose destination factor does NOT absorb `1 - coverage` —
+// see `pipeline::coverage_blend_state_for`, which pairs it with
+// `dst_factor = OneMinusSrc1`.
+//
+// The module this is appended to supplies `VertexOutput` and `shadeFragment`.
 
 /// The `k` in this pipeline's blend mode destination factor `D = k * srcAlpha`.
 ///
