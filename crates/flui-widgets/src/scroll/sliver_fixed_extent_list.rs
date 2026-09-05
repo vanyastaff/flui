@@ -117,8 +117,11 @@ impl SliverFixedExtentList {
     /// announces "item 12 of 5" for the second delegate in a pair, and the
     /// two are only ever correct when chosen together.
     ///
-    /// Left unset, the children number themselves from zero at their own
-    /// logical indices — the reference's default.
+    /// Left unset, every child is a member at its own logical index, in a set
+    /// as large as the child count — the reference's default. Note the two
+    /// numbering bases: a semantic index is 0-based, and the
+    /// `position_in_set` a screen reader is handed is 1-based, so the first
+    /// child of three announces as "1 of 3".
     #[must_use]
     pub fn semantics(mut self, semantics: SemanticSetMapping) -> Self {
         self.semantics = Some(semantics);
