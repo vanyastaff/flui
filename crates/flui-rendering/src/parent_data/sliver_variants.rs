@@ -71,6 +71,54 @@ impl Eq for SliverLogicalParentData {}
 // SLIVER MULTI BOX ADAPTOR PARENT DATA
 // ============================================================================
 
+/// The pair a lazy sliver hands down to each materialised child.
+///
+/// Both halves travel together by construction. Keeping them in one value is
+/// the point: the failure this exists to prevent is a semantic position that
+/// drifts from the row it describes, which is exactly what happens when the two
+/// are threaded, stamped, or defaulted independently.
+///
+/// Minted by the sparse host, inherited through however many component
+/// elements sit between it and the child's first render descendant, and
+/// consumed once at adopt time — Flutter's `didAdoptChild` slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SliverSlot {
+    /// The logical index: what layout and the band walk key on.
+    pub logical: usize,
+    /// The position within the semantic set, or `None` for a child that is not
+    /// a member of it — see
+    /// [`SliverMultiBoxAdaptorParentData::semantic_index`].
+    pub semantic: Option<i32>,
+}
+
+impl SliverSlot {
+    /// A slot whose semantic position is its logical index.
+    ///
+    /// The 1:1 case, which is every delegate FLUI ships today.
+    #[must_use]
+    pub const fn identity(logical: usize) -> Self {
+        Self {
+            logical,
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                reason = "a set position past i32::MAX is not a list a screen                           reader can navigate; the platform property is i32"
+            )]
+            semantic: Some(logical as i32),
+        }
+    }
+
+    /// A slot for a child that occupies a logical index without being a member
+    /// of the semantic set — a separator, a header the reader should not count.
+    #[must_use]
+    pub const fn unindexed(logical: usize) -> Self {
+        Self {
+            logical,
+            semantic: None,
+        }
+    }
+}
+
 /// Parent data for sliver multi-box adaptor children (SliverList, etc).
 ///
 /// Combines logical offset, index, and keep-alive functionality.
@@ -81,14 +129,47 @@ pub struct SliverMultiBoxAdaptorParentData {
 
     /// Index of this child in the list.
     pub index: usize,
+
+    /// This child's position within the *semantic* set, when it is a member.
+    ///
+    /// Distinct from [`Self::index`], which is the LOGICAL index layout and the
+    /// band walk key on. The two coincide for a delegate that materialises one
+    /// set member per logical index — every delegate FLUI ships today — and
+    /// diverge for any that interleaves non-members, the way Flutter's
+    /// `ListView.separated` puts separators at odd logical indices. `None`
+    /// means "not a member of the set": a separator has a logical index and no
+    /// position to announce.
+    ///
+    /// Carried beside the logical index rather than derived from it, because
+    /// the delegate is the only thing that knows which is which and the
+    /// semantics assembler that publishes the position never sees the delegate.
+    pub semantic_index: Option<i32>,
 }
 
 impl SliverMultiBoxAdaptorParentData {
-    /// Create with index.
+    /// Create with a logical index that is also its semantic position.
     pub const fn new(index: usize) -> Self {
         Self {
             layout_offset: 0.0,
             index,
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                reason = "a set position past i32::MAX is not a list a screen                           reader can navigate; the platform property is i32"
+            )]
+            semantic_index: Some(index as i32),
+        }
+    }
+
+    /// Create with a logical index and an explicit semantic position.
+    ///
+    /// `None` marks a child that is not a member of the set.
+    #[must_use]
+    pub const fn with_semantic_index(index: usize, semantic_index: Option<i32>) -> Self {
+        Self {
+            layout_offset: 0.0,
+            index,
+            semantic_index,
         }
     }
 

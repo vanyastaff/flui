@@ -7,6 +7,7 @@
 //! - ElementCore<V, A> for common element logic
 //! - B: ElementBehavior<V, A> for view-specific build logic
 
+use flui_rendering::parent_data::SliverSlot;
 use std::{
     any::{Any, TypeId},
     marker::PhantomData,
@@ -206,26 +207,30 @@ where
     fn set_parent_render_id(&mut self, parent_id: Option<RenderId>) {
         self.core.set_parent_render_id(parent_id);
     }
-    fn child_sliver_slot(&self, slot: usize) -> Option<usize> {
+    fn child_sliver_slot(&self, slot: usize) -> Option<SliverSlot> {
         // Mirrors `child_render_id`'s three cases, in priority order: a
         // sparse host mints the slot (it is also a render element, so this
         // arm must come first); any other render element resets it — its
         // children attach under it, not under the sliver; a component
         // element passes through what it received.
         if self.behavior.hosts_sparse_children() {
-            Some(slot)
+            Some(self.behavior.sliver_slot_for_child(slot))
         } else if self.behavior.render_id().is_some() {
             None
         } else {
             self.core.sliver_slot()
         }
     }
-    fn set_sliver_slot(&mut self, slot: Option<usize>) {
+    fn set_sliver_slot(&mut self, slot: Option<SliverSlot>) {
         self.core.set_sliver_slot(slot);
     }
-    fn sliver_slot(&self) -> Option<usize> {
+    fn sliver_slot(&self) -> Option<SliverSlot> {
         self.core.sliver_slot()
     }
+    fn sliver_slot_for_child(&self, logical: usize) -> SliverSlot {
+        self.behavior.sliver_slot_for_child(logical)
+    }
+
     fn hosts_sparse_children(&self) -> bool {
         self.behavior.hosts_sparse_children()
     }

@@ -34,6 +34,7 @@
 //! blanket-impl line, not a new variant in this enum (the variant set
 //! is closed at the BEHAVIOR FAMILY level, not at the per-`V` level).
 
+use flui_rendering::parent_data::SliverSlot;
 use std::{fmt, rc::Rc, sync::Arc};
 
 use flui_foundation::{Listenable, ListenerId};
@@ -659,14 +660,17 @@ impl ElementBase for ElementKind {
     fn set_parent_render_id(&mut self, parent_id: Option<flui_foundation::RenderId>) {
         self.element_mut().set_parent_render_id(parent_id);
     }
-    fn child_sliver_slot(&self, slot: usize) -> Option<usize> {
+    fn child_sliver_slot(&self, slot: usize) -> Option<SliverSlot> {
         self.element().child_sliver_slot(slot)
     }
-    fn set_sliver_slot(&mut self, slot: Option<usize>) {
+    fn set_sliver_slot(&mut self, slot: Option<SliverSlot>) {
         self.element_mut().set_sliver_slot(slot);
     }
-    fn sliver_slot(&self) -> Option<usize> {
+    fn sliver_slot(&self) -> Option<SliverSlot> {
         self.element().sliver_slot()
+    }
+    fn sliver_slot_for_child(&self, logical: usize) -> SliverSlot {
+        self.element().sliver_slot_for_child(logical)
     }
     fn hosts_sparse_children(&self) -> bool {
         self.element().hosts_sparse_children()

@@ -96,7 +96,8 @@ pub use sliver_parent_data::SliverParentData;
 // Sliver variants
 pub use sliver_variants::{
     SliverLogicalContainerParentData, SliverLogicalParentData, SliverMultiBoxAdaptorParentData,
-    SliverPhysicalContainerParentData, SliverPhysicalParentData, TreeSliverNodeParentData,
+    SliverPhysicalContainerParentData, SliverPhysicalParentData, SliverSlot,
+    TreeSliverNodeParentData,
 };
 // Table and text
 pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParentData};
