@@ -155,6 +155,21 @@ pub(super) enum ScissorRounding {
     Conservative,
 }
 
+impl ScissorRounding {
+    /// The rounding an SDF clip's coarse scissor wants for a given mode.
+    ///
+    /// A feathered clip needs the pad so the fringe is not cut; a hard one has
+    /// no fringe, and padding it would only loosen the bound that non-SDF
+    /// consumers — text, above all — rely on as their whole clip.
+    const fn for_clip(hard: bool) -> Self {
+        if hard {
+            Self::Exact
+        } else {
+            Self::Conservative
+        }
+    }
+}
+
 impl GpuStateStack {
     /// Construct a pristine stack — identity transform, no scissor, no SDF
     /// clips, all stacks empty. Equivalent to the post-`reset()` state.
@@ -605,7 +620,13 @@ impl GpuStateStack {
         // under rotation — `clip_rect` takes the AABB of all four transformed
         // corners — which is exactly what a coarse pre-pass should be now that
         // the SDF does the precise work.
-        self.clip_rect_with_rounding(rrect.rect, surface_size, ScissorRounding::Conservative);
+        // Conservative only when the clip actually feathers. The pad exists
+        // for the AA fringe, and it is not free: text is handed to glyphon
+        // with `current_scissor()` alone and never evaluates the SDF, so a
+        // widened scissor lets a glyph render outside the clip's own bounding
+        // rectangle. Under `HardEdge` there is no fringe to protect, so the
+        // exact bounds are both correct and tighter.
+        self.clip_rect_with_rounding(rrect.rect, surface_size, ScissorRounding::for_clip(hard));
     }
 
     /// Invert the CTM's 2D affine part into the `[a, b, c, d, tx, ty]` column
@@ -687,10 +708,9 @@ impl GpuStateStack {
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
         self.current_rrect_clip = [0.0; 8];
 
-        // Bounding-box scissor for early rasterizer rejection — conservative
-        // for the same reason `clip_rrect`'s is: the SDF does the precise work
-        // and this must not cut a pixel it would have shaded.
-        self.clip_rect_with_rounding(rect, surface_size, ScissorRounding::Conservative);
+        // Same rule as `clip_rrect`: pad only when the clip feathers, because
+        // the pad costs text its tight bound.
+        self.clip_rect_with_rounding(rect, surface_size, ScissorRounding::for_clip(hard));
     }
 
     // =========================================================================
