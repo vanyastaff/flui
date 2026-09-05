@@ -162,6 +162,23 @@ The `GpuCapabilities` struct in `wgpu/renderer.rs` is the canonical capability s
 
 **Accepted trade-off:** Net unsafe delta for the chain: **0**. No new unsafe added; the existing unsafe was localised and documented.
 
+### 7. Clip coverage on a second blend source, capability-gated, not a channel shared with paint alpha
+
+**Rule:** Prime Directive #1 — where Flutter's contract can be improved, improve it and account for the improvement. Skia (Flutter's reference rasterizer) keeps coverage and paint alpha apart and applies them independently; this pipeline conflated them, so a blend mode read one as the other.
+
+**Choice:** The tessellated shape shader emits clip coverage as a second blend source (`@blend_src(1)`), and the blend modes whose destination factor cannot absorb `1 − coverage` take `dst_factor = OneMinusSrc1` instead of their uncorrected factor. `pipeline::destination_alpha_scale_for` classifies the modes and supplies the shader's `destination_alpha_scale` override; `pipeline::coverage_blend_state_for` produces the paired blend state; `PipelineCache` owns both halves so a pipeline cannot mix them.
+
+The classification is a property of the FACTOR PAIR, not of `Clear`: `D` must have the absorbing form `1 − k·srcAlpha` (or be `One`). Seven modes fail it — `Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate` (`D = Zero`) and `DstIn`, `DstATop` (`D = SrcAlpha`) — and `DstOut` does not, despite being the other erase-by-alpha mode. That partition is the same one `is_tile_safe_for_ssaa` draws, for the same reason: both ask whether `D` evaluates to `1` when source alpha is `0`.
+
+**Alternatives:**
+- `Clear` → `(Zero, OneMinusSrcAlpha)`, the mechanical single-source fix — rejected. It is equivalent at full coverage and correct at partial, but it cannot tell coverage from paint alpha, so `Paint::fill(..).with_alpha(0.5).with_blend_mode(Clear)` would stop erasing fully. That is a behavioural change to every backend to fix an edge, and it has to be repeated mode by mode with a different judgement call each time.
+- Carrying the coverage class in instance data rather than a pipeline-overridable constant — rejected. The class is uniform per pipeline by construction (one pipeline per blend mode); per-instance data invites the two to disagree, and nothing would catch it.
+- Correcting every mode uniformly — rejected. `DstOut` and the other six absorbing modes would then be corrected twice. `dst_out_renders_the_same_with_and_without_a_second_blend_source` fails on exactly that mistake.
+
+**Accepted trade-off — a documented backend divergence.** `wgpu::Features::DUAL_SOURCE_BLENDING` is optional and absent on WebGPU, and this crate ships a wasm32 target. Where the device does not enable it, `PipelineCache` compiles only the folded shader assembly and the seven modes keep a HARD anti-aliased clip edge — today's behaviour exactly, and pinned as such by the fallback half of every oracle in `coverage_blend_readback_tests` and by `an_anti_aliased_destructive_blend_feathers_its_fringe`. A renderer whose output differs by backend is a real cost; it is accepted because the alternative was a fringe wrong on every backend, and because the difference is confined to partially covered pixels of seven modes. Native coverage is broad: DX12 exposes the feature unconditionally, as do Metal and every Vulkan driver reporting `dualSrcBlend`.
+
+**Scope, stated honestly.** Only `shape.wgsl` is corrected, because only its pipelines (`PipelineCache`) can select one of the seven blend states. The other six shaders that call `clipAlpha` — the three gradients and the rect/circle/texture instanced quads — are wired exclusively to `ALPHA_BLENDING` / `PREMULTIPLIED_ALPHA_BLENDING`, i.e. `SrcOver`, which absorbs partial coverage already. The SSAA tile composite does select per mode but debug-asserts `is_tile_safe_for_ssaa`, which admits only absorbing modes. Correcting the other shaders would be unreachable code. Separately, a gradient painted with a non-`SrcOver` Porter-Duff mode silently renders as `SrcOver` today — a distinct defect in the gradient batcher's routing, not this one.
+
 ### Net delta summary
 
 | Change | Net LOC delta | Net unsafe delta | Net `Arc<Mutex<>>` delta |

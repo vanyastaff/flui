@@ -161,6 +161,89 @@ pub fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
     }
 }
 
+/// The `k` in a blend mode's destination factor `D = k * srcAlpha`, for the
+/// modes where folding clip coverage into the source alpha is WRONG; `None`
+/// for the modes where it is exact.
+///
+/// ## Why folding is not always exact
+///
+/// The shape shader reports partial clip coverage by scaling its premultiplied
+/// output, so the blender computes
+///
+/// ```text
+/// S * (src * coverage) + D(alpha * coverage) * dst
+/// ```
+///
+/// where the coverage-correct answer is
+///
+/// ```text
+/// mix(dst, S * src + D(alpha) * dst, coverage)
+/// ```
+///
+/// The SOURCE halves always agree: no mode's source factor `S` reads source
+/// alpha (they read `0`, `1`, `dstAlpha`, `1 - dstAlpha`, or `dst`), so the
+/// `coverage` scale factors straight out. The DESTINATION halves agree iff
+/// `D(alpha * coverage) == 1 - coverage * (1 - D(alpha))` for all inputs,
+/// which holds exactly when `D` has the absorbing form `1 - k*srcAlpha` (or is
+/// `One`). Those modes return `None` here and need no correction.
+///
+/// The rest have `D = k * srcAlpha`, and `k` is what this returns:
+///
+/// | `k`   | destination factor | modes                                     |
+/// |-------|--------------------|-------------------------------------------|
+/// | `0.0` | `Zero`             | `Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate` |
+/// | `1.0` | `SrcAlpha`         | `DstIn`, `DstATop`                        |
+///
+/// Note `DstOut` is in neither list: it is the erase-by-alpha mode one would
+/// expect to break alongside `Clear`, and its `(Zero, OneMinusSrcAlpha)` pair
+/// has exactly the absorbing shape, so it is already correct.
+///
+/// The value is handed to `shape_fragment_second_source.wgsl` as the
+/// `destination_alpha_scale` overridable constant, which turns it into the
+/// second blend source `coverage * (1 - k*alpha)`;
+/// [`coverage_blend_state_for`] pairs that with `dst_factor = OneMinusSrc1`.
+///
+/// Advanced (dst-reading) modes never reach a fixed-function blend state and
+/// return `None`.
+pub fn destination_alpha_scale_for(mode: BlendMode) -> Option<f32> {
+    match mode {
+        BlendMode::Clear
+        | BlendMode::Src
+        | BlendMode::SrcIn
+        | BlendMode::SrcOut
+        | BlendMode::Modulate => Some(0.0),
+        BlendMode::DstIn | BlendMode::DstATop => Some(1.0),
+        _ => None,
+    }
+}
+
+/// [`blend_state_for`], corrected so partial coverage feathers the blend
+/// instead of applying it at full strength.
+///
+/// Identical to [`blend_state_for`] except for the modes
+/// [`destination_alpha_scale_for`] names: their destination factor becomes
+/// `OneMinusSrc1`, which reads the coverage term
+/// `shape_fragment_second_source.wgsl` emits as its second blend source.
+///
+/// Only valid on a device with [`wgpu::Features::DUAL_SOURCE_BLENDING`], and
+/// only paired with that shader. `PipelineCache` owns both halves of that
+/// pairing.
+pub fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
+    let folded = blend_state_for(mode);
+    if destination_alpha_scale_for(mode).is_none() {
+        return folded;
+    }
+
+    let feathered = |component: wgpu::BlendComponent| wgpu::BlendComponent {
+        dst_factor: wgpu::BlendFactor::OneMinusSrc1,
+        ..component
+    };
+    wgpu::BlendState {
+        color: feathered(folded.color),
+        alpha: feathered(folded.alpha),
+    }
+}
+
 /// Classify a blend mode as "tile-safe" for SSAA compositing.
 ///
 /// A mode is tile-safe iff compositing a **transparent-source** tile (src alpha=0,
@@ -257,6 +340,31 @@ pub fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
     (is_tile_safe_for_ssaa(mode) || mode.is_advanced()) && device_area >= SSAA_AREA_THRESHOLD_PX_SQ
 }
 
+/// The name of the overridable constant `shape_fragment_second_source.wgsl`
+/// declares, through which [`PipelineCache`] hands each pipeline the
+/// `destination_alpha_scale` for its blend mode.
+///
+/// Shared with the WGSL by spelling, not by type, so
+/// `override_constant_name_matches_the_shader` pins the two together.
+const DESTINATION_ALPHA_SCALE_OVERRIDE: &str = "destination_alpha_scale";
+
+/// The two assemblies of the tessellated shape shader a [`PipelineCache`]
+/// builds pipelines from.
+///
+/// They differ only in the fragment entry point: one folds clip coverage into
+/// the source alpha, the other emits it as a second blend source. Passed as
+/// one value rather than two `&str` parameters because swapping them compiles
+/// and then fails at pipeline creation with a message about `@blend_src`
+/// rather than about the mix-up.
+#[derive(Debug, Clone, Copy)]
+pub struct ShapeShaderSources {
+    /// Coverage folded into the source alpha. Compiles on every device.
+    pub folded: &'static str,
+    /// Coverage emitted as `@blend_src(1)`. Requires
+    /// [`wgpu::Features::DUAL_SOURCE_BLENDING`] on the device that compiles it.
+    pub second_source: &'static str,
+}
+
 /// Pipeline cache managing specialized pipeline variants
 ///
 /// Automatically creates and caches pipelines on-demand based on PipelineKey.
@@ -265,8 +373,17 @@ pub struct PipelineCache {
     /// Cached pipelines indexed by key
     cache: HashMap<PipelineKey, RenderPipeline>,
 
-    /// Shader module (shared across all pipelines)
+    /// Shader module folding clip coverage into the source alpha. Used by every
+    /// pipeline whose blend mode absorbs `1 - coverage` anyway, and by every
+    /// pipeline at all when [`Self::second_source_shader`] is `None`.
     shader: wgpu::ShaderModule,
+
+    /// Shader module emitting clip coverage as a second blend source.
+    ///
+    /// `None` when the device lacks [`wgpu::Features::DUAL_SOURCE_BLENDING`],
+    /// in which case the modes that need it fall back to `shader` and keep a
+    /// hard clip edge — see [`Self::new`].
+    second_source_shader: Option<wgpu::ShaderModule>,
 
     /// Surface format
     format: wgpu::TextureFormat,
@@ -282,23 +399,48 @@ pub struct PipelineCache {
 }
 
 impl PipelineCache {
-    /// Create a new pipeline cache
+    /// Create a new pipeline cache.
     ///
     /// # Arguments
     /// * `device` - wgpu device
-    /// * `shader_source` - WGSL shader source code
+    /// * `shader_sources` - the two assemblies of the shape shader
     /// * `format` - Surface texture format
     /// * `viewport_bind_group_layout` - Bind group layout for viewport uniform
+    ///
+    /// # Coverage fidelity depends on the device
+    ///
+    /// [`ShapeShaderSources::second_source`] is compiled only when `device`
+    /// enabled [`wgpu::Features::DUAL_SOURCE_BLENDING`] — naga rejects its
+    /// `@blend_src` outputs otherwise. Where it is absent, the modes
+    /// [`destination_alpha_scale_for`] names keep a HARD clip edge instead of a
+    /// feathered one, because coverage has nowhere to ride but the source
+    /// alpha their destination factor ignores.
+    ///
+    /// That is a deliberate, documented backend divergence rather than a
+    /// silent one: the feature is optional in WebGPU and absent on the wasm32
+    /// target this workspace ships, and the alternative — spending a paint's
+    /// alpha channel on coverage — would change what a translucent `Clear`
+    /// paint means on every backend to fix an edge on one.
     pub fn new(
         device: &wgpu::Device,
-        shader_source: &str,
+        shader_sources: ShapeShaderSources,
         format: wgpu::TextureFormat,
         viewport_bind_group_layout: wgpu::BindGroupLayout,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+            source: wgpu::ShaderSource::Wgsl(shader_sources.folded.into()),
         });
+
+        let second_source_shader = device
+            .features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING)
+            .then(|| {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Shape Shader (coverage as second blend source)"),
+                    source: wgpu::ShaderSource::Wgsl(shader_sources.second_source.into()),
+                })
+            });
 
         let clip_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -318,6 +460,7 @@ impl PipelineCache {
         Self {
             cache: HashMap::new(),
             shader,
+            second_source_shader,
             format,
             viewport_bind_group_layout,
             clip_bind_group_layout,
@@ -368,15 +511,43 @@ impl PipelineCache {
             immediate_size: 0,
         });
 
-        // Configure blend state based on key. The tessellated fragment shader
-        // emits PREMULTIPLIED alpha, so blended pipelines use the premultiplied
-        // Porter-Duff factors for `key.blend_mode()`. SrcOver maps to
-        // PREMULTIPLIED_ALPHA_BLENDING — visually identical to the previous
-        // straight-alpha output now that the shader premultiplies.
-        let blend_state = if key.is_alpha_blended() {
-            Some(blend_state_for(key.blend_mode()))
-        } else {
-            None // Opaque - no blending (faster!)
+        // Configure the shader module, blend state, and coverage constant
+        // together — they are three parts of one decision, and a pipeline that
+        // mixes them is silently wrong rather than invalid.
+        //
+        // The tessellated fragment shader emits PREMULTIPLIED alpha, so blended
+        // pipelines use the premultiplied Porter-Duff factors for
+        // `key.blend_mode()`. SrcOver maps to PREMULTIPLIED_ALPHA_BLENDING —
+        // visually identical to the previous straight-alpha output now that the
+        // shader premultiplies.
+        //
+        // A mode whose destination factor cannot absorb `1 - coverage` takes
+        // the second-source shader and the `OneMinusSrc1` factors instead, so a
+        // partially covered fragment feathers the blend. Where that shader does
+        // not exist (no `DUAL_SOURCE_BLENDING`), the mode falls back to the
+        // folded shader and the uncorrected factors — see `Self::new`.
+        let coverage_correction = key
+            .is_alpha_blended()
+            .then(|| destination_alpha_scale_for(key.blend_mode()))
+            .flatten()
+            .zip(self.second_source_shader.as_ref());
+
+        let (shader, blend_state, constants) = match coverage_correction {
+            Some((destination_alpha_scale, second_source_shader)) => (
+                second_source_shader,
+                Some(coverage_blend_state_for(key.blend_mode())),
+                vec![(
+                    DESTINATION_ALPHA_SCALE_OVERRIDE,
+                    f64::from(destination_alpha_scale),
+                )],
+            ),
+            None if key.is_alpha_blended() => (
+                &self.shader,
+                Some(blend_state_for(key.blend_mode())),
+                Vec::new(),
+            ),
+            // Opaque - no blending (faster!)
+            None => (&self.shader, None, Vec::new()),
         };
 
         // Configure MSAA
@@ -387,20 +558,23 @@ impl PipelineCache {
             label: Some("Specialized Shape Pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &self.shader,
+                module: shader,
                 entry_point: Some("vs_main"),
                 buffers: &[Some(super::vertex::Vertex::desc())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &self.shader,
+                module: shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.format,
                     blend: blend_state,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..Default::default()
+                },
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -497,6 +671,28 @@ mod blend_logic {
     use wgpu::{BlendFactor, BlendOperation};
 
     use super::*;
+
+    /// Every fixed-function mode `blend_state_for` maps.
+    ///
+    /// Three tests here classify modes and must all see the same set; a mode
+    /// added to `blend_state_for` and not here would be silently unclassified
+    /// by each of them.
+    const PORTER_DUFF_MODES: [BlendMode; 14] = [
+        BlendMode::Clear,
+        BlendMode::Src,
+        BlendMode::SrcOver,
+        BlendMode::Dst,
+        BlendMode::DstOver,
+        BlendMode::SrcIn,
+        BlendMode::DstIn,
+        BlendMode::SrcOut,
+        BlendMode::DstOut,
+        BlendMode::SrcATop,
+        BlendMode::DstATop,
+        BlendMode::Xor,
+        BlendMode::Plus,
+        BlendMode::Modulate,
+    ];
 
     #[test]
     fn srcover_opaque_skips_blending() {
@@ -767,24 +963,7 @@ mod blend_logic {
             )
         }
 
-        let porter_duff_modes = [
-            BlendMode::Clear,
-            BlendMode::Src,
-            BlendMode::SrcOver,
-            BlendMode::Dst,
-            BlendMode::DstOver,
-            BlendMode::SrcIn,
-            BlendMode::DstIn,
-            BlendMode::SrcOut,
-            BlendMode::DstOut,
-            BlendMode::SrcATop,
-            BlendMode::DstATop,
-            BlendMode::Xor,
-            BlendMode::Plus,
-            BlendMode::Modulate,
-        ];
-
-        for mode in porter_duff_modes {
+        for mode in PORTER_DUFF_MODES {
             let expected = tile_safe_from_blend_state(mode);
             let actual = is_tile_safe_for_ssaa(mode);
             assert_eq!(
@@ -795,6 +974,117 @@ mod blend_logic {
                  update both together to keep them in sync."
             );
         }
+    }
+
+    /// `destination_alpha_scale_for` must agree with the destination factor
+    /// `blend_state_for` actually emits, for every Porter-Duff mode.
+    ///
+    /// The two are one decision recorded twice — a mode's `D` decides both the
+    /// blend state and the second blend source that has to match it — so a new
+    /// mode, or a changed factor, must fail here rather than produce a pipeline
+    /// whose shader and blend state disagree about the same `D`.
+    ///
+    /// The colour and alpha components are checked separately: `Modulate` is
+    /// the mode whose two components take different SOURCE factors, and a mode
+    /// whose two components disagreed about the DESTINATION factor could not be
+    /// served by one second blend source at all.
+    #[test]
+    fn destination_alpha_scale_matches_the_factor_blend_state_for_emits() {
+        /// The `k` in `D = k * srcAlpha`, or `None` when `D` absorbs
+        /// `1 - coverage` on its own.
+        fn scale_of(factor: BlendFactor) -> Option<f32> {
+            match factor {
+                // `1 - 0*srcAlpha` and `1 - 1*srcAlpha`: absorbing.
+                BlendFactor::One | BlendFactor::OneMinusSrcAlpha => None,
+                BlendFactor::Zero => Some(0.0),
+                BlendFactor::SrcAlpha => Some(1.0),
+                other => panic!(
+                    "{other:?} appears as a destination factor in blend_state_for but has \
+                     no coverage classification; decide what a partially covered fragment \
+                     means for it before shipping the mode"
+                ),
+            }
+        }
+
+        for mode in PORTER_DUFF_MODES {
+            let state = blend_state_for(mode);
+            let from_color = scale_of(state.color.dst_factor);
+            let from_alpha = scale_of(state.alpha.dst_factor);
+            assert_eq!(
+                from_color, from_alpha,
+                "{mode:?}: colour and alpha destination factors disagree about how \
+                 coverage must be corrected; one second blend source cannot serve both"
+            );
+            assert_eq!(
+                destination_alpha_scale_for(mode),
+                from_color,
+                "{mode:?}: destination_alpha_scale_for disagrees with the destination \
+                 factor blend_state_for emits"
+            );
+        }
+    }
+
+    /// `coverage_blend_state_for` changes the destination factor of exactly the
+    /// corrected modes, and changes nothing else about any mode.
+    #[test]
+    fn coverage_blend_state_only_redirects_the_destination_factor() {
+        for mode in PORTER_DUFF_MODES {
+            let folded = blend_state_for(mode);
+            let corrected = coverage_blend_state_for(mode);
+
+            if destination_alpha_scale_for(mode).is_none() {
+                assert_eq!(
+                    corrected, folded,
+                    "{mode:?} needs no correction, so its blend state must be untouched"
+                );
+                continue;
+            }
+
+            for (corrected, folded) in [
+                (corrected.color, folded.color),
+                (corrected.alpha, folded.alpha),
+            ] {
+                assert_eq!(
+                    corrected.dst_factor,
+                    BlendFactor::OneMinusSrc1,
+                    "{mode:?} must read its coverage correction from the second blend source"
+                );
+                assert_eq!(
+                    corrected.src_factor, folded.src_factor,
+                    "{mode:?}: the source half is already coverage-correct — no mode's \
+                     source factor reads source alpha — so it must not change"
+                );
+                assert_eq!(corrected.operation, folded.operation);
+            }
+        }
+    }
+
+    /// The overridable constant is shared with the WGSL by spelling, and a
+    /// mismatch is silent: wgpu ignores an unknown constant name, leaving the
+    /// shader on its `0.0` default and every `DstIn`/`DstATop` fringe subtly
+    /// wrong instead of failing.
+    #[test]
+    fn override_constant_name_matches_the_shader() {
+        let declaration = format!("override {DESTINATION_ALPHA_SCALE_OVERRIDE}:");
+        assert!(
+            super::super::shaders::SHAPE_SECOND_SOURCE.contains(&declaration),
+            "no `{declaration}` in the second-source shape shader"
+        );
+    }
+
+    /// The second-source assembly must carry the `enable` directive BEFORE any
+    /// declaration, or naga rejects the whole module.
+    #[test]
+    fn the_second_source_shader_enables_the_extension_first() {
+        assert!(
+            super::super::shaders::SHAPE_SECOND_SOURCE.starts_with("enable dual_source_blending;"),
+            "the enable directive must precede every declaration in the module"
+        );
+        assert!(
+            !super::super::shaders::SHAPE.contains("blend_src"),
+            "the folded assembly must compile on a device without the feature, so it \
+             may not mention @blend_src"
+        );
     }
 
     /// Golden lock for the current routing of `pipeline_key_from_paint`.

@@ -258,6 +258,22 @@ pub struct GpuCapabilities {
     /// some older/mobile drivers that support the base feature but not the encoder
     /// variant.
     pub supports_timestamp_queries: bool,
+
+    /// Supports a second blend source (`@blend_src(1)` + the `Src1` blend
+    /// factors), which is how the tessellated shape shader hands clip coverage
+    /// to the blender on its own channel instead of folding it into the source
+    /// alpha.
+    ///
+    /// Without it, the blend modes whose destination factor ignores source
+    /// alpha (`Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`, `DstIn`,
+    /// `DstATop` — see `super::pipeline::destination_alpha_scale_for`) keep a
+    /// HARD anti-aliased clip edge rather than a feathered one. Every other
+    /// mode is unaffected.
+    ///
+    /// Present on DX12 (unconditionally), Metal, and Vulkan drivers reporting
+    /// `dualSrcBlend`. Optional in WebGPU and absent there, which is why the
+    /// divergence is documented rather than assumed away.
+    pub supports_dual_source_blending: bool,
 }
 
 impl GpuCapabilities {
@@ -285,6 +301,7 @@ impl GpuCapabilities {
             // features are present so the profiler is never `Some` on an incapable adapter.
             supports_timestamp_queries: features.contains(wgpu::Features::TIMESTAMP_QUERY)
                 && features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+            supports_dual_source_blending: features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
         }
     }
 
@@ -1240,6 +1257,16 @@ impl Renderer {
         if capabilities.supports_timestamp_queries {
             features |=
                 wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        }
+
+        // A second blend source, so an anti-aliased clip can feather a
+        // destination-destructive blend instead of applying it at full strength
+        // across the whole fringe. Requested only where the adapter exposes it;
+        // `PipelineCache` falls back to the folded shader otherwise, and the
+        // seven affected modes keep a hard edge there. See
+        // `GpuCapabilities::supports_dual_source_blending`.
+        if capabilities.supports_dual_source_blending {
+            features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         }
 
         features
