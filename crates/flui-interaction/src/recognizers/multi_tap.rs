@@ -272,7 +272,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer move
-    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<Pixels>, kind: PointerType) {
         // Cache settings to avoid nested locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -284,7 +284,12 @@ impl MultiTapGestureRecognizer {
             let delta = position - info.initial_position;
             let distance = delta.distance();
 
-            if settings.exceeds_touch_slop(distance) {
+            // Kind-aware, matching `isWithinGlobalTolerance(event,
+            // computeHitSlop(event.kind, gestureSettings))` at
+            // `multitap.dart:419`. Reading the touch tier unconditionally let a
+            // pointer from a precise device wander the full finger tolerance
+            // before the tap was cancelled.
+            if distance.get() > settings.hit_slop(kind) {
                 // Moved too far - cancel
                 state.phase = MultiTapPhase::Cancelled;
                 drop(state);
@@ -441,7 +446,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 if let Some(pointer) = self.state.primary_pointer() {
                     let pos = data.current.position;
                     let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                    self.handle_pointer_move(pointer, position);
+                    self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
                 }
             }
             PointerEvent::Up(data) => {
@@ -522,6 +527,52 @@ mod tests {
         assert!(unwind.is_err());
         assert_eq!(recognizer.primary_pointer(), None);
         assert!(arena.is_empty());
+    }
+
+    /// A mouse cancels a multi-tap at a drift a finger still tolerates.
+    ///
+    /// `multitap.dart:419` gates this on
+    /// `computeHitSlop(event.kind, gestureSettings)`; FLUI read the touch tier
+    /// for every device. The drift sits strictly between the two tiers, which
+    /// is the only region where the phase can disagree — under both, or over
+    /// both, the gesture survives or cancels regardless of which was read.
+    #[test]
+    fn mouse_drift_cancels_a_multi_tap_a_finger_survives() {
+        use crate::settings::DEFAULT_MOUSE_SLOP;
+
+        let touch_slop = GestureSettings::touch_defaults().touch_slop();
+        let drift = f32::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
+        assert!(drift > DEFAULT_MOUSE_SLOP && drift < touch_slop);
+
+        let phase_after_drift = |kind: PointerType| {
+            let recognizer = MultiTapGestureRecognizer::new(GestureArena::new(), 2);
+            let origin = Offset::new(Pixels(100.0), Pixels(100.0));
+            recognizer.add_pointer(PointerId::PRIMARY, origin);
+            recognizer.add_pointer(
+                PointerId::new(3).expect("nonzero pointer id"),
+                Offset::new(Pixels(200.0), Pixels(100.0)),
+            );
+
+            recognizer.handle_event(&crate::events::make_move_event(
+                Offset::new(Pixels(100.0 + drift), Pixels(100.0)),
+                kind,
+            ));
+
+            recognizer.gesture_state.lock().phase
+        };
+
+        assert_eq!(
+            phase_after_drift(PointerType::Mouse),
+            MultiTapPhase::Cancelled,
+            "a mouse drifting {drift} px past the {DEFAULT_MOUSE_SLOP} px mouse \
+             slop must cancel the multi-tap"
+        );
+        assert_eq!(
+            phase_after_drift(PointerType::Touch),
+            MultiTapPhase::WaitingForUp,
+            "a finger drifting {drift} px is well inside the {touch_slop} px \
+             touch slop and must keep waiting for the ups"
+        );
     }
 
     #[test]

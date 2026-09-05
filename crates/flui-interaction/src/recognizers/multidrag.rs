@@ -293,17 +293,17 @@ impl MultiDragGestureRecognizer {
     /// constant, unconditionally; `with_settings` customization has no effect
     /// on it.
     ///
-    /// The non-mouse arm reads [`GestureSettings::touch_slop`], not
+    /// Both arms live in [`GestureSettings::hit_slop`], which is
+    /// `computeHitSlop` itself; this method only picks the tier.
+    ///
+    /// That non-mouse arm reads [`GestureSettings::touch_slop`], not
     /// `pan_slop`: `computeHitSlop` resolves through the *touch* tier, and
     /// the two differ in the platform profiles
     /// ([`android_defaults`](GestureSettings::android_defaults) is 8 vs 16,
     /// [`ios_defaults`](GestureSettings::ios_defaults) 10 vs 20) even though
     /// they coincide at 18 under [`touch_defaults`](GestureSettings::touch_defaults).
     fn slop_for(&self, kind: PointerType) -> f32 {
-        if kind == PointerType::Mouse {
-            return crate::settings::DEFAULT_MOUSE_SLOP;
-        }
-        self.settings.lock().touch_slop()
+        self.settings.lock().hit_slop(kind)
     }
 
     /// Number of pointers currently tracked (pre- and post-acceptance).

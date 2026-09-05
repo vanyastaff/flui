@@ -17,7 +17,10 @@ use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
-    arena::GestureArenaMember, events::PointerEvent, ids::PointerId, settings::GestureSettings,
+    arena::GestureArenaMember,
+    events::{PointerEvent, PointerType},
+    ids::PointerId,
+    settings::GestureSettings,
 };
 
 /// Default pressure threshold to start force press (40%)
@@ -299,7 +302,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer move event (pressure may change)
-    fn handle_move(&self, position: Offset<Pixels>, pressure: f32) {
+    fn handle_move(&self, position: Offset<Pixels>, pressure: f32, kind: PointerType) {
         // Cache settings to avoid nested locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -307,7 +310,13 @@ impl ForcePressGestureRecognizer {
         // Check slop - if moved too far, cancel
         if let Some(initial_pos) = self.state.initial_position() {
             let delta = position - initial_pos;
-            if settings.exceeds_touch_slop(delta.distance()) {
+            // Kind-aware, matching `computeHitSlop(event.kind, gestureSettings)`
+            // at `force_press.dart:252`. Reading `touch_slop()` unconditionally
+            // gave a mouse the touch threshold, which is 18 logical pixels
+            // against the 1 a precise pointer should get -- so a force press
+            // survived eighteen times more drift with a mouse than with a
+            // finger, and no default-profile test could see it.
+            if delta.distance().get() > settings.hit_slop(kind) {
                 // Moved too far, end the gesture
                 if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked
                 {
@@ -485,7 +494,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                self.handle_move(position, data.current.pressure);
+                self.handle_move(position, data.current.pressure, data.pointer.pointer_type);
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
@@ -702,7 +711,7 @@ mod tests {
         assert!(!*peaked.lock());
 
         // Move with high pressure
-        recognizer.handle_move(position, 0.9);
+        recognizer.handle_move(position, 0.9, PointerType::Touch);
 
         // Peak should be triggered
         assert!(*peaked.lock());
@@ -728,8 +737,8 @@ mod tests {
         recognizer.handle_down(position, 0.5);
 
         // Move with changing pressure
-        recognizer.handle_move(position, 0.6);
-        recognizer.handle_move(position, 0.7);
+        recognizer.handle_move(position, 0.6, PointerType::Touch);
+        recognizer.handle_move(position, 0.7, PointerType::Touch);
 
         assert_eq!(*update_count.lock(), 2);
     }
@@ -766,5 +775,65 @@ mod tests {
 
         let details = ForcePressDetails::new(Offset::ZERO, Offset::ZERO, 1.0, 2.0);
         assert_eq!(details.normalized_pressure(), 0.5);
+    }
+    /// A mouse cancels on drift a finger survives.
+    ///
+    /// The reference resolves this check through
+    /// `computeHitSlop(event.kind, gestureSettings)` (`force_press.dart:252`);
+    /// FLUI read `touch_slop` unconditionally, so a force press survived 18
+    /// logical pixels of mouse drift where it should survive 1 -- eighteen
+    /// times the tolerance, on the input device that is most precise.
+    ///
+    /// The drift here sits strictly BETWEEN the two thresholds, which is what
+    /// makes the assertion able to fail: a drift under both, or over both,
+    /// gives the same verdict whichever slop was read. Both halves are driven
+    /// through the real `handle_move` path -- asserting on `hit_slop()` alone
+    /// would pass with this recognizer still reading `touch_slop()`.
+    #[test]
+    fn mouse_cancels_on_drift_a_finger_survives() {
+        use crate::settings::DEFAULT_MOUSE_SLOP;
+
+        let touch_slop = GestureSettings::touch_defaults().touch_slop();
+        let drift = f32::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
+        assert!(
+            drift > DEFAULT_MOUSE_SLOP && drift < touch_slop,
+            "the sample drift must sit strictly between the two thresholds, \
+             or this test cannot tell which one the recognizer read"
+        );
+
+        // Same recognizer, same drift, same pressures -- only the device kind
+        // differs between the two halves.
+        let drive = |kind: PointerType| {
+            let ended = Arc::new(Mutex::new(false));
+            let updates = Arc::new(Mutex::new(0));
+            let (e, u) = (ended.clone(), updates.clone());
+
+            let recognizer = ForcePressGestureRecognizer::new(GestureArena::new())
+                .with_on_end(move |_| *e.lock() = true)
+                .with_on_update(move |_| *u.lock() += 1);
+
+            let pointer = PointerId::new(2).expect("nonzero pointer id");
+            let origin = Offset::new(Pixels(100.0), Pixels(100.0));
+            recognizer.add_pointer(pointer, origin);
+            recognizer.handle_down(origin, 0.5);
+
+            let drifted = Offset::new(Pixels(100.0 + drift), Pixels(100.0));
+            recognizer.handle_move(drifted, 0.6, kind);
+
+            (*ended.lock(), *updates.lock())
+        };
+
+        assert_eq!(
+            drive(PointerType::Mouse),
+            (true, 0),
+            "a mouse drifting {drift} px past the {DEFAULT_MOUSE_SLOP} px mouse \
+             slop must end the press, not keep updating"
+        );
+        assert_eq!(
+            drive(PointerType::Touch),
+            (false, 1),
+            "a finger drifting {drift} px is well inside the {touch_slop} px \
+             touch slop and must keep the press alive"
+        );
     }
 }

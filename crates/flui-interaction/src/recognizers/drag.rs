@@ -25,7 +25,7 @@ use crate::{
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
-    settings::{DEFAULT_MOUSE_PAN_SLOP, DEFAULT_MOUSE_SLOP, GestureSettings},
+    settings::GestureSettings,
     traits::{DragAxis, PointerEventExtTrait},
 };
 
@@ -306,22 +306,25 @@ impl DragGestureRecognizer {
     /// - [`DragAxis::Vertical`][]: [`GestureSettings::pan_slop_vertical`]
     /// - [`DragAxis::Horizontal`][]: [`GestureSettings::pan_slop_horizontal`]
     /// - [`DragAxis::Free`][]: [`GestureSettings::pan_slop`]
+    ///
+    /// The kind split itself lives in [`GestureSettings::hit_slop`] and
+    /// [`GestureSettings::pan_slop_for`] — this method picks the tier and
+    /// then applies FLUI's per-axis narrowing on top.
     fn min_drag_distance(&self, kind: PointerType) -> f32 {
-        if kind == PointerType::Mouse {
-            return match self.axis {
-                // Vertical/HorizontalDragGestureRecognizer use
-                // `computeHitSlop` (`kPrecisePointerHitSlop`).
-                DragAxis::Vertical | DragAxis::Horizontal => DEFAULT_MOUSE_SLOP,
-                // PanGestureRecognizer uses `computePanSlop`
-                // (`kPrecisePointerPanSlop = kPrecisePointerHitSlop * 2.0`).
-                DragAxis::Free => DEFAULT_MOUSE_PAN_SLOP,
-            };
-        }
         let s = self.settings.lock();
         match self.axis {
+            // PanGestureRecognizer resolves through `computePanSlop`, which is
+            // what the shared accessor is — both arms of it.
+            DragAxis::Free => s.pan_slop_for(kind),
+            // Vertical/HorizontalDragGestureRecognizer resolve through
+            // `computeHitSlop`. Its mouse arm is the shared accessor exactly;
+            // for every other kind FLUI narrows further, to a per-axis value
+            // the reference has no equivalent of.
+            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerType::Mouse => {
+                s.hit_slop(kind)
+            }
             DragAxis::Vertical => s.pan_slop_vertical(),
             DragAxis::Horizontal => s.pan_slop_horizontal(),
-            DragAxis::Free => s.pan_slop(),
         }
     }
 

@@ -372,6 +372,53 @@ impl GestureSettings {
         self.pan_slop
     }
 
+    /// The hit slop for `kind` — how far a pointer of that kind may drift
+    /// before a gesture is rejected.
+    ///
+    /// A mouse is precise, so it gets a fixed small constant that no profile
+    /// customises; every other kind — stylus, inverted stylus, trackpad,
+    /// unknown, touch — resolves through this settings object's touch tier.
+    ///
+    /// Flutter parity: the free function `computeHitSlop(kind, settings)`
+    /// (`gestures/events.dart`). It lives on the settings here rather than
+    /// beside them because the settings are the only argument that can be
+    /// absent in Dart, and in Rust they cannot be — so a method removes the
+    /// nullable and the `?? kTouchSlop` fallback along with it.
+    ///
+    /// **Read this rather than `touch_slop()` wherever the reference calls
+    /// `computeHitSlop`.** The rule was implemented separately in two
+    /// recognizers before this existed, and a third copy would have been the
+    /// point where they drifted: the mouse and touch values coincide under no
+    /// profile at all, so a recognizer that forgets the distinction is wrong
+    /// on every real platform and looks fine in a default-profile test.
+    #[inline]
+    #[must_use]
+    pub fn hit_slop(&self, kind: PointerType) -> f32 {
+        match kind {
+            PointerType::Mouse => DEFAULT_MOUSE_SLOP,
+            _ => self.touch_slop,
+        }
+    }
+
+    /// The pan slop for `kind` — how far a pointer of that kind must move
+    /// before a pan is recognised.
+    ///
+    /// Same rule as [`Self::hit_slop`], one tier up. Flutter parity:
+    /// `computePanSlop(kind, settings)`.
+    ///
+    /// The two tiers differ on every real profile — `android_defaults` is 8
+    /// against 16, `ios_defaults` 10 against 20 — and coincide only under
+    /// `touch_defaults` (18 and 18). A recognizer reading the wrong one is
+    /// therefore invisible in a default-profile test and wrong in production.
+    #[inline]
+    #[must_use]
+    pub fn pan_slop_for(&self, kind: PointerType) -> f32 {
+        match kind {
+            PointerType::Mouse => DEFAULT_MOUSE_PAN_SLOP,
+            _ => self.pan_slop,
+        }
+    }
+
     /// Get the vertical-only pan slop (per-axis tolerance).
     ///
     /// Used by the vertical-drag recogniser to decide when a vertical
