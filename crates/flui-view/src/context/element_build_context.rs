@@ -252,6 +252,10 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().text_input_handle().cloned()
     }
 
+    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
+        self.owner.read().hit_test_handle()
+    }
+
     fn focus_manager(&self) -> Rc<FocusManager> {
         self.owner.read().focus_manager()
     }
@@ -654,6 +658,9 @@ pub(crate) struct BuildCapabilities {
     pub(crate) local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
     /// The binding's IME/text-input attach-detach capability.
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
+    /// The realm's fresh-hit-test capability, narrowed from its interaction
+    /// dispatch handle.
+    pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
     /// The render tree this element is mounted in, cloned from its own
     /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
     pub(crate) pipeline_owner: Option<flui_rendering::pipeline::PipelineCell>,
@@ -766,6 +773,10 @@ impl BuildContext for BuildCtx<'_> {
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.capabilities.text_input_handle.clone()
+    }
+
+    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
+        self.capabilities.hit_test_handle.clone()
     }
 
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
@@ -1326,6 +1337,7 @@ mod tests {
                 post_frame_handle: None,
                 local_post_frame_handle: None,
                 text_input_handle: None,
+                hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
             },
@@ -1350,6 +1362,7 @@ mod tests {
                 post_frame_handle: None,
                 local_post_frame_handle: None,
                 text_input_handle: None,
+                hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
             },

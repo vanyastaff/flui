@@ -80,6 +80,34 @@ impl PipelineCell {
         f(&owner)
     }
 
+    /// A non-owning handle to this cell.
+    ///
+    /// For a holder that must not keep the render tree alive. A presentation's
+    /// teardown drops its `PipelineCell`; anything still holding a strong
+    /// clone silently keeps that whole tree — and its dirty-request receiver —
+    /// alive past the close, which turns "fail closed" into "quietly keeps
+    /// working on a presentation the app has shut".
+    #[must_use]
+    pub fn downgrade(&self) -> WeakPipelineCell {
+        WeakPipelineCell(Rc::downgrade(&self.0))
+    }
+
+    /// [`Self::with`], but answers `None` instead of panicking when a
+    /// `with_mut` borrow is live.
+    ///
+    /// For callers that legitimately might run while a frame holds the tree
+    /// checked out, and for whom "the tree is busy" is a real answer rather
+    /// than a bug. A fresh hit test is the case: the capability is
+    /// lifecycle-acquired, but nothing stops the *call* landing in a callback
+    /// that a frame phase happens to drive, and reporting a busy tree beats
+    /// both panicking and inventing an empty result.
+    ///
+    /// Do not reach for this to paper over a genuine reentrancy bug —
+    /// [`Self::with_mut`]'s panic is load-bearing for the frame pipeline.
+    pub fn try_with<R>(&self, f: impl FnOnce(&PipelineOwner) -> R) -> Option<R> {
+        self.0.try_borrow().ok().map(|owner| f(&owner))
+    }
+
     /// Runs `f` with exclusive access to the owner.
     ///
     /// # Panics
@@ -150,6 +178,21 @@ impl fmt::Debug for PipelineCell {
         f.debug_struct("PipelineCell")
             .field("is_free", &self.is_free())
             .finish()
+    }
+}
+
+/// A non-owning [`PipelineCell`] handle, from [`PipelineCell::downgrade`].
+///
+/// `upgrade` answers `None` once every strong holder is gone — which for a
+/// presentation's pipeline means the presentation has closed.
+#[derive(Clone, Debug)]
+pub struct WeakPipelineCell(std::rc::Weak<RefCell<PipelineOwner>>);
+
+impl WeakPipelineCell {
+    /// Reclaim a strong handle, or `None` if the tree is gone.
+    #[must_use]
+    pub fn upgrade(&self) -> Option<PipelineCell> {
+        self.0.upgrade().map(PipelineCell)
     }
 }
 

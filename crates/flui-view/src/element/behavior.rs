@@ -103,6 +103,10 @@ where
             post_frame_handle: owner.post_frame_handle.clone(),
             local_post_frame_handle: owner.local_post_frame_handle.clone(),
             text_input_handle: owner.text_input_handle.clone(),
+            hit_test_handle: owner
+                .interaction_dispatch
+                .as_ref()
+                .map(flui_interaction::InteractionDispatchHandle::hit_test_handle),
             pipeline_owner: core.pipeline_owner().cloned(),
             keep_alive: owner.keep_alive.clone(),
         },

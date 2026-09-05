@@ -9,7 +9,7 @@
 //
 // Prose mentioning rebuild_handle, post_frame_handle, local_post_frame_handle,
 // text_input_handle, focus_manager, keep_alive_lease, keep_alive_handle,
-// owner_platform, or
+// owner_platform, hit_test_handle, or
 // pipeline_owner in a
 // comment must NOT count as a violation; this line proves the comment filter
 // works.
@@ -43,6 +43,9 @@ impl StatelessView for Loop {
         // in the first place.
         let pipeline = ctx.pipeline_owner();
         pipeline.unwrap().with_mut(|owner| owner.clear_all_dirty_nodes());
+        // Reads the render tree at a position from inside the phase that is
+        // still mutating it, so the answer describes a half-built tree.
+        let probe = ctx.hit_test_handle();
         Text::new("boom")
     }
 }

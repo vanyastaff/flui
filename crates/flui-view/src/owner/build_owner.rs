@@ -689,6 +689,19 @@ impl BuildOwner {
         self.local_post_frame_handle.as_ref()
     }
 
+    /// This owner's fresh-hit-test capability, narrowed from its interaction
+    /// dispatch handle.
+    ///
+    /// Derived rather than stored: the dispatch handle already carries the
+    /// realm ticket every hit test must be validated against, so a separate
+    /// field would be a second copy of one fact, free to disagree with it.
+    #[must_use]
+    pub fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
+        self.interaction_dispatch
+            .as_ref()
+            .map(flui_interaction::InteractionDispatchHandle::hit_test_handle)
+    }
+
     /// The binding's IME/text-input attach-detach capability, if one was
     /// installed.
     #[must_use]

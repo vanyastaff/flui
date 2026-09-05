@@ -2,9 +2,10 @@
 
 use flui_interaction::routing::MouseRegionTarget;
 use flui_interaction::{
-    HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane,
-    PointerTarget, RenderId, ResolvedRouteToken, RouteResolutionMiss,
+    HitTestEntry, HitTestProbe, HitTestResult, InteractionDispatchError, InteractionDispatchHandle,
+    InteractionLane, PointerTarget, RenderId, ResolvedRouteToken, RouteResolutionMiss,
 };
+use flui_types::{Offset, Pixels};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -30,8 +31,10 @@ fn public_error_surface_is_typed_and_identifier_free() {
         InteractionDispatchError::OwnerGone,
         InteractionDispatchError::TargetGone,
         InteractionDispatchError::StaleRoute,
+        InteractionDispatchError::NoHitTestProbe,
+        InteractionDispatchError::TreeBusy,
     ];
-    assert_eq!(variants.len(), 7);
+    assert_eq!(variants.len(), 9);
 
     let miss = RouteResolutionMiss::TargetGone { path_index: 3 };
     assert_eq!(miss.path_index(), 3);
@@ -282,5 +285,192 @@ fn cached_route_reports_owner_gone_after_lane_drop_not_stale_route() {
     assert_ne!(
         handle.release_route(route),
         Err(InteractionDispatchError::StaleRoute)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fresh hit test — the capability a drag needs to discover targets it has
+// moved over, which a replayed pointer-down route can never see.
+// ---------------------------------------------------------------------------
+
+/// Records the positions it was asked about and answers with a fixed path.
+struct RecordingProbe {
+    asked: RefCell<Vec<Offset<Pixels>>>,
+    answer: Vec<RenderId>,
+}
+
+impl HitTestProbe for RecordingProbe {
+    fn probe(
+        &self,
+        position: Offset<Pixels>,
+        result: &mut HitTestResult,
+    ) -> Result<(), InteractionDispatchError> {
+        self.asked.borrow_mut().push(position);
+        for id in &self.answer {
+            result.add(HitTestEntry::new(*id));
+        }
+        Ok(())
+    }
+}
+
+fn at(x: f32, y: f32) -> Offset<Pixels> {
+    Offset::new(Pixels(x), Pixels(y))
+}
+
+#[test]
+fn a_fresh_hit_test_asks_the_probe_at_the_position_given() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let probe = Rc::new(RecordingProbe {
+        asked: RefCell::new(Vec::new()),
+        answer: vec![RenderId::new(7), RenderId::new(9)],
+    });
+    lane.set_hit_test_probe(probe.clone());
+    let handle = lane.dispatch_handle();
+
+    let snapshot = lane
+        .enter(|| handle.hit_test_at(at(120.0, 40.0)))
+        .expect("probe installed and realm active");
+
+    assert_eq!(
+        probe.asked.borrow().as_slice(),
+        &[at(120.0, 40.0)],
+        "the probe must be asked about the position passed in, not a cached one"
+    );
+    assert_eq!(snapshot.position(), at(120.0, 40.0));
+    assert_eq!(
+        snapshot
+            .path()
+            .iter()
+            .map(|entry| entry.target)
+            .collect::<Vec<_>>(),
+        vec![RenderId::new(7), RenderId::new(9)],
+        "the snapshot carries the probe's whole path, leaf-first"
+    );
+}
+
+#[test]
+fn each_call_re_probes_rather_than_replaying_the_first_answer() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let probe = Rc::new(RecordingProbe {
+        asked: RefCell::new(Vec::new()),
+        answer: vec![RenderId::new(1)],
+    });
+    lane.set_hit_test_probe(probe.clone());
+    let handle = lane.dispatch_handle();
+
+    // The whole point of the capability: a drag moving across three positions
+    // must produce three questions. Caching the first answer is exactly the
+    // pointer-down-route behaviour this exists to escape.
+    lane.enter(|| {
+        for x in [0.0, 10.0, 20.0] {
+            handle.hit_test_at(at(x, 0.0)).expect("probe installed");
+        }
+    });
+
+    assert_eq!(
+        probe.asked.borrow().as_slice(),
+        &[at(0.0, 0.0), at(10.0, 0.0), at(20.0, 0.0)]
+    );
+}
+
+#[test]
+fn a_lane_with_no_probe_says_so_instead_of_answering_emptily() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+
+    // An empty snapshot and "nobody can answer" are different facts, and a
+    // caller that cannot tell them apart silently treats an unwired realm as a
+    // drag over blank space.
+    assert_eq!(
+        lane.enter(|| handle.hit_test_at(at(0.0, 0.0))).unwrap_err(),
+        InteractionDispatchError::NoHitTestProbe
+    );
+}
+
+#[test]
+fn a_fresh_hit_test_is_refused_outside_its_own_realm() {
+    let lane = InteractionLane::try_new().expect("lane");
+    lane.set_hit_test_probe(Rc::new(RecordingProbe {
+        asked: RefCell::new(Vec::new()),
+        answer: vec![RenderId::new(1)],
+    }));
+    let handle = lane.dispatch_handle();
+
+    assert_eq!(
+        handle.hit_test_at(at(0.0, 0.0)).unwrap_err(),
+        InteractionDispatchError::InactiveRealm,
+        "no realm entered"
+    );
+
+    let other = InteractionLane::try_new().expect("second lane");
+    assert_eq!(
+        other
+            .enter(|| handle.hit_test_at(at(0.0, 0.0)))
+            .unwrap_err(),
+        InteractionDispatchError::WrongRealm,
+        "a handle minted by one realm must not read another's tree"
+    );
+}
+
+#[test]
+fn a_fresh_hit_test_is_refused_from_another_thread() {
+    let lane = InteractionLane::try_new().expect("lane");
+    lane.set_hit_test_probe(Rc::new(RecordingProbe {
+        asked: RefCell::new(Vec::new()),
+        answer: vec![RenderId::new(1)],
+    }));
+    let handle = lane.dispatch_handle();
+
+    let elsewhere = std::thread::spawn(move || handle.hit_test_at(at(0.0, 0.0)).unwrap_err())
+        .join()
+        .expect("thread");
+
+    assert_eq!(elsewhere, InteractionDispatchError::WrongThread);
+}
+
+#[test]
+fn a_snapshot_outlives_the_lane_that_made_it_without_addressing_it() {
+    let snapshot = {
+        let lane = InteractionLane::try_new().expect("lane");
+        lane.set_hit_test_probe(Rc::new(RecordingProbe {
+            asked: RefCell::new(Vec::new()),
+            answer: vec![RenderId::new(3)],
+        }));
+        let handle = lane.dispatch_handle();
+        lane.enter(|| handle.hit_test_at(at(5.0, 5.0))).expect("ok")
+    };
+
+    // Owned, so this compiles and reads fine after the realm is gone. That is
+    // the documented contract: a stale snapshot is useless, not unsound — it
+    // names render objects that may have moved or been dropped.
+    assert_eq!(snapshot.path().len(), 1);
+    assert_eq!(snapshot.position(), at(5.0, 5.0));
+}
+
+/// A probe that cannot read the tree right now.
+struct BusyProbe;
+
+impl HitTestProbe for BusyProbe {
+    fn probe(
+        &self,
+        _position: Offset<Pixels>,
+        _result: &mut HitTestResult,
+    ) -> Result<(), InteractionDispatchError> {
+        Err(InteractionDispatchError::TreeBusy)
+    }
+}
+
+#[test]
+fn a_busy_tree_is_reported_rather_than_answered_as_empty() {
+    let lane = InteractionLane::try_new().expect("lane");
+    lane.set_hit_test_probe(Rc::new(BusyProbe));
+    let handle = lane.dispatch_handle();
+
+    // "Nothing is there" and "I could not look" must not collapse into the
+    // same answer: a drag over a live target during a frame would otherwise
+    // read as a drag over blank space, and leave every target it was over.
+    assert_eq!(
+        lane.enter(|| handle.hit_test_at(at(1.0, 1.0))).unwrap_err(),
+        InteractionDispatchError::TreeBusy
     );
 }

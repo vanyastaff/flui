@@ -20,7 +20,7 @@ use flui_types::geometry::Matrix4;
 use flui_types::painting::{Path, Shader};
 use flui_types::{Offset, Pixels, Rect, Size};
 
-use super::hit_test::{EventPropagation, HitTestEntry, transform_pointer_event};
+use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
 use crate::pan_zoom::PointerPanZoomEvent;
 
@@ -67,6 +67,12 @@ pub enum InteractionDispatchError {
     /// A cached route has already been released.
     #[error("resolved interaction route is stale")]
     StaleRoute,
+    /// No layer above this one has installed a hit-test probe on the lane.
+    #[error("no hit-test probe is installed on this interaction realm")]
+    NoHitTestProbe,
+    /// The render tree is checked out by a frame phase and cannot be read.
+    #[error("the render tree is busy and cannot answer a hit test right now")]
+    TreeBusy,
 }
 
 /// Opaque data-plane identity for an ordinary pointer event target.
@@ -601,8 +607,74 @@ impl fmt::Debug for RoutePanic {
     }
 }
 
+/// Runs a fresh hit test against a live render tree.
+///
+/// The lane cannot perform a hit test itself: [`HitTestResult`] is defined
+/// here, but the render tree that fills one lives two layers up
+/// (`flui_rendering::PipelineOwner`), and this crate must not depend upward to
+/// reach it. So the capability is *declared* here, where its realm identity and
+/// thread affinity already live, and *installed* by whoever owns the tree —
+/// the same division `TextInputHandle` uses.
+pub trait HitTestProbe {
+    /// Fill `result` with everything under `position`, leaf-first.
+    ///
+    /// `position` is a GLOBAL position in logical pixels, the same space
+    /// pointer events arrive in.
+    ///
+    /// # Errors
+    ///
+    /// [`InteractionDispatchError::TreeBusy`] when a frame phase holds the
+    /// tree and it cannot be read. Answering an empty path there would be a
+    /// lie a caller cannot detect — a drag over a live target would read as a
+    /// drag over nothing.
+    fn probe(
+        &self,
+        position: Offset<Pixels>,
+        result: &mut HitTestResult,
+    ) -> Result<(), InteractionDispatchError>;
+}
+
+/// An owned answer to one hit test, detached from the tree that produced it.
+///
+/// Owned rather than borrowed on purpose. The issue this implements asks for a
+/// result "valid for immediate synchronous dispatch only", and a borrow would
+/// enforce that by making the tree unusable for the borrow's whole life —
+/// which is the opposite of what a drag needs, since dispatching to a target
+/// is exactly when the tree must be free again. Owning the entries instead
+/// makes a stale snapshot *useless* rather than *unsound*: the ids in it name
+/// render objects that may since have moved or gone, so acting on one across a
+/// frame boundary addresses the past, and nothing in the type system pretends
+/// otherwise. Take one, dispatch from it, drop it.
+#[derive(Debug, Clone)]
+pub struct HitTestSnapshot {
+    position: Offset<Pixels>,
+    path: Vec<HitTestEntry>,
+}
+
+impl HitTestSnapshot {
+    /// The global position this snapshot was taken at.
+    #[must_use]
+    pub fn position(&self) -> Offset<Pixels> {
+        self.position
+    }
+
+    /// Everything under [`Self::position`], leaf-first — the same order and
+    /// the same entries a pointer-down route would have resolved.
+    #[must_use]
+    pub fn path(&self) -> &[HitTestEntry] {
+        &self.path
+    }
+
+    /// Whether anything at all was hit.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.path.is_empty()
+    }
+}
+
 struct LocalLaneInner {
     ticket: LaneTicket,
+    hit_test_probe: RefCell<Option<Rc<dyn HitTestProbe>>>,
     target_ids: MonotonicIdSource,
     route_ids: MonotonicIdSource,
     targets: RefCell<HashMap<TargetId, Rc<HandlerCell>>>,
@@ -644,6 +716,7 @@ impl InteractionLane {
                 lane_id,
                 owner: thread::current().id(),
             },
+            hit_test_probe: RefCell::new(None),
             target_ids: MonotonicIdSource::new(),
             route_ids: MonotonicIdSource::new(),
             targets: RefCell::new(HashMap::new()),
@@ -658,6 +731,16 @@ impl InteractionLane {
             registry.borrow_mut().insert(lane_id, Rc::downgrade(&inner));
         });
         Ok(Self { inner })
+    }
+
+    /// Install the tree-owning layer's hit-test probe on this lane.
+    ///
+    /// Called once during realm construction by the layer that owns the render
+    /// tree. Replaces any previous probe; a lane with none answers
+    /// [`InteractionDispatchError::NoHitTestProbe`], which is the state a bare
+    /// unit-test lane is in.
+    pub fn set_hit_test_probe(&self, probe: Rc<dyn HitTestProbe>) {
+        *self.inner.hit_test_probe.borrow_mut() = Some(probe);
     }
 
     /// Mint the Send-safe, least-privilege capability for this lane.
@@ -676,6 +759,34 @@ impl InteractionLane {
             _lane: self,
         };
         callback()
+    }
+}
+
+/// The fresh-hit-test capability, and only that.
+///
+/// Minted by [`InteractionDispatchHandle::hit_test_handle`] and reached from
+/// widget code as `BuildContext::hit_test_handle()`. Acquire it in
+/// `init_state` / `did_change_dependencies` and call it from a gesture
+/// callback; the frame-capability scope guard rejects acquisition inside
+/// `build`, layout, or paint, because a hit test mid-frame reads a tree that
+/// phase is still mutating.
+#[derive(Clone, Debug)]
+pub struct HitTestHandle {
+    dispatch: InteractionDispatchHandle,
+}
+
+impl HitTestHandle {
+    /// Run a fresh hit test at `position`; see
+    /// [`InteractionDispatchHandle::hit_test_at`].
+    ///
+    /// # Errors
+    ///
+    /// The realm, thread, and probe-installation errors that method documents.
+    pub fn hit_test_at(
+        &self,
+        position: Offset<Pixels>,
+    ) -> Result<HitTestSnapshot, InteractionDispatchError> {
+        self.dispatch.hit_test_at(position)
     }
 }
 
@@ -776,6 +887,68 @@ impl InteractionDispatchHandle {
             None => Err(InteractionDispatchError::InactiveRealm),
             Some(ticket) if ticket != self.ticket => Err(InteractionDispatchError::WrongRealm),
             Some(_) => Ok(lane),
+        }
+    }
+
+    /// Run a fresh hit test at `position` and return an owned snapshot.
+    ///
+    /// This is the capability a drag needs: the reference's `_DragAvatar`
+    /// re-tests at the pointer's *current* global position on every move,
+    /// deliberately ignoring wherever the drag's own pointer went down. FLUI's
+    /// dispatch resolves a route once at `PointerDown` and replays it, so
+    /// without this there is no way to discover a target the drag has since
+    /// moved over.
+    ///
+    /// Acquire the capability in a lifecycle hook and call this from a
+    /// gesture callback — never from `build`, layout, or paint. Mid-frame the
+    /// tree is being mutated by the very phase asking, so the answer would
+    /// describe a half-built tree; the frame-capability scope guard rejects
+    /// that statically.
+    ///
+    /// # Errors
+    ///
+    /// The realm checks [`Self::active_lane`] makes —
+    /// [`WrongThread`](InteractionDispatchError::WrongThread),
+    /// [`InactiveRealm`](InteractionDispatchError::InactiveRealm),
+    /// [`WrongRealm`](InteractionDispatchError::WrongRealm),
+    /// [`OwnerGone`](InteractionDispatchError::OwnerGone) — plus
+    /// [`NoHitTestProbe`](InteractionDispatchError::NoHitTestProbe) when no
+    /// layer installed one, and
+    /// [`TreeBusy`](InteractionDispatchError::TreeBusy) when a frame phase
+    /// holds the render tree.
+    pub fn hit_test_at(
+        &self,
+        position: Offset<Pixels>,
+    ) -> Result<HitTestSnapshot, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        // Clone the `Rc` out before probing: the probe reaches back into the
+        // tree, and anything it does there must not find this `RefCell` still
+        // borrowed.
+        let probe = lane
+            .hit_test_probe
+            .borrow()
+            .clone()
+            .ok_or(InteractionDispatchError::NoHitTestProbe)?;
+
+        let mut result = HitTestResult::new();
+        probe.probe(position, &mut result)?;
+        Ok(HitTestSnapshot {
+            position,
+            path: result.path().to_vec(),
+        })
+    }
+
+    /// Narrow this handle down to the fresh-hit-test capability alone.
+    ///
+    /// Widget code needs `hit_test_at` and nothing else. Handing it the whole
+    /// dispatch handle would hand it the registration lane too — register and
+    /// unregister pointers, mouse regions, scroll, pan-zoom, path clippers,
+    /// shader masks — which is a far larger surface than reading the tree at a
+    /// position, and one no widget has cause to touch.
+    #[must_use]
+    pub fn hit_test_handle(&self) -> HitTestHandle {
+        HitTestHandle {
+            dispatch: self.clone(),
         }
     }
 

@@ -8,6 +8,7 @@
 
 mod dirty;
 pub(crate) mod handle;
+pub mod hit_test_probe;
 mod notifier;
 mod owner;
 pub mod phase;
@@ -27,7 +28,7 @@ pub use notifier::VisualUpdateNotifier;
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, PipelineCell, PipelineOwner, ReleaseDetachedRenderSubtreesError,
-    ReleaseDetachedRenderSubtreesFailure,
+    ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 

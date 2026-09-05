@@ -806,6 +806,17 @@ impl UiRealm {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
 
+        // The lane declares the fresh-hit-test capability but cannot perform
+        // one: `HitTestResult` is its own type, while the tree that fills one
+        // lives two layers up. Install the tree-backed probe here, the single
+        // place that holds both -- the same division `TextInputOwner` uses.
+        // Without it a realm's `BuildContext::hit_test_handle()` answers
+        // `NoHitTestProbe`, which is the honest state of a bare test tree but
+        // would be a silent hole in a real one.
+        interaction_lane.set_hit_test_probe(std::rc::Rc::new(
+            flui_rendering::pipeline::hit_test_probe::PipelineHitTestProbe::new(&pipeline),
+        ));
+
         let presentation = PresentationState::new(
             presentation_id,
             pipeline,
@@ -4526,6 +4537,78 @@ mod tests {
             seen.get(),
             Some(flui_types::platform::Brightness::Dark),
             "an appearance change republishes through the root on the next frame"
+        );
+    }
+
+    /// A realm's fresh hit test reads its own live render tree.
+    ///
+    /// Every layer here is separately capable of being wired to nothing: the
+    /// lane declares the capability but cannot perform one, the probe can but
+    /// is inert until installed, and the handle is realm-scoped but useless if
+    /// it addresses a different realm's tree. So the oracle is the ANSWER —
+    /// a position over the mounted content hits, one past it does not — rather
+    /// than the handle merely being obtainable, which every unwired
+    /// arrangement above also satisfies.
+    ///
+    /// The content is wrapped in an OPAQUE `Listener` deliberately. A bare
+    /// `SizedBox` is not hit-testable (`forward_hit_test` returns false with
+    /// no child, matching `RenderProxyBox`), and `Listener`'s own default is
+    /// `DeferToChild`, which inherits that miss — both correct, and both
+    /// enough to make this test pass against a probe wired to nothing.
+    #[test]
+    fn a_realms_fresh_hit_test_reads_its_own_live_tree() {
+        use flui_interaction::InteractionDispatchError;
+        use flui_types::{Offset, Pixels};
+
+        let realm = new_runtime(noop_wake()).expect("realm claims cleanly");
+        realm
+            .attach_root_widget_with_size(
+                &flui_widgets::Listener::new()
+                    .behavior(flui_interaction::HitTestBehavior::Opaque)
+                    .child(SizedBox::new(40.0, 20.0)),
+                40.0,
+                20.0,
+            )
+            .expect("mounts");
+        // Tight 200x200 root constraints, so the mounted content fills the
+        // view rather than staying at its 40x20 request.
+        let _ = realm.draw_frame(coexistence_constraints());
+
+        let handle = realm.interaction_lane.dispatch_handle();
+        let probe_at = |x: f32, y: f32| {
+            realm
+                .interaction_lane
+                .enter(|| handle.hit_test_at(Offset::new(Pixels(x), Pixels(y))))
+        };
+
+        let inside = probe_at(5.0, 5.0).expect(
+            "a realm installs its own probe at construction — no probe would be \
+                     NoHitTestProbe here",
+        );
+        assert!(
+            !inside.is_empty(),
+            "a position over the mounted content must hit it; an empty path \
+             means the probe is reading some tree other than the one this \
+             realm's frame just laid out, or none at all"
+        );
+
+        let outside = probe_at(500.0, 500.0).expect("still installed");
+        assert!(
+            outside.is_empty(),
+            "a position past the 200x200 view must hit nothing — if this also \
+             reports hits, the probe is answering from position-independent \
+             state rather than testing the position it was given"
+        );
+
+        // The probe reads THIS realm's tree, and the handle is refused by any
+        // other realm — the capability is realm-scoped, not process-global.
+        let other = new_runtime(noop_wake()).expect("second realm");
+        assert_eq!(
+            other
+                .interaction_lane
+                .enter(|| handle.hit_test_at(Offset::new(Pixels(5.0), Pixels(5.0))))
+                .unwrap_err(),
+            InteractionDispatchError::WrongRealm
         );
     }
 
