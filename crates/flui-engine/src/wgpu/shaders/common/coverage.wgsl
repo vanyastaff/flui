@@ -13,9 +13,12 @@
 // `1 - coverage` — see `pipeline::destination_alpha_scale_for` for which modes
 // those are and what the others need instead.
 //
-// Each consuming module supplies its own `VertexOutput` and its own
-// `shadeFragment`, and the two entry points are written once here, so a
-// tessellated shape and a gradient cannot disagree about either quantity.
+// This file defines only the shared vocabulary — `ShadedFragment` and
+// `premultipliedSource`. The `@fragment` entry points that consume it live in
+// the two sibling files named above, one per blend path; each consuming module
+// supplies its own `VertexOutput` and its own `shadeFragment`. Because an entry
+// point is written once rather than per module, a tessellated shape and a
+// gradient cannot disagree about either quantity.
 
 /// Paint colour and total coverage for one fragment.
 struct ShadedFragment {
