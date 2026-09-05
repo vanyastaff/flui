@@ -164,6 +164,12 @@ The `GpuCapabilities` struct in `wgpu/renderer.rs` is the canonical capability s
 
 ### 7. Clip coverage on a second blend source, capability-gated, not a channel shared with paint alpha
 
+> **Protocol-level contract: [ADR-0057](../../docs/adr/ADR-0057-coverage-correct-blending-is-capability-gated.md).**
+> The capability gate makes the same layer tree render differently on a backend
+> without `DUAL_SOURCE_BLENDING`, which is an observable cross-platform
+> difference rather than a crate-local representation choice. This entry records
+> how it is implemented; the ADR ratifies that it is allowed.
+
 **Rule:** Prime Directive #1 — where Flutter's contract can be improved, improve it and account for the improvement. Skia (Flutter's reference rasterizer) keeps coverage and paint alpha apart and applies them independently; this pipeline conflated them, so a blend mode read one as the other.
 
 **Choice:** The tessellated shape shader emits clip coverage as a second blend source (`@blend_src(1)`), and the blend modes whose destination factor cannot absorb `1 − coverage` take `dst_factor = OneMinusSrc1` instead of their uncorrected factor. `pipeline::destination_alpha_scale_for` classifies the modes and supplies the shader's `destination_alpha_scale` override; `pipeline::coverage_blend_state_for` produces the paired blend state; `PipelineCache` owns both halves so a pipeline cannot mix them.
