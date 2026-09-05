@@ -183,10 +183,10 @@ pub use interaction::{
     ErasedDragData, ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState, GestureArenaScope, GestureDetector, GestureDetectorState,
     IgnorePointer, Intent, InteractionEndDetails, InteractionStartDetails,
-    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MouseRegion,
-    NextFocusAction, NextFocusIntent, Offstage, PanAxis, PreviousFocusAction, PreviousFocusIntent,
-    ShortcutCallback, Shortcuts, SingleActivator, TransformationController, Visibility,
-    VisibilityGate, WheelScaleGate,
+    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
+    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PreviousFocusAction,
+    PreviousFocusIntent, ShortcutCallback, Shortcuts, SingleActivator, TransformationController,
+    Visibility, VisibilityGate, WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,

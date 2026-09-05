@@ -648,6 +648,23 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         CursorIcon::Default
     }
 
+    /// An opaque payload this render object attaches to any hit that lands on
+    /// it, for searchers that cannot otherwise identify it.
+    ///
+    /// When a hit lands here, the pipeline attaches the returned value to the
+    /// node's [`HitTestEntry`](crate::hit_testing::HitTestEntry), where a
+    /// caller downcasts it with `metadata_as::<T>()`. This is how a drag finds
+    /// the `DragTarget`s it has moved over: it cannot ask the element tree who
+    /// is under a point, and a bare `RenderId` is only resolvable inside the
+    /// pipeline. Flutter's `RenderMetaData` is the same mechanism, reached the
+    /// same way from `_DragAvatar.updateDrag`.
+    ///
+    /// Default `None` — only a render object that exists to be *found*
+    /// overrides it.
+    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
     /// Mouse-tracker annotation contributed to this render object's hit entry.
     ///
     /// The pipeline passes the entry's render id so the annotation can use the

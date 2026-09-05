@@ -136,6 +136,19 @@ pub struct HitTestEntry {
 
     /// Data-plane identity of this target's owner-local pointer handler.
     pub pointer_target: Option<PointerTarget>,
+    /// Opaque payload this render object attaches to anything that hits it.
+    ///
+    /// The mechanism `RenderMetaData` uses to make a widget findable from a
+    /// hit-test path without the searcher knowing anything about it — how
+    /// `DragTarget` is discovered by a drag that has moved over it, since a
+    /// drag cannot ask the element tree "who is under this point".
+    ///
+    /// Rides on the entry rather than being resolved afterwards because the
+    /// only place a `RenderId` can be turned back into a render object is
+    /// inside the pipeline, holding the tree; a caller resolving it later
+    /// would need the pipeline itself, and would be reading a tree that may
+    /// have moved on.
+    pub metadata: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
 
     /// Data-plane identity of this target's owner-local scroll handler.
     pub scroll_target: Option<ScrollTarget>,
@@ -161,6 +174,11 @@ impl std::fmt::Debug for HitTestEntry {
             .field("has_scroll_target", &self.scroll_target.is_some())
             .field("has_pan_zoom_target", &self.pan_zoom_target.is_some())
             .field("has_mouse_annotation", &self.mouse_annotation.is_some())
+            // Presence, not contents: the payload is `dyn Any` and has no
+            // useful `Debug`. It is the flag that separates "no tag here" from
+            // "tagged, but the downcast asked for another type" -- two states a
+            // hit-test log otherwise cannot tell apart.
+            .field("has_metadata", &self.metadata.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -176,7 +194,21 @@ impl HitTestEntry {
             pan_zoom_target: None,
             cursor: CursorIcon::Default,
             mouse_annotation: None,
+            metadata: None,
         }
+    }
+
+    /// Builder: attach an opaque payload for searchers to find.
+    #[must_use]
+    pub fn metadata(mut self, payload: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        self.metadata = Some(payload);
+        self
+    }
+
+    /// The payload downcast to `T`, or `None` if absent or a different type.
+    #[must_use]
+    pub fn metadata_as<T: std::any::Any + Send + Sync + 'static>(&self) -> Option<&T> {
+        self.metadata.as_ref()?.downcast_ref::<T>()
     }
 
     /// Builder: set cursor.

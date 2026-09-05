@@ -743,6 +743,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 None => entry,
             };
             let entry = entry.cursor(render_object.mouse_cursor());
+            let entry = match render_object.metadata() {
+                Some(payload) => entry.metadata(payload),
+                None => entry,
+            };
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
                 None => entry,
@@ -1049,6 +1053,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 crate::hit_testing::HitTestEntry::new(id).cursor(render_object.mouse_cursor());
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
+                None => entry,
+            };
+            // Attached on the sliver path as well as the box one, with a
+            // matching `RenderSliver::metadata` hook so a sliver can actually
+            // supply one. No shipped sliver does today -- `RenderMetaData` is a
+            // box proxy -- but a walk that reads a hook no implementor can
+            // override is a claim of support that is not there.
+            let entry = match render_object.metadata() {
+                Some(payload) => entry.metadata(payload),
                 None => entry,
             };
             result.add(entry);
