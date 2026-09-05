@@ -240,12 +240,8 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().local_post_frame_handle().cloned()
     }
 
-    fn keep_alive_lease(&self) -> Option<crate::owner::KeepAliveLease> {
-        // Refuse a lease outside a lazy sliver: nothing would ever keep it
-        // alive, and a silently inert guard is worse than `None`. The child
-        // itself is resolved at eviction time, not recorded here.
-        crate::tree::enclosing_sparse_child(&self.tree.read(), self.element_id)?;
-        Some(self.owner.read().keep_alive.acquire(self.element_id))
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
+        self.owner.read().keep_alive.acquire(self.element_id)
     }
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
@@ -768,7 +764,7 @@ impl BuildContext for BuildCtx<'_> {
         self.capabilities.text_input_handle.clone()
     }
 
-    fn keep_alive_lease(&self) -> Option<crate::owner::KeepAliveLease> {
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
         // `init_state` runs with a `BuildCtx` — the same context type `build`
         // gets — so this must serve a real lease rather than refuse one. The
         // "never from a frame phase" half is a STATIC rule, enforced by
@@ -776,8 +772,7 @@ impl BuildContext for BuildCtx<'_> {
         // inside `build`/`perform_layout`/`paint`, exactly as it is for
         // `text_input_handle` and `focus_manager`, which are acquired from
         // `init_state` through this same context.
-        crate::tree::enclosing_sparse_child(self.tree, self.element_id)?;
-        Some(self.capabilities.keep_alive.acquire(self.element_id))
+        self.capabilities.keep_alive.acquire(self.element_id)
     }
 
     fn focus_manager(&self) -> Rc<FocusManager> {

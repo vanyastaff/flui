@@ -1687,15 +1687,7 @@ impl ViewState<KeptItem> for KeptItemState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.log.lock().push((self.index, "init"));
         if self.keep {
-            self.lease = ctx.keep_alive_lease();
-            self.log.lock().push((
-                self.index,
-                if self.lease.is_some() {
-                    "leased"
-                } else {
-                    "no-lease"
-                },
-            ));
+            self.lease = Some(ctx.keep_alive_lease());
         }
     }
     fn build(&self, _view: &KeptItem, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1749,13 +1741,6 @@ fn a_kept_alive_item_survives_the_band_moving_away() {
         inits.contains(&KEPT) && inits.contains(&0),
         "both the kept item and its control must start resident; got {inits:?}"
     );
-    let lease_state: Vec<&str> = log
-        .lock()
-        .iter()
-        .filter(|(_, what)| *what == "leased" || *what == "no-lease")
-        .map(|(_, what)| *what)
-        .collect();
-    assert_eq!(lease_state, vec!["leased"], "the lease must be acquired");
 
     // Scroll far past both.
     laid.pump_widget(list(50.0 * ITEM_EXTENT));
@@ -1875,7 +1860,7 @@ impl StatefulView for ReleasableItem {
 impl ViewState<ReleasableItem> for ReleasableItemState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.log.lock().push((self.index, "init"));
-        self.lease = ctx.keep_alive_lease();
+        self.lease = Some(ctx.keep_alive_lease());
     }
     fn did_update_view(&mut self, view: &ReleasableItem, _old: &ReleasableItem) {
         if !view.keep {

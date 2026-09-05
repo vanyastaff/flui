@@ -77,9 +77,23 @@ concedes. Flutter fuses release into `KeepAliveHandle.dispose()` precisely
 because a separate `release()` gets forgotten, and still notes that a missed
 release keeps the subtree alive "until the list itself is disposed". A
 `#[must_use]` guard whose `Drop` releases makes that unrepresentable. N holders
-are then a refcount — what Flutter's handle map emulates by hand — and identity
-is the lease itself, so a held child whose logical index changes under reconcile
-keeps its hold without any re-keying.
+are then a refcount — what Flutter's handle map emulates by hand.
+
+**A lease names its holder and nothing else.** The sparse child it keeps alive is
+resolved from the tree when eviction asks, never recorded at acquisition. That is
+what makes relocation free in both directions: a held child whose logical *index*
+changes under reconcile keeps its hold, and so does one whose *host* changes under
+a `GlobalKey` graft from one list into another. Caching the target instead was
+wrong in two ways at once — the row the holder left stayed pinned forever, and the
+row it moved to stayed evictable.
+
+It follows that a lease is issued **unconditionally**, including to an element not
+currently inside a lazy sliver: it simply holds nothing there, and begins holding
+if the element is later grafted into a list. Refusing would make that refusal
+permanent, because `init_state` is the only guaranteed acquisition point —
+`activate` and `did_update_view` receive no context, and acquiring from `build` is
+forbidden — so a `GlobalKey` state mounted outside a list and later moved into one
+would have no supported way to ask.
 
 The table lives on `BuildOwner`, not in an `InheritedView` scope. Every other
 `BuildContext` capability resolves from the owner (ADR-0018/0021/0030/0037), and

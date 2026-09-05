@@ -152,9 +152,14 @@ pub trait BuildContext {
     /// Take a keep-alive hold on the lazy sliver child this element lives
     /// inside, so it survives scrolling out of the cache band.
     ///
-    /// `None` when this element is not inside a lazy sliver child — a plain
-    /// `Column` row has nothing to keep alive, and the hold is meaningless
-    /// rather than an error.
+    /// Always issued, **including when this element is not currently inside a
+    /// lazy sliver**. The hold names its holder, not a child; the child is
+    /// resolved when eviction asks. So a lease taken outside a list simply
+    /// holds nothing, and starts holding if the element is later grafted into
+    /// one — which a `GlobalKey` state moved into a list does. Refusing here
+    /// instead would make that refusal permanent: `init_state` is the only
+    /// guaranteed acquisition point, `activate` and `did_update_view` receive
+    /// no context, and acquiring from `build` is forbidden.
     ///
     /// The returned [`KeepAliveLease`](crate::owner::KeepAliveLease) releases
     /// the hold when it drops, so keeping the child alive is exactly "keep the
@@ -166,7 +171,7 @@ pub trait BuildContext {
     /// `paint` — the same rule `post_frame_handle` and `text_input_handle`
     /// follow, enforced by `scripts/check-frame-capability-scope.sh`. A hold
     /// taken during a frame phase would be re-taken on every rebuild.
-    fn keep_alive_lease(&self) -> Option<crate::owner::KeepAliveLease>;
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease;
 
     /// This element tree's exact focus manager.
     ///

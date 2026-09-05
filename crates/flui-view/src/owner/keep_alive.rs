@@ -152,8 +152,14 @@ impl KeepAliveHolds {
 /// lives, the lazy sliver child containing it survives scrolling out of the
 /// cache band; when the state drops, so does the hold.
 ///
-/// A lease is inert if the element was not inside a lazy sliver child, or if
-/// the element tree it came from is gone.
+/// A lease is always issued, even to an element not currently inside a lazy
+/// sliver: it names its *holder*, and the child is resolved when eviction
+/// asks. So it simply holds nothing there, and begins holding if the element is
+/// later grafted into a list — which a `GlobalKey` state moved between subtrees
+/// does. Refusing would make that refusal permanent, since `init_state` is the
+/// only guaranteed acquisition point.
+///
+/// A lease outliving the element tree it came from is inert.
 ///
 /// # Example
 ///
