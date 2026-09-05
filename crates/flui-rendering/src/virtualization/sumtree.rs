@@ -10,12 +10,19 @@
 //!   target offset. `O(log n)`.
 //! - **index → offset** ([`ExtentTree::offset_of`]): descend the tree, at each
 //!   internal node adding the summed extent of skipped children. `O(log n)`.
-//! - **point update** ([`ExtentTree::set`]): descend to the leaf, replace the
-//!   item, repair summaries on the way back up. `O(log n)`.
-//! - **structural insert/delete** ([`ExtentTree::insert`] / [`ExtentTree::remove`]):
-//!   descend to the leaf, splice, then split overflowing / rebalance
-//!   underflowing nodes up the spine. `O(log n)` — *not* the `O(n)` index shift a
-//!   flat-array Fenwick/BIT would pay. This is the whole reason for a tree.
+//! - **point update** ([`ExtentTree::set`]): descend to the leaf, split or merge
+//!   the run it lands in, repair summaries on the way back up, and split or
+//!   rebalance the leaf if that changed its entry count. `O(log n)`.
+//! - **bulk reshape** ([`ExtentTree::resize`], [`ExtentTree::invalidate_from`],
+//!   [`ExtentTree::rehint_unmeasured`]): walk the runs, transform, rebuild.
+//!   `O(runs)` — which is `O(measured)`, because unmeasured items collapse.
+//!   These replace the per-item loops the virtualizer used to run, and they are
+//!   what makes an unbounded list expressible: growing to, or clamping back
+//!   from, `usize::MAX` touches one run rather than `usize::MAX` items.
+//!
+//! Item-wise structural insert/delete still exists but is `#[cfg(test)]`: it is
+//! the exerciser for the split/merge/borrow machinery the operations above rely
+//! on, driven by the property test, not a production path.
 //!
 //! # Why a mutable B-tree (not a generic `SumTree<T, Summary>`)
 //!
@@ -451,7 +458,7 @@ impl Node {
     /// Unlike a flat-item leaf, this can grow the node: writing into the middle
     /// of a run splits it into up to three (before / the new item / after), so
     /// a leaf can overflow `MAX` and must report a [`Mutation`] the way
-    /// [`Self::insert`] does.
+    /// the structural insert path does.
     fn set(&mut self, index: usize, item: ItemExtent) -> (ItemExtent, Mutation) {
         match self {
             Node::Leaf { runs } => {
@@ -504,8 +511,15 @@ impl Node {
                     );
                 }
                 *runs = rebuilt;
+                // A point update moves entries in BOTH directions, which a
+                // flat-item leaf never did: writing a value that matches one
+                // neighbour merges two runs into one, and matching both merges
+                // three into one. So this reports underflow as well as
+                // overflow, and the parent repairs either.
                 let mutation = if runs.len() > MAX {
                     self.split_leaf()
+                } else if runs.len() < MIN {
+                    Mutation::Underflow
                 } else {
                     Mutation::Done
                 };
@@ -519,9 +533,19 @@ impl Node {
                     };
                     children[child_index].set(local, item)
                 };
-                let mutation = self.apply_child_insert_mutation(child_index, child_mutation);
+                let mutation = self.apply_child_set_mutation(child_index, child_mutation);
                 (old, mutation)
             }
+        }
+    }
+
+    /// Folds a child's `set` mutation back into this node. Unlike insert or
+    /// remove, a point update can produce a split *or* an underflow, so this
+    /// routes to whichever repair applies.
+    fn apply_child_set_mutation(&mut self, child_index: usize, mutation: Mutation) -> Mutation {
+        match mutation {
+            Mutation::Underflow => self.apply_child_remove_mutation(child_index, mutation),
+            split_or_done => self.apply_child_insert_mutation(child_index, split_or_done),
         }
     }
 
@@ -559,6 +583,10 @@ impl Node {
     /// Inserts `item` at subtree-local `index` (`index <= self.count()`).
     ///
     /// Returns a [`Mutation`] telling the parent whether this node split.
+    ///
+    /// Test-only alongside `ExtentTree::insert` — see its doc for why the
+    /// item-wise structural path is retained.
+    #[cfg(test)]
     fn insert(&mut self, index: usize, item: ItemExtent) -> Mutation {
         match self {
             Node::Leaf { runs } => {
@@ -635,6 +663,7 @@ impl Node {
     /// An insert at a child boundary goes to the *left* child's tail (so
     /// appending at `count()` lands in the last child) — except an insert at
     /// index 0 of a non-empty child stays at that child's head.
+    #[cfg(test)]
     fn locate_child_for_insert(&self, index: usize) -> (usize, usize) {
         let Node::Internal { summaries, .. } = self else {
             unreachable!("locate_child_for_insert on a leaf")
@@ -729,6 +758,7 @@ impl Node {
     /// Removes the item at subtree-local `index`, returning it. Reports via
     /// [`Mutation`] whether this node underflowed (`< MIN`) so the parent can
     /// rebalance.
+    #[cfg(test)]
     fn remove(&mut self, index: usize) -> (ItemExtent, Mutation) {
         match self {
             Node::Leaf { runs } => {
@@ -1249,6 +1279,60 @@ impl ExtentTree {
         *self = Self::from_runs(rebuilt);
     }
 
+    /// Resizes to `n` items in `O(runs)`, reporting `(measured items dropped,
+    /// their total extent)`.
+    ///
+    /// Growth appends one run regardless of how many items it adds; truncation
+    /// drops whole runs and splits at most one. The per-item loop this replaces
+    /// could not survive the unbounded sentinel in either direction: a finite
+    /// feed discovered to be endless would insert `usize::MAX` items one at a
+    /// time, and an endless feed that later reports a real end would remove
+    /// them the same way.
+    pub(super) fn resize(&mut self, n: usize, hint: f32) -> (usize, f32) {
+        let len = self.len();
+        if n == len {
+            return (0, 0.0);
+        }
+        let mut runs = Vec::new();
+        Self::collect_runs(&self.root, &mut runs);
+        let mut rebuilt = Vec::with_capacity(runs.len() + 1);
+        let mut dropped_count = 0usize;
+        let mut dropped_total = 0.0f32;
+
+        if n > len {
+            for run in runs {
+                push_coalesced(&mut rebuilt, run);
+            }
+            push_coalesced(
+                &mut rebuilt,
+                Run {
+                    count: n - len,
+                    extent: ItemExtent::Unmeasured { hint },
+                },
+            );
+        } else {
+            let mut before = 0usize;
+            for run in runs {
+                let kept = n.saturating_sub(before).min(run.count);
+                let discarded = run.count - kept;
+                if discarded > 0 && run.extent.is_measured() {
+                    dropped_count = dropped_count.saturating_add(discarded);
+                    dropped_total += discarded as f32 * run.extent.extent();
+                }
+                push_coalesced(
+                    &mut rebuilt,
+                    Run {
+                        count: kept,
+                        extent: run.extent,
+                    },
+                );
+                before += run.count;
+            }
+        }
+        *self = Self::from_runs(rebuilt);
+        (dropped_count, dropped_total)
+    }
+
     /// Resets every item from `index` onward to unmeasured with `hint`,
     /// reporting `(how many measured items were dropped, their total extent)`
     /// so the caller can repair its accumulators without a second walk.
@@ -1414,16 +1498,28 @@ impl ExtentTree {
         assert!(index < self.len(), "set index out of range");
         let (old, mutation) = self.root.set(index, item);
         // A write into the middle of a run splits it, so unlike a flat-item
-        // tree this can overflow the root leaf and grow a level.
+        // tree this can overflow the root leaf and grow a level; coalescing
+        // can equally collapse one, so the root may need shrinking too.
         self.grow_root_if_split(mutation);
+        self.shrink_root_if_needed();
         old
     }
 
     /// Inserts `item` so it becomes the new item at `index`, shifting later
     /// items up by one. `index == len()` appends.
     ///
+    /// **Test-only.** Item-wise structural edits left production when
+    /// [`Self::resize`] replaced the per-item `set_count` loop — an item-wise
+    /// resize cannot cross the unbounded sentinel. They are retained rather
+    /// than deleted because they are the exerciser for the split/merge/borrow
+    /// machinery that [`Self::set`] and `resize` still depend on: the property
+    /// test drives random insert/remove sequences through it and checks the
+    /// invariants after each, which is coverage no run-level operation
+    /// reproduces on its own.
+    ///
     /// # Panics
     /// Panics if `index > len()`.
+    #[cfg(test)]
     pub(super) fn insert(&mut self, index: usize, item: ItemExtent) {
         assert!(index <= self.len(), "insert index out of range");
         let mutation = self.root.insert(index, item);
@@ -1449,8 +1545,11 @@ impl ExtentTree {
 
     /// Removes and returns the item at `index`, shifting later items down by one.
     ///
+    /// **Test-only**, for the reason given on `ExtentTree::insert`.
+    ///
     /// # Panics
     /// Panics if `index >= len()`.
+    #[cfg(test)]
     pub(super) fn remove(&mut self, index: usize) -> ItemExtent {
         assert!(index < self.len(), "remove index out of range");
         let (removed, _) = self.root.remove(index);
@@ -1798,5 +1897,89 @@ mod runs {
             t.check_invariants().unwrap();
         }
         assert_eq!(t.len(), 100);
+    }
+}
+
+/// Point updates can *shrink* a leaf, which a flat-item tree could never do.
+#[cfg(test)]
+mod set_underflow {
+    use super::*;
+
+    fn measured(extent: f32) -> ItemExtent {
+        ItemExtent::Measured { extent }
+    }
+
+    /// Writing a value that matches both neighbours merges three runs into
+    /// one, so a point update can drop a non-root leaf below `MIN`. If `set`
+    /// only reports overflow, the parent never rebalances and the tree is left
+    /// illegal.
+    #[test]
+    fn remeasuring_into_neighbours_rebalances_the_leaf() {
+        // Alternating extents: every item is its own run, so there are enough
+        // leaves for a non-root one to exist.
+        let mut t = ExtentTree::from_fn(400, |i| measured((i % 2 + 1) as f32));
+        t.check_invariants().unwrap();
+
+        // Rewrite every `2` to a `1`, front to back. Each write merges the
+        // triple around it into one run, so leaves drain progressively and a
+        // non-root leaf is certain to fall below MIN.
+        for index in 1..400 {
+            t.set(index, measured(1.0));
+            if let Err(e) = t.check_invariants() {
+                panic!("invariant broken after set({index}): {e}");
+            }
+        }
+        assert_eq!(t.len(), 400, "a point update never changes the item count");
+    }
+}
+
+/// Count changes must cross the unbounded sentinel in bounded time.
+///
+/// `ItemCount::Unknown` makes both directions reachable: a finite feed
+/// discovered to be endless resizes *up* to `usize::MAX`, and an endless feed
+/// that later answers `None` clamps back *down* to a real index. An item-wise
+/// resize hangs on either.
+#[cfg(test)]
+mod resize_across_the_sentinel {
+    use super::*;
+
+    fn unmeasured(hint: f32) -> ItemExtent {
+        ItemExtent::Unmeasured { hint }
+    }
+
+    #[test]
+    fn growing_a_finite_list_to_unbounded_is_bounded_work() {
+        let mut t = ExtentTree::uniform(3, unmeasured(10.0));
+        t.set(1, ItemExtent::Measured { extent: 25.0 });
+
+        let (dropped, dropped_total) = t.resize(usize::MAX, 10.0);
+        assert_eq!((dropped, dropped_total), (0, 0.0), "growth drops nothing");
+        assert_eq!(t.len(), usize::MAX);
+        assert_eq!(
+            *t.get(1),
+            ItemExtent::Measured { extent: 25.0 },
+            "the existing measurement survives"
+        );
+        t.check_invariants().unwrap();
+    }
+
+    #[test]
+    fn clamping_an_unbounded_list_back_down_is_bounded_work() {
+        let mut t = ExtentTree::uniform(usize::MAX, unmeasured(10.0));
+        t.set(2, ItemExtent::Measured { extent: 25.0 });
+        t.set(5, ItemExtent::Measured { extent: 35.0 });
+
+        // The feed answered `None` at index 4: everything from there is gone,
+        // including the measurement at 5.
+        let (dropped, dropped_total) = t.resize(4, 10.0);
+        assert_eq!(t.len(), 4);
+        assert_eq!(dropped, 1, "only the measured item past the clamp");
+        assert_eq!(dropped_total, 35.0);
+        assert_eq!(
+            *t.get(2),
+            ItemExtent::Measured { extent: 25.0 },
+            "a measurement below the clamp survives"
+        );
+        t.check_invariants().unwrap();
     }
 }

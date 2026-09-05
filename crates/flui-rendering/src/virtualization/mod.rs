@@ -319,32 +319,19 @@ impl Virtualizer {
     /// the default estimate) when growing, or removes trailing items when
     /// shrinking.
     ///
-    /// Each appended/removed item is an `O(log n)` tree edit, so this is
-    /// `O(|n - len()| · log n)` — *not* the `O(n)` array shift a flat-array
-    /// Fenwick/BIT would pay for a structural change. The anchor index is
-    /// clamped into range if shrinking dropped it.
+    /// `O(runs)`, which is `O(measured)` — growth appends a single run whatever
+    /// its size, and truncation drops whole runs. That is what lets a count
+    /// change cross the unbounded sentinel: an item-wise resize would insert or
+    /// remove up to `usize::MAX` items one at a time when a feed is discovered
+    /// to be endless, or when an endless one later reports a real end. The
+    /// anchor index is clamped into range if shrinking dropped it.
     pub fn set_count(&mut self, n: usize) {
-        let cur = self.tree.len();
-        if n > cur {
-            for index in cur..n {
-                self.tree.insert(
-                    index,
-                    ItemExtent::Unmeasured {
-                        hint: self.default_estimate,
-                    },
-                );
-            }
-        } else {
-            for _ in n..cur {
-                // Remove from the tail; trailing items are never measured-tracked
-                // out of order, so decrement `measured` for any measured tail.
-                let last = self.tree.len() - 1;
-                let removed = self.tree.remove(last);
-                if removed.is_measured() {
-                    self.measured -= 1;
-                    self.measured_total -= removed.extent();
-                }
-            }
+        let (dropped, dropped_total) = self.tree.resize(n, self.default_estimate);
+        self.measured -= dropped;
+        self.measured_total -= dropped_total;
+        if self.measured == 0 {
+            // Never let float drift leave a phantom total behind an empty set.
+            self.measured_total = 0.0;
         }
         self.clamp_anchor();
     }
@@ -616,7 +603,9 @@ impl Virtualizer {
     /// default estimate — a watermark to discard stale measurements after a
     /// structural change invalidates everything from `index` onward.
     ///
-    /// Complexity: `O((len() - index) · log n)`.
+    /// Complexity: `O(runs)`, which is `O(measured)` — the invalidated tail
+    /// collapses to a single run whatever its length, so this is bounded even
+    /// on an unbounded list.
     pub fn invalidate_from(&mut self, index: usize) {
         // The tree tallies the measured items it discards during the same run
         // walk, so the accumulators are repaired without a per-item loop —
