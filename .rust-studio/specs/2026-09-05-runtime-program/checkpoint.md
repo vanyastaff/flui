@@ -131,6 +131,24 @@ controlled reproduction exists:
    which makes it a symptom of the frame rate rather than a cause, but the
    violation itself is unexplained.
 
+   **Re-measured after the pacing fix, before investigating either** — which
+   is what kept (C) from becoming a wild goose chase a second time:
+   - **(C) is closed as a diagnostic defect, not a rendering one.** The
+     warning conflated three states (nothing cached / constraints changed /
+     geometry cleared under matching constraints) and asserted the third for
+     all of them; an ordinary relayout was being reported as an invariant
+     violation. Split into a pure `classify_cache_miss` with an exhaustive
+     test; only the real violation warns now. In the same commit as the
+     wasm-build fix on PR #926.
+   - **(D) is closed by the pacing fix.** The `parent_update` rebuild reason
+     is gone entirely, and the build cadence now tracks the panel: tick
+     median 6.05 ms against a 6.065 ms period, versus 1.2-3.0 ms (several
+     builds per 16 ms frame) before. **Residual, stated not swept:** builds
+     still outnumber presents, between 1.23:1 and 1.48:1 over a 12 s run
+     (1500 logged builds — the histogram only logs in completed 300-sample
+     windows, so the true count is up to 1799 — against 1218 presents). Not
+     diagnosed; a build that produces no present is the shape to look at.
+
 1. #559 — the inline lane IS the shipping path (desktop + Android runners
    construct `RasterLane`; verified 2026-09-05, the issue thread's "5 of 14"
    is stale). Open registry entries owned by #559:
