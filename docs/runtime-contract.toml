@@ -98,6 +98,7 @@ declarations = [
     "pub use app::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use app::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};",
     "pub use app::{ExitPolicy, WindowPolicy};",
+    "pub use app::{ CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse, request_presentation_close, };",
     "pub use app::open_secondary_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
     "pub use bindings::{ GestureBinding, PaintingBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding, };",
@@ -111,6 +112,7 @@ file = "crates/flui-app/src/app/mod.rs"
 declarations = [
     "pub mod direct;",
     "pub mod runner;",
+    "pub use close_request::{CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse};",
     "pub use config::{AppConfig, DiagnosticsProfile};",
     "pub use direct::run_direct;",
     "pub use execution::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
@@ -118,6 +120,7 @@ declarations = [
     "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
+    "pub use runner::request_presentation_close;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
     "pub use runtime::{ExitPolicy, WindowPolicy};",
     "pub use flui_view::{RootRenderElement, RootRenderView};",
@@ -1204,10 +1207,11 @@ loop refuses with `ShuttingDown`) and reaches application code through \
 \
 **Named gaps, stated not silently assumed:** (1) ProcessWorker is not \
 implemented -- FLUI has no process-spawning plumbing to build it on. \
-(2) Close-request veto/defer for unsaved work and (3) journaled \
-recoverable state are #558's remaining criteria, deliberately separate \
-slices (the close path needs a CloseRequested interception seam in \
-flui-platform first). (4) The widget-tier spawning capability (a \
+(2) The close-request veto has landed as its own slice -- see the \
+`close-request-veto-precedes-exit-veto` contract below; it needed no new \
+flui-platform seam, only the wiring of the one that already shipped. \
+(3) Journaled recoverable state is #558's remaining criterion, a \
+deliberately separate slice. (4) The widget-tier spawning capability (a \
 BuildContext-acquired handle per the ADR-0018/0021 discipline plus its \
 frame-capability-scope token) is deferred to its own slice. (5) wasm32 \
 has no lifecycle layer; the narrowed `expect(dead_code)` ratchet in \
@@ -1238,6 +1242,72 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn service_factory_panic_is_contained_into_a_start_error" },
     { kind = "test", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn exit_reevaluation_parks_from_any_thread_and_drives_through_the_hook" },
     { kind = "test", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn winit_control_exit_reevaluation_is_nonstarvable_coalesced_and_consumed_once" },
+]
+
+[[contract]]
+key = "close-request-veto-precedes-exit-veto"
+statement = """
+An application answers, per presentation, whether one of its windows may \
+close, and that answer is consulted strictly BEFORE the process-exit \
+question. A `CloseRequestHandler` registered through \
+`AppConfig::with_close_request_handler` is stored per \
+`PresentationAddress` by the loop-scoped `CloseRequestRouter` and reached \
+from the window's own `PlatformWindow::on_should_close`, which winit, \
+Win32 and AppKit consult at the top of their user-close handling -- \
+before `on_close`, before realm teardown, and before the exit-policy hook \
+where `ServiceLifetime::KeepsAppAlive` gets its say. So a \
+`CloseResponse::KeepOpen` means the exit question is never reached, and a \
+running keep-alive service can never hold a window open: it defers only \
+the process exit that FOLLOWS the last window closing. The ordering is \
+causal, not chosen -- "may the process exit now that the last window is \
+gone" cannot be asked about a window that is still open. \
+\
+A veto is STATELESS, which is what bounds it: the runtime records \
+nothing, arms no timer and owes nothing, so there is no deferral to \
+forget and no deadline to enforce; the window stays open and \
+interactive, and the next request is put to the handler afresh. An \
+application that refused in order to finish work resolves the close with \
+`request_presentation_close`, which bypasses the handler exactly as every \
+backend's own `PlatformWindow::close` bypasses its native close-request \
+path. A wall-clock bound was refused on merit: the canonical use is a \
+Save/Discard/Cancel prompt awaiting a human, and no reference (AppKit \
+`windowShouldClose:`, Win32 `WM_CLOSE`, GTK `delete-event`, Qt \
+`closeEvent`, Flutter `PopScope`) bounds that wait either. Both \
+untrustworthy-answer cases -- a panicking handler, and an invocation \
+arriving off the registering thread -- resolve to the same conservative \
+veto `WindowCallbacks::dispatch_should_close` already applies to a \
+reentrant query. \
+\
+**Named gaps, stated not silently assumed:** (1) No widget-tier \
+capability -- registration is embedder-facing (`AppConfig`), so no token \
+joins `scripts/check-frame-capability-scope.sh` in this slice; the \
+`PopScope`-shaped widget that would consume a `BuildContext` handle does \
+not exist either. (2) `run_direct` still allows every close \
+unconditionally: direct mode installs no `UiRealm`, so there is no \
+presentation for a veto to be addressed to. (3) The web and Android \
+backends implement the callback setter but never call \
+`dispatch_should_close`, so a handler registered there is inert. \
+(4) issue #558's own `deadline -> flush -> termination` leg bounds \
+teardown AFTER a close is agreed and belongs with the journaled-state \
+slice.\
+"""
+state = "implemented"
+domain = "application"
+owner_issue = 558
+mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/close_request.rs", contains = "pub(crate) struct CloseRequestRouter" },
+    { kind = "symbol", file = "crates/flui-app/src/app/close_request.rs", contains = "pub(crate) fn consult" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/mod.rs", contains = "pub(crate) fn install_close_request_wiring" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/mod.rs", contains = "pub fn request_presentation_close" },
+    { kind = "symbol", file = "crates/flui-platform/src/traits/window.rs", contains = "fn on_should_close" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn a_close_request_handler_keeps_its_own_window_open" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn a_window_kept_open_closes_on_a_later_programmatic_request" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn a_windows_veto_is_addressed_to_that_window_alone" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn a_close_veto_short_circuits_the_keep_alive_exit_question" },
+    { kind = "test", file = "crates/flui-app/src/app/close_request.rs", contains = "fn an_address_with_no_handler_closes" },
+    { kind = "test", file = "crates/flui-app/src/app/close_request.rs", contains = "fn a_panicking_handler_vetoes_and_stays_registered" },
+    { kind = "test", file = "crates/flui-app/src/app/close_request.rs", contains = "fn a_query_from_another_thread_vetoes_without_calling_the_handler" },
 ]
 
 [[contract]]

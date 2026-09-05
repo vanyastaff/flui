@@ -10,6 +10,8 @@
 //! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
 //! the runner drives the scheduler directly.
 
+#[cfg(not(target_os = "ios"))]
+pub(crate) mod close_request;
 mod config;
 pub mod direct;
 pub(crate) mod execution;
@@ -32,6 +34,8 @@ pub(crate) mod window_registry;
 #[cfg(test)]
 pub(crate) mod window_test_support;
 
+#[cfg(not(target_os = "ios"))]
+pub use close_request::{CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse};
 pub use config::{AppConfig, DiagnosticsProfile};
 pub use direct::run_direct;
 pub use execution::{
@@ -52,6 +56,8 @@ pub use lifecycle::{
     not(target_arch = "wasm32")
 ))]
 pub use runner::open_secondary_window;
+#[cfg(not(target_os = "ios"))]
+pub use runner::request_presentation_close;
 #[cfg(target_os = "android")]
 pub use runner::{run_app_android, run_app_android_with_config};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};

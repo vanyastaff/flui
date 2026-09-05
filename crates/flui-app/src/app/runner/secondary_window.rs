@@ -17,6 +17,13 @@ use flui_scheduler::AppLifecycleState;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+use crate::app::close_request::CloseRequestHandler;
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 use super::host::{
     APP_RUNTIME, runtime_needs_redraw_handle, runtime_wake_callback, with_owner_platform,
 };
@@ -193,6 +200,22 @@ pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow:
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+/// One `Pending`-arm window whose open resolved, waiting for
+/// [`finish_open_secondary_window`]: the policy that governs it, the native
+/// window itself, and the close-request handler its caller's `AppConfig`
+/// carried (threaded through so a secondary window can refuse its own close
+/// exactly as the primary can).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+type PendingCompletion = (
+    WindowPolicy,
+    Arc<dyn flui_platform::traits::PlatformWindow>,
+    Option<CloseRequestHandler>,
+);
+
 thread_local! {
     /// The pending-completion registry for `open_secondary_window`'s
     /// `Pending` arm (see [`spawn_pending_secondary_window_completion`]) —
@@ -219,9 +242,8 @@ thread_local! {
     /// that poll. Queuing here and draining once the checkout restores
     /// applies to BOTH policies uniformly, one completion path rather than a
     /// policy-specific carve-out.
-    static PENDING_SECONDARY_WINDOW_COMPLETIONS: std::cell::RefCell<
-        Vec<(WindowPolicy, Arc<dyn flui_platform::traits::PlatformWindow>)>,
-    > = const { std::cell::RefCell::new(Vec::new()) };
+    static PENDING_SECONDARY_WINDOW_COMPLETIONS: std::cell::RefCell<Vec<PendingCompletion>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Applies every `open_secondary_window` `Pending`-arm completion queued by
@@ -249,8 +271,8 @@ thread_local! {
 pub(super) fn drain_pending_secondary_window_completions() {
     let pending =
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
-    for (policy, window) in pending {
-        if let Err(error) = finish_open_secondary_window(policy, window) {
+    for (policy, window, close_request_handler) in pending {
+        if let Err(error) = finish_open_secondary_window(policy, window, close_request_handler) {
             tracing::error!(
                 ?policy,
                 %error,
@@ -308,9 +330,16 @@ pub(super) fn open_secondary_window_impl(
         })?;
 
     match open {
-        WindowOpen::Ready(window) => finish_open_secondary_window(policy, window).map(Some),
+        WindowOpen::Ready(window) => {
+            finish_open_secondary_window(policy, window, config.close_request_handler.clone())
+                .map(Some)
+        }
         WindowOpen::Pending(pending) => {
-            spawn_pending_secondary_window_completion(policy, pending)?;
+            spawn_pending_secondary_window_completion(
+                policy,
+                pending,
+                config.close_request_handler.clone(),
+            )?;
             Ok(None)
         }
     }
@@ -376,6 +405,7 @@ pub(super) fn open_secondary_window_impl(
 fn spawn_pending_secondary_window_completion(
     policy: WindowPolicy,
     pending: flui_platform::PendingWindow,
+    close_request_handler: Option<CloseRequestHandler>,
 ) -> anyhow::Result<()> {
     let driver = APP_RUNTIME
         .with(|slot| {
@@ -401,7 +431,9 @@ fn spawn_pending_secondary_window_completion(
                 // directly here -- see this function's own doc for why
                 // (this poll always runs mid-dispatch).
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
-                    queue.borrow_mut().push((policy, window));
+                    queue
+                        .borrow_mut()
+                        .push((policy, window, close_request_handler));
                 });
             }
             Err(error) => {
@@ -443,6 +475,7 @@ fn spawn_pending_secondary_window_completion(
 fn finish_open_secondary_window(
     policy: WindowPolicy,
     window: Arc<dyn flui_platform::traits::PlatformWindow>,
+    close_request_handler: Option<CloseRequestHandler>,
 ) -> anyhow::Result<(
     RealmDispatcher,
     Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -501,6 +534,16 @@ fn finish_open_secondary_window(
          renderer -- see this function's own doc for the two named, scoped-out gaps"
     );
 
+    // Wire this presentation into the close-request seam (issue #558)
+    // through the same single implementation `run_desktop`'s primary window
+    // uses. Unlike the frame-failure handler noted above, this one IS
+    // threaded down from the caller's `AppConfig` -- a secondary window
+    // that could not refuse its own close would leave the veto reachable
+    // for exactly one window per process, and a window's answer is
+    // addressed to its OWN presentation, so it can never affect a
+    // sibling's.
+    super::install_close_request_wiring(realm_dispatch.address, &window, close_request_handler);
+
     window.on_input(Box::new(move |input: PlatformInput| {
         let _ =
             dispatch_platform_realm(realm_dispatch, RealmTask::Event(PlatformToUi::Input(input)));
@@ -535,10 +578,8 @@ fn finish_open_secondary_window(
         tracing::info!(?realm_dispatch, "Secondary window closed");
         close_this_window(realm_dispatch);
     }));
-    window.on_should_close(Box::new(|| {
-        tracing::debug!("Secondary window close requested, allowing");
-        true
-    }));
+    // No `on_should_close` registration here: `install_close_request_wiring`
+    // above installed it, together with the router entry it consults.
     window.on_active_status_change(Box::new(move |focused| {
         let _ = dispatch_platform_realm(
             realm_dispatch,

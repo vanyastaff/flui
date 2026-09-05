@@ -50,9 +50,13 @@
 //! # Not in this slice (stated, not silently assumed)
 //!
 //! - **ProcessWorker** — see the table above.
-//! - **Close-request veto/defer** (cancel-or-defer a window close for
-//!   unsaved work) and **journaled recoverable state** — issue #558's
-//!   remaining criteria, deliberately separate slices.
+//! - **Journaled recoverable state** — issue #558's remaining criterion,
+//!   a deliberately separate slice. The close-request veto that used to be
+//!   named here alongside it has landed in
+//!   [`close_request`](super::close_request); note that it answers a
+//!   different question from [`ServiceLifetime::KeepsAppAlive`] and is
+//!   consulted strictly earlier — see
+//!   [`CloseRequestRouter::consult`](super::close_request::CloseRequestRouter::consult).
 //! - **A widget-tier capability** (a `BuildContext`-acquired spawner per
 //!   ADR-0018/0021's handle discipline) — today [`TaskSpawner`] reaches
 //!   application code through [`ServiceContext`] only.

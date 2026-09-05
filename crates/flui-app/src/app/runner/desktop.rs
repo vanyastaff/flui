@@ -261,6 +261,17 @@ where
         );
         let hot_reload_sender = ui_realm.command_sender();
         let realm_dispatch = install_platform_realm(ui_realm, &window);
+
+        // 3b0. Wire this presentation into the close-request seam (issue
+        // #558): the application's own answer to "may this window close?",
+        // plus the entry that makes the window closable programmatically
+        // afterwards. One shared implementation with
+        // `open_secondary_window`'s window — see that function's own doc.
+        crate::app::runner::install_close_request_wiring(
+            realm_dispatch.address,
+            &window,
+            config.close_request_handler.clone(),
+        );
         *rebuild_registration_slot.borrow_mut() =
             Some(worker_reload.register_rebuild_hook(hot_reload_sender));
 
@@ -656,11 +667,9 @@ where
             drop(released);
         }));
 
-        // Window should-close -> allow by default
-        window.on_should_close(Box::new(|| {
-            tracing::debug!("Window close requested, allowing");
-            true
-        }));
+        // No `on_should_close` registration here: step 3b0 above installed
+        // it, together with the router entry it consults, so the two can
+        // never be wired apart.
 
         // Window focus/visibility -> the `(visible, focused)`
         // `AppLifecycleState` derivation. `on_visibility_status_change`

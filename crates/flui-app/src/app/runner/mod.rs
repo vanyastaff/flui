@@ -45,6 +45,89 @@ pub use secondary_window::open_secondary_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
 
+/// Wire one presentation into the close-request seam (issue #558):
+/// register it with this loop's router, then install the
+/// `on_should_close` callback that consults the router when the platform
+/// asks whether the window may close.
+///
+/// The single implementation every window this crate opens goes through —
+/// `run_desktop`'s primary and `open_secondary_window`'s new window under
+/// either [`WindowPolicy`](crate::WindowPolicy) — and the one a test drives
+/// too, rather than each site (or a test harness) hand-rolling the same two
+/// steps and drifting.
+///
+/// Registration is unconditional, whether or not `handler` is `Some`: the
+/// entry is also what makes the window closable through
+/// [`request_presentation_close`], which is how an application finishes a
+/// close it kept open.
+///
+/// The router is cloned into the callback rather than resolved from
+/// `APP_RUNTIME` at fire time. That is load-bearing: a close request can
+/// arrive while this realm is checked out for dispatch, and a router
+/// reached through the thread-local would then have to fail closed on a
+/// bookkeeping detail the application never asked about.
+///
+/// This is the FIRST of the two vetoes a close passes, and the ordering is
+/// causal rather than chosen — see
+/// [`CloseRequestRouter::consult`](crate::app::close_request::CloseRequestRouter::consult)'s
+/// own doc.
+#[cfg(not(target_os = "ios"))]
+pub(crate) fn install_close_request_wiring(
+    address: flui_foundation::PresentationAddress,
+    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    handler: Option<crate::app::close_request::CloseRequestHandler>,
+) {
+    use crate::app::close_request::CloseResponse;
+
+    let router = host::APP_RUNTIME.with(|slot| slot.borrow().close_requests());
+    router.register(address, window, handler);
+
+    let consulting = std::sync::Arc::clone(&router);
+    window.on_should_close(Box::new(move || {
+        let response = consulting.consult(address);
+        tracing::debug!(?address, ?response, "window close requested");
+        matches!(response, CloseResponse::Close)
+    }));
+}
+
+/// Close the window at `address` programmatically, bypassing its
+/// close-request handler (issue #558).
+///
+/// This is how an application finishes a close it kept open: a
+/// [`CloseRequestHandler`](crate::CloseRequestHandler) that answered
+/// [`CloseResponse::KeepOpen`](crate::CloseResponse) in order to save
+/// unsaved work calls this with the address it received in the
+/// [`CloseRequest`](crate::CloseRequest) once the work is done, and the
+/// window closes on the normal path — `on_close`, presentation teardown,
+/// and then the exit-policy question if this was the last window.
+///
+/// The handler is deliberately not asked again: every backend's own
+/// `PlatformWindow::close` bypasses its native close-request path for the
+/// same reason (AppKit's `-close` does not send `windowShouldClose:`;
+/// Win32's `DestroyWindow` does not send `WM_CLOSE`).
+///
+/// Owner-thread only, like every other operation on a hosted realm.
+///
+/// # Errors
+///
+/// [`CloseRequestError::UnknownPresentation`](crate::CloseRequestError::UnknownPresentation)
+/// when no presentation is registered at `address` (never installed, or
+/// already closed), [`CloseRequestError::WindowGone`](crate::CloseRequestError::WindowGone)
+/// when its native window is already destroyed, and
+/// [`CloseRequestError::WrongThread`](crate::CloseRequestError::WrongThread)
+/// when called from anywhere but the thread that hosts the presentation.
+#[cfg(not(target_os = "ios"))]
+pub fn request_presentation_close(
+    address: flui_foundation::PresentationAddress,
+) -> Result<(), crate::app::close_request::CloseRequestError> {
+    // The router is taken out of the thread-local BEFORE the close is
+    // issued: `PlatformWindow::close` fires the window's own `on_close`,
+    // which re-enters `APP_RUNTIME` through `close_this_window`.
+    host::APP_RUNTIME
+        .with(|slot| slot.borrow().close_requests())
+        .request_close(address)
+}
+
 /// Run a FLUI application with default configuration.
 ///
 /// This is the internal implementation called by `run_app()`.
