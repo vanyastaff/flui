@@ -1101,3 +1101,126 @@ fn a_lazy_sliver_with_no_declared_mapping_announces_its_real_set_size() {
         "and so does the sliver the list view is built on"
     );
 }
+
+/// Merging collapses its descendants in the **accessibility tree**, not just in
+/// the render tree.
+///
+/// The sibling tests above assert that `RenderMergeSemantics` mounts. That
+/// proves the render object exists; it says nothing about what a screen reader
+/// is handed, and the two are separated by the whole assemble-and-translate
+/// path. This asserts the end product.
+///
+/// The premise runs first and is load-bearing: without the wrapper both labels
+/// must be separately findable. A test that only checked "the children are not
+/// findable" would pass just as well against a tree where they never
+/// contributed semantics at all — which is the ordinary state of affairs for a
+/// bare `SizedBox`, and why the children here carry real `Semantics`.
+#[test]
+fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::Column;
+
+    let labelled = |text: &'static str| {
+        Semantics::new()
+            .container(true)
+            .label(text)
+            .child(SizedBox::new(40.0, 20.0))
+    };
+
+    // Premise: unmerged, each child is its own node.
+    let mut apart = lay_out(
+        Column::new((labelled("first").boxed(), labelled("second").boxed())),
+        loose(200.0),
+    );
+    apart.enable_semantics();
+    apart.pump();
+    let apart_tree = apart.a11y_tree().expect("semantics enabled");
+    assert!(
+        apart_tree.find_by_label("first").is_ok() && apart_tree.find_by_label("second").is_ok(),
+        "premise: without merging, both labels are separately findable — \
+         otherwise the assertion below proves nothing. Tree was:\n{}",
+        apart_tree.describe()
+    );
+
+    let mut merged = lay_out(
+        MergeSemantics::new().child(Column::new((
+            labelled("first").boxed(),
+            labelled("second").boxed(),
+        ))),
+        loose(200.0),
+    );
+    merged.enable_semantics();
+    merged.pump();
+    let merged_tree = merged.a11y_tree().expect("semantics enabled");
+
+    // The combined label is the assertion that distinguishes merging from
+    // DESTROYING. "neither label is findable" plus "fewer nodes" would both
+    // hold if the merge path dropped its descendants outright, or kept only
+    // one of them — which is exclusion's contract, not merging's.
+    assert!(
+        merged_tree.find_by_label("first second").is_ok(),
+        "merging must carry its descendants' labels into one node, combined \
+         and in order. Tree was:\n{}",
+        merged_tree.describe()
+    );
+    assert!(
+        merged_tree.find_by_label("first").is_err() && merged_tree.find_by_label("second").is_err(),
+        "and neither descendant may remain addressable on its own; a reader \
+         should meet one node, not three. Tree was:\n{}",
+        merged_tree.describe()
+    );
+    assert!(
+        merged_tree.len() < apart_tree.len(),
+        "the merged tree must have strictly fewer nodes than the unmerged one \
+         ({} vs {})",
+        merged_tree.len(),
+        apart_tree.len()
+    );
+}
+
+/// Excluding removes its subtree from the accessibility tree.
+///
+/// Same shape as the merge test, and the premise matters for the same reason:
+/// "not findable" is the default state of most of the tree, so the label must
+/// be shown findable without the wrapper before its absence means anything.
+#[test]
+fn exclude_semantics_removes_its_subtree_from_the_a11y_tree() {
+    let labelled = || {
+        Semantics::new()
+            .container(true)
+            .label("hidden from readers")
+            .child(SizedBox::new(40.0, 20.0))
+    };
+
+    let mut included = lay_out(labelled(), loose(200.0));
+    included.enable_semantics();
+    included.pump();
+    let included_tree = included.a11y_tree().expect("semantics enabled");
+    assert!(
+        included_tree.find_by_label("hidden from readers").is_ok(),
+        "premise: the label is findable when nothing excludes it. Tree was:\n{}",
+        included_tree.describe()
+    );
+
+    let mut excluded = lay_out(ExcludeSemantics::new().child(labelled()), loose(200.0));
+    excluded.enable_semantics();
+    excluded.pump();
+    let excluded_tree = excluded.a11y_tree().expect("semantics enabled");
+
+    // Absence only means exclusion if the tree was published at all. A
+    // translation that emitted nothing would satisfy the assertion below for
+    // entirely the wrong reason, so the surviving root is checked first.
+    assert_eq!(
+        excluded_tree.len(),
+        1,
+        "the root must still be reachable — an empty tree would make the \
+         absence below meaningless. Tree was:\n{}",
+        excluded_tree.describe()
+    );
+    assert!(
+        excluded_tree.find_by_label("hidden from readers").is_err(),
+        "an excluded subtree must contribute nothing a reader can reach. \
+         Tree was:\n{}",
+        excluded_tree.describe()
+    );
+}
