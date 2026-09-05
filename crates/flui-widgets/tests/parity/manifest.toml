@@ -301,7 +301,7 @@ cases = [
 rust = "draggable_test"
 family = "gesture"
 oracles = ["widgets/draggable_test.dart"]
-tests = 31
+tests = 35
 
 [[targets]]
 rust = "editable_text_test"

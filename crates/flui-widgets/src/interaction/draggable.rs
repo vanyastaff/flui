@@ -142,8 +142,8 @@ use parking_lot::Mutex;
 
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::{
-    DragPosition, DragTargetSlot, ErasedDragData, GestureArenaScope, Listener, Positioned, Stack,
-    StackFit,
+    DragPosition, DragTargetSlot, ErasedDragData, GestureArenaScope, IgnorePointer, Listener,
+    Positioned, Stack, StackFit,
 };
 
 /// A no-argument callback retained in the current shared drag-config snapshot.
@@ -433,7 +433,8 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DraggableState<T> {
 ///
 /// `Draggable::data` is carried **erased** (`ErasedDragData`): a session hands
 /// it to targets that cannot name `T`, and `Arc<dyn Any + Send + Sync>` is
-/// what a hit-test-discovered target's callbacks downcast from.
+/// what a hit-test-discovered target's callbacks downcast from. What a live
+/// drag reads is its own [`DragStart`] snapshot, not this.
 /// `feedback`/`feedback_offset` are **not** carried here,
 /// even though a session does read them at start: `feedback` is
 /// `Rc<dyn Fn() -> BoxedView>`, which is `!Send` (owner-local, ADR-0027) and
@@ -443,11 +444,14 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DraggableState<T> {
 struct DragConfig {
     axis: Option<Axis>,
     max_simultaneous_drags: Option<usize>,
-    /// The drag's payload, type-erased for delivery to targets. `None` when
-    /// the `Draggable` carries no data — such a drag discovers nothing, since
-    /// a target's `isExpectedDataType` filter has nothing to match against
-    /// (the oracle's null-data drag, which enters every target, has no
-    /// representation here — a named gap, see the module docs).
+    /// The CURRENT payload, type-erased, refreshed on every build. A drag
+    /// snapshots it once at start ([`DragStart`]) and never reads it again, so
+    /// this is only ever what the *next* drag to start will carry.
+    ///
+    /// `None` when the `Draggable` carries no data — such a drag discovers
+    /// nothing, since a target's `isExpectedDataType` filter has nothing to
+    /// match against (the oracle's null-data drag, which enters every target,
+    /// has no representation here — a named gap, see the module docs).
     data: Option<ErasedDragData>,
     on_drag_started: Option<StartedCallback>,
     on_drag_update: Option<DragUpdateCallback>,
@@ -599,7 +603,15 @@ impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
     fn build(&self, view: &FeedbackAnchor, _ctx: &dyn BuildContext) -> impl IntoView {
         let displacement = self.signal.offset();
         Stack::new(vec![
-            Positioned::new((view.feedback)())
+            // `IgnorePointer` is load-bearing, not decorative: this entry is
+            // the TOPMOST one in the overlay and sits under the pointer by
+            // construction, so hit-testable feedback claims the very position
+            // the drag re-probes on every move and hides every `DragTarget`
+            // beneath it. The drag would then leave the target it is visibly
+            // hovering. Flutter defaults `ignoringFeedbackPointer` to `true`
+            // for the same reason; making it configurable (and its
+            // `ignoringFeedbackSemantics` sibling) stays a named deferral.
+            Positioned::new(IgnorePointer::new().child((view.feedback)()))
                 .left((view.feedback_offset.dx + displacement.dx).0)
                 .top((view.feedback_offset.dy + displacement.dy).0)
                 .into_view()
@@ -799,6 +811,32 @@ fn drag_targets_on(
         .collect()
 }
 
+/// What a drag reads from its `Draggable` exactly once, when it starts.
+///
+/// The oracle's `_DragAvatar` is constructed with `widget.data` and
+/// `widget.feedbackOffset` and never looks at the widget again, so a rebuild
+/// under a live drag cannot change what that drag is carrying or where it
+/// probes. Reading either live instead splits one drag in two: targets entered
+/// before the rebuild hold the old payload (the slot stored it at `did_enter`)
+/// while later ones are offered the new value, and the probe aims at an offset
+/// the mounted feedback layer was never built with.
+///
+/// One struct rather than two fields on purpose: `feedback_offset` is read
+/// here from the same borrow that mounts the feedback entry, so the offset the
+/// probe is displaced by and the offset the visible layer is positioned at
+/// cannot drift apart.
+struct DragStart {
+    /// The drag's payload, type-erased for delivery to targets that cannot
+    /// name `T`. `None` when the `Draggable` carries no data — such a drag
+    /// discovers nothing, since a target's `isExpectedDataType` filter has
+    /// nothing to match against.
+    data: Option<ErasedDragData>,
+    /// Displacement from the pointer to the feedback layer, and therefore from
+    /// the pointer to the point the drag hit-tests
+    /// (`_DragAvatar.updateDrag`'s `globalPosition + feedbackOffset`).
+    feedback_offset: Offset<Pixels>,
+}
+
 /// The `_DragAvatar` analogue: one instance per active drag, held by the
 /// recognizer for the pointer's lifetime. It owns the drag's standing with
 /// every [`DragTargetSlot`] it has entered, and re-discovers that set on
@@ -821,10 +859,9 @@ struct DragSession {
     /// re-resolution reaches a session that started before it. `None` when the
     /// embedder installed none, in which case this drag discovers nothing.
     hit_test: Rc<RefCell<Option<HitTestHandle>>>,
-    /// `feedback_offset`, read live: the oracle hit-tests at
-    /// `globalPosition + feedbackOffset`, so the probe follows the feedback
-    /// layer rather than the bare pointer.
-    feedback_config: Rc<RefCell<FeedbackConfig>>,
+    /// Everything this drag captured from its widget at start — see
+    /// [`DragStart`] for why none of it is re-read.
+    start: DragStart,
     /// The render node the drag's pointer positions are local to, and the
     /// tree that can convert them to the root's space — see [`DragOrigin`].
     listener_node: Rc<Cell<Option<flui_foundation::RenderId>>>,
@@ -903,10 +940,11 @@ impl DragSession {
     /// to hold the tree.
     fn discover(&self, global: Offset<Pixels>) -> Option<(ErasedDragData, Vec<EnteredTarget>)> {
         let handle = self.hit_test.borrow().clone()?;
-        // Read once and carry it onwards: the payload that decided which
-        // targets match must be the payload those targets are then handed.
-        let data = self.config.lock().data.clone()?;
-        let probe_at = global + self.feedback_config.borrow().feedback_offset;
+        // Both from the start-time snapshot, never re-read from the widget:
+        // see `DragStart`. Carried onwards so the payload that decided which
+        // targets match is the payload those targets are then handed.
+        let data = self.start.data.clone()?;
+        let probe_at = global + self.start.feedback_offset;
         match handle.hit_test_at(probe_at) {
             Ok(snapshot) => {
                 let targets = drag_targets_on(snapshot.path(), &data, global);
@@ -1227,13 +1265,21 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 feedback_offset,
             );
 
+            // The snapshot this drag lives on. `feedback_offset` is the very
+            // value the entry above was mounted with, so the probe and the
+            // visible layer cannot disagree.
+            let start = DragStart {
+                data: config.lock().data.clone(),
+                feedback_offset,
+            };
+
             Some(Box::new(DragSession {
                 active_count: Arc::clone(&active_count),
                 rebuild: rebuild.clone(),
                 config: Arc::clone(&config),
                 pointer,
                 hit_test: Rc::clone(&hit_test),
-                feedback_config: Rc::clone(&feedback_config),
+                start,
                 listener_node: Rc::clone(&listener_node),
                 pipeline: Rc::clone(&pipeline),
                 // The contact's own down position, unlike `offset` below —
@@ -1486,16 +1532,19 @@ mod tests {
         config: Arc<Mutex<DragConfig>>,
         rebuild: RebuildHandle,
     ) -> DragSession {
+        let data = config.lock().data.clone();
         DragSession {
             active_count: Arc::new(AtomicUsize::new(1)),
             rebuild,
             config,
             pointer,
             hit_test: Rc::new(RefCell::new(None)),
-            feedback_config: Rc::new(RefCell::new(FeedbackConfig {
-                feedback: None,
+            start: DragStart {
+                // Mirrors `on_start`: whatever the config held when the
+                // session was built is what this drag carries.
+                data,
                 feedback_offset: Offset::ZERO,
-            })),
+            },
             listener_node: Rc::new(Cell::new(None)),
             pipeline: Rc::new(RefCell::new(None)),
             position: Mutex::new(Offset::ZERO),

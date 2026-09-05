@@ -40,15 +40,18 @@
 //!    *position* — see the first corpus bucket below.
 //! 4. **Live discovery end to end** — a drag started clear of every target
 //!    moving onto one, nested and overlapping targets, a transformed target's
-//!    local position, an accepted drop, and a target removed mid-drag. The two
-//!    cases a mounted harness cannot reach — a render tree that reports itself
-//!    BUSY, and two genuinely concurrent contacts — are covered by unit tests
-//!    in `draggable.rs` against a scripted probe.
+//!    local position, an accepted drop, a target removed mid-drag (and a drop
+//!    on the slot it left behind), the drag's own feedback not hiding the
+//!    target beneath it, and the payload/`feedback_offset` snapshot a rebuild
+//!    mid-drag must not disturb. The two cases a mounted harness cannot reach
+//!    — a render tree that reports itself BUSY, and two genuinely concurrent
+//!    contacts — are covered by unit tests in `draggable.rs` against a
+//!    scripted probe.
 //!
 //! ### Denominator: 71 oracle cases
 //!
-//! **31 tests ported below** (11 `Draggable`-gesture + 6 slot-protocol + 6
-//! feedback-layer-mechanism + 8 live-discovery, listed in each section's own
+//! **35 tests ported below** (11 `Draggable`-gesture + 6 slot-protocol + 6
+//! feedback-layer-mechanism + 12 live-discovery, listed in each section's own
 //! comment), plus 2 unit tests in `draggable.rs` for the two cases a mounted
 //! harness cannot reach. Of these, 14 correspond exactly (or as an
 //! explicitly-noted partial) to a specific oracle `testWidgets` name:
@@ -202,13 +205,14 @@ use std::time::Duration;
 
 use flui_interaction::PointerId;
 use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::layout::Axis;
 use flui_types::{Color, Offset, Point, geometry::px};
-use flui_view::{IntoView, StatefulView, ViewExt};
+use flui_view::{IntoView, StatefulView, ViewExt, ViewState};
 use flui_widgets::{
     ColoredBox, DragPosition, DragTarget, DragTargetSlot, Draggable, DraggableDetails,
-    ErasedDragData, Navigator, NavigatorHandle, Padding, Positioned, SimpleRoute, SizedBox, Stack,
-    StackFit, Transform,
+    ErasedDragData, Listener, Navigator, NavigatorHandle, Padding, Positioned, SimpleRoute,
+    SizedBox, Stack, StackFit, Transform,
 };
 
 use crate::common::{LaidOut, lay_out, offset, tight};
@@ -1773,5 +1777,274 @@ fn a_target_removed_mid_drag_receives_nothing_further_and_accepts_nothing() {
         Some(false),
         "a drop onto a target that has left the tree was not accepted by \
          anything, and must not be reported as completed"
+    );
+}
+
+/// A drop on a retired slot still clears the pointer's entry.
+///
+/// The retired slot answers `false` — the target left the tree and did not
+/// receive the data (see `DragTargetSlot::did_drop`'s doc) — but "nothing
+/// happened" must not mean "nothing was cleaned up". Returning before the
+/// removal would strand the pointer's candidate entry, and with it a strong
+/// reference to the drag's payload, for as long as anything holds the slot.
+#[test]
+fn a_drop_on_a_retired_slot_clears_the_entry_even_though_it_accepts_nothing() {
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let accepts_for_cb = Arc::clone(&accepts);
+    let target = string_target().on_accept(move |_details| {
+        accepts_for_cb.fetch_add(1, Ordering::SeqCst);
+    });
+    let mut state = target.create_state();
+    let slot = state.slot();
+    let p = pointer(1);
+
+    assert!(slot.did_enter(p, &erase("a".to_string()), at_origin()));
+    assert_eq!(
+        state.candidate_data().len(),
+        1,
+        "premise: the pointer is a candidate before the target is disposed"
+    );
+
+    // Exactly what the element's own disposal does.
+    ViewState::<DragTarget<String>>::dispose(&mut state);
+
+    assert!(
+        !slot.did_drop(p, at_origin()),
+        "a target that left the tree accepts nothing"
+    );
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        0,
+        "...and its on_accept must not fire"
+    );
+    assert!(
+        state.candidate_data().is_empty(),
+        "but the pointer's entry must still be gone — a retired slot that \
+         keeps it strands the standing and the drag payload it holds"
+    );
+}
+
+/// A `Draggable` and a `DragTarget` inside a `Navigator`'s route, so
+/// `Overlay::maybe_of` finds the overlay a real app gives it and `feedback`
+/// genuinely mounts.
+///
+/// The draggable sits at the top-left corner and the target fills
+/// (60, 60)-(160, 160), so a drag from (20, 20) to (100, 100) both lands
+/// inside the target and leaves the feedback — painted at the tracked
+/// displacement (80, 80) — squarely on top of the probe position.
+fn lay_out_drag_over_target_with_overlay(
+    target: DragTarget<String>,
+    draggable: Draggable<String>,
+) -> LaidOut {
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(SimpleRoute::<i32>::new(move |_ctx| {
+        Stack::new(vec![
+            Positioned::new(target.clone())
+                .left(60.0)
+                .top(60.0)
+                .width(100.0)
+                .height(100.0)
+                .into_view()
+                .boxed(),
+            Positioned::new(draggable.clone())
+                .left(0.0)
+                .top(0.0)
+                .width(40.0)
+                .height(40.0)
+                .into_view()
+                .boxed(),
+        ])
+        .fit(StackFit::Expand)
+        .boxed()
+    }));
+    lay_out(Navigator::new(handle), tight(200.0, 200.0))
+}
+
+/// Feedback painted under the pointer must not hide the target from the
+/// drag's own hit test.
+///
+/// The feedback layer is the topmost overlay entry and sits under the pointer
+/// by construction, so an *opaque* feedback widget claims the probe position
+/// and stops the walk before it reaches any `DragTargetSlot` beneath — the
+/// drag would leave the target it is visibly hovering. Flutter's default is
+/// `ignoringFeedbackPointer: true` for exactly this reason.
+///
+/// The feedback here is deliberately hit-testable (`Listener` with
+/// `HitTestBehavior::Opaque`): a bare `SizedBox`, which the other feedback
+/// cases use, claims no hits at all and so could never demonstrate the
+/// blocking either way.
+#[test]
+fn opaque_feedback_under_the_pointer_does_not_hide_the_target_beneath_it() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let draggable = parcel().feedback(|| {
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .child(SizedBox::new(60.0, 60.0))
+            .boxed()
+    });
+    let mut scoped =
+        lay_out_drag_over_target_with_overlay(logging_target(&log, "inbox"), draggable);
+
+    scoped.dispatch_pointer_down(20.0, 20.0);
+    settle_one_frame(&mut scoped); // the feedback entry mounts, at displacement zero
+
+    scoped.dispatch_pointer_move(100.0, 100.0);
+    assert_eq!(
+        transitions(&log),
+        vec!["enter inbox".to_string(), "move inbox".to_string()],
+        "premise: the drag reaches the target on the move that precedes the \
+         feedback repositioning onto the probe point"
+    );
+    settle_one_frame(&mut scoped); // the feedback anchor rebuilds at (80, 80)
+
+    log.lock().expect("not poisoned").clear();
+    scoped.dispatch_pointer_move(101.0, 101.0);
+
+    assert_eq!(
+        transitions(&log),
+        vec!["move inbox".to_string()],
+        "the drag must still see the target under its own feedback — a leave \
+         here means the feedback claimed the probe position and hid it"
+    );
+}
+
+/// A target that records the payload each drag offers it, tagged with `name`.
+fn payload_logging_target(
+    log: &Arc<StdMutex<Vec<String>>>,
+    name: &'static str,
+) -> DragTarget<String> {
+    let enter_log = Arc::clone(log);
+    DragTarget::<String>::new(|_candidates, _rejected| SizedBox::expand().boxed()).on_will_accept(
+        move |details| {
+            enter_log
+                .lock()
+                .expect("not poisoned")
+                .push(format!("{name} saw {}", details.data));
+            true
+        },
+    )
+}
+
+/// Two targets side by side and a draggable clear of both, in a shape stable
+/// enough to swap through `pump_widget` while a drag is in flight.
+fn two_target_root(
+    left: DragTarget<String>,
+    right: DragTarget<String>,
+    draggable: Draggable<String>,
+) -> Stack {
+    Stack::new(vec![
+        Positioned::new(left)
+            .left(0.0)
+            .top(0.0)
+            .width(80.0)
+            .height(80.0)
+            .into_view()
+            .boxed(),
+        Positioned::new(right)
+            .left(100.0)
+            .top(0.0)
+            .width(80.0)
+            .height(80.0)
+            .into_view()
+            .boxed(),
+        Positioned::new(draggable)
+            .left(0.0)
+            .top(150.0)
+            .width(40.0)
+            .height(40.0)
+            .into_view()
+            .boxed(),
+    ])
+    .fit(StackFit::Expand)
+}
+
+/// A drag carries the payload it started with, even if the widget's `data`
+/// changes underneath it.
+///
+/// The oracle captures `widget.data` when it builds the `_DragAvatar` and
+/// hands that same value to every target for the drag's whole life. Reading it
+/// live instead splits one drag in two: targets entered before the rebuild
+/// hold the original value (the slot stored it at `did_enter`), targets
+/// entered after get the replacement — so crossing a boundary silently changes
+/// what is being dragged.
+#[test]
+fn a_drag_delivers_the_payload_it_started_with_after_the_widget_rebuilds() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let mut scoped = lay_out(
+        two_target_root(
+            payload_logging_target(&log, "left"),
+            payload_logging_target(&log, "right"),
+            Draggable::<String>::new(child()).data("first".to_string()),
+        ),
+        tight(200.0, 200.0),
+    );
+
+    scoped.dispatch_pointer_down(20.0, 170.0);
+    scoped.dispatch_pointer_move(40.0, 40.0);
+    assert_eq!(
+        transitions(&log),
+        vec!["left saw first".to_string()],
+        "premise: the drag enters the left target carrying its original payload"
+    );
+
+    // A parent rebuild replaces the draggable's data mid-drag. The element
+    // (and its in-flight drag) survives: same tree shape, same position.
+    scoped.pump_widget(two_target_root(
+        payload_logging_target(&log, "left"),
+        payload_logging_target(&log, "right"),
+        Draggable::<String>::new(child()).data("second".to_string()),
+    ));
+
+    log.lock().expect("not poisoned").clear();
+    scoped.dispatch_pointer_move(140.0, 40.0);
+
+    assert_eq!(
+        transitions(&log),
+        vec!["right saw first".to_string()],
+        "the second target must be offered the SAME payload the first one was \
+         — a drag that changes what it is carrying halfway across the screen \
+         is one drag delivering two different values"
+    );
+}
+
+/// The probe follows the feedback the drag actually mounted, not a
+/// `feedback_offset` a later rebuild introduced.
+///
+/// `discover` displaces the hit test by `feedback_offset` so it lands on the
+/// feedback rather than the bare pointer (the oracle's `globalPosition +
+/// feedbackOffset`). The mounted `FeedbackAnchor` keeps the offset captured
+/// when its entry was created, so reading the value live instead would aim the
+/// probe somewhere the feedback is not — the two have to be one snapshot.
+#[test]
+fn the_probe_uses_the_feedback_offset_the_drag_started_with() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let mut scoped = lay_out(
+        stack_root(logging_target(&log, "inbox"), parcel()),
+        tight(200.0, 200.0),
+    );
+
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(50.0, 50.0);
+    assert_eq!(
+        transitions(&log),
+        vec!["enter inbox".to_string(), "move inbox".to_string()],
+        "premise: the drag is inside the target before the rebuild"
+    );
+
+    // A rebuild introduces a feedback offset far larger than the viewport.
+    scoped.pump_widget(stack_root(
+        logging_target(&log, "inbox"),
+        parcel().feedback_offset(offset(500.0, 500.0)),
+    ));
+
+    log.lock().expect("not poisoned").clear();
+    scoped.dispatch_pointer_move(51.0, 51.0);
+
+    assert_eq!(
+        transitions(&log),
+        vec!["move inbox".to_string()],
+        "the in-flight drag must keep probing where its own feedback is — \
+         adopting the new offset aims the hit test 500px off the target it is \
+         sitting on and leaves it"
     );
 }

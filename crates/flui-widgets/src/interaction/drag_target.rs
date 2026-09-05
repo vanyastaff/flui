@@ -543,11 +543,14 @@ impl DragTargetSlot {
     /// oracle's `didDrop` returns early on `!mounted` but its caller still
     /// records `wasAccepted = true`; this reports the drop honestly instead.
     ///
+    /// The removal happens either way, exactly as in
+    /// [`did_leave`](Self::did_leave): "the target did not accept it" must not
+    /// also mean "the entry is still there", or a retired slot keeps the
+    /// standing — and the drag payload it holds by `Arc` — for as long as
+    /// anything holds the slot. Only the callback and the rebuild are gated.
+    ///
     /// Flutter parity: `_DragTargetState.didDrop`.
     pub fn did_drop(&self, pointer: PointerId, at: DragPosition) -> bool {
-        if !self.mounted.load(Ordering::Acquire) {
-            return false;
-        }
         let dropped = {
             let mut entered = self.entered.lock();
             entered
@@ -558,6 +561,9 @@ impl DragTargetSlot {
         let Some(dropped) = dropped else {
             return false;
         };
+        if !self.mounted.load(Ordering::Acquire) {
+            return false;
+        }
         self.schedule_rebuild();
         self.callbacks().accept(&dropped.data, at);
         true
