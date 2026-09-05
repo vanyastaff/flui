@@ -573,3 +573,44 @@ fn an_endless_source_is_bounded_through_every_lazy_adaptor() {
         "SliverGrid materialised {grid_rows} tiles for an endless source"
     );
 }
+
+/// An endless source inside a SHRINK-WRAPPING viewport, whose main axis is
+/// unbounded, must still lay out a bounded band.
+///
+/// The bounded-viewport case is covered above and does not exercise this: with
+/// a finite `remaining_cache_extent` the window is derived from pixels and is
+/// small whatever the count says. Unbounded, the cache end is infinite, so a
+/// window derived from the count alone spans `[0, usize::MAX)` and the band
+/// walk iterates it synchronously.
+///
+/// `SliverFixedExtentList` and `SliverGrid` already truncate exactly this
+/// combination (`MAX_UNBOUNDED_WINDOW_CHILDREN` / `UNBOUNDED_SENTINEL_WINDOW`);
+/// the variable-extent list is the one that did not.
+#[test]
+fn an_endless_source_under_an_unbounded_main_axis_stays_bounded() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::ItemCount;
+    use flui_widgets::{ShrinkWrappingViewport, SliverList};
+
+    const ROW: f32 = 40.0;
+    let laid = lay_out(
+        ShrinkWrappingViewport::new((SliverList::new(
+            ItemCount::Unknown,
+            ROW,
+            std::rc::Rc::new(|_: usize| Some(SizedBox::new(200.0, ROW).boxed())),
+        ),)),
+        flui_rendering::constraints::BoxConstraints::new(
+            flui_types::Pixels(200.0),
+            flui_types::Pixels(200.0),
+            flui_types::Pixels(0.0),
+            flui_types::Pixels::INFINITY,
+        ),
+    );
+
+    let rows = laid.find_all_by_render_type("RenderConstrainedBox");
+    assert!(
+        rows.len() < 4096,
+        "an unbounded main axis over an endless source materialised {} rows",
+        rows.len()
+    );
+}

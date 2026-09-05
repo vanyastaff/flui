@@ -19,6 +19,8 @@
 
 use std::collections::BTreeMap;
 
+use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
+
 use flui_tree::Variable;
 use flui_types::geometry::px;
 use flui_types::layout::AxisDirection;
@@ -66,6 +68,39 @@ pub(super) fn constraints_to_scroll_window(c: &SliverConstraints) -> ScrollWindo
         cache_before,
         cache_after,
     }
+}
+
+/// Truncates a band whose end came from an unbounded main axis.
+///
+/// A shrink-wrapping viewport gives an infinite `remaining_cache_extent`, so
+/// the queried band covers every declared item. That is fine for a real count
+/// and fatal for the unbounded sentinel, which declares `usize::MAX`. Counts
+/// past [`MAX_UNBOUNDED_WINDOW_CHILDREN`] are therefore read as "no real data
+/// source has this many" and served [`UNBOUNDED_SENTINEL_WINDOW`] items, so the
+/// committed extent falls far short of the declared content rather than the
+/// walk never returning.
+fn bounded_unbounded_window(
+    item_count: usize,
+    cache_first: usize,
+    cache_last: usize,
+    warned: &mut Option<usize>,
+) -> usize {
+    if item_count <= MAX_UNBOUNDED_WINDOW_CHILDREN {
+        return cache_last;
+    }
+    if *warned != Some(item_count) {
+        *warned = Some(item_count);
+        tracing::warn!(
+            item_count,
+            threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
+            window = UNBOUNDED_SENTINEL_WINDOW,
+            "variable-extent list asked to fill an unbounded main axis declares more \
+             children than any real data source has; reading the count as an \
+             undefined-count stand-in and serving a small bounded window instead, so \
+             the committed extent is far short of the declared content"
+        );
+    }
+    cache_last.min(cache_first.saturating_add(UNBOUNDED_SENTINEL_WINDOW))
 }
 
 /// Returns the main-axis extent of `size` for `axis_direction`.
@@ -194,6 +229,10 @@ pub(super) fn walk_virtualizer_band<'ctx, G>(
     item_count: &mut usize,
     pending_correction: &mut f32,
     attached_child_count: &mut usize,
+    // Latches the count already warned about, so an unbounded window that
+    // re-lays out every frame warns once rather than once per frame — the same
+    // discipline as the fixed-extent list's `warned_truncation_for`.
+    warned_unbounded: &mut Option<usize>,
     constraints: &SliverConstraints,
     ctx: &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
     on_absent: &mut G,
@@ -213,7 +252,26 @@ where
     let window = constraints_to_scroll_window(constraints);
     let range = virtualizer.query(&window);
     let cache_first = range.cache_first;
-    let cache_last = range.cache_last;
+    // An unbounded main axis (a shrink-wrapping viewport) makes the cache end
+    // infinite, so a band derived from it spans every declared item — and with
+    // an unbounded item count (ADR-0053's `usize::MAX` sentinel) that is a
+    // synchronous walk over `usize::MAX` indices. The fixed-extent list and the
+    // grid already truncate exactly this combination; this is the variable-extent
+    // list's half of the same guard, with the same two constants so the three
+    // agree on what "more children than any real source has" means.
+    // The ceiling every band computation in this pass is held to. With a finite
+    // cache extent it is the item count, exactly as before. With an unbounded
+    // one — a shrink-wrapping viewport — the queried band covers every declared
+    // item, which is fine for a real count and fatal for ADR-0053's `usize::MAX`
+    // sentinel. It is applied to the re-query below as well as here: the loop's
+    // own comment claims "bounded by the item count, so the loop terminates",
+    // which is true for every count except the one that means "unknown".
+    let band_ceiling = if constraints.remaining_cache_extent.is_finite() {
+        *item_count
+    } else {
+        bounded_unbounded_window(*item_count, cache_first, range.cache_last, warned_unbounded)
+    };
+    let cache_last = range.cache_last.min(band_ceiling);
 
     // ── 3. Build logical → dense-slot map from current parent data ─────────
     // O(K) where K = currently attached child count (bounded by viewport).
@@ -341,7 +399,7 @@ where
     while !stop {
         let widened = virtualizer.query(&window);
         let next_first = widened.cache_first.min(covered_first);
-        let next_last = widened.cache_last.max(covered_last).min(*item_count);
+        let next_last = widened.cache_last.max(covered_last).min(band_ceiling);
         if next_first == covered_first && next_last == covered_last {
             break;
         }
