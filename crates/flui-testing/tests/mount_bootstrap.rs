@@ -12,6 +12,8 @@
 //! for the bootstrap. Both plant a registry entry by hand rather than mounting
 //! a real `LayoutBuilder`, so they stay pure wiring tests of the frame path.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -244,5 +246,90 @@ fn a_post_frame_callback_scheduled_during_mount_waits_for_the_first_pump() {
     assert!(
         ran.load(Ordering::SeqCst),
         "the first pump is a whole frame and drains the post-frame queue",
+    );
+}
+
+/// A view that captures the fresh-hit-test capability its `init_state` is
+/// offered, over a leaf big enough to hit.
+#[derive(Clone)]
+struct HitTestCapture {
+    /// Owner-local: `HitTestHandle` holds an `Rc<dyn HitTestProbe>` and is
+    /// `!Send` by construction, because the tree it probes is owner-affine.
+    captured: Rc<RefCell<Option<flui_interaction::HitTestHandle>>>,
+}
+
+struct HitTestCaptureState {
+    captured: Rc<RefCell<Option<flui_interaction::HitTestHandle>>>,
+}
+
+impl View for HitTestCapture {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl flui_view::StatefulView for HitTestCapture {
+    type State = HitTestCaptureState;
+
+    fn create_state(&self) -> Self::State {
+        HitTestCaptureState {
+            captured: Rc::clone(&self.captured),
+        }
+    }
+}
+
+impl flui_view::ViewState<HitTestCapture> for HitTestCaptureState {
+    fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+        *self.captured.borrow_mut() = ctx.hit_test_handle();
+    }
+
+    fn build(
+        &self,
+        _view: &HitTestCapture,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        SizedLeaf {
+            size: Size::new(px(40.0), px(40.0)),
+        }
+    }
+}
+
+/// The bootstrap installs the fresh-hit-test capability, and it answers.
+///
+/// Production installs one per presentation, so a harness that did not would
+/// answer `None` to `BuildContext::hit_test_handle()` exactly where a real app
+/// answers `Some` — and a widget whose behavior rides on a fresh hit test (a
+/// `Draggable` discovering the `DragTarget` it has moved over) would be
+/// untestable in the tier that is meant to cover it. Acquired in `init_state`,
+/// which is the only place port-check trigger #22 allows.
+#[test]
+fn the_bootstrap_installs_a_working_fresh_hit_test_capability() {
+    let captured = Rc::new(RefCell::new(None));
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(
+        &HitTestCapture {
+            captured: Rc::clone(&captured),
+        },
+        MountOwners::fresh(),
+        MountOptions::new(flui_rendering::constraints::BoxConstraints::tight(
+            Size::new(px(40.0), px(40.0)),
+        )),
+    );
+
+    let handle = captured
+        .borrow()
+        .clone()
+        .expect("the bootstrap must offer the fresh-hit-test capability to init_state");
+
+    // The realm check the handle makes needs the binding's lane active, the
+    // same as any dispatch.
+    let hit = binding
+        .enter_owner_scope(|| handle.hit_test_at(flui_types::Offset::new(px(20.0), px(20.0))))
+        .expect("the tree is free between frames, so the probe must answer");
+    assert!(
+        !hit.is_empty(),
+        "the capability must probe THIS binding's mounted tree — an empty path \
+         over the middle of a laid-out 40x40 root means it is wired to \
+         something else, or to nothing"
     );
 }

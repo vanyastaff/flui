@@ -168,7 +168,7 @@ If a reference is unavailable, say so explicitly instead of reasoning from memor
 | **Runtime contract registry** | `docs/runtime-contract.toml` | Public shipped/planned runtime contracts, classified boundary families, and the checked root-export manifest. It deliberately does not depend on internal design records. Checked by `just runtime-conformance-check`; touching a monitored runtime export means updating it deliberately |
 | **Render harness** | `crates/flui-rendering/docs/TESTING.md` | RenderTester API, catalog rules |
 | **Logging ownership** | `crates/flui-log/AGENTS.md` | Subscriber policies, native sinks, who may depend on the backend |
-| **Crate ARCHITECTURE.md** | `crates/flui-{foundation,rendering,engine,layer,painting}/ARCHITECTURE.md` | Per-crate deep architecture |
+| **Crate ARCHITECTURE.md** | `crates/flui-{foundation,rendering,engine,layer,painting,widgets}/ARCHITECTURE.md` | Per-crate deep architecture |
 
 ## AI Context Files
 
