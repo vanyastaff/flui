@@ -1297,12 +1297,24 @@ mod tests {
         assert!(left < 0.0, "leftward swipe should be -dx, got {left}");
     }
 
+    /// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
+    ///
+    /// That sampler panics from inside its own strategy on some seeds (#889);
+    /// scaling an integer keeps every case random and does not call it.
+    /// `u16` because `f32: From<u16>` is lossless and `From<u32>` does not
+    /// exist.
+    fn float_in(lo: f32, hi: f32) -> impl proptest::strategy::Strategy<Value = f32> {
+        use proptest::strategy::Strategy as _;
+        const STEPS: u16 = 10_000;
+        (0u16..=STEPS).prop_map(move |n| lo + (f32::from(n) / f32::from(STEPS)) * (hi - lo))
+    }
+
     proptest::proptest! {
         /// Finite positions at monotonic times never produce a non-finite
         /// velocity, and the estimate's confidence stays in [0, 1].
         #[test]
         fn velocity_finite_and_confidence_bounded(
-            xs in proptest::collection::vec(-1e4f32..1e4, 2..=20),
+            xs in proptest::collection::vec(float_in(-1e4, 1e4), 2..=20),
         ) {
             let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
             let start = Instant::now();

@@ -429,6 +429,28 @@ fn single_item_virtualizer() {
 // Property tests vs a naive Vec<ItemExtent> oracle
 // ============================================================================
 
+/// A float in `[lo, hi]` generated WITHOUT proptest's uniform float
+/// sampler.
+///
+/// That sampler panics from inside its own strategy on some seeds —
+/// `assertion failed: self.low - result < self.intervals.step`
+/// (`proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+/// *generating* a value, before any code here sees it. 1.11.0 is the
+/// current release, so there is no version to move to.
+///
+/// Pinning a seed would trade the randomness this test exists for. Drawing
+/// an integer and scaling it keeps every case random and simply does not
+/// call the broken sampler. `STEPS` sets the granularity; nothing here
+/// depends on hitting exact float values, only on covering the range.
+fn extent_in(lo: f32, hi: f32) -> impl proptest::strategy::Strategy<Value = f32> {
+    const STEPS: u32 = 10_000;
+    use proptest::strategy::Strategy as _;
+    (0u32..=STEPS).prop_map(move |n| {
+        let t = f32::from(u16::try_from(n).unwrap_or(u16::MAX)) / STEPS as f32;
+        lo + t * (hi - lo)
+    })
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;
@@ -533,7 +555,7 @@ mod prop {
     fn op_strategy() -> impl Strategy<Value = Op> {
         prop_oneof![
             (0usize..200).prop_map(Op::SetCount),
-            (0usize..200, 0.1f32..100.0)
+            (0usize..200, extent_in(0.1, 100.0))
                 .prop_map(|(index, extent)| Op::SetMeasured { index, extent }),
             (0usize..200).prop_map(Op::InvalidateFrom),
         ]
@@ -572,7 +594,7 @@ mod prop {
         #[test]
         fn invariants_hold_under_random_ops(
             initial_count in 0usize..100,
-            default_estimate in 0.5f32..50.0,
+            default_estimate in extent_in(0.5, 50.0),
             ops in proptest::collection::vec(op_strategy(), 0..120),
         ) {
             let mut v = Virtualizer::new(initial_count, default_estimate);
@@ -663,7 +685,7 @@ mod prop {
         #[test]
         fn set_count_resizes_preserve_sums(
             sizes in proptest::collection::vec(0usize..150, 1..40),
-            est in 1.0f32..20.0,
+            est in extent_in(1.0, 20.0),
         ) {
             let mut v = Virtualizer::new(0, est);
             let mut oracle = Oracle::new(0, est);
@@ -763,9 +785,9 @@ mod tree_edits {
 
     fn op() -> impl Strategy<Value = Op> {
         prop_oneof![
-            (0usize..300, 0.0f32..50.0).prop_map(|(at, e)| Op::Insert { at, e }),
+            (0usize..300, extent_in(0.0, 50.0)).prop_map(|(at, e)| Op::Insert { at, e }),
             (0usize..300).prop_map(|at| Op::Remove { at }),
-            (0usize..300, 0.0f32..50.0).prop_map(|(at, e)| Op::Set { at, e }),
+            (0usize..300, extent_in(0.0, 50.0)).prop_map(|(at, e)| Op::Set { at, e }),
         ]
     }
 
@@ -774,7 +796,7 @@ mod tree_edits {
 
         #[test]
         fn mid_list_insert_remove_matches_oracle(
-            init in proptest::collection::vec(0.0f32..50.0, 0..30),
+            init in proptest::collection::vec(extent_in(0.0, 50.0), 0..30),
             ops in proptest::collection::vec(op(), 0..400),
         ) {
             let mut t = ExtentTree::from_fn(init.len(), |i| measured(init[i]));
@@ -841,8 +863,8 @@ mod tree_edits {
         /// the interior shared descent, and the `>= total` clamp together.
         #[test]
         fn seek_sorted_agrees_with_scalar_seek(
-            init in proptest::collection::vec(0.1f32..50.0, 1..40),
-            fracs in proptest::collection::vec(0.0f32..1.0, 1..8),
+            init in proptest::collection::vec(extent_in(0.1, 50.0), 1..40),
+            fracs in proptest::collection::vec(extent_in(0.0, 1.0), 1..8),
         ) {
             let t = ExtentTree::from_fn(init.len(), |i| measured(init[i]));
             let total = t.total_extent();

@@ -11,14 +11,28 @@ use proptest::prelude::*;
 // Arbitrary generators for property testing
 // ============================================================================
 
+/// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
+///
+/// That sampler panics from inside its own strategy on some seeds (#889:
+/// `assertion failed: self.low - result < self.intervals.step`,
+/// `proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+/// *generating* a value, before any assertion here runs. Scaling an integer
+/// keeps every case random and simply does not call it.
+fn float_in(lo: f32, hi: f32) -> impl Strategy<Value = f32> {
+    // `u16` because `f32: From<u16>` is lossless and `From<u32>` does not
+    // exist — the conversion has to be exact or the range drifts.
+    const STEPS: u16 = 10_000;
+    (0u16..=STEPS).prop_map(move |n| lo + (f32::from(n) / f32::from(STEPS)) * (hi - lo))
+}
+
 /// Generate arbitrary Pixels values in a reasonable range for UI coordinates
 fn arb_pixels() -> impl Strategy<Value = Pixels> {
-    (-10000.0f32..=10000.0f32).prop_map(Pixels)
+    float_in(-10000.0, 10000.0).prop_map(Pixels)
 }
 
 /// Generate arbitrary positive Pixels for sizes (must be >= 0)
 fn arb_positive_pixels() -> impl Strategy<Value = Pixels> {
-    (0.0f32..=10000.0f32).prop_map(Pixels)
+    float_in(0.0, 10000.0).prop_map(Pixels)
 }
 
 /// Generate arbitrary Points

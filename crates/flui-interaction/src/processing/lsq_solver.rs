@@ -478,13 +478,25 @@ mod tests {
         );
     }
 
+    /// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
+    ///
+    /// That sampler panics from inside its own strategy on some seeds (#889);
+    /// scaling an integer keeps every case random and does not call it.
+    /// `u16` because `f64: From<u16>` is lossless and `From<u32>` does not
+    /// exist.
+    fn float_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
+        use proptest::strategy::Strategy as _;
+        const STEPS: u16 = 10_000;
+        (0u16..=STEPS).prop_map(move |n| lo + (f64::from(n) / f64::from(STEPS)) * (hi - lo))
+    }
+
     proptest::proptest! {
         /// For any finite data and degree, `solve` returns either `None` or a
         /// fit whose confidence is in [0, 1] with finite coefficients — never
         /// NaN/Inf poisoning downstream consumers.
         #[test]
         fn solve_confidence_bounded_and_finite(
-            data in proptest::collection::vec((-1e3f64..1e3, -1e3f64..1e3), 1..=20),
+            data in proptest::collection::vec((float_in(-1e3, 1e3), float_in(-1e3, 1e3)), 1..=20),
             degree in 0usize..=3,
         ) {
             let xs: Vec<f64> = data.iter().map(|p| p.0).collect();
