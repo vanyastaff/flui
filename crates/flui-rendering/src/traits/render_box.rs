@@ -494,6 +494,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         CursorIcon::Default
     }
 
+    /// Opaque payload this box attaches to any hit that lands on it — see
+    /// [`RenderObject::metadata`].
+    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
     /// Mouse-tracker annotation contributed to this box's hit entry.
     fn mouse_tracker_annotation(
         &self,
@@ -846,6 +852,10 @@ where
 
     fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         <T as RenderBox>::hit_test_transform(self, size)
+    }
+
+    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+        <T as RenderBox>::metadata(self)
     }
 
     fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {

@@ -78,6 +78,8 @@ mod lazy_list;
 mod list_body;
 #[path = "listener.rs"]
 mod listener;
+#[path = "meta_data.rs"]
+mod meta_data;
 #[path = "modifiers.rs"]
 mod modifiers;
 #[path = "mouse_region.rs"]

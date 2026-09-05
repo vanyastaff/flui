@@ -13,6 +13,7 @@ mod gesture_detector;
 mod ignore_pointer;
 mod interactive_viewer;
 mod listener;
+mod meta_data;
 mod mouse_region;
 mod offstage;
 mod shortcuts;
@@ -47,6 +48,7 @@ pub use interactive_viewer::{
     InteractiveViewerState, PanAxis, WheelScaleGate,
 };
 pub use listener::Listener;
+pub use meta_data::MetaData;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
 pub use shortcuts::{

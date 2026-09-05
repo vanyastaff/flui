@@ -113,6 +113,25 @@ impl RenderMetaData {
         had != has || has
     }
 
+    /// Replaces the payload with an already-shared one.
+    ///
+    /// The widget-facing setter: a `MetaData` widget holds its payload as an
+    /// `Arc` already (it may be rebuilt many times and must not re-wrap on
+    /// each), so this takes the `Arc` rather than boxing a fresh one like
+    /// [`Self::set_metadata`].
+    ///
+    /// Returns whether the payload changed identity, the same contract the
+    /// other setters give a caller gating work on a change.
+    pub fn set_shared_metadata(&mut self, payload: Option<MetaDataPayload>) -> bool {
+        let changed = match (&self.metadata, &payload) {
+            (Some(current), Some(next)) => !Arc::ptr_eq(current, next),
+            (None, None) => false,
+            _ => true,
+        };
+        self.metadata = payload;
+        changed
+    }
+
     /// Clears the metadata. Returns `true` if a payload was present.
     pub fn clear_metadata(&mut self) -> bool {
         let had = self.metadata.is_some();
@@ -177,20 +196,28 @@ impl RenderBox for RenderMetaData {
         self.behavior
     }
 
+    /// Hand the payload to every hit that lands here.
+    ///
+    /// This is what makes the node findable: the searcher walks a hit path it
+    /// got from somewhere else entirely and downcasts, never needing to know
+    /// this type exists. `DragTarget` discovery rides on exactly this.
+    fn metadata(&self) -> Option<MetaDataPayload> {
+        self.metadata.clone()
+    }
+
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if !ctx.is_within_own_size() {
             return false;
         }
-        // Test the child first when the behavior allows deferral.
-        let child_hit = if matches!(
-            self.behavior,
-            HitTestBehavior::DeferToChild | HitTestBehavior::Translucent
-        ) && self.has_child
-        {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
-        } else {
-            false
-        };
+        // Children are tested FIRST, whatever the behavior --
+        // `RenderProxyBoxWithHitTestBehavior.hitTest` is
+        // `hitTestChildren(...) || hitTestSelf(...)`, and only `hitTestSelf`
+        // consults the behavior. Skipping the descent for `Opaque` (as this
+        // did) makes an opaque node a wall: it claims the hit and everything
+        // beneath it becomes unreachable, so a tagged subtree inside another
+        // tagged subtree is invisible. Nested drop targets are exactly that
+        // shape.
+        let child_hit = self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO);
 
         if child_hit {
             return true;

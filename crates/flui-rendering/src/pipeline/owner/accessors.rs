@@ -743,6 +743,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 None => entry,
             };
             let entry = entry.cursor(render_object.mouse_cursor());
+            let entry = match render_object.metadata() {
+                Some(payload) => entry.metadata(payload),
+                None => entry,
+            };
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
                 None => entry,
@@ -1049,6 +1053,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 crate::hit_testing::HitTestEntry::new(id).cursor(render_object.mouse_cursor());
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
+                None => entry,
+            };
+            // Attached on the sliver path as well as the box one. No shipped
+            // sliver overrides `metadata` today -- `RenderMetaData` is a box
+            // proxy -- but a trait method the box walk honours and the sliver
+            // walk silently drops is a trap, not an optimisation.
+            let entry = match render_object.metadata() {
+                Some(payload) => entry.metadata(payload),
                 None => entry,
             };
             result.add(entry);
