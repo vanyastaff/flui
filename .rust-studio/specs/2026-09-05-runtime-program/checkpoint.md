@@ -50,9 +50,7 @@ unit boundary; read it back against the code before trusting any line.
 
 ## Unit 2 — PR #920 (#558 close veto) to green (MERGED — main d6be4912)
 
-- wasm32 failure fixed locally on the branch (worktree
-  `/tmp/claude-1000/-mnt-data-dev-flui/c85dfaf1-30e5-463b-87f9-2419e33d9d59/scratchpad/wt-558`,
-  commit `be85f101`): the `PendingCompletion` static lacked the alias's cfg;
+- wasm32 failure fixed on the branch (commit `be85f101`): the `PendingCompletion` static lacked the alias's cfg;
   the consult side of the close-request router is dead on wasm32/Android and
   now carries the crate's standard `expect(dead_code)` ratchet.
 - Rebased onto `main` (only conflict: the trait-file doc hunk on the block
@@ -66,9 +64,11 @@ unit boundary; read it back against the code before trusting any line.
 Method: `FLUI_FRAME_HISTOGRAM=1 FLUI_SELF_CLOSE_AFTER_MS=20000 target/debug/examples/animated_box_app`
 (dev profile, as ADR-0029), real Wayland session, NVIDIA RTX 3070 Ti driver
 595.84, primary panel 164.89 Hz (a second panel at 143.91 Hz is attached;
-the window's placement was not controlled). Logs (ANSI-stripped) beside this
-file: `baseline-serial-lane.log` (histogram only) and
-`baseline-serial-lane-gpu.log` (plus `flui.gpu` per-present trace).
+the window's placement was not controlled). Reduced into `adr-0058-measurements.md` — the raw traces are not
+committed (one is 20 MB, and `.gitignore` excludes `*.log`), so that file
+carries every number, the per-second present counts, and the reduction
+script's inputs rather than pointing at something a clean checkout cannot
+open.
 
 **It does not reproduce ADR-0029's July picture (median 6.058 ms tracking
 the panel, p90 within 0.1 ms).** Three findings, each a hypothesis until a
