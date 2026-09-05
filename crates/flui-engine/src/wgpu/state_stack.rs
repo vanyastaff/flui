@@ -505,14 +505,23 @@ impl GpuStateStack {
                 .map(|c| c.y)
                 .fold(f32::NEG_INFINITY, f32::max);
 
-            let x = min_x.max(0.0) as u32;
-            let y = min_y.max(0.0) as u32;
-            let w = (max_x.min(surface_size.0 as f32) - min_x.max(0.0))
-                .ceil()
-                .max(0.0) as u32;
-            let h = (max_y.min(surface_size.1 as f32) - min_y.max(0.0))
-                .ceil()
-                .max(0.0) as u32;
+            // The conservative pad applies here too. The AABB is already
+            // conservative about ROTATION, which is a different question from
+            // whether its fractional bounds round outward: a clip translated
+            // by 0.75 still truncates to `x = 0, w = 10` and rejects the
+            // column whose centre at 10.5 is inside the SDF's edge at 10.75.
+            let pad = match rounding {
+                ScissorRounding::Exact => 0.0,
+                ScissorRounding::Conservative => 1.0,
+            };
+            let left = (min_x - pad).max(0.0);
+            let top = (min_y - pad).max(0.0);
+            let right = (max_x + pad).min(surface_size.0 as f32);
+            let bottom = (max_y + pad).min(surface_size.1 as f32);
+            let x = left.floor() as u32;
+            let y = top.floor() as u32;
+            let w = (right.ceil() - left.floor()).max(0.0) as u32;
+            let h = (bottom.ceil() - top.floor()).max(0.0) as u32;
             (x, y, w, h)
         };
 

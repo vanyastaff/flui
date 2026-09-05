@@ -68,19 +68,31 @@ impl WgpuPainter {
     /// coordinates clamped to `[0, viewport]`).  Subsequent draw calls are
     /// rasterised only within the resulting intersection.  Call [`Self::restore`]
     /// to pop the clip state pushed by the matching [`Self::save`].
-    /// `hard` selects the layer's `Clip` mode. A hard-edged rect clip is the
-    /// scissor: integer pixel bounds, no partial coverage, and free. A
-    /// *smooth* one cannot be — the scissor has no sub-pixel notion — so it
-    /// goes through the SDF as a rounded rect with zero radii, which is the
-    /// same path a rounded clip takes and already feathers correctly under
-    /// rotation and non-uniform scale.
+    /// A rectangular clip is the hardware scissor, whatever the mode.
+    ///
+    /// `Clip::AntiAlias` on a *rect* is therefore **not yet honoured** — it
+    /// renders as `HardEdge`. Routing it to the SDF instead (which is what
+    /// gives a rounded clip its feathered edge) was tried and reverted: the
+    /// SDF is a per-instance uniform and the scissor is not, so the swap
+    /// silently gave up three things the scissor does.
+    ///
+    /// - **It reaches everything.** Text is handed to glyphon with the
+    ///   scissor alone, so an SDF-only clip does not clip a label at all.
+    /// - **It intersects.** Nested clips share one SDF slot and the inner one
+    ///   clears the outer; scissors intersect by construction.
+    /// - **It is exact.** The SDF's coarse scissor is deliberately expanded,
+    ///   so pixels leak up to a pixel outside a clip that used to be tight.
+    ///
+    /// A feathered rectangular edge is not worth those three. Honouring it
+    /// properly means giving the shader a clip *stack* and routing text
+    /// through the same mask — a different piece of work, tracked on #848.
+    ///
+    /// `hard` is still taken so these call sites read like the rounded ones,
+    /// and so that the day the SDF can carry a rect clip safely, only this
+    /// body changes.
     pub fn clip_rect(&mut self, rect: Rect<Pixels>, hard: bool) {
-        if hard {
-            self.state.clip_rect(rect, self.size);
-        } else {
-            self.state
-                .clip_rrect(RRect::from_rect(rect), self.size, false);
-        }
+        let _ = hard;
+        self.state.clip_rect(rect, self.size);
     }
 
     /// Intersect the clip region with a rounded rectangle.

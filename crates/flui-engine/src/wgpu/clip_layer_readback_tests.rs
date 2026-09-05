@@ -8,13 +8,20 @@
 //! the widget test reads layer kinds and never a pixel, and this one knows
 //! nothing about viewports. Together they say what a user sees.
 //!
-//! **The modes.** `HardEdge` and `AntiAlias` now render differently, which
-//! `a_hard_clip_edge_and_a_smooth_one_differ` pins: the backend used to take a
-//! clip layer's `Clip` and discard it, so all three clipped modes were one
-//! picture. `AntiAliasWithSaveLayer` still renders as `AntiAlias` — its
-//! offscreen composite is not implemented — and that is asserted deliberately
-//! and narrowly, so the day it lands, the assertion fails in the right place
-//! rather than the divergence going quiet.
+//! **The modes.** The backend used to take a clip layer's `Clip` and discard
+//! it, so all three clipped modes were one picture. Now:
+//!
+//! - a **rounded** clip honours `HardEdge` vs `AntiAlias`
+//!   (`a_rounded_clip_honours_hard_edge_and_anti_alias_differently`);
+//! - a **rect** clip does not — it is the hardware scissor under both modes,
+//!   because routing it to the SDF costs text clipping, nested intersection
+//!   and exactness (`Painter::clip_rect` has the full reasoning);
+//! - `AntiAliasWithSaveLayer` renders as `AntiAlias`; its offscreen group
+//!   composite is unimplemented.
+//!
+//! The last two are pinned by tests asserting the known-wrong equalities —
+//! deliberately, so each fails in the right place when it is fixed rather than
+//! the divergence going quiet. Both are tracked on #848, which stays open.
 
 use flui_layer::{LayerTree, SceneBuilder};
 use flui_painting::{Canvas, Paint};
@@ -235,14 +242,23 @@ fn rotated_clip_scene(behavior: Clip) -> LayerTree {
     tree
 }
 
-/// `Clip::HardEdge` and `Clip::AntiAlias` must not render the same picture.
+/// A RECTANGULAR clip renders the same under both modes, deliberately.
 ///
-/// This is the defect #848 named: the backend took the layer's `Clip` and
-/// discarded it, so all three clipped modes were one picture. A test asserting
-/// the modes AGREE would have pinned that defect as the contract, which is why
-/// none existed before the modes were honoured.
+/// `Clip::AntiAlias` on a rect is not honoured: a rect clip is the hardware
+/// scissor, and routing it to the SDF to get a feathered edge was tried and
+/// reverted. The SDF is a per-instance uniform and the scissor is not, so the
+/// swap gave up three things — it stopped reaching text (handed to glyphon
+/// with the scissor alone), stopped intersecting under nesting (one SDF slot,
+/// inner overwrites outer), and stopped being exact (its coarse scissor is
+/// padded, so pixels leak up to a pixel out). See `Painter::clip_rect`.
+///
+/// Asserting a known-wrong equality is normally how a defect gets frozen as a
+/// contract, so this is deliberate and narrow, and paired with
+/// `a_rounded_clip_honours_hard_edge_and_anti_alias_differently`, which proves
+/// the mode IS honoured where it can be. When the shader grows a clip stack
+/// and text routes through the same mask, this is the test that fails.
 #[test]
-fn a_hard_clip_edge_and_a_smooth_one_differ() {
+fn a_rect_clip_renders_the_same_under_both_modes_for_now() {
     let Ok(renderer) = HeadlessRenderer::new() else {
         eprintln!("skipping: no GPU adapter available");
         return;
@@ -254,17 +270,11 @@ fn a_hard_clip_edge_and_a_smooth_one_differ() {
             .expect("the headless capture path must rasterize a clipped tree")
     };
 
-    let hard = partial_coverage_pixels(&render(Clip::HardEdge));
-    let smooth = partial_coverage_pixels(&render(Clip::AntiAlias));
-
-    assert!(
-        smooth > hard,
-        "an anti-aliased clip must feather its boundary: hard={hard} smooth={smooth}"
-    );
-    assert!(
-        hard * 4 < smooth,
-        "the difference must be a real band, not a few stray pixels: \
-         hard={hard} smooth={smooth}"
+    assert_eq!(
+        render(Clip::HardEdge),
+        render(Clip::AntiAlias),
+        "a rect clip is the scissor under both modes until the SDF can carry \
+         one without losing text, nesting and exactness (#848)"
     );
 }
 
