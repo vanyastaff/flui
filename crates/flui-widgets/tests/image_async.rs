@@ -84,28 +84,60 @@ fn pump_until(laid: &mut common::LaidOut, mut check: impl FnMut(&mut common::Lai
     }
 }
 
-/// An `AssetImage`-backed `Image` shows the empty-box placeholder on the
-/// first frame (the eager inline poll of `resolve_async` cannot
-/// synchronously complete a real background file read), then decodes to the
-/// fixture's true 5×3 dimensions once the bridged load lands as a scheduled
-/// rebuild.
+/// An `AssetImage`-backed `Image` only ever shows the empty-box placeholder or
+/// the fixture's true dimensions — never a guessed or default size — and
+/// reaches the true dimensions once the bridged load lands.
+///
+/// The assertion is on that INVARIANT rather than on the first frame being a
+/// placeholder. An earlier version asserted the placeholder on frame one, with
+/// a doc-comment premise that "the eager inline poll of `resolve_async` cannot
+/// synchronously complete a real background file read". CI disproved the
+/// premise: on a warm page cache the 75-byte read does complete inline, and the
+/// test failed with `5x3` against `0x0` — reporting correct-and-fast behaviour
+/// as a defect.
+///
+/// A placeholder frame is permitted, not required. What is forbidden is any
+/// third size, which is what "a guessed or default size" would be, and that is
+/// still caught on every frame.
 #[test]
-fn asset_image_placeholder_then_decodes_across_pumped_frames() {
+fn asset_image_shows_only_the_placeholder_or_the_true_size() {
     let mut laid = lay_out(
         Image::asset(registry(), fixture("tiny-progress.png")),
         loose(1000.0),
     );
 
-    assert_eq!(
-        laid.size(laid.current_root()),
-        size(0.0, 0.0),
-        "the first frame must show the empty-box placeholder while the \
-         background load is in flight, not a guessed or default size",
-    );
+    let decoded = size(5.0, 3.0);
+    let placeholder = size(0.0, 0.0);
+    let mut seen = Vec::new();
 
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(5.0, 3.0)
-    });
+    let deadline = Instant::now() + DECODE_BUDGET;
+    loop {
+        let observed = laid.size(laid.current_root());
+        if seen.last() != Some(&observed) {
+            seen.push(observed);
+        }
+        assert!(
+            observed == placeholder || observed == decoded,
+            "an in-flight image must show the empty-box placeholder or its \
+             real dimensions and nothing else; the frame went through {seen:?}",
+        );
+        if observed == decoded {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the async load did not complete within the {DECODE_BUDGET:?} \
+             budget; the frame went through {seen:?}",
+        );
+        laid.tick();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    assert_eq!(
+        seen.last(),
+        Some(&decoded),
+        "the load must land on the real dimensions"
+    );
 }
 
 /// Unmounting and remounting an `Image` with the SAME cache key after the
