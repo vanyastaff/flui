@@ -69,28 +69,91 @@ impl Summary {
     };
 
     #[inline]
-    fn of_item(item: &ItemExtent) -> Self {
+    fn of_run(run: &Run) -> Self {
         Self {
-            count: 1,
-            total_extent: item.extent(),
+            count: run.count,
+            total_extent: run.total(),
         }
     }
 
     #[inline]
     fn add(self, other: Self) -> Self {
         Self {
-            count: self.count + other.count,
-            total_extent: self.total_extent + other.total_extent,
+            // Saturating: the tree can hold `usize::MAX` items in one run, and
+            // an unbounded list plus anything else must stay at the sentinel
+            // rather than wrap to a small count.
+            count: self.count.saturating_add(other.count),
+            total_extent: finite_or_max(self.total_extent + other.total_extent),
         }
     }
 }
 
-/// A B-tree node: either a leaf holding items, or an internal node holding
-/// child subtrees plus a parallel array of their cached summaries.
+/// Clamps a non-finite extent sum to `f32::MAX`.
+///
+/// An unbounded list's total leaves the range `f32` can name. Infinity there
+/// propagates into `max_scroll_extent` and poisons every scroll clamp
+/// downstream, so it is pinned to the largest nameable extent instead — still
+/// far beyond any reachable scroll position, but arithmetically ordinary.
+#[inline]
+fn finite_or_max(value: f32) -> f32 {
+    if value.is_finite() { value } else { f32::MAX }
+}
+
+/// A run of consecutive items sharing one extent — the leaf's unit of storage.
+///
+/// Unmeasured items are always created in large identical batches: the whole
+/// list at construction, the tail after a growth, everything after an
+/// invalidation. Collapsing them costs one entry instead of `count`. Measured
+/// items are individual, but a lazy sliver only ever measures the band it lays
+/// out, so the tree is `O(measured)` rather than `O(item_count)`.
+///
+/// That is what makes ADR-0053's unbounded `usize::MAX` sentinel representable
+/// at all: an endless list is a single entry, not an allocation that overflows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Run {
+    /// How many consecutive items this run covers. Always `>= 1`.
+    count: usize,
+    /// The extent every item in the run carries.
+    extent: ItemExtent,
+}
+
+impl Run {
+    /// The run's total pixel extent, saturating rather than overflowing.
+    ///
+    /// No reachable offset loses precision to the saturation: `offset_of`
+    /// computes a prefix from within the run it lands in and never adds a
+    /// saturated total (see [`Node::offset_of`]).
+    #[inline]
+    fn total(&self) -> f32 {
+        finite_or_max(self.count as f32 * self.extent.extent())
+    }
+}
+
+/// Appends `run` to `runs`, merging it into the previous entry when the two
+/// carry the same extent.
+///
+/// Coalescing is what keeps the run count bounded: without it, re-hinting or
+/// invalidating would leave one entry per original item and the whole point of
+/// the representation would be lost on the second edit.
+fn push_coalesced(runs: &mut Vec<Run>, run: Run) {
+    if run.count == 0 {
+        return;
+    }
+    match runs.last_mut() {
+        Some(last) if last.extent == run.extent => {
+            last.count = last.count.saturating_add(run.count);
+        }
+        _ => runs.push(run),
+    }
+}
+
+/// A B-tree node: either a leaf holding runs of items, or an internal node
+/// holding child subtrees plus a parallel array of their cached summaries.
 #[derive(Debug, Clone)]
 enum Node {
-    /// Leaf: the actual items, in index order.
-    Leaf { items: Vec<ItemExtent> },
+    /// Leaf: runs of items, in index order. Adjacent runs always differ in
+    /// extent (see [`push_coalesced`]).
+    Leaf { runs: Vec<Run> },
     /// Internal: child subtrees in index order, with `summaries[i]` caching
     /// `children[i]`'s subtree summary. `children.len() == summaries.len()`.
     ///
@@ -119,15 +182,19 @@ enum Mutation {
 impl Node {
     #[inline]
     fn new_leaf() -> Self {
-        Node::Leaf { items: Vec::new() }
+        Node::Leaf { runs: Vec::new() }
     }
 
-    /// Number of entries directly in this node (items for a leaf, children for
-    /// an internal node).
+    /// Number of **entries** directly in this node — runs for a leaf, children
+    /// for an internal node.
+    ///
+    /// This is what the `MIN`/`MAX` balance invariants are stated over, and it
+    /// is deliberately not the item count: one run may cover `usize::MAX`
+    /// items. [`Self::count`] is the item count.
     #[inline]
     fn len(&self) -> usize {
         match self {
-            Node::Leaf { items } => items.len(),
+            Node::Leaf { runs } => runs.len(),
             Node::Internal { children, .. } => children.len(),
         }
     }
@@ -135,9 +202,9 @@ impl Node {
     /// Computes this node's subtree summary from scratch.
     fn summary(&self) -> Summary {
         match self {
-            Node::Leaf { items } => items
+            Node::Leaf { runs } => runs
                 .iter()
-                .fold(Summary::EMPTY, |acc, it| acc.add(Summary::of_item(it))),
+                .fold(Summary::EMPTY, |acc, r| acc.add(Summary::of_run(r))),
             Node::Internal { summaries, .. } => {
                 summaries.iter().fold(Summary::EMPTY, |acc, s| acc.add(*s))
             }
@@ -148,8 +215,12 @@ impl Node {
     #[inline]
     fn count(&self) -> usize {
         match self {
-            Node::Leaf { items } => items.len(),
-            Node::Internal { summaries, .. } => summaries.iter().map(|s| s.count).sum(),
+            Node::Leaf { runs } => runs
+                .iter()
+                .fold(0usize, |acc, r| acc.saturating_add(r.count)),
+            Node::Internal { summaries, .. } => summaries
+                .iter()
+                .fold(0usize, |acc, s| acc.saturating_add(s.count)),
         }
     }
 
@@ -160,11 +231,27 @@ impl Node {
     /// `index` is subtree-local and must satisfy `index <= self.count()`.
     fn offset_of(&self, index: usize) -> f32 {
         match self {
-            Node::Leaf { items } => items
-                .iter()
-                .take(index)
-                .map(ItemExtent::extent)
-                .sum::<f32>(),
+            Node::Leaf { runs } => {
+                // Whole runs before `index` contribute their total; the run
+                // `index` lands inside contributes only the prefix, computed
+                // as `consumed * extent` directly. That direct product is why
+                // a saturating run total never costs a reachable offset any
+                // precision — the saturated value is only ever added for runs
+                // entirely before `index`, which for an unbounded tail cannot
+                // happen (nothing follows it).
+                let mut acc = 0.0f32;
+                let mut remaining = index;
+                for run in runs {
+                    if remaining >= run.count {
+                        acc += run.total();
+                        remaining -= run.count;
+                    } else {
+                        acc += remaining as f32 * run.extent.extent();
+                        return acc;
+                    }
+                }
+                acc
+            }
             Node::Internal {
                 children,
                 summaries,
@@ -205,21 +292,31 @@ impl Node {
     #[cfg(test)]
     fn seek_offset(&self, offset: f32) -> (usize, f32) {
         match self {
-            Node::Leaf { items } => {
-                let mut acc = 0.0;
-                for (i, it) in items.iter().enumerate() {
-                    let e = it.extent();
-                    // Strictly-greater end means a zero-extent item at exactly
+            Node::Leaf { runs } => {
+                let mut acc = 0.0f32;
+                let mut base = 0usize;
+                for run in runs {
+                    let e = run.extent.extent();
+                    let run_total = run.total();
+                    // Strictly-greater end means a zero-extent run at exactly
                     // `offset` is skipped in favour of the next real item — the
-                    // half-open `[start, end)` containment rule.
-                    if acc + e > offset {
-                        return (i, offset - acc);
+                    // half-open `[start, end)` containment rule, applied to the
+                    // whole run at once (every item in it has the same extent,
+                    // so a zero-extent run contains no offset).
+                    if acc + run_total > offset {
+                        let into_run = offset - acc;
+                        // `e > 0.0` here: a zero-extent run has `run_total ==
+                        // 0.0` and cannot satisfy the test above.
+                        let local = ((into_run / e) as usize).min(run.count - 1);
+                        return (base + local, into_run - local as f32 * e);
                     }
-                    acc += e;
+                    acc += run_total;
+                    base += run.count;
                 }
                 // `offset` is at or past the end: clamp to the last item.
-                let last = items.len() - 1;
-                (last, offset - (acc - items[last].extent()))
+                let last_run = runs.last().expect("leaf reached by seek is non-empty");
+                let last = base - 1;
+                (last, offset - (acc - last_run.extent.extent()))
             }
             Node::Internal {
                 children,
@@ -281,19 +378,33 @@ impl Node {
             return;
         }
         match self {
-            Node::Leaf { items } => {
-                // One forward scan shared across all offsets (they are sorted, so
-                // the item cursor only advances). `last`-clamp mirrors the
-                // single-offset leaf rule, though middle offsets never reach it.
-                let last = items.len() - 1;
+            Node::Leaf { runs } => {
+                // One forward scan shared across all offsets (they are sorted,
+                // so the run cursor only advances). Within the landing run the
+                // item is found by division, not iteration — a run may cover
+                // `usize::MAX` items. `last`-clamp mirrors the single-offset
+                // leaf rule, though middle offsets never reach it.
+                let last_run = runs.len() - 1;
                 let mut acc = base_offset;
-                let mut i = 0usize;
+                let mut r = 0usize;
+                let mut base = base_index;
                 for (slot, &off) in out.iter_mut().zip(offsets) {
-                    while i < last && acc + items[i].extent() <= off {
-                        acc += items[i].extent();
-                        i += 1;
+                    while r < last_run && acc + runs[r].total() <= off {
+                        acc += runs[r].total();
+                        base = base.saturating_add(runs[r].count);
+                        r += 1;
                     }
-                    *slot = (base_index + i, off - acc);
+                    let run = &runs[r];
+                    let e = run.extent.extent();
+                    let into_run = off - acc;
+                    let local = if e > 0.0 {
+                        ((into_run / e) as usize).min(run.count - 1)
+                    } else {
+                        // A zero-extent run spans no pixels; every offset in it
+                        // resolves to its first item, matching the scalar rule.
+                        0
+                    };
+                    *slot = (base + local, into_run - local as f32 * e);
                 }
             }
             Node::Internal {
@@ -336,23 +447,80 @@ impl Node {
 
     /// Replaces the item at subtree-local `index`, returning the *old* item so
     /// the caller can compute deltas. Repairs summaries on the way back up.
-    fn set(&mut self, index: usize, item: ItemExtent) -> ItemExtent {
+    ///
+    /// Unlike a flat-item leaf, this can grow the node: writing into the middle
+    /// of a run splits it into up to three (before / the new item / after), so
+    /// a leaf can overflow `MAX` and must report a [`Mutation`] the way
+    /// [`Self::insert`] does.
+    fn set(&mut self, index: usize, item: ItemExtent) -> (ItemExtent, Mutation) {
         match self {
-            Node::Leaf { items } => std::mem::replace(&mut items[index], item),
-            Node::Internal {
-                children,
-                summaries,
-            } => {
-                let mut remaining = index;
-                for (child, summ) in children.iter_mut().zip(summaries.iter_mut()) {
-                    if remaining < summ.count {
-                        let old = child.set(remaining, item);
-                        *summ = child.summary();
-                        return old;
+            Node::Leaf { runs } => {
+                let mut before = 0usize;
+                let mut target = None;
+                for (i, run) in runs.iter().enumerate() {
+                    if index - before < run.count {
+                        target = Some((i, index - before, run.extent, run.count));
+                        break;
                     }
-                    remaining -= summ.count;
+                    before += run.count;
                 }
-                unreachable!("index out of range in Node::set")
+                let (slot, local, old, run_count) =
+                    target.expect("BUG: Node::set index is bounded by the caller's assert");
+                if old == item {
+                    // Nothing to do, and splitting here would create two
+                    // adjacent equal runs — the invariant coalescing exists to
+                    // prevent.
+                    return (old, Mutation::Done);
+                }
+                // Rebuild through `push_coalesced` so the write merges with
+                // whichever neighbours now match it, in one pass. Bounded by
+                // `MAX` entries, so this stays O(1) in the item count.
+                let mut rebuilt = Vec::with_capacity(runs.len() + 2);
+                for (i, run) in runs.iter().enumerate() {
+                    if i != slot {
+                        push_coalesced(&mut rebuilt, *run);
+                        continue;
+                    }
+                    push_coalesced(
+                        &mut rebuilt,
+                        Run {
+                            count: local,
+                            extent: old,
+                        },
+                    );
+                    push_coalesced(
+                        &mut rebuilt,
+                        Run {
+                            count: 1,
+                            extent: item,
+                        },
+                    );
+                    push_coalesced(
+                        &mut rebuilt,
+                        Run {
+                            count: run_count - local - 1,
+                            extent: old,
+                        },
+                    );
+                }
+                *runs = rebuilt;
+                let mutation = if runs.len() > MAX {
+                    self.split_leaf()
+                } else {
+                    Mutation::Done
+                };
+                (old, mutation)
+            }
+            Node::Internal { .. } => {
+                let (child_index, local) = self.locate_child_for_remove(index);
+                let (old, child_mutation) = {
+                    let Node::Internal { children, .. } = self else {
+                        unreachable!()
+                    };
+                    children[child_index].set(local, item)
+                };
+                let mutation = self.apply_child_insert_mutation(child_index, child_mutation);
+                (old, mutation)
             }
         }
     }
@@ -360,7 +528,16 @@ impl Node {
     /// Returns the item at subtree-local `index`.
     fn get(&self, index: usize) -> &ItemExtent {
         match self {
-            Node::Leaf { items } => &items[index],
+            Node::Leaf { runs } => {
+                let mut remaining = index;
+                for run in runs {
+                    if remaining < run.count {
+                        return &run.extent;
+                    }
+                    remaining -= run.count;
+                }
+                unreachable!("index out of range in Node::get")
+            }
             Node::Internal {
                 children,
                 summaries,
@@ -384,9 +561,55 @@ impl Node {
     /// Returns a [`Mutation`] telling the parent whether this node split.
     fn insert(&mut self, index: usize, item: ItemExtent) -> Mutation {
         match self {
-            Node::Leaf { items } => {
-                items.insert(index, item);
-                if items.len() > MAX {
+            Node::Leaf { runs } => {
+                // Splice one item in, splitting the straddled run and merging
+                // wherever the new item matches a neighbour. Appending at the
+                // end of the leaf (`index == count`) falls through the loop and
+                // is handled by the trailing push.
+                let mut rebuilt = Vec::with_capacity(runs.len() + 2);
+                let mut before = 0usize;
+                let mut placed = false;
+                for run in runs.iter() {
+                    if !placed && index - before <= run.count {
+                        let local = index - before;
+                        push_coalesced(
+                            &mut rebuilt,
+                            Run {
+                                count: local,
+                                extent: run.extent,
+                            },
+                        );
+                        push_coalesced(
+                            &mut rebuilt,
+                            Run {
+                                count: 1,
+                                extent: item,
+                            },
+                        );
+                        push_coalesced(
+                            &mut rebuilt,
+                            Run {
+                                count: run.count - local,
+                                extent: run.extent,
+                            },
+                        );
+                        placed = true;
+                    } else {
+                        push_coalesced(&mut rebuilt, *run);
+                    }
+                    before += run.count;
+                }
+                if !placed {
+                    push_coalesced(
+                        &mut rebuilt,
+                        Run {
+                            count: 1,
+                            extent: item,
+                        },
+                    );
+                }
+                *runs = rebuilt;
+                if runs.len() > MAX {
                     self.split_leaf()
                 } else {
                     Mutation::Done
@@ -465,12 +688,12 @@ impl Node {
     /// Splits an over-full leaf in half, keeping the left half in `self` and
     /// returning the right half as a new sibling.
     fn split_leaf(&mut self) -> Mutation {
-        let Node::Leaf { items } = self else {
+        let Node::Leaf { runs } = self else {
             unreachable!("split_leaf on an internal node")
         };
-        let mid = items.len() / 2;
-        let right_items = items.split_off(mid);
-        let right = Node::Leaf { items: right_items };
+        let mid = runs.len() / 2;
+        let right_runs = runs.split_off(mid);
+        let right = Node::Leaf { runs: right_runs };
         let right_summary = right.summary();
         Mutation::Split {
             right,
@@ -508,9 +731,33 @@ impl Node {
     /// rebalance.
     fn remove(&mut self, index: usize) -> (ItemExtent, Mutation) {
         match self {
-            Node::Leaf { items } => {
-                let removed = items.remove(index);
-                let mutation = if items.len() < MIN {
+            Node::Leaf { runs } => {
+                // Items within a run are interchangeable — they carry the same
+                // extent — so removing one from the middle is just a decrement.
+                // The run disappears only when it empties, which is the sole
+                // way this leaf can lose an entry.
+                let mut before = 0usize;
+                let mut slot = None;
+                for (i, run) in runs.iter().enumerate() {
+                    if index - before < run.count {
+                        slot = Some(i);
+                        break;
+                    }
+                    before += run.count;
+                }
+                let slot = slot.expect("BUG: Node::remove index is bounded by the caller's assert");
+                let removed = runs[slot].extent;
+                runs[slot].count -= 1;
+                if runs[slot].count == 0 {
+                    runs.remove(slot);
+                    // The two entries that were around it may now match.
+                    if slot > 0 && slot < runs.len() && runs[slot - 1].extent == runs[slot].extent {
+                        runs[slot - 1].count =
+                            runs[slot - 1].count.saturating_add(runs[slot].count);
+                        runs.remove(slot);
+                    }
+                }
+                let mutation = if runs.len() < MIN {
                     Mutation::Underflow
                 } else {
                     Mutation::Done
@@ -585,16 +832,30 @@ impl Node {
         // Prefer borrowing from the left sibling, then the right; fall back to a
         // merge. A borrow keeps both siblings `>= MIN`; a merge collapses two
         // children into one and may underflow this node.
+        //
+        // A borrow can come up short, which a flat-item tree never had to
+        // handle: a donated run whose extent equals the head it lands beside
+        // merges into it, moving items without adding an entry (equal runs
+        // across a leaf boundary are legal — no-adjacent-equal is a per-leaf
+        // rule). The helpers therefore donate until the child is legal or the
+        // donor is exhausted, and this checks the result rather than assuming
+        // one donation sufficed.
         let has_left = child_index > 0;
         let has_right = child_index + 1 < children.len();
 
         if has_left && children[child_index - 1].len() > MIN {
             Self::borrow_from_left(children, summaries, child_index);
-            Mutation::Done
+            if children[child_index].len() >= MIN {
+                return Mutation::Done;
+            }
         } else if has_right && children[child_index + 1].len() > MIN {
             Self::borrow_from_right(children, summaries, child_index);
-            Mutation::Done
-        } else if has_left {
+            if children[child_index].len() >= MIN {
+                return Mutation::Done;
+            }
+        }
+
+        if has_left {
             // Merge the underflowed child into its left sibling.
             Self::merge(children, summaries, child_index - 1);
             Self::underflow_or_done(children)
@@ -622,14 +883,30 @@ impl Node {
     /// `children[child_index]`. Both are leaves or both internal.
     fn borrow_from_left(children: &mut [Node], summaries: &mut [Summary], child_index: usize) {
         let left_index = child_index - 1;
+        while children[child_index].len() < MIN && children[left_index].len() > MIN {
+            Self::donate_left_to_right(children, left_index, child_index);
+        }
+        summaries[left_index] = children[left_index].summary();
+        summaries[child_index] = children[child_index].summary();
+    }
+
+    /// Moves one entry from `left_index`'s tail to `child_index`'s head.
+    fn donate_left_to_right(children: &mut [Node], left_index: usize, child_index: usize) {
         // Pop the donated entry out of the left sibling first.
         match &mut children[left_index] {
-            Node::Leaf { items } => {
-                let donated = items.pop().expect("left sibling above MIN is non-empty");
-                let Node::Leaf { items: dst } = &mut children[child_index] else {
+            Node::Leaf { runs } => {
+                let donated = runs.pop().expect("left sibling above MIN is non-empty");
+                let Node::Leaf { runs: dst } = &mut children[child_index] else {
                     unreachable!("sibling node kinds must match")
                 };
-                dst.insert(0, donated);
+                // A donated run may match the head it lands beside; merging
+                // keeps the no-adjacent-equal-runs invariant across the move.
+                match dst.first_mut() {
+                    Some(first) if first.extent == donated.extent => {
+                        first.count = first.count.saturating_add(donated.count);
+                    }
+                    _ => dst.insert(0, donated),
+                }
             }
             Node::Internal {
                 children: lc,
@@ -648,21 +925,28 @@ impl Node {
                 ds.insert(0, donated_summary);
             }
         }
-        summaries[left_index] = children[left_index].summary();
-        summaries[child_index] = children[child_index].summary();
     }
 
     /// Moves the first entry of the right sibling to the back of
     /// `children[child_index]`. Both are leaves or both internal.
     fn borrow_from_right(children: &mut [Node], summaries: &mut [Summary], child_index: usize) {
         let right_index = child_index + 1;
+        while children[child_index].len() < MIN && children[right_index].len() > MIN {
+            Self::donate_right_to_left(children, child_index, right_index);
+        }
+        summaries[child_index] = children[child_index].summary();
+        summaries[right_index] = children[right_index].summary();
+    }
+
+    /// Moves one entry from `right_index`'s head to `child_index`'s tail.
+    fn donate_right_to_left(children: &mut [Node], child_index: usize, right_index: usize) {
         match &mut children[right_index] {
-            Node::Leaf { items } => {
-                let donated = items.remove(0);
-                let Node::Leaf { items: dst } = &mut children[child_index] else {
+            Node::Leaf { runs } => {
+                let donated = runs.remove(0);
+                let Node::Leaf { runs: dst } = &mut children[child_index] else {
                     unreachable!("sibling node kinds must match")
                 };
-                dst.push(donated);
+                push_coalesced(dst, donated);
             }
             Node::Internal {
                 children: rc,
@@ -681,8 +965,6 @@ impl Node {
                 ds.push(donated_summary);
             }
         }
-        summaries[child_index] = children[child_index].summary();
-        summaries[right_index] = children[right_index].summary();
     }
 
     /// Merges `children[left_index + 1]` into `children[left_index]`, removing
@@ -691,8 +973,10 @@ impl Node {
         let right = children.remove(left_index + 1);
         summaries.remove(left_index + 1);
         match (&mut children[left_index], right) {
-            (Node::Leaf { items: left }, Node::Leaf { items: mut right }) => {
-                left.append(&mut right);
+            (Node::Leaf { runs: left }, Node::Leaf { runs: right }) => {
+                for run in right {
+                    push_coalesced(left, run);
+                }
             }
             (
                 Node::Internal {
@@ -739,6 +1023,20 @@ impl Node {
             // An empty root is only legal as a single empty leaf.
             if !matches!(self, Node::Leaf { .. }) {
                 return Err("empty root must be a leaf".to_string());
+            }
+        }
+        if let Node::Leaf { runs } = self {
+            // A zero-count run is unrepresentable by construction, and two
+            // adjacent runs carrying the same extent mean a coalescing site was
+            // missed — which is how the representation silently degrades back
+            // to one entry per item.
+            for (i, run) in runs.iter().enumerate() {
+                if run.count == 0 {
+                    return Err(format!("run {i} has count 0"));
+                }
+                if i > 0 && runs[i - 1].extent == run.extent {
+                    return Err(format!("runs {} and {i} are adjacent and equal", i - 1));
+                }
             }
         }
         if let Node::Internal {
@@ -825,25 +1123,63 @@ pub(super) struct ExtentTree {
 impl ExtentTree {
     /// Builds a tree from `count` items produced by `make`, each at `index`.
     ///
+    /// **Test-only, deliberately.** It calls `make` once per item, so it is
+    /// `O(count)` and cannot express an unbounded list at all — which is the
+    /// defect this representation exists to remove. Production construction
+    /// goes through [`Self::uniform`]; keeping this out of non-test builds
+    /// stops a per-item constructor from creeping back in.
+    ///
     /// Bulk-loads leaves bottom-up, so construction is `O(count)` rather than
     /// `O(count log count)` repeated inserts. Every node it builds is in
     /// `[MIN, MAX]` entries (except a sole root, which may be smaller) — see
     /// [`balanced_chunk_sizes`].
+    #[cfg(test)]
     pub(super) fn from_fn(count: usize, mut make: impl FnMut(usize) -> ItemExtent) -> Self {
-        if count == 0 {
+        let mut runs: Vec<Run> = Vec::new();
+        for index in 0..count {
+            push_coalesced(
+                &mut runs,
+                Run {
+                    count: 1,
+                    extent: make(index),
+                },
+            );
+        }
+        Self::from_runs(runs)
+    }
+
+    /// Builds a tree of `count` items that all carry `extent`, in `O(1)`.
+    ///
+    /// This is the constructor a virtualizer actually uses: every item starts
+    /// unmeasured with the same estimate, which is one run. It is also the only
+    /// way an unbounded list is representable — the test-only per-item
+    /// `from_fn` would call its closure `usize::MAX` times.
+    pub(super) fn uniform(count: usize, extent: ItemExtent) -> Self {
+        Self::from_runs(if count == 0 {
+            Vec::new()
+        } else {
+            vec![Run { count, extent }]
+        })
+    }
+
+    /// Bulk-loads a tree from `runs` bottom-up, so construction is `O(runs)`
+    /// rather than `O(runs log runs)` repeated inserts.
+    ///
+    /// Every node it builds holds `[MIN, MAX]` entries (except a sole root,
+    /// which may be smaller) — see [`balanced_chunk_sizes`]. `runs` must already
+    /// be coalesced; the callers all build theirs through [`push_coalesced`].
+    fn from_runs(runs: Vec<Run>) -> Self {
+        if runs.is_empty() {
             return Self {
                 root: Node::new_leaf(),
             };
         }
-
-        // Leaf level: split items into legal-sized chunks (never below MIN
-        // unless it is the only chunk), each a leaf.
-        let mut items = (0..count).map(&mut make);
-        let mut level: Vec<Node> = balanced_chunk_sizes(count)
+        let run_count = runs.len();
+        let mut iter = runs.into_iter();
+        let mut level: Vec<Node> = balanced_chunk_sizes(run_count)
             .into_iter()
-            .map(|size| {
-                let chunk: Vec<ItemExtent> = items.by_ref().take(size).collect();
-                Node::Leaf { items: chunk }
+            .map(|size| Node::Leaf {
+                runs: iter.by_ref().take(size).collect(),
             })
             .collect();
 
@@ -867,8 +1203,98 @@ impl ExtentTree {
         Self {
             root: level
                 .pop()
-                .expect("count > 0 always yields at least one leaf node"),
+                .expect("a non-empty run list always yields at least one node"),
         }
+    }
+
+    /// Collects every run in index order, coalescing across leaf boundaries.
+    fn collect_runs(node: &Node, out: &mut Vec<Run>) {
+        match node {
+            Node::Leaf { runs } => {
+                for run in runs {
+                    push_coalesced(out, *run);
+                }
+            }
+            Node::Internal { children, .. } => {
+                for child in children {
+                    Self::collect_runs(child, out);
+                }
+            }
+        }
+    }
+
+    /// Replaces the estimate carried by every still-unmeasured item, leaving
+    /// measured extents alone.
+    ///
+    /// `O(runs)`, which is `O(measured)` — the unmeasured items are exactly the
+    /// ones that collapse. The per-item loop this replaces was `O(n log n)` and
+    /// ran from inside the layout pass whenever the measured mean moved.
+    pub(super) fn rehint_unmeasured(&mut self, hint: f32) {
+        let mut runs = Vec::new();
+        Self::collect_runs(&self.root, &mut runs);
+        let mut rebuilt = Vec::with_capacity(runs.len());
+        for run in runs {
+            let extent = match run.extent {
+                ItemExtent::Unmeasured { .. } => ItemExtent::Unmeasured { hint },
+                measured @ ItemExtent::Measured { .. } => measured,
+            };
+            push_coalesced(
+                &mut rebuilt,
+                Run {
+                    count: run.count,
+                    extent,
+                },
+            );
+        }
+        *self = Self::from_runs(rebuilt);
+    }
+
+    /// Resets every item from `index` onward to unmeasured with `hint`,
+    /// reporting `(how many measured items were dropped, their total extent)`
+    /// so the caller can repair its accumulators without a second walk.
+    ///
+    /// `O(runs)`. The whole invalidated tail becomes a single run, so a list
+    /// invalidated from item 0 costs one entry regardless of its length — and
+    /// the dropped-measured tally comes out of the same walk, which is what
+    /// keeps an unbounded list from being counted item by item.
+    pub(super) fn invalidate_from(&mut self, index: usize, hint: f32) -> (usize, f32) {
+        let len = self.len();
+        if index >= len {
+            return (0, 0.0);
+        }
+        let mut runs = Vec::new();
+        Self::collect_runs(&self.root, &mut runs);
+        let mut rebuilt = Vec::with_capacity(runs.len() + 1);
+        let mut before = 0usize;
+        let mut dropped_count = 0usize;
+        let mut dropped_total = 0.0f32;
+        for run in runs {
+            // The part of this run at or past `index` is being discarded; tally
+            // it when it was measured.
+            let kept = index.saturating_sub(before).min(run.count);
+            let discarded = run.count - kept;
+            if discarded > 0 && run.extent.is_measured() {
+                dropped_count = dropped_count.saturating_add(discarded);
+                dropped_total += discarded as f32 * run.extent.extent();
+            }
+            push_coalesced(
+                &mut rebuilt,
+                Run {
+                    count: kept,
+                    extent: run.extent,
+                },
+            );
+            before += run.count;
+        }
+        push_coalesced(
+            &mut rebuilt,
+            Run {
+                count: len - index,
+                extent: ItemExtent::Unmeasured { hint },
+            },
+        );
+        *self = Self::from_runs(rebuilt);
+        (dropped_count, dropped_total)
     }
 
     /// Number of items in the tree.
@@ -986,7 +1412,11 @@ impl ExtentTree {
     /// Panics if `index >= len()`.
     pub(super) fn set(&mut self, index: usize, item: ItemExtent) -> ItemExtent {
         assert!(index < self.len(), "set index out of range");
-        self.root.set(index, item)
+        let (old, mutation) = self.root.set(index, item);
+        // A write into the middle of a run splits it, so unlike a flat-item
+        // tree this can overflow the root leaf and grow a level.
+        self.grow_root_if_split(mutation);
+        old
     }
 
     /// Inserts `item` so it becomes the new item at `index`, shifting later
@@ -997,12 +1427,17 @@ impl ExtentTree {
     pub(super) fn insert(&mut self, index: usize, item: ItemExtent) {
         assert!(index <= self.len(), "insert index out of range");
         let mutation = self.root.insert(index, item);
+        self.grow_root_if_split(mutation);
+    }
+
+    /// Grows a new root level when the old root split. Shared by `insert` and
+    /// `set` — with run-length leaves both can overflow.
+    fn grow_root_if_split(&mut self, mutation: Mutation) {
         if let Mutation::Split {
             right,
             right_summary,
         } = mutation
         {
-            // Root split: grow a new level.
             let old_root = std::mem::replace(&mut self.root, Node::new_leaf());
             let left_summary = old_root.summary();
             self.root = Node::Internal {
@@ -1047,6 +1482,23 @@ impl ExtentTree {
     #[cfg(test)]
     pub(super) fn check_invariants(&self) -> Result<(), String> {
         self.root.check_invariants(true)
+    }
+
+    /// How many runs the tree stores — the quantity that must stay `O(measured)`
+    /// rather than `O(item_count)`.
+    ///
+    /// Exposed for tests so the compaction is asserted rather than assumed: a
+    /// representation that silently stopped coalescing would still pass every
+    /// behavioural test, just with the memory profile the runs exist to avoid.
+    #[cfg(test)]
+    pub(super) fn run_count(&self) -> usize {
+        fn walk(node: &Node) -> usize {
+            match node {
+                Node::Leaf { runs } => runs.len(),
+                Node::Internal { children, .. } => children.iter().map(walk).sum(),
+            }
+        }
+        walk(&self.root)
     }
 }
 
@@ -1208,5 +1660,143 @@ mod tests {
                 "seek_sorted[{i}] (offset {o}) must agree with scalar seek_offset",
             );
         }
+    }
+}
+
+/// Run-length representation: the properties that make an unbounded list
+/// representable, and the compaction that keeps it that way.
+#[cfg(test)]
+mod runs {
+    use super::*;
+
+    fn unmeasured(hint: f32) -> ItemExtent {
+        ItemExtent::Unmeasured { hint }
+    }
+
+    fn measured(extent: f32) -> ItemExtent {
+        ItemExtent::Measured { extent }
+    }
+
+    /// The whole point: an unbounded list is one entry, built in constant time.
+    #[test]
+    fn an_unbounded_tree_is_a_single_run() {
+        let t = ExtentTree::uniform(usize::MAX, unmeasured(40.0));
+        assert_eq!(t.run_count(), 1);
+        assert_eq!(t.len(), usize::MAX);
+        t.check_invariants().unwrap();
+        // Reachable offsets stay exact even though the total saturates: the
+        // prefix is computed inside the landing run, never by summing it.
+        assert_eq!(t.offset_of(0), 0.0);
+        assert_eq!(t.offset_of(3), 120.0);
+        assert!(t.total_extent().is_finite());
+    }
+
+    /// Measuring inside a huge run splits it into three and leaves every other
+    /// index's offset arithmetic intact.
+    #[test]
+    fn measuring_inside_a_run_splits_it_and_preserves_offsets() {
+        let mut t = ExtentTree::uniform(1_000_000, unmeasured(10.0));
+        t.set(500, ItemExtent::Measured { extent: 30.0 });
+        assert_eq!(t.run_count(), 3, "before / measured / after");
+        t.check_invariants().unwrap();
+
+        assert_eq!(
+            t.offset_of(500),
+            5000.0,
+            "prefix below the split is unchanged"
+        );
+        assert_eq!(t.offset_of(501), 5030.0, "the measured item contributes 30");
+        assert_eq!(
+            t.offset_of(1000),
+            5030.0 + 499.0 * 10.0,
+            "items after the split resume the estimate"
+        );
+        assert_eq!(t.len(), 1_000_000, "the item count is untouched");
+    }
+
+    /// Re-hinting touches only unmeasured runs, and re-coalesces what it can.
+    #[test]
+    fn rehinting_preserves_measurements_and_recompacts() {
+        let mut t = ExtentTree::uniform(1000, unmeasured(10.0));
+        t.set(500, ItemExtent::Measured { extent: 30.0 });
+        assert_eq!(t.run_count(), 3);
+
+        t.rehint_unmeasured(20.0);
+        t.check_invariants().unwrap();
+        assert_eq!(t.run_count(), 3, "still three runs, not one per item");
+        assert_eq!(*t.get(500), ItemExtent::Measured { extent: 30.0 });
+        assert_eq!(*t.get(499), unmeasured(20.0));
+        assert_eq!(t.offset_of(500), 500.0 * 20.0);
+    }
+
+    /// A measurement written back to its existing value must not split a run —
+    /// that is the path by which the representation would degrade to one entry
+    /// per item under a stable, repeatedly-relaid-out band.
+    #[test]
+    fn rewriting_an_identical_extent_does_not_fragment() {
+        let mut t = ExtentTree::uniform(1000, unmeasured(10.0));
+        for index in 0..200 {
+            t.set(index, unmeasured(10.0));
+        }
+        assert_eq!(t.run_count(), 1, "identical rewrites must coalesce away");
+        t.check_invariants().unwrap();
+    }
+
+    /// Invalidating a suffix collapses it to one run regardless of how
+    /// fragmented it was, and reports the measured items it discarded.
+    #[test]
+    fn invalidating_a_suffix_collapses_it_and_reports_the_drop() {
+        let mut t = ExtentTree::uniform(1000, unmeasured(10.0));
+        // Alternating extents, so the band genuinely fragments — a band of one
+        // repeated extent would coalesce to a single run and prove nothing
+        // about collapsing a fragmented suffix.
+        let mut expected_total = 0.0f32;
+        for index in 400..420 {
+            let extent = if index % 2 == 0 { 25.0 } else { 35.0 };
+            expected_total += extent;
+            t.set(index, ItemExtent::Measured { extent });
+        }
+        let fragmented = t.run_count();
+        assert!(
+            fragmented > 3,
+            "the measured band should have fragmented the tree, got {fragmented} runs"
+        );
+
+        let (dropped, dropped_total) = t.invalidate_from(300, 10.0);
+        t.check_invariants().unwrap();
+        assert_eq!(dropped, 20, "every measured item past 300 was discarded");
+        assert_eq!(dropped_total, expected_total);
+        assert_eq!(t.run_count(), 1, "prefix and tail carry the same hint");
+        assert_eq!(t.len(), 1000);
+    }
+
+    /// The same, on an unbounded list — the tail cannot be walked item by item.
+    #[test]
+    fn invalidating_an_unbounded_tail_is_bounded_work() {
+        let mut t = ExtentTree::uniform(usize::MAX, unmeasured(10.0));
+        t.set(7, ItemExtent::Measured { extent: 25.0 });
+        let (dropped, dropped_total) = t.invalidate_from(3, 10.0);
+        assert_eq!(dropped, 1);
+        assert_eq!(dropped_total, 25.0);
+        assert_eq!(t.run_count(), 1);
+        assert_eq!(t.len(), usize::MAX);
+        t.check_invariants().unwrap();
+    }
+
+    /// A borrow that merges into its destination moves items without adding an
+    /// entry, so it has to repeat — otherwise the underflowed leaf stays
+    /// illegal. Equal extents across a leaf boundary are legal, which is what
+    /// makes this reachable.
+    #[test]
+    fn removals_rebalance_when_donated_runs_coalesce() {
+        // Alternating pairs, so leaf boundaries frequently sit between equal
+        // extents and donations merge rather than append.
+        let mut t = ExtentTree::from_fn(400, |i| measured(((i / 2) % 2 + 1) as f32));
+        for _ in 0..300 {
+            let mid = t.len() / 2;
+            t.remove(mid);
+            t.check_invariants().unwrap();
+        }
+        assert_eq!(t.len(), 100);
     }
 }

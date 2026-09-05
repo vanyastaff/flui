@@ -455,3 +455,121 @@ fn an_unknown_item_count_that_grows_is_rediscovered_on_the_next_build() {
         "a grown source must be rediscovered; the clamp alone can only shrink"
     );
 }
+
+/// An endless builder — one that answers `Some` for every index — lays out a
+/// bounded band instead of allocating from the unbounded sentinel count.
+///
+/// `ItemCount::Unknown` resolves to `usize::MAX` by design (ADR-0053): the
+/// window is what bounds the work, not the count. That is only true if every
+/// consumer of the count treats it as unbounded, and the virtualizer did not —
+/// it bulk-loaded one backing-tree entry per item at construction, so this
+/// panicked with `capacity overflow` inside `Vec::with_capacity` before a
+/// single row was laid out.
+///
+/// The oracle is a laid-out row, not merely a surviving mount: a tree that
+/// built its children but never sized them would satisfy "did not panic" while
+/// leaving the viewport empty.
+#[test]
+fn an_endless_builder_lays_out_a_bounded_band_without_overflowing() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::ItemCount;
+    use flui_widgets::{SliverList, Viewport};
+
+    const ROW: f32 = 40.0;
+    let laid = lay_out(
+        Viewport::new((SliverList::new(
+            ItemCount::Unknown,
+            ROW,
+            std::rc::Rc::new(|_: usize| Some(SizedBox::new(200.0, ROW).boxed())),
+        ),)),
+        tight(200.0, 80.0),
+    );
+
+    // The materialised band, which is the quantity `usize::MAX` would blow up.
+    // Deliberately NOT measured by counting builder calls: resolving
+    // `ItemCount::Unknown` probes the builder all the way to `usize::MAX - 1`
+    // by design (ADR-0053), so call count and highest-index-requested both
+    // report the probe, not the band.
+    let rows = laid.find_all_by_render_type("RenderConstrainedBox");
+    assert!(
+        !rows.is_empty(),
+        "no row reached the render tree — the band was never materialised"
+    );
+    // The band must be the same one a FINITE list of identical rows produces.
+    // A bare upper bound would pass on a single materialised row; pinning it to
+    // the finite case says the unbounded count changed nothing observable,
+    // which is the actual claim.
+    let finite = lay_out(
+        Viewport::new((SliverList::new(
+            ItemCount::Exact(1000),
+            ROW,
+            std::rc::Rc::new(|_: usize| Some(SizedBox::new(200.0, ROW).boxed())),
+        ),)),
+        tight(200.0, 80.0),
+    );
+    assert_eq!(
+        rows.len(),
+        finite.find_all_by_render_type("RenderConstrainedBox").len(),
+        "an unbounded count materialised a different band than a finite one"
+    );
+
+    // Materialised is not laid out: a tree that built its children and never
+    // sized them would satisfy every assertion above while leaving the
+    // viewport blank.
+    let heights: Vec<f32> = rows.iter().map(|&id| laid.size(id).height.get()).collect();
+    assert!(
+        heights.iter().all(|h| (h - ROW).abs() < 0.5),
+        "rows laid out at unexpected heights: {heights:?}"
+    );
+}
+
+/// The same endless source through all three lazy adaptors.
+///
+/// #879 asked for all three because only the list was known to break: the
+/// fixed-extent list and the grid carry their own unbounded-window guards
+/// (`MAX_UNBOUNDED_WINDOW_CHILDREN` / `UNBOUNDED_SENTINEL_WINDOW`), which is
+/// why the defect surfaced on the list first. All three share the virtualizer,
+/// so all three are pinned rather than assumed safe.
+#[test]
+fn an_endless_source_is_bounded_through_every_lazy_adaptor() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::{SliverFixedExtentList, SliverGrid};
+    use flui_widgets::Viewport;
+
+    const ROW: f32 = 40.0;
+    let rows_of = |laid: &flui_widgets::testing::LaidOut| {
+        laid.find_all_by_render_type("RenderConstrainedBox").len()
+    };
+
+    // Fixed-extent list, unbounded count.
+    let fixed = lay_out(
+        Viewport::new((SliverFixedExtentList::new(
+            ROW,
+            usize::MAX,
+            std::rc::Rc::new(|_: usize| Some(SizedBox::new(200.0, ROW).boxed())),
+        ),)),
+        tight(200.0, 80.0),
+    );
+    let fixed_rows = rows_of(&fixed);
+    assert!(
+        fixed_rows > 0 && fixed_rows < 64,
+        "SliverFixedExtentList materialised {fixed_rows} rows for an endless source"
+    );
+
+    // Grid, unbounded count.
+    let grid = lay_out(
+        Viewport::new((SliverGrid::new(
+            std::sync::Arc::new(
+                flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount::new(2),
+            ),
+            usize::MAX,
+            std::rc::Rc::new(|_: usize| Some(SizedBox::new(100.0, ROW).boxed())),
+        ),)),
+        tight(200.0, 80.0),
+    );
+    let grid_rows = rows_of(&grid);
+    assert!(
+        grid_rows > 0 && grid_rows < 64,
+        "SliverGrid materialised {grid_rows} tiles for an endless source"
+    );
+}

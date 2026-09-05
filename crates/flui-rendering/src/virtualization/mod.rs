@@ -281,11 +281,13 @@ impl Virtualizer {
     /// Creates a virtualizer over `item_count` items, each seeded as
     /// [`ItemExtent::Unmeasured`] with `default_estimate`.
     ///
-    /// Complexity: `O(item_count)` (bulk-loads the backing tree bottom-up).
+    /// Complexity: `O(1)`. Every item starts with the same estimate, so the
+    /// backing tree holds a single run — which is also what makes an unbounded
+    /// list (ADR-0053's `usize::MAX` sentinel) constructible at all.
     #[must_use]
     pub fn new(item_count: usize, default_estimate: f32) -> Self {
         let est = default_estimate.max(0.0);
-        let tree = ExtentTree::from_fn(item_count, |_| ItemExtent::Unmeasured { hint: est });
+        let tree = ExtentTree::uniform(item_count, ItemExtent::Unmeasured { hint: est });
         Self {
             tree,
             default_estimate: est,
@@ -424,12 +426,7 @@ impl Virtualizer {
             return false;
         }
         self.default_estimate = estimate;
-        for index in 0..self.tree.len() {
-            if matches!(self.tree.get(index), ItemExtent::Unmeasured { .. }) {
-                self.tree
-                    .set(index, ItemExtent::Unmeasured { hint: estimate });
-            }
-        }
+        self.tree.rehint_unmeasured(estimate);
         true
     }
 
@@ -621,19 +618,12 @@ impl Virtualizer {
     ///
     /// Complexity: `O((len() - index) · log n)`.
     pub fn invalidate_from(&mut self, index: usize) {
-        let count = self.tree.len();
-        for i in index..count {
-            let old = self.tree.set(
-                i,
-                ItemExtent::Unmeasured {
-                    hint: self.default_estimate,
-                },
-            );
-            if old.is_measured() {
-                self.measured -= 1;
-                self.measured_total -= old.extent();
-            }
-        }
+        // The tree tallies the measured items it discards during the same run
+        // walk, so the accumulators are repaired without a per-item loop —
+        // which an unbounded list could not survive.
+        let (dropped, dropped_total) = self.tree.invalidate_from(index, self.default_estimate);
+        self.measured -= dropped;
+        self.measured_total -= dropped_total;
         if self.measured == 0 {
             // Never let float drift leave a phantom total behind an empty set.
             self.measured_total = 0.0;
