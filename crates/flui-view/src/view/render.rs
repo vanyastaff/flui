@@ -67,7 +67,7 @@ impl<'a> RenderObjectContext<'a> {
     /// the element was mounted detached, or the owner is gone.
     pub fn register_pointer(
         &self,
-        handler: impl Fn(&flui_interaction::PointerEvent) + 'static,
+        handler: impl Fn(flui_interaction::PointerDispatch<'_>) + 'static,
     ) -> Result<flui_interaction::PointerTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_pointer(handler)?)
     }
@@ -82,7 +82,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn replace_pointer(
         &self,
         target: flui_interaction::PointerTarget,
-        handler: impl Fn(&flui_interaction::PointerEvent) + 'static,
+        handler: impl Fn(flui_interaction::PointerDispatch<'_>) + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.replace_pointer(target, handler)?)
     }

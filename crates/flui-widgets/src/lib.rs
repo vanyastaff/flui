@@ -279,7 +279,7 @@ pub use flui_rendering::delegates::{
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
 // pointer event types its callbacks receive.
 pub use flui_rendering::hit_testing::{
-    CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
+    CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
 };
 // The shared scroll state `ScrollController::position()` returns and
 // `Viewport`/`SingleChildScrollView::position()` accept — a widget author
@@ -359,7 +359,7 @@ pub mod prelude {
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::{
-        CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
+        CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
     };
     pub use flui_rendering::view::ScrollPosition;
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};

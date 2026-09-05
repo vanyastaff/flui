@@ -3,8 +3,16 @@
 Hit testing records which render objects are under a pointer and how to
 transform the event into each target's local coordinate space. Ordinary pointer
 delivery follows Flutter's `GestureBinding.dispatchEvent` semantics: dispatch is
-leaf-first, synchronous, locally transformed per entry, and every hit target
-receives the event.
+leaf-first, synchronous, localized per entry, and every hit target receives the
+event.
+
+A handler is invoked with a `PointerDispatch`, not a bare event: `local` is the
+event rewritten into that entry's own space, `global` is the platform's own
+value passed through untouched. Flutter carries the same pair on `PointerEvent`
+itself (`localPosition` and `position`); FLUI's pointer events are `ui_events`
+types with room for exactly one position, so the pair travels beside the event.
+Both halves borrow values the dispatch already owns, so carrying the second one
+costs no clone.
 
 ## Current ADR-0027 shape
 

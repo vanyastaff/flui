@@ -130,10 +130,10 @@ fn target() -> ColoredBox {
     ColoredBox::new(Color::rgb(10, 20, 30)).child(SizedBox::new(100.0, 100.0))
 }
 
-fn counter() -> (Rc<Cell<usize>>, impl Fn(&PointerEvent) + Clone) {
+fn counter() -> (Rc<Cell<usize>>, impl Fn(PointerDispatch<'_>) + Clone) {
     let count = Rc::new(Cell::new(0));
     let probe = Rc::clone(&count);
-    (count, move |_event: &PointerEvent| {
+    (count, move |_dispatch: PointerDispatch<'_>| {
         probe.set(probe.get() + 1);
     })
 }

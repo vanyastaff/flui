@@ -264,9 +264,9 @@ pub use routing::{
     FocusScopeNode, FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior,
     HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot, HitTestable,
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, PathClipTarget, PointerRouteHandler, PointerRouter,
-    PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken, ResolvedStep,
-    RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget,
+    KeyEventHandler, KeyEventResult, PathClipTarget, PointerDispatch, PointerRouteHandler,
+    PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken,
+    ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget,
     TransformGuard, TraversalEdgeBehavior, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};

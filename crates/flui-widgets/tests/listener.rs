@@ -7,6 +7,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::common::{lay_out, size, tight};
+use flui_interaction::PointerDispatch;
 use flui_interaction::events::pointer::{
     PointerButtons, PointerGesture, PointerGestureEvent, PointerInfo, PointerState, PointerType,
     PointerUpdate,
@@ -17,10 +18,7 @@ use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{ColoredBox, Listener, PointerPanZoomEvent, SizedBox};
 
 /// A counter callback + a readable handle.
-fn counter() -> (
-    Rc<Cell<usize>>,
-    impl Fn(&flui_widgets::prelude::PointerEvent) + 'static,
-) {
+fn counter() -> (Rc<Cell<usize>>, impl Fn(PointerDispatch<'_>) + 'static) {
     let count = Rc::new(Cell::new(0));
     let in_cb = Rc::clone(&count);
     (count, move |_event| {

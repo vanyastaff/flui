@@ -210,8 +210,9 @@ impl ListenerState {
 ```
 
 Dispatch resolves each `PointerTarget` through the active owner lane and then
-invokes every target in leaf-first order with its locally transformed
-`PointerEvent`. Ordinary pointer delivery has no `EventPropagation::Stop`;
+invokes every target in leaf-first order with a `PointerDispatch` — the event
+localized to that entry (`local`) alongside the untouched platform event
+(`global`). Ordinary pointer delivery has no `EventPropagation::Stop`;
 scroll/pointer-signal arbitration is the separate claiming path.
 
 ## Integration 3: flui_gestures → flui_interaction

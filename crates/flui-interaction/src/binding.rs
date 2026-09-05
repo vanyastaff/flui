@@ -1968,7 +1968,8 @@ mod tests {
             let release_probe = SetOnDrop(Rc::clone(&route_released));
             let delivered_x_for_target = Rc::clone(&delivered_x);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     let _keep_probe_alive = &release_probe;
                     if let PointerEvent::Move(pointer_move) = event {
                         delivered_x_for_target
@@ -2130,7 +2131,8 @@ mod tests {
         lane.enter(|| {
             let callback_gesture_moves = Rc::clone(&gesture_moves);
             let pointer_target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     if matches!(event, PointerEvent::Move(_)) {
                         callback_gesture_moves.set(callback_gesture_moves.get() + 1);
                     }
@@ -2686,7 +2688,8 @@ mod tests {
         lane.enter(|| {
             let delivered_to_target = Rc::clone(&delivered);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     if matches!(event, PointerEvent::Gesture(_)) {
                         delivered_to_target.set(delivered_to_target.get() + 1);
                     }
@@ -2762,7 +2765,8 @@ mod tests {
         lane.enter(|| {
             let log = Rc::clone(&delivered);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     log.borrow_mut().push(match event {
                         PointerEvent::Down(_) => "down",
                         PointerEvent::Move(_) => "move",
@@ -2862,7 +2866,8 @@ mod tests {
         lane.enter(|| {
             let sink = Rc::clone(&log);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     sink.borrow_mut().push(match event {
                         PointerEvent::Enter(_) => "enter",
                         PointerEvent::Leave(_) => "leave",
@@ -2929,7 +2934,8 @@ mod tests {
         lane.enter(|| {
             let sink = Rc::clone(&log);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     sink.borrow_mut().push(match event {
                         PointerEvent::Down(_) => "down",
                         PointerEvent::Move(_) => "move",
@@ -2996,15 +3002,16 @@ mod tests {
 
         lane.enter(|| {
             let panicking = handle
-                .register_pointer(|event| {
-                    if matches!(event, PointerEvent::Cancel(_)) {
+                .register_pointer(|dispatch| {
+                    if matches!(dispatch.local, PointerEvent::Cancel(_)) {
                         panic!("first contact cancel panic");
                     }
                 })
                 .expect("register panicking target");
             let observed = Rc::clone(&second_saw_cancel);
             let second = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     if matches!(event, PointerEvent::Cancel(_)) {
                         observed.set(true);
                     }
@@ -3057,7 +3064,8 @@ mod tests {
         lane.enter(|| {
             let sink = Rc::clone(&log);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     sink.borrow_mut().push(match event {
                         PointerEvent::Down(_) => "down",
                         PointerEvent::Leave(_) => "leave",
@@ -3090,7 +3098,8 @@ mod tests {
         lane.enter(|| {
             let drop_probe = SetOnDrop(Rc::clone(&handler_dropped));
             let panicking = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     let _keep_probe_alive = &drop_probe;
                     if matches!(event, PointerEvent::Up(_)) {
                         panic!("target panic on Up");
@@ -3150,7 +3159,8 @@ mod tests {
             let binding_for_target = Rc::clone(&binding);
             let target_log = Arc::clone(&log);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     if matches!(event, PointerEvent::Down(_)) {
                         target_log.lock().push("hit");
                         binding_for_target
@@ -3200,7 +3210,8 @@ mod tests {
             let drop_probe = SetOnDrop(Rc::clone(&handler_dropped));
             let hit_up_count = Rc::clone(&hit_up_deliveries);
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     let _keep_probe_alive = &drop_probe;
                     if matches!(event, PointerEvent::Up(_)) {
                         hit_up_count.set(hit_up_count.get() + 1);
@@ -3275,7 +3286,8 @@ mod tests {
         lane.enter(|| {
             let panic_on_cleanup = PanicOnDrop;
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     let _keep_cleanup_panic_alive = &panic_on_cleanup;
                     if matches!(event, PointerEvent::Up(_)) {
                         panic!("target first panic");
@@ -3358,15 +3370,16 @@ mod tests {
                 }
             };
             handle
-                .replace_pointer(target_for(drain_order[0]), |event| {
-                    if matches!(event, PointerEvent::Move(_)) {
+                .replace_pointer(target_for(drain_order[0]), |dispatch| {
+                    if matches!(dispatch.local, PointerEvent::Move(_)) {
                         panic!("first move panic");
                     }
                 })
                 .expect("replace first drained target");
             let later_count = Rc::clone(&later_deliveries);
             handle
-                .replace_pointer(target_for(drain_order[1]), move |event| {
+                .replace_pointer(target_for(drain_order[1]), move |dispatch| {
+                    let event = dispatch.local;
                     if matches!(event, PointerEvent::Move(_)) {
                         later_count.set(later_count.get() + 1);
                     }
@@ -3729,7 +3742,8 @@ mod tests {
             let slot_for_target = Rc::clone(&target_slot);
             let panic_on_snapshot_drop = PanicOnDrop;
             let replacing_target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     let _keep_owner_alive = &panic_on_snapshot_drop;
                     if matches!(event, PointerEvent::Down(_)) {
                         let target = slot_for_target.get().expect("target installed");
@@ -3805,7 +3819,8 @@ mod tests {
             let slot_for_target = Rc::clone(&target_slot);
             let panic_on_route_drop = PanicOnDrop;
             let cancelling_target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     let _keep_owner_alive = &panic_on_route_drop;
                     if matches!(event, PointerEvent::Down(_)) {
                         handle_for_target
@@ -4028,7 +4043,8 @@ mod tests {
             let probe = SetOnDrop(Rc::clone(&handler_dropped));
             let arena = binding.arena().clone();
             let target = handle
-                .register_pointer(move |event| {
+                .register_pointer(move |dispatch| {
+                    let event = dispatch.local;
                     let _keep_probe_alive = &probe;
                     if matches!(event, PointerEvent::Down(_)) {
                         arena.add(PointerId::PRIMARY, Arc::new(PanickingAcceptArenaMember));

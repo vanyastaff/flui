@@ -39,6 +39,18 @@
 //! `push_transform`/`with_transform` stack (`Flow`'s mechanism, and now this
 //! one's).
 //!
+//! A fifth group is neither a port nor a transform-stack defect: the two cases
+//! at the end of this file cover the OTHER half of what a delivered event
+//! carries — the global position
+//! ([`a_delivered_event_carries_both_the_local_and_the_global_position`] and
+//! [`a_mid_contact_transform_change_does_not_move_the_reported_global_position`]).
+//! Upstream needs no such cases: Flutter's `PointerEvent` holds `position` and
+//! `localPosition` on one object. FLUI's are `ui_events` types with room for
+//! one, so dispatch delivers the pair beside the event as a `PointerDispatch`,
+//! and that both halves are truthful is a contract only this file pins. Every
+//! case above reads `dispatch.local` alone, so none of them would notice if
+//! the global half were merely a relabelling of the local one.
+//!
 //! Not ported:
 //! - `'scaled for touch/signal'` — `Align(topLeft)` contributes a zero offset
 //!   (`TOP_LEFT`'s alignment factor is `(0, 0)` regardless of the size
@@ -89,9 +101,10 @@
 //! case proving the defect needs a non-commuting ancestor to surface, not as
 //! a regression risk in isolation.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt as _;
 use flui_types::Color;
 use flui_widgets::prelude::*;
@@ -128,8 +141,8 @@ type RecordedPosition = Rc<Cell<Option<(f32, f32)>>>;
 fn recording_listener() -> (RecordedPosition, Listener) {
     let recorded = Rc::new(Cell::new(None));
     let probe = Rc::clone(&recorded);
-    let listener = Listener::new().on_pointer_down(move |event: &PointerEvent| {
-        let position = event.position();
+    let listener = Listener::new().on_pointer_down(move |dispatch: PointerDispatch<'_>| {
+        let position = dispatch.local.position();
         probe.set(Some((position.dx.get(), position.dy.get())));
     });
     (recorded, listener)
@@ -500,5 +513,189 @@ fn transform_hit_tests_false_localises_to_the_laid_out_child() {
         (30.0, 40.0),
         "transform_hit_tests(false) must localise against the child's laid-out \
          box, not through the paint transform",
+    );
+}
+
+// ============================================================================
+// The other half of the pair: the GLOBAL position
+// ============================================================================
+
+/// One recorded delivery: the `dx`/`dy` of the local position, then of the
+/// global one.
+type RecordedPair = ((f32, f32), (f32, f32));
+
+/// The pair a single `on_pointer_down` recorded, readable back by the test.
+type RecordedDown = Rc<Cell<Option<RecordedPair>>>;
+
+/// Every pair the callbacks recorded, in delivery order.
+type RecordedDeliveries = Rc<RefCell<Vec<RecordedPair>>>;
+
+fn record(position: flui_types::Offset<flui_types::geometry::Pixels>) -> (f32, f32) {
+    (position.dx.get(), position.dy.get())
+}
+
+/// A `Listener` recording `(local, global)` from the dispatch its
+/// `on_pointer_down` receives, plus a handle to read it back.
+fn pair_recording_listener() -> (RecordedDown, Listener) {
+    let recorded: RecordedDown = Rc::new(Cell::new(None));
+    let probe = Rc::clone(&recorded);
+    let listener = Listener::new().on_pointer_down(move |dispatch: PointerDispatch<'_>| {
+        probe.set(Some((
+            record(dispatch.local.position()),
+            record(dispatch.global.position()),
+        )));
+    });
+    (recorded, listener)
+}
+
+/// A `Listener` appending `(local, global)` for every down and every move it
+/// receives, in delivery order.
+fn delivery_recording_listener() -> (RecordedDeliveries, Listener) {
+    let recorded: RecordedDeliveries = Rc::new(RefCell::new(Vec::new()));
+    let append = |probe: RecordedDeliveries| {
+        move |dispatch: PointerDispatch<'_>| {
+            probe.borrow_mut().push((
+                record(dispatch.local.position()),
+                record(dispatch.global.position()),
+            ));
+        }
+    };
+    let listener = Listener::new()
+        .on_pointer_down(append(Rc::clone(&recorded)))
+        .on_pointer_move(append(Rc::clone(&recorded)));
+    (recorded, listener)
+}
+
+/// A delivered pointer event carries BOTH spaces: the receiver's local
+/// position and the position the platform actually reported.
+///
+/// The same `Center(Transform.scale(2)(Listener(100x100)))` tree as
+/// [`a_scaled_and_offset_ancestor_localises_the_delivered_position`], so the
+/// two positions are numerically far apart — `(50, 50)` local against
+/// `(450, 350)` global. That separation is the whole point: a tree whose
+/// `Listener` sits at the origin under an identity ancestor reports the same
+/// number for both fields whether dispatch carries the global position or
+/// merely relabels the local one, and so cannot tell a correct
+/// implementation from the defect.
+///
+/// Divergence from Flutter, recorded rather than silently matched: Flutter's
+/// `PointerEvent` carries `position` and `localPosition` on one object, so
+/// this contract is a property of the event there. FLUI's pointer events are
+/// `ui_events` types with room for one position, so the pair is delivered
+/// as `PointerDispatch` instead. The observable contract — a handler can read
+/// both spaces — is the same.
+#[test]
+fn a_delivered_event_carries_both_the_local_and_the_global_position() {
+    let (recorded, listener) = pair_recording_listener();
+
+    let laid = harness::pump_widget(
+        Center::new().child(
+            Transform::scale(2.0, 2.0)
+                .alignment(Alignment::TOP_LEFT)
+                .child(listener.child(target())),
+        ),
+        harness::screen(),
+    );
+
+    laid.dispatch_pointer_down(450.0, 350.0);
+
+    let (local, global) = recorded.get().expect("on_pointer_down must have fired");
+    assert_close(local, (50.0, 50.0), "local: the Listener's own 100x100 box");
+    assert_close(
+        global,
+        (450.0, 350.0),
+        "global: the dispatched platform point",
+    );
+    assert_ne!(
+        local, global,
+        "under a scaled and offset ancestor the two spaces must not coincide — if they \
+         do, one of the two fields is a relabelling of the other"
+    );
+}
+
+/// A frame that changes the receiver's transform mid-contact does not move
+/// the global position reported for later events in that contact.
+///
+/// The global half is the platform's own value, passed through untouched, so
+/// nothing about the tree can shift it. This is the property that distinguishes
+/// carrying the position from re-deriving it: a consumer that recovers a global
+/// point by mapping the delivered local position through the tree's *current*
+/// transform reads the post-swap matrix while the local position came from the
+/// pre-swap one, and lands somewhere the pointer never was.
+///
+/// The scale doubles between the two moves (2x, then 4x) while the pointer
+/// stays at one global point.
+///
+/// # Why the last leg is here
+///
+/// The two moves alone would pass vacuously if `pump_widget` had changed
+/// nothing at all: a contact replays the route resolved at its own `Down`
+/// (Flutter does the same), so BOTH halves are expected to be stable across
+/// the swap, and stability proves nothing about a swap that never happened.
+/// The trailing up-then-down dispatches a FRESH contact at the original point,
+/// which resolves a fresh route against the new tree and must therefore
+/// localise differently — `(450, 350)` is `(50, 50)` inside a 2x box and
+/// `(25, 25)` inside a 4x one. That inequality is what makes the equality
+/// above load-bearing.
+#[test]
+fn a_mid_contact_transform_change_does_not_move_the_reported_global_position() {
+    let (deliveries, listener) = delivery_recording_listener();
+
+    let tree = |scale: f32| {
+        Center::new().child(
+            Transform::scale(scale, scale)
+                .alignment(Alignment::TOP_LEFT)
+                .child(listener.clone().child(target())),
+        )
+    };
+
+    let mut laid = harness::pump_widget(tree(2.0), harness::screen());
+
+    laid.dispatch_pointer_down(450.0, 350.0);
+    laid.dispatch_pointer_move(460.0, 360.0);
+
+    // Same contact, same pointer position, different ancestor transform.
+    laid.pump_widget(tree(4.0));
+    laid.dispatch_pointer_move(460.0, 360.0);
+    laid.dispatch_pointer_up(460.0, 360.0);
+
+    // A fresh contact, resolved against the swapped tree.
+    laid.dispatch_pointer_down(450.0, 350.0);
+
+    let deliveries = deliveries.borrow();
+    assert_eq!(
+        deliveries.len(),
+        4,
+        "expected down, move, move, down — got {deliveries:?}"
+    );
+    let (first_down_local, _) = deliveries[0];
+    let (_, global_before) = deliveries[1];
+    let (_, global_after) = deliveries[2];
+    let (second_down_local, second_down_global) = deliveries[3];
+
+    assert_close(global_before, (460.0, 360.0), "global before the swap");
+    assert_close(
+        global_after,
+        (460.0, 360.0),
+        "global after the swap — the platform value, not a value re-derived \
+         from whatever transform the tree now has",
+    );
+
+    assert_close(
+        first_down_local,
+        (50.0, 50.0),
+        "local under the 2x ancestor",
+    );
+    assert_close(
+        second_down_local,
+        (25.0, 25.0),
+        "local under the 4x ancestor — this is what proves the swap took \
+         effect, so the two readings above are not equal merely because \
+         nothing changed",
+    );
+    assert_close(
+        second_down_global,
+        (450.0, 350.0),
+        "the fresh contact's global is still the platform value",
     );
 }

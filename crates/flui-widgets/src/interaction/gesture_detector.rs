@@ -649,11 +649,15 @@ impl GestureDetectorState {
         let on_up = group.clone();
         let on_cancel = group;
 
+        // Recognizers still consume a single-space event, so they are handed
+        // the LOCAL one — the space they have always tracked. The pair's
+        // global half stops here; carrying it into the recognizers means
+        // giving them Flutter's `OffsetPair`, which is its own change.
         Listener::new()
-            .on_pointer_down(move |event| down.handle_down(event))
-            .on_pointer_move(move |event| on_move.forward(event))
-            .on_pointer_up(move |event| on_up.forward(event))
-            .on_pointer_cancel(move |event| on_cancel.forward(event))
+            .on_pointer_down(move |dispatch| down.handle_down(dispatch.local))
+            .on_pointer_move(move |dispatch| on_move.forward(dispatch.local))
+            .on_pointer_up(move |dispatch| on_up.forward(dispatch.local))
+            .on_pointer_cancel(move |dispatch| on_cancel.forward(dispatch.local))
     }
 }
 

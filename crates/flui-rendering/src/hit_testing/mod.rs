@@ -84,15 +84,16 @@ pub use flui_interaction::routing::HitTestBehavior;
 // Pointer-event dispatch surface: a `RenderObject` advertises a data-only
 // `PointerTarget` (see `RenderObject::pointer_target`) that the pipeline
 // attaches to its hit entry; dispatch resolves the target through the
-// owner-local interaction lane and delivers the locally transformed
-// `PointerEvent` leaf-first to every target (ADR-0027 — executable callbacks
-// never live in render storage). `EventPropagation` is carried only by the
-// two arbitrated claim walks, scroll signals and trackpad pan-zoom.
+// owner-local interaction lane and delivers a `PointerDispatch` — the event in
+// the target's own space alongside the untouched platform one — leaf-first to
+// every target (ADR-0027 — executable callbacks never live in render storage).
+// `EventPropagation` is carried only by the two arbitrated claim walks, scroll
+// signals and trackpad pan-zoom.
 pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
 pub use flui_interaction::routing::{
     DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
     MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation, PanZoomTarget, PathClipTarget,
-    PointerTarget, ScrollTarget, ShaderMaskTarget, resolve_path_clip_target,
+    PointerDispatch, PointerTarget, ScrollTarget, ShaderMaskTarget, resolve_path_clip_target,
     resolve_shader_mask_target,
 };
 pub use result::HitTestResult;
