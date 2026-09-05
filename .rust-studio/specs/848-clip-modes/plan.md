@@ -1,3 +1,7 @@
+> **Status: partly shipped.** Read item 2's strikethrough before following
+> this plan — the rect half was implemented, found to cost more than it bought,
+> and reverted. The rounded half shipped.
+
 # #848 — honour the clip layer's `Clip` mode in the wgpu backend
 
 ## What is actually wrong (verified by reading, not from the issue text)
@@ -7,7 +11,7 @@ ignore the mode, and each is wrong in a different direction.**
 
 | call | today's path | today's edge | correct for |
 |---|---|---|---|
-| `push_clip_rect` | `state_stack::clip_rect` → hardware scissor (integer pixels) | always **hard** | `HardEdge` only |
+| `push_clip_rect` | `state_stack::clip_rect` → hardware scissor (integer pixels) | always **hard** | `HardEdge` only — and it STAYS this way, see item 2 |
 | `push_clip_rrect` | coarse scissor + `current_rrect_clip` → SDF | always **anti-aliased** | `AntiAlias` only |
 | `push_clip_path` | `painter.clip_path` | (unexamined) | — |
 
@@ -25,9 +29,14 @@ clip layer, so nothing reaches these functions.
 1. **Thread the mode.** `push_clip_rect` / `push_clip_rrect` / `push_clip_path`
    (`wgpu/backend.rs:1465-1481`) currently bind it as `_clip_behavior`. Pass it
    through `painter/transform_clip.rs` into `state_stack.rs`.
-2. **`rect` + `AntiAlias`** routes to the SDF path instead of the scissor — a
-   rrect with zero radii. The scissor is integer-aligned and cannot feather.
-   Keep the coarse scissor as an early-reject, as `clip_rrect` already does.
+2. ~~**`rect` + `AntiAlias`** routes to the SDF path instead of the scissor.~~
+   **TRIED AND REJECTED — this is the opposite of what shipped.** The scissor
+   is not only an early reject: text is handed to glyphon with it alone and
+   never evaluates the SDF, nested clips share one SDF slot so the inner clears
+   the outer, and the SDF's coarse scissor is padded so pixels leak. A rect
+   clip therefore stays the scissor under BOTH modes, and `Clip::AntiAlias` on
+   a rect is a named gap. See `Painter::clip_rect` for the full reasoning and
+   ADR-0054's status entry.
 3. **`rrect` / superellipse + `HardEdge`** needs a hard threshold in the shader:
    `step(0.0, -dist)` in place of `sdfToAlpha(dist)`. Cleanest as an orthogonal
    `clip_hard` flag rather than new `clip_kind` values, because `clip_kind`

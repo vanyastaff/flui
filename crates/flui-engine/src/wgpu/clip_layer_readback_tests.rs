@@ -375,3 +375,60 @@ fn a_rounded_clip_honours_hard_edge_and_anti_alias_differently() {
          hard={hard} smooth={smooth}"
     );
 }
+
+/// `Clip::None` through the CANVAS api applies no clip at all.
+///
+/// Reachable, despite the layer path never emitting one: `Canvas::clip_rect_ext`
+/// and its siblings push their `DrawCommand` whatever mode they are given. The
+/// backend used to map `None` alongside `HardEdge` — "the cheapest path" — which
+/// clipped content the caller had explicitly asked to leave alone.
+#[test]
+fn a_canvas_clip_with_mode_none_does_not_clip() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let scene = |behavior: Clip| {
+        let mut tree = LayerTree::new();
+        {
+            let mut builder = SceneBuilder::new(&mut tree);
+            let mut canvas = Canvas::new();
+            canvas.clip_rect_ext(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(CLIP_BOTTOM)),
+                flui_types::painting::ClipOp::Intersect,
+                behavior,
+            );
+            canvas.draw_rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+                &Paint::fill(Color::rgb(0, 0, 255)),
+            );
+            builder.add_picture(canvas.finish());
+            builder.build();
+        }
+        renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a canvas-clipped tree")
+    };
+
+    // Sampled below the clip's bottom edge: `HardEdge` clips it away, leaving
+    // the white ground; `None` must leave it painted blue.
+    //
+    // The RED channel is the oracle, not blue: the content is blue and the
+    // cleared surface is white, so the two AGREE on blue and an assertion
+    // there passes either way. ADR-0054 records this about the sibling test;
+    // I wrote blue first and it passed against both cases.
+    let hard = sample(&scene(Clip::HardEdge), SAMPLE_X, SAMPLE_Y);
+    let none = sample(&scene(Clip::None), SAMPLE_X, SAMPLE_Y);
+
+    assert!(
+        hard[0] > 200,
+        "the control must actually clip — expected the white ground, got {hard:?}, \
+         so the sample point proves nothing"
+    );
+    assert!(
+        none[0] < 64,
+        "Clip::None must not clip: content below the rect should still be painted \
+         blue, got {none:?}"
+    );
+}

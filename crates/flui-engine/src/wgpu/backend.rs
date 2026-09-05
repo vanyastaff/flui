@@ -520,10 +520,14 @@ impl Drop for Backend<'_> {
 /// Whether a clip layer's mode wants a hard boundary.
 ///
 /// `HardEdge` is the scissor for a rect, and a thresholded SDF for a rounded
-/// one. `AntiAlias` feathers. `None` never reaches a clip call — a render
-/// object choosing it pushes no clip layer at all — so its arm only has to be
-/// harmless, and the cheapest path is the honest answer for "no clipping
-/// wanted".
+/// one. `AntiAlias` feathers.
+///
+/// `None` is **not** handled here: it means "do not clip at all", and mapping
+/// it to any rounding would clip. It is filtered by [`clip_is_disabled`] before
+/// this is consulted. A render object choosing `Clip::None` pushes no clip
+/// LAYER, which is what made this look unreachable — but `Canvas::clip_rect_ext`
+/// and its siblings emit a `DrawCommand` unconditionally, so the canvas path
+/// reaches it with any mode the caller passes.
 ///
 /// `AntiAliasWithSaveLayer` is treated as `AntiAlias` here, and that is a real
 /// divergence, not a rounding of one. Flutter renders the subtree into an
@@ -536,10 +540,18 @@ impl Drop for Backend<'_> {
 /// not supported; it is approximated, and the approximation is wrong in a way
 /// a user can see.
 const fn clip_is_hard(behavior: flui_types::painting::Clip) -> bool {
-    matches!(
-        behavior,
-        flui_types::painting::Clip::None | flui_types::painting::Clip::HardEdge
-    )
+    matches!(behavior, flui_types::painting::Clip::HardEdge)
+}
+
+/// Whether a clip command asks for no clipping at all.
+///
+/// `Clip::None` reaching a clip call is not a contradiction: the layer path
+/// never emits one, but `Canvas::clip_rect_ext` / `clip_rrect_ext` /
+/// `clip_rsuperellipse_ext` push their command whatever mode they are given.
+/// Honouring it means applying NO clip — the alternative, treating it as the
+/// cheapest clip, clips content the caller asked to leave alone.
+const fn clip_is_disabled(behavior: flui_types::painting::Clip) -> bool {
+    matches!(behavior, flui_types::painting::Clip::None)
 }
 
 impl CommandRenderer for Backend<'_> {
@@ -1266,6 +1278,9 @@ impl CommandRenderer for Backend<'_> {
     ) {
         // `ClipOp::Difference` is still unhandled (it would need a stencil);
         // the `Clip` mode is honoured — see `clip_is_hard`.
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
         let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
             painter.clip_rect(rect, hard);
@@ -1279,6 +1294,9 @@ impl CommandRenderer for Backend<'_> {
         clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
         let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
             painter.clip_rrect(rrect, hard);
@@ -1297,6 +1315,9 @@ impl CommandRenderer for Backend<'_> {
         // SDF clip, populating `current_rsuperellipse_clip` so subsequent
         // rect_instanced draws apply the iOS-squircle SDF via the
         // per-instance kind=2 path.
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
         let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
             painter.clip_rsuperellipse(rsuperellipse, hard);
