@@ -32,7 +32,7 @@ pub use global_key_scope::GlobalKeyScope;
 pub(crate) use global_key_registry::GlobalKeyRegistry;
 pub(crate) use global_key_reservations::GlobalKeyReservations;
 pub(crate) use keep_alive::KeepAliveHolds;
-pub use keep_alive::KeepAliveLease;
+pub use keep_alive::{KeepAliveHandle, KeepAliveLease};
 pub use rebuild_handle::RebuildHandle;
 // Moved to flui-foundation (ADR-0040: observation events carry typed
 // causes, and foundation is the only crate below every emitter); re-exported

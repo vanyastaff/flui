@@ -173,6 +173,21 @@ pub trait BuildContext {
     /// taken during a frame phase would be re-taken on every rebuild.
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease;
 
+    /// A retained capability to take keep-alive holds later.
+    ///
+    /// [`Self::keep_alive_lease`] takes one hold now, which serves an item
+    /// that is keep-worthy from the start. This serves the case it cannot: a
+    /// state that becomes keep-worthy *after* `init_state` — an editor that
+    /// becomes dirty, a video that starts playing — or one that releases a
+    /// hold and later needs another. There is no second lifecycle hook to ask
+    /// from, so the capability is acquired once and the holds are taken from
+    /// it whenever the answer changes. Same shape, and same reason, as
+    /// [`rebuild_handle`](Self::rebuild_handle).
+    ///
+    /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
+    /// frame phase — enforced by `scripts/check-frame-capability-scope.sh`.
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
+
     /// This element tree's exact focus manager.
     ///
     /// A build owner always has one focus tree, so this capability is

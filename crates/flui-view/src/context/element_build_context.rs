@@ -241,7 +241,11 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
-        self.owner.read().keep_alive.acquire(self.element_id)
+        self.keep_alive_handle().hold()
+    }
+
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
+        self.owner.read().keep_alive.handle(self.element_id)
     }
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
@@ -772,7 +776,11 @@ impl BuildContext for BuildCtx<'_> {
         // inside `build`/`perform_layout`/`paint`, exactly as it is for
         // `text_input_handle` and `focus_manager`, which are acquired from
         // `init_state` through this same context.
-        self.capabilities.keep_alive.acquire(self.element_id)
+        self.keep_alive_handle().hold()
+    }
+
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
+        self.capabilities.keep_alive.handle(self.element_id)
     }
 
     fn focus_manager(&self) -> Rc<FocusManager> {

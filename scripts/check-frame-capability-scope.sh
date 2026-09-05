@@ -26,6 +26,9 @@
 #   focus_manager()     ADR-0037 — returns the presentation's concrete focus
 #                       owner; imperative focus changes synchronously notify
 #                       listeners and may schedule rebuilds.
+#   keep_alive_handle() #835 — the retained form of the same capability, for a
+#                       state that becomes keep-worthy after init_state. Same
+#                       hazard from a frame phase: re-acquired every rebuild.
 #   keep_alive_lease()  #835 — takes a hold on the enclosing lazy sliver child so
 #                       band eviction skips it. Acquired from `build` it would be
 #                       re-taken on every rebuild, and the lease's `Drop` would
@@ -95,7 +98,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guarded_fns='build|build_into_views|perform_layout|layout_node_with_children|paint|paint_raw|run_paint|run_layout|run_compositing|compose|composite'
 
 # The capabilities themselves. Adding one here is the whole cost of guarding it.
-capabilities='rebuild_handle|local_post_frame_handle|post_frame_handle|text_input_handle|focus_manager|keep_alive_lease|owner_platform|pipeline_owner'
+capabilities='rebuild_handle|local_post_frame_handle|post_frame_handle|text_input_handle|focus_manager|keep_alive_lease|keep_alive_handle|owner_platform|pipeline_owner'
 
 scan() {
   awk -v guarded="${guarded_fns}" -v caps="${capabilities}" '
@@ -141,17 +144,17 @@ self_test() {
     scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | sed 's/^/  /' || true
     local found
     found=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | wc -l || true)
-    if [[ "${found}" -ne 11 ]]; then
-      echo "  FAIL: expected 11 violations across all eight lifecycle-only capability tokens, got ${found}"
+    if [[ "${found}" -ne 12 ]]; then
+      echo "  FAIL: expected 12 violations across all nine lifecycle-only capability tokens, got ${found}"
       status=1
     else
-      echo "  ok: 11 violations reported"
+      echo "  ok: 12 violations reported"
     fi
     # Every capability token must actually be named — a scanner can otherwise
     # report the expected count while silently leaving a newer capability open.
     local reported
     reported=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null || true)
-    for cap in rebuild_handle local_post_frame_handle post_frame_handle text_input_handle focus_manager keep_alive_lease owner_platform pipeline_owner; do
+    for cap in rebuild_handle local_post_frame_handle post_frame_handle text_input_handle focus_manager keep_alive_lease keep_alive_handle owner_platform pipeline_owner; do
       if ! grep -q "${cap}()" <<<"${reported}"; then
         echo "  FAIL: scanner never reported a ${cap}() violation"
         status=1

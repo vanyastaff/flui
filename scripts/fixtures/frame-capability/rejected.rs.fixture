@@ -8,7 +8,8 @@
 // without adding a fixture cannot create a false sense of coverage.
 //
 // Prose mentioning rebuild_handle, post_frame_handle, local_post_frame_handle,
-// text_input_handle, focus_manager, keep_alive_lease, owner_platform, or
+// text_input_handle, focus_manager, keep_alive_lease, keep_alive_handle,
+// owner_platform, or
 // pipeline_owner in a
 // comment must NOT count as a violation; this line proves the comment filter
 // works.
@@ -31,6 +32,8 @@ impl StatelessView for Loop {
         // Drop releases it, so the child's survival would hinge on rebuild
         // ordering rather than on the state that wants it kept alive.
         let keep_alive = ctx.keep_alive_lease();
+        // Same hazard in retained form: a fresh handle every rebuild.
+        let keep_alive_capability = ctx.keep_alive_handle();
         // Ambient owner-thread platform access from mid-frame presentation
         // code (ADR-0039 §6) — the same hazard trigger #22 exists to fence.
         with_owner_platform(|owner| owner.quit());

@@ -56,7 +56,7 @@ use smallvec::SmallVec;
 /// independently-keeping descendants is rare.
 type HolderIds = SmallVec<[ElementId; 2]>;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Inner {
     /// Live holder -> how many leases it currently holds.
     ///
@@ -70,6 +70,14 @@ struct Inner {
     holders: HashMap<ElementId, usize>,
 }
 
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("holders", &self.holders)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The keep-alive table owned by one element tree.
 ///
 /// Cheap to clone (one `Rc`), so the split-borrow `ElementOwner` and the
@@ -81,27 +89,10 @@ pub(crate) struct KeepAliveHolds {
 }
 
 impl KeepAliveHolds {
-    /// Registers one lease held by `holder`, returning the guard whose drop
-    /// releases it.
-    ///
-    /// Each acquisition is counted independently, **including repeats by the
-    /// same holder**. Deduplicating instead would break the ordinary
-    /// reacquisition idiom: in
-    ///
-    /// ```rust,ignore
-    /// self.lease = ctx.keep_alive_lease();
-    /// ```
-    ///
-    /// Rust evaluates the right-hand side *before* dropping the old value, so a
-    /// deduplicated acquire would add nothing and the old lease's `Drop` would
-    /// then remove the only entry — leaving a live lease whose child is no
-    /// longer held, evicted on the next band move. Counting makes the pair
-    /// balance: `+1` then `-1` leaves the hold standing.
-    ///
-    /// The child being held is deliberately not recorded — see [`Inner`].
-    pub(crate) fn acquire(&self, holder: ElementId) -> KeepAliveLease {
-        *self.inner.borrow_mut().holders.entry(holder).or_insert(0) += 1;
-        KeepAliveLease {
+    /// A retained handle for `holder`, so holds can be taken after
+    /// `init_state` — see [`KeepAliveHandle`].
+    pub(crate) fn handle(&self, holder: ElementId) -> KeepAliveHandle {
+        KeepAliveHandle {
             inner: Rc::downgrade(&self.inner),
             holder,
         }
@@ -140,6 +131,63 @@ impl KeepAliveHolds {
     /// How many holders are live. Diagnostics and tests.
     pub(crate) fn holder_count(&self) -> usize {
         self.inner.borrow().holders.len()
+    }
+}
+
+/// A retained capability to take keep-alive holds, obtained once and used
+/// later.
+///
+/// This is the acquisition path for the case that matters most and that a
+/// one-shot lease cannot serve: a state that becomes keep-worthy *after*
+/// `init_state` — an editor that becomes dirty, a video that starts playing —
+/// or one that releases a hold and later needs another. There is no second
+/// lifecycle hook to ask from: `did_update_view` and `activate` receive no
+/// context, `did_change_dependencies` is not guaranteed to run, and acquiring
+/// from `build` is forbidden by the frame-capability rule. So the *capability*
+/// is acquired once, in `init_state`, and the holds are taken from it whenever
+/// the answer changes — the same shape `RebuildHandle` uses for the same
+/// reason.
+///
+/// ```rust,ignore
+/// struct EditorState {
+///     keep_alive: KeepAliveHandle,
+///     lease: Option<KeepAliveLease>,
+/// }
+///
+/// fn init_state(&mut self, ctx: &dyn BuildContext) {
+///     self.keep_alive = ctx.keep_alive_handle();
+/// }
+///
+/// fn on_text_changed(&mut self, dirty: bool) {
+///     // false -> true and true -> false, any number of times.
+///     self.lease = dirty.then(|| self.keep_alive.hold());
+/// }
+/// ```
+#[derive(Clone, Debug)]
+pub struct KeepAliveHandle {
+    inner: Weak<RefCell<Inner>>,
+    holder: ElementId,
+}
+
+impl KeepAliveHandle {
+    /// Take a hold. Drop the returned lease to release it.
+    ///
+    /// Repeatable: each call is counted independently, so `hold()` before
+    /// dropping a previous lease keeps the child alive across the swap.
+    pub fn hold(&self) -> KeepAliveLease {
+        if let Some(inner) = self.inner.upgrade() {
+            *inner.borrow_mut().holders.entry(self.holder).or_insert(0) += 1;
+        }
+        KeepAliveLease {
+            inner: self.inner.clone(),
+            holder: self.holder,
+        }
+    }
+
+    /// The element this handle takes holds for.
+    #[must_use]
+    pub fn holder(&self) -> ElementId {
+        self.holder
     }
 }
 
@@ -230,7 +278,7 @@ mod tests {
         let holder = id(2);
         assert_eq!(holds.holder_count(), 0);
 
-        let lease = holds.acquire(holder);
+        let lease = holds.handle(holder).hold();
         assert_eq!(holds.holder_count(), 1);
 
         drop(lease);
@@ -242,8 +290,8 @@ mod tests {
     #[test]
     fn the_last_holder_releases_not_the_first() {
         let holds = KeepAliveHolds::default();
-        let first = holds.acquire(id(2));
-        let second = holds.acquire(id(3));
+        let first = holds.handle(id(2)).hold();
+        let second = holds.handle(id(3)).hold();
 
         drop(first);
         assert_eq!(holds.holder_count(), 1, "one released, another remains");
@@ -264,10 +312,10 @@ mod tests {
         let holds = KeepAliveHolds::default();
         let holder = id(2);
 
-        let mut lease = Some(holds.acquire(holder));
+        let mut lease = Some(holds.handle(holder).hold());
         // The replacement is built while the old one is still alive, and the
         // old one drops only after it lands.
-        let replacement = holds.acquire(holder);
+        let replacement = holds.handle(holder).hold();
         drop(lease.replace(replacement));
         assert_eq!(holds.holder_count(), 1, "the hold survives the swap");
 
@@ -281,8 +329,8 @@ mod tests {
     fn forgetting_a_holder_releases_every_lease_it_had() {
         let holds = KeepAliveHolds::default();
         let holder = id(2);
-        let first = holds.acquire(holder);
-        let second = holds.acquire(holder);
+        let first = holds.handle(holder).hold();
+        let second = holds.handle(holder).hold();
 
         holds.forget_holder(holder);
         assert_eq!(holds.holder_count(), 0);
@@ -298,7 +346,7 @@ mod tests {
     fn a_lease_outliving_its_table_drops_harmlessly() {
         let lease = {
             let holds = KeepAliveHolds::default();
-            holds.acquire(id(2))
+            holds.handle(id(2)).hold()
         };
         drop(lease);
     }

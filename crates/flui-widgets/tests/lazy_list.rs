@@ -1862,8 +1862,10 @@ impl ViewState<ReleasableItem> for ReleasableItemState {
         self.log.lock().push((self.index, "init"));
         self.lease = Some(ctx.keep_alive_lease());
     }
-    fn did_update_view(&mut self, view: &ReleasableItem, _old: &ReleasableItem) {
-        if !view.keep {
+    fn did_update_view(&mut self, _old: &ReleasableItem, new_view: &ReleasableItem) {
+        // `(old_view, new_view)`. Reading the OLD one here made the release
+        // land a frame late; the test still passed because it pumps twice.
+        if !new_view.keep {
             // Dropping the lease is the release.
             self.lease = None;
         }
@@ -2010,4 +2012,133 @@ impl ViewState<MiddleLayer> for MiddleLayerState {
             log: Arc::clone(&self.log),
         }
     }
+}
+
+/// An item that starts NOT keep-worthy and becomes so later — the case a
+/// one-shot lease cannot serve.
+///
+/// It keeps the retained handle, not a lease, and takes the hold when the flag
+/// flips. That is the shape a real "keep me while I have unsaved input" item
+/// takes: the answer is unknown at `init_state`, and there is no second
+/// lifecycle hook that receives a context.
+#[derive(Clone, StatefulView)]
+struct BecomesKeepWorthy {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct BecomesKeepWorthyState {
+    index: usize,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+    handle: Option<flui_view::owner::KeepAliveHandle>,
+    lease: Option<flui_view::owner::KeepAliveLease>,
+}
+
+impl StatefulView for BecomesKeepWorthy {
+    type State = BecomesKeepWorthyState;
+    fn create_state(&self) -> BecomesKeepWorthyState {
+        BecomesKeepWorthyState {
+            index: self.index,
+            log: Arc::clone(&self.log),
+            handle: None,
+            lease: None,
+        }
+    }
+}
+
+impl ViewState<BecomesKeepWorthy> for BecomesKeepWorthyState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.log.lock().push((self.index, "init"));
+        // The capability, not a hold: nothing is keep-worthy yet.
+        self.handle = Some(ctx.keep_alive_handle());
+    }
+    fn did_update_view(&mut self, _old: &BecomesKeepWorthy, new_view: &BecomesKeepWorthy) {
+        // `(old_view, new_view)` — the NEW one carries the current answer.
+        self.lease = new_view
+            .keep
+            .then(|| {
+                self.handle
+                    .as_ref()
+                    .map(flui_view::owner::KeepAliveHandle::hold)
+            })
+            .flatten();
+    }
+    fn build(&self, _view: &BecomesKeepWorthy, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, 48.0)
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push((self.index, "dispose"));
+    }
+}
+
+/// A hold taken AFTER `init_state` keeps the item alive.
+///
+/// Without the retained handle there is no supported way to do this: a
+/// one-shot lease is only obtainable from `init_state`, and by then the answer
+/// is not known. `did_update_view` and `activate` receive no context,
+/// `did_change_dependencies` is not guaranteed to run, and acquiring from
+/// `build` is forbidden — so a false→true transition would leave the row
+/// evictable with the state still asking to be kept.
+#[test]
+fn a_hold_taken_after_init_state_keeps_the_item_alive() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    const KEPT: usize = 1;
+
+    let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    // Starts false: nothing is keep-worthy when init_state runs.
+    let dirty = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let list = {
+        let log = Arc::clone(&log);
+        let dirty = Arc::clone(&dirty);
+        move |offset: f32| {
+            let log = Arc::clone(&log);
+            let dirty = Arc::clone(&dirty);
+            ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    BecomesKeepWorthy {
+                        index: i,
+                        keep: i == KEPT && dirty.load(std::sync::atomic::Ordering::SeqCst),
+                        log: Arc::clone(&log),
+                    }
+                    .boxed()
+                })
+            })
+            .repaint_boundaries(false)
+            .offset(offset)
+        }
+    };
+
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+    // Now it becomes keep-worthy, well after init_state.
+    dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+    laid.pump_widget(list(0.0));
+
+    // Scroll far past it.
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+
+    let disposed: Vec<usize> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "dispose")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        disposed.contains(&0),
+        "the unheld control must be evicted; got {disposed:?}"
+    );
+    let kept_saw: Vec<&str> = log
+        .lock()
+        .iter()
+        .filter(|(i, _)| *i == KEPT)
+        .map(|(_, what)| *what)
+        .collect();
+    assert!(
+        !disposed.contains(&KEPT),
+        "a hold taken after init_state must keep the item alive; \
+         got {disposed:?}, kept item saw {kept_saw:?}"
+    );
 }

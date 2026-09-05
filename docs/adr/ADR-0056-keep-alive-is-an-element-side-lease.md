@@ -87,6 +87,16 @@ a `GlobalKey` graft from one list into another. Caching the target instead was
 wrong in two ways at once — the row the holder left stayed pinned forever, and the
 row it moved to stayed evictable.
 
+**The capability is retained, not one-shot.** `keep_alive_lease()` takes a hold
+now, which serves an item that is keep-worthy from the start.
+`keep_alive_handle()` returns the capability itself, so holds can be taken and
+released whenever the answer changes — an editor that becomes dirty, a video
+that starts playing. Without it the common false→true transition is
+unreachable: `init_state` is the only guaranteed hook that receives a context,
+`did_update_view` and `activate` receive none, `did_change_dependencies` is not
+guaranteed to run, and acquiring from `build` is forbidden. Same shape, and the
+same reason, as `RebuildHandle`. Both are trigger #22 tokens.
+
 It follows that a lease is issued **unconditionally**, including to an element not
 currently inside a lazy sliver: it simply holds nothing there, and begins holding
 if the element is later grafted into a list. Refusing would make that refusal
@@ -178,9 +188,15 @@ code on net.
   evicted), and `fire_need_visual_update` wakes the loop for a boundary whose
   content is not on screen. Flutter does not warn here; `flushPaint` checks
   `layer.attached` and calls `_skippedPaintingOnLayer()`.
-- **Release timing during a frame phase is unspecified.** Band eviction runs
-  between layout passes and once post-frame; a lease dropped from a post-frame
-  callback is not observed until the next frame's eviction.
+- **Releasing the last hold does not itself schedule anything.** Band eviction
+  is the only path that detaches a parked child, and it runs during layout. A
+  hold released from an event handler or a post-frame callback therefore leaves
+  the child attached until some *other* layout happens — the next scroll, in
+  practice, but indefinitely if the user never interacts again. Closing it means
+  waking the host on the last release; `ExternalBuildScheduler` is the existing
+  hook, and the reason it is not wired here is that "schedule the holder's
+  rebuild" does not obviously reach the sliver's layout, and I did not want to
+  claim a chain I had not tested.
 - **`ItemCount::Unknown` can strand a hold.** A count clamp that shrinks below a
   held index leaves a child the band walk never lays out and `retain_band` never
   evicts.
