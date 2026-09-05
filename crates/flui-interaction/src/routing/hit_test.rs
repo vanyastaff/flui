@@ -174,6 +174,11 @@ impl std::fmt::Debug for HitTestEntry {
             .field("has_scroll_target", &self.scroll_target.is_some())
             .field("has_pan_zoom_target", &self.pan_zoom_target.is_some())
             .field("has_mouse_annotation", &self.mouse_annotation.is_some())
+            // Presence, not contents: the payload is `dyn Any` and has no
+            // useful `Debug`. It is the flag that separates "no tag here" from
+            // "tagged, but the downcast asked for another type" -- two states a
+            // hit-test log otherwise cannot tell apart.
+            .field("has_metadata", &self.metadata.is_some())
             .finish_non_exhaustive()
     }
 }

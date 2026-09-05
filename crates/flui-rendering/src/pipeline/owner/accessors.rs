@@ -1055,10 +1055,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 Some(annotation) => entry.mouse_annotation(annotation),
                 None => entry,
             };
-            // Attached on the sliver path as well as the box one. No shipped
-            // sliver overrides `metadata` today -- `RenderMetaData` is a box
-            // proxy -- but a trait method the box walk honours and the sliver
-            // walk silently drops is a trap, not an optimisation.
+            // Attached on the sliver path as well as the box one, with a
+            // matching `RenderSliver::metadata` hook so a sliver can actually
+            // supply one. No shipped sliver does today -- `RenderMetaData` is a
+            // box proxy -- but a walk that reads a hook no implementor can
+            // override is a claim of support that is not there.
             let entry = match render_object.metadata() {
                 Some(payload) => entry.metadata(payload),
                 None => entry,

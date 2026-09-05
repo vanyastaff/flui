@@ -223,18 +223,17 @@ impl RenderBox for RenderMetaData {
             return true;
         }
 
-        // The driver owns the hit path and builds each entry from the
-        // node's own id, so a self-hit is expressed by returning `true`
-        // (or by `ctx.register_self_hit_entry()` for a node that must
-        // appear in the path without blocking what is behind it). The
-        // `add_self` this comment used to point at was deleted with the
-        // rest of the unread protocol-level result (issue #844).
-        //
-        // Carrying `metadata` INTO the entry is still not possible: the
-        // entry the driver builds has no payload slot. That is a real gap
-        // and it is the reason this node cannot yet be routed to by its
-        // metadata rather than by its id.
-        self.behavior.registers_self()
+        // The child missed. `Translucent` must still appear in the path
+        // WITHOUT blocking what is behind it, and the bool this method
+        // returns cannot say both: the bridge reads it as `add_self` AND
+        // `blocks_below`, so returning `true` here would make a translucent
+        // node opaque to its siblings. `register_self_hit_entry` is the half
+        // that adds without blocking -- the same split `RenderListener`
+        // makes.
+        if self.behavior == HitTestBehavior::Translucent {
+            ctx.register_self_hit_entry();
+        }
+        self.behavior.blocks_below()
     }
 }
 

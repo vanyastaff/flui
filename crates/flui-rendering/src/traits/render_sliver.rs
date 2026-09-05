@@ -350,6 +350,17 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         None
     }
 
+    /// Opaque payload this sliver attaches to any hit that lands on it — see
+    /// [`RenderObject::metadata`].
+    ///
+    /// Present so the hook is honoured on both protocols. The pipeline's sliver
+    /// hit walk reads it exactly as the box walk does; without this forward it
+    /// would read the `RenderObject` default and no sliver could ever attach a
+    /// payload, which is a quieter failure than not offering the hook at all.
+    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
     /// Returns the blend mode for the opacity layer wrapping children.
     ///
     /// Default: `None`. See
@@ -616,6 +627,10 @@ where
     // through `&dyn RenderObject<SliverProtocol>`.
     fn paint_alpha(&self) -> Option<u8> {
         <T as RenderSliver>::paint_alpha(self)
+    }
+
+    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+        <T as RenderSliver>::metadata(self)
     }
 
     fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
@@ -1135,5 +1150,57 @@ mod tests {
         let geom = result.expect("non-leaf sliver bridge must accept completed layout");
         assert_eq!(geom.scroll_extent, 600.0);
         assert_eq!(geom.paint_extent, 600.0);
+    }
+    /// A sliver's `metadata` reaches the erased `RenderObject` surface.
+    ///
+    /// The pipeline's sliver hit walk reads `RenderObject::metadata`, so a
+    /// hook on `RenderSliver` that the blanket impl does not forward would
+    /// leave every sliver silently unable to attach a payload — a walk reading
+    /// a hook no implementor can override is a claim of support that is not
+    /// there. Asserted through `dyn RenderObject`, which is how the pipeline
+    /// sees it; calling `RenderSliver::metadata` directly would pass with the
+    /// forward deleted.
+    #[test]
+    fn a_slivers_metadata_forwards_through_the_erased_surface() {
+        #[derive(Debug, PartialEq)]
+        struct Tag(&'static str);
+
+        #[derive(Debug)]
+        struct TaggedSliver;
+
+        impl flui_foundation::Diagnosticable for TaggedSliver {
+            fn debug_fill_properties(&self, _p: &mut flui_foundation::DiagnosticsBuilder) {}
+        }
+
+        impl RenderSliver for TaggedSliver {
+            type Arity = Leaf;
+            type ParentData = crate::parent_data::SliverParentData;
+
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+            ) -> SliverGeometry {
+                SliverGeometry::ZERO
+            }
+
+            fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+                Some(std::sync::Arc::new(Tag("sliver")))
+            }
+        }
+
+        let erased: &dyn crate::traits::RenderObject<SliverProtocol> = &TaggedSliver;
+        let payload = erased.metadata().expect("the hook must forward");
+        assert_eq!(
+            payload.downcast_ref::<Tag>(),
+            Some(&Tag("sliver")),
+            "the payload must survive the erasure intact"
+        );
+
+        let untagged: &dyn crate::traits::RenderObject<SliverProtocol> =
+            &FixedHeightSliver::new(10.0);
+        assert!(
+            untagged.metadata().is_none(),
+            "a sliver that attaches nothing must not appear to carry a payload"
+        );
     }
 }
