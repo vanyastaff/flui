@@ -105,7 +105,6 @@ where
             text_input_handle: owner.text_input_handle.clone(),
             pipeline_owner: core.pipeline_owner().cloned(),
             keep_alive: owner.keep_alive.clone(),
-            own_sliver_slot: core.sliver_slot(),
         },
     ))
 }

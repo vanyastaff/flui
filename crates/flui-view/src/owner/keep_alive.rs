@@ -69,18 +69,26 @@ impl KeepAliveHolds {
     /// Registers `holder` as keeping `held` alive, returning the lease whose
     /// drop releases it.
     ///
-    /// A holder may hold at most one child — it lives inside exactly one — so a
-    /// repeat acquisition by the same holder is deduplicated rather than
-    /// counted twice. That matters because `init_state` is the sanctioned
-    /// acquisition site but a re-activated element runs it again.
+    /// Each acquisition is counted independently, **including repeats by the
+    /// same holder**. Deduplicating instead would break the ordinary
+    /// reacquisition idiom: in
+    ///
+    /// ```rust,ignore
+    /// self.lease = ctx.keep_alive_lease();
+    /// ```
+    ///
+    /// Rust evaluates the right-hand side *before* dropping the old value, so a
+    /// deduplicated acquire would add nothing and the old lease's `Drop` would
+    /// then remove the only entry — leaving a live lease whose child is no
+    /// longer held, evicted on the next band move. Counting makes the pair
+    /// balance: `+1` then `-1` leaves the hold standing.
     pub(crate) fn acquire(&self, holder: ElementId, held: ElementId) -> KeepAliveLease {
-        {
-            let mut inner = self.inner.borrow_mut();
-            let holders = inner.holders.entry(held).or_default();
-            if !holders.contains(&holder) {
-                holders.push(holder);
-            }
-        }
+        self.inner
+            .borrow_mut()
+            .holders
+            .entry(held)
+            .or_default()
+            .push(holder);
         KeepAliveLease {
             inner: Rc::downgrade(&self.inner),
             holder,
@@ -180,7 +188,12 @@ impl Drop for KeepAliveLease {
         let Some(holders) = inner.holders.get_mut(&self.held) else {
             return;
         };
-        holders.retain(|candidate| *candidate != self.holder);
+        // Exactly one entry — this lease's own. Removing every entry for the
+        // holder would release a replacement lease taken before this one was
+        // dropped, which is the reacquisition case `acquire` documents.
+        if let Some(position) = holders.iter().position(|c| *c == self.holder) {
+            holders.remove(position);
+        }
         if holders.is_empty() {
             inner.holders.remove(&self.held);
         }
@@ -227,22 +240,31 @@ mod tests {
         assert!(!holds.is_held(child));
     }
 
-    /// `init_state` runs again on a re-activated element, so a repeat
-    /// acquisition must not push a second entry that outlives the first lease.
+    /// The reacquisition idiom must not drop the hold.
+    ///
+    /// `self.lease = ctx.keep_alive_lease()` builds the new lease before
+    /// dropping the old one. If acquisitions by one holder were deduplicated,
+    /// the new lease would add nothing and the old one's `Drop` would remove
+    /// the only entry — leaving a live lease over an unheld child, evicted on
+    /// the next band move. This is the ordering, spelled out.
     #[test]
-    fn a_repeat_acquisition_by_one_holder_is_not_counted_twice() {
+    fn reacquiring_before_dropping_the_old_lease_keeps_the_hold() {
         let holds = KeepAliveHolds::default();
         let child = id(1);
         let holder = id(2);
 
-        let first = holds.acquire(holder, child);
-        let second = holds.acquire(holder, child);
-        drop(first);
-        drop(second);
+        let mut lease = Some(holds.acquire(holder, child));
+        // The exact ordering of `self.lease = ctx.keep_alive_lease()`: the
+        // replacement is built while the old one is still alive, and the old
+        // one drops only after it lands.
+        let replacement = holds.acquire(holder, child);
+        drop(lease.replace(replacement));
+        assert!(holds.is_held(child), "the hold survives the swap");
 
+        drop(lease.take());
         assert!(
             !holds.is_held(child),
-            "a deduplicated holder must fully release"
+            "and the last lease still releases it"
         );
     }
 

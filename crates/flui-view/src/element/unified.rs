@@ -226,6 +226,9 @@ where
     fn sliver_slot(&self) -> Option<usize> {
         self.core.sliver_slot()
     }
+    fn hosts_sparse_children(&self) -> bool {
+        self.behavior.hosts_sparse_children()
+    }
 
     // ========================================================================
     // Inherited-element protocol

@@ -1890,3 +1890,139 @@ impl ViewState<ReleasableItem> for ReleasableItemState {
         self.log.lock().push((self.index, "dispose"));
     }
 }
+
+/// The holder is a component *below* the sparse child, not the child itself.
+///
+/// `sliver_slot` is inherited through component elements, so with
+/// `repaint_boundaries(false)` the item and every component it builds beneath
+/// it all carry the same slot value. A lookup that stopped at the nearest
+/// slot-carrier would name a descendant `SparseChildren` has never heard of,
+/// and the hold would silently do nothing — the item is still evicted. The
+/// item itself holding (which the test above covers) cannot catch that,
+/// because there the nearest carrier and the sparse child are the same
+/// element.
+#[test]
+fn a_hold_taken_below_the_sparse_child_still_names_the_sparse_child() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    const KEPT: usize = 1;
+
+    let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let list = {
+        let log = Arc::clone(&log);
+        move |offset: f32| {
+            let log = Arc::clone(&log);
+            ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    // `NestedHolder` is the sparse child; it builds `KeptItem`,
+                    // a component one level down, which is what takes the hold.
+                    NestedHolder {
+                        index: i,
+                        keep: i == KEPT,
+                        log: Arc::clone(&log),
+                    }
+                    .boxed()
+                })
+            })
+            .repaint_boundaries(false)
+            .offset(offset)
+        }
+    };
+
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+
+    let disposed: Vec<usize> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "dispose")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        disposed.contains(&0),
+        "the unheld control must be evicted; got {disposed:?}"
+    );
+    assert!(
+        !disposed.contains(&KEPT),
+        "a hold taken one level below the sparse child must still keep it alive; got {disposed:?}"
+    );
+}
+
+/// The sparse child; delegates the actual hold to a nested component.
+#[derive(Clone, StatefulView)]
+struct NestedHolder {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct NestedHolderState {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+impl StatefulView for NestedHolder {
+    type State = NestedHolderState;
+    fn create_state(&self) -> NestedHolderState {
+        NestedHolderState {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+impl ViewState<NestedHolder> for NestedHolderState {
+    fn build(&self, _view: &NestedHolder, _ctx: &dyn BuildContext) -> impl IntoView {
+        // TWO component levels, not one. The holder's own node is *extracted*
+        // while it builds, so a walk that started at the nearest slot-carrier
+        // would skip itself and land on its parent anyway — masking the defect
+        // at one level of nesting. With a middle component present, that walk
+        // stops at the middle element, which `SparseChildren` has never heard
+        // of, and the hold is lost.
+        MiddleLayer {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push((self.index, "dispose"));
+    }
+}
+
+#[derive(Clone, StatefulView)]
+struct MiddleLayer {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct MiddleLayerState {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+impl StatefulView for MiddleLayer {
+    type State = MiddleLayerState;
+    fn create_state(&self) -> MiddleLayerState {
+        MiddleLayerState {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+impl ViewState<MiddleLayer> for MiddleLayerState {
+    fn build(&self, _view: &MiddleLayer, _ctx: &dyn BuildContext) -> impl IntoView {
+        KeptItem {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+}

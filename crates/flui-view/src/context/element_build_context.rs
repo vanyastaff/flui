@@ -210,18 +210,7 @@ impl ElementBuildContext {
     /// inside another list holds the inner one.
     fn enclosing_sparse_child(&self) -> Option<ElementId> {
         let tree = self.tree.read();
-        let mut current_id = self.element_id;
-        loop {
-            let node = tree.get(current_id)?;
-            if node
-                .element_opt()
-                .and_then(crate::view::ElementBase::sliver_slot)
-                .is_some()
-            {
-                return Some(current_id);
-            }
-            current_id = node.parent()?;
-        }
+        enclosing_sparse_child_in(&tree, self.element_id)
     }
 }
 
@@ -685,12 +674,35 @@ pub(crate) struct BuildCapabilities {
     /// The presentation's keep-alive table, so an item can take a hold on the
     /// lazy sliver child it lives inside from `init_state`.
     pub(crate) keep_alive: crate::owner::KeepAliveHolds,
-    /// This element's own lazy-sliver slot, cloned from its `ElementCore` for
-    /// the same reason `pipeline_owner` is: during a build its tree node is
-    /// *extracted*, so reading the slot back through `tree.get(self)` would hit
-    /// the take/put hole. An item that is itself the sparse child — a lazy list
-    /// configured with `repaint_boundaries(false)` — is exactly that case.
-    pub(crate) own_sliver_slot: Option<usize>,
+}
+
+/// The lazy sliver child `from` lives inside — the direct child of the nearest
+/// element that hosts sparse children.
+///
+/// **Not** the nearest ancestor carrying a `sliver_slot`. A component element
+/// passes its slot down to its own children, so with `repaint_boundaries(false)`
+/// an item and every component it builds beneath it all carry the same value;
+/// picking the nearest would name a descendant that `SparseChildren` has never
+/// heard of, and the hold would silently do nothing. Nesting resolves correctly
+/// for the same reason: the *inner* list's host is found first.
+///
+/// Self-inclusive, because an item whose parent is the host is itself that
+/// child. Ancestors are read through `element_opt`, so a node extracted by
+/// `build_scope`'s take/put window is a clean miss rather than a panic — the
+/// contract for every walk reachable during a build.
+fn enclosing_sparse_child_in(tree: &ElementTree, from: ElementId) -> Option<ElementId> {
+    let mut current_id = from;
+    loop {
+        let parent_id = tree.get(current_id)?.parent()?;
+        let hosts = tree
+            .get(parent_id)?
+            .element_opt()
+            .is_some_and(crate::view::ElementBase::hosts_sparse_children);
+        if hosts {
+            return Some(current_id);
+        }
+        current_id = parent_id;
+    }
 }
 
 pub(crate) struct BuildCtx<'b> {
@@ -807,27 +819,7 @@ impl BuildContext for BuildCtx<'_> {
         // inside `build`/`perform_layout`/`paint`, exactly as it is for
         // `text_input_handle` and `focus_manager`, which are acquired from
         // `init_state` through this same context.
-        let held = if self.capabilities.own_sliver_slot.is_some() {
-            // This element *is* the sparse child.
-            self.element_id
-        } else {
-            // Walk ancestors through `element_opt`: a node extracted by
-            // `build_scope`'s take/put window reads as a clean miss rather
-            // than panicking, which is the contract for every `BuildCtx`
-            // ancestor walk.
-            let mut current_id = self.tree.get(self.element_id)?.parent()?;
-            loop {
-                let node = self.tree.get(current_id)?;
-                if node
-                    .element_opt()
-                    .and_then(crate::view::ElementBase::sliver_slot)
-                    .is_some()
-                {
-                    break current_id;
-                }
-                current_id = node.parent()?;
-            }
-        };
+        let held = enclosing_sparse_child_in(self.tree, self.element_id)?;
         Some(self.capabilities.keep_alive.acquire(self.element_id, held))
     }
 
@@ -1376,7 +1368,6 @@ mod tests {
                 text_input_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
-                own_sliver_slot: None,
             },
         );
         ctx.visit_child_elements(&mut |_| {});
@@ -1401,7 +1392,6 @@ mod tests {
                 text_input_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
-                own_sliver_slot: None,
             },
         );
 
