@@ -556,6 +556,13 @@ pub enum WindowEvent {
     /// programmatic [`PlatformWindow::close`], which asks no veto — that
     /// route reports only [`Closed`](Self::Closed).
     ///
+    /// Ordering: emitted BEFORE the window's own `on_close` callback runs,
+    /// so a global handler observes the window still intact when told the
+    /// close is going ahead; [`Closed`](Self::Closed) follows once the
+    /// window has left the backend's tracking. (Earlier winit versions ran
+    /// `on_close` first — a deliberate change, made when both close routes
+    /// were unified into one teardown.)
+    ///
     /// Wired on winit and Win32. The headless backend routes no window
     /// lifecycle through the global handler at all (it emits only
     /// [`Created`](Self::Created)); use the window's own `on_should_close`
