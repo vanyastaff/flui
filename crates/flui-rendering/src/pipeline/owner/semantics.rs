@@ -976,7 +976,9 @@ fn describe_semantics_configuration(node: &RenderNode) -> SemanticsConfiguration
 /// explicit `IndexedSemantics` anywhere in the item wins, the same rule the
 /// contributing path follows.
 fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [SemanticsFragment]) {
-    let Some(index) = stamped_semantic_index(node) else {
+    let Some((index, set_size)) = stamped_sliver_parent_data(node)
+        .and_then(|pd| pd.semantic_index.map(|index| (index, pd.semantic_set_size)))
+    else {
         return;
     };
     for fragment in fragments {
@@ -984,25 +986,56 @@ fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [Semanti
             SemanticsFragment::Pending(pending) => &mut pending.config,
             SemanticsFragment::Formed(formed) => &mut formed.config,
         };
+        // Same split as the contributing path: an explicit `IndexedSemantics`
+        // keeps its position, but the set's size still applies — it belongs to
+        // the sliver, not to whoever numbered the row.
         if config.index_in_parent().is_none() {
             config.set_index_in_parent(index);
+        }
+        if let Some(size) = set_size {
+            config.set_scroll_child_count(size);
         }
     }
 }
 
-/// The semantic position a lazy sliver stamped into this node's parent data.
-fn stamped_semantic_index(node: &RenderNode) -> Option<i32> {
+/// The lazy-sliver slot a host stamped into this node's parent data.
+fn stamped_sliver_parent_data(
+    node: &RenderNode,
+) -> Option<&crate::parent_data::SliverMultiBoxAdaptorParentData> {
     node.parent_data()
         .and_then(|pd| pd.downcast_ref::<crate::parent_data::SliverMultiBoxAdaptorParentData>())
-        .and_then(|pd| pd.semantic_index)
 }
 
 fn apply_lazy_child_semantic_index(node: &RenderNode, config: &mut SemanticsConfiguration) {
-    if config.index_in_parent().is_some() {
+    let Some(pd) = stamped_sliver_parent_data(node) else {
         return;
-    }
-    if let Some(index) = stamped_semantic_index(node) {
-        config.set_index_in_parent(index);
+    };
+    // An explicit `IndexedSemantics` owns the POSITION — that is the whole
+    // reason it stays public. It says nothing about the set's size, though: the
+    // item is a member of the sliver's set whoever numbered it, so the size
+    // still comes from the stamp and is applied to a node that has a position
+    // either way. A size on a node with no position announces "of 100" attached
+    // to nothing.
+    let declared = config.index_in_parent().is_some();
+    if declared || pd.semantic_index.is_some() {
+        if let (false, Some(index)) = (declared, pd.semantic_index) {
+            config.set_index_in_parent(index);
+        }
+        // The total rides with the position, never without it: AccessKit's two
+        // properties describe one node, and a size on a node with no position
+        // announces "of 100" attached to nothing.
+        //
+        // `scroll_child_count` is the framework-side name for what the platform
+        // publishes as `size_of_set` (`accesskit_translation`'s
+        // `data.scroll_child_count -> set_size_of_set`). On an item node it
+        // means the size of the set the item belongs to, NOT that the item
+        // scrolls — the name comes from Flutter, where the property sits on the
+        // scrollable and each platform bridge recombines it with the item's
+        // index. AccessKit wants both on one node, so here it travels with the
+        // item.
+        if let Some(size) = pd.semantic_set_size {
+            config.set_scroll_child_count(size);
+        }
     }
 }
 

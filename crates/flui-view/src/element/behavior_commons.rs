@@ -103,11 +103,13 @@ pub(crate) fn stamp_sliver_slot(
     {
         existing.index = slot.logical;
         existing.semantic_index = slot.semantic;
+        existing.semantic_set_size = slot.set_size;
         return;
     }
-    node.set_parent_data(Box::new(
-        SliverMultiBoxAdaptorParentData::with_semantic_index(slot.logical, slot.semantic),
-    ));
+    let mut fresh =
+        SliverMultiBoxAdaptorParentData::with_semantic_index(slot.logical, slot.semantic);
+    fresh.semantic_set_size = slot.set_size;
+    node.set_parent_data(Box::new(fresh));
 }
 
 /// Run a user `build()` closure under [`std::panic::catch_unwind`] and,
