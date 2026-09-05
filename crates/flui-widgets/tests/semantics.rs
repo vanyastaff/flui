@@ -902,3 +902,64 @@ fn a_mapping_change_alone_restamps_the_resident_children() {
          scheduled to carry it"
     );
 }
+
+/// The composed offset reaches the grid entry point too, not just the list.
+///
+/// `SliverList` and `SliverGrid` are both re-exports of the same
+/// `SliverMultiBoxAdaptor` alias, so the mapping is declared identically on
+/// each. This pins that shared route from the grid side: a regression that
+/// wired the offset into the list's own layout rather than the adaptor's
+/// stamping would keep the list test green and fail here.
+#[test]
+fn a_composed_offset_reaches_the_grid_entry_point() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::{SemanticSetMapping, StaticChildren};
+    use flui_widgets::{
+        ScrollController, SliverGrid, SliverGridDelegateWithFixedCrossAxisCount, Viewport,
+    };
+    use std::sync::Arc;
+
+    const CELLS: usize = 2;
+    const SET: usize = 6;
+    const OFFSET: i32 = 4;
+
+    let cell = |i: usize| {
+        Semantics::new()
+            .container(true)
+            .label(format!("cell {i}"))
+            .child(SizedBox::new(200.0, 60.0))
+            .boxed()
+    };
+    let children = StaticChildren::new((0..CELLS).map(cell).collect::<Vec<_>>());
+    let controller = ScrollController::new();
+
+    // One cell per row, so a grid position is a list position and the
+    // assertion below reads the same either way.
+    let delegate = Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(1));
+
+    let mut laid = lay_out(
+        Viewport::new((SliverGrid::over(delegate, &children).semantics(
+            SemanticSetMapping::one_to_one(CELLS.into())
+                .composed_at(OFFSET, i32::try_from(SET).ok()),
+        ),))
+        .position(controller.position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let announced = |label: &str| {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        (node.position_in_set(), node.size_of_set())
+    };
+
+    assert_eq!(
+        [announced("cell 0"), announced("cell 1")],
+        [(Some(5), Some(SET)), (Some(6), Some(SET))],
+        "the grid's cells must carry the composed offset — `(Some(1), _)` \
+         means the mapping never reached this entry point"
+    );
+}
