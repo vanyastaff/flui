@@ -1057,6 +1057,38 @@ mod tests {
         assert!(!r1.overlaps(&r3));
     }
 
+    /// An empty rect never overlaps ITSELF, though it can overlap a rect that
+    /// straddles it.
+    ///
+    /// Both facts fall out of the strict inequalities, and the asymmetry is
+    /// the surprising part. Against itself, the degenerate axis compares
+    /// `10 > 10` and fails. Against a rect that strictly encloses it, every
+    /// comparison is a genuine inequality and succeeds — the empty rect is
+    /// "inside" without having any area of its own.
+    ///
+    /// Worth pinning because a property test asserted the opposite ("a rect
+    /// always intersects itself") and passed for as long as its generator
+    /// never produced a degenerate rect. It does now.
+    ///
+    /// Not verified against the reference: `Rect.overlaps` lives in `dart:ui`,
+    /// which the local `.flutter` clone does not include.
+    #[test]
+    fn an_empty_rect_never_overlaps_itself() {
+        let empty = Rect::from_xywh(px(10.0), px(10.0), px(0.0), px(50.0));
+        let straddling = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+
+        assert!(
+            !empty.overlaps(&empty),
+            "the degenerate axis compares 10 > 10, which is false"
+        );
+        assert!(
+            empty.overlaps(&straddling),
+            "but every comparison against a strictly enclosing rect is a real \
+             inequality, so this DOES overlap"
+        );
+        assert!(straddling.overlaps(&empty), "...and symmetrically");
+    }
+
     #[test]
     fn test_intersect() {
         let r1 = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));

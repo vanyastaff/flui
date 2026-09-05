@@ -189,12 +189,28 @@ proptest! {
         }
     }
 
-    /// Property: A rect always intersects itself
+    /// Property: a rect with area intersects itself, and an EMPTY one does
+    /// not — including with itself.
+    ///
+    /// `overlaps` uses strict inequalities, so a zero-width or zero-height
+    /// rect overlaps nothing at all. That is the half-open convention and it
+    /// is self-consistent: an empty region contains no points, so it can share
+    /// none. (Not verified against the reference here — `Rect.overlaps` lives
+    /// in `dart:ui`, which the local `.flutter` clone does not include.)
+    ///
+    /// The unqualified form of this property — "a rect always intersects
+    /// itself" — was false for empty rects and passed only because the old
+    /// generator essentially never produced one. It does now: the strategy
+    /// draws from a finite grid and hits its endpoints.
     #[test]
-    fn prop_rect_intersects_self(r in arb_rect()) {
-        prop_assert!(r.intersects(&r),
-            "Rect must intersect itself: {:?}",
-            r);
+    fn prop_rect_intersects_self_iff_it_has_area(r in arb_rect()) {
+        let has_area = r.max.x > r.min.x && r.max.y > r.min.y;
+        prop_assert_eq!(
+            r.intersects(&r),
+            has_area,
+            "a rect intersects itself exactly when it has area: {:?}",
+            r
+        );
     }
 
     /// Property: If A contains B, then A intersects B
