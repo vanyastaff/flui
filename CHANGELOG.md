@@ -517,6 +517,18 @@ file records the repo-consumer-visible summary.
   published; no git tag is cut by this entry (release-lead's call, separate
   from this changelog sweep).
 
+### Fixed
+
+- **A programmatic `PlatformWindow::close()` on the winit backend now actually closes the
+  window** (#919). It used to hide the window and fire `on_close` but never leave the backend's
+  tracking map, against which the exit policy is consulted, so an application closing its own
+  last window lingered forever with nothing on screen. Both close routes now run one teardown
+  body on the event-loop owner's next turn; `on_close` therefore fires on the owner thread
+  whatever thread called `close()`, never synchronously inside the call. `WinitWindow` moved
+  from `flui_platform::traits` to `flui_platform::platforms::winit`, and its constructor is
+  backend-private (it now needs the owner lane). The live-smoke harnesses gained a
+  `FLUI_SELF_CLOSE_ROUTE=programmatic` cycle that drives this route through the real app.
+
 ### Pre-changelog milestones
 
 Recorded retroactively from `docs/ROADMAP-TRACKER.md`; evidence links live

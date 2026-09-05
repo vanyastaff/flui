@@ -12,8 +12,10 @@ mod data_transfer;
 mod display;
 mod events;
 mod platform;
+mod window;
 
 pub use clipboard::ArboardClipboard;
 pub use data_transfer::WinitDataTransfer;
 pub use display::WinitDisplay;
 pub use platform::WinitPlatform;
+pub use window::WinitWindow;

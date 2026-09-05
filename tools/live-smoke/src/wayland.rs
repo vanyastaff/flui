@@ -27,12 +27,15 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-/// How many launch/self-close cycles must exit 0.
+use crate::self_close::{self, CloseRoute};
+
+/// How many launch/self-close cycles must exit 0 on the compositor route.
 const RUNS: u32 = 5;
-/// The app closes itself this long after the loop starts — long enough for
-/// the window and a few presented frames to exist (the swapchain must be
-/// live for the teardown-order check to mean anything).
-const SELF_CLOSE_AFTER_MS: u64 = 2000;
+/// How many further cycles must exit 0 on the programmatic route
+/// (`PlatformWindow::close`, issue #919) — the same teardown body, entered
+/// from the owner lane instead of the event arm; fewer cycles because the
+/// #713 ordering it re-pins is the same code, only the entry differs.
+const PROGRAMMATIC_RUNS: u32 = 2;
 const APP_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 const COMPOSITOR_SOCKET_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -55,16 +58,36 @@ pub(crate) fn run(app_path: &str) -> Result<()> {
     );
 
     for run in 1..=RUNS {
-        run_one_cycle(app_path, &compositor, run)?;
+        run_one_cycle(app_path, &compositor, CloseRoute::Compositor, run, RUNS)?;
     }
     eprintln!("live-smoke(wayland): clean close OK ({RUNS}/{RUNS} cycles exited 0)");
+    for run in 1..=PROGRAMMATIC_RUNS {
+        run_one_cycle(
+            app_path,
+            &compositor,
+            CloseRoute::Programmatic,
+            run,
+            PROGRAMMATIC_RUNS,
+        )?;
+    }
+    eprintln!(
+        "live-smoke(wayland): programmatic close OK ({PROGRAMMATIC_RUNS}/{PROGRAMMATIC_RUNS} \
+         cycles exited 0)"
+    );
     Ok(())
 }
 
-fn run_one_cycle(app_path: &str, compositor: &HeadlessCompositor, run: u32) -> Result<()> {
+fn run_one_cycle(
+    app_path: &str,
+    compositor: &HeadlessCompositor,
+    route: CloseRoute,
+    run: u32,
+    runs: u32,
+) -> Result<()> {
     let log_path = std::env::temp_dir().join(format!(
-        "flui-live-smoke-wayland-app-{}-{run}.log",
-        std::process::id()
+        "flui-live-smoke-wayland-app-{}-{}-{run}.log",
+        std::process::id(),
+        route.env_value()
     ));
     let log_file = std::fs::File::create(&log_path)
         .with_context(|| format!("creating {}", log_path.display()))?;
@@ -76,7 +99,11 @@ fn run_one_cycle(app_path: &str, compositor: &HeadlessCompositor, run: u32) -> R
         // winit could fall back to X11 and this check would silently pin
         // the wrong backend's teardown.
         .env_remove("DISPLAY")
-        .env("FLUI_SELF_CLOSE_AFTER_MS", SELF_CLOSE_AFTER_MS.to_string())
+        .env(
+            self_close::DEADLINE_ENV,
+            self_close::SELF_CLOSE_AFTER_MS.to_string(),
+        )
+        .env(self_close::ROUTE_ENV, route.env_value())
         .env("RUST_LOG", "warn,flui_platform=debug")
         .stdout(log_file.try_clone().context("cloning the app log handle")?)
         .stderr(log_file)
@@ -84,21 +111,25 @@ fn run_one_cycle(app_path: &str, compositor: &HeadlessCompositor, run: u32) -> R
         .with_context(|| format!("spawning {app_path}"))?;
 
     let status = wait_with_timeout(&mut app, APP_EXIT_TIMEOUT)?;
+    let route_name = route.env_value();
     let result = match status {
-        Some(status) if status.success() => {
-            eprintln!("live-smoke(wayland): cycle {run}/{RUNS} exited 0");
-            Ok(())
-        }
+        Some(status) if status.success() => self_close::assert_route_observed(&log_path, route)
+            .map(|()| {
+                eprintln!(
+                    "live-smoke(wayland): {route_name} close cycle {run}/{runs} exited 0, route \
+                     observed"
+                );
+            }),
         Some(status) => Err(anyhow::anyhow!(
-            "close check FAILED (cycle {run}/{RUNS}): teardown finished with {status} — \
-             a post-quit crash on the Wayland path (issue #713's class)"
+            "close check FAILED ({route_name} route, cycle {run}/{runs}): teardown finished \
+             with {status} — a post-quit crash on the Wayland path (issue #713's class)"
         )),
         None => {
             let _ = app.kill();
             let _ = app.wait();
             Err(anyhow::anyhow!(
-                "close check FAILED (cycle {run}/{RUNS}): still running {}s after the \
-                 self-close deadline — the close never fired or teardown hangs",
+                "close check FAILED ({route_name} route, cycle {run}/{runs}): still running \
+                 {}s after the self-close deadline — the close never fired or teardown hangs",
                 APP_EXIT_TIMEOUT.as_secs()
             ))
         }

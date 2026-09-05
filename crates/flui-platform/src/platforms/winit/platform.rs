@@ -29,6 +29,22 @@
 //! the exact duration of the `on_ready` call so `open_window` can create the
 //! window directly instead.
 //!
+//! # Programmatic close runs the owner's close teardown
+//!
+//! A window leaves this backend by exactly one body,
+//! [`WinitApp::complete_window_close`], whichever way it was asked to go:
+//! the compositor's `CloseRequested` (after the should-close veto) runs it
+//! in the event arm, and [`PlatformWindow::close`] — a decision the embedder
+//! already made, so no veto — posts a per-window request on the owner
+//! control lane ([`ControlSender::request_close_window`]) that the owner
+//! runs on its next turn. It cannot run in place: the teardown ends the
+//! loop when the last window goes, which needs the live `ActiveEventLoop`
+//! only an owner-turn callback holds, and the `on_close` callback must fire
+//! on the owner thread whatever thread asked. Before this (issue #919)
+//! `close()` hid the window and never left the tracking map, so the exit
+//! policy — consulted only against that map — never saw the last window
+//! go and the process lingered with nothing on screen.
+//!
 //! # Vsync pacing
 //!
 //! [`WinitApp::about_to_wait`] pins the event loop's control flow every
@@ -88,6 +104,7 @@ use winit::{
 
 use flui_types::geometry::{Pixels, Point, px};
 
+use super::window::WinitWindow;
 use super::{
     clipboard::ArboardClipboard,
     control::{
@@ -107,7 +124,7 @@ use crate::{
         Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, PendingWindow, Platform,
         PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput,
         PlatformReadyCallback, PlatformWindow, ProxySendError, WindowEvent, WindowId, WindowOpen,
-        WindowOptions, WinitWindow,
+        WindowOptions,
         owner::{OwnerHooks, ProxyTransport},
     },
 };
@@ -453,6 +470,7 @@ impl WinitPlatform {
             in_flight_replies: Vec::new(),
             bootstrap_error: None,
             self_close_deadline: self_close_deadline_from_env(),
+            self_close_route: self_close_route_from_env(),
         };
         if quit_requested {
             control.request_quit();
@@ -525,6 +543,17 @@ impl WinitPlatform {
         event_loop: &ActiveEventLoop,
         options: WindowOptions,
     ) -> Result<WindowId, OpenWindowError> {
+        // Resolve the lane BEFORE creating the native window: a window whose
+        // programmatic close could reach no owner is the shape of issue #919,
+        // and a live `ActiveEventLoop` without an installed lane cannot
+        // happen (`run_event_loop` installs it before the loop starts) — but
+        // the signature already speaks `OpenWindowError`, so the impossible
+        // case is a typed refusal, not a panic holding a native window.
+        let Some(close_lane) = self.control_sender() else {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(options),
+            });
+        };
         let mut attributes = WindowAttributes::default()
             .with_title(options.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
@@ -554,7 +583,7 @@ impl WinitPlatform {
         // `WinitWindow` can carry its own `id()` from the start, rather than
         // being registered under an identity it cannot itself report.
         let platform_id = self.with_state(WinitPlatformState::allocate_window_id);
-        let winit_window = Arc::new(WinitWindow::new(platform_id, raw_window));
+        let winit_window = Arc::new(WinitWindow::new(platform_id, raw_window, close_lane));
 
         self.with_state(|state| {
             state.register_window(winit_id, platform_id, winit_window.clone());
@@ -617,6 +646,17 @@ impl WinitPlatform {
             platform: self,
             hook,
         }
+    }
+
+    /// The owner control lane, while a loop is starting or running; `None`
+    /// before `run_event_loop` installs one or after the loop stopped.
+    fn control_sender(&self) -> Option<ControlSender> {
+        self.with_state(|state| match &state.run_state {
+            WinitRunState::Starting { control, .. } | WinitRunState::Running { control, .. } => {
+                Some(control.clone())
+            }
+            WinitRunState::New { .. } | WinitRunState::Stopped => None,
+        })
     }
 }
 
@@ -754,6 +794,41 @@ fn self_close_deadline_from_env() -> Option<Instant> {
     }
 }
 
+/// Which close route the harness self-close drives — see
+/// [`WinitApp::self_close_route`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SelfCloseRoute {
+    /// Synthesize `WindowEvent::CloseRequested`: the compositor/user path,
+    /// veto and all.
+    #[default]
+    Compositor,
+    /// Call [`PlatformWindow::close`] on the tracked window: the
+    /// programmatic path, exactly as an application closing its own window
+    /// does (issue #919).
+    Programmatic,
+}
+
+/// Reads the harness self-close route from `FLUI_SELF_CLOSE_ROUTE`
+/// (`compositor`, the default, or `programmatic`). Only meaningful with a
+/// deadline armed. An unknown value is a harness misconfiguration worth
+/// surfacing, not silently defaulting.
+fn self_close_route_from_env() -> SelfCloseRoute {
+    let Ok(raw) = std::env::var("FLUI_SELF_CLOSE_ROUTE") else {
+        return SelfCloseRoute::default();
+    };
+    match raw.as_str() {
+        "compositor" => SelfCloseRoute::Compositor,
+        "programmatic" => SelfCloseRoute::Programmatic,
+        _ => {
+            tracing::warn!(
+                %raw,
+                "FLUI_SELF_CLOSE_ROUTE is neither `compositor` nor `programmatic`; using compositor"
+            );
+            SelfCloseRoute::Compositor
+        }
+    }
+}
+
 /// The earlier of two optional wall-clock deadlines — `None` only when both
 /// are `None`, so an armed deadline is never lost to an idle `Wait`.
 fn earliest_deadline(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
@@ -802,6 +877,15 @@ struct WinitApp {
     /// default, and always in production) this is `None` and nothing here
     /// runs.
     self_close_deadline: Option<Instant>,
+    /// Which close route the armed self-close drives
+    /// (`FLUI_SELF_CLOSE_ROUTE`): the synthesized compositor
+    /// `CloseRequested` by default, or [`PlatformWindow::close`] on the
+    /// tracked window — so the live-smoke harnesses can prove the
+    /// programmatic route's teardown (issue #919) against a real app, real
+    /// GPU surface, and the embedder's real exit-policy hook, which no
+    /// in-crate test can host. Irrelevant while `self_close_deadline` is
+    /// `None`.
+    self_close_route: SelfCloseRoute,
 }
 
 /// Completes a dequeued window request even if owner-side processing
@@ -955,76 +1039,17 @@ impl ApplicationHandler for WinitApp {
                     return; // Vetoed
                 }
 
-                // Notify per-window close callback
-                if let Some(ref win) = window {
-                    win.callbacks().dispatch_close();
-                }
+                // The global "the user asked and nothing vetoed" event belongs
+                // to this route alone (a programmatic close was never a
+                // request); leased and invoked OUTSIDE the state lock
+                // (ADR-0039) like every global-handler call here.
+                self.platform
+                    .lease_window_event_handler()
+                    .invoke(WindowEvent::CloseRequested {
+                        window_id: platform_id,
+                    });
 
-                // Lease-take the global handler and invoke it OUTSIDE the
-                // state lock (ADR-0039): preserves today's observable
-                // ordering (handler invocation still precedes map
-                // removal/`should_exit`) while letting the handler call
-                // owner-thread platform methods (e.g. a deferred
-                // `OwnerPlatform::open_window`) without deadlocking on this
-                // non-reentrant lock.
-                let mut handler = self.platform.lease_window_event_handler();
-                handler.invoke(WindowEvent::CloseRequested {
-                    window_id: platform_id,
-                });
-                drop(handler);
-
-                let (windows_empty, transfer) = self.platform.with_state(|state| {
-                    // Remove window from tracking
-                    state.window_id_map.retain(|_, v| *v != platform_id);
-                    state.windows.remove(&platform_id);
-                    state.cursor_positions.remove(&platform_id);
-
-                    (state.windows.is_empty(), Arc::clone(&state.data_transfer))
-                });
-
-                // Retire any drag session addressed at this window; parked
-                // deliveries resolve SourceGone (ADR-0038 offer lifecycle).
-                transfer.forget_window(platform_id);
-
-                // Teardown-order invariant (issue #713): drop this window's
-                // registered callbacks NOW, while the native window (the
-                // `window` Arc above is still live) and the event loop are
-                // both still alive. The frame callback owns the embedder's
-                // GPU renderer, and its `wgpu::Surface` must be destroyed
-                // strictly before the winit window's Wayland objects — a
-                // swapchain destroyed after its `wl_surface` marshals on a
-                // freed `wl_proxy` and segfaults post-quit. Without this,
-                // the last window `Arc` (and the renderer inside these
-                // callbacks) unwinds only during the embedder's post-loop
-                // teardown, after the `EventLoop` is gone, in exactly the
-                // wrong order. `WinitWindow::drop` repeats this clear as a
-                // last-resort guarantee for refs that die elsewhere.
-                if let Some(ref win) = window {
-                    win.callbacks().clear();
-                }
-
-                // This backend's own window map is not the only ledger:
-                // an embedder hosting more than one top-level window (issue
-                // #555's `WindowPolicy`) tracks realms/presentations this
-                // platform layer cannot see. `windows_empty` alone would
-                // exit even while a queued "open another window" request
-                // is still in flight (e.g. a splash screen's own close
-                // handler asking for the main window) -- the exit-policy
-                // hook, when installed, gets the final word; unset, this
-                // is the exact pre-#555 unconditional behavior.
-                //
-                // Lease-take the hook and consult it OUTSIDE the state lock
-                // (ADR-0039), exactly like the window-event handler above:
-                // the hook's own body drops removed realm state, whose
-                // destructors may call back into this platform (e.g. a
-                // dispose hook opening another window) -- consulting it
-                // while still holding this non-reentrant lock would deadlock
-                // the instant such a callback re-entered `with_state`.
-                let should_exit = windows_empty && self.platform.lease_exit_policy_hook().invoke();
-
-                if should_exit {
-                    self.request_exit(event_loop);
-                }
+                self.complete_window_close(event_loop, platform_id, window.as_ref());
             }
             WinitWindowEvent::Resized(physical_size) => {
                 use flui_types::geometry::{Size, device_px, px};
@@ -1483,7 +1508,11 @@ impl ApplicationHandler for WinitApp {
         self.process_control(event_loop);
     }
 
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        // A close posted after the last drain but before admission closed
+        // (from inside the exit-policy hook that ended the loop, say) still
+        // gets its teardown — the loop is exiting, the window is not.
+        self.complete_pending_closes(event_loop);
         self.finish_shutdown();
     }
 }
@@ -1579,6 +1608,7 @@ impl WinitApp {
 
     fn process_control(&mut self, event_loop: &ActiveEventLoop) {
         if self.control.take_quit_requested() {
+            self.complete_pending_closes(event_loop);
             self.request_exit(event_loop);
             return;
         }
@@ -1586,6 +1616,7 @@ impl WinitApp {
         let drain_budget = self.control.begin_drain();
         for _ in 0..drain_budget {
             if self.control.take_quit_requested() {
+                self.complete_pending_closes(event_loop);
                 self.request_exit(event_loop);
                 return;
             }
@@ -1630,6 +1661,8 @@ impl WinitApp {
                 }
             }
         }
+
+        self.complete_pending_closes(event_loop);
 
         // Sweep entries whose requester claimed delivery and then dropped
         // its handle without ever reading it (late abandonment) — reclaim
@@ -1702,18 +1735,24 @@ impl WinitApp {
             (window, Arc::clone(&state.data_transfer))
         });
         if let Some(window) = window {
-            window.close();
+            // Directly, not through `PlatformWindow::close`: that route posts
+            // a close request for the owner's next turn, and this window is
+            // already out of the map it would look in.
+            window.inner().set_visible(false);
         }
         data_transfer.forget_window(window_id);
     }
 
     /// Fires the harness self-close (see [`WinitApp::self_close_deadline`])
-    /// when its deadline has passed and at least one window is tracked:
-    /// synthesizes `WindowEvent::CloseRequested` through the ordinary
+    /// when its deadline has passed and at least one window is tracked. On
+    /// the default [`SelfCloseRoute::Compositor`] it synthesizes
+    /// `WindowEvent::CloseRequested` through the ordinary
     /// [`ApplicationHandler::window_event`] entry so the whole close arm —
     /// should-close veto, per-window close callbacks, global handler, map
     /// removal, exit policy — runs exactly as a compositor-delivered close
-    /// would. One-shot: the deadline is cleared on fire. If no window exists
+    /// would; on [`SelfCloseRoute::Programmatic`] it calls
+    /// [`PlatformWindow::close`] on that window instead, exactly as an
+    /// application would. One-shot: the deadline is cleared on fire. If no window exists
     /// yet at the deadline, it stays armed until one does — re-paced a
     /// short interval forward on each check, never left in the past, so the
     /// loop keeps waiting instead of busy-waking on an expired
@@ -1742,8 +1781,163 @@ impl WinitApp {
             return;
         };
         self.self_close_deadline = None;
-        tracing::info!("harness self-close deadline reached; synthesizing CloseRequested");
-        self.window_event(event_loop, winit_id, WinitWindowEvent::CloseRequested);
+        match self.self_close_route {
+            SelfCloseRoute::Compositor => {
+                tracing::info!(
+                    route = "compositor",
+                    "harness self-close deadline reached; synthesizing CloseRequested"
+                );
+                self.window_event(event_loop, winit_id, WinitWindowEvent::CloseRequested);
+            }
+            SelfCloseRoute::Programmatic => {
+                // Through the public trait method, exactly as an application
+                // would: it posts the close on the owner lane and wakes this
+                // loop, whose next `user_event` drain runs the teardown.
+                let window = self.platform.with_state(|state| {
+                    state
+                        .get_platform_window_id(winit_id)
+                        .and_then(|id| state.windows.get(&id).cloned())
+                });
+                let Some(window) = window else {
+                    return;
+                };
+                tracing::info!(
+                    route = "programmatic",
+                    "harness self-close deadline reached; calling PlatformWindow::close"
+                );
+                window.close();
+            }
+        }
+    }
+
+    /// The teardown every closing window takes once the decision to close
+    /// is final — the ONE body behind both routes, because issue #919 was
+    /// exactly the two routes being written separately: the compositor's
+    /// `CloseRequested` arm (after its should-close veto) did all of this,
+    /// while the programmatic [`PlatformWindow::close`] hid the window and
+    /// fired its callback but never left the tracking map, so the exit
+    /// policy — consulted only against that map — never saw the last
+    /// window go, and the process lingered with nothing on screen.
+    ///
+    /// Always an owner-turn body, never run synchronously inside `close()`,
+    /// for a reason stronger than "ending the loop needs the live
+    /// `ActiveEventLoop`": a `close()` issued from inside one of this
+    /// window's own callbacks runs while that callback is leased out of its
+    /// slot, and `CallbackLease::drop` restores a leased callback into a
+    /// slot it finds empty — so a synchronous `callbacks().clear()` would be
+    /// undone the moment the callback returned, leaving the renderer-owning
+    /// frame callback alive in a window that is out of the map (issue #713's
+    /// class from the other direction). Deferring to the next owner turn is
+    /// what makes step 4 stick.
+    ///
+    /// Order, load-bearing throughout:
+    /// 1. hide the native window where the backend can (winit's
+    ///    `set_visible` is a no-op on Wayland, Android and Web — there the
+    ///    window disappears when its last handle drops) and report it not
+    ///    visible; the visible effect should not wait for handle drops an
+    ///    embedder may defer;
+    /// 2. the per-window `on_close` callback (an embedder tears down what it
+    ///    hung on this window — `flui-app` closes the window's presentation
+    ///    here, BEFORE the exit policy below reads its realm registry);
+    /// 3. removal from the window/cursor maps (and from `active_window`,
+    ///    which otherwise keeps naming a window that no longer exists), and
+    ///    retirement of any drag session addressed at this window (ADR-0038
+    ///    offer lifecycle);
+    /// 4. the callback clear — NOW, while the native window (`window` is
+    ///    still live) and the event loop are both alive: the frame callback
+    ///    owns the embedder's GPU renderer, whose `wgpu::Surface` must die
+    ///    strictly before the winit window's Wayland objects (a swapchain
+    ///    destroyed after its `wl_surface` marshals on a freed `wl_proxy`
+    ///    and segfaults post-quit — issue #713). `WinitWindow::drop` repeats
+    ///    the clear as a last resort for refs that die elsewhere;
+    /// 5. the global `WindowEvent::Closed` — both routes: the window is gone
+    ///    from this backend's ledger whichever way it left (the native
+    ///    route's `CloseRequested` is emitted by its arm, before this body);
+    /// 6. the exit-policy consult, only when this backend's own map is now
+    ///    empty. That map is not the only ledger: an embedder hosting more
+    ///    than one top-level window (issue #555's `WindowPolicy`) tracks
+    ///    realms/presentations this layer cannot see, and a queued "open
+    ///    another window" request (a splash's close handler asking for the
+    ///    main window) must not be raced by an unconditional exit — so the
+    ///    hook, when installed, gets the final word; unset, this is the
+    ///    exact pre-#555 unconditional behavior.
+    ///
+    /// Lock discipline (ADR-0039): the global handler and the exit-policy
+    /// hook are lease-taken and invoked OUTSIDE the platform state lock. The
+    /// hook's own body drops removed realm state, whose destructors may call
+    /// back into this platform (a dispose hook opening another window);
+    /// consulting it under this non-reentrant lock would deadlock the
+    /// instant such a callback re-entered `with_state`.
+    fn complete_window_close(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        platform_id: WindowId,
+        window: Option<&Arc<WinitWindow>>,
+    ) {
+        if let Some(win) = window {
+            win.inner().set_visible(false);
+            win.set_visible(false);
+            win.callbacks().dispatch_close();
+        }
+
+        let (windows_empty, transfer) = self.platform.with_state(|state| {
+            state.window_id_map.retain(|_, v| *v != platform_id);
+            state.windows.remove(&platform_id);
+            state.cursor_positions.remove(&platform_id);
+            if state.active_window == Some(platform_id) {
+                state.active_window = None;
+            }
+
+            (state.windows.is_empty(), Arc::clone(&state.data_transfer))
+        });
+        transfer.forget_window(platform_id);
+
+        if let Some(win) = window {
+            win.callbacks().clear();
+        }
+
+        self.platform
+            .lease_window_event_handler()
+            .invoke(WindowEvent::Closed(platform_id));
+
+        let should_exit = windows_empty && self.platform.lease_exit_policy_hook().invoke();
+        if should_exit {
+            self.request_exit(event_loop);
+        }
+    }
+
+    /// Runs the close teardown for every window whose programmatic
+    /// `close()` is waiting on the owner (issue #919). Called at the
+    /// `user_event` drain anchor AFTER the command drain, so a window opened
+    /// by a command in the same wake (a splash's close handler asking for
+    /// the main window) is already in the map and vetoes exit by count
+    /// alone; and called BEFORE any quit exits the loop — a close posted
+    /// before the quit is a decision already made whose `on_close` the
+    /// embedder is owed, and a quit that overtook it would strand that
+    /// window hidden-but-tracked, the exact shape of the original defect. A
+    /// window the map no longer holds (closed by the compositor in between,
+    /// or an orphan already unwound) is skipped: its teardown already ran.
+    fn complete_pending_closes(&mut self, event_loop: &ActiveEventLoop) {
+        for window_id in self.control.take_close_requests() {
+            let window = self
+                .platform
+                .with_state(|state| state.windows.get(&window_id).cloned());
+            let Some(window) = window else {
+                tracing::debug!(
+                    ?window_id,
+                    "programmatic close for a window no longer tracked"
+                );
+                continue;
+            };
+            // `route` is the live-smoke harnesses' oracle for this path
+            // (`tools/live-smoke`): matched on the field, not the message.
+            tracing::info!(
+                ?window_id,
+                route = "programmatic",
+                "Window closed programmatically"
+            );
+            self.complete_window_close(event_loop, window_id, Some(&window));
+        }
     }
 
     fn request_exit(&mut self, event_loop: &ActiveEventLoop) {
@@ -1845,13 +2039,7 @@ impl Platform for WinitPlatform {
         // the loop starts there is no hook installed and no service
         // running, so a pre-run request has nothing to re-evaluate and is
         // deliberately dropped rather than parked.
-        let control = self.with_state(|state| match &state.run_state {
-            WinitRunState::Starting { control, .. } | WinitRunState::Running { control, .. } => {
-                Some(control.clone())
-            }
-            WinitRunState::New { .. } | WinitRunState::Stopped => None,
-        });
-        if let Some(control) = control {
+        if let Some(control) = self.control_sender() {
             control.request_exit_reevaluation();
         }
     }
@@ -2260,13 +2448,16 @@ mod tests {
     };
 
     use super::{
-        OpenWindowReplyGuard, OpenWindowStateError, WinitApp, WinitPlatform, WinitProxyTransport,
-        WinitRunState, combine_shutdown_result,
+        OpenWindowReplyGuard, OpenWindowStateError, SelfCloseRoute, WinitApp, WinitPlatform,
+        WinitProxyTransport, WinitRunState, combine_shutdown_result,
     };
     use crate::{
         error::PlatformError,
         platforms::winit::control::{ControlCommand, control_lane},
-        traits::{Platform, PlatformWindow, ProxySendError, WindowOptions, owner::ProxyTransport},
+        traits::{
+            Platform, PlatformWindow, ProxySendError, WindowEvent, WindowId, WindowOptions,
+            owner::ProxyTransport,
+        },
     };
 
     fn options(title: impl Into<String>) -> WindowOptions {
@@ -2397,7 +2588,7 @@ mod tests {
     /// and Windows offer an explicit opt-out for exactly this situation
     /// (test harnesses, embedding). AppKit has no such opt-out — main-thread
     /// affinity there is enforced by the OS, not just winit's own guard —
-    /// so these lane tests are `#[ignore]`d on macOS (see the two callers).
+    /// so these lane tests are `#[ignore]`d on macOS (see the callers).
     ///
     /// **Only one `EventLoop` may ever exist per process** (a separate,
     /// permanent winit limitation, not the main-thread one above): a second
@@ -2406,9 +2597,9 @@ mod tests {
     /// exited. Every test that calls this must run in its own process —
     /// `cargo nextest run` gives each test one by default; plain
     /// `cargo test` runs the whole binary in one process and WILL fail
-    /// whichever of these tests happens to run second. Local-only per the
-    /// ADR-0039 slice-2 plan either way (`flui-platform`'s suite is
-    /// excluded from CI regardless).
+    /// whichever of these tests happens to run second. CI runs this crate's
+    /// suite with nextest under `xvfb-run` (see `crates/flui-platform/AGENTS.md`),
+    /// which is what gives these tests their X11 connection there.
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn build_test_event_loop() -> EventLoop<()> {
         #[cfg(target_os = "linux")]
@@ -2562,6 +2753,7 @@ mod tests {
             in_flight_replies: Vec::new(),
             bootstrap_error: None,
             self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
         };
 
         app.notify_quit_once();
@@ -2592,6 +2784,7 @@ mod tests {
             in_flight_replies: Vec::new(),
             bootstrap_error: None,
             self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
         };
 
         app.finish_shutdown();
@@ -2636,6 +2829,7 @@ mod tests {
                 in_flight_replies: Vec::new(),
                 bootstrap_error: None,
                 self_close_deadline: None,
+                self_close_route: SelfCloseRoute::default(),
             };
             panic!("exercise WinitApp unwind cleanup");
         }));
@@ -2697,6 +2891,7 @@ mod tests {
             in_flight_replies: Vec::new(),
             bootstrap_error: None,
             self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
         };
 
         let first_finish = catch_unwind(AssertUnwindSafe(|| app.finish_shutdown()));
@@ -2873,6 +3068,7 @@ mod tests {
             in_flight_replies: Vec::new(),
             bootstrap_error: None,
             self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
         };
         event_loop
             .run_app(&mut app)
@@ -3044,6 +3240,7 @@ mod tests {
                 in_flight_replies: Vec::new(),
                 bootstrap_error: None,
                 self_close_deadline: None,
+                self_close_route: SelfCloseRoute::default(),
             },
             stale_id,
             inject_now,
@@ -3149,6 +3346,7 @@ mod tests {
         // only AFTER the assertions, so the drop flag being set cannot be
         // this Arc's own (post-loop) drop doing the clearing.
         let kept_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+        let global_close_events = record_global_close_events(&platform);
 
         let platform_for_worker = Arc::clone(&platform);
         let control_for_worker = control;
@@ -3206,6 +3404,7 @@ mod tests {
                 in_flight_replies: Vec::new(),
                 bootstrap_error: None,
                 self_close_deadline: None,
+                self_close_route: SelfCloseRoute::default(),
             },
             arm_now,
         };
@@ -3226,8 +3425,262 @@ mod tests {
             platform.with_state(|state| state.windows.is_empty()),
             "the synthesized CloseRequested must remove the window from tracking"
         );
+        let closed_id = kept_window.lock().as_ref().map(|window| window.id());
+        assert_eq!(
+            *global_close_events.lock(),
+            vec![
+                (
+                    GlobalCloseEvent::CloseRequested,
+                    closed_id.expect("window was opened")
+                ),
+                (
+                    GlobalCloseEvent::Closed,
+                    closed_id.expect("window was opened")
+                ),
+            ],
+            "the user-initiated route reports CloseRequested (veto passed) and then Closed"
+        );
         // Only now release the worker's window Arc — after the assertions
         // that prove the clearing already happened without it.
+        drop(kept_window.lock().take());
+    }
+
+    /// Which of the two close-related global `WindowEvent`s a test saw.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum GlobalCloseEvent {
+        CloseRequested,
+        Closed,
+    }
+
+    /// Installs a global window-event handler that records the close-related
+    /// events in order (other events are ignored) — the only way to pin
+    /// which route emits which event, since no production code installs
+    /// one.
+    fn record_global_close_events(
+        platform: &WinitPlatform,
+    ) -> Arc<Mutex<Vec<(GlobalCloseEvent, WindowId)>>> {
+        let events: Arc<Mutex<Vec<(GlobalCloseEvent, WindowId)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let events_for_handler = Arc::clone(&events);
+        platform.on_window_event(Box::new(move |event| match event {
+            WindowEvent::CloseRequested { window_id } => events_for_handler
+                .lock()
+                .push((GlobalCloseEvent::CloseRequested, window_id)),
+            WindowEvent::Closed(window_id) => events_for_handler
+                .lock()
+                .push((GlobalCloseEvent::Closed, window_id)),
+            _ => {}
+        }));
+        events
+    }
+
+    /// Programmatic close runs the owner's full close teardown and exits
+    /// the loop on its own (issue #919). Before the fix
+    /// `WinitWindow::close` hid the window and fired its callback but never
+    /// left the tracking map, so the exit policy — consulted only against
+    /// that map — never saw the last window go. Observed on the pre-fix
+    /// body: the worker's bounded wait for map removal times out
+    /// (`window_id_map.len() = 1, expected 0`), which aborts the worker
+    /// before the later assertions run; by construction `on_close` would
+    /// also have fired on the worker thread, and the loop only ended
+    /// because the worker's failure-path `request_quit` unparked it.
+    ///
+    /// Pinned, in one real-event-loop run, from a cross-thread `close()`:
+    /// 1. the window leaves the tracking map and is reported not visible;
+    /// 2. `on_close` fires on the OWNER thread, not the calling worker —
+    ///    an embedder's owner-affine close handling (`flui-app` rejects
+    ///    realm dispatch off its owner thread) would otherwise silently
+    ///    refuse it;
+    /// 3. the registered callbacks are cleared inside the teardown, while
+    ///    the window and loop are alive (the #713 ordering the compositor
+    ///    path already pins);
+    /// 4. the global handler sees `Closed` and NOT `CloseRequested` — a
+    ///    programmatic close was never a request;
+    /// 5. the loop exits by the teardown's own exit-policy consult — the
+    ///    worker waits for `exiting` BEFORE arming its fallback quit, so a
+    ///    map removal without the exit is a timeout here, not a pass.
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "winit requires AppKit's event loop on the real main thread; \
+                  the test harness runs this on an ordinary test thread"
+    )]
+    fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
+        /// Delegating wrapper that records when the loop reaches `exiting`,
+        /// so the worker can tell "the teardown ended the loop" apart from
+        /// "my own fallback quit did".
+        struct ExitObserver {
+            inner: WinitApp,
+            exiting: Arc<AtomicBool>,
+        }
+
+        impl ApplicationHandler for ExitObserver {
+            fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+                self.inner.resumed(event_loop);
+            }
+
+            fn window_event(
+                &mut self,
+                event_loop: &ActiveEventLoop,
+                window_id: WinitWindowId,
+                event: WinitWindowEvent,
+            ) {
+                self.inner.window_event(event_loop, window_id, event);
+            }
+
+            fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+                self.inner.user_event(event_loop, ());
+            }
+
+            fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+                self.inner.about_to_wait(event_loop);
+            }
+
+            fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+                self.exiting.store(true, Ordering::SeqCst);
+                self.inner.exiting(event_loop);
+            }
+        }
+
+        /// Sets its flag when dropped — owned by the registered frame
+        /// callback, standing in for the GPU renderer the production
+        /// closure owns.
+        struct DropFlag(Arc<AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let platform = Arc::new(WinitPlatform::new());
+        let event_loop = build_test_event_loop();
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        let owner_thread = thread::current().id();
+        platform
+            .install_control_lane(owner_thread, control.clone())
+            .expect("first install succeeds");
+
+        let exiting = Arc::new(AtomicBool::new(false));
+        let callback_dropped = Arc::new(AtomicBool::new(false));
+        let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
+        // Parked here so the drop flag cannot be this Arc's own drop.
+        let kept_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+        let global_close_events = record_global_close_events(&platform);
+
+        let platform_for_worker = Arc::clone(&platform);
+        let control_for_worker = control;
+        let exiting_for_worker = Arc::clone(&exiting);
+        let callback_dropped_for_worker = Arc::clone(&callback_dropped);
+        let close_thread_for_worker = Arc::clone(&close_thread);
+        let kept_window_for_worker = Arc::clone(&kept_window);
+        let worker = thread::spawn(move || {
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                wait_for_running(&platform_for_worker);
+
+                let handle = control_for_worker
+                    .request_open_window(options("programmatic-close"))
+                    .expect("lane accepts the request");
+                let window = match handle.wait() {
+                    ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
+                    ClaimOutcome::AlreadyClaimed => {
+                        panic!("this handle is never polled by another caller before wait")
+                    }
+                    ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
+                };
+                wait_for_map_len(&platform_for_worker, 1, "window registration");
+
+                let flag = DropFlag(Arc::clone(&callback_dropped_for_worker));
+                window.on_request_frame(Box::new(move || {
+                    let _ = &flag;
+                }));
+                let close_thread_for_callback = Arc::clone(&close_thread_for_worker);
+                window.on_close(Box::new(move || {
+                    *close_thread_for_callback.lock() = Some(thread::current().id());
+                }));
+                *kept_window_for_worker.lock() = Some(Arc::clone(&window));
+
+                // The programmatic close, from a thread that is NOT the
+                // owner — the hardest case for the teardown's thread rules.
+                window.close();
+
+                wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
+                assert!(
+                    !window.is_visible(),
+                    "the teardown reports the closed window as not visible"
+                );
+
+                // The teardown's own exit-policy consult must end the loop;
+                // bounded so a missing exit is a loud failure, not a hang.
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !exiting_for_worker.load(Ordering::SeqCst) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the window left the map but the loop did not exit: the close \
+                         teardown must consult the exit policy once the map is empty"
+                    );
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }));
+
+            // Success path: the teardown's own exit already ended the loop
+            // and this quit is a no-op. Failure path: it unparks `run_app`
+            // so the main thread reaches its assertions instead of hanging.
+            control_for_worker.request_quit();
+            if let Err(payload) = outcome {
+                resume_unwind(payload);
+            }
+        });
+
+        let mut app = ExitObserver {
+            inner: WinitApp {
+                platform: Arc::clone(&platform),
+                on_ready: None,
+                control: receiver,
+                quit_notified: false,
+                in_flight_replies: Vec::new(),
+                bootstrap_error: None,
+                self_close_deadline: None,
+                self_close_route: SelfCloseRoute::default(),
+            },
+            exiting,
+        };
+        event_loop
+            .run_app(&mut app)
+            .expect("event loop runs to completion");
+        worker.join().expect("worker thread does not panic");
+
+        assert_eq!(
+            *close_thread.lock(),
+            Some(owner_thread),
+            "on_close must fire on the event-loop owner thread, never on the thread that \
+             called close()"
+        );
+        assert!(
+            callback_dropped.load(Ordering::SeqCst),
+            "the programmatic close must clear the window's callbacks inside the teardown, \
+             while the window and event loop are alive (issue #713's ordering)"
+        );
+        assert!(
+            platform.with_state(|state| state.windows.is_empty()
+                && state.window_id_map.is_empty()
+                && state.cursor_positions.is_empty()
+                && state.active_window.is_none()),
+            "the programmatic close must leave no trace in the tracking maps"
+        );
+        let closed_id = kept_window.lock().as_ref().map(|window| window.id());
+        assert_eq!(
+            *global_close_events.lock(),
+            vec![(
+                GlobalCloseEvent::Closed,
+                closed_id.expect("window was opened")
+            )],
+            "a programmatic close reports Closed only — it was never a request, so no \
+             CloseRequested"
+        );
         drop(kept_window.lock().take());
     }
 
@@ -3267,6 +3720,7 @@ mod tests {
             in_flight_replies: Vec::new(),
             bootstrap_error: None,
             self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
         };
 
         let result = event_loop
@@ -3331,6 +3785,7 @@ mod tests {
             in_flight_replies: Vec::new(),
             bootstrap_error: None,
             self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
         };
         event_loop
             .run_app(&mut app)

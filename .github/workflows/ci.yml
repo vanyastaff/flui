@@ -510,8 +510,11 @@ jobs:
       # same out-of-order teardown that is a use-after-free on Wayland's
       # client-side proxies. Runs the demo under a headless weston
       # compositor; the app closes itself via the platform's harness
-      # self-close hook (FLUI_SELF_CLOSE_AFTER_MS — the exact CloseRequested
-      # arm a compositor close takes), five cycles, each must exit 0.
+      # self-close hook (FLUI_SELF_CLOSE_AFTER_MS): five cycles on the
+      # compositor route (the exact CloseRequested arm a compositor close
+      # takes) and two on the programmatic PlatformWindow::close route
+      # (FLUI_SELF_CLOSE_ROUTE=programmatic, issue #919); each must exit 0
+      # AND log the route it took.
       # Weston is installed explicitly so the harness's weston-absent SKIP
       # path can never silently fire here. Reuses the demo/harness binaries
       # built by the X11 step above.
