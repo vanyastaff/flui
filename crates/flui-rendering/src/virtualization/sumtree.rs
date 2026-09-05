@@ -250,11 +250,15 @@ impl Node {
                 let mut remaining = index;
                 for run in runs {
                     if remaining >= run.count {
-                        acc += run.total();
+                        // Saturating, exactly as `Summary::add` is: several
+                        // runs can each reach `f32::MAX`, and an unchecked sum
+                        // would reach infinity while the cached total stays
+                        // finite. A prefix that disagrees with the total leaks
+                        // straight into item placement and scroll bounds.
+                        acc = finite_or_max(acc + run.total());
                         remaining -= run.count;
                     } else {
-                        acc += remaining as f32 * run.extent.extent();
-                        return acc;
+                        return finite_or_max(acc + remaining as f32 * run.extent.extent());
                     }
                 }
                 acc
@@ -268,12 +272,11 @@ impl Node {
                 for (child, summ) in children.iter().zip(summaries) {
                     if remaining >= summ.count {
                         // The whole child is before `index`: add its total.
-                        acc += summ.total_extent;
+                        acc = finite_or_max(acc + summ.total_extent);
                         remaining -= summ.count;
                     } else {
                         // `index` lands inside this child: recurse for the rest.
-                        acc += child.offset_of(remaining);
-                        return acc;
+                        return finite_or_max(acc + child.offset_of(remaining));
                     }
                 }
                 acc
@@ -317,7 +320,7 @@ impl Node {
                         let local = ((into_run / e) as usize).min(run.count - 1);
                         return (base + local, into_run - local as f32 * e);
                     }
-                    acc += run_total;
+                    acc = finite_or_max(acc + run_total);
                     base += run.count;
                 }
                 // `offset` is at or past the end: clamp to the last item.
@@ -345,7 +348,7 @@ impl Node {
                         let (local, into) = child.seek_offset(offset - acc);
                         return (index_base + local, into);
                     }
-                    acc += summ.total_extent;
+                    acc = finite_or_max(acc + summ.total_extent);
                     index_base += summ.count;
                 }
                 let last = children.last().expect("internal node has >= 1 child");
@@ -397,7 +400,7 @@ impl Node {
                 let mut base = base_index;
                 for (slot, &off) in out.iter_mut().zip(offsets) {
                     while r < last_run && acc + runs[r].total() <= off {
-                        acc += runs[r].total();
+                        acc = finite_or_max(acc + runs[r].total());
                         base = base.saturating_add(runs[r].count);
                         r += 1;
                     }
@@ -430,7 +433,7 @@ impl Node {
                     if start == offsets.len() {
                         return;
                     }
-                    let child_end = acc + summ.total_extent;
+                    let child_end = finite_or_max(acc + summ.total_extent);
                     let mut run = start;
                     while run < offsets.len() && offsets[run] < child_end {
                         run += 1;
@@ -1981,5 +1984,39 @@ mod resize_across_the_sentinel {
             "a measurement below the clamp survives"
         );
         t.check_invariants().unwrap();
+    }
+}
+
+/// Prefix sums must saturate the same way cached totals do.
+#[cfg(test)]
+mod saturating_prefixes {
+    use super::*;
+
+    /// With extents large enough that several runs each saturate,
+    /// `offset_of` must not exceed what `total_extent` reports.
+    ///
+    /// `Summary::add` clamps the cached total to `f32::MAX`; an unchecked
+    /// prefix accumulation would reach infinity instead and disagree with it,
+    /// then leak into item placement and scroll bounds.
+    #[test]
+    fn a_prefix_never_exceeds_the_saturated_total() {
+        let mut t = ExtentTree::uniform(5, ItemExtent::Unmeasured { hint: f32::MAX });
+        // Split the uniform run so several saturating runs coexist.
+        t.set(2, ItemExtent::Measured { extent: f32::MAX });
+        t.check_invariants().unwrap();
+
+        let total = t.total_extent();
+        assert!(total.is_finite(), "the cached total saturates");
+        for index in 0..=t.len() {
+            let prefix = t.offset_of(index);
+            assert!(
+                prefix.is_finite(),
+                "offset_of({index}) = {prefix} is not finite"
+            );
+            assert!(
+                prefix <= total,
+                "offset_of({index}) = {prefix} exceeds the total {total}"
+            );
+        }
     }
 }
