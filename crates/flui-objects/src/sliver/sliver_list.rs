@@ -94,6 +94,10 @@ pub struct RenderSliverList {
     /// Dense child count committed after the last layout pass. Used by the
     /// `&self` hit-test reverse-walk which cannot re-read `ctx.child_count()`.
     attached_child_count: usize,
+
+    /// The item count already warned about for an unbounded main axis, so the
+    /// truncation warns once rather than once per frame.
+    warned_unbounded: Option<usize>,
 }
 
 impl RenderSliverList {
@@ -119,6 +123,7 @@ impl RenderSliverList {
             logical_to_slot: BTreeMap::new(),
             pending_correction: 0.0,
             attached_child_count: 0,
+            warned_unbounded: None,
         }
     }
 
@@ -177,6 +182,7 @@ impl Clone for RenderSliverList {
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
             pending_correction: self.pending_correction,
             attached_child_count: self.attached_child_count,
+            warned_unbounded: None,
         }
     }
 }
@@ -217,6 +223,7 @@ impl RenderSliver for RenderSliverList {
             &mut self.item_count,
             &mut self.pending_correction,
             &mut self.attached_child_count,
+            &mut self.warned_unbounded,
             &constraints,
             ctx,
             // Absent strategy: emit a request via the request-strategy seam.
