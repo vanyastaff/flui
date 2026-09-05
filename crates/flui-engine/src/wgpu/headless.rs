@@ -38,9 +38,36 @@ pub struct HeadlessRenderer {
 impl HeadlessRenderer {
     /// Acquire a surface-less GPU device for offscreen capture.
     ///
+    /// Requests [`wgpu::Features::DUAL_SOURCE_BLENDING`] where the adapter
+    /// exposes it, so a capture shows the same clip fringe the windowed
+    /// renderer does — `Renderer::required_features` makes the same request for
+    /// the same reason. Nothing else about the device is negotiated.
+    ///
     /// # Errors
     /// Returns [`EngineError`] when no GPU adapter or device is available.
     pub fn new() -> EngineResult<Self> {
+        Self::acquire(wgpu::Features::DUAL_SOURCE_BLENDING)
+    }
+
+    /// [`Self::new`] with [`wgpu::Features::DUAL_SOURCE_BLENDING`] withheld
+    /// from the device even where the adapter exposes it.
+    ///
+    /// This is how a test reaches the folded fallback on hardware that has the
+    /// feature. Every adapter this workspace's CI and dev machines run on has
+    /// it — DX12 exposes it unconditionally — so without this the fallback
+    /// would ship untested on every device able to exercise it, and the
+    /// feathered result would have nothing to be compared against.
+    ///
+    /// # Errors
+    /// Returns [`EngineError`] when no GPU adapter or device is available.
+    #[cfg(test)]
+    pub(crate) fn without_dual_source_blending() -> EngineResult<Self> {
+        Self::acquire(wgpu::Features::empty())
+    }
+
+    /// Acquires the capture device, requesting whichever of `wanted_features`
+    /// the adapter actually offers.
+    fn acquire(wanted_features: wgpu::Features) -> EngineResult<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(
             &super::adapter::trusted_adapter_options(wgpu::PowerPreference::HighPerformance, None),
@@ -49,9 +76,11 @@ impl HeadlessRenderer {
 
         // Deliberately NOT `adapter::request_flui_device`: capture wants
         // wgpu's default (downlevel-friendly) device rather than the
-        // renderer's capability-negotiated one.
+        // renderer's capability-negotiated one — plus the features above,
+        // which change what the captured pixels look like.
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("FLUI Headless Capture Device"),
+            required_features: adapter.features() & wanted_features,
             ..Default::default()
         }))
         .map_err(EngineError::device_creation)?;
@@ -60,6 +89,17 @@ impl HeadlessRenderer {
             device: Arc::new(device),
             queue: Arc::new(queue),
         })
+    }
+
+    /// Whether this renderer's device can feather a coverage-destructive
+    /// blend's clip edge — the same question
+    /// `GpuCapabilities::supports_dual_source_blending` answers for the
+    /// windowed renderer.
+    #[must_use]
+    pub fn supports_dual_source_blending(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING)
     }
 
     /// Rasterize `tree` at `size` (device pixels) and return tightly-packed

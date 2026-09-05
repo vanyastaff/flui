@@ -588,79 +588,109 @@ fn a_destructive_blend_does_not_escape_a_rounded_clip() {
     );
 }
 
-/// An ANTI-ALIASED clip does not soften a destructive blend's fringe, and that
-/// is a known gap rather than a contract.
+/// An ANTI-ALIASED clip FEATHERS a destructive blend's fringe — and a device
+/// without a second blend source still cannot.
 ///
-/// The discard fixes the corners: a fully clipped-out fragment no longer
-/// reaches the blender. It cannot fix the fringe. `sdfToAlpha` gives a
-/// fractional coverage there, the fragment runs, and `Clear`'s `(Zero, Zero)`
-/// factors then wipe the destination completely regardless of the alpha
-/// emitted — so an anti-aliased eraser has a hard edge.
+/// This replaces a tripwire that asserted the opposite. That test pinned the
+/// state where `sdfToAlpha` produced fractional coverage along the rounded
+/// edge, the fragment reached the blender, and `Clear`'s `(Zero, Zero)` factors
+/// wiped the destination regardless of the alpha emitted — a hard-edged eraser.
+/// It was written to fail once coverage stopped riding in the source alpha, and
+/// it fired as designed — reporting 68 pixels along this exact edge that it
+/// required to be zero. The count is a record of that firing, not a number
+/// this test asserts; the exact per-mode arithmetic lives in
+/// `coverage_blend_readback_tests`.
 ///
-/// Fixing it means folding coverage into the blend rather than the alpha
-/// (`Clear` would need `(Zero, OneMinusSrcAlpha)`), which changes what a
-/// translucent `Clear` paint means and needs its own decision. Tracked
-/// separately; this asserts the CURRENT behaviour so the gap is a checked
-/// state and whoever changes it is told exactly where.
+/// The old claim is not discarded, it is DEMOTED to the fallback: a device
+/// without `wgpu::Features::DUAL_SOURCE_BLENDING` has nowhere to put coverage
+/// but the alpha channel `Clear` ignores, so the second half of this test
+/// asserts the hard fringe still, on a device built with the feature withheld.
+/// Rendering both ways in one test is what makes each half evidence — a single
+/// render could not tell "the fix works" from "this scene never had a fringe".
 ///
 /// The sibling tests miss this by construction: the destructive one uses
-/// `HardEdge`, which has no fringe, and the fringe one uses `SrcOver`, which
-/// blends correctly.
+/// `HardEdge`, which has no fringe, and the fringe one uses `SrcOver`, whose
+/// destination factor absorbs partial coverage already.
 #[test]
-fn an_anti_aliased_destructive_blend_still_has_a_hard_fringe() {
+fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
     use flui_types::painting::{BlendMode, ClipOp};
 
-    let Ok(renderer) = HeadlessRenderer::new() else {
+    /// Pixels along the edge that are neither untouched ground nor fully
+    /// erased. The ground is opaque red, so the RED channel discriminates:
+    /// 255 = untouched, 0 = erased, anything between = partially erased.
+    fn partially_erased(pixels: &[u8]) -> usize {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| (5..250).contains(&pixel[0]))
+            .count()
+    }
+
+    fn erase_through_an_anti_aliased_clip(renderer: &HeadlessRenderer) -> Vec<u8> {
+        let mut tree = LayerTree::new();
+        {
+            let mut builder = SceneBuilder::new(&mut tree);
+            let mut canvas = Canvas::new();
+            canvas.draw_rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+                &Paint::fill(Color::rgb(255, 0, 0)).with_anti_alias(false),
+            );
+            canvas.save();
+            canvas.clip_rrect_ext(
+                flui_types::geometry::RRect::from_rect_circular(
+                    Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
+                    px(16.0),
+                ),
+                ClipOp::Intersect,
+                Clip::AntiAlias,
+            );
+            canvas.draw_rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+                &Paint::fill(Color::rgb(0, 0, 0))
+                    .with_anti_alias(false)
+                    .with_blend_mode(BlendMode::Clear),
+            );
+            canvas.restore();
+            builder.add_picture(canvas.finish());
+            builder.build();
+        }
+
+        renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize the scene")
+    }
+
+    let Ok(feathering) = HeadlessRenderer::new() else {
         eprintln!("skipping: no GPU adapter available");
         return;
     };
+    let folded = HeadlessRenderer::without_dual_source_blending()
+        .expect("an adapter that answered once must answer again with fewer features");
 
-    let mut tree = LayerTree::new();
-    {
-        let mut builder = SceneBuilder::new(&mut tree);
-        let mut canvas = Canvas::new();
-        canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
-            &Paint::fill(Color::rgb(255, 0, 0)).with_anti_alias(false),
+    // The fallback half runs on every device, including one whose adapter
+    // simply lacks the feature.
+    assert_eq!(
+        partially_erased(&erase_through_an_anti_aliased_clip(&folded)),
+        0,
+        "without a second blend source, coverage has nowhere to ride but the \
+         alpha channel `Clear`'s (Zero, Zero) factors ignore, so every pixel \
+         along the edge is either untouched or fully erased"
+    );
+
+    if !feathering.supports_dual_source_blending() {
+        eprintln!(
+            "skipping the feathered half: this adapter does not expose \
+             DUAL_SOURCE_BLENDING, so both renderers take the folded path"
         );
-        canvas.save();
-        canvas.clip_rrect_ext(
-            flui_types::geometry::RRect::from_rect_circular(
-                Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
-                px(16.0),
-            ),
-            ClipOp::Intersect,
-            Clip::AntiAlias,
-        );
-        canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
-            &Paint::fill(Color::rgb(0, 0, 0))
-                .with_anti_alias(false)
-                .with_blend_mode(BlendMode::Clear),
-        );
-        canvas.restore();
-        builder.add_picture(canvas.finish());
-        builder.build();
+        return;
     }
 
-    let pixels = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
-        .expect("the headless capture path must rasterize the scene");
-
-    // Every pixel is either untouched ground or fully erased: no partial
-    // erase anywhere along the rounded edge.
-    let partial = pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .filter(|p| (5..250).contains(&p[0]))
-        .count();
-
-    assert_eq!(
-        partial, 0,
-        "TRIPWIRE, not a contract: an anti-aliased eraser should feather its \
-         edge, and today it cannot — coverage rides in the alpha, which \
-         `Clear`'s (Zero, Zero) factors ignore. When that is fixed this must \
-         fail; found {partial} partially-erased pixels"
+    let feathered = partially_erased(&erase_through_an_anti_aliased_clip(&feathering));
+    assert!(
+        feathered > 0,
+        "an anti-aliased eraser must feather its edge: with coverage on its \
+         own blend channel, `Clear` erases a fringe pixel in proportion to how \
+         much of it the clip admits, leaving a partial value. Found none"
     );
 }

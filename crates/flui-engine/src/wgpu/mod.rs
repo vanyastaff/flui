@@ -243,6 +243,11 @@ mod sdf_smoke_test;
 #[cfg(test)]
 mod clip_layer_readback_tests;
 
+// The clip suite's companion: same clip, but asserting the ARITHMETIC of a
+// partially covered blend rather than counting clipped pixels.
+#[cfg(test)]
+mod coverage_blend_readback_tests;
+
 // aa_oracle_tests contains both CPU unit tests (no GPU) and GPU readback tests.
 // Include whenever test compilation is active.
 #[cfg(test)]

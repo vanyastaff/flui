@@ -56,29 +56,55 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     return output;
 }
 
-// Fragment shader
+// Fragment shading
 //
-// Emits PREMULTIPLIED alpha: rgb is scaled by the final alpha. This is the
-// correct input form for fixed-function Porter-Duff blending, which the
-// tessellated pipeline selects per `PipelineKey::blend_mode`. The default
-// SrcOver case pairs this with `BlendState::PREMULTIPLIED_ALPHA_BLENDING`
-// (src factor One), making it visually identical to the previous straight
-// `input.color` + `ALPHA_BLENDING` output. The batch clip is folded into alpha
-// BEFORE premultiplying, so `a` below is the full final alpha.
+// Coverage and paint alpha are DIFFERENT quantities. `clipAlpha` reports how
+// much of the pixel the clip admits; `color.a` is how opaque the paint is.
+// Handing the blender their product as one number is exact only for a blend
+// mode whose destination factor absorbs `1 - coverage` — see
+// `pipeline::destination_alpha_scale_for` for which modes those are and what
+// the others need instead. Both fragment entry points share the shading below
+// so they cannot disagree about either quantity; they differ only in how many
+// channels they hand to the blender.
 
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let c = input.color;
+/// Paint colour and clip coverage for one fragment.
+struct ShadedFragment {
+    /// Straight (NOT premultiplied) paint colour; `.a` is the paint's own alpha.
+    color: vec4<f32>,
+    /// The fraction of this pixel the clip admits, in [0, 1].
+    coverage: f32,
+}
+
+fn shadeFragment(input: VertexOutput) -> ShadedFragment {
+    var shaded: ShadedFragment;
+    shaded.color = input.color;
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
-    let a = c.a
-        * clipAlpha(
-            input.world_pos,
-            clip.bounds,
-            clip.radii,
-            // Bit 2 carries the clip layer's Clip mode; `clipAlpha` unpacks it.
-            clip.kind.x | (clip.kind.z << 2u),
-            clip.device_to_local,
-            clip.local_origin,
-        );
-    return vec4<f32>(c.rgb * a, a);
+    shaded.coverage = clipAlpha(
+        input.world_pos,
+        clip.bounds,
+        clip.radii,
+        // Bit 2 carries the clip layer's Clip mode; `clipAlpha` unpacks it.
+        clip.kind.x | (clip.kind.z << 2u),
+        clip.device_to_local,
+        clip.local_origin,
+    );
+    return shaded;
+}
+
+/// The first blend source: PREMULTIPLIED colour, scaled by coverage.
+///
+/// Premultiplied is the correct input form for fixed-function Porter-Duff
+/// blending, which the tessellated pipeline selects per
+/// `PipelineKey::blend_mode`. The default SrcOver case pairs this with
+/// `BlendState::PREMULTIPLIED_ALPHA_BLENDING` (src factor One).
+///
+/// Scaling the whole premultiplied source by coverage is exactly
+/// `coverage x (the full-coverage source term)` for every mode in
+/// `blend_state_for`, because no mode's SOURCE factor reads source alpha —
+/// they read `0`, `1`, `dstAlpha`, `1 - dstAlpha`, or `dst`. That is why only
+/// the DESTINATION half of the blend needs correcting for partial coverage,
+/// and why both entry points can emit the same first source.
+fn premultipliedSource(shaded: ShadedFragment) -> vec4<f32> {
+    let a = shaded.color.a * shaded.coverage;
+    return vec4<f32>(shaded.color.rgb * a, a);
 }

@@ -16,11 +16,39 @@
 //! WGSL files themselves stay; only the redundant indirection went away.
 
 // Basic shapes
-/// Basic shape rendering shader.
+//
+// Two assemblies of the same shader, differing only in the fragment entry
+// point, because a device without `wgpu::Features::DUAL_SOURCE_BLENDING`
+// cannot compile the second one at all: naga rejects `@blend_src` without the
+// matching validator capability. `PipelineCache` picks between them per
+// device and per blend mode.
+//
+// Both are prepended with the shared clip block: tessellated geometry
+// evaluates the same SDF clip the instanced primitives do, from a per-batch
+// uniform.
+
+/// Tessellated shape shader with coverage folded into the source alpha.
 ///
-/// Prepended with the shared clip block: tessellated geometry evaluates the
-/// same SDF clip the instanced primitives do, from a per-batch uniform.
-pub const SHAPE: &str = concat!(include_str!("common/clip.wgsl"), include_str!("shape.wgsl"));
+/// The only assembly on a device without dual-source blending, and the one
+/// used for every blend mode whose destination factor already absorbs
+/// `1 - coverage` (see `pipeline::destination_alpha_scale_for`).
+pub const SHAPE: &str = concat!(
+    include_str!("common/clip.wgsl"),
+    include_str!("shape.wgsl"),
+    include_str!("shape_fragment_folded.wgsl"),
+);
+
+/// Tessellated shape shader that emits coverage as a second blend source.
+///
+/// The `enable` directive must precede every declaration in the module, so it
+/// is prepended here rather than written at the top of a `.wgsl` file — the
+/// clip block that follows opens with a `const`.
+pub const SHAPE_SECOND_SOURCE: &str = concat!(
+    "enable dual_source_blending;\n",
+    include_str!("common/clip.wgsl"),
+    include_str!("shape.wgsl"),
+    include_str!("shape_fragment_second_source.wgsl"),
+);
 
 // Instanced rendering
 //

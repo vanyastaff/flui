@@ -259,7 +259,10 @@ impl PipelineSet {
         // ── Shape pipeline cache (also creates the viewport bind-group layout) ──
         let shape_cache = PipelineCache::new(
             device,
-            super::shaders::SHAPE,
+            super::pipeline::ShapeShaderSources {
+                folded: super::shaders::SHAPE,
+                second_source: super::shaders::SHAPE_SECOND_SOURCE,
+            },
             surface_format,
             create_viewport_bind_group_layout(device),
         );
