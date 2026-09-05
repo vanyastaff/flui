@@ -129,19 +129,17 @@ pub(crate) fn install_close_request_wiring(
 /// `AppRuntime::new`'s own doc) — it resolves no services and constructs
 /// no singletons.
 ///
-/// # Backend completeness (issue #919)
+/// # Backend behaviour
 ///
-/// This resolves the close fully on the **headless**, **Win32** and
-/// **AppKit** backends, whose `PlatformWindow::close` performs a real
-/// close. On **winit** it does NOT: `WinitWindow::close` fires the
-/// window's `on_close` (so the presentation IS torn down) and hides the
-/// window, but never removes it from the backend's own window map and
-/// never re-consults the exit policy — so a winit application that
-/// defers its last window's close and then resolves it here ends up with
-/// no visible window and a process that does not exit. Stated rather than
-/// implied: this function introduces the path that depends on that fix.
-/// On **web** and **Android** the veto itself is inert (neither backend
-/// consults `dispatch_should_close`), so there is nothing to resolve.
+/// This resolves the close fully on the **headless**, **winit**, **Win32**
+/// and **AppKit** backends, whose `PlatformWindow::close` performs a real
+/// close. Timing differs: on **winit** the teardown (`on_close`, window-map
+/// removal, exit-policy consult) runs on the event-loop owner's next turn,
+/// after this call returns — never synchronously inside it (issue #919's
+/// fix) — while the **headless** double runs `on_close` synchronously
+/// inside `close()`. On **web** and **Android** the veto itself is inert
+/// (neither backend consults `dispatch_should_close`), so there is nothing
+/// to resolve.
 ///
 /// # Errors
 ///

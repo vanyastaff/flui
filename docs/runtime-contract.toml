@@ -1289,17 +1289,18 @@ backends implement the callback setter but never call \
 `dispatch_should_close`, so a handler registered there is inert. \
 (4) issue #558's own `deadline -> flush -> termination` leg bounds \
 teardown AFTER a close is agreed and belongs with the journaled-state \
-slice. (5) **Resolving a deferred close does not complete on winit** \
-(issue #919): `WinitWindow::close` fires `on_close` and hides the window \
-but never removes it from that backend's own window map nor re-consults \
-the exit policy, so the presentation tears down and the window vanishes \
-while the process stays alive. Headless, Win32 and AppKit complete \
-normally. The fix is not the teardown extraction it resembles -- \
-`WinitWindow` has no back-reference into the winit backend's private \
-platform state or its control lane -- but it IS testable there, \
-alongside \
-`close_requested_drops_window_callbacks_and_self_close_exits_the_loop`, \
-which drives a real window close under a live event loop in CI.\
+slice. (5) **Resolving a deferred close on winit completes on the owner's next \
+turn** (issue #919, fixed): `WinitWindow::close` posts the close to that \
+backend's owner lane and `WinitApp::complete_window_close` runs the same \
+teardown a compositor close takes -- `on_close`, window-map removal, \
+callback clear, exit-policy consult -- so the last window's deferred close \
+exits the process. Pinned by \
+`programmatic_close_runs_the_full_teardown_and_exits_the_loop` on a real \
+winit loop and by the live-smoke harnesses' programmatic-close cycles. What \
+this contract still states, not assumes: the close is ASYNCHRONOUS with \
+respect to `request_presentation_close` on winit (owner turn) and \
+synchronous on the headless double, so a test asserting right after the \
+call pins the double.\
 """
 state = "implemented"
 domain = "application"

@@ -73,24 +73,17 @@
 //!   `impl_window_callback_setters!` macro) but no code path in either
 //!   calls `dispatch_should_close`, so a handler registered there is inert.
 //!   That is a property of those backends, not of this module.
-//! - **Resolving a deferred close does not complete on winit** (issue
-//!   #919). `WinitWindow::close` fires the window's `on_close` and hides
-//!   it, but never removes it from the backend's own window map and never
-//!   re-consults the exit policy — so on the primary desktop backend a
-//!   deferred close tears the presentation down and the window vanishes,
-//!   while the process stays alive even when that was the last window.
-//!   This module's own path is what makes that reachable, so it is stated
-//!   here and at
+//! - **Resolving a deferred close on winit completes on the owner's next
+//!   turn, not inside the call** (issue #919, fixed). `WinitWindow::close`
+//!   posts the close to that backend's owner lane and the owner runs the
+//!   same teardown a compositor close takes — `on_close`, window-map
+//!   removal, callback clear, exit-policy consult — so the process exits
+//!   when that was the last window. What this module inherits from it: on
+//!   winit the presentation is torn down AFTER
 //!   [`request_presentation_close`](crate::request_presentation_close)
-//!   rather than left to the reader. The fix is not the teardown
-//!   extraction it looks like: `WinitWindow` (declared in
-//!   `flui-platform`'s `traits/window.rs`, holding only its winit handle
-//!   and callbacks) has no back-reference into the winit backend's private
-//!   platform state or its control lane, and giving it one — or adding a
-//!   per-window close request to that lane — is a flui-platform design
-//!   change with its own review. It IS testable there: `build_test_event_loop`
-//!   plus `wait_for_map_len` already drive a real window close under a live
-//!   event loop, and that suite runs in CI on Linux.
+//!   returns, on the owner turn; the headless double still runs `on_close`
+//!   synchronously inside `close()`, so a test that asserts right after the
+//!   call pins the double, not the winit contract.
 
 use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
@@ -151,10 +144,10 @@ pub enum CloseResponse {
     /// "don't quit" does nothing further, and the next close request is
     /// put to the handler afresh.
     ///
-    /// On winit, resolving the close that way does not currently exit the
-    /// process — see
+    /// On winit the close resolved that way completes on the owner's next
+    /// turn rather than inside the call — see
     /// [`request_presentation_close`](crate::request_presentation_close)'s
-    /// backend-completeness section (issue #919).
+    /// backend section.
     KeepOpen,
 }
 
@@ -510,14 +503,13 @@ impl CloseRequestRouter {
     /// This is how a [`CloseResponse::KeepOpen`] answer is finished: the
     /// application saved its work and now wants the close it deferred.
     ///
-    /// **Completes on headless, Win32 and AppKit; does NOT complete on
-    /// winit** (issue #919), because `WinitWindow::close` hides the window
-    /// and fires its `on_close` without removing it from the backend's own
-    /// window map or re-consulting the exit policy. On winit the
-    /// presentation is therefore torn down and the window disappears, but
-    /// the process does not exit even when this was the last window. See
+    /// **Completes on every backend whose `close()` performs a real close**
+    /// (headless, winit, Win32, AppKit). On winit the teardown — `on_close`,
+    /// window-map removal, exit-policy consult — runs on the owner's next
+    /// turn, not inside this call (issue #919's fix); the headless double
+    /// runs it synchronously. See
     /// [`request_presentation_close`](crate::request_presentation_close)
-    /// for the full statement.
+    /// for the per-backend statement.
     /// Bypassing the handler is the point — every backend's own
     /// `PlatformWindow::close` bypasses its native close-request path for
     /// the same reason (AppKit's `-close` does not send
