@@ -1685,14 +1685,19 @@ impl LayerStateStack for Backend<'_> {
             }
             Some(ClipFrame::Save) => self.painter.restore(),
             None => {
-                // An unmatched pop. The painter's own state stack warns and
-                // leaves state unchanged on underflow; say which stack ran out
-                // so the two are not confused for one another.
+                // An unmatched pop, and it must NOT reach the painter.
+                //
+                // `WgpuPainter::restore` leaves state unchanged only when its
+                // own stack is EMPTY. Here the clip stack ran out while the
+                // painter's may not have: an enclosing `push_offset` or
+                // `push_transform` has a save on it, and restoring would pop
+                // THAT, silently dropping a transform every later draw depends
+                // on. The clip stack is the one that underflowed, so the clip
+                // stack is the only one that reports it.
                 tracing::warn!(
                     "Backend::pop_clip: no clip frame is open; the layer walk emitted a \
-                     pop_clip without a matching push_clip_*"
+                     pop_clip without a matching push_clip_* -- painter state left untouched"
                 );
-                self.painter.restore();
             }
         }
     }
