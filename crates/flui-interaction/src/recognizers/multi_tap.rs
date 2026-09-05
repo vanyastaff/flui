@@ -290,8 +290,11 @@ impl MultiTapGestureRecognizer {
             // pointer from a precise device wander the full finger tolerance
             // before the tap was cancelled.
             if distance.get() > settings.hit_slop(kind) {
-                // Moved too far - cancel
-                state.phase = MultiTapPhase::Cancelled;
+                // Moved too far - cancel. Leave the phase alone: `handle_cancel`
+                // guards on `phase != Cancelled` and does the transition
+                // itself, so setting it here would make that guard reject its
+                // own work and strand the recognizer holding its pointers and
+                // its arena entry, with no cancel callback.
                 drop(state);
                 self.handle_cancel();
             }
@@ -403,15 +406,16 @@ impl MultiTapGestureRecognizer {
 
     /// Check if time window has expired
     pub fn check_timeout(&self) -> bool {
-        let mut state = self.gesture_state.lock();
+        let state = self.gesture_state.lock();
 
         if state.phase == MultiTapPhase::Collecting
             && let Some(first_time) = state.first_down_time
         {
             let elapsed = self.state.now().duration_since(first_time);
             if elapsed > self.max_time_window {
-                // Timeout - cancel
-                state.phase = MultiTapPhase::Cancelled;
+                // Timeout - cancel. As on the slop path, the phase transition
+                // belongs to `handle_cancel`: setting `Cancelled` here trips
+                // its own `phase != Cancelled` guard and cancels nothing.
                 drop(state);
                 self.handle_cancel();
                 return true;
@@ -529,13 +533,70 @@ mod tests {
         assert!(arena.is_empty());
     }
 
+    /// A timed-out multi-tap really cancels.
+    ///
+    /// The timeout path had the same shape as the slop path: it set
+    /// `Cancelled` itself, so `handle_cancel`'s `phase != Cancelled` guard
+    /// refused to do the cleanup. The recognizer went quiet holding its
+    /// pointers and its arena entry — and because the phase *looked* right, a
+    /// phase-based oracle would have called that a pass.
+    #[test]
+    fn a_timed_out_multi_tap_fires_its_cancel_and_releases_everything() {
+        use flui_foundation::ManualClock;
+
+        let clock = ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+
+        let cancelled = Arc::new(Mutex::new(false));
+        let flag = cancelled.clone();
+        // Three required, only one arrives: the gesture stays `Collecting`,
+        // which is the phase `check_timeout` acts on.
+        let recognizer = MultiTapGestureRecognizer::new(arena, 3)
+            .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
+
+        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(0.0), Pixels(0.0)));
+        assert_eq!(
+            recognizer.gesture_state.lock().phase,
+            MultiTapPhase::Collecting,
+            "premise: one of three pointers down leaves the gesture collecting"
+        );
+
+        assert!(
+            !recognizer.check_timeout(),
+            "the window has not elapsed yet"
+        );
+
+        clock.advance(Duration::from_millis(200));
+        assert!(recognizer.check_timeout(), "200ms is past the 100ms window");
+
+        assert!(
+            *cancelled.lock(),
+            "a timed-out multi-tap must tell its listener"
+        );
+        assert!(
+            recognizer.gesture_state.lock().pointers.is_empty(),
+            "and release the pointer it was holding"
+        );
+        assert!(
+            recognizer.primary_pointer().is_none(),
+            "and withdraw from the arena instead of blocking competitors"
+        );
+    }
+
     /// A mouse cancels a multi-tap at a drift a finger still tolerates.
     ///
     /// `multitap.dart:419` gates this on
     /// `computeHitSlop(event.kind, gestureSettings)`; FLUI read the touch tier
     /// for every device. The drift sits strictly between the two tiers, which
-    /// is the only region where the phase can disagree — under both, or over
+    /// is the only region where the outcome can disagree — under both, or over
     /// both, the gesture survives or cancels regardless of which was read.
+    ///
+    /// The oracle is the **cancel callback**, not the phase. A stranded
+    /// recognizer — one that set `Cancelled` itself and so made
+    /// `handle_cancel`'s `phase != Cancelled` guard reject its own cleanup —
+    /// reaches the same phase while keeping its pointers, holding its arena
+    /// entry, and never telling anyone. Asserting on the phase alone passes on
+    /// exactly that broken state, which is what the first draft did.
     #[test]
     fn mouse_drift_cancels_a_multi_tap_a_finger_survives() {
         use crate::settings::DEFAULT_MOUSE_SLOP;
@@ -544,8 +605,14 @@ mod tests {
         let drift = f32::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
         assert!(drift > DEFAULT_MOUSE_SLOP && drift < touch_slop);
 
-        let phase_after_drift = |kind: PointerType| {
-            let recognizer = MultiTapGestureRecognizer::new(GestureArena::new(), 2);
+        // (cancel callback fired, pointers still tracked, still in the arena)
+        let outcome_after_drift = |kind: PointerType| {
+            let arena = GestureArena::new();
+            let cancelled = Arc::new(Mutex::new(false));
+            let flag = cancelled.clone();
+            let recognizer = MultiTapGestureRecognizer::new(arena.clone(), 2)
+                .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
+
             let origin = Offset::new(Pixels(100.0), Pixels(100.0));
             recognizer.add_pointer(PointerId::PRIMARY, origin);
             recognizer.add_pointer(
@@ -558,20 +625,29 @@ mod tests {
                 kind,
             ));
 
-            recognizer.gesture_state.lock().phase
+            let tracked = recognizer.gesture_state.lock().pointers.len();
+            // `reject` withdraws only this member and deliberately leaves the
+            // shared entry standing for any competitor, so the recognizer's own
+            // primary pointer — not arena emptiness — is what says it bowed out.
+            (
+                *cancelled.lock(),
+                tracked,
+                recognizer.primary_pointer().is_some(),
+            )
         };
 
         assert_eq!(
-            phase_after_drift(PointerType::Mouse),
-            MultiTapPhase::Cancelled,
+            outcome_after_drift(PointerType::Mouse),
+            (true, 0, false),
             "a mouse drifting {drift} px past the {DEFAULT_MOUSE_SLOP} px mouse \
-             slop must cancel the multi-tap"
+             slop must fire the cancel callback, release its pointers, and \
+             leave the arena"
         );
         assert_eq!(
-            phase_after_drift(PointerType::Touch),
-            MultiTapPhase::WaitingForUp,
+            outcome_after_drift(PointerType::Touch),
+            (false, 2, true),
             "a finger drifting {drift} px is well inside the {touch_slop} px \
-             touch slop and must keep waiting for the ups"
+             touch slop: no cancel, both pointers still tracked, arena held"
         );
     }
 
