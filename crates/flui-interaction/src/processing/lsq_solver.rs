@@ -480,14 +480,22 @@ mod tests {
 
     /// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
     ///
-    /// That sampler panics from inside its own strategy on some seeds (#889);
-    /// scaling an integer keeps every case random and does not call it.
-    /// `u16` because `f64: From<u16>` is lossless and `From<u32>` does not
-    /// exist.
+    /// That sampler panics from inside its own strategy on some seeds (#889:
+    /// `assertion failed: self.low - result < self.intervals.step`,
+    /// `proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+    /// *generating* a value, before any assertion here runs.
+    ///
+    /// The grid is 2^24 steps so near-degenerate inputs stay reachable — a
+    /// coarse grid would quietly narrow a solver's test space to well-spaced
+    /// points, which is the opposite of what it should be exercised on.
+    ///
+    /// No narrowing cast here: `f64: From<u32>` is exact for every step index,
+    /// so the whole computation stays in the target type. (The `f32` siblings
+    /// of this helper do need one — `f32: From<u32>` does not exist.)
     fn float_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
         use proptest::strategy::Strategy as _;
-        const STEPS: u16 = 10_000;
-        (0u16..=STEPS).prop_map(move |n| lo + (f64::from(n) / f64::from(STEPS)) * (hi - lo))
+        const STEPS: u32 = 1 << 24;
+        (0u32..=STEPS).prop_map(move |n| lo + (f64::from(n) / f64::from(STEPS)) * (hi - lo))
     }
 
     proptest::proptest! {

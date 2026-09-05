@@ -429,25 +429,35 @@ fn single_item_virtualizer() {
 // Property tests vs a naive Vec<ItemExtent> oracle
 // ============================================================================
 
-/// A float in `[lo, hi]` generated WITHOUT proptest's uniform float
-/// sampler.
+/// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
 ///
-/// That sampler panics from inside its own strategy on some seeds —
-/// `assertion failed: self.low - result < self.intervals.step`
-/// (`proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
-/// *generating* a value, before any code here sees it. 1.11.0 is the
-/// current release, so there is no version to move to.
+/// That sampler panics from inside its own strategy on some seeds (#889:
+/// `assertion failed: self.low - result < self.intervals.step`,
+/// `proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+/// *generating* a value, before any assertion here runs.
 ///
-/// Pinning a seed would trade the randomness this test exists for. Drawing
-/// an integer and scaling it keeps every case random and simply does not
-/// call the broken sampler. `STEPS` sets the granularity; nothing here
-/// depends on hitting exact float values, only on covering the range.
+/// The grid is 2^24 steps, not a round decimal, so subpixel and
+/// near-degenerate geometry stays reachable: across a 20,000 px range that is
+/// ~0.0012 px between neighbours. A coarse grid would quietly narrow these
+/// tests to whole-pixel cases, which is the opposite of what a geometry
+/// property suite is for.
+///
+/// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
+/// step index, where `f32: From<u32>` does not exist at all. Only the final
+/// narrowing is lossy, and that is the point — the value has to land in the
+/// target type.
 fn extent_in(lo: f32, hi: f32) -> impl proptest::strategy::Strategy<Value = f32> {
-    const STEPS: u32 = 10_000;
+    const STEPS: u32 = 1 << 24;
     use proptest::strategy::Strategy as _;
     (0u32..=STEPS).prop_map(move |n| {
-        let t = f32::from(u16::try_from(n).unwrap_or(u16::MAX)) / STEPS as f32;
-        lo + t * (hi - lo)
+        let t = f64::from(n) / f64::from(STEPS);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "narrowing to the target type is the purpose; the \
+                      arithmetic above is exact in f64"
+        )]
+        let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f32;
+        v
     })
 }
 
