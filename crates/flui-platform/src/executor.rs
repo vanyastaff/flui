@@ -11,10 +11,7 @@ use std::{
 
 use tokio::runtime::Runtime;
 
-use crate::{
-    task::{Priority, Task},
-    traits::PlatformExecutor,
-};
+use crate::{task::Task, traits::PlatformExecutor};
 
 /// Worker threads in the lazily-started runtime. Deliberately small: since
 /// the unified execution services (issue #557) the loop-scoped `AppRuntime`
@@ -95,19 +92,6 @@ impl BackgroundExecutor {
     ) -> Task<R> {
         let handle = self.runtime().spawn(future);
         Task::from_handle(handle)
-    }
-
-    /// Spawn an async task with explicit priority
-    ///
-    /// Priority is currently informational only — tokio uses fair scheduling.
-    /// Priority-aware dispatching is planned for post-MVP.
-    pub fn spawn_with_priority<R: Send + 'static>(
-        &self,
-        _priority: Priority,
-        future: impl Future<Output = R> + Send + 'static,
-    ) -> Task<R> {
-        // TODO: route to priority-aware thread pools post-MVP
-        self.spawn(future)
     }
 
     /// Create a timer that completes after the given duration
@@ -206,15 +190,5 @@ mod tests {
             executor.timer(Duration::from_millis(50)).await;
         });
         assert!(start.elapsed() >= Duration::from_millis(40));
-    }
-
-    #[test]
-    fn test_background_executor_spawn_with_priority() {
-        let executor = BackgroundExecutor::new();
-        let result = executor.block(async {
-            let task = executor.spawn_with_priority(Priority::High, async { 42 });
-            task.await
-        });
-        assert_eq!(result, 42);
     }
 }

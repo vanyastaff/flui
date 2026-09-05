@@ -1,4 +1,4 @@
-//! Async task abstraction with priority support
+//! Async task abstraction
 //!
 //! Provides [`Task<T>`] — an awaitable handle to a spawned async operation.
 //! Wraps `tokio::task::JoinHandle<T>` for background tasks and supports
@@ -11,32 +11,18 @@
 //! - `Task::detach()` — fire-and-forget (drops handle, task keeps running)
 //! - `impl Future for Task<T>` — await the result
 //!
-//! Priority is stored as metadata. Tokio's fair scheduler handles all
-//! priorities adequately for MVP. Priority-aware thread pools are deferred to
-//! post-MVP.
+//! There is deliberately no priority knob. One existed — a `Priority` enum
+//! that `spawn_with_priority` took and discarded, since tokio schedules
+//! fairly regardless — and an argument the callee ignores is worse than no
+//! argument at all: it reads as a scheduling guarantee the runtime never
+//! made. Priority-aware dispatch (Windows ThreadPool, macOS GCD) can
+//! reintroduce the knob when it can honour it.
 
 use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
-
-/// Task priority level
-///
-/// Stored as metadata on spawned tasks. Currently informational only —
-/// tokio uses fair scheduling regardless of priority. Priority-aware
-/// dispatching (e.g., Windows ThreadPool, macOS GCD) is planned for post-MVP.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Priority {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// High priority — UI-blocking operations, user input handling
-    High,
-    /// Medium priority — default for most operations
-    #[default]
-    Medium,
-    /// Low priority — background maintenance, prefetching
-    Low,
-}
 
 /// Debug/tracing label for a task
 ///
@@ -230,11 +216,6 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
         });
-    }
-
-    #[test]
-    fn test_priority_default() {
-        assert_eq!(Priority::default(), Priority::Medium);
     }
 
     #[test]
