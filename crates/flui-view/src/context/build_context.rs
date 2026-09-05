@@ -149,6 +149,45 @@ pub trait BuildContext {
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
 
+    /// Take a keep-alive hold on the lazy sliver child this element lives
+    /// inside, so it survives scrolling out of the cache band.
+    ///
+    /// Always issued, **including when this element is not currently inside a
+    /// lazy sliver**. The hold names its holder, not a child; the child is
+    /// resolved when eviction asks. So a lease taken outside a list simply
+    /// holds nothing, and starts holding if the element is later grafted into
+    /// one — which a `GlobalKey` state moved into a list does. Refusing here
+    /// instead would make that refusal permanent: `init_state` is the only
+    /// guaranteed acquisition point, `activate` and `did_update_view` receive
+    /// no context, and acquiring from `build` is forbidden.
+    ///
+    /// The returned [`KeepAliveLease`](crate::owner::KeepAliveLease) releases
+    /// the hold when it drops, so keeping the child alive is exactly "keep the
+    /// lease in your `ViewState`". Several descendants may each hold
+    /// independently; the child survives while any of them does.
+    ///
+    /// Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), never inside `build`, `perform_layout` or
+    /// `paint` — the same rule `post_frame_handle` and `text_input_handle`
+    /// follow, enforced by `scripts/check-frame-capability-scope.sh`. A hold
+    /// taken during a frame phase would be re-taken on every rebuild.
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease;
+
+    /// A retained capability to take keep-alive holds later.
+    ///
+    /// [`Self::keep_alive_lease`] takes one hold now, which serves an item
+    /// that is keep-worthy from the start. This serves the case it cannot: a
+    /// state that becomes keep-worthy *after* `init_state` — an editor that
+    /// becomes dirty, a video that starts playing — or one that releases a
+    /// hold and later needs another. There is no second lifecycle hook to ask
+    /// from, so the capability is acquired once and the holds are taken from
+    /// it whenever the answer changes. Same shape, and same reason, as
+    /// [`rebuild_handle`](Self::rebuild_handle).
+    ///
+    /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
+    /// frame phase — enforced by `scripts/check-frame-capability-scope.sh`.
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
+
     /// This element tree's exact focus manager.
     ///
     /// A build owner always has one focus tree, so this capability is

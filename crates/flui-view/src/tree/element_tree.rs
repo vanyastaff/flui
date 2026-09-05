@@ -481,6 +481,40 @@ impl ProvisionalOrder<'_> {
     };
 }
 
+/// The lazy sliver child `from` lives inside — the direct child of the nearest
+/// element that hosts sparse children.
+///
+/// **Not** the nearest ancestor carrying a `sliver_slot`: a component element
+/// passes its slot down to its own children, so several elements in one item
+/// carry the same value and the nearest is usually a descendant
+/// `SparseChildren` has never heard of. Nesting resolves correctly for the same
+/// reason — the *inner* list's host is found first.
+///
+/// Self-inclusive, because an item whose parent is the host is itself that
+/// child. Ancestors are read through `element_opt`, so a node extracted by
+/// `build_scope`'s take/put window is a clean miss rather than a panic — the
+/// contract for every walk reachable during a build.
+///
+/// Shared by the keep-alive capability (which resolves it when a lease is
+/// taken) and by band eviction (which re-resolves it for every live holder, so
+/// a holder grafted between slivers is re-targeted rather than pinning the row
+/// it left). Two copies of this rule would drift, and the drift would be a
+/// silent leak.
+pub(crate) fn enclosing_sparse_child(tree: &ElementTree, from: ElementId) -> Option<ElementId> {
+    let mut current_id = from;
+    loop {
+        let parent_id = tree.get(current_id)?.parent()?;
+        let hosts = tree
+            .get(parent_id)?
+            .element_opt()
+            .is_some_and(crate::view::ElementBase::hosts_sparse_children);
+        if hosts {
+            return Some(current_id);
+        }
+        current_id = parent_id;
+    }
+}
+
 impl ElementTree {
     /// Create a new empty ElementTree.
     pub fn new() -> Self {
@@ -1551,6 +1585,17 @@ impl ElementTree {
         let providers = owner.unmount_inherited_dependent(dependent);
         self.release_inherited_providers(dependent, providers);
         owner.clear_pending_dependency_change(dependent);
+        // A keep-alive lease normally releases through its own `Drop` when the
+        // holder's state drops. An element can be torn down without that
+        // happening in the same step, and a stranded holder would keep
+        // resolving to whatever sparse child it last sat under, so the unmount
+        // seam clears it too. This is the liveness half Flutter leaves to
+        // `AutomaticKeepAliveClientMixin.dispose`.
+        //
+        // There is no matching "forget the held child" step: nothing records a
+        // held child any more. A hold is resolved from its holder when eviction
+        // asks, so an unmounted child simply stops being resolved to.
+        owner.keep_alive.forget_holder(dependent);
     }
 
     /// Reactivate a subtree and schedule dependency lifecycle work for every

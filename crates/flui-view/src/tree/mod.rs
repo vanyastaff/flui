@@ -21,5 +21,5 @@ pub mod reconcile_event;
 pub mod test_utils;
 
 pub use element_tree::{ElementNode, ElementTree};
-pub(crate) use element_tree::{InsertedChild, SubtreeRemoval};
+pub(crate) use element_tree::{InsertedChild, SubtreeRemoval, enclosing_sparse_child};
 pub use reconcile_event::{RECONCILE_TARGET, ReconcileEvent, ReconcileEventKind};

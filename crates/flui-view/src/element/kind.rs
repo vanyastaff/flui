@@ -665,6 +665,12 @@ impl ElementBase for ElementKind {
     fn set_sliver_slot(&mut self, slot: Option<usize>) {
         self.element_mut().set_sliver_slot(slot);
     }
+    fn sliver_slot(&self) -> Option<usize> {
+        self.element().sliver_slot()
+    }
+    fn hosts_sparse_children(&self) -> bool {
+        self.element().hosts_sparse_children()
+    }
 
     fn as_inherited(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
         self.element().as_inherited()

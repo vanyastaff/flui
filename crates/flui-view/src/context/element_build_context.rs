@@ -240,6 +240,14 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().local_post_frame_handle().cloned()
     }
 
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
+        self.keep_alive_handle().hold()
+    }
+
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
+        self.owner.read().keep_alive.handle(self.element_id)
+    }
+
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.owner.read().text_input_handle().cloned()
     }
@@ -649,6 +657,9 @@ pub(crate) struct BuildCapabilities {
     /// The render tree this element is mounted in, cloned from its own
     /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
     pub(crate) pipeline_owner: Option<flui_rendering::pipeline::PipelineCell>,
+    /// The presentation's keep-alive table, so an item can take a hold on the
+    /// lazy sliver child it lives inside from `init_state`.
+    pub(crate) keep_alive: crate::owner::KeepAliveHolds,
 }
 
 pub(crate) struct BuildCtx<'b> {
@@ -755,6 +766,21 @@ impl BuildContext for BuildCtx<'_> {
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.capabilities.text_input_handle.clone()
+    }
+
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
+        // `init_state` runs with a `BuildCtx` — the same context type `build`
+        // gets — so this must serve a real lease rather than refuse one. The
+        // "never from a frame phase" half is a STATIC rule, enforced by
+        // `scripts/check-frame-capability-scope.sh` scanning for the token
+        // inside `build`/`perform_layout`/`paint`, exactly as it is for
+        // `text_input_handle` and `focus_manager`, which are acquired from
+        // `init_state` through this same context.
+        self.keep_alive_handle().hold()
+    }
+
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
+        self.capabilities.keep_alive.handle(self.element_id)
     }
 
     fn focus_manager(&self) -> Rc<FocusManager> {
@@ -1301,6 +1327,7 @@ mod tests {
                 local_post_frame_handle: None,
                 text_input_handle: None,
                 pipeline_owner: None,
+                keep_alive: crate::owner::KeepAliveHolds::default(),
             },
         );
         ctx.visit_child_elements(&mut |_| {});
@@ -1324,6 +1351,7 @@ mod tests {
                 local_post_frame_handle: None,
                 text_input_handle: None,
                 pipeline_owner: None,
+                keep_alive: crate::owner::KeepAliveHolds::default(),
             },
         );
 

@@ -532,6 +532,28 @@ pub trait ElementBase: Downcast + 'static {
     /// slab at the same seams as [`Self::set_parent_render_id`]. Default
     /// no-op.
     fn set_sliver_slot(&mut self, _slot: Option<usize>) {}
+    /// Whether this element hosts lazy sliver children — i.e. it is the
+    /// adaptor whose `SparseChildren` mounts and evicts them.
+    ///
+    /// The discriminator for "which element is *the* sparse child": that is the
+    /// direct child of the nearest element answering `true` here. A slot alone
+    /// cannot answer it, because a component element passes its slot down to
+    /// its own children, so several elements in one item carry the same value.
+    /// Default `false`.
+    fn hosts_sparse_children(&self) -> bool {
+        false
+    }
+    /// The lazy-sliver slot this element inherited, if any — the read half of
+    /// the pair whose write half is [`Self::set_sliver_slot`].
+    ///
+    /// `Some(index)` on a lazy sliver's direct child and on every component
+    /// element beneath it, `None` under any render element (see
+    /// [`Self::child_sliver_slot`] for why the chain stops there). Walking
+    /// ancestors until this answers `Some` is therefore how a descendant finds
+    /// the sparse child it lives inside. Default `None`.
+    fn sliver_slot(&self) -> Option<usize> {
+        None
+    }
 
     // ========================================================================
     // Inherited-element protocol

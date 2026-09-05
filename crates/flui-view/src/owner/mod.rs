@@ -13,6 +13,7 @@ mod global_key_registry;
 mod global_key_reservations;
 mod global_key_scope;
 mod inherited_dependencies;
+mod keep_alive;
 mod layout_builder;
 mod rebuild_handle;
 
@@ -30,6 +31,8 @@ pub use global_key_scope::GlobalKeyScope;
 // never by naming the containers.
 pub(crate) use global_key_registry::GlobalKeyRegistry;
 pub(crate) use global_key_reservations::GlobalKeyReservations;
+pub(crate) use keep_alive::KeepAliveHolds;
+pub use keep_alive::{KeepAliveHandle, KeepAliveLease};
 pub use rebuild_handle::RebuildHandle;
 // Moved to flui-foundation (ADR-0040: observation events carry typed
 // causes, and foundation is the only crate below every emitter); re-exported

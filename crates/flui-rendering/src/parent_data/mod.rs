@@ -71,7 +71,6 @@ mod sliver_parent_data;
 
 // Mixins
 mod container_mixin;
-mod keep_alive_mixin;
 
 // Variants
 mod box_variants;
@@ -93,7 +92,6 @@ pub use box_variants::{
 };
 // Mixins
 pub use container_mixin::ContainerParentDataMixin;
-pub use keep_alive_mixin::KeepAliveParentDataMixin;
 pub use sliver_parent_data::SliverParentData;
 // Sliver variants
 pub use sliver_variants::{
@@ -136,7 +134,7 @@ pub mod prelude {
         ListWheelParentData, MultiChildLayoutParentData, StackParentData, WrapParentData,
     };
     // Mixins
-    pub use super::{ContainerParentDataMixin, KeepAliveParentDataMixin};
+    pub use super::ContainerParentDataMixin;
     // Sliver variants
     pub use super::{
         SliverLogicalContainerParentData, SliverLogicalParentData, SliverMultiBoxAdaptorParentData,

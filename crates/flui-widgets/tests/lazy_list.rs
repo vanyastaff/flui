@@ -1648,3 +1648,497 @@ fn lazy_list_view_builder_preserves_a_global_keyed_item_grafted_to_another_list(
     assert_eq!(laid.count_elements_by_view_type::<CountingItem>(), 1);
     assert_eq!(log.lock().as_slice(), ["init"]);
 }
+
+// ---------------------------------------------------------------------------
+// Keep-alive (#835)
+// ---------------------------------------------------------------------------
+
+/// An item that takes a keep-alive lease in `init_state` when `keep` is set.
+///
+/// The lease lives in the state, so it is released exactly when the state is
+/// dropped — there is no `dispose` bookkeeping to forget.
+#[derive(Clone, StatefulView)]
+struct KeptItem {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct KeptItemState {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+    lease: Option<flui_view::owner::KeepAliveLease>,
+}
+
+impl StatefulView for KeptItem {
+    type State = KeptItemState;
+    fn create_state(&self) -> KeptItemState {
+        KeptItemState {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+            lease: None,
+        }
+    }
+}
+
+impl ViewState<KeptItem> for KeptItemState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.log.lock().push((self.index, "init"));
+        if self.keep {
+            self.lease = Some(ctx.keep_alive_lease());
+        }
+    }
+    fn build(&self, _view: &KeptItem, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, 48.0)
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push((self.index, "dispose"));
+    }
+}
+
+/// A held item survives the band moving away; an unheld one does not.
+///
+/// The control is the point: without an unheld neighbour proving the band
+/// really did move and really does evict, "the held item is still alive" would
+/// also pass on a build where eviction never ran at all.
+#[test]
+fn a_kept_alive_item_survives_the_band_moving_away() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    const KEPT: usize = 1;
+
+    let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let list = {
+        let log = Arc::clone(&log);
+        move |offset: f32| {
+            let log = Arc::clone(&log);
+            ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    KeptItem {
+                        index: i,
+                        keep: i == KEPT,
+                        log: Arc::clone(&log),
+                    }
+                    .boxed()
+                })
+            })
+            .repaint_boundaries(false)
+            .offset(offset)
+        }
+    };
+
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+    let inits: Vec<usize> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "init")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        inits.contains(&KEPT) && inits.contains(&0),
+        "both the kept item and its control must start resident; got {inits:?}"
+    );
+
+    // Scroll far past both.
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+
+    let disposed: Vec<usize> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "dispose")
+        .map(|(i, _)| *i)
+        .collect();
+
+    // The control proves the band moved and eviction ran.
+    assert!(
+        disposed.contains(&0),
+        "the unheld control must be evicted when the band leaves it; got {disposed:?}"
+    );
+    // And the held item rode it out.
+    assert!(
+        !disposed.contains(&KEPT),
+        "the held item must survive the band moving away; got {disposed:?}"
+    );
+}
+
+/// Releasing the lease lets the next band eviction take the item.
+///
+/// This is the half a `#[must_use]` guard cannot enforce: that a *released*
+/// hold actually stops holding. Without it, a lease that never released would
+/// pass the test above forever.
+#[test]
+fn releasing_the_lease_lets_the_item_be_evicted() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    const KEPT: usize = 1;
+
+    let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    // Flipped between frames: the item re-reads it on rebuild and drops the
+    // lease when it goes false.
+    let keeping = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    let list = {
+        let log = Arc::clone(&log);
+        let keeping = Arc::clone(&keeping);
+        move |offset: f32| {
+            let log = Arc::clone(&log);
+            let keeping = Arc::clone(&keeping);
+            ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    ReleasableItem {
+                        index: i,
+                        keep: i == KEPT && keeping.load(std::sync::atomic::Ordering::SeqCst),
+                        log: Arc::clone(&log),
+                    }
+                    .boxed()
+                })
+            })
+            .repaint_boundaries(false)
+            .offset(offset)
+        }
+    };
+
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+    assert!(
+        !log.lock()
+            .iter()
+            .any(|(i, what)| *i == KEPT && *what == "dispose"),
+        "held item survives the first scroll"
+    );
+
+    // Release, then scroll again.
+    keeping.store(false, std::sync::atomic::Ordering::SeqCst);
+    laid.pump_widget(list(60.0 * ITEM_EXTENT));
+    laid.pump_widget(list(70.0 * ITEM_EXTENT));
+
+    let kept_events: Vec<&str> = log
+        .lock()
+        .iter()
+        .filter(|(i, _)| *i == KEPT)
+        .map(|(_, what)| *what)
+        .collect();
+    assert!(
+        log.lock()
+            .iter()
+            .any(|(i, what)| *i == KEPT && *what == "dispose"),
+        "a released item must be evicted by the next band move; kept item saw {kept_events:?}"
+    );
+}
+
+/// Like `KeptItem`, but re-reads `keep` on every update and drops the lease
+/// when it clears — the shape a real "keep me while I have unsaved input"
+/// item takes.
+#[derive(Clone, StatefulView)]
+struct ReleasableItem {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct ReleasableItemState {
+    index: usize,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+    lease: Option<flui_view::owner::KeepAliveLease>,
+}
+
+impl StatefulView for ReleasableItem {
+    type State = ReleasableItemState;
+    fn create_state(&self) -> ReleasableItemState {
+        ReleasableItemState {
+            index: self.index,
+            log: Arc::clone(&self.log),
+            lease: None,
+        }
+    }
+}
+
+impl ViewState<ReleasableItem> for ReleasableItemState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.log.lock().push((self.index, "init"));
+        self.lease = Some(ctx.keep_alive_lease());
+    }
+    fn did_update_view(&mut self, _old: &ReleasableItem, new_view: &ReleasableItem) {
+        // `(old_view, new_view)`. Reading the OLD one here made the release
+        // land a frame late; the test still passed because it pumps twice.
+        if !new_view.keep {
+            // Dropping the lease is the release.
+            self.lease = None;
+        }
+    }
+    fn build(&self, _view: &ReleasableItem, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, 48.0)
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push((self.index, "dispose"));
+    }
+}
+
+/// The holder is a component *below* the sparse child, not the child itself.
+///
+/// `sliver_slot` is inherited through component elements, so with
+/// `repaint_boundaries(false)` the item and every component it builds beneath
+/// it all carry the same slot value. A lookup that stopped at the nearest
+/// slot-carrier would name a descendant `SparseChildren` has never heard of,
+/// and the hold would silently do nothing — the item is still evicted. The
+/// item itself holding (which the test above covers) cannot catch that,
+/// because there the nearest carrier and the sparse child are the same
+/// element.
+#[test]
+fn a_hold_taken_below_the_sparse_child_still_names_the_sparse_child() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    const KEPT: usize = 1;
+
+    let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let list = {
+        let log = Arc::clone(&log);
+        move |offset: f32| {
+            let log = Arc::clone(&log);
+            ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    // `NestedHolder` is the sparse child; it builds `KeptItem`,
+                    // a component one level down, which is what takes the hold.
+                    NestedHolder {
+                        index: i,
+                        keep: i == KEPT,
+                        log: Arc::clone(&log),
+                    }
+                    .boxed()
+                })
+            })
+            .repaint_boundaries(false)
+            .offset(offset)
+        }
+    };
+
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+
+    let disposed: Vec<usize> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "dispose")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        disposed.contains(&0),
+        "the unheld control must be evicted; got {disposed:?}"
+    );
+    assert!(
+        !disposed.contains(&KEPT),
+        "a hold taken one level below the sparse child must still keep it alive; got {disposed:?}"
+    );
+}
+
+/// The sparse child; delegates the actual hold to a nested component.
+#[derive(Clone, StatefulView)]
+struct NestedHolder {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct NestedHolderState {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+impl StatefulView for NestedHolder {
+    type State = NestedHolderState;
+    fn create_state(&self) -> NestedHolderState {
+        NestedHolderState {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+impl ViewState<NestedHolder> for NestedHolderState {
+    fn build(&self, _view: &NestedHolder, _ctx: &dyn BuildContext) -> impl IntoView {
+        // TWO component levels, not one. The holder's own node is *extracted*
+        // while it builds, so a walk that started at the nearest slot-carrier
+        // would skip itself and land on its parent anyway — masking the defect
+        // at one level of nesting. With a middle component present, that walk
+        // stops at the middle element, which `SparseChildren` has never heard
+        // of, and the hold is lost.
+        MiddleLayer {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push((self.index, "dispose"));
+    }
+}
+
+#[derive(Clone, StatefulView)]
+struct MiddleLayer {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct MiddleLayerState {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+impl StatefulView for MiddleLayer {
+    type State = MiddleLayerState;
+    fn create_state(&self) -> MiddleLayerState {
+        MiddleLayerState {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+impl ViewState<MiddleLayer> for MiddleLayerState {
+    fn build(&self, _view: &MiddleLayer, _ctx: &dyn BuildContext) -> impl IntoView {
+        KeptItem {
+            index: self.index,
+            keep: self.keep,
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+/// An item that starts NOT keep-worthy and becomes so later — the case a
+/// one-shot lease cannot serve.
+///
+/// It keeps the retained handle, not a lease, and takes the hold when the flag
+/// flips. That is the shape a real "keep me while I have unsaved input" item
+/// takes: the answer is unknown at `init_state`, and there is no second
+/// lifecycle hook that receives a context.
+#[derive(Clone, StatefulView)]
+struct BecomesKeepWorthy {
+    index: usize,
+    keep: bool,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct BecomesKeepWorthyState {
+    index: usize,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+    handle: Option<flui_view::owner::KeepAliveHandle>,
+    lease: Option<flui_view::owner::KeepAliveLease>,
+}
+
+impl StatefulView for BecomesKeepWorthy {
+    type State = BecomesKeepWorthyState;
+    fn create_state(&self) -> BecomesKeepWorthyState {
+        BecomesKeepWorthyState {
+            index: self.index,
+            log: Arc::clone(&self.log),
+            handle: None,
+            lease: None,
+        }
+    }
+}
+
+impl ViewState<BecomesKeepWorthy> for BecomesKeepWorthyState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.log.lock().push((self.index, "init"));
+        // The capability, not a hold: nothing is keep-worthy yet.
+        self.handle = Some(ctx.keep_alive_handle());
+    }
+    fn did_update_view(&mut self, _old: &BecomesKeepWorthy, new_view: &BecomesKeepWorthy) {
+        // `(old_view, new_view)` — the NEW one carries the current answer.
+        self.lease = new_view
+            .keep
+            .then(|| {
+                self.handle
+                    .as_ref()
+                    .map(flui_view::owner::KeepAliveHandle::hold)
+            })
+            .flatten();
+    }
+    fn build(&self, _view: &BecomesKeepWorthy, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, 48.0)
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push((self.index, "dispose"));
+    }
+}
+
+/// A hold taken AFTER `init_state` keeps the item alive.
+///
+/// Without the retained handle there is no supported way to do this: a
+/// one-shot lease is only obtainable from `init_state`, and by then the answer
+/// is not known. `did_update_view` and `activate` receive no context,
+/// `did_change_dependencies` is not guaranteed to run, and acquiring from
+/// `build` is forbidden — so a false→true transition would leave the row
+/// evictable with the state still asking to be kept.
+#[test]
+fn a_hold_taken_after_init_state_keeps_the_item_alive() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    const KEPT: usize = 1;
+
+    let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    // Starts false: nothing is keep-worthy when init_state runs.
+    let dirty = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let list = {
+        let log = Arc::clone(&log);
+        let dirty = Arc::clone(&dirty);
+        move |offset: f32| {
+            let log = Arc::clone(&log);
+            let dirty = Arc::clone(&dirty);
+            ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    BecomesKeepWorthy {
+                        index: i,
+                        keep: i == KEPT && dirty.load(std::sync::atomic::Ordering::SeqCst),
+                        log: Arc::clone(&log),
+                    }
+                    .boxed()
+                })
+            })
+            .repaint_boundaries(false)
+            .offset(offset)
+        }
+    };
+
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+    // Now it becomes keep-worthy, well after init_state.
+    dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+    laid.pump_widget(list(0.0));
+
+    // Scroll far past it.
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+
+    let disposed: Vec<usize> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "dispose")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        disposed.contains(&0),
+        "the unheld control must be evicted; got {disposed:?}"
+    );
+    let kept_saw: Vec<&str> = log
+        .lock()
+        .iter()
+        .filter(|(i, _)| *i == KEPT)
+        .map(|(_, what)| *what)
+        .collect();
+    assert!(
+        !disposed.contains(&KEPT),
+        "a hold taken after init_state must keep the item alive; \
+         got {disposed:?}, kept item saw {kept_saw:?}"
+    );
+}

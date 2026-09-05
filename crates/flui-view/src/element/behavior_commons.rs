@@ -78,10 +78,13 @@ where
 ///
 /// A node that already carries `SliverMultiBoxAdaptorParentData` — a
 /// relocated child that was laid out under its previous host — has only its
-/// `index` rewritten: `layout_offset` and `keep_alive` are the sliver's and
-/// the keep-alive protocol's own state, and replacing the box would reset
-/// both until the next layout recomputed them. A fresh node (no parent data)
-/// or one carrying another type gets a new box.
+/// `index` rewritten: `layout_offset` is the sliver's own state, and replacing
+/// the box would reset it until the next layout recomputed it. A fresh node
+/// (no parent data) or one carrying another type gets a new box.
+///
+/// Keep-alive is deliberately absent from this: a hold lives on the element
+/// side, keyed by element identity, so relocation carries it with no help from
+/// the stamp (ADR-0056).
 pub(crate) fn stamp_sliver_logical_index(
     owner: &mut flui_rendering::pipeline::PipelineOwner,
     render_id: flui_foundation::RenderId,
@@ -538,8 +541,8 @@ mod stamp_tests {
 
     /// A relocated child arrives already laid out under its previous host:
     /// re-stamping rewrites the index and nothing else, so the offset the
-    /// previous layout committed (and the keep-alive state) survive until
-    /// the next layout recomputes them, instead of snapping to zero.
+    /// previous layout committed survives until the next layout recomputes
+    /// it, instead of snapping to zero.
     #[test]
     fn stamp_rewrites_only_the_index_of_existing_parent_data() {
         let mut owner = PipelineOwner::new();
@@ -551,7 +554,6 @@ mod stamp_tests {
             )));
         let mut seeded = SliverMultiBoxAdaptorParentData::new(3);
         seeded.layout_offset = 42.0;
-        seeded.keep_alive.keep_alive = true;
         owner
             .render_tree_mut()
             .get_mut(id)
@@ -565,10 +567,9 @@ mod stamp_tests {
             .get(id)
             .and_then(|node| node.parent_data())
             .and_then(|pd| pd.downcast_ref::<SliverMultiBoxAdaptorParentData>())
-            .map(|pd| (pd.index, pd.layout_offset, pd.keep_alive.keep_alive))
+            .map(|pd| (pd.index, pd.layout_offset))
             .expect("parent data must still be SliverMultiBoxAdaptorParentData");
         assert_eq!(pd.0, 9);
         assert_eq!(pd.1, 42.0, "layout_offset must survive a re-stamp");
-        assert!(pd.2, "keep_alive must survive a re-stamp");
     }
 }

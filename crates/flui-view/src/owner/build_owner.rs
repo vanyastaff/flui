@@ -302,6 +302,11 @@ pub struct BuildOwner {
     /// [`ElementNode`](crate::tree::ElementNode).
     pub(crate) inherited_dependencies: InheritedDependencies,
 
+    /// Keep-alive holds on lazy sliver children — which children band eviction
+    /// must skip. Presentation-scoped like every other lifecycle capability,
+    /// and cheap to clone into the split-borrow `ElementOwner`.
+    pub(crate) keep_alive: super::KeepAliveHolds,
+
     /// The realm's tree-observer slot (ADR-0040). `None` = observation off
     /// (one branch per emission site). `pub(crate)` for the
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
@@ -512,6 +517,7 @@ impl BuildOwner {
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
+            keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
             #[cfg(debug_assertions)]
             building: false,
@@ -943,6 +949,7 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
+            keep_alive: self.keep_alive.clone(),
             on_build_scheduled: self.on_build_scheduled.as_deref(),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
@@ -1366,6 +1373,7 @@ impl BuildOwner {
                     inactive_elements: &mut self.inactive_elements,
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     inherited_dependencies: &mut self.inherited_dependencies,
+                    keep_alive: self.keep_alive.clone(),
                     on_build_scheduled: self.on_build_scheduled.as_deref(),
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
@@ -1464,6 +1472,7 @@ impl BuildOwner {
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 inherited_dependencies: &mut self.inherited_dependencies,
+                keep_alive: self.keep_alive.clone(),
                 on_build_scheduled: self.on_build_scheduled.as_deref(),
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
@@ -1712,6 +1721,7 @@ impl BuildOwner {
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 inherited_dependencies: &mut self.inherited_dependencies,
+                keep_alive: self.keep_alive.clone(),
                 on_build_scheduled: self.on_build_scheduled.as_deref(),
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
@@ -1910,6 +1920,7 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
+            keep_alive: self.keep_alive.clone(),
             on_build_scheduled: self.on_build_scheduled.as_deref(),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
