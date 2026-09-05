@@ -176,7 +176,7 @@ pub use flui_painting::Paint;
 pub use traits::{CommandRenderer, LayerStateStack};
 // RasterBackend: the frame-driver swap point. The trait is unconditional;
 // only the wgpu impl is feature-gated.
-pub use raster::RasterBackend;
+pub use raster::{PrePresentHook, RasterBackend};
 // Raster mailbox + dedicated ack channel boundary.
 pub use raster_owner::{
     FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner,

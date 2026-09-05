@@ -2,7 +2,9 @@ use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 
 use super::device_recovery::{DeviceRecoveryBackoff, render_frame_with_device_recovery};
-use super::frame_pacing::{NO_PRESENT_FALLBACK_PACE, WakeAction, frame_is_dirty, wake_action};
+use super::frame_pacing::{
+    BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
+};
 use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_needs_redraw_handle,
     runtime_wake_callback, with_owner_platform,
@@ -336,12 +338,16 @@ where
                         realm.needs_redraw(),
                         has_pending,
                         device_recovery_backoff.next_attempt_at(),
+                        // Android has no wake-deadline hook, so no fallback deferral
+                        // exists to consult (ADR-0058): its backgrounded pump sleeps.
+                        FallbackGate::default(),
                     );
                     let scheduler = realm.scheduler();
                     match wake_action(
                         scheduler.frames_enabled(),
                         dirty,
                         scheduler.is_frame_scheduled(),
+                        FallbackGate::default(),
                     ) {
                         WakeAction::Skip => return,
                         WakeAction::PumpAsync => {
@@ -360,8 +366,10 @@ where
                             // no vsync/present call to bound it here either, and
                             // this arm has no gate-open signal to make the pace
                             // conditional the way desktop's does — see
-                            // `NO_PRESENT_FALLBACK_PACE`'s doc.
-                            std::thread::sleep(NO_PRESENT_FALLBACK_PACE);
+                            // `BACKGROUNDED_PUMP_PACE`'s doc. Android keeps the
+                            // sleep the desktop path dropped (ADR-0058): its frame
+                            // source has no wake-deadline hook to arm instead.
+                            std::thread::sleep(BACKGROUNDED_PUMP_PACE);
                             return;
                         }
                         WakeAction::Render => {}

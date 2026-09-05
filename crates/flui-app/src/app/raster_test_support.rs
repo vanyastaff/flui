@@ -51,6 +51,9 @@ pub(crate) struct TestRasterBackend {
     pub(crate) submitted_scene_had_content: Vec<bool>,
     /// What `size()` reports.
     size: (u32, u32),
+    /// The installed pre-present hook, run before every script outcome
+    /// that reports a present (`Ok(true)`).
+    pre_present_hook: Option<flui_engine::PrePresentHook>,
 }
 
 impl TestRasterBackend {
@@ -66,6 +69,7 @@ impl TestRasterBackend {
             render_scene_calls: 0,
             submitted_scene_had_content: Vec::new(),
             size: (800, 600),
+            pre_present_hook: None,
         }
     }
 
@@ -112,7 +116,18 @@ impl RasterBackend for TestRasterBackend {
         let call_index = self.render_scene_calls;
         self.render_scene_calls += 1;
         self.submitted_scene_had_content.push(scene.has_content());
-        (self.render)(call_index, scene)
+        let outcome = (self.render)(call_index, scene);
+        // Mirror the wgpu renderer's contract: the hook runs only for a
+        // frame that presents, and before that present.
+        if matches!(outcome, Ok(true))
+            && let Some(hook) = self.pre_present_hook.as_mut()
+        {
+            hook();
+        }
+        outcome
+    }
+    fn set_pre_present_hook(&mut self, hook: Option<flui_engine::PrePresentHook>) {
+        self.pre_present_hook = hook;
     }
     fn resize(&mut self, _width: u32, _height: u32) {}
     fn is_device_lost(&self) -> bool {

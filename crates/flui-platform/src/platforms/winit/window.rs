@@ -181,6 +181,20 @@ impl PlatformWindow for WinitWindow {
         self.window.request_redraw();
     }
 
+    fn refresh_period(&self) -> Option<std::time::Duration> {
+        self.window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+            .filter(|&millihertz| millihertz > 0)
+            .map(|millihertz| std::time::Duration::from_secs_f64(1000.0 / f64::from(millihertz)))
+    }
+
+    fn pre_present_notify(&self) {
+        // The Wayland frame-callback arm (see the trait doc); harmless
+        // elsewhere. winit documents this as "call before presenting".
+        self.window.pre_present_notify();
+    }
+
     fn is_focused(&self) -> bool {
         *self.is_focused.lock()
     }

@@ -114,6 +114,19 @@ pub trait PlatformWindow: Send + Sync {
     /// Request a redraw
     fn request_redraw(&self);
 
+    /// Tell the backend a frame is about to be presented for this window —
+    /// called once per presented frame, immediately before the present.
+    ///
+    /// On Wayland this is what makes [`request_redraw`](Self::request_redraw)
+    /// compositor-paced: winit arms the surface's frame callback here, and
+    /// withholds the next `RedrawRequested` until the compositor delivers
+    /// it — one per display refresh while the surface is visible, none at
+    /// all while it is fully hidden, so a running animation is paced by the
+    /// panel and an occluded window costs nothing. Without this call every
+    /// `request_redraw` is delivered immediately, whatever the display is
+    /// doing. A no-op on backends with no such protocol.
+    fn pre_present_notify(&self) {}
+
     /// Check if window is focused
     fn is_focused(&self) -> bool;
 
@@ -174,6 +187,16 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Get the display this window is currently on
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        None
+    }
+
+    /// The refresh period of the display this window is currently on, when
+    /// the backend can tell — the interval an embedder's own frame pacing
+    /// should never produce faster than. `None` when unknown (no monitor
+    /// reported, a backend without the query); an embedder then falls back
+    /// to a documented default rather than guessing. Re-query after a move
+    /// or resize: a window can change monitors, and monitors differ.
+    fn refresh_period(&self) -> Option<std::time::Duration> {
         None
     }
 

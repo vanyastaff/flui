@@ -545,6 +545,9 @@ pub struct Renderer {
     device_lost: Arc<std::sync::atomic::AtomicBool>,
     /// Tracks dirty regions for incremental rendering (skip frames with no damage)
     damage_tracker: flui_layer::damage::DamageTracker,
+    /// Runs immediately before every `queue.present` — see
+    /// [`crate::RasterBackend::set_pre_present_hook`].
+    pre_present_hook: Option<crate::raster::PrePresentHook>,
     /// Raw platform handles, wrapped in [`RawHandles`] so `Renderer: Send`
     /// is a compiler derivation rather than a hand-written assertion.
     /// Reused by `recover()` to rebuild the wgpu surface after a GPU device
@@ -605,7 +608,28 @@ impl SurfaceAcquireBackend for Renderer {
 
     fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
         let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
-        Ok(SurfaceAcquireOutcome::from(surface.get_current_texture()))
+        // Under `Fifo` with a frame latency of 1 this is where the vsync
+        // block lands (ADR-0045 decision 3), so its duration is the one
+        // number that says whether the display is pacing this thread.
+        let acquire_started = std::time::Instant::now();
+        let acquired = surface.get_current_texture();
+        let outcome = match &acquired {
+            wgpu::CurrentSurfaceTexture::Success(_) => "success",
+            wgpu::CurrentSurfaceTexture::Suboptimal(_) => "suboptimal",
+            wgpu::CurrentSurfaceTexture::Timeout => "timeout",
+            wgpu::CurrentSurfaceTexture::Occluded => "occluded",
+            wgpu::CurrentSurfaceTexture::Outdated => "outdated",
+            wgpu::CurrentSurfaceTexture::Lost => "lost",
+            wgpu::CurrentSurfaceTexture::Validation => "validation",
+        };
+        tracing::trace!(
+            target: "flui.gpu",
+            event = "surface_acquired",
+            acquire_us = acquire_started.elapsed().as_micros() as u64,
+            outcome,
+            "surface texture acquired"
+        );
+        Ok(SurfaceAcquireOutcome::from(acquired))
     }
 
     fn reconfigure(&mut self) -> Result<(), EngineError> {
@@ -687,6 +711,7 @@ impl Renderer {
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
+            pre_present_hook: None,
             raw_handles: RawHandles {
                 window: Some(raw_window_handle),
                 display: raw_display_handle,
@@ -931,6 +956,7 @@ impl Renderer {
             supports_copy_src: false,
             device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
+            pre_present_hook: None,
             raw_handles: RawHandles {
                 window: None,
                 display: None,
@@ -987,6 +1013,7 @@ impl Renderer {
             supports_copy_src: false,
             device_lost: services.device_lost_handle(),
             damage_tracker: flui_layer::damage::DamageTracker::new(),
+            pre_present_hook: None,
             raw_handles: RawHandles {
                 window: None,
                 display: None,
@@ -1375,6 +1402,12 @@ impl Renderer {
         wgpu::PresentMode::Fifo
     }
 
+    /// Install the hook run immediately before every present — see
+    /// [`crate::RasterBackend::set_pre_present_hook`].
+    pub fn set_pre_present_hook(&mut self, hook: Option<crate::raster::PrePresentHook>) {
+        self.pre_present_hook = hook;
+    }
+
     /// Resize the surface
     pub fn resize(&mut self, width: u32, height: u32) {
         if let (Some(config), Some(surface)) = (&mut self.config, &self.surface)
@@ -1637,7 +1670,21 @@ impl Renderer {
             offscreen.blit_to_surface(slot.texture(), &view, surface_format);
         }
 
+        // The platform's frame-pacing signal, armed strictly before the
+        // present that follows (see `RasterBackend::set_pre_present_hook`).
+        // The trace event is the live-smoke harness's ordering oracle: every
+        // `present_submitted` must be preceded by one of these.
+        if let Some(hook) = self.pre_present_hook.as_mut() {
+            hook();
+            tracing::trace!(
+                target: "flui.gpu",
+                event = "pre_present_notified",
+                "platform notified before present"
+            );
+        }
+        let present_started = std::time::Instant::now();
         self.queue.present(output);
+        let present_us = present_started.elapsed().as_micros() as u64;
 
         // Dedicated target so a harness can count REAL per-frame GPU work
         // from the log (`RUST_LOG` filter: `flui.gpu=trace`): this line is
@@ -1651,6 +1698,7 @@ impl Renderer {
         tracing::trace!(
             target: "flui.gpu",
             event = "present_submitted",
+            present_us,
             "surface frame submitted and presented"
         );
 

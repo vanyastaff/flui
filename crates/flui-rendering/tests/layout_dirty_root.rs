@@ -293,6 +293,67 @@ fn double_layout_does_not_panic_on_frame_two() {
     assert_eq!(size1, Size::new(px(50.0), px(50.0)));
 }
 
+/// A clean node can miss the geometry cache for three different reasons, and
+/// only one of them is a defect. The walk used to warn "invariant violation"
+/// for all three, which is not a cosmetic complaint: an animated demo logged
+/// that warning twice per frame for a whole run and it was recorded as a
+/// suspected rendering defect, while the actual defect that run had was
+/// somewhere else entirely (frame pacing, ADR-0058).
+///
+/// This pins the two benign paths as *behaviour*: both must complete layout
+/// and return a correct size. The classification itself — which of the three
+/// a given miss is — is pinned separately and exhaustively by
+/// `classify_cache_miss`'s own unit test in `subtree_arena.rs`, because the
+/// distinction is a diagnostic and this crate has no tracing-capture facility
+/// to assert on log output (it may not depend on `flui-log`, which is
+/// restricted to composition roots). The third state cannot be constructed
+/// through the public pipeline API at all: nothing outside the walk can clear
+/// geometry without clearing the constraints beside it.
+#[test]
+fn a_clean_node_that_misses_the_cache_still_lays_out_for_either_benign_reason() {
+    let mut pipeline = fresh_layout_pipeline();
+
+    let padding_id = pipeline
+        .render_tree_mut()
+        .insert_box(Box::new(RenderPadding::all(5.0)));
+    let _child_id = pipeline
+        .render_tree_mut()
+        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert must succeed");
+
+    // Reason 1: no cached constraints at all — the first pass over a freshly
+    // mounted node. NEEDS_LAYOUT is set here, so this is the ordinary entry,
+    // but it establishes the cache the next two cases depend on.
+    let first = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let size_first = pipeline
+        .layout_dirty_root(padding_id, first)
+        .expect("first layout succeeds");
+    assert_eq!(size_first, Size::new(px(50.0), px(50.0)));
+
+    // Reason 2: the node is now clean and its constraints are cached, but the
+    // incoming constraints DIFFER — a resize, a viewport change, a parent that
+    // lays its child out differently. The cache correctly refuses to serve,
+    // which is the invalidation path working, not an invariant being broken.
+    let tighter = BoxConstraints::tight(Size::new(px(30.0), px(30.0)));
+    let size_resized = pipeline
+        .layout_dirty_root(padding_id, tighter)
+        .expect("relayout under new constraints succeeds");
+    assert_eq!(
+        size_resized,
+        Size::new(px(30.0), px(30.0)),
+        "a clean node under changed constraints must lay out again and honour them — \
+         serving the stale cached size here would be the real defect"
+    );
+
+    // And the cache now serves the SAME constraints without a fresh pass:
+    // same answer, no warning, which is the path the other two are measured
+    // against.
+    let size_cached = pipeline
+        .layout_dirty_root(padding_id, tighter)
+        .expect("cache hit succeeds");
+    assert_eq!(size_cached, size_resized);
+}
+
 // ============================================================================
 // Manual RenderObject<BoxProtocol> impls (RenderViewAdapter): the layout walk
 // still drives perform_layout_raw on them via the trait dispatch.

@@ -829,6 +829,22 @@ fn self_close_route_from_env() -> SelfCloseRoute {
     }
 }
 
+/// How long an `about_to_wait` decision parks the loop for, in whole
+/// milliseconds from now — `None` for an open-ended `Wait`. Trace-only:
+/// the number a pacing investigation needs next to the frame callback's own
+/// timing, without which "the loop was idle" and "the loop was blocked in
+/// the GPU" are indistinguishable in a log.
+fn control_flow_wait_ms(control_flow: ControlFlow) -> Option<u64> {
+    match control_flow {
+        ControlFlow::WaitUntil(deadline) => Some(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u64,
+        ),
+        ControlFlow::Wait | ControlFlow::Poll => None,
+    }
+}
+
 /// The earlier of two optional wall-clock deadlines — `None` only when both
 /// are `None`, so an armed deadline is never lost to an idle `Wait`.
 fn earliest_deadline(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
@@ -1501,6 +1517,10 @@ impl ApplicationHandler for WinitApp {
             Some(deadline) => ControlFlow::WaitUntil(deadline),
             None => ControlFlow::Wait,
         };
+        tracing::trace!(
+            wait_until_ms = control_flow_wait_ms(control_flow),
+            "about to wait"
+        );
         event_loop.set_control_flow(control_flow);
     }
 

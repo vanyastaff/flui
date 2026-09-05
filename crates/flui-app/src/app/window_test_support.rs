@@ -34,6 +34,9 @@ pub(crate) struct TestWindow {
     /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
     /// [`Self::redraw_calls_handle`] to the asserting side.
     redraw_calls: Arc<AtomicU32>,
+    /// How many times `pre_present_notify` ran — see
+    /// [`TestWindow::pre_present_notifies_handle`].
+    pre_present_notifies: Arc<AtomicU32>,
     text_input: Option<Arc<dyn PlatformTextInput>>,
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     /// Last cursor set through [`PlatformWindow::set_cursor`]; read back via
@@ -59,6 +62,7 @@ impl TestWindow {
             logical_size: Size::default(),
             focused: false,
             redraw_calls: Arc::new(AtomicU32::new(0)),
+            pre_present_notifies: Arc::new(AtomicU32::new(0)),
             text_input: None,
             accessibility: None,
             cursor: parking_lot::Mutex::new(flui_platform::CursorIcon::Default),
@@ -108,6 +112,13 @@ impl TestWindow {
 
     /// The counter [`PlatformWindow::request_redraw`] bumps — clone it out
     /// before `Arc`-ing the window.
+    /// A handle on the pre-present-notify counter, for a test that must
+    /// observe the count from inside a raster backend script (i.e. at the
+    /// moment of the present) rather than after the fact.
+    pub(crate) fn pre_present_notifies_handle(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.pre_present_notifies)
+    }
+
     pub(crate) fn redraw_calls_handle(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.redraw_calls)
     }
@@ -133,6 +144,10 @@ impl PlatformWindow for TestWindow {
 
     fn scale_factor(&self) -> f64 {
         self.scale_factor
+    }
+
+    fn pre_present_notify(&self) {
+        self.pre_present_notifies.fetch_add(1, Ordering::Relaxed);
     }
 
     fn request_redraw(&self) {
