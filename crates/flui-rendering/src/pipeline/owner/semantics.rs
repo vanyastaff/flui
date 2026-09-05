@@ -588,6 +588,17 @@ fn build_semantics_fragments_impl(
     // A node the semantics clip leaves nothing of publishes no node, but its
     // children have already been walked under their own clips above.
     if !decisions.contributes || clipped.dropped {
+        // The stamped node forms no semantics node of its own — a `Padding` or
+        // an `Align` at the item's root, which is what a builder most often
+        // returns. Its position would be lost here, so it is handed to the
+        // fragments travelling up instead: whichever of them ends up carrying
+        // the row's label carries its position too.
+        //
+        // Skipped when the node is dropped rather than merely transparent: a
+        // clipped-away row has no position to announce.
+        if !clipped.dropped {
+            offer_semantic_index_to_fragments(node, &mut child_fragments);
+        }
         return Some(child_fragments);
     }
 
@@ -958,15 +969,39 @@ fn describe_semantics_configuration(node: &RenderNode) -> SemanticsConfiguration
 /// is. A missing position degrades to "item ? of 100"; a wrong one misleads.
 ///
 /// [`IndexedSemantics`]: https://api.flutter.dev/flutter/widgets/IndexedSemantics-class.html
+/// Hand a transparent stamped node's position down to the fragments it
+/// forwards, so the node that does form for this item carries it.
+///
+/// Only offered where nothing already declared one, at every level — an
+/// explicit `IndexedSemantics` anywhere in the item wins, the same rule the
+/// contributing path follows.
+fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [SemanticsFragment]) {
+    let Some(index) = stamped_semantic_index(node) else {
+        return;
+    };
+    for fragment in fragments {
+        let config = match fragment {
+            SemanticsFragment::Pending(pending) => &mut pending.config,
+            SemanticsFragment::Formed(formed) => &mut formed.config,
+        };
+        if config.index_in_parent().is_none() {
+            config.set_index_in_parent(index);
+        }
+    }
+}
+
+/// The semantic position a lazy sliver stamped into this node's parent data.
+fn stamped_semantic_index(node: &RenderNode) -> Option<i32> {
+    node.parent_data()
+        .and_then(|pd| pd.downcast_ref::<crate::parent_data::SliverMultiBoxAdaptorParentData>())
+        .and_then(|pd| pd.semantic_index)
+}
+
 fn apply_lazy_child_semantic_index(node: &RenderNode, config: &mut SemanticsConfiguration) {
     if config.index_in_parent().is_some() {
         return;
     }
-    if let Some(index) = node
-        .parent_data()
-        .and_then(|pd| pd.downcast_ref::<crate::parent_data::SliverMultiBoxAdaptorParentData>())
-        .and_then(|pd| pd.semantic_index)
-    {
+    if let Some(index) = stamped_semantic_index(node) {
         config.set_index_in_parent(index);
     }
 }

@@ -299,6 +299,64 @@ impl flui_view::View for RowBody {
     }
 }
 
+/// A row whose first render object is semantics-transparent still announces.
+///
+/// The stamp lands on the item's FIRST render descendant, which is whatever the
+/// builder returns — very often a `Padding` or an `Align` with no semantics of
+/// its own. Such a node does not contribute a semantics node, so a position
+/// applied only where a node forms never reaches the row that carries the
+/// label.
+///
+/// The sibling tests all put `Semantics` at the root, which is exactly the
+/// shape that works either way; this is the one that fails when the stamp is
+/// only consulted for contributing nodes.
+#[test]
+fn a_row_behind_a_transparent_root_still_announces_its_position() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{Padding, ScrollController, SliverList, Viewport};
+
+    const ROWS: usize = 3;
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        Viewport::new((SliverList::new(
+            ROWS,
+            100.0,
+            std::rc::Rc::new(|i: usize| {
+                (i < ROWS).then(|| {
+                    // Padding is the item's root: it carries the stamp and has
+                    // no semantics of its own.
+                    Padding::all(4.0)
+                        .child(
+                            Semantics::new()
+                                .container(true)
+                                .label(format!("padded {i}"))
+                                .child(SizedBox::new(180.0, 92.0)),
+                        )
+                        .boxed()
+                })
+            }),
+        ),))
+        .position(controller.position()),
+        crate::common::tight(200.0, 300.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    for (announced, label) in [(1usize, "padded 0"), (2, "padded 1"), (3, "padded 2")] {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        assert_eq!(
+            node.position_in_set(),
+            Some(announced),
+            "{label} must announce its position even though the stamped node \
+             is a transparent Padding rather than the row itself",
+        );
+    }
+}
+
 /// An explicit `IndexedSemantics` overrides the stamped index.
 ///
 /// Both paths reach the same property, so precedence has to be decided rather

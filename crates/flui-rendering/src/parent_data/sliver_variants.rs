@@ -91,6 +91,25 @@ pub struct SliverSlot {
     pub semantic: Option<i32>,
 }
 
+/// A logical index as a semantic position, or `None` if it does not fit.
+///
+/// The platform property is `i32`. Casting past its range wraps, and a wrapped
+/// position is a *wrong* announcement — "item 3 of 100" on the four-billionth
+/// row — where `None` is an honest "item ? of 100". A list that long is not one
+/// a screen reader can navigate anyway, so nothing is lost by declining.
+const fn semantic_position(logical: usize) -> Option<i32> {
+    if logical <= i32::MAX as usize {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "guarded by the bound immediately above"
+        )]
+        Some(logical as i32)
+    } else {
+        None
+    }
+}
+
 impl SliverSlot {
     /// A slot whose semantic position is its logical index.
     ///
@@ -99,12 +118,7 @@ impl SliverSlot {
     pub const fn identity(logical: usize) -> Self {
         Self {
             logical,
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_possible_wrap,
-                reason = "a set position past i32::MAX is not a list a screen                           reader can navigate; the platform property is i32"
-            )]
-            semantic: Some(logical as i32),
+            semantic: semantic_position(logical),
         }
     }
 
@@ -152,12 +166,7 @@ impl SliverMultiBoxAdaptorParentData {
         Self {
             layout_offset: 0.0,
             index,
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_possible_wrap,
-                reason = "a set position past i32::MAX is not a list a screen                           reader can navigate; the platform property is i32"
-            )]
-            semantic_index: Some(index as i32),
+            semantic_index: semantic_position(index),
         }
     }
 
@@ -187,6 +196,12 @@ impl SliverMultiBoxAdaptorParentData {
     /// Builder: set index.
     pub const fn with_index(mut self, index: usize) -> Self {
         self.index = index;
+        // Both halves, or neither. Moving the logical index while leaving the
+        // semantic one behind is exactly the drift these two travel together to
+        // prevent -- `zero().with_index(9)` would otherwise keep announcing the
+        // position it held at index 0. A caller that needs them to differ says
+        // so through [`Self::with_semantic_index`].
+        self.semantic_index = semantic_position(index);
         self
     }
 
@@ -642,5 +657,49 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(hash_of(&a), hash_of(&b));
         assert_ne!(hash_of(&a), hash_of(&c));
+    }
+    /// `with_index` moves BOTH halves.
+    ///
+    /// Moving the logical index while leaving the semantic one behind is the
+    /// drift the pair exists to prevent, and this builder is where it can
+    /// happen — the constructors derive both from one value and cannot
+    /// disagree with themselves.
+    #[test]
+    fn with_index_moves_the_semantic_position_too() {
+        let moved = SliverMultiBoxAdaptorParentData::zero().with_index(9);
+        assert_eq!(
+            (moved.index, moved.semantic_index),
+            (9, Some(9)),
+            "`Some(0)` here is the position the child held before the move, \
+             which would announce it as item 1 rather than item 10"
+        );
+    }
+
+    /// A caller that wants the two to differ has to say so.
+    #[test]
+    fn with_semantic_index_is_how_the_two_are_allowed_to_differ() {
+        let separator = SliverMultiBoxAdaptorParentData::with_semantic_index(7, None);
+        assert_eq!((separator.index, separator.semantic_index), (7, None));
+    }
+
+    /// A logical index past `i32::MAX` declines a position rather than wrapping.
+    ///
+    /// The platform property is `i32`, and a wrapped cast announces a *wrong*
+    /// position — the honest answer is none at all.
+    #[test]
+    fn an_index_too_large_for_the_platform_property_declines() {
+        let representable = SliverSlot::identity(i32::MAX as usize);
+        assert_eq!(representable.semantic, Some(i32::MAX));
+
+        let past_the_end = SliverSlot::identity(i32::MAX as usize + 1);
+        assert_eq!(
+            past_the_end.semantic, None,
+            "wrapping would announce a small, plausible, and wrong position"
+        );
+        assert_eq!(
+            past_the_end.logical,
+            i32::MAX as usize + 1,
+            "the logical index is untouched -- layout still keys on it"
+        );
     }
 }
