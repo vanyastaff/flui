@@ -2490,6 +2490,15 @@ pub struct SemanticSetMapping {
     index_of: Option<Rc<dyn Fn(usize) -> Option<i32>>>,
     /// How many members the set has, or `None` when that is not known.
     set_size: Option<i32>,
+    /// Added to every position this mapping produces.
+    ///
+    /// Flutter's `semanticIndexOffset`, and for the reason its docs give:
+    /// "If multiple delegates are used in a single scroll view, then the
+    /// indexes will not be correct by default." Two slivers in one viewport
+    /// each number their own children from zero — which is the reference's
+    /// default too — so a caller composing them offsets the second by the
+    /// first's member count to make the whole scroll view read monotonically.
+    offset: i32,
 }
 
 impl fmt::Debug for SemanticSetMapping {
@@ -2497,6 +2506,7 @@ impl fmt::Debug for SemanticSetMapping {
         f.debug_struct("SemanticSetMapping")
             .field("interleaved", &self.index_of.is_some())
             .field("set_size", &self.set_size)
+            .field("offset", &self.offset)
             .finish()
     }
 }
@@ -2510,7 +2520,7 @@ impl SemanticSetMapping {
     /// comparison errs toward "changed".
     #[must_use]
     pub fn differs_from(&self, other: &Self) -> bool {
-        if self.set_size != other.set_size {
+        if self.set_size != other.set_size || self.offset != other.offset {
             return true;
         }
         match (&self.index_of, &other.index_of) {
@@ -2526,7 +2536,22 @@ impl SemanticSetMapping {
         Self {
             index_of: None,
             set_size: set_size_of(item_count),
+            offset: 0,
         }
+    }
+
+    /// Shift every position this mapping produces by `offset`, and declare the
+    /// size of the set the shifted positions belong to.
+    ///
+    /// Both together on purpose. An offset without a matching size announces
+    /// "item 12 of 5" for the second delegate in a pair — the position is now
+    /// the composed set's, while the size is still this delegate's own. A
+    /// caller composing delegates knows both; nothing else does.
+    #[must_use]
+    pub fn composed_at(mut self, offset: i32, set_size: Option<i32>) -> Self {
+        self.offset = offset;
+        self.set_size = set_size;
+        self
     }
 
     /// Members interleaved with non-members: `index_of` decides which is which,
@@ -2536,6 +2561,7 @@ impl SemanticSetMapping {
         Self {
             index_of: Some(index_of),
             set_size: i32::try_from(members).ok(),
+            offset: 0,
         }
     }
 
@@ -2554,7 +2580,15 @@ impl SemanticSetMapping {
             },
             None => SliverSlot::identity(logical),
         };
-        base.with_set_size(self.set_size)
+        // Saturating: an offset that pushes a position past `i32::MAX` has no
+        // honest answer, and clamping announces a wrong-but-plausible one. A
+        // list that long is not one a screen reader can navigate, and the
+        // saturation is unreachable for any real composition.
+        let shifted = SliverSlot {
+            semantic: base.semantic.map(|s| s.saturating_add(self.offset)),
+            ..base
+        };
+        shifted.with_set_size(self.set_size)
     }
 }
 

@@ -413,6 +413,149 @@ fn an_explicit_index_overrides_the_one_the_sliver_stamped() {
     }
 }
 
+/// Two slivers in one viewport number independently — the reference's reason
+/// for `semanticIndexOffset`.
+///
+/// Flutter: "If multiple delegates are used in a single scroll view, then the
+/// indexes will not be correct by default. The `semanticIndexOffset` can be
+/// used to offset the semantic indexes of each delegate so that the indexes are
+/// monotonically increasing."
+///
+/// This pins the DEFAULT, which is the same as the reference's: each delegate
+/// numbers from zero, and a caller composing several says so explicitly. It
+/// exists so the composed case is a checked state rather than an assumption,
+/// and so the offset landing has something to change.
+#[test]
+fn two_slivers_in_one_viewport_each_number_from_zero_by_default() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    let list = |tag: &'static str, count: usize| {
+        SliverList::new(
+            count,
+            60.0,
+            std::rc::Rc::new(move |i: usize| {
+                (i < count).then(|| {
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("{tag} {i}"))
+                        .child(SizedBox::new(200.0, 60.0))
+                        .boxed()
+                })
+            }),
+        )
+    };
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        Viewport::new((list("first", 2), list("second", 2))).position(controller.position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let position = |label: &str| {
+        tree.find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"))
+            .position_in_set()
+    };
+
+    assert_eq!(
+        (position("first 0"), position("first 1")),
+        (Some(1), Some(2)),
+        "the first delegate numbers its own children"
+    );
+    assert_eq!(
+        (position("second 0"), position("second 1")),
+        (Some(1), Some(2)),
+        "and so does the second — independently, which is why the reference \
+         has `semanticIndexOffset` at all"
+    );
+}
+
+/// Composed slivers read monotonically once the second declares its offset.
+///
+/// The sibling test above pins the default: each delegate numbers from zero,
+/// as the reference does. This is the escape the reference provides for it —
+/// `semanticIndexOffset`, whose docs give this exact scenario: "if a scroll
+/// view contains two delegates where the first has 10 children contributing
+/// semantics, then the second delegate should offset its children by 10."
+///
+/// The offset and the composed SIZE are declared together, and the assertions
+/// check both. An offset alone would announce "item 3 of 2" for the second
+/// delegate's first row — a position from the composed set paired with a size
+/// from its own.
+#[test]
+fn a_composed_offset_makes_two_slivers_read_as_one_set() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    const FIRST: usize = 2;
+    const SECOND: usize = 2;
+    const TOTAL: i32 = (FIRST + SECOND) as i32;
+
+    let list = |tag: &'static str, count: usize| {
+        SliverList::new(
+            count,
+            60.0,
+            std::rc::Rc::new(move |i: usize| {
+                (i < count).then(|| {
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("{tag} {i}"))
+                        .child(SizedBox::new(200.0, 60.0))
+                        .boxed()
+                })
+            }),
+        )
+    };
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        Viewport::new((
+            list("a", FIRST).semantics(
+                flui_view::element::SemanticSetMapping::one_to_one(FIRST.into())
+                    .composed_at(0, Some(TOTAL)),
+            ),
+            list("b", SECOND).semantics(
+                flui_view::element::SemanticSetMapping::one_to_one(SECOND.into())
+                    .composed_at(FIRST as i32, Some(TOTAL)),
+            ),
+        ))
+        .position(controller.position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let announced = |label: &str| {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        (node.position_in_set(), node.size_of_set())
+    };
+
+    assert_eq!(
+        [
+            announced("a 0"),
+            announced("a 1"),
+            announced("b 0"),
+            announced("b 1"),
+        ],
+        [
+            (Some(1), Some(4)),
+            (Some(2), Some(4)),
+            (Some(3), Some(4)),
+            (Some(4), Some(4)),
+        ],
+        "the two delegates must read as one set of four, numbered 1..=4 — \
+         `(Some(1), _)` for `b 0` means the offset was ignored, and \
+         `(_, Some(2))` means the size was left as that delegate's own",
+    );
+}
+
 /// A shrinking list stops announcing the old total.
 ///
 /// Residents that keep their index are not relocated, so nothing moves them —
