@@ -831,3 +831,74 @@ fn an_indexed_item_publishes_its_position_in_the_set() {
          count, which describes a different set; found {sizes:?}",
     );
 }
+
+/// A mapping change alone reaches the residents, without waiting for an
+/// unrelated layout to carry it.
+///
+/// The adaptor refreshes its resident children inside the service pass that
+/// follows a layout, and a rebuild that changes only the *numbering* leaves
+/// the delegate — the builder and key callback — identical. Flagging the
+/// residents for refresh without also scheduling that layout is inert: the
+/// sliver stays clean, the pass never runs, and every resident goes on
+/// announcing the position it was stamped with.
+///
+/// The delegate is deliberately one shared `StaticChildren`, cloned into both
+/// roots. Building a fresh one per root would hand the adaptor a different
+/// builder, take the changed-delegate path, and never exercise the case at
+/// all.
+#[test]
+fn a_mapping_change_alone_restamps_the_resident_children() {
+    use flui_view::ViewExt as _;
+    use flui_view::element::{SemanticSetMapping, StaticChildren};
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    const ROWS: usize = 2;
+    const SET: usize = 10;
+
+    let row = |i: usize| {
+        Semantics::new()
+            .container(true)
+            .label(format!("row {i}"))
+            .child(SizedBox::new(200.0, 60.0))
+            .boxed()
+    };
+    let children = StaticChildren::new((0..ROWS).map(row).collect::<Vec<_>>());
+    let controller = ScrollController::new();
+
+    let root = |offset: i32| {
+        Viewport::new((SliverList::over(60.0, &children).semantics(
+            SemanticSetMapping::one_to_one(ROWS.into())
+                .composed_at(offset, i32::try_from(SET).ok()),
+        ),))
+        .position(controller.position())
+    };
+
+    let mut laid = lay_out(root(0), crate::common::tight(200.0, 400.0));
+    laid.enable_semantics();
+    laid.pump();
+
+    let announced = |laid: &mut flui_widgets::testing::LaidOut, label: &str| {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        (node.position_in_set(), node.size_of_set())
+    };
+
+    assert_eq!(
+        [announced(&mut laid, "row 0"), announced(&mut laid, "row 1")],
+        [(Some(1), Some(SET)), (Some(2), Some(SET))],
+        "the un-offset mapping numbers the two rows 1 and 2 of the composed set"
+    );
+
+    // Same children, same delegate, same count — only the offset moves.
+    laid.pump_widget(root(5));
+
+    assert_eq!(
+        [announced(&mut laid, "row 0"), announced(&mut laid, "row 1")],
+        [(Some(6), Some(SET)), (Some(7), Some(SET))],
+        "the new offset must reach the residents on this frame — still \
+         announcing 1 and 2 means the refresh was flagged but no layout was \
+         scheduled to carry it"
+    );
+}
