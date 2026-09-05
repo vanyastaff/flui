@@ -509,6 +509,19 @@ pub(crate) struct SavedLayer {
     /// The `Reintegrate` fast-path is gated on `image_filter.is_none()` — a
     /// filter layer always routes through the offscreen composite path (G3).
     pub(crate) image_filter: Option<ImageFilterSpec>,
+    /// The clip a `Clip::AntiAliasWithSaveLayer` layer applies to its COMPOSITE
+    /// rather than to the draws inside it.
+    ///
+    /// `Some` marks the layer as one a clip opened, and forces the composite
+    /// path: the whole point of the mode is that the offscreen exists, so the
+    /// `Reintegrate` fast-path — which splices the children straight back into
+    /// the parent draw order — must not swallow it.
+    ///
+    /// `Some(ResolvedClip::NONE)` is a real value, not an empty one: a
+    /// rectangular clip is the hardware scissor, which already applied to every
+    /// draw inside the offscreen and is binary, so the composite carries no SDF
+    /// of its own. `None` means no clip opened this layer at all.
+    pub(crate) composite_clip: Option<super::state_stack::ResolvedClip>,
 }
 
 // ─── Draw segment ─────────────────────────────────────────────────────────────
@@ -973,6 +986,13 @@ pub(crate) struct PendingOpacityLayer {
     /// plain tint-only composite (the common fast-path). Folded left-to-right
     /// in `flush_opacity_layer` via ping-pong texture acquire/drop.
     pub(crate) filters: LayerFilterChain,
+    /// The SDF clip applied to this layer's COMPOSITE, when a
+    /// `Clip::AntiAliasWithSaveLayer` layer opened it.
+    ///
+    /// Forwarded from [`SavedLayer::composite_clip`] at restore time and
+    /// attached to the composite's `TextureInstance` in `flush_opacity_layer`,
+    /// so the clip's coverage multiplies the finished group exactly once.
+    pub(crate) composite_clip: Option<super::state_stack::ResolvedClip>,
 }
 
 // ─── Filter IR-purity witnesses (CI-visible) ──────────────────────────────────

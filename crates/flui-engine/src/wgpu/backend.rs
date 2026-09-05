@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use super::{
     command_ir::{GammaDirection, ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
-    painter::WgpuPainter,
+    painter::{ClipOutcome, WgpuPainter},
+    state_stack::ResolvedClip,
 };
 use crate::{
     commands::dispatch_command,
@@ -129,6 +130,30 @@ pub struct Backend<'frame> {
     /// precisely the right point for correctness; Drop is the backstop
     /// for any site that is missed.
     active_transform: Option<Matrix4>,
+    /// One entry per clip layer that is currently open, innermost last.
+    ///
+    /// [`LayerStateStack::pop_clip`] serves all three `push_clip_*` variants
+    /// and takes no argument, so nothing in the call itself can say whether the
+    /// matching push opened an offscreen. This stack is the only thing that
+    /// can, and [`Backend::open_clip_frame`] is the only writer: it performs
+    /// the open and records it in the same call, so a push cannot open a layer
+    /// it did not record or record one it did not open.
+    clip_frames: Vec<ClipFrame>,
+}
+
+/// What one `push_clip_*` did to the painter, and therefore what the matching
+/// `pop_clip` must undo.
+///
+/// The variants name painter operations rather than clip modes on purpose:
+/// `pop_clip` does not need to know which `Clip` was asked for, only what is
+/// open.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ClipFrame {
+    /// `painter.save()` — balanced by `painter.restore()`.
+    Save,
+    /// `painter.save()` then `painter.save_layer_clipped(..)` — balanced by
+    /// `painter.restore_layer()` and then `painter.restore()`, in that order.
+    SaveLayer,
 }
 
 impl<'frame> Backend<'frame> {
@@ -146,6 +171,7 @@ impl<'frame> Backend<'frame> {
             surface_view: None,
             surface_texture: None,
             active_transform: None,
+            clip_frames: Vec::new(),
         }
     }
 
@@ -161,6 +187,7 @@ impl<'frame> Backend<'frame> {
             surface_view: None,
             surface_texture: None,
             active_transform: None,
+            clip_frames: Vec::new(),
         }
     }
 
@@ -217,6 +244,62 @@ impl<'frame> Backend<'frame> {
     pub fn restore(&mut self) {
         self.flush_active_transform();
         self.painter.restore();
+    }
+
+    /// Whether this push will render its subtree into an offscreen.
+    ///
+    /// Answered ONCE per push, before anything is installed, because two halves
+    /// depend on it and must agree: which clip call installs the content's clip
+    /// (per draw, or the bounding scissor alone with the rounded coverage saved
+    /// for the composite), and what [`LayerStateStack::pop_clip`] closes.
+    /// Deciding it after installing would leave a refused layer's content
+    /// clipped by its bounding box with the coverage dropped on the floor —
+    /// worse than either answer.
+    ///
+    /// Three things must all hold:
+    ///
+    /// - the mode asks for it ([`clip_opens_a_layer`]);
+    /// - a clip was actually installed. A group composite needs an edge to
+    ///   composite against, and `Painter::clip_path` installs none — keying on
+    ///   the ANSWER rather than on which shape was pushed is what makes this
+    ///   correct the day path clipping lands, with no second place to update;
+    /// - no enclosing layer routes through a bounds-growing image filter. Those
+    ///   layers discard nested `DrawItem::OpacityLayer`s, and everything already
+    ///   flushed beside them, so opening one there deletes content rather than
+    ///   improving an edge. Degrading the mode to per-draw coverage loses an
+    ///   edge; opening the layer loses the subtree. See
+    ///   `LayerCompositor::inside_image_filter_layer`.
+    fn opens_offscreen(&self, behavior: flui_types::painting::Clip, clip: ClipOutcome) -> bool {
+        clip_opens_a_layer(behavior)
+            && clip == ClipOutcome::Installed
+            && !self.painter.inside_image_filter_layer()
+    }
+
+    /// Open the offscreen a clip asked for, if it asked for one, and record the
+    /// frame [`LayerStateStack::pop_clip`] will close.
+    ///
+    /// `Some(clip)` means the push wants the offscreen and `clip` is the
+    /// coverage its group composite applies — see
+    /// [`WgpuPainter::save_layer_clipped`], and note that `ResolvedClip::NONE`
+    /// is a legitimate payload. `None` means the push installed its clip per
+    /// draw and wants no layer.
+    ///
+    /// The only writer of `clip_frames`. The open and the record happen here, on
+    /// the two sides of one `if`, so they cannot be set apart: no caller can
+    /// record a `SaveLayer` without opening one, or open one without recording
+    /// it.
+    fn open_clip_frame(&mut self, composite_clip: Option<ResolvedClip>) {
+        let frame = if let Some(clip) = composite_clip {
+            // The clip's own scissor, which the caller has just installed: the
+            // clip's device-space bounds already intersected with every
+            // ancestor's, and a bound on everything the offscreen can hold.
+            let bounds = self.painter.clip_bounds();
+            self.painter.save_layer_clipped(clip, bounds);
+            ClipFrame::SaveLayer
+        } else {
+            ClipFrame::Save
+        };
+        self.clip_frames.push(frame);
     }
 
     /// Get or create a cached offscreen painter for shader mask rendering.
@@ -529,18 +612,45 @@ impl Drop for Backend<'_> {
 /// and its siblings emit a `DrawCommand` unconditionally, so the canvas path
 /// reaches it with any mode the caller passes.
 ///
-/// `AntiAliasWithSaveLayer` is treated as `AntiAlias` here, and that is a real
-/// divergence, not a rounding of one. Flutter renders the subtree into an
-/// offscreen first so the group composites against the clip edge once; applying
-/// coverage per draw instead makes the edge darker or more opaque wherever the
-/// clipped content overlaps itself or blends non-trivially. The offscreen
-/// machinery exists in this backend (`painter::save_layer_impl`, with group
-/// opacity, blend-mode propagation and a filter chain), so this is a deferral
-/// rather than a limitation — and issue #848 stays OPEN for it. The mode is
-/// not supported; it is approximated, and the approximation is wrong in a way
-/// a user can see.
+/// `AntiAliasWithSaveLayer` answers `false`, and that is right as far as this
+/// question goes — the mode is anti-aliased. What distinguishes it from
+/// `AntiAlias` is decided by [`clip_opens_a_layer`] instead: its coverage is
+/// applied once, to a group composite, rather than per draw. `push_clip_rrect`
+/// therefore never consults this function for that mode.
+///
+/// The CANVAS clip commands (`clip_rect` / `clip_rrect` / `clip_rsuperellipse`
+/// on the `CommandRenderer` impl, the `DrawCommand` path) still do, and for them
+/// the mode really is approximated by `AntiAlias`. `flui_painting`'s
+/// `ClipContext` emits Flutter's shape there — clip anti-aliased, then
+/// `save_layer_alpha(.., 255)` — but that layer composites at opacity 1.0 with a
+/// white tint and `SrcOver`, which `LayerCompositor::pop_layer` reintegrates
+/// rather than compositing, and a group composited that way is arithmetically
+/// identical to drawing straight through. Tying the two commands together needs
+/// a `DrawCommand` carrying the clip and the layer as one, which is a change to
+/// the canvas vocabulary rather than to this backend; issue #848 stays open for
+/// it. No in-repo caller reaches it: `RenderClip` and `RenderPhysicalModel` both
+/// paint through `PaintCx::with_clip_*`, which pushes a clip LAYER.
 const fn clip_is_hard(behavior: flui_types::painting::Clip) -> bool {
     matches!(behavior, flui_types::painting::Clip::HardEdge)
+}
+
+/// Whether a clip layer's mode asks for an offscreen around the clipped
+/// subtree.
+///
+/// `AntiAliasWithSaveLayer` and nothing else. Flutter renders the clipped
+/// subtree into an offscreen so the group composites against the clip edge
+/// ONCE; applying the coverage per draw instead makes the edge darker or more
+/// opaque wherever the content overlaps itself, because each draw is attenuated
+/// by the clip and then blended over an already-attenuated one. The offscreen
+/// is also what isolates a destructive or advanced blend inside the clip from
+/// the backdrop behind it — Flutter's own docs call that out as a semantic
+/// change, not a side effect.
+///
+/// This answers only the MODE half of the question. Whether a layer is actually
+/// opened is [`Backend::opens_offscreen`], which also requires that a clip was
+/// installed at all and that no enclosing image-filter layer would discard it.
+const fn clip_opens_a_layer(behavior: flui_types::painting::Clip) -> bool {
+    matches!(behavior, flui_types::painting::Clip::AntiAliasWithSaveLayer)
 }
 
 /// Whether a clip command asks for no clipping at all.
@@ -1345,7 +1455,12 @@ impl CommandRenderer for Backend<'_> {
         transform: &Matrix4,
     ) {
         self.with_transform(transform, |painter| {
-            painter.clip_path(path);
+            // The outcome has no consumer on the CANVAS path: a saveLayer here
+            // is a `DrawCommand` of its own, emitted by the caller
+            // (`flui_painting`'s `ClipContext`), so this function opens no
+            // layer whose existence could depend on the answer. Only
+            // `LayerStateStack::push_clip_path` acts on it.
+            let _ = painter.clip_path(path);
         });
     }
 
@@ -1514,23 +1629,72 @@ impl LayerStateStack for Backend<'_> {
         self.flush_active_transform();
         self.painter.save();
         self.painter.clip_rect(*rect, clip_is_hard(clip_behavior));
+        // A rect clip is the hardware scissor under every mode, and the scissor
+        // has already clipped every draw that goes into the offscreen. It is
+        // binary, so re-applying it to the group would change nothing — hence
+        // `ResolvedClip::NONE`. The layer is still opened, for the half of the
+        // mode a scissor cannot give: isolation from the backdrop.
+        let composite_clip = self
+            .opens_offscreen(clip_behavior, ClipOutcome::Installed)
+            .then_some(ResolvedClip::NONE);
+        self.open_clip_frame(composite_clip);
     }
 
     fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
-        self.painter.clip_rrect(*rrect, clip_is_hard(clip_behavior));
+        // Decided BEFORE installing anything: the two calls below clip the
+        // content differently, and picking the wrong one because the layer was
+        // refused afterwards would drop the rounded coverage entirely.
+        let composite_clip = if self.opens_offscreen(clip_behavior, ClipOutcome::Installed) {
+            // Bounding scissor only: the rounded coverage is what the group
+            // composite applies, once. Installing the SDF slot as well would
+            // apply it a second time, per draw — the defect the mode exists to
+            // avoid.
+            Some(self.painter.clip_rrect_at_composite(*rrect))
+        } else {
+            self.painter.clip_rrect(*rrect, clip_is_hard(clip_behavior));
+            None
+        };
+        self.open_clip_frame(composite_clip);
     }
 
-    fn push_clip_path(&mut self, path: &Path, _clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
-        self.painter.clip_path(path);
+        // `clip_path` reports whether it installed anything, and today it does
+        // not. That answer — not this function's identity — is what decides the
+        // offscreen, so when path clipping lands the layer follows it here with
+        // nothing else to change.
+        let outcome = self.painter.clip_path(path);
+        let composite_clip = self
+            .opens_offscreen(clip_behavior, outcome)
+            .then_some(ResolvedClip::NONE);
+        self.open_clip_frame(composite_clip);
     }
 
     fn pop_clip(&mut self) {
         self.flush_active_transform();
-        self.painter.restore();
+        match self.clip_frames.pop() {
+            Some(ClipFrame::SaveLayer) => {
+                // Inside out: the layer was opened after the save, so it closes
+                // before it. Reversing these leaves the composite reading the
+                // parent's clip state instead of the clip's own.
+                self.painter.restore_layer();
+                self.painter.restore();
+            }
+            Some(ClipFrame::Save) => self.painter.restore(),
+            None => {
+                // An unmatched pop. The painter's own state stack warns and
+                // leaves state unchanged on underflow; say which stack ran out
+                // so the two are not confused for one another.
+                tracing::warn!(
+                    "Backend::pop_clip: no clip frame is open; the layer walk emitted a \
+                     pop_clip without a matching push_clip_*"
+                );
+                self.painter.restore();
+            }
+        }
     }
 
     fn push_offset(&mut self, offset: Offset<Pixels>) {

@@ -111,6 +111,51 @@ impl WgpuPainter {
         self.state.clip_rrect(rrect, self.size, hard);
     }
 
+    /// The active scissor as a device-space rect, or the whole surface when no
+    /// scissor is set.
+    ///
+    /// This is the compositing bounds for a `Clip::AntiAliasWithSaveLayer`
+    /// layer: the scissor is the clip's device-space bounding box already
+    /// intersected with every ancestor clip, and every draw inside the layer is
+    /// subject to it, so nothing the offscreen holds can fall outside.
+    pub(crate) fn clip_bounds(&self) -> Rect<Pixels> {
+        self.state.current_scissor().map_or_else(
+            || {
+                Rect::from_xywh(
+                    flui_types::geometry::px(0.0),
+                    flui_types::geometry::px(0.0),
+                    flui_types::geometry::px(self.size.0 as f32),
+                    flui_types::geometry::px(self.size.1 as f32),
+                )
+            },
+            |(x, y, width, height)| {
+                Rect::from_xywh(
+                    flui_types::geometry::px(x as f32),
+                    flui_types::geometry::px(y as f32),
+                    flui_types::geometry::px(width as f32),
+                    flui_types::geometry::px(height as f32),
+                )
+            },
+        )
+    }
+
+    /// Apply a rounded clip's bounding-box scissor and return the clip for a
+    /// group composite to apply once — the `Clip::AntiAliasWithSaveLayer` half
+    /// of [`Self::clip_rrect`].
+    ///
+    /// The per-draw SDF slot is deliberately NOT written: the caller is about
+    /// to open an offscreen with [`Self::save_layer_clipped`], and the returned
+    /// clip is applied to that layer's composite instead. Setting both would
+    /// apply the clip's coverage twice — once per draw and once to the group —
+    /// which reads as a darker, more opaque edge wherever the content overlaps
+    /// itself. See `GpuStateStack::clip_rrect_at_composite`.
+    pub(crate) fn clip_rrect_at_composite(
+        &mut self,
+        rrect: RRect,
+    ) -> super::super::state_stack::ResolvedClip {
+        self.state.clip_rrect_at_composite(rrect, self.size)
+    }
+
     /// Look up or generate a tessellated superellipse path via the
     /// Painter-owned bounded cache.
     ///
@@ -160,7 +205,17 @@ impl WgpuPainter {
     /// the GPU level and will emit a release-build warning via `tracing::warn!`.
     /// Use [`Self::clip_rect`] or [`Self::clip_rrect`] for hardware-accelerated
     /// clipping; [`Self::clip_rsuperellipse`] for iOS-squircle clips.
-    pub fn clip_path(&mut self, _path: &Path) {
+    ///
+    /// The [`ClipOutcome`] is what callers key behaviour on instead of asking
+    /// which shape they passed. `Clip::AntiAliasWithSaveLayer` opens an
+    /// offscreen only where a clip was actually installed — a group composite
+    /// needs an edge to composite against — and returning the answer from here
+    /// is what makes that decision correct the day this body starts installing
+    /// one, with no second place to remember. Issue #921 tracks the nearest
+    /// case: `ClipSuperellipseLayer` routes its squircle here and so does not
+    /// clip, even though `Self::clip_rsuperellipse` implements one.
+    #[must_use]
+    pub fn clip_path(&mut self, _path: &Path) -> ClipOutcome {
         // Path clipping requires stencil buffer or path tessellation
         // This is a complex feature that needs:
         // 1. Stencil buffer configuration in render pass
@@ -187,5 +242,21 @@ impl WgpuPainter {
              Use ClipRect or ClipRRect for hardware-accelerated clipping. \
              Path clipping requires stencil-buffer support"
         );
+        ClipOutcome::NothingInstalled
     }
+}
+
+/// Whether a clip call left a clip in force.
+///
+/// One value rather than a caller-side table of which shapes clip, because the
+/// table would be a second place to update: `WgpuPainter::clip_path` is the only
+/// call that can answer [`Self::NothingInstalled`] today, and the day it stops
+/// doing so every consumer's behaviour follows from the same return.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClipOutcome {
+    /// A clip is in force for subsequent draws.
+    Installed,
+    /// Nothing was installed: the call warned and returned, and subsequent
+    /// draws are unclipped by it.
+    NothingInstalled,
 }

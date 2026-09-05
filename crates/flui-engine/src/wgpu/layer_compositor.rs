@@ -65,6 +65,12 @@ pub(super) enum RestoreOutcome {
         /// and a `Morph` pass derived from this spec, rather than `DrawItem::OpacityLayer`.
         /// Forwarded from [`SavedLayer::image_filter`].
         image_filter: Option<ImageFilterSpec>,
+        /// The clip to apply to the COMPOSITE, when a
+        /// `Clip::AntiAliasWithSaveLayer` layer opened this one.
+        ///
+        /// Forwarded from [`SavedLayer::composite_clip`]; see that field for
+        /// why `Some(ResolvedClip::NONE)` is meaningful.
+        composite_clip: Option<super::state_stack::ResolvedClip>,
         /// Parent segment saved before `save_layer` — splice back into `current_segment`.
         saved_segment: DrawSegment,
         /// Parent draw order saved before `save_layer` — splice back into `draw_order`.
@@ -203,8 +209,8 @@ impl LayerCompositor {
     #[expect(
         clippy::too_many_arguments,
         reason = "all arguments are load-bearing: draw-order snapshot, opacity, tint, blend, \
-                  bounds, and filter must all be stored on the SavedLayer; the alternative \
-                  (a builder struct) adds complexity without a semantic boundary"
+                  bounds, filter, and composite clip must all be stored on the SavedLayer; the \
+                  alternative (a builder struct) adds complexity without a semantic boundary"
     )]
     pub(super) fn push_layer(
         &mut self,
@@ -215,6 +221,7 @@ impl LayerCompositor {
         layer_blend: BlendMode,
         bounds: Option<[f32; 4]>,
         filters: LayerFilterChain,
+        composite_clip: Option<super::state_stack::ResolvedClip>,
     ) {
         let saved = SavedLayer {
             saved_draw_order,
@@ -227,6 +234,7 @@ impl LayerCompositor {
             bounds,
             filters,
             image_filter: None, // set by save_layer_with_image_filter after push
+            composite_clip,
         };
         self.layer_stack.push(saved);
 
@@ -242,6 +250,30 @@ impl LayerCompositor {
     /// Returns `None` when the stack is empty (underflow is handled by `pop_layer`).
     pub(super) fn peek_layer_bounds(&self) -> Option<[f32; 4]> {
         self.layer_stack.last().and_then(|saved| saved.bounds)
+    }
+
+    /// Whether ANY currently-open layer routes through a bounds-growing image
+    /// filter.
+    ///
+    /// Those layers' restore arms carry only the layer's final `DrawSegment`
+    /// into `FilterOp::input` and discard `offscreen_items` wholesale — so a
+    /// `DrawItem::OpacityLayer` opened anywhere inside one takes not just its
+    /// own subtree but every sibling already flushed into the enclosing
+    /// layer's draw order. `Backend::push_clip_*` consults this and declines
+    /// the offscreen rather than open one that will be thrown away; degrading
+    /// `Clip::AntiAliasWithSaveLayer` to per-draw coverage loses an edge, and
+    /// opening it here loses the content.
+    ///
+    /// ANY open layer, not just the innermost: an intervening opacity layer
+    /// composites into its own `DrawItem::OpacityLayer`, which the filter arm
+    /// then discards just the same.
+    ///
+    /// The lifting of this is widening `FilterOp::input` to `Vec<DrawItem>` —
+    /// the same change the arms' own warnings ask for.
+    pub(super) fn inside_image_filter_layer(&self) -> bool {
+        self.layer_stack
+            .iter()
+            .any(|saved| saved.image_filter.is_some())
     }
 
     /// Mark the top-of-stack `SavedLayer` with an image filter spec.
@@ -339,11 +371,18 @@ impl LayerCompositor {
         // Morph (or future Blur) pass can run on the rendered offscreen before
         // pixels reach the parent.  The Reintegrate fast-path splices children
         // directly into the parent draw order and CANNOT apply an image filter.
+        //
+        // A `composite_clip` ALWAYS forces the composite path for the same
+        // reason: `Clip::AntiAliasWithSaveLayer` asks for the offscreen by
+        // name, and its clip's coverage is applied to the composite. Splicing
+        // the children back into the parent would drop both — the layer's
+        // isolation and, for a rounded clip, the clip itself.
         let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON
             || has_chroma
             || saved.layer_blend.is_advanced()
             || !saved.filters.is_empty()
-            || saved.image_filter.is_some();
+            || saved.image_filter.is_some()
+            || saved.composite_clip.is_some();
 
         if needs_composite {
             RestoreOutcome::Composite {
@@ -355,6 +394,7 @@ impl LayerCompositor {
                 layer_blend: saved.layer_blend,
                 layer_filter: saved.filters,
                 image_filter: saved.image_filter,
+                composite_clip: saved.composite_clip,
                 saved_segment: saved.saved_segment,
                 saved_draw_order: saved.saved_draw_order,
             }
@@ -414,6 +454,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         compositor.debug_assert_balanced();
     }
@@ -436,6 +477,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         // Inside the layer, children draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
@@ -456,6 +498,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         // Children inside the layer draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
@@ -473,6 +516,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         let _ = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!((compositor.current_opacity() - 0.8).abs() < f32::EPSILON);
@@ -489,6 +533,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Empty { .. }));
@@ -511,6 +556,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(),
+            None, // no clip layer
         );
         // Text-only segment: a stamped glyph range, zero geometry.
         let mut text_only = DrawSegment::new();
@@ -536,6 +582,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Composite { .. }));
@@ -552,6 +599,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(
@@ -571,6 +619,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(), // no filter
+            None,                    // no clip layer
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(
@@ -644,6 +693,7 @@ mod tests {
             BlendMode::SrcOver,
             None,
             LayerFilterChain::new(),
+            None, // no clip layer
         );
         // Set the image filter on the top-of-stack entry.
         compositor.set_top_image_filter(ImageFilterSpec::Morph {
@@ -656,6 +706,48 @@ mod tests {
         assert!(
             matches!(outcome, RestoreOutcome::Composite { .. }),
             "image_filter=Some(_) must force Composite outcome (G3 guardrail)"
+        );
+    }
+
+    /// A layer a `Clip::AntiAliasWithSaveLayer` clip opened must Composite, even
+    /// when every other field says `Reintegrate` would do.
+    ///
+    /// The mode asks for the offscreen by name: the clipped subtree has to
+    /// exist as a group before the clip's coverage multiplies it, and the
+    /// offscreen is also what isolates a destructive blend inside the clip from
+    /// the backdrop behind it. `Reintegrate` splices the children straight into
+    /// the parent draw order and does neither.
+    ///
+    /// `ResolvedClip::NONE` is the payload on purpose — that is what a
+    /// RECTANGULAR clip hands over, its scissor having already done the
+    /// clipping — so this pins that the routing keys on a clip having opened the
+    /// layer, not on the clip carrying an SDF.
+    #[test]
+    fn pop_layer_composites_a_layer_a_clip_opened_even_with_no_sdf_to_apply() {
+        let mut compositor = LayerCompositor::new();
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            1.0,             // opacity ~1.0 — would ordinarily Reintegrate
+            [1.0, 1.0, 1.0], // white tint — no chroma
+            BlendMode::SrcOver,
+            None,
+            LayerFilterChain::new(),
+            Some(super::super::state_stack::ResolvedClip::NONE),
+        );
+
+        let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
+        let RestoreOutcome::Composite { composite_clip, .. } = outcome else {
+            panic!(
+                "a clip-opened layer must Composite; Reintegrate would splice the \
+                 subtree back into the parent and lose the offscreen the mode asks for"
+            );
+        };
+        assert_eq!(
+            composite_clip,
+            Some(super::super::state_stack::ResolvedClip::NONE),
+            "the clip must reach the flush path unchanged — it is what the \
+             composite multiplies by"
         );
     }
 }

@@ -335,6 +335,7 @@ impl WgpuPainter {
             [1.0, 1.0, 1.0],
             paint.blend_mode,
             LayerFilterChain::new(),
+            None, // no clip layer opened this one
         );
     }
 
@@ -369,7 +370,66 @@ impl WgpuPainter {
             tint,
             flui_types::painting::BlendMode::SrcOver,
             LayerFilterChain::new(), // no filter — tint carries the color
+            None,                    // no clip layer opened this one
         );
+    }
+
+    /// Open an offscreen whose COMPOSITE carries `clip`.
+    ///
+    /// This is `Clip::AntiAliasWithSaveLayer`. Flutter renders the clipped
+    /// subtree into an offscreen so the group composites against the clip edge
+    /// ONCE; applying the coverage per draw instead makes the edge darker or
+    /// more opaque wherever the content overlaps itself, because each draw is
+    /// attenuated by the clip and then blended over an already-attenuated one.
+    ///
+    /// So the caller must NOT also install `clip` in the per-draw SDF slot —
+    /// `Painter::clip_rrect_at_composite` is the paired call that installs the
+    /// bounding scissor and hands the clip here instead.
+    ///
+    /// `ResolvedClip::NONE` is a legitimate argument: a rectangular clip is the
+    /// hardware scissor, which is binary and has already been applied to every
+    /// draw inside the offscreen, so its composite carries no SDF. The layer is
+    /// still opened — the offscreen is what the mode asks for, and it is what
+    /// isolates a destructive blend inside the clip from the backdrop behind
+    /// it.
+    ///
+    /// Opacity 1.0, white tint, `SrcOver`, no filter chain: the layer exists to
+    /// group, not to tint. `LayerCompositor::pop_layer` still routes it through
+    /// the composite path rather than `Reintegrate`, keyed on the clip being
+    /// present.
+    ///
+    /// `bounds` is the clip's DEVICE-space rect, and it is not optional the way
+    /// [`Self::save_layer`]'s is. Flutter passes the clip's bounds for this
+    /// mode for a reason (`clip.dart`'s `_clipAndPaint` takes them and hands
+    /// them to `canvas.saveLayer`); left at the viewport fallback, every
+    /// clipped group composites as a full-screen textured quad running the
+    /// clip SDF per fragment, however small the clip. Pass the SCISSOR the
+    /// clip just installed: it is already intersected with every ancestor
+    /// clip, and no content can exist outside it, so it cannot cut anything
+    /// the offscreen actually holds.
+    pub(crate) fn save_layer_clipped(
+        &mut self,
+        clip: super::super::state_stack::ResolvedClip,
+        bounds: Rect<Pixels>,
+    ) {
+        let layer_opacity = self.compositor.effective_layer_opacity(1.0);
+        self.save_layer_impl(
+            Some(bounds),
+            layer_opacity,
+            [1.0, 1.0, 1.0],
+            flui_types::painting::BlendMode::SrcOver,
+            LayerFilterChain::new(),
+            Some(clip),
+        );
+    }
+
+    /// Whether an enclosing `save_layer` routes through a bounds-growing image
+    /// filter, whose restore discards nested layers wholesale.
+    ///
+    /// See `LayerCompositor::inside_image_filter_layer` for what is discarded
+    /// and why a clip asks before opening an offscreen.
+    pub(crate) fn inside_image_filter_layer(&self) -> bool {
+        self.compositor.inside_image_filter_layer()
     }
 
     /// Like [`Self::save_layer`] but routes the layer through a per-pixel GPU
@@ -398,6 +458,7 @@ impl WgpuPainter {
             [1.0, 1.0, 1.0],
             flui_types::painting::BlendMode::SrcOver,
             smallvec![filter],
+            None, // no clip layer opened this one
         );
     }
 
@@ -427,6 +488,7 @@ impl WgpuPainter {
             [1.0, 1.0, 1.0],
             flui_types::painting::BlendMode::SrcOver,
             LayerFilterChain::new(), // no color-filter chain (image filter is separate)
+            None,                    // no clip layer opened this one
         );
         // Mark the freshly-pushed SavedLayer with the image filter spec so that
         // `restore_layer` knows to emit DrawItem::Filter instead of OpacityLayer.
@@ -443,7 +505,8 @@ impl WgpuPainter {
     /// [`Self::save_layer_with_tint`] / [`Self::save_layer_with_filter`] /
     /// [`Self::save_layer_with_image_filter`]:
     /// snapshot the draw state and push a layer with the given composite
-    /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, and color-filter chain.
+    /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, color-filter chain, and
+    /// composite clip.
     fn save_layer_impl(
         &mut self,
         bounds: Option<Rect<Pixels>>,
@@ -451,6 +514,7 @@ impl WgpuPainter {
         layer_tint_rgb: [f32; 3],
         layer_blend: flui_types::painting::BlendMode,
         filters: LayerFilterChain,
+        composite_clip: Option<super::super::state_stack::ResolvedClip>,
     ) {
         // Convert bounds to [x, y, w, h] if provided.
         let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
@@ -476,6 +540,37 @@ impl WgpuPainter {
             layer_blend,
             bounds_array,
             filters, // moved here after the trace
+            composite_clip,
+        );
+    }
+
+    /// Warn that a bounds-growing image-filter layer is dropping nested draw
+    /// items.
+    ///
+    /// `FilterOp::input` is one `DrawSegment`, not a `Vec<DrawItem>`, so the
+    /// Morph / Blur / Chain arms of [`Self::restore_layer`] carry only the
+    /// layer's final segment and discard everything else — which is not just
+    /// the nested layer's own subtree but every sibling already flushed into
+    /// the enclosing layer's draw order beside it.
+    ///
+    /// One function rather than three near-copies differing by a literal: they
+    /// drifted apart once already, and the loss they describe is the same loss.
+    ///
+    /// `Backend::opens_offscreen` declines to open a clip's offscreen inside
+    /// one of these layers precisely so a `Clip::AntiAliasWithSaveLayer` clip
+    /// cannot reach this path; what remains is an explicitly nested opacity
+    /// layer, which is the pre-existing limitation `FilterOp::input` has to
+    /// grow a `Vec<DrawItem>` to lift.
+    fn warn_discarded_offscreen_items(filter_kind: &str, offscreen_items: &[DrawItem]) {
+        if offscreen_items.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            filter_kind,
+            item_count = offscreen_items.len(),
+            "restore_layer: offscreen_items discarded; FilterOp::input only \
+             captures the final DrawSegment, so a nested opacity layer and \
+             everything flushed beside it inside this filter layer is lost"
         );
     }
 
@@ -529,6 +624,7 @@ impl WgpuPainter {
                 layer_blend,
                 layer_filter,
                 image_filter,
+                composite_clip,
                 saved_segment,
                 saved_draw_order,
             } => {
@@ -543,6 +639,17 @@ impl WgpuPainter {
                 if !parent_segment.is_empty() {
                     self.draw_order.push(DrawItem::Segment(parent_segment));
                 }
+
+                // A clip and an image filter never open the same layer:
+                // `save_layer_clipped` and `save_layer_with_image_filter` are
+                // separate entry points and neither sets the other's field. The
+                // arms below would silently drop a clip if they ever met, so say
+                // so here rather than leaving it to be discovered in pixels.
+                debug_assert!(
+                    composite_clip.is_none() || image_filter.is_none(),
+                    "BUG: a clip-opened layer carries no image filter — the \
+                     DrawItem::Filter arms cannot apply a composite clip"
+                );
 
                 // Route to DrawItem::Filter for bounds-growing image filters
                 // (Morph/Blur); fall through to DrawItem::OpacityLayer for
@@ -561,15 +668,7 @@ impl WgpuPainter {
                         // debug trace — the items are silently ignored because the
                         // current FilterOp::input is a single DrawSegment; a future
                         // task can extend FilterOp::input to Vec<DrawItem> if needed.
-                        if !offscreen_items.is_empty() {
-                            tracing::debug!(
-                                item_count = offscreen_items.len(),
-                                "restore_layer(Morph): offscreen_items discarded; \
-                                 FilterOp::input only captures the final DrawSegment. \
-                                 Nested opacity layers inside a morphology layer are \
-                                 not yet supported."
-                            );
-                        }
+                        Self::warn_discarded_offscreen_items("Morph", &offscreen_items);
                         // `_ = layer_opacity` — morphology is applied as a DrawItem::Filter
                         // that composites directly; the opacity field is inherited via
                         // `effective_layer_opacity(1.0)` in `save_layer_with_image_filter`
@@ -632,14 +731,7 @@ impl WgpuPainter {
                         //
                         // Growth via the shared `cumulative_growth` helper (one source
                         // of truth for Blur; `kernel_radius` uses Impeller's √3·σ rule).
-                        if !offscreen_items.is_empty() {
-                            tracing::debug!(
-                                item_count = offscreen_items.len(),
-                                "restore_layer(Blur): offscreen_items discarded; \
-                                 FilterOp::input only captures the final DrawSegment. \
-                                 Nested opacity layers inside a blur layer are not yet supported."
-                            );
-                        }
+                        Self::warn_discarded_offscreen_items("Blur", &offscreen_items);
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
                         // Content-AABB override (same rationale as the Morph arm above).
@@ -684,16 +776,7 @@ impl WgpuPainter {
                         // at record time by `flatten_compose` in `backend.rs`.
                         //
                         // Identical offscreen_items guard as Morph/Blur arms above.
-                        if !offscreen_items.is_empty() {
-                            tracing::debug!(
-                                item_count = offscreen_items.len(),
-                                pass_count = passes.len(),
-                                "restore_layer(Chain): offscreen_items discarded; \
-                                 FilterOp::input only captures the final DrawSegment. \
-                                 Nested opacity layers inside a Compose chain layer are \
-                                 not yet supported."
-                            );
-                        }
+                        Self::warn_discarded_offscreen_items("Chain", &offscreen_items);
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
                         // Content-AABB override (same rationale as the Morph/Blur arms above).
@@ -751,6 +834,7 @@ impl WgpuPainter {
                                 bounds: composite_bounds,
                                 blend: layer_blend,
                                 filters: layer_filter,
+                                composite_clip,
                             }));
                     }
                 }

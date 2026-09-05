@@ -799,6 +799,9 @@ mod gradient;
 mod layer;
 mod transform_clip;
 
+/// Whether a clip call left a clip in force — see [`WgpuPainter::clip_path`].
+pub use transform_clip::ClipOutcome;
+
 // ─── Shared growth helper ─────────────────────────────────────────────────────
 
 /// Compute the total grown-bounds expansion in pixels for a pass chain.

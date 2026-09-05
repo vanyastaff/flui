@@ -144,18 +144,25 @@ past the clip's edge. Its oracle samples the RED channel on purpose: the content
 cleared surface is white, so the two agree on blue and an assertion there would pass either way.
 
 The gap this recorded — the wgpu backend discarding a clip layer's `Clip` mode, leaving all three
-clipped modes pixel-identical — is **partly closed** (issue #848, still open). A **rounded** clip
-now honours `HardEdge` against `AntiAlias`, pinned by
-`a_rounded_clip_honours_hard_edge_and_anti_alias_differently`. Two modes remain deferred, each
-pinned by a test asserting the known-wrong equality so the divergence cannot go quiet:
+clipped modes pixel-identical — is **mostly closed** (issue #848). A **rounded** clip now honours
+`HardEdge` against `AntiAlias`, pinned by
+`a_rounded_clip_honours_hard_edge_and_anti_alias_differently`, and
+**`AntiAliasWithSaveLayer`** renders the clipped subtree into an offscreen so the clip's coverage
+multiplies the finished group once, pinned by
+`the_save_layer_mode_composites_the_clipped_group_once` against the value a single composed draw
+produces. One case remains deferred, pinned by a test asserting the known-wrong equality so the
+divergence cannot go quiet:
 
 - **`AntiAlias` on a rect** renders as `HardEdge`. A rect clip is the hardware scissor, and
   routing it to the SDF to feather it was tried and reverted: the SDF is a per-instance uniform,
   so the swap stopped clipping text (handed to glyphon with the scissor alone), stopped
   intersecting under nesting (one SDF slot, inner clears outer), and stopped being exact. Fixing
   it means a clip *stack* in the shader plus routing text through the same mask.
-- **`AntiAliasWithSaveLayer`** renders as `AntiAlias`; its offscreen group composite is
-  unimplemented, so the clip edge darkens wherever content overlaps itself.
+
+Two narrower facts about that mode are recorded in `crates/flui-engine/ARCHITECTURE.md`: the
+offscreen is declined where no clip was actually installed (a **path** clip installs none) and
+inside a bounds-growing image-filter layer (which discards nested layers), and its compositing
+bounds are the clip's own scissor rather than the whole viewport.
 
 The second part is the clips a child sees, and it landed with its consumer rather than ahead of
 it. Two hooks join the render-object trait family beside `excludes_semantics_subtree`:

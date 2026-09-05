@@ -943,6 +943,17 @@ impl GpuReplay {
             return Ok(());
         }
 
+        // The advanced-blend arm below composites through `flush_advanced_layer`,
+        // whose instance carries no clip slot — a clipped layer taking it would
+        // paint the whole offscreen unclipped. Only `save_layer_clipped` sets
+        // `composite_clip`, and it always asks for `SrcOver`, so the two are
+        // disjoint by construction; this is the assertion that keeps them so.
+        debug_assert!(
+            layer.composite_clip.is_none() || !layer.blend.is_advanced(),
+            "BUG: a clip-opened layer must composite with SrcOver — the advanced-blend \
+             path cannot carry its clip"
+        );
+
         let layer_tex = self.render_layer_to_offscreen(
             &mut layer,
             viewport_size,
@@ -1075,6 +1086,17 @@ impl GpuReplay {
             [uv_left, uv_top, uv_right, uv_bottom],
             tint,
         );
+        // A `Clip::AntiAliasWithSaveLayer` layer applies its clip HERE, to the
+        // finished group, and nowhere else — the draws inside the offscreen
+        // were left unclipped by `clip_rrect_at_composite` precisely so this
+        // multiply happens once. Every other layer kind leaves the slot clear.
+        let instance = match layer.composite_clip {
+            Some(clip) => {
+                use super::instancing::ClippableInstance as _;
+                instance.with_clip(clip)
+            }
+            None => instance,
+        };
         let _ = self.texture_batch.add(instance);
         // Opacity-layer composite onto main surface — full-viewport, no scissor.
         // Premultiplied: offscreen texels are premultiplied (see above).

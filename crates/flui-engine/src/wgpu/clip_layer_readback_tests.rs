@@ -15,13 +15,18 @@
 //!   (`a_rounded_clip_honours_hard_edge_and_anti_alias_differently`);
 //! - a **rect** clip does not — it is the hardware scissor under both modes,
 //!   because routing it to the SDF costs text clipping, nested intersection
-//!   and exactness (`Painter::clip_rect` has the full reasoning);
-//! - `AntiAliasWithSaveLayer` renders as `AntiAlias`; its offscreen group
-//!   composite is unimplemented.
-//!
-//! The last two are pinned by tests asserting the known-wrong equalities —
-//! deliberately, so each fails in the right place when it is fixed rather than
-//! the divergence going quiet. Both are tracked on #848, which stays open.
+//!   and exactness (`Painter::clip_rect` has the full reasoning). That one is
+//!   still pinned by a test asserting the known-wrong equality, deliberately,
+//!   so it fails in the right place when the shader grows a clip stack;
+//! - `AntiAliasWithSaveLayer` renders the clipped subtree into an offscreen and
+//!   applies the clip's coverage ONCE, to the finished group
+//!   (`the_save_layer_mode_composites_the_clipped_group_once`). The offscreen
+//!   is declined in two cases, neither keyed on the clip's shape: where no clip
+//!   was installed at all, and inside a bounds-growing image-filter layer,
+//!   which would discard it along with its siblings. Their tests are
+//!   `a_path_clip_opens_no_offscreen_because_it_installs_no_clip` and
+//!   `a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`;
+//!   both are reasoned in the crate's `ARCHITECTURE.md`.
 
 use flui_layer::{LayerTree, SceneBuilder};
 use flui_painting::{Canvas, Paint};
@@ -278,22 +283,243 @@ fn a_rect_clip_renders_the_same_under_both_modes_for_now() {
     );
 }
 
-/// `AntiAliasWithSaveLayer` currently renders as `AntiAlias`, which is WRONG.
+// ---------------------------------------------------------------------------
+// `AntiAliasWithSaveLayer`: the clip applies once, to the group
+// ---------------------------------------------------------------------------
+
+/// The rounded clip every scene in this section is drawn through.
 ///
-/// This asserts a known-wrong equality, which is normally how a defect gets
-/// frozen as a contract. It is here deliberately and narrowly: the mode's
-/// offscreen half is unimplemented, issue #848 stays open for it, and this is
-/// what fails — loudly, in the right place — when it lands. Without the test
-/// the divergence goes quiet; with it, the next person to implement the mode
-/// is told exactly where to look.
+/// Axis-aligned and on integer bounds so the straight edges land on pixel
+/// boundaries and only the four corners carry fractional coverage — the only
+/// place the two modes can differ at all.
+fn corner_clip() -> flui_types::geometry::RRect {
+    flui_types::geometry::RRect::from_rect_circular(
+        Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
+        px(16.0),
+    )
+}
+
+/// One picture inside [`corner_clip`] under `behavior`.
+fn clipped_tree(behavior: Clip, paint_content: impl FnOnce(&mut Canvas)) -> LayerTree {
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        builder.push_clip_rrect(corner_clip(), behavior);
+        let mut canvas = Canvas::new();
+        paint_content(&mut canvas);
+        builder.add_picture(canvas.finish());
+        builder.build();
+    }
+    tree
+}
+
+/// A hard-edged rect covering the whole surface.
 ///
-/// What is actually wrong: Flutter composites the clipped subtree once, as a
-/// group, against the clip edge. Applying coverage per draw makes the edge
-/// darker or more opaque wherever the content overlaps itself or blends
-/// non-trivially. A scene without such overlap is unaffected, which is why
-/// this is a real defect and not a visible one in the common case.
+/// Hard-edged and surface-sized so the paint contributes no partial coverage of
+/// its own: the clip's boundary is then the only fractional edge in the frame,
+/// and the difference these tests measure cannot come from anywhere else.
+fn full_surface(canvas: &mut Canvas, color: Color) {
+    canvas.draw_rect(
+        Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+        &Paint::fill(color).with_anti_alias(false),
+    );
+}
+
+/// The alpha both translucent draws carry.
+const DRAW_ALPHA: u8 = 200;
+
+/// TWO COINCIDENT TRANSLUCENT DRAWS inside the rounded clip.
+///
+/// The content shape is what makes this scene able to see the defect at all,
+/// and two conditions are easy to miss.
+///
+/// **One draw is never enough.** A single rect gives identical pixels whether
+/// it is clipped on its own or composited once as a group, so a scene built on
+/// one stays green either way.
+///
+/// **Overlapping draws are not enough either.** The two modes agree wherever
+/// the clip's coverage is 1 or 0, so the overlap has to sit ON the clip's
+/// fractional boundary. Two rects overlapping deep inside the clip differ by a
+/// level of quantization and nothing else.
+///
+/// Coincident full-surface draws satisfy both: the overlap is everywhere, the
+/// clip's whole feather included. Where coverage is `c` and both draws carry
+/// alpha `a`, per-draw clipping reaches `1 - (1 - a·c)²` while the group
+/// composite reaches `c · (2a - a²)`; the first is larger for every
+/// `0 < c < 1`, which is the "darker or more opaque edge" this mode exists to
+/// remove.
+fn two_overlapping_translucent_draws(behavior: Clip) -> LayerTree {
+    clipped_tree(behavior, |canvas| {
+        full_surface(canvas, Color::rgba(0, 0, 255, DRAW_ALPHA));
+        full_surface(canvas, Color::rgba(255, 0, 0, DRAW_ALPHA));
+    })
+}
+
+/// The value [`two_overlapping_translucent_draws`] must produce under
+/// `AntiAliasWithSaveLayer`: the two draws COMPOSED, then clipped once.
+///
+/// This is the expectation, not "some other number". A group composite applies
+/// the clip to the finished group, so the result along the feather is exactly a
+/// single draw of the composed colour at the same coverage — and a single draw
+/// is where the two modes agree (per-draw and group coverage differ only where
+/// draws overlap), which makes this reference a stable oracle produced by a
+/// code path other than the one under test.
+///
+/// Red over blue, both at `DRAW_ALPHA` (`a = 200/255 = 0.784314`):
+///
+/// ```text
+///   premul.r = 1 · a           = 0.784314
+///   premul.b = 1 · a · (1 - a) = 0.169166
+///   alpha    = a + a · (1 - a) = 0.953479
+///   straight = premul / alpha  = (0.822567, 0, 0.177418)
+///   as bytes                   = (210, 0, 45) at alpha 243
+/// ```
+fn the_two_draws_composed_once() -> LayerTree {
+    clipped_tree(Clip::AntiAlias, |canvas| {
+        full_surface(canvas, Color::rgba(210, 0, 45, 243));
+    })
+}
+
+/// The same two translucent draws, moved apart so they do NOT overlap.
+///
+/// The control for [`two_overlapping_translucent_draws`]: same colours, same
+/// alphas, same clip, same feather — only the overlap is gone. Each draw's own
+/// edges are hard and sit in the gap between them, so the clip's boundary is
+/// still the only fractional edge.
+fn two_disjoint_translucent_draws(behavior: Clip) -> LayerTree {
+    clipped_tree(behavior, |canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(30.0), px(SIDE as f32)),
+            &Paint::fill(Color::rgba(0, 0, 255, DRAW_ALPHA)).with_anti_alias(false),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(px(34.0), px(0.0), px(30.0), px(SIDE as f32)),
+            &Paint::fill(Color::rgba(255, 0, 0, DRAW_ALPHA)).with_anti_alias(false),
+        );
+    })
+}
+
+/// How far two renders of the same group may drift and still be the same
+/// picture.
+///
+/// Not slop for a fuzzy comparison: two named, bounded sources of error, both
+/// confined to the extreme fringe, and the bound is their sum rather than a
+/// number picked to make a run pass.
+///
+/// 1. The group's colour makes one round trip through an 8-bit offscreen, and
+///    the composed value is not exactly representable there (its premultiplied
+///    blue is 43.14/255) — under one level.
+/// 2. The composite is a textured quad, and that shader discards below 1/100
+///    coverage where a rect draw has no alpha test at all. A fringe pixel the
+///    rect path renders at up to `0.01 · 255` and the composite drops entirely
+///    is worth up to 2.55 levels.
+///
+/// Neither term depends on the rasterizer: any rasterizer quantizes to the same
+/// 8 bits and runs the same alpha test. The MEASUREMENT does — 2 on the
+/// overlapping scene and 1 on the disjoint one, both on this machine's Vulkan
+/// adapter. The merge-blocking `gpu-test` job runs on WARP, a different
+/// rasterizer whose feather may place fringe pixels differently, and this bound
+/// has not been checked there. It is stated as a derivation rather than fitted
+/// to the measurement for that reason; the difference these tests are looking
+/// for is 39, so what headroom the derivation leaves costs the oracle nothing.
+const COMPOSITE_TOLERANCE: i32 = 4;
+
+/// The floor the two modes must differ by for a scene to be able to tell them
+/// apart at all.
+///
+/// Two thirds of the 39 levels the coincident-draws scene actually produces at
+/// half coverage — enough margin for a rasterizer whose feather is narrower or
+/// lands on different pixel centres, and still an order of magnitude above
+/// [`COMPOSITE_TOLERANCE`], so a scene that only just clears it would still be
+/// saying something.
+const DISCRIMINATING_GAP: i32 = 25;
+
+/// The largest per-channel difference between two renders, and the pixel it is
+/// at.
+fn largest_channel_difference(left: &[u8], right: &[u8]) -> (i32, usize) {
+    (0..left.len())
+        .step_by(4)
+        .map(|byte| {
+            let worst = (0..4)
+                .map(|channel| {
+                    (i32::from(left[byte + channel]) - i32::from(right[byte + channel])).abs()
+                })
+                .max()
+                .unwrap_or(0);
+            (worst, byte / 4)
+        })
+        .max_by_key(|&(worst, _)| worst)
+        .unwrap_or((0, 0))
+}
+
+/// `AntiAliasWithSaveLayer` composites the clipped subtree ONCE, as a group.
+///
+/// Flutter renders the clipped subtree into an offscreen so the group
+/// composites against the clip edge once. Applying coverage per draw instead
+/// attenuates each draw by the clip and then blends it over an
+/// already-attenuated one, which makes the edge darker or more opaque wherever
+/// the content overlaps itself. A scene without such overlap is unaffected —
+/// see the control below — which is what makes this a real defect and not a
+/// visible one in the common case.
+///
+/// The expectation is a value, not an inequality: the group composite must
+/// equal a single draw of the two colours composed
+/// ([`the_two_draws_composed_once`]), everywhere, because that is what
+/// compositing once means.
 #[test]
-fn anti_alias_with_save_layer_currently_matches_plain_anti_alias() {
+fn the_save_layer_mode_composites_the_clipped_group_once() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |tree: &LayerTree| {
+        renderer
+            .render_layer_tree(tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a clipped tree")
+    };
+
+    let composited_once = render(&the_two_draws_composed_once());
+    let save_layer = render(&two_overlapping_translucent_draws(
+        Clip::AntiAliasWithSaveLayer,
+    ));
+    let per_draw = render(&two_overlapping_translucent_draws(Clip::AntiAlias));
+
+    // The premise, first: the two modes must be able to disagree on this scene
+    // at all. Without this the assertion below would pass against a renderer
+    // that had never heard of the mode — which is exactly how the tripwire this
+    // replaces came to fire on quantization instead of on the defect.
+    let (per_draw_gap, per_draw_pixel) = largest_channel_difference(&per_draw, &composited_once);
+    assert!(
+        per_draw_gap > DISCRIMINATING_GAP,
+        "premise: clipping each draw separately must visibly differ from \
+         compositing the group once — the clip's feather is where it shows. \
+         Largest difference was only {per_draw_gap} at pixel {per_draw_pixel}, \
+         so this scene cannot tell the two apart and proves nothing"
+    );
+
+    let (gap, pixel) = largest_channel_difference(&save_layer, &composited_once);
+    assert!(
+        gap <= COMPOSITE_TOLERANCE,
+        "`AntiAliasWithSaveLayer` must composite the clipped group once: every \
+         pixel has to match a single draw of the two colours composed, within \
+         {COMPOSITE_TOLERANCE}. Largest difference was {gap} at pixel {pixel}. \
+         A difference near {per_draw_gap} means the clip is being applied per \
+         draw again: the mode approximated by plain anti-alias, which is what \
+         the two modes producing IDENTICAL pixels used to mean"
+    );
+}
+
+/// The mode changes nothing where the content does not overlap itself.
+///
+/// The control, and it matters as much as the oracle above: per-draw coverage
+/// and a group composite agree wherever at most one draw covers a pixel, so a
+/// change that shifted anything else would be doing more than this mode asks
+/// for. Applying the clip twice — the obvious wrong way to wire the offscreen —
+/// fails here as well as above, because a double multiply moves a single draw
+/// too.
+#[test]
+fn the_save_layer_mode_leaves_non_overlapping_content_alone() {
     let Ok(renderer) = HeadlessRenderer::new() else {
         eprintln!("skipping: no GPU adapter available");
         return;
@@ -301,58 +527,566 @@ fn anti_alias_with_save_layer_currently_matches_plain_anti_alias() {
 
     let render = |behavior: Clip| {
         renderer
-            .render_layer_tree(&overlapping_translucent_scene(behavior), (SIDE, SIDE))
+            .render_layer_tree(&two_disjoint_translucent_draws(behavior), (SIDE, SIDE))
             .expect("the headless capture path must rasterize a clipped tree")
     };
 
-    assert_eq!(
-        render(Clip::AntiAliasWithSaveLayer),
-        render(Clip::AntiAlias),
-        "the save-layer mode is approximated by plain anti-alias until its \
-         offscreen composite lands (#848); when that changes, this test is the \
-         one to update"
+    // The premise: this scene's content reaches the clip's fractional boundary,
+    // where the modes could differ if the change were not confined. Content
+    // that never touched the feather would make the assertion below vacuous.
+    // The hard-vs-smooth axis is independent of the mode under test.
+    let (feather, _) =
+        largest_channel_difference(&render(Clip::HardEdge), &render(Clip::AntiAlias));
+    assert!(
+        feather > DISCRIMINATING_GAP,
+        "premise: the disjoint draws must reach the clip's feather — thresholding \
+         it should visibly change them. Largest difference was only {feather}, so \
+         this scene has no fractional coverage to be confined to"
+    );
+
+    let (gap, pixel) = largest_channel_difference(
+        &render(Clip::AntiAliasWithSaveLayer),
+        &render(Clip::AntiAlias),
+    );
+    assert!(
+        gap <= COMPOSITE_TOLERANCE,
+        "the same two draws, moved apart so they do not overlap, must render \
+         the same under both modes — the offscreen exists to fix overlap and \
+         nothing else. Largest difference was {gap} at pixel {pixel}, against a \
+         tolerance of {COMPOSITE_TOLERANCE} (see `COMPOSITE_TOLERANCE`)"
     );
 }
 
-/// Two OVERLAPPING TRANSLUCENT draws inside a rounded clip.
+/// A red backdrop, then `paint_inside` within a clip in `behavior`.
 ///
-/// The content shape is the whole point, and the first version of the
-/// save-layer test got it wrong. A single opaque rect gives identical pixels
-/// whether each draw is clipped on its own or the group is composited once
-/// through an offscreen — so a tripwire built on that scene would stay green
-/// after the mode is implemented, which is the one thing it must not do.
-///
-/// Overlapping translucency does differ. Per-draw coverage multiplies the
-/// clip's alpha into each draw separately, so where the two overlap — and
-/// along the clip's own fractional edge — it is applied twice; a group
-/// composite applies it once, to the finished group. That is precisely what
-/// `AntiAliasWithSaveLayer` exists to get right.
-fn overlapping_translucent_scene(behavior: Clip) -> LayerTree {
+/// The backdrop is a picture of its own, OUTSIDE the clip layer, which is what
+/// makes the offscreen observable: the layer composites back with `SrcOver`, so
+/// a destructive blend inside it cannot reach a ground painted outside it,
+/// while without the layer the two share a pass and it can.
+fn inside_a_clip(
+    behavior: Clip,
+    push_clip: impl FnOnce(&mut SceneBuilder<'_>, Clip),
+    paint_inside: impl FnOnce(&mut Canvas),
+) -> LayerTree {
     let mut tree = LayerTree::new();
     {
         let mut builder = SceneBuilder::new(&mut tree);
-        builder.push_clip_rrect(
-            flui_types::geometry::RRect::from_rect_circular(
-                Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
-                px(16.0),
-            ),
+        builder.push_offset(flui_types::Offset::ZERO);
+
+        let mut canvas = Canvas::new();
+        full_surface(&mut canvas, Color::rgb(255, 0, 0));
+        builder.add_picture(canvas.finish());
+
+        push_clip(&mut builder, behavior);
+        let mut canvas = Canvas::new();
+        paint_inside(&mut canvas);
+        builder.add_picture(canvas.finish());
+        builder.pop().expect("the clip is open");
+        builder.build();
+    }
+    tree
+}
+
+/// A full-surface eraser.
+fn erase_everything(canvas: &mut Canvas) {
+    canvas.draw_rect(
+        Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+        &Paint::fill(Color::rgb(0, 0, 0))
+            .with_anti_alias(false)
+            .with_blend_mode(flui_types::painting::BlendMode::Clear),
+    );
+}
+
+/// An unbounded green fill — the shape `RenderPhysicalModel` emits.
+///
+/// That render object is the mode's only production consumer, and its fill goes
+/// through `Canvas::draw_paint`, which has no geometry of its own:
+/// `Backend::render_paint` expands it to the whole viewport, so its extent is
+/// decided entirely by the clip.
+fn fill_everything(canvas: &mut Canvas) {
+    canvas.draw_paint(&Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false));
+}
+
+/// A RECT clip in `AntiAliasWithSaveLayer` opens the offscreen, and the
+/// offscreen isolates — while the clip goes on clipping.
+///
+/// The rect clip's own pixels cannot show the mode: the clip is the hardware
+/// scissor, which is binary, so applying it once to the group and once per draw
+/// give the same answer for every `SrcOver` scene. Isolation is the half that
+/// remains observable, and it is the half `Clip`'s own contract calls a
+/// semantic change — so it is what this pins. Without it the mode would be
+/// silently unhonoured for rect clips, which is the defect #848 opened on.
+///
+/// TWO scenes, because one cannot carry both oracles: a fill drawn after the
+/// eraser hides exactly the pixels the isolation oracle reads, and an eraser
+/// alone leaves nothing whose confinement could be measured.
+#[test]
+fn a_rect_clip_in_the_save_layer_mode_isolates_a_destructive_blend() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let clip_rect = |builder: &mut SceneBuilder<'_>, behavior: Clip| {
+        builder.push_clip_rect(
+            Rect::from_xywh(px(16.0), px(16.0), px(32.0), px(32.0)),
             behavior,
         );
-        let mut canvas = Canvas::new();
-        // Half-transparent, and straddling the clip's corners on purpose so
-        // the overlap sits where the clip's own coverage is fractional.
-        canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(40.0), px(40.0)),
-            &Paint::fill(Color::rgba(0, 0, 255, 128)),
+    };
+    let render = |behavior: Clip, paint_inside: fn(&mut Canvas)| {
+        renderer
+            .render_layer_tree(
+                &inside_a_clip(behavior, clip_rect, paint_inside),
+                (SIDE, SIDE),
+            )
+            .expect("the headless capture path must rasterize the scene")
+    };
+
+    // Scene 1, isolation. The premise first: without the layer the eraser
+    // reaches the backdrop, so the assertion after it is not vacuous.
+    let per_draw = sample(&render(Clip::AntiAlias, erase_everything), 32, 32);
+    assert!(
+        per_draw[0] < 8,
+        "premise: with no offscreen the eraser must reach the backdrop through \
+         the clip, got {per_draw:?}"
+    );
+    let isolated = sample(
+        &render(Clip::AntiAliasWithSaveLayer, erase_everything),
+        32,
+        32,
+    );
+    assert!(
+        isolated[0] > 248 && isolated[1] < 8,
+        "`AntiAliasWithSaveLayer` must render the clipped subtree into an \
+         offscreen, so an eraser inside the clip cannot reach a backdrop \
+         painted outside it — the layer composites back with `SrcOver`. Got \
+         {isolated:?}, which is what a clip that never opened the layer leaves"
+    );
+
+    // Scene 2, the clip still clips. Nothing above would notice a rect clip
+    // whose scissor stopped reaching the offscreen: an eraser is invisible
+    // outside the clip either way. An unbounded fill is not.
+    let filled = render(Clip::AntiAliasWithSaveLayer, fill_everything);
+    let inside = sample(&filled, 32, 32);
+    assert!(
+        inside[1] > 128 && inside[0] < 64,
+        "premise: the unbounded fill must land inside the clip, got {inside:?}"
+    );
+    let outside = sample(&filled, 4, 4);
+    assert!(
+        outside[0] > 248 && outside[1] < 64,
+        "the backdrop must survive OUTSIDE the clip: the fill has no geometry \
+         of its own, so only the clip keeps it off (4, 4), got {outside:?}"
+    );
+}
+
+/// A PATH clip opens no offscreen BECAUSE it installs no clip.
+///
+/// The offscreen is granted on `ClipOutcome`, not on which `push_clip_*` was
+/// entered, so this is a consequence rather than an exemption:
+/// `WgpuPainter::clip_path` warns and returns without touching any state, and a
+/// group composite has no edge to composite against.
+///
+/// Both halves are asserted, precondition first. A test that pinned only the
+/// consequence would keep passing after its premise was repaired — and that
+/// repair is imminent: issue #921 records that `ClipSuperellipseLayer` routes
+/// its squircle through this same call and so does not clip at all, even though
+/// `GpuStateStack::clip_rsuperellipse` implements one. When `clip_path` starts
+/// installing, the precondition assertion fails first and says exactly what
+/// changed; the consequence follows on its own, with no code to update.
+#[test]
+fn a_path_clip_opens_no_offscreen_because_it_installs_no_clip() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |behavior: Clip| {
+        let tree = inside_a_clip(
+            behavior,
+            |builder, behavior| {
+                let mut path = flui_types::painting::Path::new();
+                path.add_rect(Rect::from_xywh(px(16.0), px(16.0), px(32.0), px(32.0)));
+                builder.push_clip_path(path, behavior);
+            },
+            erase_everything,
         );
+        renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize the scene")
+    };
+
+    // The PRECONDITION the rest of this test rests on, asserted rather than
+    // assumed: `clip_path` installs nothing, so its content is unclipped.
+    // (32, 32) is inside the path; (2, 2) is far outside it and must be painted
+    // all the same. Read on the BLUE channel — the ground is white, so the red
+    // backdrop is the one that discriminates.
+    let outside_the_path = sample(&render(Clip::AntiAliasWithSaveLayer), 2, 2);
+    assert!(
+        outside_the_path[2] < 8,
+        "precondition: `Painter::clip_path` installs no clip, so the backdrop \
+         is painted outside the path too, got {outside_the_path:?}. If this \
+         fails, path clipping now works (#921) — and the offscreen below \
+         follows from `ClipOutcome` with no code change, so update this test, \
+         not the backend"
+    );
+
+    let escaped = sample(&render(Clip::AntiAliasWithSaveLayer), 32, 32);
+    assert!(
+        escaped[0] < 8,
+        "with no clip installed there is no edge for a group composite, so no \
+         offscreen is opened and an eraser inside still reaches the backdrop, \
+         got {escaped:?}"
+    );
+    assert_eq!(
+        render(Clip::AntiAliasWithSaveLayer),
+        render(Clip::AntiAlias),
+        "a path clip installs no clip at all, so its modes cannot differ"
+    );
+}
+
+/// The clip's subtree and a sibling drawn before it, inside a blur layer.
+///
+/// `with_filter` decides whether the pair is wrapped; everything else is
+/// identical, so the wrapped and unwrapped renders differ only by the filter
+/// layer.
+fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        builder.push_offset(flui_types::Offset::ZERO);
+        if with_filter {
+            builder.push_blur(1.0);
+        }
+
+        // A sibling FLUSHED BEFORE the clip. Opening an offscreen finalises the
+        // enclosing layer's pending segment into its draw order, so this is
+        // discarded alongside the clip's own subtree, not just beside it.
+        let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_xywh(px(24.0), px(24.0), px(40.0), px(40.0)),
-            &Paint::fill(Color::rgba(255, 0, 0, 128)),
+            Rect::from_xywh(px(0.0), px(0.0), px(24.0), px(SIDE as f32)),
+            &Paint::fill(Color::rgb(255, 0, 0)).with_anti_alias(false),
+        );
+        builder.add_picture(canvas.finish());
+
+        builder.push_clip_rect(
+            Rect::from_xywh(px(32.0), px(0.0), px(32.0), px(SIDE as f32)),
+            Clip::AntiAliasWithSaveLayer,
+        );
+        let mut canvas = Canvas::new();
+        full_surface(&mut canvas, Color::rgb(0, 0, 255));
+        builder.add_picture(canvas.finish());
+        builder.pop().expect("the clip is open");
+
+        if with_filter {
+            builder.pop().expect("the blur is open");
+        }
+        builder.build();
+    }
+    tree
+}
+
+/// Inside a bounds-growing image-filter layer the mode DEGRADES; it does not
+/// delete the content.
+///
+/// Those layers carry only their final `DrawSegment` into `FilterOp::input` and
+/// discard `offscreen_items`. A `DrawItem::OpacityLayer` opened inside one is
+/// therefore thrown away — and so is every sibling already flushed into the
+/// enclosing layer's draw order, because opening the layer finalises the pending
+/// segment first. `Backend::opens_offscreen` declines the offscreen there and
+/// falls back to per-draw coverage: losing an edge beats losing the picture.
+///
+/// Both samples matter. The blue is the clip's own subtree; the red is the
+/// sibling drawn BEFORE it, which is the half that makes this a data-loss bug
+/// rather than a clipping one. The red sample doubles as the pin that the
+/// degraded path still CLIPS: blue is `(0, 0, 255)`, so a leak past the clip
+/// rect would take the red channel down with it.
+///
+/// The other direction — that the refusal is narrow, and an offscreen is still
+/// opened everywhere else — is
+/// `a_rect_clip_in_the_save_layer_mode_isolates_a_destructive_blend`, which
+/// fails the moment `opens_offscreen` declines unconditionally.
+///
+/// What is NOT pinned, deliberately: that the degraded content inside a filter
+/// layer takes per-draw coverage rather than group coverage. The two differ
+/// only along a clip's fractional edge under overlapping translucency, and a
+/// blur pass smears exactly that edge — there is no sample point here that
+/// could tell them apart, so no assertion pretends to.
+#[test]
+fn a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |with_filter: bool| {
+        renderer
+            .render_layer_tree(&a_clip_beside_a_sibling(with_filter), (SIDE, SIDE))
+            .expect("the headless capture path must rasterize the scene")
+    };
+
+    // Each colour is read on the channel the WHITE ground does not share with
+    // it: the ground is `(255, 255, 255)`, so "blue is present" asserted on the
+    // blue channel passes against a blank frame and proves nothing. Red content
+    // is read on BLUE, blue content on RED.
+    let red_is_present = |pixel: [u8; 4]| pixel[2] < 64;
+    let blue_is_present = |pixel: [u8; 4]| pixel[0] < 64;
+
+    // The premise: unwrapped, the scene paints both. Without this the wrapped
+    // assertions would pass against a scene that never painted anything.
+    let unwrapped = render(false);
+    let (sibling_x, clipped_x) = (8, 48);
+    let unwrapped_sibling = sample(&unwrapped, sibling_x, 32);
+    let unwrapped_clipped = sample(&unwrapped, clipped_x, 32);
+    assert!(
+        red_is_present(unwrapped_sibling) && blue_is_present(unwrapped_clipped),
+        "premise: outside a filter layer the scene paints a red sibling and a \
+         blue clipped subtree, got {unwrapped_sibling:?} and {unwrapped_clipped:?}"
+    );
+
+    let wrapped = render(true);
+    let sibling = sample(&wrapped, sibling_x, 32);
+    let clipped = sample(&wrapped, clipped_x, 32);
+    assert!(
+        blue_is_present(clipped),
+        "the clip's own subtree must survive inside a filter layer, got \
+         {clipped:?} — the white ground. Gone means an offscreen was opened \
+         where the enclosing layer discards nested draw items"
+    );
+    assert!(
+        red_is_present(sibling),
+        "the SIBLING drawn before the clip must survive too, got {sibling:?}. \
+         Opening an offscreen finalises the enclosing layer's pending segment \
+         into its draw order first, so it is discarded with the clip"
+    );
+}
+
+/// An ancestor's per-draw clip still clips the draws INSIDE a save-layer
+/// offscreen.
+///
+/// `clip_rrect_at_composite` installs only the bounding scissor and leaves the
+/// per-draw SDF slot alone. That is what lets the group composite apply its own
+/// coverage once — and it is also the whole reason nesting works: an enclosing
+/// `Clip::AntiAlias` is still in the slot, and every draw that goes into the
+/// offscreen is still subject to it.
+///
+/// The nesting test cannot see this, because there the inner clip sits strictly
+/// inside the outer and no content ever reaches the outer's round. Here the
+/// inner save-layer clip is LARGER than the outer, with square corners, so its
+/// own composite excludes nothing and the outer's rounded corner is the only
+/// boundary in the frame. If the ancestor's SDF stopped applying inside the
+/// offscreen, the outer's bounding-box scissor would be all that remained and
+/// the corner would fill in.
+#[test]
+fn an_ancestor_clip_still_clips_the_draws_inside_a_save_layer_offscreen() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        builder.push_clip_rrect(corner_clip(), Clip::AntiAlias);
+        // Square corners and larger than the outer clip: this one's composite
+        // must not be what keeps the content off the sample point.
+        builder.push_clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+                px(0.0),
+            ),
+            Clip::AntiAliasWithSaveLayer,
+        );
+        let mut canvas = Canvas::new();
+        full_surface(&mut canvas, Color::rgb(0, 0, 255));
+        builder.add_picture(canvas.finish());
+        builder.build();
+    }
+
+    let pixels = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize a nested clipped tree");
+
+    // The premise: content inside the outer round is painted, so the corner
+    // assertion is about the clip and not about an empty frame.
+    let centre = sample(&pixels, 32, 32);
+    assert!(
+        centre[0] < 8 && centre[2] > 248,
+        "premise: content inside the outer clip must be painted blue, got {centre:?}"
+    );
+
+    // (9, 9) is inside the outer clip's bounding box — so its scissor admits
+    // it — and 20.5 px from the corner arc's centre (24, 24), radius 16, so
+    // only the ancestor's SDF can keep it clear. Read on RED: the content is
+    // blue and the ground is white, and they agree on blue.
+    let past_the_ancestor_round = sample(&pixels, 9, 9);
+    assert!(
+        past_the_ancestor_round[0] > 248,
+        "an enclosing `Clip::AntiAlias` must still clip every draw inside the \
+         offscreen — `clip_rrect_at_composite` leaves its SDF slot in place for \
+         exactly this. Got {past_the_ancestor_round:?} at (9, 9), which is the \
+         outer clip's bounding box with its rounded corner ignored"
+    );
+}
+
+/// The outer clip of the nesting scene. Its rounded corner is what
+/// `NESTED_OUTSIDE_OUTER_ROUND` samples.
+fn nesting_outer_clip() -> flui_types::geometry::RRect {
+    flui_types::geometry::RRect::from_rect_circular(
+        Rect::from_xywh(px(4.0), px(4.0), px(56.0), px(56.0)),
+        px(8.0),
+    )
+}
+
+/// The inner clip of the nesting scene, wholly inside [`nesting_outer_clip`].
+fn nesting_inner_clip() -> flui_types::geometry::RRect {
+    flui_types::geometry::RRect::from_rect_circular(
+        Rect::from_xywh(px(16.0), px(16.0), px(32.0), px(32.0)),
+        px(8.0),
+    )
+}
+
+/// Inside the INNER clip's bounding box, outside its rounded corner.
+///
+/// The corner arc is centred at `(24, 24)` with radius 8, and this pixel's
+/// centre `(17.5, 17.5)` is 9.19 away — outside. Only the inner clip's own
+/// coverage can keep the blue off it.
+const NESTED_OUTSIDE_INNER_ROUND: (u32, u32) = (17, 17);
+
+/// Inside the OUTER clip's bounding box, outside its rounded corner.
+///
+/// Arc centred at `(12, 12)` radius 8; this pixel's centre `(5.5, 5.5)` is 9.19
+/// away. Only the outer clip's own coverage can keep the red band off it.
+const NESTED_OUTSIDE_OUTER_ROUND: (u32, u32) = (5, 5);
+
+/// Outside BOTH clips, and outside the marker-free zone the two above sample.
+const NESTED_AFTER_BOTH_POPS: (u32, u32) = (1, 1);
+
+/// Two nested clips of mixed modes, each with its own content, and a marker
+/// drawn after both pops.
+///
+/// Three draws, one per thing that can go wrong:
+///
+/// - **blue**, inside both clips — the inner clip's coverage is the only thing
+///   that keeps it off `NESTED_OUTSIDE_INNER_ROUND`;
+/// - **red**, a band between the two clips, drawn after the inner pop — the
+///   outer clip's coverage is the only thing that keeps it off
+///   `NESTED_OUTSIDE_OUTER_ROUND`;
+/// - **green**, a marker in the surface corner drawn after BOTH pops — only a
+///   fully released stack leaves it unclipped.
+///
+/// A save-layer clip applies its coverage at the composite, so a `pop_clip`
+/// that fails to close the layer never applies it at all and the corresponding
+/// draw leaks past its round. A `pop_clip` that closes a layer that was never
+/// opened underflows the compositor and composites the OTHER clip's layer early
+/// — before its own content is drawn — which leaks the same way.
+fn nested_mixed_clip_tree(outer: Clip, inner: Clip) -> LayerTree {
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        // An inert container, so the marker below is a SIBLING of the clips and
+        // not an orphan: the first layer pushed becomes the root, and a leaf
+        // added on an empty stack is never attached to the tree at all.
+        builder.push_offset(flui_types::Offset::ZERO);
+
+        builder.push_clip_rrect(nesting_outer_clip(), outer);
+        builder.push_clip_rrect(nesting_inner_clip(), inner);
+        let mut canvas = Canvas::new();
+        full_surface(&mut canvas, Color::rgb(0, 0, 255));
+        builder.add_picture(canvas.finish());
+        builder.pop().expect("the inner clip is open");
+
+        // A band between the two clips: below the outer's top edge, above the
+        // inner's. Disjoint from the blue, so neither can hide the other.
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(14.0)),
+            &Paint::fill(Color::rgb(255, 0, 0)).with_anti_alias(false),
+        );
+        builder.add_picture(canvas.finish());
+        builder.pop().expect("the outer clip is open");
+
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(4.0), px(4.0)),
+            &Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false),
         );
         builder.add_picture(canvas.finish());
         builder.build();
     }
     tree
+}
+
+/// Nested clips of MIXED modes each apply their own coverage, and both release.
+///
+/// `pop_clip` serves all three `push_clip_*` variants and takes no argument, so
+/// nothing in the call can say whether the push it balances opened an offscreen
+/// — only `Backend`'s frame stack can. Nesting the two modes is what makes a
+/// desynchronised stack observable: each pop would close the other's frame.
+///
+/// Both orders run, because only one of the two pops is the save-layer one in
+/// each, and a stack that is wrong in one direction can be right in the other.
+#[test]
+fn nested_clips_of_mixed_modes_close_in_the_order_they_opened() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    for (outer, inner) in [
+        (Clip::AntiAlias, Clip::AntiAliasWithSaveLayer),
+        (Clip::AntiAliasWithSaveLayer, Clip::AntiAlias),
+    ] {
+        let pixels = renderer
+            .render_layer_tree(&nested_mixed_clip_tree(outer, inner), (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a nested clipped tree");
+        let at = |(x, y): (u32, u32)| sample(&pixels, x, y);
+        let modes = format!("outer={outer:?} inner={inner:?}");
+
+        // The premise: both draws land somewhere. Without it every assertion
+        // below would pass against a renderer that painted nothing at all.
+        let inside_both = at((32, 32));
+        assert!(
+            inside_both[0] < 8 && inside_both[2] > 248,
+            "premise: content inside both clips must be painted blue ({modes}), \
+             got {inside_both:?}"
+        );
+        let inside_outer_only = at((32, 8));
+        assert!(
+            inside_outer_only[0] > 248 && inside_outer_only[2] < 8,
+            "premise: the band between the two clips must be painted red \
+             ({modes}), got {inside_outer_only:?}"
+        );
+
+        // The inner clip's own coverage.
+        let past_inner_round = at(NESTED_OUTSIDE_INNER_ROUND);
+        assert!(
+            past_inner_round[2] > 248 && past_inner_round[0] > 248,
+            "the blue must not reach past the INNER clip's rounded corner \
+             ({modes}), got {past_inner_round:?} at \
+             {NESTED_OUTSIDE_INNER_ROUND:?}. A save-layer clip applies its \
+             coverage at the composite, so blue here means the layer its push \
+             opened was never closed"
+        );
+
+        // The outer clip's own coverage, on content drawn after the inner pop.
+        let past_outer_round = at(NESTED_OUTSIDE_OUTER_ROUND);
+        assert!(
+            past_outer_round[0] > 248 && past_outer_round[2] > 248,
+            "the red band must not reach past the OUTER clip's rounded corner \
+             ({modes}), got {past_outer_round:?} at \
+             {NESTED_OUTSIDE_OUTER_ROUND:?}. Red here means the inner pop \
+             closed the outer clip's frame"
+        );
+
+        // Both pops released.
+        let after_both_pops = at(NESTED_AFTER_BOTH_POPS);
+        assert!(
+            after_both_pops[1] > 128 && after_both_pops[0] < 64,
+            "the marker drawn AFTER both pops must reach the corner unclipped \
+             ({modes}), got {after_both_pops:?} at {NESTED_AFTER_BOTH_POPS:?}"
+        );
+    }
 }
 
 /// A ROUNDED clip: hard thresholds its corners, smooth feathers them.
