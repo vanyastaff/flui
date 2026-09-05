@@ -195,23 +195,6 @@ impl ElementBuildContext {
             current_id = parent_id;
         }
     }
-
-    /// The lazy sliver child this element lives inside, if any.
-    ///
-    /// Walks self-then-ancestors for the first element carrying a
-    /// `sliver_slot`. That is the sparse child: a lazy host stamps
-    /// `Some(logical_index)` on its direct children, component elements pass it
-    /// through, and any render element resets it to `None` for its own
-    /// descendants — so the nearest ancestor answering `Some` is exactly the
-    /// child the sliver would evict. Self-inclusive, because an item that owns
-    /// a render node directly (no per-item `RepaintBoundary`) *is* that child.
-    ///
-    /// Innermost wins, which is what nesting requires: an item inside a list
-    /// inside another list holds the inner one.
-    fn enclosing_sparse_child(&self) -> Option<ElementId> {
-        let tree = self.tree.read();
-        enclosing_sparse_child_in(&tree, self.element_id)
-    }
 }
 
 impl BuildContext for ElementBuildContext {
@@ -258,8 +241,11 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn keep_alive_lease(&self) -> Option<crate::owner::KeepAliveLease> {
-        let held = self.enclosing_sparse_child()?;
-        Some(self.owner.read().keep_alive.acquire(self.element_id, held))
+        // Refuse a lease outside a lazy sliver: nothing would ever keep it
+        // alive, and a silently inert guard is worse than `None`. The child
+        // itself is resolved at eviction time, not recorded here.
+        crate::tree::enclosing_sparse_child(&self.tree.read(), self.element_id)?;
+        Some(self.owner.read().keep_alive.acquire(self.element_id))
     }
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
@@ -676,35 +662,6 @@ pub(crate) struct BuildCapabilities {
     pub(crate) keep_alive: crate::owner::KeepAliveHolds,
 }
 
-/// The lazy sliver child `from` lives inside — the direct child of the nearest
-/// element that hosts sparse children.
-///
-/// **Not** the nearest ancestor carrying a `sliver_slot`. A component element
-/// passes its slot down to its own children, so with `repaint_boundaries(false)`
-/// an item and every component it builds beneath it all carry the same value;
-/// picking the nearest would name a descendant that `SparseChildren` has never
-/// heard of, and the hold would silently do nothing. Nesting resolves correctly
-/// for the same reason: the *inner* list's host is found first.
-///
-/// Self-inclusive, because an item whose parent is the host is itself that
-/// child. Ancestors are read through `element_opt`, so a node extracted by
-/// `build_scope`'s take/put window is a clean miss rather than a panic — the
-/// contract for every walk reachable during a build.
-fn enclosing_sparse_child_in(tree: &ElementTree, from: ElementId) -> Option<ElementId> {
-    let mut current_id = from;
-    loop {
-        let parent_id = tree.get(current_id)?.parent()?;
-        let hosts = tree
-            .get(parent_id)?
-            .element_opt()
-            .is_some_and(crate::view::ElementBase::hosts_sparse_children);
-        if hosts {
-            return Some(current_id);
-        }
-        current_id = parent_id;
-    }
-}
-
 pub(crate) struct BuildCtx<'b> {
     element_id: ElementId,
     depth: usize,
@@ -819,8 +776,8 @@ impl BuildContext for BuildCtx<'_> {
         // inside `build`/`perform_layout`/`paint`, exactly as it is for
         // `text_input_handle` and `focus_manager`, which are acquired from
         // `init_state` through this same context.
-        let held = enclosing_sparse_child_in(self.tree, self.element_id)?;
-        Some(self.capabilities.keep_alive.acquire(self.element_id, held))
+        crate::tree::enclosing_sparse_child(self.tree, self.element_id)?;
+        Some(self.capabilities.keep_alive.acquire(self.element_id))
     }
 
     fn focus_manager(&self) -> Rc<FocusManager> {

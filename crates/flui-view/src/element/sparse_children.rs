@@ -184,12 +184,16 @@ impl SparseChildren {
         // assertion in the band walk. Flutter draws the same line — a hold is
         // consulted by `collectGarbage`, while a removal goes through
         // `removeChild` and destroys unconditionally.
+        // Resolved once for the pass, not per candidate: each holder costs one
+        // walk to its nearest sparse host, and resolving it *now* rather than
+        // caching it at acquisition is what makes a holder grafted between two
+        // lists re-target instead of pinning the row it left.
+        let held = owner.keep_alive.held_children(tree);
         let out_of_band: Vec<usize> = self
             .by_logical_index
             .iter()
             .filter(|(logical_index, child)| {
-                (**logical_index < first || **logical_index >= last)
-                    && !owner.keep_alive.is_held(**child)
+                (**logical_index < first || **logical_index >= last) && !held.contains(child)
             })
             .map(|(logical_index, _)| *logical_index)
             .collect();
@@ -201,12 +205,13 @@ impl SparseChildren {
         // reports it: a leaked hold shows up as a list that quietly stops
         // reclaiming memory. Emitting the count here is the one place that
         // sees both halves.
-        let held = owner.keep_alive.held_count();
-        if held > 0 {
+        let holders = owner.keep_alive.holder_count();
+        if holders > 0 {
             tracing::trace!(
                 band = ?(first, last),
                 resident = self.by_logical_index.len(),
-                held,
+                holders,
+                held = held.len(),
                 "SparseChildren retained a band with keep-alive holds"
             );
         }
@@ -289,6 +294,8 @@ impl SparseChildren {
             /// Keyless and outside the band: left to the band eviction.
             carried_over: bool,
         }
+        // Same one-walk-per-holder resolution the band eviction uses.
+        let held = owner.keep_alive.held_children(tree);
         let mut residents: Vec<Resident> = self
             .by_logical_index
             .iter()
@@ -304,8 +311,7 @@ impl SparseChildren {
                 // its data said when it left the band, and would deny it the
                 // update that might release the hold. Held children therefore
                 // reconcile like in-band residents.
-                let carried_over =
-                    key.is_none() && !in_band(index) && !owner.keep_alive.is_held(id);
+                let carried_over = key.is_none() && !in_band(index) && !held.contains(&id);
                 Resident {
                     index,
                     id,

@@ -25,8 +25,13 @@
 //!   disposed"). A `#[must_use]` guard makes that unrepresentable.
 //! - **N holders are a refcount**, which is what Flutter's handle map emulates
 //!   by hand.
-//! - **Identity is the lease**, not an index. A held child whose logical index
-//!   changes under reconcile keeps its hold, because nothing is keyed by index.
+//! - **Nothing is cached but the holder.** A lease records the element that took
+//!   it; the child it keeps alive is resolved from the tree when eviction asks.
+//!   So a held child whose logical index changes under reconcile keeps its hold,
+//!   and so does one whose *host* changes — a `GlobalKey` graft from one list
+//!   into another re-targets with no bookkeeping, where a cached target would
+//!   pin the row the holder left (forever, since nothing would release it) while
+//!   leaving the row it moved to evictable.
 //!
 //! # Where the parked child goes: nowhere
 //!
@@ -43,6 +48,8 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::ElementId;
+
+use crate::tree::ElementTree;
 use smallvec::SmallVec;
 
 /// Holders of one child. Two inline slots: a row with more than a couple of
@@ -51,8 +58,16 @@ type HolderIds = SmallVec<[ElementId; 2]>;
 
 #[derive(Debug, Default)]
 struct Inner {
-    /// Held sparse child -> the holders currently keeping it alive.
-    holders: HashMap<ElementId, HolderIds>,
+    /// Live holder -> how many leases it currently holds.
+    ///
+    /// Deliberately **not** `held -> holders`. Caching the target at
+    /// acquisition pinned the sparse child the holder happened to live in
+    /// then, which a `GlobalKey` graft between two lists makes wrong in both
+    /// directions at once: the row the holder left stays pinned forever, and
+    /// the row it moved to is evictable despite something asking to keep it.
+    /// Resolving the target when eviction asks makes relocation free the same
+    /// way keying by element rather than index does.
+    holders: HashMap<ElementId, usize>,
 }
 
 /// The keep-alive table owned by one element tree.
@@ -66,8 +81,8 @@ pub(crate) struct KeepAliveHolds {
 }
 
 impl KeepAliveHolds {
-    /// Registers `holder` as keeping `held` alive, returning the lease whose
-    /// drop releases it.
+    /// Registers one lease held by `holder`, returning the guard whose drop
+    /// releases it.
     ///
     /// Each acquisition is counted independently, **including repeats by the
     /// same holder**. Deduplicating instead would break the ordinary
@@ -82,51 +97,48 @@ impl KeepAliveHolds {
     /// then remove the only entry — leaving a live lease whose child is no
     /// longer held, evicted on the next band move. Counting makes the pair
     /// balance: `+1` then `-1` leaves the hold standing.
-    pub(crate) fn acquire(&self, holder: ElementId, held: ElementId) -> KeepAliveLease {
-        self.inner
-            .borrow_mut()
-            .holders
-            .entry(held)
-            .or_default()
-            .push(holder);
+    ///
+    /// The child being held is deliberately not recorded — see [`Inner`].
+    pub(crate) fn acquire(&self, holder: ElementId) -> KeepAliveLease {
+        *self.inner.borrow_mut().holders.entry(holder).or_insert(0) += 1;
         KeepAliveLease {
             inner: Rc::downgrade(&self.inner),
             holder,
-            held,
         }
     }
 
-    /// Whether anything is currently keeping `child` alive.
+    /// The sparse children currently kept alive, resolved through `tree`.
     ///
-    /// This is the whole question band eviction asks.
-    pub(crate) fn is_held(&self, child: ElementId) -> bool {
-        self.inner.borrow().holders.contains_key(&child)
+    /// Called once per band eviction rather than per candidate child: the
+    /// holder set is small (it is the items a user asked to keep), and each
+    /// resolution is one walk to the nearest sparse host. A holder whose
+    /// element is gone from the tree resolves to nothing and is skipped, so a
+    /// stale entry cannot pin a row.
+    pub(crate) fn held_children(&self, tree: &ElementTree) -> HolderIds {
+        let inner = self.inner.borrow();
+        let mut held = HolderIds::new();
+        for holder in inner.holders.keys() {
+            if let Some(child) = crate::tree::enclosing_sparse_child(tree, *holder)
+                && !held.contains(&child)
+            {
+                held.push(child);
+            }
+        }
+        held
     }
 
-    /// Drops every hold `holder` had, whichever child it was holding.
+    /// Drops every lease `holder` had.
     ///
     /// Called when an element unmounts. A lease's own `Drop` normally does
     /// this, but an element can be torn down without its state being dropped
-    /// in the same step, and a stranded hold would pin a child forever.
+    /// in the same step, and a stranded holder would keep resolving to
+    /// whatever sparse child it last sat under.
     pub(crate) fn forget_holder(&self, holder: ElementId) {
-        let mut inner = self.inner.borrow_mut();
-        inner.holders.retain(|_, holders| {
-            holders.retain(|candidate| *candidate != holder);
-            !holders.is_empty()
-        });
+        self.inner.borrow_mut().holders.remove(&holder);
     }
 
-    /// Drops every hold on `child`.
-    ///
-    /// Called when the child is genuinely destroyed — a data-source removal,
-    /// which destroys regardless of holds — so the table cannot retain an id
-    /// the tree no longer has.
-    pub(crate) fn forget_held(&self, child: ElementId) {
-        self.inner.borrow_mut().holders.remove(&child);
-    }
-
-    /// How many children are currently held. Diagnostics and tests.
-    pub(crate) fn held_count(&self) -> usize {
+    /// How many holders are live. Diagnostics and tests.
+    pub(crate) fn holder_count(&self) -> usize {
         self.inner.borrow().holders.len()
     }
 }
@@ -167,15 +179,16 @@ pub struct KeepAliveLease {
     /// Weak, so a lease outliving its element tree is inert rather than
     /// keeping the table alive.
     inner: Weak<RefCell<Inner>>,
+    /// The element that took the lease. The child it keeps alive is resolved
+    /// from this when eviction asks, never cached — see [`Inner`].
     holder: ElementId,
-    held: ElementId,
 }
 
 impl KeepAliveLease {
-    /// The lazy sliver child this lease keeps alive.
+    /// The element holding this lease.
     #[must_use]
-    pub fn held(&self) -> ElementId {
-        self.held
+    pub fn holder(&self) -> ElementId {
+        self.holder
     }
 }
 
@@ -185,17 +198,14 @@ impl Drop for KeepAliveLease {
             return;
         };
         let mut inner = inner.borrow_mut();
-        let Some(holders) = inner.holders.get_mut(&self.held) else {
-            return;
-        };
-        // Exactly one entry — this lease's own. Removing every entry for the
-        // holder would release a replacement lease taken before this one was
-        // dropped, which is the reacquisition case `acquire` documents.
-        if let Some(position) = holders.iter().position(|c| *c == self.holder) {
-            holders.remove(position);
-        }
-        if holders.is_empty() {
-            inner.holders.remove(&self.held);
+        // Decrement by one — this lease's own. Clearing the holder outright
+        // would release a replacement taken before this one dropped, which is
+        // the reacquisition case `acquire` documents.
+        if let Some(count) = inner.holders.get_mut(&self.holder) {
+            *count -= 1;
+            if *count == 0 {
+                inner.holders.remove(&self.holder);
+            }
         }
     }
 }
@@ -211,17 +221,14 @@ mod tests {
     #[test]
     fn a_lease_holds_until_it_is_dropped() {
         let holds = KeepAliveHolds::default();
-        let child = id(1);
-        assert!(!holds.is_held(child));
+        let holder = id(2);
+        assert_eq!(holds.holder_count(), 0);
 
-        let lease = holds.acquire(id(2), child);
-        assert!(holds.is_held(child));
+        let lease = holds.acquire(holder);
+        assert_eq!(holds.holder_count(), 1);
 
         drop(lease);
-        assert!(
-            !holds.is_held(child),
-            "dropping the lease releases the hold"
-        );
+        assert_eq!(holds.holder_count(), 0, "dropping the lease releases it");
     }
 
     /// The multi-client law: releasing one holder must not release the others.
@@ -229,15 +236,14 @@ mod tests {
     #[test]
     fn the_last_holder_releases_not_the_first() {
         let holds = KeepAliveHolds::default();
-        let child = id(1);
-        let first = holds.acquire(id(2), child);
-        let second = holds.acquire(id(3), child);
+        let first = holds.acquire(id(2));
+        let second = holds.acquire(id(3));
 
         drop(first);
-        assert!(holds.is_held(child), "one holder released, another remains");
+        assert_eq!(holds.holder_count(), 1, "one released, another remains");
 
         drop(second);
-        assert!(!holds.is_held(child));
+        assert_eq!(holds.holder_count(), 0);
     }
 
     /// The reacquisition idiom must not drop the hold.
@@ -246,59 +252,39 @@ mod tests {
     /// dropping the old one. If acquisitions by one holder were deduplicated,
     /// the new lease would add nothing and the old one's `Drop` would remove
     /// the only entry — leaving a live lease over an unheld child, evicted on
-    /// the next band move. This is the ordering, spelled out.
+    /// the next band move. This is that ordering, spelled out.
     #[test]
     fn reacquiring_before_dropping_the_old_lease_keeps_the_hold() {
         let holds = KeepAliveHolds::default();
-        let child = id(1);
         let holder = id(2);
 
-        let mut lease = Some(holds.acquire(holder, child));
-        // The exact ordering of `self.lease = ctx.keep_alive_lease()`: the
-        // replacement is built while the old one is still alive, and the old
-        // one drops only after it lands.
-        let replacement = holds.acquire(holder, child);
+        let mut lease = Some(holds.acquire(holder));
+        // The replacement is built while the old one is still alive, and the
+        // old one drops only after it lands.
+        let replacement = holds.acquire(holder);
         drop(lease.replace(replacement));
-        assert!(holds.is_held(child), "the hold survives the swap");
+        assert_eq!(holds.holder_count(), 1, "the hold survives the swap");
 
         drop(lease.take());
-        assert!(
-            !holds.is_held(child),
-            "and the last lease still releases it"
-        );
+        assert_eq!(holds.holder_count(), 0, "and the last lease releases it");
     }
 
-    /// An element can be torn down without its state dropping in the same step;
-    /// the hold must not survive the holder.
+    /// An element can be torn down without its state dropping in the same
+    /// step; the holder must not survive it.
     #[test]
-    fn forgetting_a_holder_releases_its_hold() {
+    fn forgetting_a_holder_releases_every_lease_it_had() {
         let holds = KeepAliveHolds::default();
-        let child = id(1);
-        let lease = holds.acquire(id(2), child);
+        let holder = id(2);
+        let first = holds.acquire(holder);
+        let second = holds.acquire(holder);
 
-        holds.forget_holder(id(2));
-        assert!(!holds.is_held(child));
+        holds.forget_holder(holder);
+        assert_eq!(holds.holder_count(), 0);
 
-        // The lease's own drop must then be harmless, not a double-release.
-        drop(lease);
-        assert_eq!(holds.held_count(), 0);
-    }
-
-    /// A data-source removal destroys the child regardless of holds, so the
-    /// table must not retain an id the tree no longer has.
-    #[test]
-    fn forgetting_a_held_child_clears_every_holder() {
-        let holds = KeepAliveHolds::default();
-        let child = id(1);
-        let a = holds.acquire(id(2), child);
-        let b = holds.acquire(id(3), child);
-
-        holds.forget_held(child);
-        assert_eq!(holds.held_count(), 0);
-
-        drop(a);
-        drop(b);
-        assert_eq!(holds.held_count(), 0);
+        // The leases' own drops must then be harmless, not an underflow.
+        drop(first);
+        drop(second);
+        assert_eq!(holds.holder_count(), 0);
     }
 
     /// A lease that outlives its tree is inert, not a dangling write.
@@ -306,7 +292,7 @@ mod tests {
     fn a_lease_outliving_its_table_drops_harmlessly() {
         let lease = {
             let holds = KeepAliveHolds::default();
-            holds.acquire(id(2), id(1))
+            holds.acquire(id(2))
         };
         drop(lease);
     }

@@ -201,7 +201,7 @@ impliedMode})`).
 | `Keep alive Listenable has its listener removed once called` | **Retired**, replaced by construction: `Drop` *is* the release, pinned by a lease dropped with no explicit call |
 | `keepAlive set to true before initState` | **Retired**: it pins Flutter's post-frame fallback for when the `KeepAlive` child element does not exist yet. FLUI's table has no such ordering — a lease taken in `init_state` is effective in that same frame |
 | `AutomaticKeepAlive with SliverKeepAliveWidget` | **Dropped, recorded**: it exists to keep `RenderSliverWithKeepAliveMixin` usable by third-party slivers, an artifact of the parent-data design this ADR deletes |
-| `AutomaticKeepAlive double 2` (reparenting a holder between slivers) | **Named gap.** Not ported; the lease would still name the old sparse child |
+| `AutomaticKeepAlive double 2` (reparenting a holder between slivers) | **Correct by construction, not by test.** A lease records only its *holder*; the sparse child is resolved from the tree when eviction asks, so a `GlobalKey` graft between two lists re-targets with no bookkeeping. There is no cached target that could go stale. Not pinned by a test: the unit fixture cannot host a real adaptor (`hosts_sparse_children` lives on the behavior, which only `SliverAdaptorBehavior` sets), and a two-list graft at the widget level is not yet written |
 | `…and widget goes out of scope` (250 items, jump past the whole window) | **Named gap.** Not ported; would catch a guard that only works for incremental scrolls |
 
 Deliberately out of scope, named rather than silently dropped: `_SelectionKeepAlive`
