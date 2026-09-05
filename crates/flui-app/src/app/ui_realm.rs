@@ -4661,6 +4661,71 @@ mod tests {
         );
     }
 
+    /// A closed presentation refuses hit tests even while its tree is held.
+    ///
+    /// Under `SharedRealm` the realm outlives any one presentation, so the
+    /// realm ticket alone cannot say "closed". Neither can the pipeline's
+    /// allocation: `BuildContext::pipeline_owner()` hands out a STRONG
+    /// `PipelineCell`, so a widget that stored one keeps the tree alive past
+    /// the close — and a probe reading liveness from the allocation would go
+    /// on answering from a detached tree with nothing to catch it.
+    ///
+    /// Hence the presentation owns a token, and this test holds the tree the
+    /// way such a widget would.
+    #[test]
+    fn a_closed_presentations_hit_test_refuses_while_its_tree_is_still_held() {
+        use flui_interaction::InteractionDispatchError;
+        use flui_types::{Offset, Pixels};
+
+        let mut realm = UiRealm::for_test();
+        let second_id = realm.install_second_presentation_for_test();
+        let closing_id = realm.presentation_id();
+
+        let handle = realm
+            .presentations
+            .get(closing_id)
+            .expect("installed")
+            .widgets()
+            .with_build_owner(|owner| owner.hit_test_handle().cloned())
+            .expect("assembly installs a handle");
+
+        // Stand in for a widget that stored `pipeline_owner()`: a strong
+        // reference outliving the presentation it came from.
+        let retained_tree = realm
+            .presentations
+            .get(closing_id)
+            .expect("installed")
+            .pipeline()
+            .clone();
+
+        let at = Offset::new(Pixels(5.0), Pixels(5.0));
+        assert!(
+            realm
+                .interaction_lane
+                .enter(|| handle.hit_test_at(at))
+                .is_ok(),
+            "precondition: the handle answers while its presentation is open"
+        );
+
+        assert!(realm.close_presentation_entered(closing_id));
+        assert!(
+            realm.presentations.get(second_id).is_some(),
+            "the sibling presentation keeps the realm -- and its ticket -- alive, \
+             which is what makes the realm check unable to catch this"
+        );
+
+        assert_eq!(
+            realm
+                .interaction_lane
+                .enter(|| handle.hit_test_at(at))
+                .unwrap_err(),
+            InteractionDispatchError::OwnerGone,
+            "a closed presentation must report itself gone even though its \
+             tree is still allocated and its realm is still live"
+        );
+        drop(retained_tree);
+    }
+
     #[test]
     fn two_realms_coexist_same_thread() {
         use std::cell::Cell;
