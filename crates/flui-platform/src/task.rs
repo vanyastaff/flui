@@ -12,11 +12,11 @@
 //! - `impl Future for Task<T>` — await the result
 //!
 //! There is deliberately no priority knob. One existed — a `Priority` enum
-//! that `spawn_with_priority` took and discarded, since tokio schedules
-//! fairly regardless — and an argument the callee ignores is worse than no
-//! argument at all: it reads as a scheduling guarantee the runtime never
-//! made. Priority-aware dispatch (Windows ThreadPool, macOS GCD) can
-//! reintroduce the knob when it can honour it.
+//! that `spawn_with_priority` took and discarded, because tokio exposes no
+//! task-priority scheduling for it to route to — and an argument the callee
+//! ignores is worse than no argument at all: it reads as a scheduling
+//! guarantee the runtime never made. Priority-aware dispatch (Windows
+//! ThreadPool, macOS GCD) can reintroduce the knob when it can honour it.
 
 use std::{
     future::Future,

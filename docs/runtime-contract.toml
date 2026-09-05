@@ -1089,7 +1089,8 @@ ADR-0049) is the lanes' shipped production consumer -- \
 not exist yet and errors the moment a wasm consumer lands. \
 (2) DELIVERED: `flui_platform::Priority` is retired. It was public and \
 purely informational -- `spawn_with_priority` took it and discarded it, \
-since tokio schedules fairly regardless -- so it satisfied the \
+because tokio exposes no task-priority scheduling to route it to -- so it \
+satisfied the \
 "tested behavior or not public" criterion in neither direction. It is \
 unbundled from `BackgroundExecutor`/`Task`, which stay removal-targets \
 with real consumers to migrate (flui-assets decode, Windows prompt \
