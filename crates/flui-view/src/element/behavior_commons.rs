@@ -85,25 +85,29 @@ where
 /// Keep-alive is deliberately absent from this: a hold lives on the element
 /// side, keyed by element identity, so relocation carries it with no help from
 /// the stamp (ADR-0056).
-pub(crate) fn stamp_sliver_logical_index(
+pub(crate) fn stamp_sliver_slot(
     owner: &mut flui_rendering::pipeline::PipelineOwner,
     render_id: flui_foundation::RenderId,
-    logical_index: usize,
+    slot: flui_rendering::parent_data::SliverSlot,
 ) {
     use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
     let Some(node) = owner.render_tree_mut().get_mut(render_id) else {
         return;
     };
+    // Both halves, always together. Writing only the logical index on the
+    // update path would leave a stale semantic position beside a fresh logical
+    // one, which is the exact drift `SliverSlot` exists to make impossible.
     if let Some(existing) = node
         .parent_data_mut()
         .and_then(|pd| pd.downcast_mut::<SliverMultiBoxAdaptorParentData>())
     {
-        existing.index = logical_index;
+        existing.index = slot.logical;
+        existing.semantic_index = slot.semantic;
         return;
     }
-    node.set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
-        logical_index,
-    )));
+    node.set_parent_data(Box::new(
+        SliverMultiBoxAdaptorParentData::with_semantic_index(slot.logical, slot.semantic),
+    ));
 }
 
 /// Run a user `build()` closure under [`std::panic::catch_unwind`] and,
@@ -513,11 +517,11 @@ mod tests {
 #[cfg(test)]
 mod stamp_tests {
     use flui_objects::RenderSizedBox;
-    use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
+    use flui_rendering::parent_data::{SliverMultiBoxAdaptorParentData, SliverSlot};
     use flui_rendering::pipeline::PipelineOwner;
     use flui_types::geometry::px;
 
-    use super::stamp_sliver_logical_index;
+    use super::stamp_sliver_slot;
 
     #[test]
     fn stamp_installs_fresh_parent_data_on_a_bare_node() {
@@ -528,15 +532,15 @@ mod stamp_tests {
                 Some(px(10.0)),
                 Some(px(10.0)),
             )));
-        stamp_sliver_logical_index(&mut owner, id, 7);
+        stamp_sliver_slot(&mut owner, id, SliverSlot::identity(7));
         let pd = owner
             .render_tree()
             .get(id)
             .and_then(|node| node.parent_data())
             .and_then(|pd| pd.downcast_ref::<SliverMultiBoxAdaptorParentData>())
-            .map(|pd| pd.index)
+            .map(|pd| (pd.index, pd.semantic_index))
             .expect("stamp must install SliverMultiBoxAdaptorParentData");
-        assert_eq!(pd, 7);
+        assert_eq!(pd, (7, Some(7)));
     }
 
     /// A relocated child arrives already laid out under its previous host:
@@ -560,7 +564,7 @@ mod stamp_tests {
             .expect("node")
             .set_parent_data(Box::new(seeded));
 
-        stamp_sliver_logical_index(&mut owner, id, 9);
+        stamp_sliver_slot(&mut owner, id, SliverSlot::identity(9));
 
         let pd = owner
             .render_tree()
@@ -571,5 +575,44 @@ mod stamp_tests {
             .expect("parent data must still be SliverMultiBoxAdaptorParentData");
         assert_eq!(pd.0, 9);
         assert_eq!(pd.1, 42.0, "layout_offset must survive a re-stamp");
+    }
+
+    /// A re-stamp rewrites BOTH halves of the slot.
+    ///
+    /// Rewriting only the logical index would leave a stale semantic position
+    /// beside a fresh logical one — a row announcing the place its predecessor
+    /// held. The update path is where that can happen, since the insert path
+    /// builds both halves from one value and cannot disagree with itself.
+    #[test]
+    fn a_re_stamp_rewrites_the_semantic_index_too() {
+        let mut owner = PipelineOwner::new();
+        let id = owner
+            .render_tree_mut()
+            .insert_box(Box::new(RenderSizedBox::new(
+                Some(px(10.0)),
+                Some(px(10.0)),
+            )));
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("node")
+            .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(3)));
+
+        // The relocated child is not a set member at its new position.
+        stamp_sliver_slot(&mut owner, id, SliverSlot::unindexed(9));
+
+        let pd = owner
+            .render_tree()
+            .get(id)
+            .and_then(|node| node.parent_data())
+            .and_then(|pd| pd.downcast_ref::<SliverMultiBoxAdaptorParentData>())
+            .map(|pd| (pd.index, pd.semantic_index))
+            .expect("parent data must still be SliverMultiBoxAdaptorParentData");
+        assert_eq!(
+            pd,
+            (9, None),
+            "a re-stamp must rewrite the semantic index as well as the logical \
+             one; `Some(3)` here is the stale position the previous stamp left"
+        );
     }
 }

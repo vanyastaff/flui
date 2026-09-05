@@ -64,22 +64,46 @@ boundary in this assembler, so a wrapper above the container would index the nod
 above the row — the sliver — instead of the row. Flutter's delegates wrap outside because its
 merge runs the other way.
 
-**Not done, and why it is not a silent gap:** deriving each item's position automatically from
-the index the sliver already stamps in `SliverMultiBoxAdaptorParentData`. It is the better design
-— zero extra nodes, and an index the band walk keeps in step with the row's real position rather
-than one captured at build time — and a working version measured the wrapper cost directly (a
-three-item `ListView` went from 8 render nodes to 11). It is not shipped because
-`SliverList::separated` interleaves items at even logical indices with separators at odd ones, so
-a derivation from the logical index alone announces separators as members and gives the real items
-positions 1, 3, 5. Correcting that needs a semantic index carried beside the logical one through
-`ElementCore::sliver_slot` and both stamp sites, which is its own change. Tracked on #837.
+**Now done: the position is derived, not wrapped.** Each item's position comes from the index the
+sliver already stamps in `SliverMultiBoxAdaptorParentData` — zero extra nodes, and an index the
+band walk keeps in step with the row's real position rather than one captured at build time. (The
+wrapper cost was measured before this landed: a three-item `ListView` went from 8 render nodes to
+11.)
 
-**Replacement test:** `an_indexed_item_publishes_its_position_in_the_set`
-(`crates/flui-widgets/tests/semantics.rs`), asserting on the published AccessKit nodes rather than
-the framework configuration — the whole chain existed in pieces before this and connected to
-nothing, so the near end proves nothing about what a reader receives. It also asserts that
-*nothing* publishes a set size, so the deferral is a checked state rather than an oversight and
-the assertion fails the moment one is added without revisiting this entry. Plus
+What blocked it was that a derivation from the *logical* index alone announces non-members as
+members — `ListView.separated` interleaves separators at odd logical indices, so the real items
+would get positions 1, 3, 5. The fix is a semantic index carried BESIDE the logical one:
+`SliverSlot { logical, semantic }` is minted by the host, inherited through however many component
+elements sit between it and the child's first render descendant, and stamped together at both
+stamp sites. `semantic: None` marks a child that occupies a logical index without being a member.
+The two halves are one value precisely because the failure being prevented is their drifting
+apart.
+
+`IndexedSemantics` and `RenderIndexedSemantics` remain public and **take precedence**: the stamped
+index is applied only where nothing declared one, and only *after* the fragment fold, since an
+`IndexedSemantics` inside the row is a non-boundary configuration absorbed by the row during that
+fold. Applying it earlier makes the stamp win — `absorb` does not overwrite a value the parent
+already holds — which would make hand-indexed content inside a lazy list impossible.
+
+FLUI has no `separated` constructor yet; the threading landed first so that constructor's author
+inherits a hook they must answer rather than a 1:1 assumption they must discover. The delegate-
+supplied rule (`semantic_index_callback`, `semantic_index_offset`) is still open on #837.
+
+**Replacement tests**, all in `crates/flui-widgets/tests/semantics.rs` and all asserting on the
+published AccessKit nodes rather than the framework configuration — the whole chain existed in
+pieces before this and connected to nothing, so the near end proves nothing about what a reader
+receives:
+
+- `an_indexed_item_publishes_its_position_in_the_set` — the explicit `IndexedSemantics` path. It
+  also asserts that *nothing* publishes a set size, so that deferral stays a checked state rather
+  than an oversight, and the assertion fails the moment one is added without revisiting this entry.
+- `a_lazy_child_publishes_its_position_without_an_indexed_semantics_wrapper` — the derived path,
+  on rows carrying no wrapper at all.
+- `an_explicit_index_overrides_the_one_the_sliver_stamped` — precedence. Its declared indices are
+  the REVERSE of the stamped ones, so it fails whichever way the precedence is wrong; with them
+  equal it would pass against both orders.
+
+Plus
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 (`crates/flui-objects/tests/render_object_harness.rs`), including that an unchanged index requests
 no semantics update.

@@ -38,6 +38,7 @@
 //! }
 //! ```
 
+use flui_rendering::parent_data::SliverSlot;
 use std::{
     any::TypeId,
     marker::PhantomData,
@@ -100,7 +101,7 @@ struct CoreState {
     /// `SliverMultiBoxAdaptorParentData` at mount) and hands `None` to its
     /// own children. This is the slot Flutter's `RenderObjectElement`
     /// inherits down to `didAdoptChild`.
-    sliver_slot: Option<usize>,
+    sliver_slot: Option<SliverSlot>,
 
     /// This element's own `ElementId`, stamped at slab insertion.
     self_id: Option<ElementId>,
@@ -546,13 +547,13 @@ where
     /// between a sparse sliver host and the render object that will carry
     /// that index. See `CoreState::sliver_slot`.
     #[inline]
-    pub fn sliver_slot(&self) -> Option<usize> {
+    pub fn sliver_slot(&self) -> Option<SliverSlot> {
         self.state.sliver_slot
     }
     /// Seed (or clear) the inherited lazy-sliver slot. Called by the slab at
     /// the same seams as [`Self::set_parent_render_id`].
     #[inline]
-    pub fn set_sliver_slot(&mut self, slot: Option<usize>) {
+    pub fn set_sliver_slot(&mut self, slot: Option<SliverSlot>) {
         self.state.sliver_slot = slot;
     }
 

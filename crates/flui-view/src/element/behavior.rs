@@ -4,6 +4,7 @@
 //! view type (Stateless, Proxy, Stateful, Render). Behaviors encapsulate the
 //! view-specific logic while the unified Element handles all common operations.
 
+use flui_rendering::parent_data::SliverSlot;
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 use flui_foundation::{ElementId, ListenerId, RenderId};
@@ -277,6 +278,23 @@ where
     /// [`ElementBase::child_sliver_slot`]: crate::view::ElementBase::child_sliver_slot
     fn hosts_sparse_children(&self) -> bool {
         false
+    }
+
+    /// The slot a sparse host hands its child at `logical` — both the logical
+    /// index and the child's position in the semantic set.
+    ///
+    /// Only consulted when [`Self::hosts_sparse_children`] answers `true`. The
+    /// default is the 1:1 mapping, which is every delegate FLUI ships: one set
+    /// member per logical index. A delegate that materialises non-members —
+    /// separators, the shape `ListView.separated` takes — overrides this and
+    /// answers [`SliverSlot::unindexed`] for them, so a screen reader counts
+    /// the members and nothing else.
+    ///
+    /// The two halves are minted together here, and travel together from here
+    /// on, because the failure they exist to prevent is precisely a semantic
+    /// position that drifts from the row it describes.
+    fn sliver_slot_for_child(&self, logical: usize) -> SliverSlot {
+        SliverSlot::identity(logical)
     }
 
     /// The parent-data this element contributes to its render child's nearest
@@ -858,12 +876,8 @@ where
                 // its logical index the moment its first render descendant
                 // attaches; the sliver rebuilds its `logical -> dense slot`
                 // map from this parent data on every layout pass.
-                if let Some(logical_index) = sliver_slot {
-                    super::behavior_commons::stamp_sliver_logical_index(
-                        pipeline_owner,
-                        render_id,
-                        logical_index,
-                    );
+                if let Some(slot) = sliver_slot {
+                    super::behavior_commons::stamp_sliver_slot(pipeline_owner, render_id, slot);
                 }
 
                 render_id

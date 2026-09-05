@@ -420,7 +420,7 @@ impl SparseChildren {
                     let resident = &residents[pos];
                     if resident.index != *index {
                         tree.relocate_sparse_child(resident.id, *index);
-                        stamp_logical_index(tree, pipeline, resident.id, *index);
+                        stamp_logical_index(tree, pipeline, host, resident.id, *index);
                         tracing::trace!(
                             from = resident.index,
                             to = *index,
@@ -673,7 +673,7 @@ fn mount_sparse_child_unbounded(
         let _reconcile_guard = tree.begin_reconcile(host);
         tree.insert_reporting_child(view, host, logical_index, owner, inserted)
     };
-    stamp_logical_index(tree, pipeline, child, logical_index);
+    stamp_logical_index(tree, pipeline, host, child, logical_index);
 
     // `ElementTree::insert` (via `ElementCore::mount`) sets the child's
     // `dirty = true` but does NOT push it onto the build heap — only
@@ -817,6 +817,7 @@ fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View
 fn stamp_logical_index(
     tree: &ElementTree,
     pipeline: &PipelineCell,
+    host: ElementId,
     child: ElementId,
     logical_index: usize,
 ) {
@@ -824,13 +825,21 @@ fn stamp_logical_index(
     if render_ids.is_empty() {
         return;
     }
+    // Minted by the HOST's mapping, not assembled here, so the relocation path
+    // and the mount path cannot disagree about a child's semantic position.
+    //
+    // `sliver_slot_for_child` rather than `child_sliver_slot`: the latter also
+    // encodes the INHERITANCE rules, under which a render element resets the
+    // slot to `None` for its children. This function is only ever reached from
+    // a sparse host, which is itself a render element, so asking the
+    // inheritance question here would answer about the wrong relationship.
+    let slot = tree.get(host).map_or_else(
+        || flui_rendering::parent_data::SliverSlot::identity(logical_index),
+        |node| node.element().sliver_slot_for_child(logical_index),
+    );
     pipeline.with_mut(|owner| {
         for render_id in render_ids {
-            crate::element::behavior_commons::stamp_sliver_logical_index(
-                owner,
-                render_id,
-                logical_index,
-            );
+            crate::element::behavior_commons::stamp_sliver_slot(owner, render_id, slot);
         }
     });
 }

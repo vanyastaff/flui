@@ -11,6 +11,7 @@ use std::any::TypeId;
 
 use downcast_rs::{Downcast, impl_downcast};
 use dyn_clone::{DynClone, clone_trait_object};
+use flui_rendering::parent_data::SliverSlot;
 
 /// Base trait for all Views.
 ///
@@ -525,13 +526,24 @@ pub trait ElementBase: Downcast + 'static {
     /// through the slot it received; a render element answers `None`, since
     /// its own children attach under it, not under the sliver. Default
     /// `None`.
-    fn child_sliver_slot(&self, _slot: usize) -> Option<usize> {
+    fn child_sliver_slot(&self, _slot: usize) -> Option<SliverSlot> {
         None
     }
     /// Store the inherited lazy-sliver slot on this element. Called by the
     /// slab at the same seams as [`Self::set_parent_render_id`]. Default
     /// no-op.
-    fn set_sliver_slot(&mut self, _slot: Option<usize>) {}
+    fn set_sliver_slot(&mut self, _slot: Option<SliverSlot>) {}
+    /// The slot this element would hand a sparse child at `logical`.
+    ///
+    /// Distinct from [`Self::child_sliver_slot`], which also encodes the
+    /// inheritance rules (a render element resets, a component passes
+    /// through). This is the MAPPING alone, so a caller that already knows it
+    /// is talking to the sparse host — `SparseChildren`, which is only ever
+    /// driven by one — gets the pair without re-deriving inheritance. Default
+    /// is the 1:1 mapping.
+    fn sliver_slot_for_child(&self, logical: usize) -> SliverSlot {
+        SliverSlot::identity(logical)
+    }
     /// Whether this element hosts lazy sliver children — i.e. it is the
     /// adaptor whose `SparseChildren` mounts and evicts them.
     ///
@@ -551,7 +563,7 @@ pub trait ElementBase: Downcast + 'static {
     /// [`Self::child_sliver_slot`] for why the chain stops there). Walking
     /// ancestors until this answers `Some` is therefore how a descendant finds
     /// the sparse child it lives inside. Default `None`.
-    fn sliver_slot(&self) -> Option<usize> {
+    fn sliver_slot(&self) -> Option<SliverSlot> {
         None
     }
 

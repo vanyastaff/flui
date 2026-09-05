@@ -299,6 +299,173 @@ impl flui_view::View for RowBody {
     }
 }
 
+/// A row whose first render object is semantics-transparent still announces.
+///
+/// The stamp lands on the item's FIRST render descendant, which is whatever the
+/// builder returns — very often a `Padding` or an `Align` with no semantics of
+/// its own. Such a node does not contribute a semantics node, so a position
+/// applied only where a node forms never reaches the row that carries the
+/// label.
+///
+/// The sibling tests all put `Semantics` at the root, which is exactly the
+/// shape that works either way; this is the one that fails when the stamp is
+/// only consulted for contributing nodes.
+#[test]
+fn a_row_behind_a_transparent_root_still_announces_its_position() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{Padding, ScrollController, SliverList, Viewport};
+
+    const ROWS: usize = 3;
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        Viewport::new((SliverList::new(
+            ROWS,
+            100.0,
+            std::rc::Rc::new(|i: usize| {
+                (i < ROWS).then(|| {
+                    // Padding is the item's root: it carries the stamp and has
+                    // no semantics of its own.
+                    Padding::all(4.0)
+                        .child(
+                            Semantics::new()
+                                .container(true)
+                                .label(format!("padded {i}"))
+                                .child(SizedBox::new(180.0, 92.0)),
+                        )
+                        .boxed()
+                })
+            }),
+        ),))
+        .position(controller.position()),
+        crate::common::tight(200.0, 300.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    for (announced, label) in [(1usize, "padded 0"), (2, "padded 1"), (3, "padded 2")] {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        assert_eq!(
+            node.position_in_set(),
+            Some(announced),
+            "{label} must announce its position even though the stamped node \
+             is a transparent Padding rather than the row itself",
+        );
+    }
+}
+
+/// An explicit `IndexedSemantics` overrides the stamped index.
+///
+/// Both paths reach the same property, so precedence has to be decided rather
+/// than left to whichever writes last. The explicit widget wins: hand-indexed
+/// content inside a lazy list — a grid of cards that indexes by row, a list
+/// whose items are logically grouped — is the reason `IndexedSemantics` stays
+/// public, and a stamp that overwrote it would make that impossible.
+///
+/// The declared indices are deliberately the REVERSE of the stamped ones, so
+/// the assertion fails whichever way the precedence is wrong. With them equal
+/// the test would pass against both orders, which is what the sibling test
+/// above cannot rule out on its own.
+#[test]
+fn an_explicit_index_overrides_the_one_the_sliver_stamped() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{IndexedSemantics, ScrollController, SliverList, Viewport};
+
+    const ROWS: usize = 3;
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        Viewport::new((SliverList::new(
+            ROWS,
+            100.0,
+            std::rc::Rc::new(|i: usize| {
+                (i < ROWS).then(|| {
+                    // Reversed: row 0 declares index 2, row 2 declares 0.
+                    let declared = (ROWS - 1 - i) as i32;
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("override {i}"))
+                        .child(IndexedSemantics::new(declared).child(SizedBox::new(200.0, 100.0)))
+                        .boxed()
+                })
+            }),
+        ),))
+        .position(controller.position()),
+        crate::common::tight(200.0, 300.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    for (announced, label) in [(3usize, "override 0"), (2, "override 1"), (1, "override 2")] {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        assert_eq!(
+            node.position_in_set(),
+            Some(announced),
+            "{label} must announce the index its own IndexedSemantics declared, \
+             not the one the sliver stamped",
+        );
+    }
+}
+
+/// A lazy list item publishes its position with NO wrapper widget.
+///
+/// Flutter's delegates supply this by wrapping every materialised item in an
+/// `IndexedSemantics` (`addSemanticIndexes`, on by default) — one render node
+/// per item, carrying an index captured when the item was built. FLUI reads the
+/// slot the sliver already stamps into the child's parent data, which costs no
+/// node and tracks the row as the band moves.
+///
+/// The rows here carry no `IndexedSemantics` at all. That is the whole point:
+/// the sibling test above uses one and proves the explicit path still works,
+/// while this one proves a plain lazy child is announced without it.
+#[test]
+fn a_lazy_child_publishes_its_position_without_an_indexed_semantics_wrapper() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    const ROWS: usize = 3;
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        Viewport::new((SliverList::new(
+            ROWS,
+            100.0,
+            std::rc::Rc::new(|i: usize| {
+                (i < ROWS).then(|| {
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("bare {i}"))
+                        .child(SizedBox::new(200.0, 100.0))
+                        .boxed()
+                })
+            }),
+        ),))
+        .position(controller.position()),
+        crate::common::tight(200.0, 300.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    for (announced, label) in [(1usize, "bare 0"), (2, "bare 1"), (3, "bare 2")] {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        assert_eq!(
+            node.position_in_set(),
+            Some(announced),
+            "{label} must publish a one-based set position derived from the \
+             index the sliver stamped, with nothing in the tree wrapping it",
+        );
+    }
+}
+
 /// An `IndexedSemantics` publishes its child's position within the set.
 ///
 /// That is the "12" a screen reader reads out in "item 12 of 100". The "100"
