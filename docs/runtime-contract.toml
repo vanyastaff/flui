@@ -149,7 +149,7 @@ declarations = [
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
     "pub use shared::{PlatformHandlers, WindowCallbacks};",
-    "pub use task::{Priority, Task, TaskLabel};",
+    "pub use task::{Task, TaskLabel};",
     "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
     "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WindowOpen, };",
     "pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {",
@@ -1087,10 +1087,16 @@ ADR-0049) is the lanes' shipped production consumer -- \
 `ServiceContext::spawner()`; the `expect(dead_code)` ratchet in \
 `app/execution.rs` is narrowed to wasm32, where the lifecycle layer does \
 not exist yet and errors the moment a wasm consumer lands. \
-(2) `flui_platform::Priority` remains public and informational -- its \
-"tested behavior or not public" criterion is deferred to the follow-up \
-slice that retires the `BackgroundExecutor`/`Task`/`Priority` surfaces \
-(already classified removal-target below). (3) flui-assets' bridged decode \
+(2) DELIVERED: `flui_platform::Priority` is retired. It was public and \
+purely informational -- `spawn_with_priority` took it and discarded it, \
+because tokio exposes no task-priority scheduling to route it to -- so it \
+satisfied the \
+"tested behavior or not public" criterion in neither direction. It is \
+unbundled from `BackgroundExecutor`/`Task`, which stay removal-targets \
+with real consumers to migrate (flui-assets decode, Windows prompt \
+marshaling); `Priority` had none, was stored nowhere, and changed no \
+behavior, so retiring it alone is a leaf removal rather than a \
+half-migration. (3) flui-assets' bridged decode \
 path still starts its own single-worker runtime when no handle is \
 injected -- a 1-thread residual, not a full-core pool; wiring it to the \
 unified IO lane needs a flui-app -> flui-assets edge decision and is \

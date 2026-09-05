@@ -219,7 +219,7 @@ pub use platforms::WinitPlatform;
 // Re-export shared infrastructure
 pub use shared::{PlatformHandlers, WindowCallbacks};
 // Re-export task types
-pub use task::{Priority, Task, TaskLabel};
+pub use task::{Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
