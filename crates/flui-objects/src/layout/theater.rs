@@ -36,25 +36,23 @@
 //!   unbounded theater falls back to `constraints.smallest()`, matching
 //!   `RenderStack`'s own no-non-positioned-children fallback rather than panicking
 //!   — see [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md).
-//! * **Skipped entries leave the semantics tree only once they have been laid
-//!   out.** Flutter's `visitChildrenForSemantics` walks `_childrenInPaintOrder()`
-//!   (`overlay.dart:1427-1428`), so an offstage entry is absent from the semantics
-//!   tree unconditionally. FLUI's `RenderBox` has no per-child semantics visitor —
-//!   only the whole-subtree `excludes_semantics_subtree` — so exclusion here is a
-//!   side effect of the placed-generation stamp instead: a skipped entry is not
-//!   laid out, its stamp goes stale, and the semantics walk drops it along with
-//!   paint and hit-test.
+//! * **Offstage entries publish no semantics**, matching the reference, but by
+//!   two mechanisms rather than Flutter's one. Flutter's
+//!   `visitChildrenForSemantics` walks `_childrenInPaintOrder()`
+//!   (`overlay.dart:1427-1428`) and that is the whole story there.
 //!
-//!   That covers the transition this widget actually performs — an entry laid out
-//!   while visible, then skipped when an opaque entry is pushed above it. It does
-//!   **not** cover an entry that is skipped from its very first pass: nothing ever
-//!   stamped it, and an unstamped child reads as placed by design (the stamp must
-//!   only ever remove a child a parent demonstrably *stopped* laying out, or a
-//!   parent that lays out through a path of its own would hide its whole subtree).
-//!   Such an entry is still announced. Full parity needs the per-child semantics
-//!   visitor FLUI lacks; tracked on issue #885. `RenderOffstage` (which a
-//!   `ModalRoute` puts around its page) suppresses semantics for the case that
-//!   matters today.
+//!   Here, `visits_child_for_semantics` answers from `skip_count` directly, so
+//!   an entry offstage from its very first pass is excluded regardless of
+//!   layout history — that is the equivalent of Flutter's override. The
+//!   placed-generation stamp independently excludes an entry that was laid out
+//!   while visible and then covered, since its stamp goes stale.
+//!
+//!   The stamp alone was not enough, which is why the visitor exists: it may
+//!   only remove a child a parent demonstrably *stopped* laying out (otherwise
+//!   a parent laying out through a path of its own would hide its whole
+//!   subtree), so a child skipped from pass one was never stamped and read as
+//!   placed. An app starting with an opaque entry above another announced a
+//!   route the user could neither see nor touch.
 
 use flui_tree::Variable;
 use flui_types::{Offset, Size};
@@ -160,6 +158,24 @@ impl flui_foundation::Diagnosticable for RenderTheater {
 impl RenderBox for RenderTheater {
     type Arity = Variable;
     type ParentData = StackParentData;
+
+    /// The first `skip_count` entries are offstage and publish no semantics.
+    ///
+    /// This is the whole point of the hook: an entry beneath the topmost
+    /// opaque one is a real child that is deliberately not shown, and a screen
+    /// reader must not find it. The placed-generation stamp gets the common
+    /// case for free — an entry laid out while visible and then covered has a
+    /// stale stamp — but not the one that matters most: an app that STARTS
+    /// with an opaque route above another never lays the lower one out, so
+    /// nothing ever stamps it and it reads as placed. Answering here is
+    /// history-independent.
+    ///
+    /// Flutter parity: `RenderTheater.visitChildrenForSemantics` walks
+    /// `_childrenInPaintOrder()` (`overlay.dart:1427-1428`), which is exactly
+    /// the entries from `skip_count` onward.
+    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
+        child_slot >= self.skip_count
+    }
 
     fn perform_layout(
         &mut self,

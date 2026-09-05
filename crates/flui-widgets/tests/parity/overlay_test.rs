@@ -98,11 +98,24 @@
 //!   of bespoke gesture-dispatch harness `gesture_detector_test.rs` builds for
 //!   itself — infrastructure this suite does not have and this task does not
 //!   add.
-//! - `'Semantics of entries below opaque entries are ignored'` — parity is
-//!   **not** claimed; a real, documented divergence in
-//!   `crates/flui-objects/src/layout/theater.rs`'s module docs ("Semantics
-//!   are not skipped" — FLUI's `RenderTheater` has no per-child semantics
-//!   visitor, only the whole-subtree `excludes_semantics_subtree`).
+//! - `'Semantics of entries below opaque entries are ignored'` — **the
+//!   behavior is implemented**, but parity is not claimed HERE, because this
+//!   suite holds no evidence of it. `RenderTheater::visits_child_for_semantics`
+//!   answers from `skip_count` — Flutter's
+//!   `visitChildrenForSemantics`/`_childrenInPaintOrder()` contract — and is
+//!   pinned by
+//!   `harness_theater_offstage_from_the_first_pass_publishes_no_semantics`
+//!   (`crates/flui-objects/tests/render_object_harness.rs`), which mounts a
+//!   theater with `skip_count = 1` from the first frame and asserts the covered
+//!   entry publishes nothing.
+//!
+//!   This entry previously read as a documented DIVERGENCE — "FLUI's
+//!   `RenderTheater` has no per-child semantics visitor" — which is no longer
+//!   true. The claim stays unclaimed rather than being moved here because the
+//!   manifest's citation gate requires evidence in this file, and a
+//!   widget-level equivalent would rebuild the semantics-tree observation the
+//!   render harness already does. Claiming it from a module doc would be
+//!   exactly the "claim the code does not cite" the gate exists to refuse.
 //! - The `OverlayEntry listenable` group (`'mounted state can be listened'`,
 //!   `'throw if disposed before removal'`, `'dispose works'`, `'delayed
 //!   dispose'`, `'asserts when remove is called twice'`) — FLUI's

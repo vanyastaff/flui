@@ -13339,3 +13339,63 @@ fn harness_placed_generation_gate_excludes_a_dropped_child_from_semantics() {
          from a pass that no longer holds; got {announced:?}"
     );
 }
+
+/// An entry offstage from its VERY FIRST pass publishes no semantics.
+///
+/// This is the case the placed-generation stamp provably cannot reach, and it
+/// is why the per-child visitor exists. The stamp excludes a child a parent
+/// *stopped* laying out; a child skipped from pass one was never stamped, and
+/// an unstamped child reads as placed by design — the stamp may only remove a
+/// child that demonstrably fell out, or a parent laying out through a path of
+/// its own would hide its whole subtree.
+///
+/// Concretely: an app that STARTS with an opaque route above another never
+/// lays the lower one out, so a screen reader announced a route the user could
+/// neither see nor touch. Push-then-cover was already handled (the entry was
+/// laid out once, so its stamp goes stale); this is the other half.
+///
+/// Red without `RenderTheater::visits_child_for_semantics`: the covered entry
+/// is announced.
+#[test]
+fn harness_theater_offstage_from_the_first_pass_publishes_no_semantics() {
+    let labelled = |label: &str| {
+        box_node(
+            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label(label))
+                .with_container(true),
+        )
+        .child(box_node(RenderSizedBox::new(
+            Some(px(40.0)),
+            Some(px(20.0)),
+        )))
+    };
+
+    // `skip_count = 1` from the start: the bottom entry is never laid out, so
+    // nothing ever stamps it.
+    let run = RenderTester::mount(
+        box_node(RenderTheater::new().with_skip_count(1))
+            .child(labelled("covered"))
+            .child(labelled("visible")),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let announced: Vec<String> = run
+        .semantics_owner()
+        .expect("semantics enabled")
+        .tree()
+        .iter()
+        .filter_map(|(_, node)| node.label().map(ToString::to_string))
+        .collect();
+
+    assert!(
+        announced.iter().any(|l| l.contains("visible")),
+        "the presented entry must still be announced; got {announced:?}"
+    );
+    assert!(
+        !announced.iter().any(|l| l.contains("covered")),
+        "an entry offstage from its first pass must publish no semantics — a \
+         screen reader would otherwise find a route the user cannot see or \
+         touch; got {announced:?}"
+    );
+}

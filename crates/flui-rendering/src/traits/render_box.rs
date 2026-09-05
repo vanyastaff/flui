@@ -525,6 +525,33 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         false
     }
 
+    /// Whether the child in `child_slot` reaches the semantics tree at all.
+    ///
+    /// Default: `true` — every child is visited. An object that keeps children
+    /// it does not present overrides this to drop them, which is the only way
+    /// to exclude a child that is *structurally* absent from the presentation
+    /// rather than merely un-laid-out.
+    ///
+    /// [`Self::excludes_semantics_subtree`] is the whole-subtree version and
+    /// answers a different question: "none of my descendants", versus "this
+    /// child of mine". `RenderTheater` needs the second — its offstage entries
+    /// are real children it deliberately does not show.
+    ///
+    /// **Not** covered by the placed-generation stamp, which is why this
+    /// exists. That stamp excludes a child a parent *stopped* laying out; a
+    /// child skipped from its very first pass was never stamped, and an
+    /// unstamped child reads as placed by design (the stamp may only remove a
+    /// child that demonstrably fell out, or a parent laying out through a path
+    /// of its own would hide its whole subtree). So exclusion by stamp is
+    /// history-dependent, and this is not.
+    ///
+    /// Flutter parity: `RenderObject.visitChildrenForSemantics`, which
+    /// `RenderTheater` overrides to walk `_childrenInPaintOrder()`
+    /// (`overlay.dart:1427-1428`).
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        true
+    }
+
     /// The rect, in this node's coordinates, outside which child paint is not
     /// visible.
     ///
@@ -849,6 +876,10 @@ where
         config: &mut crate::semantics::SemanticsConfiguration,
     ) {
         <T as RenderBox>::describe_semantics_configuration(self, config);
+    }
+
+    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
+        <T as RenderBox>::visits_child_for_semantics(self, child_slot)
     }
 
     fn excludes_semantics_subtree(&self) -> bool {

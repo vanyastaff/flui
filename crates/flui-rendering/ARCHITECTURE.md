@@ -148,12 +148,15 @@ pass that no longer holds sends a screen reader somewhere with nothing on it.
 unstamped child reads as placed, exclusion is history-dependent: a child laid out and *then*
 skipped is dropped, while one skipped from its very first pass was never stamped and is still
 announced. Two identical final trees can therefore expose different accessibility trees. The
-asymmetry is not removable here — requiring a stamp instead of accepting its absence regresses
-`harness_merge_semantics_collapses_descendant_boundaries` (verified: the descendant's `is_button`
-is lost), which is the same objection that deferred this gate in the first place. It is the price
-of inferring placement from a layout side effect rather than from a per-child semantics visitor,
-which `RenderBox` does not have. `RenderTheater` is the reachable case (`layout/theater.rs`);
-issue #885 tracks the visitor.
+asymmetry is not removable *at the stamp* — requiring one instead of accepting its absence
+regresses `harness_merge_semantics_collapses_descendant_boundaries` (verified: the descendant's
+`is_button` is lost), which is the same objection that deferred this gate in the first place.
+
+It is removable one layer up, and now is: `RenderBox::visits_child_for_semantics(child_slot)` lets
+a parent drop a child it structurally does not present, independently of layout history. The stamp
+answers "did this pass place you"; the visitor answers "do I present you at all". `RenderTheater`
+was the reachable case and overrides it from `skip_count` — see
+`harness_theater_offstage_from_the_first_pass_publishes_no_semantics`, which is red without it.
 
 **A skip must drop the cached output too.** `run_paint`'s residue scan clears the dirty flag of
 any node the descent did not reach — it has always done that, with a warning, for multi-root and
