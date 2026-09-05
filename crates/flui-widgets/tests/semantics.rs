@@ -1153,10 +1153,20 @@ fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
     merged.pump();
     let merged_tree = merged.a11y_tree().expect("semantics enabled");
 
+    // The combined label is the assertion that distinguishes merging from
+    // DESTROYING. "neither label is findable" plus "fewer nodes" would both
+    // hold if the merge path dropped its descendants outright, or kept only
+    // one of them — which is exclusion's contract, not merging's.
     assert!(
-        merged_tree.find_by_label("first").is_err(),
-        "merging must not leave its descendants addressable as their own \
-         nodes; a reader should meet one node, not three. Tree was:\n{}",
+        merged_tree.find_by_label("first second").is_ok(),
+        "merging must carry its descendants' labels into one node, combined \
+         and in order. Tree was:\n{}",
+        merged_tree.describe()
+    );
+    assert!(
+        merged_tree.find_by_label("first").is_err() && merged_tree.find_by_label("second").is_err(),
+        "and neither descendant may remain addressable on its own; a reader \
+         should meet one node, not three. Tree was:\n{}",
         merged_tree.describe()
     );
     assert!(
@@ -1197,6 +1207,16 @@ fn exclude_semantics_removes_its_subtree_from_the_a11y_tree() {
     excluded.pump();
     let excluded_tree = excluded.a11y_tree().expect("semantics enabled");
 
+    // Absence only means exclusion if the tree was published at all. A
+    // translation that emitted nothing would satisfy the assertion below for
+    // entirely the wrong reason, so the surviving root is checked first.
+    assert_eq!(
+        excluded_tree.len(),
+        1,
+        "the root must still be reachable — an empty tree would make the \
+         absence below meaningless. Tree was:\n{}",
+        excluded_tree.describe()
+    );
     assert!(
         excluded_tree.find_by_label("hidden from readers").is_err(),
         "an excluded subtree must contribute nothing a reader can reach. \
