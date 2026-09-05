@@ -150,8 +150,11 @@ fn clipAlpha(
         //
         // Returning zero alpha is enough for `SrcOver` — nothing is
         // contributed either way — but not for a destination-destructive mode.
-        // `Clear`, `Src`, `SrcIn` and `DstIn` clear or replace the destination
-        // from their blend FACTORS, which do not consult source alpha, so a
+        // A TRANSPARENT SOURCE still zeroes or replaces the destination there:
+        // `Clear` is `(Zero, Zero)`, `Src` is `(One, Zero)`, `SrcIn` is
+        // `(DstAlpha, Zero)`, and `DstIn` is `(Zero, SrcAlpha)` — which does
+        // read source alpha, and reads it as zero, scaling the destination to
+        // nothing. So `alpha = 0` is not equivalent to being clipped, and a
         // full-surface `Clear` through a rounded clip wiped the clip's whole
         // bounding box, corners included.
         //

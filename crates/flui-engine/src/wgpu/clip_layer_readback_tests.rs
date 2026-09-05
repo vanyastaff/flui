@@ -570,8 +570,9 @@ fn a_destructive_blend_does_not_escape_a_rounded_clip() {
 
     // (32, 32) is the centre — well inside the round, so the clear must land.
     let centre = at(32, 32);
-    // (9, 9) is inside the clip's bounding box but outside its rounded corner
-    // (radius 16 from the box origin at 8,8), so the ground must survive.
+    // (9, 9) is inside the clip's bounding box but outside its rounded corner.
+    // The corner arc is centred at (origin + radius) = (24, 24) with radius 16,
+    // and (9, 9) is 21.2 away — outside the arc, so the ground must survive.
     let corner = at(9, 9);
 
     assert!(
@@ -584,5 +585,82 @@ fn a_destructive_blend_does_not_escape_a_rounded_clip() {
         "the ground must survive OUTSIDE the rounded corner: a destructive \
          blend that only zeroes alpha still clears the whole bounding box, \
          got {corner:?} at (9, 9)"
+    );
+}
+
+/// An ANTI-ALIASED clip does not soften a destructive blend's fringe, and that
+/// is a known gap rather than a contract.
+///
+/// The discard fixes the corners: a fully clipped-out fragment no longer
+/// reaches the blender. It cannot fix the fringe. `sdfToAlpha` gives a
+/// fractional coverage there, the fragment runs, and `Clear`'s `(Zero, Zero)`
+/// factors then wipe the destination completely regardless of the alpha
+/// emitted — so an anti-aliased eraser has a hard edge.
+///
+/// Fixing it means folding coverage into the blend rather than the alpha
+/// (`Clear` would need `(Zero, OneMinusSrcAlpha)`), which changes what a
+/// translucent `Clear` paint means and needs its own decision. Tracked
+/// separately; this asserts the CURRENT behaviour so the gap is a checked
+/// state and whoever changes it is told exactly where.
+///
+/// The sibling tests miss this by construction: the destructive one uses
+/// `HardEdge`, which has no fringe, and the fringe one uses `SrcOver`, which
+/// blends correctly.
+#[test]
+fn an_anti_aliased_destructive_blend_still_has_a_hard_fringe() {
+    use flui_types::painting::{BlendMode, ClipOp};
+
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+            &Paint::fill(Color::rgb(255, 0, 0)).with_anti_alias(false),
+        );
+        canvas.save();
+        canvas.clip_rrect_ext(
+            flui_types::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
+                px(16.0),
+            ),
+            ClipOp::Intersect,
+            Clip::AntiAlias,
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+            &Paint::fill(Color::rgb(0, 0, 0))
+                .with_anti_alias(false)
+                .with_blend_mode(BlendMode::Clear),
+        );
+        canvas.restore();
+        builder.add_picture(canvas.finish());
+        builder.build();
+    }
+
+    let pixels = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+
+    // Every pixel is either untouched ground or fully erased: no partial
+    // erase anywhere along the rounded edge.
+    let partial = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| (5..250).contains(&p[0]))
+        .count();
+
+    assert_eq!(
+        partial, 0,
+        "TRIPWIRE, not a contract: an anti-aliased eraser should feather its \
+         edge, and today it cannot — coverage rides in the alpha, which \
+         `Clear`'s (Zero, Zero) factors ignore. When that is fixed this must \
+         fail; found {partial} partially-erased pixels"
     );
 }
