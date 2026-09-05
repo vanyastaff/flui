@@ -144,32 +144,6 @@ impl ResolvedClip {
     };
 }
 
-/// Whether a scissor's fractional bounds round to the pixels it covers exactly
-/// or to a superset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ScissorRounding {
-    /// The scissor is the clip. Truncation is the `Clip::HardEdge` semantic.
-    Exact,
-    /// The scissor is an early reject in front of an SDF. It must cover every
-    /// pixel the SDF might shade, including the anti-aliased fringe.
-    Conservative,
-}
-
-impl ScissorRounding {
-    /// The rounding an SDF clip's coarse scissor wants for a given mode.
-    ///
-    /// A feathered clip needs the pad so the fringe is not cut; a hard one has
-    /// no fringe, and padding it would only loosen the bound that non-SDF
-    /// consumers — text, above all — rely on as their whole clip.
-    const fn for_clip(hard: bool) -> Self {
-        if hard {
-            Self::Exact
-        } else {
-            Self::Conservative
-        }
-    }
-}
-
 impl GpuStateStack {
     /// Construct a pristine stack — identity transform, no scissor, no SDF
     /// clips, all stacks empty. Equivalent to the post-`reset()` state.
@@ -459,47 +433,15 @@ impl GpuStateStack {
     /// parameter rather than stored on the stack so the painter remains the
     /// single owner of the surface dimensions.
     pub(super) fn clip_rect(&mut self, rect: Rect<Pixels>, surface_size: (u32, u32)) {
-        self.clip_rect_with_rounding(rect, surface_size, ScissorRounding::Exact);
-    }
-
-    /// Intersect the current scissor with `rect`, rounding per `rounding`.
-    pub(super) fn clip_rect_with_rounding(
-        &mut self,
-        rect: Rect<Pixels>,
-        surface_size: (u32, u32),
-        rounding: ScissorRounding,
-    ) {
         let transform = self.current_transform;
 
         // Compute axis-aligned bounding box in screen space.
         let (x, y, width, height) = if transform == glam::Mat4::IDENTITY {
             // Fast path: no transform.
-            let (left, top, right_f, bottom_f) = match rounding {
-                // The scissor IS the clip: truncation is the hard edge.
-                ScissorRounding::Exact => (
-                    rect.left().0.max(0.0),
-                    rect.top().0.max(0.0),
-                    rect.right().0.min(surface_size.0 as f32),
-                    rect.bottom().0.min(surface_size.1 as f32),
-                ),
-                // The scissor is only an early reject in front of an SDF that
-                // does the precise work, so it must never cut a pixel the SDF
-                // would have shaded. Expand outward by a pixel: fractional
-                // bounds otherwise truncate (a right edge at 10.75 ends the
-                // scissor at column 10, discarding the pixel centred at 10.5
-                // that is inside the clip), and the feather itself reaches
-                // about half a pixel past the boundary.
-                ScissorRounding::Conservative => (
-                    (rect.left().0 - 1.0).floor().max(0.0),
-                    (rect.top().0 - 1.0).floor().max(0.0),
-                    (rect.right().0 + 1.0).ceil().min(surface_size.0 as f32),
-                    (rect.bottom().0 + 1.0).ceil().min(surface_size.1 as f32),
-                ),
-            };
-            let x = left as u32;
-            let y = top as u32;
-            let right = right_f as u32;
-            let bottom = bottom_f as u32;
+            let x = rect.left().0.max(0.0) as u32;
+            let y = rect.top().0.max(0.0) as u32;
+            let right = rect.right().0.min(surface_size.0 as f32) as u32;
+            let bottom = rect.bottom().0.min(surface_size.1 as f32) as u32;
             (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
         } else {
             // Transform all four corners and compute a conservative AABB.
@@ -520,23 +462,14 @@ impl GpuStateStack {
                 .map(|c| c.y)
                 .fold(f32::NEG_INFINITY, f32::max);
 
-            // The conservative pad applies here too. The AABB is already
-            // conservative about ROTATION, which is a different question from
-            // whether its fractional bounds round outward: a clip translated
-            // by 0.75 still truncates to `x = 0, w = 10` and rejects the
-            // column whose centre at 10.5 is inside the SDF's edge at 10.75.
-            let pad = match rounding {
-                ScissorRounding::Exact => 0.0,
-                ScissorRounding::Conservative => 1.0,
-            };
-            let left = (min_x - pad).max(0.0);
-            let top = (min_y - pad).max(0.0);
-            let right = (max_x + pad).min(surface_size.0 as f32);
-            let bottom = (max_y + pad).min(surface_size.1 as f32);
-            let x = left.floor() as u32;
-            let y = top.floor() as u32;
-            let w = (right.ceil() - left.floor()).max(0.0) as u32;
-            let h = (bottom.ceil() - top.floor()).max(0.0) as u32;
+            let x = min_x.max(0.0) as u32;
+            let y = min_y.max(0.0) as u32;
+            let w = (max_x.min(surface_size.0 as f32) - min_x.max(0.0))
+                .ceil()
+                .max(0.0) as u32;
+            let h = (max_y.min(surface_size.1 as f32) - min_y.max(0.0))
+                .ceil()
+                .max(0.0) as u32;
             (x, y, w, h)
         };
 
@@ -620,13 +553,22 @@ impl GpuStateStack {
         // under rotation — `clip_rect` takes the AABB of all four transformed
         // corners — which is exactly what a coarse pre-pass should be now that
         // the SDF does the precise work.
-        // Conservative only when the clip actually feathers. The pad exists
-        // for the AA fringe, and it is not free: text is handed to glyphon
-        // with `current_scissor()` alone and never evaluates the SDF, so a
-        // widened scissor lets a glyph render outside the clip's own bounding
-        // rectangle. Under `HardEdge` there is no fringe to protect, so the
-        // exact bounds are both correct and tighter.
-        self.clip_rect_with_rounding(rrect.rect, surface_size, ScissorRounding::for_clip(hard));
+        // Exact bounds, deliberately, even though this is nominally a coarse
+        // early reject in front of an SDF that does the precise work.
+        //
+        // Padding it outward so the anti-aliased fringe is never cut was tried
+        // and reverted. The scissor is not only an early reject: text is handed
+        // to glyphon with `current_scissor()` alone and never evaluates the
+        // SDF, so for every glyph the scissor IS the clip. A pixel of pad lets
+        // a glyph render outside the clip — visible — to recover half a pixel
+        // of feather at the boundary — not. The cost of exactness is that a
+        // fractional edge truncates (10.75 ends the scissor at column 10) and
+        // the outer half of the feather is lost there.
+        //
+        // The pad becomes correct the moment text routes through the same mask;
+        // that is what #848 stays open for.
+        let _ = hard;
+        self.clip_rect(rrect.rect, surface_size);
     }
 
     /// Invert the CTM's 2D affine part into the `[a, b, c, d, tx, ty]` column
@@ -708,9 +650,9 @@ impl GpuStateStack {
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
         self.current_rrect_clip = [0.0; 8];
 
-        // Same rule as `clip_rrect`: pad only when the clip feathers, because
-        // the pad costs text its tight bound.
-        self.clip_rect_with_rounding(rect, surface_size, ScissorRounding::for_clip(hard));
+        // Exact, for the reason spelled out in `clip_rrect`.
+        let _ = hard;
+        self.clip_rect(rect, surface_size);
     }
 
     // =========================================================================
