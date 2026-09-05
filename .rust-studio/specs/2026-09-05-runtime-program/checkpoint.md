@@ -161,6 +161,24 @@ controlled reproduction exists:
    wakeups) on the six workloads named in the mandate, before any
    optimisation claim.
 
+## Visual verification found a defect no green test could
+
+After the engine change, the three demos were rendered offscreen
+(`cargo run -p flui --features material,cupertino --example screenshot`) to
+confirm nothing about what renders had changed. Nothing had — but the
+Cupertino demo showed a plainly wrong space in its navigation title, and
+measuring the rendered pixels put a number on it: a 22 px space at font
+size 17 (~1.3 em), against 6 px for a Material string through the same
+renderer. `CupertinoSystemText` does not resolve on this machine, so every
+Cupertino run goes through fallback, and the fallback's metrics are wrong.
+Filed as **#927** with the measurements.
+
+Two things worth keeping from how it was found: the layer snapshot holds a
+single correct span, so every display-list assertion in the suite passes
+while the pixels are wrong — the exact "MVP reported as parity" shape
+`AGENTS.md` names; and the defect surfaced only because something actually
+looked at the output.
+
 ## Working-tree hazard, hit for real on 2026-09-05
 
 **Another session shares this checkout.** At 14:49 the reflog records a
