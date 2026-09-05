@@ -97,9 +97,14 @@ whether or not it remembered to ask for one.
 
 **Why it cannot live in the render object:** `PaintCx` exposes neither parent data nor a child's
 logical index, so an object cannot tell paint which of its children this pass placed. That is why
-the now-deleted eager grid carried a `laid_out_band` field of its own and why the lazy slivers
-still rely on the frame evicting out-of-band residents before paint runs (ADR-0017's amendment) —
-each a per-object workaround for a property the pipeline can hold once.
+the now-deleted eager grid carried a `laid_out_band` field of its own, and why the lazy slivers
+used to rely on the frame evicting out-of-band residents before paint runs (ADR-0017's amendment)
+— each a per-object workaround for a property the pipeline can hold once.
+
+That eviction is no longer a backstop for every out-of-band child. Keep-alive (ADR-0056) makes a
+held child stay attached and unlaid indefinitely, so this stamp is the **sole** mechanism keeping
+it off screen, out of hit-test, and out of the semantics tree — defence-in-depth promoted to
+load-bearing. That promotion is why the semantics gate had to land before keep-alive could.
 
 **Three constraints the implementation found, each of which broke a real test:**
 

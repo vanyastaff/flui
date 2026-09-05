@@ -195,6 +195,34 @@ impl ElementBuildContext {
             current_id = parent_id;
         }
     }
+
+    /// The lazy sliver child this element lives inside, if any.
+    ///
+    /// Walks self-then-ancestors for the first element carrying a
+    /// `sliver_slot`. That is the sparse child: a lazy host stamps
+    /// `Some(logical_index)` on its direct children, component elements pass it
+    /// through, and any render element resets it to `None` for its own
+    /// descendants — so the nearest ancestor answering `Some` is exactly the
+    /// child the sliver would evict. Self-inclusive, because an item that owns
+    /// a render node directly (no per-item `RepaintBoundary`) *is* that child.
+    ///
+    /// Innermost wins, which is what nesting requires: an item inside a list
+    /// inside another list holds the inner one.
+    fn enclosing_sparse_child(&self) -> Option<ElementId> {
+        let tree = self.tree.read();
+        let mut current_id = self.element_id;
+        loop {
+            let node = tree.get(current_id)?;
+            if node
+                .element_opt()
+                .and_then(crate::view::ElementBase::sliver_slot)
+                .is_some()
+            {
+                return Some(current_id);
+            }
+            current_id = node.parent()?;
+        }
+    }
 }
 
 impl BuildContext for ElementBuildContext {
@@ -238,6 +266,11 @@ impl BuildContext for ElementBuildContext {
 
     fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
         self.owner.read().local_post_frame_handle().cloned()
+    }
+
+    fn keep_alive_lease(&self) -> Option<crate::owner::KeepAliveLease> {
+        let held = self.enclosing_sparse_child()?;
+        Some(self.owner.read().keep_alive.acquire(self.element_id, held))
     }
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
@@ -649,6 +682,15 @@ pub(crate) struct BuildCapabilities {
     /// The render tree this element is mounted in, cloned from its own
     /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
     pub(crate) pipeline_owner: Option<flui_rendering::pipeline::PipelineCell>,
+    /// The presentation's keep-alive table, so an item can take a hold on the
+    /// lazy sliver child it lives inside from `init_state`.
+    pub(crate) keep_alive: crate::owner::KeepAliveHolds,
+    /// This element's own lazy-sliver slot, cloned from its `ElementCore` for
+    /// the same reason `pipeline_owner` is: during a build its tree node is
+    /// *extracted*, so reading the slot back through `tree.get(self)` would hit
+    /// the take/put hole. An item that is itself the sparse child — a lazy list
+    /// configured with `repaint_boundaries(false)` — is exactly that case.
+    pub(crate) own_sliver_slot: Option<usize>,
 }
 
 pub(crate) struct BuildCtx<'b> {
@@ -755,6 +797,38 @@ impl BuildContext for BuildCtx<'_> {
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.capabilities.text_input_handle.clone()
+    }
+
+    fn keep_alive_lease(&self) -> Option<crate::owner::KeepAliveLease> {
+        // `init_state` runs with a `BuildCtx` — the same context type `build`
+        // gets — so this must serve a real lease rather than refuse one. The
+        // "never from a frame phase" half is a STATIC rule, enforced by
+        // `scripts/check-frame-capability-scope.sh` scanning for the token
+        // inside `build`/`perform_layout`/`paint`, exactly as it is for
+        // `text_input_handle` and `focus_manager`, which are acquired from
+        // `init_state` through this same context.
+        let held = if self.capabilities.own_sliver_slot.is_some() {
+            // This element *is* the sparse child.
+            self.element_id
+        } else {
+            // Walk ancestors through `element_opt`: a node extracted by
+            // `build_scope`'s take/put window reads as a clean miss rather
+            // than panicking, which is the contract for every `BuildCtx`
+            // ancestor walk.
+            let mut current_id = self.tree.get(self.element_id)?.parent()?;
+            loop {
+                let node = self.tree.get(current_id)?;
+                if node
+                    .element_opt()
+                    .and_then(crate::view::ElementBase::sliver_slot)
+                    .is_some()
+                {
+                    break current_id;
+                }
+                current_id = node.parent()?;
+            }
+        };
+        Some(self.capabilities.keep_alive.acquire(self.element_id, held))
     }
 
     fn focus_manager(&self) -> Rc<FocusManager> {
@@ -1301,6 +1375,8 @@ mod tests {
                 local_post_frame_handle: None,
                 text_input_handle: None,
                 pipeline_owner: None,
+                keep_alive: crate::owner::KeepAliveHolds::default(),
+                own_sliver_slot: None,
             },
         );
         ctx.visit_child_elements(&mut |_| {});
@@ -1324,6 +1400,8 @@ mod tests {
                 local_post_frame_handle: None,
                 text_input_handle: None,
                 pipeline_owner: None,
+                keep_alive: crate::owner::KeepAliveHolds::default(),
+                own_sliver_slot: None,
             },
         );
 

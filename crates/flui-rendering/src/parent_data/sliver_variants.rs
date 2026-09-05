@@ -6,10 +6,7 @@ use std::hash::{Hash, Hasher};
 use flui_foundation::RenderId;
 use flui_types::Offset;
 
-use super::{
-    base::ParentData, container_mixin::ContainerParentDataMixin,
-    keep_alive_mixin::KeepAliveParentDataMixin,
-};
+use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
 // ============================================================================
 // SLIVER LOGICAL PARENT DATA (Base)
@@ -84,9 +81,6 @@ pub struct SliverMultiBoxAdaptorParentData {
 
     /// Index of this child in the list.
     pub index: usize,
-
-    /// Keep-alive mixin for AutomaticKeepAlive support.
-    pub keep_alive: KeepAliveParentDataMixin,
 }
 
 impl SliverMultiBoxAdaptorParentData {
@@ -95,7 +89,6 @@ impl SliverMultiBoxAdaptorParentData {
         Self {
             layout_offset: 0.0,
             index,
-            keep_alive: KeepAliveParentDataMixin::new(),
         }
     }
 
@@ -133,7 +126,6 @@ impl Hash for SliverMultiBoxAdaptorParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.layout_offset.to_bits().hash(state);
         self.index.hash(state);
-        self.keep_alive.hash(state);
     }
 }
 
@@ -154,9 +146,6 @@ pub struct TreeSliverNodeParentData {
     /// Index of this child in the tree.
     pub index: usize,
 
-    /// Keep-alive mixin.
-    pub keep_alive: KeepAliveParentDataMixin,
-
     /// Depth in tree (0 = root, 1 = child, etc).
     pub depth: usize,
 }
@@ -167,7 +156,6 @@ impl TreeSliverNodeParentData {
         Self {
             layout_offset: 0.0,
             index,
-            keep_alive: KeepAliveParentDataMixin::new(),
             depth,
         }
     }
@@ -200,7 +188,6 @@ impl Hash for TreeSliverNodeParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.layout_offset.to_bits().hash(state);
         self.index.hash(state);
-        self.keep_alive.hash(state);
         self.depth.hash(state);
     }
 }

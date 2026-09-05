@@ -174,15 +174,41 @@ impl SparseChildren {
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
     ) -> bool {
+        // Keep-alive is honoured *here and only here*. Band eviction is the
+        // "this scrolled away" path, which is exactly what a hold opts out of.
+        //
+        // The reconcile path must NOT consult holds: a resident the data source
+        // stopped producing is destroyed regardless, because a held child
+        // squatting on index 3 while a keyed resident relocates onto 3 would
+        // leave two attached children stamped 3 and trip the uniqueness
+        // assertion in the band walk. Flutter draws the same line — a hold is
+        // consulted by `collectGarbage`, while a removal goes through
+        // `removeChild` and destroys unconditionally.
         let out_of_band: Vec<usize> = self
             .by_logical_index
-            .keys()
-            .copied()
-            .filter(|&logical_index| logical_index < first || logical_index >= last)
+            .iter()
+            .filter(|(logical_index, child)| {
+                (**logical_index < first || **logical_index >= last)
+                    && !owner.keep_alive.is_held(**child)
+            })
+            .map(|(logical_index, _)| *logical_index)
             .collect();
         let any_evicted = !out_of_band.is_empty();
         for logical_index in out_of_band {
             self.evict(logical_index, tree, owner);
+        }
+        // The parked set is unbounded and user-controlled, and nothing else
+        // reports it: a leaked hold shows up as a list that quietly stops
+        // reclaiming memory. Emitting the count here is the one place that
+        // sees both halves.
+        let held = owner.keep_alive.held_count();
+        if held > 0 {
+            tracing::trace!(
+                band = ?(first, last),
+                resident = self.by_logical_index.len(),
+                held,
+                "SparseChildren retained a band with keep-alive holds"
+            );
         }
         any_evicted
     }
@@ -230,7 +256,11 @@ impl SparseChildren {
     /// layout pass retained is neither built nor evicted here — it is carried
     /// over for the band eviction that follows, so a scroll that rebuilds the
     /// host never calls the builder for an item it is about to drop (Flutter
-    /// rebuilds every resident and collects the garbage afterwards). A view
+    /// rebuilds every resident and collects the garbage afterwards).
+    /// A **kept-alive** resident is the exception, and reconciles like an
+    /// in-band one: it is not about to be dropped, so carrying it over would
+    /// freeze its content at whatever the data said when it left the band —
+    /// see [ADR-0056](../../../../docs/adr/ADR-0056-keep-alive-is-an-element-side-lease.md). A view
     /// built for an out-of-band index that claims no resident is dropped, not
     /// mounted.
     ///
@@ -266,7 +296,16 @@ impl SparseChildren {
                 let key = tree
                     .get(id)
                     .and_then(|node| node.key().map(ViewKey::clone_key));
-                let carried_over = key.is_none() && !in_band(index);
+                // Carrying over is an optimisation for a resident that is
+                // *about to be dropped* by the band eviction that follows, so
+                // rebuilding it would call the builder for an item on its way
+                // out. A held child is the exact opposite: it persists
+                // indefinitely, so skipping it would leave it showing whatever
+                // its data said when it left the band, and would deny it the
+                // update that might release the hold. Held children therefore
+                // reconcile like in-band residents.
+                let carried_over =
+                    key.is_none() && !in_band(index) && !owner.keep_alive.is_held(id);
                 Resident {
                     index,
                     id,

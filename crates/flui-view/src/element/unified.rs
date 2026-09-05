@@ -223,6 +223,9 @@ where
     fn set_sliver_slot(&mut self, slot: Option<usize>) {
         self.core.set_sliver_slot(slot);
     }
+    fn sliver_slot(&self) -> Option<usize> {
+        self.core.sliver_slot()
+    }
 
     // ========================================================================
     // Inherited-element protocol

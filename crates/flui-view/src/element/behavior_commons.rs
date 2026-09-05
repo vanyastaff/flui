@@ -78,7 +78,7 @@ where
 ///
 /// A node that already carries `SliverMultiBoxAdaptorParentData` — a
 /// relocated child that was laid out under its previous host — has only its
-/// `index` rewritten: `layout_offset` and `keep_alive` are the sliver's and
+/// `index` rewritten: `layout_offset` is the sliver's and
 /// the keep-alive protocol's own state, and replacing the box would reset
 /// both until the next layout recomputed them. A fresh node (no parent data)
 /// or one carrying another type gets a new box.
@@ -551,7 +551,6 @@ mod stamp_tests {
             )));
         let mut seeded = SliverMultiBoxAdaptorParentData::new(3);
         seeded.layout_offset = 42.0;
-        seeded.keep_alive.keep_alive = true;
         owner
             .render_tree_mut()
             .get_mut(id)
@@ -565,10 +564,9 @@ mod stamp_tests {
             .get(id)
             .and_then(|node| node.parent_data())
             .and_then(|pd| pd.downcast_ref::<SliverMultiBoxAdaptorParentData>())
-            .map(|pd| (pd.index, pd.layout_offset, pd.keep_alive.keep_alive))
+            .map(|pd| (pd.index, pd.layout_offset))
             .expect("parent data must still be SliverMultiBoxAdaptorParentData");
         assert_eq!(pd.0, 9);
         assert_eq!(pd.1, 42.0, "layout_offset must survive a re-stamp");
-        assert!(pd.2, "keep_alive must survive a re-stamp");
     }
 }

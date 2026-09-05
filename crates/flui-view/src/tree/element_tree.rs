@@ -1551,6 +1551,15 @@ impl ElementTree {
         let providers = owner.unmount_inherited_dependent(dependent);
         self.release_inherited_providers(dependent, providers);
         owner.clear_pending_dependency_change(dependent);
+        // A keep-alive lease normally releases through its own `Drop` when the
+        // holder's state drops. An element can be torn down without that
+        // happening in the same step, and a stranded hold would pin its lazy
+        // sliver child forever, so the unmount seam clears it too. This is the
+        // liveness half Flutter leaves to `AutomaticKeepAliveClientMixin.dispose`.
+        owner.keep_alive.forget_holder(dependent);
+        // And if the unmounted element *is* a lazy sliver child, nothing may
+        // still claim to be holding it.
+        owner.keep_alive.forget_held(dependent);
     }
 
     /// Reactivate a subtree and schedule dependency lifecycle work for every

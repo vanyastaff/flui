@@ -114,6 +114,12 @@ pub struct ElementOwner<'a> {
     /// `crate::tree::element_tree`.
     pub(crate) global_keys: &'a mut GlobalKeyRegistry,
 
+    /// Keep-alive holds — consulted by `SparseChildren::retain_band` to decide
+    /// which out-of-band children survive, and cleared as holders unmount.
+    /// A clone of the owner's table (one `Rc`), not a borrow, so it does not
+    /// contend with the other split-borrow fields.
+    pub(crate) keep_alive: super::KeepAliveHolds,
+
     /// This frame's `GlobalKey` declarations (`parent -> child -> key`),
     /// verified at the frame boundary by `BuildOwner::finalize_tree`.
     ///

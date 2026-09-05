@@ -532,6 +532,17 @@ pub trait ElementBase: Downcast + 'static {
     /// slab at the same seams as [`Self::set_parent_render_id`]. Default
     /// no-op.
     fn set_sliver_slot(&mut self, _slot: Option<usize>) {}
+    /// The lazy-sliver slot this element inherited, if any — the read half of
+    /// the pair whose write half is [`Self::set_sliver_slot`].
+    ///
+    /// `Some(index)` on a lazy sliver's direct child and on every component
+    /// element beneath it, `None` under any render element (see
+    /// [`Self::child_sliver_slot`] for why the chain stops there). Walking
+    /// ancestors until this answers `Some` is therefore how a descendant finds
+    /// the sparse child it lives inside. Default `None`.
+    fn sliver_slot(&self) -> Option<usize> {
+        None
+    }
 
     // ========================================================================
     // Inherited-element protocol

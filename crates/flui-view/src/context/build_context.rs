@@ -149,6 +149,25 @@ pub trait BuildContext {
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
 
+    /// Take a keep-alive hold on the lazy sliver child this element lives
+    /// inside, so it survives scrolling out of the cache band.
+    ///
+    /// `None` when this element is not inside a lazy sliver child — a plain
+    /// `Column` row has nothing to keep alive, and the hold is meaningless
+    /// rather than an error.
+    ///
+    /// The returned [`KeepAliveLease`](crate::owner::KeepAliveLease) releases
+    /// the hold when it drops, so keeping the child alive is exactly "keep the
+    /// lease in your `ViewState`". Several descendants may each hold
+    /// independently; the child survives while any of them does.
+    ///
+    /// Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), never inside `build`, `perform_layout` or
+    /// `paint` — the same rule `post_frame_handle` and `text_input_handle`
+    /// follow, enforced by `scripts/check-frame-capability-scope.sh`. A hold
+    /// taken during a frame phase would be re-taken on every rebuild.
+    fn keep_alive_lease(&self) -> Option<crate::owner::KeepAliveLease>;
+
     /// This element tree's exact focus manager.
     ///
     /// A build owner always has one focus tree, so this capability is
