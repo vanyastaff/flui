@@ -986,14 +986,15 @@ fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [Semanti
             SemanticsFragment::Pending(pending) => &mut pending.config,
             SemanticsFragment::Formed(formed) => &mut formed.config,
         };
-        // Same split as the contributing path: an explicit `IndexedSemantics`
-        // keeps its position, but the set's size still applies — it belongs to
-        // the sliver, not to whoever numbered the row.
+        // Same rule as the contributing path: an explicit `IndexedSemantics`
+        // keeps its position AND suppresses the stamped size, because explicit
+        // numbering describes a different set from the one the delegate
+        // materialises.
         if config.index_in_parent().is_none() {
             config.set_index_in_parent(index);
-        }
-        if let Some(size) = set_size {
-            config.set_scroll_child_count(size);
+            if let Some(size) = set_size {
+                config.set_scroll_child_count(size);
+            }
         }
     }
 }
@@ -1010,17 +1011,20 @@ fn apply_lazy_child_semantic_index(node: &RenderNode, config: &mut SemanticsConf
     let Some(pd) = stamped_sliver_parent_data(node) else {
         return;
     };
-    // An explicit `IndexedSemantics` owns the POSITION — that is the whole
-    // reason it stays public. It says nothing about the set's size, though: the
-    // item is a member of the sliver's set whoever numbered it, so the size
-    // still comes from the stamp and is applied to a node that has a position
-    // either way. A size on a node with no position announces "of 100" attached
-    // to nothing.
-    let declared = config.index_in_parent().is_some();
-    if declared || pd.semantic_index.is_some() {
-        if let (false, Some(index)) = (declared, pd.semantic_index) {
-            config.set_index_in_parent(index);
-        }
+    // An explicit `IndexedSemantics` owns the POSITION, and the stamped size
+    // does NOT pair with it. Explicit numbering exists to describe a DIFFERENT
+    // set from the one the delegate materialises — six cards numbered as three
+    // rows, or an offset numbering — so pairing "row 2" with the delegate's
+    // count of six announces "row 2 of 6", and an offset can put the position
+    // past the size entirely. A caller wanting both supplies both.
+    //
+    // The honest degradation is "row 2 of ?", the same trade this entry already
+    // makes for an unresolved `ItemCount::Unknown`.
+    if config.index_in_parent().is_some() {
+        return;
+    }
+    if let Some(index) = pd.semantic_index {
+        config.set_index_in_parent(index);
         // The total rides with the position, never without it: AccessKit's two
         // properties describe one node, and a size on a node with no position
         // announces "of 100" attached to nothing.

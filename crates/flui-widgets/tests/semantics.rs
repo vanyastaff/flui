@@ -413,6 +413,68 @@ fn an_explicit_index_overrides_the_one_the_sliver_stamped() {
     }
 }
 
+/// A shrinking list stops announcing the old total.
+///
+/// Residents that keep their index are not relocated, so nothing moves them —
+/// and a stamp written only on mount or on a move leaves them announcing the
+/// set they were mounted into. A list going from six items to three would keep
+/// saying "of 6" for every row that stayed put, which is worse than saying
+/// nothing: the reader is told a definite, wrong total.
+#[test]
+fn shrinking_a_list_stops_announcing_the_old_total() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    let rows = |count: usize| {
+        Viewport::new((SliverList::new(
+            count,
+            60.0,
+            std::rc::Rc::new(move |i: usize| {
+                (i < count).then(|| {
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("row {i}"))
+                        .child(SizedBox::new(200.0, 60.0))
+                        .boxed()
+                })
+            }),
+        ),))
+    };
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        rows(6).position(controller.position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let before = laid.a11y_tree().expect("semantics enabled");
+    assert_eq!(
+        before
+            .find_by_label("row 0")
+            .expect("row 0 present")
+            .size_of_set(),
+        Some(6),
+        "precondition: the six-item list announces six",
+    );
+
+    // Same rows 0..3, still at the same indices — nothing relocates them.
+    laid.pump_widget(rows(3).position(controller.position()));
+    laid.pump();
+
+    let after = laid.a11y_tree().expect("semantics enabled");
+    assert_eq!(
+        after
+            .find_by_label("row 0")
+            .expect("row 0 survives the shrink")
+            .size_of_set(),
+        Some(3),
+        "a resident that never moved must still pick up the new total; \
+         `Some(6)` here is the set it was mounted into, which no longer exists",
+    );
+}
+
 /// A separated list counts its ITEMS, not its interleaved children.
 ///
 /// `SliverList::separated` builds `2n - 1` children: items at even logical
@@ -541,6 +603,12 @@ fn a_lazy_child_publishes_its_position_without_an_indexed_semantics_wrapper() {
             "{label} must publish a one-based set position derived from the \
              index the sliver stamped, with nothing in the tree wrapping it",
         );
+        assert_eq!(
+            node.size_of_set(),
+            Some(ROWS),
+            "...and the set's size beside it, since the delegate's own count \
+             does describe the set these rows belong to",
+        );
     }
 }
 
@@ -603,21 +671,20 @@ fn an_indexed_item_publishes_its_position_in_the_set() {
         );
     }
 
-    // The set SIZE now lands too, and on the item nodes — not the enclosing
-    // sliver. AccessKit's `size_of_set` and `position_in_set` describe the
-    // SAME node, so a total on the container is not something a reader
-    // querying the focused row can see.
+    // No size, and that is the CONTRACT here rather than a gap. Explicit
+    // numbering exists to describe a set the delegate does not materialise —
+    // six cards numbered as three rows, or an offset numbering — so pairing
+    // these positions with the delegate's own count would announce "item 2 of
+    // 6" for a row the caller numbered within a set of three, and an offset
+    // could put the position past the size entirely.
     //
-    // It is the count of set MEMBERS, taken from the delegate's declared item
-    // count rather than the sliver's render-child count: a delegate that
-    // interleaves non-members has more children than members, and announcing
-    // the child count would say "item 2 of 5" on a three-item list.
+    // A caller who wants both supplies both. "item 2 of ?" is the honest
+    // degradation, the same trade made for an unresolved `ItemCount::Unknown`.
+    // The derived path publishes both — see the sibling test below.
     let sizes: Vec<usize> = tree.nodes().filter_map(|node| node.size_of_set()).collect();
-    assert_eq!(
-        sizes,
-        vec![ROWS; ROWS],
-        "every indexed row must announce the set's size beside its position, \
-         and only the rows -- a size on any other node is one a reader \
-         querying a row cannot see",
+    assert!(
+        sizes.is_empty(),
+        "an explicitly numbered row must not be paired with the delegate's \
+         count, which describes a different set; found {sizes:?}",
     );
 }

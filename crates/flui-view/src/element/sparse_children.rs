@@ -420,7 +420,6 @@ impl SparseChildren {
                     let resident = &residents[pos];
                     if resident.index != *index {
                         tree.relocate_sparse_child(resident.id, *index);
-                        stamp_logical_index(tree, pipeline, host, resident.id, *index);
                         tracing::trace!(
                             from = resident.index,
                             to = *index,
@@ -429,6 +428,13 @@ impl SparseChildren {
                         );
                         any_work = true;
                     }
+                    // Stamped on EVERY reconcile, not only on a move. The host
+                    // mints the slot from its current mapping, and that mapping
+                    // changes without any child changing index — a list
+                    // shrinking from 100 items to 40 leaves every resident
+                    // where it is, and a resident that kept its old stamp goes
+                    // on announcing "of 100".
+                    stamp_logical_index(tree, pipeline, host, resident.id, *index);
                     let live = match update_or_replace_resident(
                         resident.id,
                         *index,

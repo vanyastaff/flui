@@ -935,6 +935,17 @@ where
         // already-built index, so without this an already-resident child
         // would show stale content forever across a `pump_widget` root-swap
         // that changes the backing item list/builder).
+        // Before the early return: the mapping can change while the delegate
+        // does not — same static children, same count, a different numbering —
+        // and a stale mapping announces a set that is no longer there.
+        let semantics_changed = self.semantics.differs_from(&core.view().semantics);
+        self.semantics = core.view().semantics.clone();
+        if semantics_changed {
+            // Residents keep the slot they were stamped with until something
+            // reconciles them. Nothing else here would.
+            self.manager.lock().needs_resident_refresh = true;
+        }
+
         if !delegate_changed(old_view, core.view()) {
             // Same builder, same key callback, same count: the residents
             // cannot read differently — Flutter's `SliverChildListDelegate.
@@ -951,10 +962,6 @@ where
             .clone_from(&core.view().find_index_by_key);
         manager.needs_resident_refresh = true;
         drop(manager);
-        // A changed delegate can mean a changed length or a changed
-        // interleaving, both of which change the announcement: "of 100" must
-        // not survive the list becoming 40.
-        self.semantics = core.view().semantics.clone();
 
         // A changed delegate under `ItemCount::Unknown` may mean a changed
         // length, and nothing else can discover a GROWN one: the manager's
@@ -2495,6 +2502,24 @@ impl fmt::Debug for SemanticSetMapping {
 }
 
 impl SemanticSetMapping {
+    /// Whether this mapping would announce differently from `other`.
+    ///
+    /// Compared by identity for the rule (a closure has no other equality) and
+    /// by value for the size. A false positive costs one restamp pass; a false
+    /// negative leaves a row announcing a set that no longer exists, so the
+    /// comparison errs toward "changed".
+    #[must_use]
+    pub fn differs_from(&self, other: &Self) -> bool {
+        if self.set_size != other.set_size {
+            return true;
+        }
+        match (&self.index_of, &other.index_of) {
+            (Some(a), Some(b)) => !Rc::ptr_eq(a, b),
+            (None, None) => false,
+            _ => true,
+        }
+    }
+
     /// Every child is a member, at its own logical index.
     #[must_use]
     pub fn one_to_one(item_count: ItemCount) -> Self {
