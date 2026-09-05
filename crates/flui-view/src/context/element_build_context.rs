@@ -253,7 +253,7 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
-        self.owner.read().hit_test_handle()
+        self.owner.read().hit_test_handle().cloned()
     }
 
     fn focus_manager(&self) -> Rc<FocusManager> {

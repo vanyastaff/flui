@@ -612,12 +612,19 @@ fn test_build_owner_memory_size() {
     // A bloat tripwire, not a hard constraint: one `BuildOwner` exists per
     // presentation, so this is measured in handfuls per process.
     //
-    // It last moved from 512 when the owner took on the duplicate-`GlobalKey`
+    // It moved from 512 when the owner took on the duplicate-`GlobalKey`
     // machinery, for a measured +32 bytes: the diagnostic drain (a `Vec`, 24)
     // and one pointer to the per-frame reservation ledger (8). The ledger's
     // own four containers are deliberately behind that pointer — they are
     // frame scratch, empty in any tree that uses no `GlobalKey`s, and do not
     // belong in the owner's inline hot set. Without the box this would be
     // 672.
-    assert!(size < 576, "BuildOwner is too large: {size} bytes");
+    //
+    // It moved again, 552 -> 584, for the per-presentation fresh-hit-test
+    // handle: a measured 32 bytes, being a lane ticket and a fat `Rc` pointer
+    // to the probe, with `Option`'s niche absorbing the discriminant. Stored
+    // inline rather than boxed on purpose: `BuildCapabilities` derives `Clone`
+    // and is built once per `BuildCtx`, so a `Box` here would trade 24 bytes
+    // on a per-presentation struct for an allocation on every element build.
+    assert!(size < 608, "BuildOwner is too large: {size} bytes");
 }

@@ -449,8 +449,19 @@ impl PresentationState {
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(PostFrameHandle::new(capabilities.scheduler));
             owner.set_local_post_frame_handle(capabilities.local_post_frame_handle);
-            owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle);
+            owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle.clone());
             owner.set_text_input_handle(text_input.handle());
+            // Paired here, the one place holding both halves: the realm's
+            // dispatch ticket (identity) and THIS presentation's pipeline
+            // (the tree). A realm may host several presentations, each with
+            // its own `PipelineOwner`, so a probe installed once per realm
+            // would answer every presentation with the first one's tree.
+            owner.set_hit_test_handle(flui_interaction::HitTestHandle::new(
+                capabilities.interaction_dispatch_handle,
+                Rc::new(
+                    flui_rendering::pipeline::hit_test_probe::PipelineHitTestProbe::new(&pipeline),
+                ),
+            ));
         });
 
         let renderer =

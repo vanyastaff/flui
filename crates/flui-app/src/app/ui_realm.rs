@@ -806,17 +806,6 @@ impl UiRealm {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
 
-        // The lane declares the fresh-hit-test capability but cannot perform
-        // one: `HitTestResult` is its own type, while the tree that fills one
-        // lives two layers up. Install the tree-backed probe here, the single
-        // place that holds both -- the same division `TextInputOwner` uses.
-        // Without it a realm's `BuildContext::hit_test_handle()` answers
-        // `NoHitTestProbe`, which is the honest state of a bare test tree but
-        // would be a silent hole in a real one.
-        interaction_lane.set_hit_test_probe(std::rc::Rc::new(
-            flui_rendering::pipeline::hit_test_probe::PipelineHitTestProbe::new(&pipeline),
-        ));
-
         let presentation = PresentationState::new(
             presentation_id,
             pipeline,
@@ -4545,19 +4534,18 @@ mod tests {
     /// Every layer here is separately capable of being wired to nothing: the
     /// lane declares the capability but cannot perform one, the probe can but
     /// is inert until installed, and the handle is realm-scoped but useless if
-    /// it addresses a different realm's tree. So the oracle is the ANSWER —
-    /// a position over the mounted content hits, one past it does not — rather
-    /// than the handle merely being obtainable, which every unwired
+    /// it addresses a different presentation's tree. So the oracle is the
+    /// ANSWER — a position over the mounted content hits, one past it does not
+    /// — rather than the handle merely being obtainable, which every unwired
     /// arrangement above also satisfies.
     ///
     /// The content is wrapped in an OPAQUE `Listener` deliberately. A bare
-    /// `SizedBox` is not hit-testable (`forward_hit_test` returns false with
-    /// no child, matching `RenderProxyBox`), and `Listener`'s own default is
-    /// `DeferToChild`, which inherits that miss — both correct, and both
-    /// enough to make this test pass against a probe wired to nothing.
+    /// `SizedBox` is not hit-testable (`forward_hit_test` returns false with no
+    /// child, matching `RenderProxyBox`), and `Listener`'s own default
+    /// `DeferToChild` inherits that miss — both correct, and both enough to
+    /// make this pass against a probe wired to nothing.
     #[test]
     fn a_realms_fresh_hit_test_reads_its_own_live_tree() {
-        use flui_interaction::InteractionDispatchError;
         use flui_types::{Offset, Pixels};
 
         let realm = new_runtime(noop_wake()).expect("realm claims cleanly");
@@ -4574,25 +4562,28 @@ mod tests {
         // view rather than staying at its 40x20 request.
         let _ = realm.draw_frame(coexistence_constraints());
 
-        let handle = realm.interaction_lane.dispatch_handle();
+        let handle = realm
+            .presentations
+            .primary()
+            .widgets()
+            .with_build_owner(|owner| owner.hit_test_handle().cloned())
+            .expect("a presentation installs its own hit-test handle at assembly");
+
         let probe_at = |x: f32, y: f32| {
             realm
                 .interaction_lane
                 .enter(|| handle.hit_test_at(Offset::new(Pixels(x), Pixels(y))))
         };
 
-        let inside = probe_at(5.0, 5.0).expect(
-            "a realm installs its own probe at construction — no probe would be \
-                     NoHitTestProbe here",
-        );
+        let inside = probe_at(5.0, 5.0).expect("realm active");
         assert!(
             !inside.is_empty(),
             "a position over the mounted content must hit it; an empty path \
              means the probe is reading some tree other than the one this \
-             realm's frame just laid out, or none at all"
+             presentation's frame just laid out, or none at all"
         );
 
-        let outside = probe_at(500.0, 500.0).expect("still installed");
+        let outside = probe_at(500.0, 500.0).expect("realm active");
         assert!(
             outside.is_empty(),
             "a position past the 200x200 view must hit nothing — if this also \
@@ -4600,15 +4591,73 @@ mod tests {
              state rather than testing the position it was given"
         );
 
-        // The probe reads THIS realm's tree, and the handle is refused by any
-        // other realm — the capability is realm-scoped, not process-global.
+        // Realm-scoped, not process-global: another realm refuses the handle.
         let other = new_runtime(noop_wake()).expect("second realm");
         assert_eq!(
             other
                 .interaction_lane
                 .enter(|| handle.hit_test_at(Offset::new(Pixels(5.0), Pixels(5.0))))
                 .unwrap_err(),
-            InteractionDispatchError::WrongRealm
+            flui_interaction::InteractionDispatchError::WrongRealm
+        );
+    }
+
+    /// Two presentations in ONE realm read their own trees.
+    ///
+    /// The realm's interaction lane is shared by every presentation it hosts,
+    /// but each has its own `PipelineOwner`. A probe held once per realm would
+    /// answer the second presentation with the first one's tree — and would
+    /// report the tree gone once the FIRST presentation closed, while the
+    /// second was still live. Hence the handle is minted per presentation, at
+    /// assembly, pairing the realm's ticket with that presentation's pipeline.
+    #[test]
+    fn two_presentations_in_one_realm_do_not_share_a_hit_test_tree() {
+        use flui_types::{Offset, Pixels};
+
+        let mut realm = UiRealm::for_test();
+        let second_id = realm.install_second_presentation_for_test();
+        let first_id = realm.presentation_id();
+        assert_ne!(first_id, second_id);
+
+        let handle_for = |id: PresentationId| {
+            realm
+                .presentations
+                .get(id)
+                .expect("installed")
+                .widgets()
+                .with_build_owner(|owner| owner.hit_test_handle().cloned())
+                .expect("each presentation installs its own handle")
+        };
+
+        // Content in the FIRST presentation only. Its tree hits; the second
+        // presentation's tree is empty and must say so.
+        realm
+            .attach_root_widget_with_size(
+                &flui_widgets::Listener::new()
+                    .behavior(flui_interaction::HitTestBehavior::Opaque)
+                    .child(SizedBox::new(40.0, 20.0)),
+                40.0,
+                20.0,
+            )
+            .expect("mounts into the primary presentation");
+        let _ = realm.draw_frame(coexistence_constraints());
+
+        let at_origin = Offset::new(Pixels(5.0), Pixels(5.0));
+        let (from_first, from_second) = realm.interaction_lane.enter(|| {
+            (
+                handle_for(first_id).hit_test_at(at_origin),
+                handle_for(second_id).hit_test_at(at_origin),
+            )
+        });
+
+        assert!(
+            !from_first.expect("first answers").is_empty(),
+            "the presentation that owns the mounted content must hit it"
+        );
+        assert!(
+            from_second.expect("second answers").is_empty(),
+            "the second presentation has no content — reporting a hit here \
+             means it is reading the first presentation's tree"
         );
     }
 
