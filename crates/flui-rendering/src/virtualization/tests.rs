@@ -429,6 +429,38 @@ fn single_item_virtualizer() {
 // Property tests vs a naive Vec<ItemExtent> oracle
 // ============================================================================
 
+/// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
+///
+/// That sampler panics from inside its own strategy on some seeds (#889:
+/// `assertion failed: self.low - result < self.intervals.step`,
+/// `proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+/// *generating* a value, before any assertion here runs.
+///
+/// The grid is 2^24 steps, not a round decimal, so subpixel and
+/// near-degenerate geometry stays reachable: across a 20,000 px range that is
+/// ~0.0012 px between neighbours. A coarse grid would quietly narrow these
+/// tests to whole-pixel cases, which is the opposite of what a geometry
+/// property suite is for.
+///
+/// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
+/// step index, where `f32: From<u32>` does not exist at all. Only the final
+/// narrowing is lossy, and that is the point — the value has to land in the
+/// target type.
+fn extent_in(lo: f32, hi: f32) -> impl proptest::strategy::Strategy<Value = f32> {
+    const STEPS: u32 = 1 << 24;
+    use proptest::strategy::Strategy as _;
+    (0u32..=STEPS).prop_map(move |n| {
+        let t = f64::from(n) / f64::from(STEPS);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "narrowing to the target type is the purpose; the \
+                      arithmetic above is exact in f64"
+        )]
+        let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f32;
+        v
+    })
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;
@@ -533,7 +565,7 @@ mod prop {
     fn op_strategy() -> impl Strategy<Value = Op> {
         prop_oneof![
             (0usize..200).prop_map(Op::SetCount),
-            (0usize..200, 0.1f32..100.0)
+            (0usize..200, extent_in(0.1, 100.0))
                 .prop_map(|(index, extent)| Op::SetMeasured { index, extent }),
             (0usize..200).prop_map(Op::InvalidateFrom),
         ]
@@ -572,7 +604,7 @@ mod prop {
         #[test]
         fn invariants_hold_under_random_ops(
             initial_count in 0usize..100,
-            default_estimate in 0.5f32..50.0,
+            default_estimate in extent_in(0.5, 50.0),
             ops in proptest::collection::vec(op_strategy(), 0..120),
         ) {
             let mut v = Virtualizer::new(initial_count, default_estimate);
@@ -663,7 +695,7 @@ mod prop {
         #[test]
         fn set_count_resizes_preserve_sums(
             sizes in proptest::collection::vec(0usize..150, 1..40),
-            est in 1.0f32..20.0,
+            est in extent_in(1.0, 20.0),
         ) {
             let mut v = Virtualizer::new(0, est);
             let mut oracle = Oracle::new(0, est);
@@ -763,9 +795,9 @@ mod tree_edits {
 
     fn op() -> impl Strategy<Value = Op> {
         prop_oneof![
-            (0usize..300, 0.0f32..50.0).prop_map(|(at, e)| Op::Insert { at, e }),
+            (0usize..300, extent_in(0.0, 50.0)).prop_map(|(at, e)| Op::Insert { at, e }),
             (0usize..300).prop_map(|at| Op::Remove { at }),
-            (0usize..300, 0.0f32..50.0).prop_map(|(at, e)| Op::Set { at, e }),
+            (0usize..300, extent_in(0.0, 50.0)).prop_map(|(at, e)| Op::Set { at, e }),
         ]
     }
 
@@ -774,7 +806,7 @@ mod tree_edits {
 
         #[test]
         fn mid_list_insert_remove_matches_oracle(
-            init in proptest::collection::vec(0.0f32..50.0, 0..30),
+            init in proptest::collection::vec(extent_in(0.0, 50.0), 0..30),
             ops in proptest::collection::vec(op(), 0..400),
         ) {
             let mut t = ExtentTree::from_fn(init.len(), |i| measured(init[i]));
@@ -841,8 +873,8 @@ mod tree_edits {
         /// the interior shared descent, and the `>= total` clamp together.
         #[test]
         fn seek_sorted_agrees_with_scalar_seek(
-            init in proptest::collection::vec(0.1f32..50.0, 1..40),
-            fracs in proptest::collection::vec(0.0f32..1.0, 1..8),
+            init in proptest::collection::vec(extent_in(0.1, 50.0), 1..40),
+            fracs in proptest::collection::vec(extent_in(0.0, 1.0), 1..8),
         ) {
             let t = ExtentTree::from_fn(init.len(), |i| measured(init[i]));
             let total = t.total_extent();

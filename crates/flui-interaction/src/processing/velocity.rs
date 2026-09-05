@@ -1297,12 +1297,44 @@ mod tests {
         assert!(left < 0.0, "leftward swipe should be -dx, got {left}");
     }
 
+    /// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
+    ///
+    /// That sampler panics from inside its own strategy on some seeds (#889:
+    /// `assertion failed: self.low - result < self.intervals.step`,
+    /// `proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+    /// *generating* a value, before any assertion here runs.
+    ///
+    /// The grid is 2^24 steps, not a round decimal, so subpixel and
+    /// near-degenerate geometry stays reachable: across a 20,000 px range that is
+    /// ~0.0012 px between neighbours. A coarse grid would quietly narrow these
+    /// tests to whole-pixel cases, which is the opposite of what a geometry
+    /// property suite is for.
+    ///
+    /// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
+    /// step index, where `f32: From<u32>` does not exist at all. Only the final
+    /// narrowing is lossy, and that is the point — the value has to land in the
+    /// target type.
+    fn float_in(lo: f32, hi: f32) -> impl proptest::strategy::Strategy<Value = f32> {
+        const STEPS: u32 = 1 << 24;
+        use proptest::strategy::Strategy as _;
+        (0u32..=STEPS).prop_map(move |n| {
+            let t = f64::from(n) / f64::from(STEPS);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "narrowing to the target type is the purpose; the \
+                          arithmetic above is exact in f64"
+            )]
+            let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f32;
+            v
+        })
+    }
+
     proptest::proptest! {
         /// Finite positions at monotonic times never produce a non-finite
         /// velocity, and the estimate's confidence stays in [0, 1].
         #[test]
         fn velocity_finite_and_confidence_bounded(
-            xs in proptest::collection::vec(-1e4f32..1e4, 2..=20),
+            xs in proptest::collection::vec(float_in(-1e4, 1e4), 2..=20),
         ) {
             let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
             let start = Instant::now();

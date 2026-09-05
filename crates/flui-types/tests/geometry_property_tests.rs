@@ -11,14 +11,45 @@ use proptest::prelude::*;
 // Arbitrary generators for property testing
 // ============================================================================
 
+/// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
+///
+/// That sampler panics from inside its own strategy on some seeds (#889:
+/// `assertion failed: self.low - result < self.intervals.step`,
+/// `proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+/// *generating* a value, before any assertion here runs.
+///
+/// The grid is 2^24 steps, not a round decimal, so subpixel and
+/// near-degenerate geometry stays reachable: across a 20,000 px range that is
+/// ~0.0012 px between neighbours. A coarse grid would quietly narrow these
+/// tests to whole-pixel cases, which is the opposite of what a geometry
+/// property suite is for.
+///
+/// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
+/// step index, where `f32: From<u32>` does not exist at all. Only the final
+/// narrowing is lossy, and that is the point — the value has to land in the
+/// target type.
+fn float_in(lo: f32, hi: f32) -> impl Strategy<Value = f32> {
+    const STEPS: u32 = 1 << 24;
+    (0u32..=STEPS).prop_map(move |n| {
+        let t = f64::from(n) / f64::from(STEPS);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "narrowing to the target type is the purpose; the \
+                      arithmetic above is exact in f64"
+        )]
+        let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f32;
+        v
+    })
+}
+
 /// Generate arbitrary Pixels values in a reasonable range for UI coordinates
 fn arb_pixels() -> impl Strategy<Value = Pixels> {
-    (-10000.0f32..=10000.0f32).prop_map(Pixels)
+    float_in(-10000.0, 10000.0).prop_map(Pixels)
 }
 
 /// Generate arbitrary positive Pixels for sizes (must be >= 0)
 fn arb_positive_pixels() -> impl Strategy<Value = Pixels> {
-    (0.0f32..=10000.0f32).prop_map(Pixels)
+    float_in(0.0, 10000.0).prop_map(Pixels)
 }
 
 /// Generate arbitrary Points
@@ -175,12 +206,28 @@ proptest! {
         }
     }
 
-    /// Property: A rect always intersects itself
+    /// Property: a rect with area intersects itself, and an EMPTY one does
+    /// not — including with itself.
+    ///
+    /// `overlaps` uses strict inequalities, so a zero-width or zero-height
+    /// rect overlaps nothing at all. That is the half-open convention and it
+    /// is self-consistent: an empty region contains no points, so it can share
+    /// none. (Not verified against the reference here — `Rect.overlaps` lives
+    /// in `dart:ui`, which the local `.flutter` clone does not include.)
+    ///
+    /// The unqualified form of this property — "a rect always intersects
+    /// itself" — was false for empty rects and passed only because the old
+    /// generator essentially never produced one. It does now: the strategy
+    /// draws from a finite grid and hits its endpoints.
     #[test]
-    fn prop_rect_intersects_self(r in arb_rect()) {
-        prop_assert!(r.intersects(&r),
-            "Rect must intersect itself: {:?}",
-            r);
+    fn prop_rect_intersects_self_iff_it_has_area(r in arb_rect()) {
+        let has_area = r.max.x > r.min.x && r.max.y > r.min.y;
+        prop_assert_eq!(
+            r.intersects(&r),
+            has_area,
+            "a rect intersects itself exactly when it has area: {:?}",
+            r
+        );
     }
 
     /// Property: If A contains B, then A intersects B

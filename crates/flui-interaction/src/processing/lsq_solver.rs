@@ -478,13 +478,33 @@ mod tests {
         );
     }
 
+    /// A float in `[lo, hi]` drawn WITHOUT proptest's uniform float sampler.
+    ///
+    /// That sampler panics from inside its own strategy on some seeds (#889:
+    /// `assertion failed: self.low - result < self.intervals.step`,
+    /// `proptest-1.11.0/src/num/float_samplers.rs:466`), which fires while
+    /// *generating* a value, before any assertion here runs.
+    ///
+    /// The grid is 2^24 steps so near-degenerate inputs stay reachable — a
+    /// coarse grid would quietly narrow a solver's test space to well-spaced
+    /// points, which is the opposite of what it should be exercised on.
+    ///
+    /// No narrowing cast here: `f64: From<u32>` is exact for every step index,
+    /// so the whole computation stays in the target type. (The `f32` siblings
+    /// of this helper do need one — `f32: From<u32>` does not exist.)
+    fn float_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
+        use proptest::strategy::Strategy as _;
+        const STEPS: u32 = 1 << 24;
+        (0u32..=STEPS).prop_map(move |n| lo + (f64::from(n) / f64::from(STEPS)) * (hi - lo))
+    }
+
     proptest::proptest! {
         /// For any finite data and degree, `solve` returns either `None` or a
         /// fit whose confidence is in [0, 1] with finite coefficients — never
         /// NaN/Inf poisoning downstream consumers.
         #[test]
         fn solve_confidence_bounded_and_finite(
-            data in proptest::collection::vec((-1e3f64..1e3, -1e3f64..1e3), 1..=20),
+            data in proptest::collection::vec((float_in(-1e3, 1e3), float_in(-1e3, 1e3)), 1..=20),
             degree in 0usize..=3,
         ) {
             let xs: Vec<f64> = data.iter().map(|p| p.0).collect();
