@@ -775,6 +775,42 @@ unsafe fn layout_subtree_borrowed(
     })
 }
 
+/// Why a node with `NEEDS_LAYOUT` clear did not serve its cached geometry.
+///
+/// Three genuinely different states reach that point and only the third is a
+/// defect. They were reported as one — every miss logged "invariant
+/// violation" — which is not a cosmetic problem: an animated demo logged it
+/// twice per frame for a whole run and it was recorded as a suspected
+/// rendering defect while the run's actual defect was frame pacing
+/// (ADR-0058). A named classification keeps the distinction where a reader
+/// and a test can both see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheMiss {
+    /// No constraints have ever been cached: the first pass over a freshly
+    /// mounted node. Benign.
+    FirstLayout,
+    /// Constraints are cached but differ from the incoming ones — a resize,
+    /// a viewport change, a parent laying its child out differently. The
+    /// cache refusing to serve here IS the invalidation path working.
+    /// Benign.
+    ConstraintsChanged,
+    /// Constraints are cached AND match, the node is clean, and geometry is
+    /// still absent. Nothing may clear one without the other, so this is a
+    /// real invariant violation — the only one of the three.
+    GeometryClearedUnderMatchingConstraints,
+}
+
+/// Classifies a cache miss on a clean node. Pure so the distinction is
+/// testable without driving a layout walk that can only produce two of the
+/// three states through its public API.
+const fn classify_cache_miss(has_cached_constraints: bool, constraints_match: bool) -> CacheMiss {
+    match (has_cached_constraints, constraints_match) {
+        (false, _) => CacheMiss::FirstLayout,
+        (true, false) => CacheMiss::ConstraintsChanged,
+        (true, true) => CacheMiss::GeometryClearedUnderMatchingConstraints,
+    }
+}
+
 /// Body of [`layout_subtree_borrowed`]; split out so every recursion
 /// level enters through the [`ensure_stack`] probe.
 ///
@@ -870,6 +906,8 @@ unsafe fn layout_subtree_borrowed_impl(
         child_ids,
         needs_layout_flag,
         cached_geometry,
+        constraints_match,
+        has_cached_constraints,
         geometry_degraded,
         node_protocol,
         is_leaf,
@@ -893,14 +931,17 @@ unsafe fn layout_subtree_borrowed_impl(
         let needs_layout_flag = entry.needs_layout();
         // Snapshot the cached geometry for the short-circuit check below;
         // no allocation — `Size` is `Copy`.
-        let cached_geometry: Option<flui_types::Size> = if needs_layout_flag {
+        // Split deliberately, not folded into one `Option`: a clean node
+        // that misses the cache does so for one of three reasons, and only
+        // the third is a defect (see the short-circuit below). Collapsing
+        // them loses the distinction at the only point that can still tell
+        // them apart.
+        let constraints_match = entry.state().has_constraints(&constraints);
+        let has_cached_constraints = entry.state().constraints().is_some();
+        let cached_geometry: Option<flui_types::Size> = if needs_layout_flag || !constraints_match {
             None
         } else {
-            entry
-                .state()
-                .has_constraints(&constraints)
-                .then(|| entry.state().geometry())
-                .flatten()
+            entry.state().geometry()
         };
         let geometry_degraded = entry.state().geometry_degraded();
         let is_leaf = child_ids.is_empty();
@@ -911,6 +952,8 @@ unsafe fn layout_subtree_borrowed_impl(
             child_ids,
             needs_layout_flag,
             cached_geometry,
+            constraints_match,
+            has_cached_constraints,
             geometry_degraded,
             node_protocol,
             is_leaf,
@@ -932,13 +975,27 @@ unsafe fn layout_subtree_borrowed_impl(
             }
             return Ok(geometry);
         }
-        // Constraints matched but geometry was absent — invariant violation.
-        // Fall through to a full layout pass with a warning.
-        tracing::warn!(
-            node_id = ?id,
-            "layout short-circuit: clean constraints cache but missing geometry; \
-             proceeding with layout (invariant violation)"
-        );
+        // A clean node that did not hit the cache. Three different states
+        // reach here and only one of them is a defect; warning about all
+        // three is how a normal relayout gets reported as an invariant
+        // violation. (It did: an animated demo logged this warning twice
+        // per frame for the whole run, and the frame it was blamed for was
+        // a pacing defect elsewhere entirely — ADR-0058.)
+        match classify_cache_miss(has_cached_constraints, constraints_match) {
+            CacheMiss::FirstLayout => {
+                tracing::trace!(node_id = ?id, "first layout: no cached constraints");
+            }
+            CacheMiss::ConstraintsChanged => {
+                tracing::trace!(node_id = ?id, "relayout: constraints changed");
+            }
+            CacheMiss::GeometryClearedUnderMatchingConstraints => {
+                tracing::warn!(
+                    node_id = ?id,
+                    "layout short-circuit: clean node, matching constraints, but geometry was \
+                     cleared without clearing them; proceeding with layout (invariant violation)"
+                );
+            }
+        }
     }
 
     // Past the short-circuit: this node is being laid out for real. Recorded
@@ -2078,6 +2135,35 @@ mod tests {
     /// structural (`SubtreeArena: !Send + !Sync`, pinned further down in
     /// this file's test module) with no runtime check to exercise -- see
     /// the comment above the pin.
+    /// The three states a clean node's cache miss can be in, exhaustively.
+    /// Only the third is a defect; the walk warns for that one alone.
+    #[test]
+    fn a_cache_miss_is_classified_by_what_the_cache_actually_holds() {
+        assert_eq!(
+            classify_cache_miss(false, false),
+            CacheMiss::FirstLayout,
+            "nothing cached: a freshly mounted node's first pass"
+        );
+        assert_eq!(
+            classify_cache_miss(false, true),
+            CacheMiss::FirstLayout,
+            "`constraints_match` is meaningless with nothing cached, and must not \
+             promote an unlaid-out node to a violation"
+        );
+        assert_eq!(
+            classify_cache_miss(true, false),
+            CacheMiss::ConstraintsChanged,
+            "a resize or a viewport change: the cache refusing to serve is the \
+             invalidation path working, not a broken invariant"
+        );
+        assert_eq!(
+            classify_cache_miss(true, true),
+            CacheMiss::GeometryClearedUnderMatchingConstraints,
+            "the only real violation: geometry cleared without clearing the \
+             constraints that still match"
+        );
+    }
+
     #[test]
     fn new_with_zero_ids_produces_empty_arena() {
         // Exercise `SubtreeArena::new` with the matched-length empty case

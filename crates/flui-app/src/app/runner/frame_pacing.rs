@@ -206,6 +206,13 @@ const FALLBACK_PERIOD_FRACTION: f64 = 0.95;
 /// What a wake sees of the fallback deadline: armed and not yet due (the
 /// ticker-only wake is deferred), or due (this wake IS the deferred one).
 /// Both false when nothing is armed.
+///
+/// Not `cfg`-gated, unlike `FallbackWake` itself: every backend's
+/// `wake_action` call passes one, and the web runner passes
+/// `FallbackGate::default()` because the browser's `requestAnimationFrame`
+/// loop already paces it. A gated type here would make the shared predicate
+/// take a different shape per target — the thing that let a signature change
+/// break the wasm build while the native gate stayed green.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct FallbackGate {
     /// A deadline is armed and lies in the future.

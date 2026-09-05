@@ -1,7 +1,7 @@
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 
-use super::frame_pacing::{WakeAction, wake_action};
+use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
 use super::host::{
     APP_RUNTIME, install_owner_platform, runtime_needs_redraw_handle, runtime_wake_callback,
     with_owner_platform,
@@ -187,8 +187,16 @@ where
                     let has_pending = realm.has_pending_work();
                     let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
                     let scheduler = realm.scheduler();
-                    match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
-                    {
+                    match wake_action(
+                        scheduler.frames_enabled(),
+                        dirty,
+                        scheduler.is_frame_scheduled(),
+                        // No deferral on web: this callback is driven by the
+                        // browser's own `requestAnimationFrame` loop, which
+                        // already paces at the display's rate — the exact job
+                        // ADR-0058's deadline does for the native backends.
+                        FallbackGate::default(),
+                    ) {
                         WakeAction::Skip => return,
                         WakeAction::PumpAsync => {
                             // Frames disabled: pump only the async driver — see
