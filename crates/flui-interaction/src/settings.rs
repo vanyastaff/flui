@@ -70,7 +70,28 @@ pub const DEFAULT_PAN_SLOP_VERTICAL: f32 = 18.0;
 pub const DEFAULT_PAN_SLOP_HORIZONTAL: f32 = 18.0;
 
 /// Default scale slop (minimum scale factor change to start scaling).
+///
+/// A *ratio* tolerance, not a distance: the reference's acceptance test reads
+/// `max(a / b, b / a) > 1.05` (`gestures/scale.dart`), and this is that
+/// `0.05`. It is dimensionless, which is why — unlike every other slop here —
+/// it has no per-kind variant: a 5% pinch is 5% whatever moved.
 pub const DEFAULT_SCALE_SLOP: f32 = 0.05;
+
+/// Default span slop for imprecise devices (18 logical pixels).
+///
+/// Matches Flutter's `kScaleSlop = kTouchSlop` (`gestures/constants.dart`,
+/// tag `3.44.0`) — the threshold `computeScaleSlop` returns for every kind but
+/// mouse. This is the *absolute* distance the span between two pointers must
+/// change by, the tier [`DEFAULT_SCALE_SLOP`]'s ratio cannot express: a pinch
+/// starting from a wide span moves a long way before it moves 5%.
+pub const DEFAULT_SPAN_SLOP: f32 = DEFAULT_TOUCH_SLOP;
+
+/// Default span slop for mouse devices (1 logical pixel).
+///
+/// Matches Flutter's `kPrecisePointerScaleSlop = kPrecisePointerHitSlop`
+/// (`gestures/constants.dart`, tag `3.44.0`) — what `computeScaleSlop` returns
+/// for `PointerDeviceKind.mouse`.
+pub const DEFAULT_MOUSE_SPAN_SLOP: f32 = DEFAULT_MOUSE_SLOP;
 
 /// Default double-tap distance tolerance (100 logical pixels).
 pub const DEFAULT_DOUBLE_TAP_SLOP: f32 = 100.0;
@@ -444,9 +465,33 @@ impl GestureSettings {
     }
 
     /// Get the scale slop (minimum scale change to start scaling).
+    ///
+    /// A ratio, not a distance — see [`DEFAULT_SCALE_SLOP`]. Compare through
+    /// [`Self::exceeds_scale_slop`] rather than against a measured distance.
     #[inline]
     pub fn scale_slop(&self) -> f32 {
         self.scale_slop
+    }
+
+    /// The span slop for `kind` — how far the *distance between two pointers*
+    /// must change, in logical pixels, before a scale is recognised.
+    ///
+    /// This is `computeScaleSlop(kind)` (`gestures/events.dart`, tag
+    /// `3.44.0`). Like `computeHitSlop`, it special-cases exactly the mouse as
+    /// precise; unlike it, the reference's version takes no settings at all,
+    /// so neither arm here is configurable.
+    ///
+    /// Distinct from [`Self::scale_slop`], which is a dimensionless ratio. The
+    /// two are separate acceptance criteria, not two spellings of one: a pinch
+    /// crosses this tier on absolute movement from a wide starting span long
+    /// before it reaches 5%, and a small pinch crosses the ratio tier while
+    /// barely moving.
+    #[inline]
+    pub fn span_slop_for(&self, kind: PointerType) -> f32 {
+        match kind {
+            PointerType::Mouse => DEFAULT_MOUSE_SPAN_SLOP,
+            _ => DEFAULT_SPAN_SLOP,
+        }
     }
 
     /// Get the double-tap slop (maximum distance between taps).
