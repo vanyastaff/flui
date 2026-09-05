@@ -161,7 +161,7 @@ impl RenderPointerListener {
 The widget side owns callback composition and lane registration:
 
 ```rust
-use flui_interaction::{PointerEvent, PointerTarget};
+use flui_interaction::{PointerDispatch, PointerTarget};
 use flui_view::RenderObjectContext;
 
 pub struct ListenerState {
@@ -174,7 +174,10 @@ impl ListenerState {
         ctx: &RenderObjectContext<'_>,
     ) -> RenderPointerListener {
         let target = ctx
-            .register_pointer(|event: &PointerEvent| {
+            .register_pointer(|dispatch: PointerDispatch<'_>| {
+                // `dispatch.local` is the event in this node's own space —
+                // what a handler used to receive. `dispatch.global` is the
+                // same event as the platform delivered it.
                 // Dispatch to on_pointer_down / on_pointer_up / ...
             })
             .ok();
@@ -189,13 +192,13 @@ impl ListenerState {
     ) {
         match self.target {
             Some(target) => {
-                let _ = ctx.replace_pointer(target, |event: &PointerEvent| {
+                let _ = ctx.replace_pointer(target, |dispatch: PointerDispatch<'_>| {
                     // Dispatch to the updated callback set.
                 });
                 render.set_target(Some(target));
             }
             None => {
-                self.target = ctx.register_pointer(|event: &PointerEvent| {}).ok();
+                self.target = ctx.register_pointer(|_: PointerDispatch<'_>| {}).ok();
                 render.set_target(self.target);
             }
         }
