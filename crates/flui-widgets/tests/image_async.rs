@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use common::{lay_out, loose, size};
 use flui_assets::AssetRegistry;
+use flui_types::Size;
 use flui_types::painting::Image as PixelImage;
 use flui_widgets::{AssetImage, Image, ImageProvider, ImageProviderError};
 use flui_widgets::{Padding, SizedBox};
@@ -35,6 +36,28 @@ const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 fn fixture(name: &str) -> String {
     format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// The two fixture shapes. Every discriminating pair in this file pairs one
+/// of each, so `LaidOut::size` names WHICH image is on screen rather than only
+/// that some image is. With both members the same size, a test asserting "the
+/// new provider is showing" passes just as well when the old one never left,
+/// or when the new one never arrived — which is exactly how a provider-swap
+/// race went unnoticed until it failed on CI.
+const OLD: (f32, f32) = (5.0, 3.0);
+const NEW: (f32, f32) = (7.0, 2.0);
+
+fn old_size() -> Size {
+    size(OLD.0, OLD.1)
+}
+
+fn new_size() -> Size {
+    size(NEW.0, NEW.1)
+}
+
+/// `inner` grown by `Padding::all(2.0)` on every side.
+fn padded(inner: Size) -> Size {
+    size(inner.width.0 + 4.0, inner.height.0 + 4.0)
 }
 
 fn registry() -> Arc<AssetRegistry> {
@@ -323,32 +346,64 @@ fn async_image_provider_swap_under_gapless_playback_retains_the_previous_frame()
         loose(1000.0),
     );
     pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(5.0, 3.0)
+        laid.size(laid.current_root()) == old_size()
     });
 
     laid.pump_widget(Image::asset(reg, new_path).gapless_playback(true));
     assert_eq!(
         laid.size(laid.current_root()),
-        size(5.0, 3.0),
+        old_size(),
         "gapless playback must keep showing the OLD decoded frame while the \
          new provider's load is in flight, not reset to the placeholder",
     );
 
-    // Watch a short window while the new path's load is genuinely in
-    // flight: the frame must stay 5x3 continuously, never dipping to the
-    // empty placeholder in between -- proving this is real data retention,
-    // not a race that happens to land the same value on the one frame
-    // already asserted above.
-    for _ in 0..50 {
+    // Gapless playback's actual promise is that there is NO placeholder frame
+    // between the old image and the new one. Watch every frame until the new
+    // image lands: each must be the old one or the new one, never the empty
+    // placeholder.
+    //
+    // The previous version asserted the frame stayed 5x3 for 50 ticks and
+    // called that "real data retention, not a race that happens to land the
+    // same value". With both fixtures 5x3 it could not have detected either:
+    // the new image lands well inside that window, and the assertion it made
+    // was satisfied by the new image just as well as the old.
+    let mut seen = vec![laid.size(laid.current_root())];
+    let deadline = Instant::now() + DECODE_BUDGET;
+    loop {
         laid.tick();
+        let observed = laid.size(laid.current_root());
+        if seen.last() != Some(&observed) {
+            seen.push(observed);
+        }
+        assert_ne!(
+            observed,
+            size(0.0, 0.0),
+            "gapless playback must never show the placeholder between the two \
+             images; the frame went through {seen:?}",
+        );
+        if observed == new_size() {
+            break;
+        }
         assert_eq!(
-            laid.size(laid.current_root()),
-            size(5.0, 3.0),
-            "the displayed frame must never drop to the empty placeholder \
-             while the new provider's load is in flight",
+            observed,
+            old_size(),
+            "before the new image lands the frame must be the OLD one; it \
+             went through {seen:?}",
+        );
+        assert!(
+            Instant::now() < deadline,
+            "the new provider's load did not complete within the \
+             {DECODE_BUDGET:?} budget; the frame went through {seen:?}",
         );
         std::thread::sleep(POLL_INTERVAL);
     }
+
+    assert_eq!(
+        seen,
+        vec![old_size(), new_size()],
+        "the frame must go straight from the old image to the new one, with \
+         nothing in between",
+    );
 }
 
 /// Flutter's oracle `Verify Image resets its RenderImage when changing
@@ -364,21 +419,31 @@ fn async_image_provider_swap_clears_to_the_placeholder_by_default() {
 
     let mut laid = lay_out(Image::asset(Arc::clone(&reg), old_path), loose(1000.0));
     pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(5.0, 3.0)
+        laid.size(laid.current_root()) == old_size()
     });
 
     laid.pump_widget(Image::asset(reg, new_path));
+    // Three distinct outcomes are possible here, and with both fixtures the
+    // same size two of them were indistinguishable: the placeholder (correct),
+    // the OLD frame retained (the bug this test exists to catch), or the NEW
+    // frame already landed (a race -- correct behaviour observed too late).
+    // Different sizes make the failure message say which one happened.
     assert_eq!(
         laid.size(laid.current_root()),
         size(0.0, 0.0),
         "Flutter's default (gaplessPlayback: false) clears to the \
-         placeholder the instant the provider key changes",
+         placeholder the instant the provider key changes; {} means the old \
+         frame was retained and {} means the new load had already landed",
+        old_size(),
+        new_size(),
     );
 
-    // ...and the new provider still resolves: clearing is a transition, not
-    // a dead end.
+    // ...and the NEW provider resolves: clearing is a transition, not a dead
+    // end. Waiting for the new image's size rather than a size both fixtures
+    // share is what makes this assert the new one arrived, instead of being
+    // satisfied by the old one reappearing.
     pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(5.0, 3.0)
+        laid.size(laid.current_root()) == new_size()
     });
 }
 
@@ -398,17 +463,17 @@ fn async_image_provider_swap_between_two_already_cached_providers_shows_immediat
     let path_b = fixture("tiny-swap2-b.png");
     let reg = registry();
 
-    for path in [path_a.clone(), path_b.clone()] {
+    for (path, expected) in [(path_a.clone(), old_size()), (path_b.clone(), new_size())] {
         let mut warm_up = lay_out(Image::asset(Arc::clone(&reg), path), loose(1000.0));
         pump_until(&mut warm_up, |laid| {
-            laid.size(laid.current_root()) == size(5.0, 3.0)
+            laid.size(laid.current_root()) == expected
         });
     }
 
     let mut laid = lay_out(Image::asset(Arc::clone(&reg), path_a), loose(1000.0));
     assert_eq!(
         laid.size(laid.current_root()),
-        size(5.0, 3.0),
+        old_size(),
         "a pre-cached provider must show its real dimensions on its very \
          first frame, with no placeholder frame at all",
     );
@@ -416,9 +481,11 @@ fn async_image_provider_swap_between_two_already_cached_providers_shows_immediat
     laid.pump_widget(Image::asset(reg, path_b));
     assert_eq!(
         laid.size(laid.current_root()),
-        size(5.0, 3.0),
-        "swapping between two already-cached providers must show the new \
-         one's real dimensions on the same frame as the swap",
+        new_size(),
+        "swapping between two already-cached providers must show the NEW \
+         one's real dimensions on the same frame as the swap -- the two \
+         fixtures differ in size precisely so that still showing the old \
+         one is a failure here rather than an indistinguishable pass",
     );
 }
 
@@ -450,20 +517,20 @@ fn async_image_provider_swap_from_a_cold_stream_to_an_already_cached_provider_la
             loose(1000.0),
         );
         pump_until(&mut warm_up, |laid| {
-            laid.size(laid.current_root()) == size(5.0, 3.0)
+            laid.size(laid.current_root()) == new_size()
         });
     }
 
     // Path A starts COLD: a real background load, placeholder until it lands.
     let mut laid = lay_out(Image::asset(Arc::clone(&reg), path_a), loose(1000.0));
     pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(5.0, 3.0)
+        laid.size(laid.current_root()) == old_size()
     });
 
     laid.pump_widget(Image::asset(reg, path_b));
     assert_eq!(
         laid.size(laid.current_root()),
-        size(5.0, 3.0),
+        new_size(),
         "swapping from a cold-then-resolved stream to an already-cached \
          provider must still lay out the new render object on the same \
          frame, not leave it permanently without committed geometry",
@@ -521,7 +588,7 @@ fn async_image_provider_swap_lays_out_when_the_replacement_is_not_the_root() {
             loose(1000.0),
         );
         pump_until(&mut warm_up, |laid| {
-            laid.size(laid.current_root()) == size(9.0, 7.0)
+            laid.size(laid.current_root()) == padded(new_size())
         });
     }
 
@@ -530,17 +597,18 @@ fn async_image_provider_swap_lays_out_when_the_replacement_is_not_the_root() {
         loose(1000.0),
     );
     pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(9.0, 7.0)
+        laid.size(laid.current_root()) == padded(old_size())
     });
 
     laid.pump_widget(Padding::all(2.0).child(Image::asset(reg, path_b)));
 
-    // 5x3 image + 2px padding on every side. A child left without committed
-    // geometry cannot produce this, because the padding parent sizes itself
-    // from the child it just laid out.
+    // The NEW image plus 2px of padding on every side. A child left without
+    // committed geometry cannot produce this, because the padding parent sizes
+    // itself from the child it just laid out -- and because the two fixtures
+    // differ in size, neither can a child still showing the OLD image.
     assert_eq!(
         laid.size(laid.current_root()),
-        size(9.0, 7.0),
+        padded(new_size()),
         "a replaced render object below the root must be laid out in the same \
          frame as the swap that created it",
     );
