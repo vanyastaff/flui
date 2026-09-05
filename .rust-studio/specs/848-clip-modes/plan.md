@@ -78,12 +78,33 @@ reaches the SDF) and `sdf-clip-is-axis-aligned-only` (rotation falls back to the
 scissor — which means a rotated `AntiAlias` clip may not be honourable without
 further work; establish that before promising it).
 
-## Order
+## Order — DONE, except where marked
 
-1. Read `SaveLayer` support to settle item 4 — it decides how much of this ships.
-2. Shader flag + `clipAlpha` branch, with an SDF unit test.
-3. Thread the mode through painter → state_stack.
-4. Route rect+AntiAlias to the SDF.
-5. Readback oracles per mode, each verified red against the current behaviour.
-6. Update ADR-0054's "Status of the decisions" entry, which records this as a
-   named gap.
+1. ~~Read `SaveLayer` support to settle item 4.~~ Done: the offscreen machinery
+   exists (`painter::save_layer_impl`), so `AntiAliasWithSaveLayer` is a
+   deferral, not a limitation.
+2. ~~Shader flag + `clipAlpha` branch.~~ **Shipped.** The mode rides in bit 2 of
+   the existing `clip_kind` lane, so no shader grows a varying.
+3. ~~Thread the mode through painter → state_stack.~~ **Shipped**, including
+   superellipse, which the first attempt missed.
+4. ~~Route rect+AntiAlias to the SDF.~~ **REJECTED — do not do this.** It was
+   implemented and reverted: the SDF is a per-instance uniform and the scissor
+   is not, so the swap stops clipping text (glyphon gets the scissor alone),
+   stops intersecting under nesting (one SDF slot, inner clears outer), and
+   stops being exact. A rect clip stays the scissor under both modes.
+5. ~~Readback oracles per mode.~~ **Shipped**, each verified red against the
+   behaviour it pins.
+6. ~~Update ADR-0054.~~ **Shipped.**
+
+### What is actually left for #848
+
+- **Route text through the SDF mask.** This is the root of three separate
+  findings on the PR: it is why rect clips cannot use the SDF, why the coarse
+  scissor cannot be padded, and why any clip whose precision lives in the SDF
+  is invisible to a label. Everything else here is downstream of it.
+- **A clip STACK in the shader**, so nested SDF clips intersect instead of the
+  inner clearing the outer.
+- **`AntiAliasWithSaveLayer`'s offscreen composite**, on top of
+  `painter::save_layer_impl`.
+- **`discard` for destructive blend modes** — tracked separately as #890, since
+  it predates this work.

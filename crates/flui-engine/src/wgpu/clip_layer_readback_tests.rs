@@ -301,7 +301,7 @@ fn anti_alias_with_save_layer_currently_matches_plain_anti_alias() {
 
     let render = |behavior: Clip| {
         renderer
-            .render_layer_tree(&rotated_clip_scene(behavior), (SIDE, SIDE))
+            .render_layer_tree(&overlapping_translucent_scene(behavior), (SIDE, SIDE))
             .expect("the headless capture path must rasterize a clipped tree")
     };
 
@@ -312,6 +312,47 @@ fn anti_alias_with_save_layer_currently_matches_plain_anti_alias() {
          offscreen composite lands (#848); when that changes, this test is the \
          one to update"
     );
+}
+
+/// Two OVERLAPPING TRANSLUCENT draws inside a rounded clip.
+///
+/// The content shape is the whole point, and the first version of the
+/// save-layer test got it wrong. A single opaque rect gives identical pixels
+/// whether each draw is clipped on its own or the group is composited once
+/// through an offscreen — so a tripwire built on that scene would stay green
+/// after the mode is implemented, which is the one thing it must not do.
+///
+/// Overlapping translucency does differ. Per-draw coverage multiplies the
+/// clip's alpha into each draw separately, so where the two overlap — and
+/// along the clip's own fractional edge — it is applied twice; a group
+/// composite applies it once, to the finished group. That is precisely what
+/// `AntiAliasWithSaveLayer` exists to get right.
+fn overlapping_translucent_scene(behavior: Clip) -> LayerTree {
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        builder.push_clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
+                px(16.0),
+            ),
+            behavior,
+        );
+        let mut canvas = Canvas::new();
+        // Half-transparent, and straddling the clip's corners on purpose so
+        // the overlap sits where the clip's own coverage is fractional.
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(40.0), px(40.0)),
+            &Paint::fill(Color::rgba(0, 0, 255, 128)),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(px(24.0), px(24.0), px(40.0), px(40.0)),
+            &Paint::fill(Color::rgba(255, 0, 0, 128)),
+        );
+        builder.add_picture(canvas.finish());
+        builder.build();
+    }
+    tree
 }
 
 /// A ROUNDED clip: hard thresholds its corners, smooth feathers them.
