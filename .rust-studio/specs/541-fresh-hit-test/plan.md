@@ -89,3 +89,48 @@ behaviour and must be rewritten, not deleted, when the base changes.
 exist), `dragAnchorStrategy` selection, `affinity`, `hitTestBehavior`,
 `rootOverlay`, `ignoringFeedback*`. All are named deferrals in the draggable
 module doc and none is blocked on this capability.
+
+---
+
+## Slice B scope, surveyed
+
+The discovery mechanism is mostly ported already; what is missing is the wiring
+(the dominant defect shape in this repo).
+
+**Present:** `flui_objects::RenderMetaData` — a single-child proxy carrying
+`MetaDataPayload = Arc<dyn Any + Send + Sync>`, with `metadata_as::<T>()` and a
+`HitTestBehavior`. That is Flutter's `RenderMetaData`, the exact mechanism
+`_DragAvatar.updateDrag` walks the hit path looking for.
+
+**Absent:**
+
+1. **No `MetaData` widget.** `RenderMetaData` has no widget wrapper anywhere in
+   `flui-widgets` — nothing in the framework can produce one. `DragTarget` needs
+   to wrap its child in one carrying a handle to its own state.
+2. **No payload in the snapshot.** `HitTestSnapshot` carries `HitTestEntry`,
+   whose `target` is a bare `RenderId`. Resolving that back to a render object
+   needs the `PipelineOwner` — which widget code reaches only through
+   `pipeline_owner()`, itself a guarded frame capability.
+
+   The fix belongs in the probe, not a second lookup: it already holds the tree
+   borrowed while walking, so it can collect the metadata payloads it passes and
+   hand them back in the snapshot. That keeps the capability's contract intact
+   (owned, synchronous, no borrow escaping) and avoids widgets needing the
+   pipeline at all.
+3. **The `_lastOffset` divergence.** `DraggableDetails.offset` reports
+   displacement-since-drag-start where the reference reports
+   `globalOrigin + displacement`. `local_to_global` is on `PipelineOwner`
+   (`accessors.rs:304`), so this becomes reachable through the same probe seam.
+   `draggable_test.rs`'s `reported_offset_is_displacement_not_global_position`
+   pins the CURRENT behaviour and must be rewritten, not deleted.
+
+**Order:** (1) `MetaData` widget + payloads in the snapshot; (2) `DragTarget`
+tags itself, `DragSession::update` probes per move and drives
+enter/move/leave; (3) `end` resolves the drop and finally lets
+`on_drag_completed` / `was_accepted` be true; (4) the offset base, with its
+pinning test rewritten.
+
+**Acceptance criteria this closes** (from the issue): nested/overlapping target
+transitions, target removal mid-drag, multiple simultaneous drags isolated, and
+transform/clip-aware local positions — the last coming free from `HitTestEntry`'s
+existing per-entry transform.
