@@ -144,6 +144,27 @@ fn clipAlpha(
         } else {
             alpha = sdfToAlpha(clip_dist);
         }
+
+        // Fully clipped-out fragments are DISCARDED, not merely made
+        // transparent.
+        //
+        // Returning zero alpha is enough for `SrcOver` — nothing is
+        // contributed either way — but not for a destination-destructive mode.
+        // A TRANSPARENT SOURCE still zeroes or replaces the destination there:
+        // `Clear` is `(Zero, Zero)`, `Src` is `(One, Zero)`, `SrcIn` is
+        // `(DstAlpha, Zero)`, and `DstIn` is `(Zero, SrcAlpha)` — which does
+        // read source alpha, and reads it as zero, scaling the destination to
+        // nothing. So `alpha = 0` is not equivalent to being clipped, and a
+        // full-surface `Clear` through a rounded clip wiped the clip's whole
+        // bounding box, corners included.
+        //
+        // The threshold is exactly zero, not "small". At any partial coverage
+        // the fragment must still reach the blender: `sdfToAlpha` feathers the
+        // edge, and discarding a fringe fragment because its coverage is
+        // merely low would harden every anti-aliased clip.
+        if (alpha <= 0.0) {
+            discard;
+        }
     }
     return alpha;
 }
