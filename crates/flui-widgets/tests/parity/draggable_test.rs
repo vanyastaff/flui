@@ -4,59 +4,53 @@
 //! (tag `3.44.0`, **71** `testWidgets` cases — `grep -cE '^\s*testWidgets\('`
 //! against the tagged file).
 //!
-//! ### Why this file is split into two halves
+//! ### What this file proves
 //!
-//! `crates/flui-widgets/src/interaction/draggable.rs` and `.../drag_target.rs`
-//! document, in depth, the one architectural gap that shapes most of the
-//! cases below: FLUI's pointer dispatch (both the production path and this
-//! crate's own test harness) resolves the hit-test path **once, at
-//! `PointerDown`**, and replays that cached route for every later
-//! `Move`/`Up` — there is no capability reachable from widget or
-//! gesture-callback code to run a fresh hit test at an arbitrary *later*
-//! global position, which is exactly what the oracle's
-//! `_DragAvatar.updateDrag` (`WidgetsBinding.hitTestInView`) needs to
-//! discover a `DragTarget` the drag has moved onto. Building that
-//! reachability is a legitimate, separate-scope change, tracked in
-//! `docs/ROADMAP.md`'s Cross.H section (widget-reachable fresh hit-test
-//! capability). The *other* architectural gap that used to sit alongside it
-//! here — no `Overlay.of(context)` equivalent, so `feedback` was accepted but
-//! never painted — is closed (ADR-0036; `Overlay::of`/`maybe_of`); see the
-//! feedback-layer group below and the corpus accounting's first bucket for
-//! what that does and does not unlock.
+//! Live drag-target discovery is wired: `DragTarget` publishes an
+//! `Arc<DragTargetSlot>` as its hit-test payload (through `MetaData`), and a
+//! dragging `Draggable` re-tests at the pointer's current global position on
+//! every move and drives the enter/move/leave/drop transitions from the
+//! result — the oracle's `_DragAvatar.updateDrag` / `_getDragTargets` shape.
+//! The one divergence is where that global position comes from: FLUI's pointer
+//! dispatch rewrites each event's position into the receiving node's LOCAL
+//! space, so `Draggable` mounts a private origin probe under its `Listener`
+//! and converts through `PipelineOwner::local_to_global`. See
+//! `crates/flui-widgets/src/interaction/draggable.rs`'s divergence #2 and
+//! `crates/flui-widgets/ARCHITECTURE.md`'s `## Mapping decisions`.
 //!
-//! Consequently this file proves two *independently real* things rather than
-//! one *simulated* end-to-end thing:
+//! The cases below fall into four groups:
 //!
 //! 1. **`Draggable`'s gesture lifecycle** — genuine pointer dispatch through
-//!    canonical `LaidOut` presentation harness, exercising the real
-//!    `MultiDragGestureRecognizer`:
-//!    start/update/end/cancel, the `child`/`child_when_dragging` swap,
-//!    `max_simultaneous_drags`, axis restriction (including the oracle's
-//!    "only fires when the restricted position actually moves" gate), and
-//!    the divergent-but-documented immediate-cancel-on-unmount behavior.
-//!    Because no target is ever discovered, every drop is honestly
-//!    unaccepted here — proven, not assumed
-//!    (`drag_end_reports_not_accepted_and_never_fires_completed`).
-//! 2. **`DragTargetState`'s accept/candidate/reject/leave protocol** — driven
-//!    directly through its production methods (`did_enter`/`did_move`/
-//!    `did_leave`/`did_drop`), the same methods a live discovery mechanism
-//!    would call once it exists. This is the load-bearing, testable core the
-//!    task brief names explicitly.
-//! 3. **The feedback layer's insert/reposition/remove mechanism** — now that
-//!    `Overlay::maybe_of` exists (ADR-0036), `feedback` genuinely mounts as
-//!    an `OverlayEntry` in a real ancestor `Overlay` (provided here by
-//!    wrapping the draggable's route content in a `Navigator`, the same way
-//!    a real app gets one), follows the tracked pointer displacement, and is
-//!    removed on end/cancel/unmount. What is **not** proven is pixel-exact
-//!    parity with the oracle's own feedback *position* — see the first
-//!    corpus bucket below for why the 15 named oracle cases still do not
-//!    port even though the underlying mechanism is now real.
+//!    the canonical `LaidOut` presentation harness, exercising the real
+//!    `MultiDragGestureRecognizer`: start/update/end/cancel, the
+//!    `child`/`child_when_dragging` swap, `max_simultaneous_drags`, axis
+//!    restriction (including the oracle's "only fires when the restricted
+//!    position actually moves" gate), and the divergent-but-documented
+//!    immediate-cancel-on-unmount behavior.
+//! 2. **One target's accept/candidate/reject/leave protocol** — driven
+//!    directly against its `DragTargetSlot`, the same object a live drag
+//!    drives it through, so a single transition is isolated from the
+//!    sequencing rules that decide when a drag issues it.
+//! 3. **The feedback layer's insert/reposition/remove mechanism** — `feedback`
+//!    genuinely mounts as an `OverlayEntry` in a real ancestor `Overlay`
+//!    (provided here by wrapping the draggable's route content in a
+//!    `Navigator`, the same way a real app gets one), follows the tracked
+//!    pointer displacement, and is removed on end/cancel/unmount. What is
+//!    **not** proven is pixel-exact parity with the oracle's feedback
+//!    *position* — see the first corpus bucket below.
+//! 4. **Live discovery end to end** — a drag started clear of every target
+//!    moving onto one, nested and overlapping targets, a transformed target's
+//!    local position, an accepted drop, and a target removed mid-drag. The two
+//!    cases a mounted harness cannot reach — a render tree that reports itself
+//!    BUSY, and two genuinely concurrent contacts — are covered by unit tests
+//!    in `draggable.rs` against a scripted probe.
 //!
 //! ### Denominator: 71 oracle cases
 //!
-//! **23 tests ported below** (11 `Draggable`-gesture + 6
-//! `DragTargetState`-protocol + 6 feedback-layer-mechanism, listed in each
-//! section's own comment). Of these, 6 correspond exactly (or as an
+//! **31 tests ported below** (11 `Draggable`-gesture + 6 slot-protocol + 6
+//! feedback-layer-mechanism + 8 live-discovery, listed in each section's own
+//! comment), plus 2 unit tests in `draggable.rs` for the two cases a mounted
+//! harness cannot reach. Of these, 14 correspond exactly (or as an
 //! explicitly-noted partial) to a specific oracle `testWidgets` name:
 //! - `'Null axis onDragUpdate called only if draggable moves in any
 //!   direction'`, `'Vertical axis onDragUpdate only called if draggable
@@ -76,6 +70,22 @@
 //!   draggable'` → `unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled`
 //!   proves the *documented divergence* (`draggable.rs`'s divergence #5)
 //!   in their place, not the oracle's own keep-alive behavior.
+//! - `'control test'` → `a_drop_over_an_accepting_target_completes_the_drag`.
+//! - `'onLeave callback fires correctly'` (×2, with/without generic param) and
+//!   `'onMove callback fires correctly'` (×2, ditto) →
+//!   `a_drag_enters_a_target_it_moves_over_and_leaves_it_on_the_way_out`,
+//!   which drives both through a live drag rather than the protocol alone.
+//! - `'onDragCompleted called if dropped on accepting target'`, `'onDragEnd
+//!   called if dropped on accepting target'`, and `'onDraggableCanceled not
+//!   called if dropped on a accepting target'` →
+//!   `a_drop_over_an_accepting_target_completes_the_drag`'s three outcome
+//!   assertions.
+//! - `'DragTarget does not call onDragEnd when remove from the tree'` →
+//!   `a_target_removed_mid_drag_receives_nothing_further_and_accepts_nothing`,
+//!   as a **partial**: it pins that the removed target receives nothing and
+//!   the drop is not reported accepted, not the oracle's own `onDragEnd`
+//!   suppression (this port fires `on_drag_end` unconditionally — see
+//!   `pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity`).
 //!
 //! The remaining 17 ported tests exercise the oracle's established
 //! start/update/end/cancel/accept/candidate/reject/leave *contract*, plus the
@@ -88,8 +98,8 @@
 //! same shape, proving the mechanism the corpus's first bucket names as
 //! still not enough to satisfy any of its 15 oracle cases.)
 //!
-//! **65 cases out of scope, with reasons (not silently dropped from the
-//! count):** 15 + 28 + 12 + 3 + 3 + 1 + 1 + 1 + 1 = 65; together with the 6
+//! **57 cases out of scope, with reasons (not silently dropped from the
+//! count):** 15 + 20 + 12 + 3 + 3 + 1 + 1 + 1 + 1 = 57; together with the 14
 //! in-scope oracle names above, that accounts for all 71.
 //!
 //! - **Feedback overlay presence/position (15 cases) — still 0 ported, for a
@@ -124,34 +134,31 @@
 //!   `reported_offset_is_displacement_not_global_position` proves the
 //!   *shipped* semantics of a related, still-open gap rather than the
 //!   oracle's own value.
-//! - **Live hit-test-based target discovery (28 cases).** Needs a real
-//!   `DragTarget` hit-tested at the pointer's current, moved-to position —
-//!   the exact gap this module doc opens with: `'control test'`, `'onLeave
-//!   callback fires correctly'` (×2, with/without generic param — the
-//!   *protocol* is ported directly, see `on_leave` coverage in group 2),
-//!   `'onMove callback fires correctly'` (×2, ditto — see
-//!   `on_move_fires_for_both_candidate_and_rejected_entries`), `'onMove is
-//!   not called if moved with null data'` (also needs null-data modeling —
-//!   `ErasedDragData` erases a concrete value, not an `Option`, so a
-//!   genuinely-null `Draggable::data` has no representation in this cut),
-//!   `'dragging over button'`, `'tapping button'`, `'horizontal and vertical
-//!   draggables in vertical/horizontal block'` (×2), `'onDraggableCanceled
-//!   not/called if dropped on a/non-accepting target'` (×2, plus `'...with
-//!   details'`/`'...with correct velocity'` variants, ×2 more),
-//!   `'onDragEnd not called if dropped on non-accepting target'` (+`'...with
-//!   details'`, ×2), `'DragTarget rebuilds with and without rejected data
-//!   ...'`, `'Can drag and drop over a non-accepting target multiple
-//!   times'`, `'onDragCompleted not called if dropped on non-accepting
-//!   target'` (+`'...with details'`, ×2), `'onDragEnd called if dropped on
-//!   accepting target'`, `'DragTarget does not call onDragEnd when remove
-//!   from the tree'`, `'onDragCompleted called if dropped on accepting
-//!   target'`, `'allow pass through of unaccepted data test'` (+`'...twice
-//!   test'`, ×2), `'onAccept is not called if dropped with null data'` (also
-//!   null-data), `'Draggable plays nice with onTap'`, `'DragTarget does not
-//!   set state when remove from the tree'` (a `setState`-after-dispose class
-//!   of bug Rust's ownership model rules out structurally — same reasoning
-//!   as `dismissible_test.rs`'s `'Verify that drag-move events do not
-//!   assert'` note).
+//! - **Live drag-target discovery: 20 cases unported, but no longer
+//!   blocked.** This bucket used to hold 28 cases with a hard blocker — no
+//!   capability reachable from widget code to hit-test at a later, arbitrary
+//!   position. That capability exists now (see "What this file proves"), and 8
+//!   of the 28 are ported above. The other 20 are simply not written yet, with
+//!   no remaining architectural obstacle for most of them: `'dragging over
+//!   button'`, `'tapping button'`, `'horizontal and vertical draggables in
+//!   vertical/horizontal block'` (×2), `'onDraggableCanceled called if dropped
+//!   on non-accepting target'` (plus its `'...with details'` /
+//!   `'...with correct velocity'` variants, ×2 more), `'onDragEnd not called
+//!   if dropped on non-accepting target'` (+`'...with details'`, ×2),
+//!   `'DragTarget rebuilds with and without rejected data ...'`, `'Can drag
+//!   and drop over a non-accepting target multiple times'`, `'onDragCompleted
+//!   not called if dropped on non-accepting target'` (+`'...with details'`,
+//!   ×2), `'allow pass through of unaccepted data test'` (+`'...twice test'`,
+//!   ×2), `'Draggable plays nice with onTap'`. Two keep their own, independent
+//!   blockers: `'onMove is not called if moved with null data'` and
+//!   `'onAccept is not called if dropped with null data'` need null-data
+//!   modelling (`ErasedDragData` erases a concrete value, not an `Option`, so
+//!   a genuinely-null `Draggable::data` has no representation — a drag without
+//!   data discovers nothing here, where the oracle's enters every target). One
+//!   is structurally not applicable: `'DragTarget does not set state when
+//!   remove from the tree'` is a `setState`-after-dispose class of bug Rust's
+//!   ownership model rules out — same reasoning as `dismissible_test.rs`'s
+//!   `'Verify that drag-move events do not assert'` note.
 //! - **`LongPressDraggable` (12 cases).** `DelayedMultiDragGestureRecognizer`
 //!   does not exist in `flui-interaction` yet (`draggable.rs` divergence
 //!   #3): both `'long press draggable, short/long press'`, `'Tap above
@@ -197,13 +204,14 @@ use flui_interaction::PointerId;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::layout::Axis;
 use flui_types::{Color, Offset, Point, geometry::px};
-use flui_view::{StatefulView, ViewExt};
+use flui_view::{IntoView, StatefulView, ViewExt};
 use flui_widgets::{
-    ColoredBox, DragTarget, Draggable, DraggableDetails, ErasedDragData, Navigator,
-    NavigatorHandle, SimpleRoute, SizedBox,
+    ColoredBox, DragPosition, DragTarget, DragTargetSlot, Draggable, DraggableDetails,
+    ErasedDragData, Navigator, NavigatorHandle, Padding, Positioned, SimpleRoute, SizedBox, Stack,
+    StackFit, Transform,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, lay_out, offset, tight};
 
 fn extent() -> BoxConstraints {
     tight(100.0, 100.0)
@@ -239,6 +247,13 @@ fn origin() -> Offset {
     Offset::new(px(0.0), px(0.0))
 }
 
+/// The screen origin, with no transform between the target and the root — the
+/// position a protocol-level test hands a slot when the geometry is not what
+/// it is exercising.
+fn at_origin() -> DragPosition {
+    DragPosition::global_only(origin())
+}
+
 /// Type-erases `value` the way a live `Draggable` session would hand a drag's
 /// data to a discovered `DragTarget`.
 fn erase<T: Send + Sync + 'static>(value: T) -> ErasedDragData {
@@ -256,8 +271,8 @@ fn erase<T: Send + Sync + 'static>(value: T) -> ErasedDragData {
 // exercised under a nonzero ancestor `Padding` so it is not origin-hidden);
 // the null/vertical/horizontal axis "onDragUpdate only fires if the
 // restricted position actually moved" gate (the oracle's own three-case
-// group, ported 1:1); end reports unaccepted and fires canceled, never
-// completed, with the tracked displacement offset; a platform pointer-cancel
+// group, ported 1:1); a drop over nothing reports unaccepted and fires
+// canceled, never completed, with the tracked displacement offset; a platform pointer-cancel
 // also fires `on_drag_end` with that same offset and zero velocity
 // (Flutter's `finishDrag` is unconditional — this project found and fixed a
 // divergence from that while building this port, see
@@ -488,8 +503,15 @@ fn horizontal_axis_on_drag_update_only_fires_when_position_moves_horizontally() 
     scoped.dispatch_pointer_up(110.0, 120.0);
 }
 
+/// A drop with no target anywhere under it is unaccepted: `on_drag_end`
+/// reports so, `on_draggable_canceled` fires, `on_drag_completed` does not.
+///
+/// The complement — a drop that IS over a target — is
+/// `a_drop_over_an_accepting_target_completes_the_drag` in group 4. Both are
+/// needed: this one alone would also pass against a `Draggable` that never
+/// discovered anything.
 #[test]
-fn drag_end_reports_not_accepted_and_never_fires_completed() {
+fn a_drop_over_no_target_reports_unaccepted_and_fires_canceled() {
     let end_details: Arc<StdMutex<Option<DraggableDetails>>> = Arc::new(StdMutex::new(None));
     let end_for_cb = Arc::clone(&end_details);
     let canceled = Arc::new(AtomicUsize::new(0));
@@ -519,7 +541,7 @@ fn drag_end_reports_not_accepted_and_never_fires_completed() {
         .expect("on_drag_end fired");
     assert!(
         !details.was_accepted,
-        "no live target discovery exists yet (see draggable.rs's module docs): every drop is unaccepted"
+        "a drop with nothing under it is not accepted by anything"
     );
     assert_eq!(
         canceled.load(Ordering::SeqCst),
@@ -529,7 +551,7 @@ fn drag_end_reports_not_accepted_and_never_fires_completed() {
     assert_eq!(
         completed.load(Ordering::SeqCst),
         0,
-        "on_drag_completed never fires without live target discovery"
+        "on_drag_completed must not fire for a drop no target took"
     );
 }
 
@@ -724,16 +746,19 @@ fn unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled() {
 // Group 2 — `DragTargetState`'s accept/candidate/reject/leave protocol
 // ============================================================================
 //
-// 6 cases, driven directly against the state machine (see the module doc
-// above for why): data delivered on an accepted drop; the candidate list
+// 6 cases, driven directly against one target's `DragTargetSlot` — the same
+// object a live drag drives it through, one layer below the discovery a
+// `Draggable` performs (group 4 covers that end to end). Driving the slot
+// directly is how a single transition is isolated from the sequencing rules
+// that decide *when* a drag issues it: data delivered on an accepted drop;
+// the candidate list
 // gains/loses entries across enter/leave; `on_will_accept` returning `false`
 // routes to the rejected list instead of the candidate list; typed-data
 // mismatch (a `DragTarget<String>` given an `i32` payload) never becomes an
 // entry at all, matching the oracle's discovery-time `isExpectedDataType`
 // filter; `did_move` fires for a rejected entry too — the oracle's own
-// `didMove` gates only on null data, not rejection status (this is the
-// mutation-coverage gap the pre-fix code had: `did_move` used to no-op for
-// `Standing::Rejected`); `did_drop` only accepts a *current* candidate.
+// `didMove` gates only on null data, not rejection status; `did_drop` only
+// accepts a *current* candidate.
 
 fn string_target() -> DragTarget<String> {
     DragTarget::new(|_candidates, _rejected| SizedBox::new(0.0, 0.0).boxed())
@@ -746,11 +771,12 @@ fn data_delivered_to_on_accept_on_drop() {
     let target = string_target().on_accept(move |details| {
         *accepted_for_cb.lock().expect("not poisoned") = Some(details.data);
     });
-    let mut state = target.create_state();
+    let state = target.create_state();
+    let slot = state.slot();
 
     let p = pointer(1);
-    assert!(state.did_enter(&target, p, erase("hello".to_string()), origin()));
-    assert!(state.did_drop(&target, p, origin()));
+    assert!(slot.did_enter(p, &erase("hello".to_string()), at_origin()));
+    assert!(slot.did_drop(p, at_origin()));
 
     assert_eq!(
         accepted.lock().expect("not poisoned").as_deref(),
@@ -766,18 +792,19 @@ fn candidate_list_gains_and_loses_entries_across_enter_and_leave() {
     let target = string_target().on_leave(move |data| {
         *left_for_cb.lock().expect("not poisoned") = Some(data);
     });
-    let mut state = target.create_state();
+    let state = target.create_state();
+    let slot = state.slot();
     let p = pointer(1);
 
     assert!(state.candidate_data().is_empty());
-    assert!(state.did_enter(&target, p, erase("a".to_string()), origin()));
+    assert!(slot.did_enter(p, &erase("a".to_string()), at_origin()));
     assert_eq!(
         state.candidate_data(),
         vec![Some("a".to_string())],
         "an accepted enter must appear in the candidate list"
     );
 
-    state.did_leave(&target, p);
+    slot.did_leave(p);
     assert!(
         state.candidate_data().is_empty(),
         "did_leave must remove the pointer from the candidate list"
@@ -798,10 +825,11 @@ fn on_will_accept_veto_routes_to_rejected_not_candidate() {
         .on_leave(move |data| {
             *left_for_cb.lock().expect("not poisoned") = Some(data);
         });
-    let mut state = target.create_state();
+    let state = target.create_state();
+    let slot = state.slot();
     let p = pointer(1);
 
-    let accepted = state.did_enter(&target, p, erase("a".to_string()), origin());
+    let accepted = slot.did_enter(p, &erase("a".to_string()), at_origin());
 
     assert!(
         !accepted,
@@ -816,7 +844,7 @@ fn on_will_accept_veto_routes_to_rejected_not_candidate() {
          holds T?-typed data — see drag_target.rs's module docs)"
     );
 
-    state.did_leave(&target, p);
+    slot.did_leave(p);
     assert_eq!(
         left_with.lock().expect("not poisoned").clone().flatten(),
         Some("a".to_string()),
@@ -835,10 +863,11 @@ fn typed_data_mismatch_is_never_tracked_regardless_of_on_will_accept() {
     // type-mismatched avatar never reaches `_candidateAvatars` OR
     // `_rejectedAvatars`.
     let target = string_target().on_will_accept(|_details| true);
-    let mut state = target.create_state();
+    let state = target.create_state();
+    let slot = state.slot();
     let p = pointer(1);
 
-    let accepted = state.did_enter(&target, p, erase(42_i32), origin());
+    let accepted = slot.did_enter(p, &erase(42_i32), at_origin());
 
     assert!(
         !accepted,
@@ -853,9 +882,9 @@ fn typed_data_mismatch_is_never_tracked_regardless_of_on_will_accept() {
 
     // Confirms it was never tracked: a later did_leave/did_move/did_drop for
     // the same pointer is a no-op, not an error.
-    state.did_leave(&target, p);
-    state.did_move(&target, p, origin());
-    assert!(!state.did_drop(&target, p, origin()));
+    slot.did_leave(p);
+    slot.did_move(p, at_origin());
+    assert!(!slot.did_drop(p, at_origin()));
 }
 
 #[test]
@@ -877,15 +906,16 @@ fn did_move_fires_for_both_candidate_and_rejected_entries() {
                 .expect("not poisoned")
                 .push(details.data);
         });
-    let mut state = target.create_state();
+    let state = target.create_state();
+    let slot = state.slot();
 
     let candidate = pointer(1);
     let rejected = pointer(2);
-    assert!(state.did_enter(&target, candidate, erase("candidate".to_string()), origin()));
-    assert!(!state.did_enter(&target, rejected, erase("rejected".to_string()), origin()));
+    assert!(slot.did_enter(candidate, &erase("candidate".to_string()), at_origin()));
+    assert!(!slot.did_enter(rejected, &erase("rejected".to_string()), at_origin()));
 
-    state.did_move(&target, candidate, origin());
-    state.did_move(&target, rejected, origin());
+    slot.did_move(candidate, at_origin());
+    slot.did_move(rejected, at_origin());
 
     assert_eq!(
         *candidate_moves.lock().expect("not poisoned"),
@@ -903,11 +933,12 @@ fn did_drop_only_accepts_a_current_candidate() {
         .on_accept(move |_details| {
             accepted_for_cb.fetch_add(1, Ordering::SeqCst);
         });
-    let mut state = target.create_state();
+    let state = target.create_state();
+    let slot = state.slot();
     let p = pointer(1);
 
-    assert!(!state.did_enter(&target, p, erase("a".to_string()), origin()));
-    let dropped = state.did_drop(&target, p, origin());
+    assert!(!slot.did_enter(p, &erase("a".to_string()), at_origin()));
+    let dropped = slot.did_drop(p, at_origin());
 
     assert!(!dropped, "a rejected pointer's drop must be a no-op");
     assert_eq!(
@@ -917,7 +948,7 @@ fn did_drop_only_accepts_a_current_candidate() {
     );
 
     // An unknown pointer (never entered at all) is equally a no-op.
-    assert!(!state.did_drop(&target, pointer(2), origin()));
+    assert!(!slot.did_drop(pointer(2), at_origin()));
 }
 
 // ============================================================================
@@ -1242,5 +1273,505 @@ fn feedback_layer_survives_a_restart_before_the_previous_removal_drains() {
         "the surviving layer must be the second drag's own — tracking its \
          +40 vertical move, not frozen at the first drag's +30 horizontal \
          position — got {position:?}"
+    );
+}
+
+// ============================================================================
+// Group 4 — live drag-target discovery
+// ============================================================================
+//
+// The oracle's `_DragAvatar.updateDrag` hit-tests at the pointer's CURRENT
+// global position on every move and walks the result for `RenderMetaData`
+// nodes whose payload is a drag target (`_getDragTargets`). These cases cover
+// both halves of that in FLUI: the target publishing a findable payload, and
+// the drag finding it and sequencing the transitions.
+
+/// The target's own discovery edge: a mounted `DragTarget` must be findable
+/// from a hit test over it, carrying the slot a drag drives.
+///
+/// Its content here is a bare `SizedBox`, which claims no hits of its own —
+/// deliberately, because the oracle's default `hitTestBehavior` is
+/// `translucent`, i.e. the target is found within its own bounds whatever its
+/// content does. A `DeferToChild` tag over this child would find nothing.
+#[test]
+fn a_mounted_drag_target_publishes_a_slot_a_hit_test_can_find() {
+    let laid = lay_out(
+        DragTarget::<String>::new(|_candidates, _rejected| SizedBox::new(40.0, 40.0).boxed()),
+        tight(40.0, 40.0),
+    );
+
+    let hit = laid.hit_test_pointer(offset(20.0, 20.0));
+
+    assert!(
+        !hit.path().is_empty(),
+        "premise: the position must hit something, so a missing slot below \
+         is about the payload and not about the hit"
+    );
+    let found = hit
+        .path()
+        .iter()
+        .filter(|entry| entry.metadata_as::<DragTargetSlot>().is_some())
+        .count();
+    assert_eq!(
+        found, 1,
+        "a hit over a mounted DragTarget must carry its slot back out — \
+         without it no drag can ever discover this target"
+    );
+}
+
+/// A target that appends every transition it receives to `log`, tagged with
+/// `name`, so a test can assert the exact ORDER of a boundary crossing rather
+/// than only the final state.
+///
+/// `on_will_accept` doubles as the enter probe: it is the one callback the
+/// oracle fires exactly once per `didEnter`.
+fn logging_target(log: &Arc<StdMutex<Vec<String>>>, name: &'static str) -> DragTarget<String> {
+    let enter_log = Arc::clone(log);
+    let move_log = Arc::clone(log);
+    let leave_log = Arc::clone(log);
+    let accept_log = Arc::clone(log);
+    DragTarget::<String>::new(|_candidates, _rejected| SizedBox::expand().boxed())
+        .on_will_accept(move |_details| {
+            enter_log
+                .lock()
+                .expect("not poisoned")
+                .push(format!("enter {name}"));
+            true
+        })
+        .on_move(move |_details| {
+            move_log
+                .lock()
+                .expect("not poisoned")
+                .push(format!("move {name}"));
+        })
+        .on_leave(move |_data| {
+            leave_log
+                .lock()
+                .expect("not poisoned")
+                .push(format!("leave {name}"));
+        })
+        .on_accept(move |details| {
+            accept_log
+                .lock()
+                .expect("not poisoned")
+                .push(format!("accept {name} {}", details.data));
+        })
+}
+
+/// The draggable these cases pick up, carrying `"parcel"`.
+fn parcel() -> Draggable<String> {
+    Draggable::<String>::new(child()).data("parcel".to_string())
+}
+
+/// A 200x200 stack: `target_area` fills the 100x100 top-left corner, and the
+/// draggable sits in a 40x40 box at (150, 150) — clear of it, so a drag can
+/// start outside every target and move in.
+///
+/// The shape is fixed so a test can swap only `target_area` through
+/// `pump_widget` and keep the draggable's own element (and its in-flight
+/// drag) alive across the rebuild.
+fn stack_root(target_area: impl IntoView, draggable: Draggable<String>) -> Stack {
+    Stack::new(vec![
+        Positioned::new(target_area)
+            .left(0.0)
+            .top(0.0)
+            .width(100.0)
+            .height(100.0)
+            .into_view()
+            .boxed(),
+        Positioned::new(draggable)
+            .left(150.0)
+            .top(150.0)
+            .width(40.0)
+            .height(40.0)
+            .into_view()
+            .boxed(),
+    ])
+    .fit(StackFit::Expand)
+}
+
+fn stack_with(target_area: impl IntoView, draggable: Draggable<String>) -> LaidOut {
+    lay_out(stack_root(target_area, draggable), tight(200.0, 200.0))
+}
+
+fn transitions(log: &Arc<StdMutex<Vec<String>>>) -> Vec<String> {
+    log.lock().expect("not poisoned").clone()
+}
+
+/// A drag that starts clear of every target and moves onto one enters it,
+/// and moving back out leaves it — once each, at the boundary.
+///
+/// This is the whole of `_DragAvatar.updateDrag` end to end: the pointer route
+/// was resolved at Down over the *draggable*, so nothing about that route
+/// mentions the target; only a fresh hit test at the moved-to position can
+/// find it.
+#[test]
+fn a_drag_enters_a_target_it_moves_over_and_leaves_it_on_the_way_out() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let scoped = stack_with(logging_target(&log, "inbox"), parcel());
+
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(160.0, 160.0);
+    assert_eq!(
+        transitions(&log),
+        Vec::<String>::new(),
+        "a drag still clear of every target must not have entered one"
+    );
+
+    scoped.dispatch_pointer_move(50.0, 50.0);
+    assert_eq!(
+        transitions(&log),
+        vec!["enter inbox".to_string(), "move inbox".to_string()],
+        "moving onto the target must enter it, then report the move"
+    );
+
+    scoped.dispatch_pointer_move(45.0, 45.0);
+    assert_eq!(
+        transitions(&log),
+        vec![
+            "enter inbox".to_string(),
+            "move inbox".to_string(),
+            "move inbox".to_string()
+        ],
+        "a further move inside the same target must report a move, not \
+         re-enter it"
+    );
+
+    scoped.dispatch_pointer_move(170.0, 170.0);
+    assert_eq!(
+        transitions(&log).last().map(String::as_str),
+        Some("leave inbox"),
+        "moving back out must leave the target exactly once"
+    );
+}
+
+/// A drop over an accepting target delivers the data, reports the drag as
+/// accepted, and fires `on_drag_completed` instead of `on_draggable_canceled`.
+#[test]
+fn a_drop_over_an_accepting_target_completes_the_drag() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let completed = Arc::new(AtomicUsize::new(0));
+    let canceled = Arc::new(AtomicUsize::new(0));
+    let accepted_flag = Arc::new(StdMutex::new(None));
+
+    let completed_for_cb = Arc::clone(&completed);
+    let canceled_for_cb = Arc::clone(&canceled);
+    let accepted_for_cb = Arc::clone(&accepted_flag);
+    let draggable = parcel()
+        .on_drag_completed(move || {
+            completed_for_cb.fetch_add(1, Ordering::SeqCst);
+        })
+        .on_draggable_canceled(move |_velocity, _offset| {
+            canceled_for_cb.fetch_add(1, Ordering::SeqCst);
+        })
+        .on_drag_end(move |details| {
+            *accepted_for_cb.lock().expect("not poisoned") = Some(details.was_accepted);
+        });
+    let scoped = stack_with(logging_target(&log, "inbox"), draggable);
+
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+
+    assert_eq!(
+        transitions(&log).last().map(String::as_str),
+        Some("accept inbox parcel"),
+        "the drop must deliver the draggable's own data to the target"
+    );
+    assert_eq!(
+        *accepted_flag.lock().expect("not poisoned"),
+        Some(true),
+        "DraggableDetails::was_accepted must report the accepted drop"
+    );
+    assert_eq!(
+        completed.load(Ordering::SeqCst),
+        1,
+        "an accepted drop fires on_drag_completed"
+    );
+    assert_eq!(
+        canceled.load(Ordering::SeqCst),
+        0,
+        "an accepted drop must not also report itself canceled"
+    );
+}
+
+/// Nested targets: the innermost accepting one wins, and the outer target it
+/// sits inside is never entered while it is active.
+///
+/// Flutter parity: `_DragAvatar.updateDrag`'s `firstWhere` over the leaf-first
+/// path stops at the first target whose `didEnter` returns true, so targets
+/// below (outside) it are shadowed by the acceptance.
+#[test]
+fn the_innermost_accepting_target_shadows_the_outer_one_it_sits_in() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let inner = logging_target(&log, "inner");
+    let outer = DragTarget::<String>::new(move |_candidates, _rejected| {
+        Padding::all(20.0).child(inner.clone()).boxed()
+    });
+    let outer = {
+        let enter_log = Arc::clone(&log);
+        let leave_log = Arc::clone(&log);
+        let move_log = Arc::clone(&log);
+        outer
+            .on_will_accept(move |_details| {
+                enter_log
+                    .lock()
+                    .expect("not poisoned")
+                    .push("enter outer".to_string());
+                true
+            })
+            .on_move(move |_details| {
+                move_log
+                    .lock()
+                    .expect("not poisoned")
+                    .push("move outer".to_string());
+            })
+            .on_leave(move |_data| {
+                leave_log
+                    .lock()
+                    .expect("not poisoned")
+                    .push("leave outer".to_string());
+            })
+    };
+    let scoped = stack_with(outer, parcel());
+
+    // (10, 10) is inside the outer 100x100 box but inside its 20px padding
+    // ring, so only the outer target is under the pointer.
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(10.0, 10.0);
+    assert_eq!(
+        transitions(&log),
+        vec!["enter outer".to_string(), "move outer".to_string()],
+        "in the padding ring, only the outer target is hit"
+    );
+
+    // (50, 50) is inside both. Crossing that boundary leaves the outer and
+    // enters the inner — and the outer, now shadowed, is not re-entered.
+    log.lock().expect("not poisoned").clear();
+    scoped.dispatch_pointer_move(50.0, 50.0);
+    assert_eq!(
+        transitions(&log),
+        vec![
+            "leave outer".to_string(),
+            "enter inner".to_string(),
+            "move inner".to_string()
+        ],
+        "crossing into the inner target must leave the outer, enter the \
+         inner, and leave the outer un-entered underneath it"
+    );
+}
+
+/// When the innermost target vetoes the drag, the search continues outwards:
+/// the vetoing target is still entered (as a rejected one, receiving moves and
+/// a leave), and the outer target below it becomes the active one.
+#[test]
+fn a_vetoing_inner_target_is_still_entered_and_the_outer_one_accepts() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let inner = {
+        let enter_log = Arc::clone(&log);
+        let move_log = Arc::clone(&log);
+        DragTarget::<String>::new(|_candidates, _rejected| SizedBox::expand().boxed())
+            .on_will_accept(move |_details| {
+                enter_log
+                    .lock()
+                    .expect("not poisoned")
+                    .push("enter inner".to_string());
+                false
+            })
+            .on_move(move |_details| {
+                move_log
+                    .lock()
+                    .expect("not poisoned")
+                    .push("move inner".to_string());
+            })
+    };
+    let accepted = Arc::new(StdMutex::new(None));
+    let accepted_for_cb = Arc::clone(&accepted);
+    let outer = {
+        let enter_log = Arc::clone(&log);
+        let move_log = Arc::clone(&log);
+        DragTarget::<String>::new(move |_candidates, _rejected| {
+            Padding::all(20.0).child(inner.clone()).boxed()
+        })
+        .on_will_accept(move |_details| {
+            enter_log
+                .lock()
+                .expect("not poisoned")
+                .push("enter outer".to_string());
+            true
+        })
+        .on_move(move |_details| {
+            move_log
+                .lock()
+                .expect("not poisoned")
+                .push("move outer".to_string());
+        })
+        .on_accept(move |details| {
+            *accepted_for_cb.lock().expect("not poisoned") = Some(details.data);
+        })
+    };
+    let scoped = stack_with(outer, parcel());
+
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(50.0, 50.0);
+
+    assert_eq!(
+        transitions(&log),
+        vec![
+            "enter inner".to_string(),
+            "enter outer".to_string(),
+            "move inner".to_string(),
+            "move outer".to_string()
+        ],
+        "a vetoed inner target stays entered and keeps receiving moves; the \
+         search continues outwards to the first target that accepts"
+    );
+
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    assert_eq!(
+        accepted.lock().expect("not poisoned").as_deref(),
+        Some("parcel"),
+        "the drop lands on the outer target, the one that actually accepted"
+    );
+}
+
+/// Overlapping siblings: the one painted on top is the one entered, and the
+/// one beneath it is not — the hit path is leaf-first in reverse paint order,
+/// and the first acceptance stops the search.
+#[test]
+fn the_topmost_of_two_overlapping_targets_is_the_one_entered() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let scoped = lay_out(
+        Stack::new(vec![
+            Positioned::new(logging_target(&log, "beneath"))
+                .left(0.0)
+                .top(0.0)
+                .width(100.0)
+                .height(100.0)
+                .into_view()
+                .boxed(),
+            Positioned::new(logging_target(&log, "above"))
+                .left(0.0)
+                .top(0.0)
+                .width(100.0)
+                .height(100.0)
+                .into_view()
+                .boxed(),
+            Positioned::new(parcel())
+                .left(150.0)
+                .top(150.0)
+                .width(40.0)
+                .height(40.0)
+                .into_view()
+                .boxed(),
+        ])
+        .fit(StackFit::Expand),
+        tight(200.0, 200.0),
+    );
+
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(50.0, 50.0);
+
+    assert_eq!(
+        transitions(&log),
+        vec!["enter above".to_string(), "move above".to_string()],
+        "only the topmost overlapping target is entered — the one beneath is \
+         shadowed by its acceptance"
+    );
+}
+
+/// A target under a transform is told where the drag is in its OWN space, not
+/// only the root's.
+///
+/// The oracle gives a target the global position and nothing else; a Dart
+/// target that wants a local one calls `globalToLocal` on its render object,
+/// which FLUI callback code cannot reach.
+///
+/// `Transform::scale` scales about the child's CENTRE, so for the 100x100
+/// target box the map is `local = centre + (global - centre) / 2`. A drag at
+/// global (40, 60) therefore lands at (50, 50) + (-10, 10) / 2 = (45, 55) —
+/// a value neither the raw global position nor any origin subtraction can
+/// produce, so only composing the entry's real transform gets it right.
+#[test]
+fn a_transformed_target_is_told_the_drag_position_in_its_own_space() {
+    let seen = Arc::new(StdMutex::new(None));
+    let seen_for_cb = Arc::clone(&seen);
+    let target = DragTarget::<String>::new(|_candidates, _rejected| SizedBox::expand().boxed())
+        .on_move(move |details| {
+            *seen_for_cb.lock().expect("not poisoned") =
+                Some((details.offset, details.local_offset));
+        });
+    let scoped = stack_with(
+        Transform::scale(2.0, 2.0).child(SizedBox::new(50.0, 50.0).child(target)),
+        parcel(),
+    );
+
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(40.0, 60.0);
+
+    let (global, local) = seen
+        .lock()
+        .expect("not poisoned")
+        .expect("the drag must have reached the transformed target");
+    assert_eq!(
+        global,
+        offset(40.0, 60.0),
+        "`offset` stays the oracle's global position"
+    );
+    assert_eq!(
+        local,
+        offset(45.0, 55.0),
+        "`local_offset` must be the same point mapped through the target's \
+         own global-to-local transform — see this test's doc for the \
+         centre-anchored derivation; neither the global point nor an origin \
+         subtraction produces it"
+    );
+}
+
+/// A target that leaves the tree mid-drag receives nothing more, does not
+/// panic, and does not let the drag report a completed drop into a widget
+/// that no longer exists.
+///
+/// The slot outlives the element by `Arc` — the drag is still holding it — so
+/// the danger is not a dangling reference but a live one that keeps calling
+/// into a disposed state.
+#[test]
+fn a_target_removed_mid_drag_receives_nothing_further_and_accepts_nothing() {
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    let accepted_flag = Arc::new(StdMutex::new(None));
+    let accepted_for_cb = Arc::clone(&accepted_flag);
+    let draggable = parcel().on_drag_end(move |details| {
+        *accepted_for_cb.lock().expect("not poisoned") = Some(details.was_accepted);
+    });
+    let mut scoped = stack_with(logging_target(&log, "inbox"), draggable.clone());
+
+    scoped.dispatch_pointer_down(170.0, 170.0);
+    scoped.dispatch_pointer_move(50.0, 50.0);
+    assert_eq!(
+        transitions(&log),
+        vec!["enter inbox".to_string(), "move inbox".to_string()],
+        "premise: the drag is inside the target before it is removed"
+    );
+
+    // Same tree shape, same slots — only the target's content is swapped for
+    // a plain box, so the `Draggable`'s own element (and its in-flight drag)
+    // survives while the `DragTarget` element is disposed.
+    log.lock().expect("not poisoned").clear();
+    scoped.pump_widget(stack_root(SizedBox::expand(), draggable));
+
+    scoped.dispatch_pointer_move(45.0, 45.0);
+    scoped.dispatch_pointer_up(45.0, 45.0);
+
+    assert_eq!(
+        transitions(&log),
+        Vec::<String>::new(),
+        "a target whose element is gone must receive no further move, leave, \
+         or accept"
+    );
+    assert_eq!(
+        *accepted_flag.lock().expect("not poisoned"),
+        Some(false),
+        "a drop onto a target that has left the tree was not accepted by \
+         anything, and must not be reported as completed"
     );
 }

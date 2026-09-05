@@ -2,8 +2,8 @@
 //! `data` for a [`DragTarget`](crate::DragTarget) to receive on drop.
 //!
 //! Flutter parity: `widgets/drag_target.dart` (tag `3.44.0`) — `Draggable`,
-//! `_DraggableState`, `DraggableDetails`. `LongPressDraggable` and
-//! `DragAnchorStrategy` are named deferrals; see the module docs below.
+//! `_DraggableState`, `DraggableDetails`, `_DragAvatar`. `LongPressDraggable`
+//! and `DragAnchorStrategy` are named deferrals; see the module docs below.
 //!
 //! # Deliberate divergences from the oracle (framework-surface gaps)
 //!
@@ -24,36 +24,44 @@
 //!    wrong (by exactly that origin) everywhere else, same shape of divergence
 //!    as #4. `rootOverlay`, `ignoringFeedback*`, and scaled/rotated-ancestor
 //!    correctness are separate, still-open gaps (ADR-0036's deferrals).
-//! 2. **No live drag-target discovery.** The oracle's `_DragAvatar.updateDrag`
-//!    performs an ad hoc `WidgetsBinding.instance.hitTestInView` at the
-//!    pointer's *current* global position on every move, independent of
-//!    wherever the drag's own pointer originally went down, and walks the
-//!    result for `RenderMetaData`-tagged `DragTarget`s. FLUI's pointer
-//!    dispatch — both the production path
-//!    (`GestureBinding::handle_pointer_event`,
-//!    `crates/flui-interaction/src/binding.rs`) and the widget test harness's
-//!    arena-scoped helper — resolves the hit-test path **once, at
-//!    `PointerDown`**, and replays that *cached* route for every subsequent
-//!    `Move`/`Up`. There is no capability reachable from widget or
-//!    gesture-callback code to run a fresh, arbitrary-position hit test later
-//!    (`RenderObjectContext` exposes only owner-lane registration;
-//!    `PipelineOwner::hit_test` lives one layer up and is reachable only from
-//!    binding-internal code). Adding that reachability is a legitimate,
-//!    separate-scope change — the same shape of gap as point 1 above, also
-//!    tracked in `docs/ROADMAP.md`'s Cross.H section — and one this port
-//!    does not invent silently mid-task.
+//! 2. **Live drag-target discovery, reached through a private origin probe.**
+//!    The oracle's `_DragAvatar.updateDrag` hit-tests at the pointer's
+//!    *current* global position on every move, independent of wherever the
+//!    drag's own pointer went down, and walks the result for
+//!    `RenderMetaData`-tagged `DragTarget`s. FLUI does the same now:
+//!    `BuildContext::hit_test_handle()` (acquired in `init_state` /
+//!    `did_change_dependencies`, never from a frame phase) runs a fresh test
+//!    against the live render tree, and [`DragTarget`](crate::DragTarget)
+//!    publishes an `Arc<DragTargetSlot>` as its hit-test payload for the walk
+//!    to find. Pointer dispatch still resolves its own route once at
+//!    `PointerDown` and replays it; the fresh probe is deliberately
+//!    independent of that route, which is the whole point.
 //!
-//!    Consequently: **`Draggable`'s own gesture lifecycle is fully real** —
-//!    start/update/end/cancel, `child`/`child_when_dragging` swap,
-//!    `max_simultaneous_drags` gating, and every lifecycle callback fire
-//!    through genuine [`MultiDragGestureRecognizer`] dispatch. But because no
-//!    target is ever discovered, a drag can never be *accepted*: every drag
-//!    ends in [`Draggable::on_draggable_canceled`], never
-//!    [`Draggable::on_drag_completed`], and [`DraggableDetails::was_accepted`]
-//!    is always `false`. [`DragTarget`](crate::DragTarget)'s accept/candidate/
-//!    reject/leave protocol is implemented and tested directly against its
-//!    state machine (the load-bearing, testable core), not wired end-to-end
-//!    to a live `Draggable` session.
+//!    **The divergence is where the position comes from.** Flutter's
+//!    `PointerEvent` carries `position` (global) *and* `localPosition`, so a
+//!    widget always has both. FLUI's pointer events are `ui_events` types with
+//!    room for one position, and dispatch rewrites it into the receiving
+//!    entry's local space (`HitTestResult`'s per-entry
+//!    `transform_pointer_event`) — so a gesture callback knows only where the
+//!    pointer is inside its *own* node. A hit test needs the root's space. The
+//!    conversion between exactly those two spaces is
+//!    `PipelineOwner::local_to_global`, which needs the `RenderId` of the node
+//!    the local point belongs to, and [`DragOrigin`] — a payload-free view
+//!    mounted as the `Listener`'s direct child — is how this widget learns it:
+//!    its `find_render_object()` stops at the `Listener`'s own render node,
+//!    the node dispatch localized against. The conversion composes the whole
+//!    ancestor chain, so it is exact under scale and rotation, not just
+//!    translation.
+//!
+//!    Two consequences worth naming rather than discovering later. A drag
+//!    carrying **no data** discovers nothing at all: a target's
+//!    `isExpectedDataType` filter has nothing to match, and the oracle's
+//!    null-data drag — which enters *every* target — has no representation
+//!    here (`ErasedDragData` erases a concrete value, not an `Option`). And
+//!    `axis` restriction is applied to deltas in the `Listener`'s space rather
+//!    than the root's, which differs from the oracle only under a rotating
+//!    ancestor.
+//!
 //! 3. **No `LongPressDraggable`.** The oracle's variant swaps in a
 //!    `DelayedMultiDragGestureRecognizer`, which does not exist in
 //!    `flui-interaction` yet (only the immediate `MultiDragGestureRecognizer`
@@ -86,12 +94,14 @@
 //!    `Offset::ZERO`, never given a `globalOrigin` term) is correct only for
 //!    a `Draggable` whose render object sits at the screen origin; for any
 //!    other position, this port's reported offset is short by exactly that
-//!    origin. Getting the real `globalOrigin` needs the same
-//!    global-position/frame-aware event delivery capability point 2 above
-//!    names as missing (`PipelineOwner::hit_test`/`local_to_global`,
-//!    reachable only from binding-internal code) — this is the *same*
-//!    Cross.H-tracked family of gaps, not a new one, and is **not** attempted
-//!    here. What this port ships is honestly **displacement since the drag
+//!    origin. **The blocker this note used to name is gone**: point 2's origin
+//!    probe now converts a `Listener`-local point to the root's space through
+//!    `PipelineOwner::local_to_global`, which is exactly the `globalOrigin`
+//!    term this formula wants. Closing it is nonetheless a separate change —
+//!    it alters what `DraggableDetails.offset` and `on_draggable_canceled`
+//!    report to existing callers, and `dragAnchorStrategy` (which decides
+//!    `dragStartPoint`) has to land with it or the "fix" would be a different
+//!    wrong value. What this port ships is still **displacement since the drag
 //!    started**, not the oracle's globally-anchored value — pinned by
 //!    `draggable_test.rs`'s `reported_offset_is_displacement_not_global_position`,
 //!    which lays the `Draggable` under a nonzero `Padding` specifically so a
@@ -110,19 +120,19 @@
 //!    correctly owner-local, removing the former type-system obstacle; the
 //!    remaining work is a real lifetime transfer, not a threading workaround.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_interaction::{
-    DragUpdateDetails, GestureRecognizer, MultiDragAxis, MultiDragEndDetails,
-    MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails,
-    PointerEvent, PointerEventExt as _, Velocity,
+    DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
+    MultiDragUpdateDetails, PointerEvent, PointerEventExt as _, PointerId, Velocity,
 };
 use flui_types::{
     Offset,
-    geometry::{PixelDelta, Pixels},
+    geometry::{Matrix4, PixelDelta, Pixels},
     layout::Axis,
 };
 use flui_view::RebuildHandle;
@@ -131,7 +141,10 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
-use crate::{GestureArenaScope, Listener, Positioned, Stack, StackFit};
+use crate::{
+    DragPosition, DragTargetSlot, ErasedDragData, GestureArenaScope, Listener, Positioned, Stack,
+    StackFit,
+};
 
 /// A no-argument callback retained in the current shared drag-config snapshot.
 ///
@@ -148,11 +161,12 @@ type DraggableCanceledCallback = Arc<dyn Fn(Velocity, Offset<Pixels>) + Send + S
 /// Details for [`Draggable::on_drag_end`] — the velocity and position at
 /// release, and whether a [`DragTarget`](crate::DragTarget) accepted the drop.
 ///
-/// Flutter parity: `DraggableDetails`. See the module-level divergence notes:
-/// `was_accepted` is always `false` in this cut (no live target discovery).
+/// Flutter parity: `DraggableDetails`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DraggableDetails {
-    /// Whether a `DragTarget` accepted this drop.
+    /// Whether a `DragTarget` accepted this drop — `true` when the drag
+    /// ended over a target that had taken it as a candidate and whose element
+    /// was still mounted to receive it.
     pub was_accepted: bool,
     /// Velocity at release.
     pub velocity: Velocity,
@@ -168,7 +182,8 @@ pub struct DraggableDetails {
 /// [`DragTarget`](crate::DragTarget) to receive.
 ///
 /// Flutter parity: `widgets/drag_target.dart` `Draggable`. See the module
-/// docs for what is and is not wired up in this cut.
+/// docs for the divergences, notably where the drag's global position comes
+/// from.
 #[derive(Clone, StatefulView)]
 pub struct Draggable<T: Clone + Send + Sync + 'static> {
     child: Child,
@@ -285,8 +300,8 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
         self
     }
 
-    /// Called when the drag ends without a target accepting it. Always
-    /// invoked in this cut — see the module divergence notes.
+    /// Called when the drag ends without a target accepting it — including
+    /// every cancel, and every drop over nothing.
     #[must_use]
     pub fn on_draggable_canceled(
         mut self,
@@ -306,8 +321,9 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
         self
     }
 
-    /// Called when a target accepts the drop. Never fires in this cut — see
-    /// the module divergence notes.
+    /// Called when a target accepts the drop. Fires instead of
+    /// [`on_draggable_canceled`](Self::on_draggable_canceled), never
+    /// alongside it.
     #[must_use]
     pub fn on_drag_completed(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_drag_completed = Some(Arc::new(callback));
@@ -334,6 +350,25 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// `Arc<Mutex<_>>` so the `on_start` closure captured once in
     /// `init_state` always reads the latest resolution.
     overlay: Arc<Mutex<Option<OverlayHandle>>>,
+    /// The fresh-hit-test capability, resolved in `init_state` /
+    /// `did_change_dependencies` — a lifecycle hook, never `build` or a
+    /// gesture callback (port-check trigger #22), because a hit test taken
+    /// mid-frame reads a tree that phase is still mutating.
+    ///
+    /// Owner-local (`Rc<RefCell<_>>`, not `Arc<Mutex<_>>`): `HitTestHandle`
+    /// holds an `Rc<dyn HitTestProbe>` and is `!Send` by construction, which
+    /// is correct — the tree it probes is owner-affine. Shared by cell rather
+    /// than copied into each session so a re-resolution reaches sessions that
+    /// started before it.
+    hit_test: Rc<RefCell<Option<HitTestHandle>>>,
+    /// The render node pointer events reach this widget in the space of,
+    /// published by the [`DragOrigin`] mounted under the `Listener`.
+    listener_node: Rc<Cell<Option<flui_foundation::RenderId>>>,
+    /// The render tree, for converting those local positions to the root's
+    /// space. A lifecycle-acquired capability like the two above (port-check
+    /// trigger #22): only ever read from a gesture callback, never from a
+    /// frame phase.
+    pipeline: Rc<RefCell<Option<flui_rendering::pipeline::PipelineCell>>>,
     /// The currently-mounted feedback layer, if any is showing. Owner-local
     /// (`Rc<RefCell<_>>`, not `Arc<Mutex<_>>`): only `on_start`, `build` and
     /// `dispose` — all owner-thread code — ever touch it. It remains
@@ -396,12 +431,10 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DraggableState<T> {
 /// throughout its lifetime. `Send + Sync` because it is read from inside a
 /// [`MultiDragHandle`] impl.
 ///
-/// `Draggable::data` and `on_drag_completed` are deliberately **not** carried
-/// here: with no live target discovery (see the module docs), a drop is
-/// never accepted, so neither is ever consulted by a session — they stay on
-/// the public [`Draggable`] view only, ready for a future live-wiring pass
-/// rather than threaded into internal state that would silently do nothing
-/// with them. `feedback`/`feedback_offset` are **not** carried here either,
+/// `Draggable::data` is carried **erased** (`ErasedDragData`): a session hands
+/// it to targets that cannot name `T`, and `Arc<dyn Any + Send + Sync>` is
+/// what a hit-test-discovered target's callbacks downcast from.
+/// `feedback`/`feedback_offset` are **not** carried here,
 /// even though a session does read them at start: `feedback` is
 /// `Rc<dyn Fn() -> BoxedView>`, which is `!Send` (owner-local, ADR-0027) and
 /// would make this whole `Send + Sync`-bound struct `!Send` by infection —
@@ -410,10 +443,17 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DraggableState<T> {
 struct DragConfig {
     axis: Option<Axis>,
     max_simultaneous_drags: Option<usize>,
+    /// The drag's payload, type-erased for delivery to targets. `None` when
+    /// the `Draggable` carries no data — such a drag discovers nothing, since
+    /// a target's `isExpectedDataType` filter has nothing to match against
+    /// (the oracle's null-data drag, which enters every target, has no
+    /// representation here — a named gap, see the module docs).
+    data: Option<ErasedDragData>,
     on_drag_started: Option<StartedCallback>,
     on_drag_update: Option<DragUpdateCallback>,
     on_draggable_canceled: Option<DraggableCanceledCallback>,
     on_drag_end: Option<DragEndCallback>,
+    on_drag_completed: Option<StartedCallback>,
 }
 
 impl DragConfig {
@@ -421,10 +461,15 @@ impl DragConfig {
         Self {
             axis: view.axis,
             max_simultaneous_drags: view.max_simultaneous_drags,
+            data: view
+                .data
+                .clone()
+                .map(|payload| Arc::new(payload) as ErasedDragData),
             on_drag_started: view.on_drag_started.clone(),
             on_drag_update: view.on_drag_update.clone(),
             on_draggable_canceled: view.on_draggable_canceled.clone(),
             on_drag_end: view.on_drag_end.clone(),
+            on_drag_completed: view.on_drag_completed.clone(),
         }
     }
 }
@@ -649,8 +694,115 @@ fn restrict_axis_delta(delta: Offset<PixelDelta>, axis: Option<Axis>) -> Offset<
     }
 }
 
+/// Publishes the `RenderId` of the node whose coordinate space a
+/// `Draggable`'s pointer events arrive in.
+///
+/// Pointer dispatch rewrites each event's position into the receiving entry's
+/// LOCAL space (`HitTestResult`'s per-entry `transform_pointer_event`), and
+/// `PointerEvent` is a `ui_events` type with nowhere to keep the global one
+/// alongside. A drag therefore knows only where the pointer is inside its own
+/// `Listener`; a hit test needs where it is in the root's space.
+///
+/// `PipelineOwner::local_to_global` converts between exactly those two spaces
+/// — given the `RenderId` of the node the local point belongs to. This view is
+/// how the drag learns it: mounted as the `Listener`'s direct child, its
+/// `find_render_object()` walks strict ancestors and stops at the `Listener`'s
+/// own render node, which is the node dispatch localized against.
+///
+/// The conversion composes the whole ancestor chain, so it is exact under
+/// scale and rotation, not only translation.
+#[derive(Clone)]
+struct DragOrigin {
+    node: Rc<Cell<Option<flui_foundation::RenderId>>>,
+    child: BoxedView,
+}
+
+impl View for DragOrigin {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for DragOrigin {
+    type State = DragOriginState;
+
+    fn create_state(&self) -> Self::State {
+        DragOriginState {
+            node: Rc::clone(&self.node),
+        }
+    }
+}
+
+struct DragOriginState {
+    node: Rc<Cell<Option<flui_foundation::RenderId>>>,
+}
+
+impl ViewState<DragOrigin> for DragOriginState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.node.set(ctx.find_render_object());
+    }
+
+    fn build(&self, view: &DragOrigin, _ctx: &dyn BuildContext) -> impl IntoView {
+        view.child.clone()
+    }
+}
+
+/// One [`DragTargetSlot`] this drag is currently over, with the drag's
+/// position as that target sees it.
+///
+/// The position is refreshed on every discovery pass, so a drop reports where
+/// the pointer actually was — including in the target's own local space,
+/// which only the hit entry's transform can give.
+#[derive(Clone)]
+struct EnteredTarget {
+    slot: Arc<DragTargetSlot>,
+    at: DragPosition,
+}
+
+/// `global` mapped into the space `transform` describes.
+///
+/// A hit entry's transform already maps global to local — `HitTestResult`
+/// folds each level's own inverse as it descends — so this applies it
+/// directly rather than inverting again. An entry with no transform is
+/// already in the root's space.
+fn localize(global: Offset<Pixels>, transform: Option<&Matrix4>) -> Offset<Pixels> {
+    let Some(transform) = transform else {
+        return global;
+    };
+    let (x, y) = transform.transform_point(global.dx, global.dy);
+    Offset::new(x, y)
+}
+
+/// The drag targets on `path`, leaf-first, that will take `data`.
+///
+/// Flutter parity: `_DragAvatar._getDragTargets` — walk the hit path for
+/// metadata-tagged targets and keep those whose `T` matches the drag's
+/// payload (`isExpectedDataType`). Order is the path's own, which is what
+/// makes the innermost of a set of nested targets win.
+fn drag_targets_on(
+    path: &[HitTestEntry],
+    data: &ErasedDragData,
+    global: Offset<Pixels>,
+) -> Vec<EnteredTarget> {
+    path.iter()
+        .filter_map(|entry| {
+            let payload = Arc::clone(entry.metadata.as_ref()?);
+            let slot = payload.downcast::<DragTargetSlot>().ok()?; // PORT-CHECK-OK-DOWNCAST: the hit-test payload channel is `dyn Any` by construction (`HitTestEntry::metadata`); this is the `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
+            slot.accepts_data_type(data).then(|| EnteredTarget {
+                at: DragPosition {
+                    global,
+                    local: localize(global, entry.transform.as_ref()),
+                },
+                slot,
+            })
+        })
+        .collect()
+}
+
 /// The `_DragAvatar` analogue: one instance per active drag, held by the
-/// recognizer for the pointer's lifetime.
+/// recognizer for the pointer's lifetime. It owns the drag's standing with
+/// every [`DragTargetSlot`] it has entered, and re-discovers that set on
+/// every move.
 ///
 /// **Current divergence from `_disposeRecognizerIfInactive`:** the recognizer
 /// and feedback entry still belong to `DraggableState`, rather than being
@@ -661,6 +813,41 @@ struct DragSession {
     active_count: Arc<AtomicUsize>,
     rebuild: RebuildHandle,
     config: Arc<Mutex<DragConfig>>,
+    /// The contact this session follows. Every transition a target receives
+    /// is keyed by it, which is what keeps simultaneous drags independent.
+    pointer: PointerId,
+    /// The fresh-hit-test capability, acquired by `DraggableState` in
+    /// `init_state` / `did_change_dependencies` and shared by cell so a later
+    /// re-resolution reaches a session that started before it. `None` when the
+    /// embedder installed none, in which case this drag discovers nothing.
+    hit_test: Rc<RefCell<Option<HitTestHandle>>>,
+    /// `feedback_offset`, read live: the oracle hit-tests at
+    /// `globalPosition + feedbackOffset`, so the probe follows the feedback
+    /// layer rather than the bare pointer.
+    feedback_config: Rc<RefCell<FeedbackConfig>>,
+    /// The render node the drag's pointer positions are local to, and the
+    /// tree that can convert them to the root's space — see [`DragOrigin`].
+    listener_node: Rc<Cell<Option<flui_foundation::RenderId>>>,
+    pipeline: Rc<RefCell<Option<flui_rendering::pipeline::PipelineCell>>>,
+    /// The drag's current position (`_DragAvatar._position`): the contact's
+    /// down position plus every axis-restricted delta since.
+    ///
+    /// In the `Listener`'s LOCAL space, because that is the space every
+    /// pointer event reaches a widget in — [`to_global`](Self::to_global)
+    /// converts it for the hit test and for what targets are told.
+    ///
+    /// Distinct from [`offset`](Self::offset), which is the same sum without
+    /// the starting point — see that field, and the module's divergence
+    /// note #4 on why `DraggableDetails.offset` keeps that narrower meaning.
+    position: Mutex<Offset<Pixels>>,
+    /// Every target this drag is currently inside, outermost-last, and the
+    /// drag position each one last saw (`_DragAvatar._enteredTargets`).
+    entered: RefCell<Vec<EnteredTarget>>,
+    /// The first entered target that accepted the drag, if any
+    /// (`_DragAvatar._activeTarget`) — the one a drop is delivered to, and the
+    /// position it last saw, so the drop reports where the pointer actually
+    /// was instead of re-deriving it.
+    active: RefCell<Option<EnteredTarget>>,
     /// Running sum of every axis-restricted delta since the drag started —
     /// displacement, seeded at `Offset::ZERO`. **Not** the oracle's
     /// `_lastOffset`: that adds the draggable's global origin on top of this
@@ -685,27 +872,199 @@ impl DragSession {
         self.active_count.fetch_sub(1, Ordering::AcqRel);
         self.rebuild.schedule(flui_view::RebuildReason::StateChange);
     }
+
+    /// `local` — a point in the `Listener`'s space, which is the only space a
+    /// pointer event reaches widget code in — as a point in the root's.
+    ///
+    /// `None` when the conversion cannot be made honestly: before the origin
+    /// probe has mounted, without the pipeline capability, while a frame holds
+    /// the tree, or when the composed transform is singular (a zero-scale
+    /// ancestor). Every one of those is a reason to leave the drag's target
+    /// standing untouched, never to guess a position.
+    fn to_global(&self, local: Offset<Pixels>) -> Option<Offset<Pixels>> {
+        let node = self.listener_node.get()?;
+        let pipeline = self.pipeline.borrow().clone()?;
+        let global = pipeline.try_with(|owner| {
+            owner.local_to_global(node, flui_types::Point::new(local.dx, local.dy), None)
+        })??;
+        Some(Offset::new(global.x, global.y))
+    }
+
+    /// The targets under the drag right now, or `None` when the question
+    /// could not be asked.
+    ///
+    /// `None` and `Some(vec![])` are deliberately different answers.
+    /// `Some(vec![])` means the tree replied and the drag is over nothing, so
+    /// every entered target must be left. `None` means no reply was
+    /// obtainable — no capability installed, no payload to match, no global
+    /// position to ask about, or the tree reported itself busy or closed — and
+    /// the correct response is to change nothing at all. Collapsing the two
+    /// would fire a spurious leave on every target each time a frame happened
+    /// to hold the tree.
+    fn discover(&self, global: Offset<Pixels>) -> Option<(ErasedDragData, Vec<EnteredTarget>)> {
+        let handle = self.hit_test.borrow().clone()?;
+        // Read once and carry it onwards: the payload that decided which
+        // targets match must be the payload those targets are then handed.
+        let data = self.config.lock().data.clone()?;
+        let probe_at = global + self.feedback_config.borrow().feedback_offset;
+        match handle.hit_test_at(probe_at) {
+            Ok(snapshot) => {
+                let targets = drag_targets_on(snapshot.path(), &data, global);
+                Some((data, targets))
+            }
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "drag-target discovery skipped: the render tree could not answer"
+                );
+                None
+            }
+        }
+    }
+
+    /// Re-discover the targets under `global` and drive the resulting
+    /// enter/move/leave transitions.
+    ///
+    /// Flutter parity: `_DragAvatar.updateDrag`, including its prefix-match
+    /// fast path. The oracle bails to move-only when the new target list
+    /// starts with exactly the entered list AND either something has already
+    /// accepted (deeper targets below the active one are correctly ignored) or
+    /// the lists are the same length (nothing has accepted, so `_enteredTargets`
+    /// holds every hit target and a longer list means a new one appeared).
+    fn update_drag(&self, local: Offset<Pixels>) {
+        let Some(global) = self.to_global(local) else {
+            return;
+        };
+        self.update_drag_at(global);
+    }
+
+    /// [`update_drag`](Self::update_drag) from a position already in the
+    /// root's space.
+    ///
+    /// Split from the conversion so the sequencing rules can be driven
+    /// directly against a controllable probe: the difference between "the tree
+    /// says nothing is here" and "the tree could not answer" is not reachable
+    /// through a mounted harness (making a real tree report itself busy means
+    /// holding it checked out, which the harness's own dispatch path cannot do
+    /// while delivering a pointer event).
+    fn update_drag_at(&self, global: Offset<Pixels>) {
+        let Some((data, targets)) = self.discover(global) else {
+            return;
+        };
+
+        let prefix_matches = {
+            let entered = self.entered.borrow();
+            !entered.is_empty()
+                && targets.len() >= entered.len()
+                && entered
+                    .iter()
+                    .zip(targets.iter())
+                    .all(|(was, now)| Arc::ptr_eq(&was.slot, &now.slot))
+        };
+        let unchanged_length = targets.len() == self.entered.borrow().len();
+
+        if prefix_matches && (self.active.borrow().is_some() || unchanged_length) {
+            // Same targets, new position: refresh what each one last saw, then
+            // report the move. Both borrows end before any callback runs.
+            let moving: Vec<EnteredTarget> = {
+                let mut entered = self.entered.borrow_mut();
+                for (was, now) in entered.iter_mut().zip(targets.iter()) {
+                    was.at = now.at;
+                }
+                entered.clone()
+            };
+            for target in moving {
+                target.slot.did_move(self.pointer, target.at);
+            }
+            return;
+        }
+
+        self.leave_all_entered();
+
+        // Enter targets leaf-first, stopping at the first that accepts —
+        // everything under it is shadowed by the acceptance.
+        let mut newly_entered: Vec<EnteredTarget> = Vec::new();
+        let mut new_active = None;
+        for target in targets {
+            newly_entered.push(target.clone());
+            if target.slot.did_enter(self.pointer, &data, target.at) {
+                new_active = Some(target);
+                break;
+            }
+        }
+        *self.entered.borrow_mut() = newly_entered;
+        *self.active.borrow_mut() = new_active;
+
+        // Cloned out and the borrow dropped before any callback runs, the same
+        // as the move-only path above.
+        let moving: Vec<EnteredTarget> = self.entered.borrow().clone();
+        for target in moving {
+            target.slot.did_move(self.pointer, target.at);
+        }
+    }
+
+    /// Leave every target this drag has entered, in entry order
+    /// (`_DragAvatar._leaveAllEntered`).
+    fn leave_all_entered(&self) {
+        let leaving: Vec<EnteredTarget> = self.entered.borrow_mut().drain(..).collect();
+        for target in leaving {
+            target.slot.did_leave(self.pointer);
+        }
+    }
+
+    /// Deliver the drop, if this drag ends over an accepting target, then
+    /// leave everything. Returns whether a target took the data.
+    ///
+    /// Flutter parity: `_DragAvatar.finishDrag`. The one divergence is the
+    /// return value: the oracle records `wasAccepted = true` whenever an
+    /// active target exists, even when that target's own `didDrop` returned
+    /// early because it had left the tree. [`DragTargetSlot::did_drop`]
+    /// answers whether the data was actually taken, and this reports that.
+    fn finish_drag(&self, dropped: bool) -> bool {
+        let mut was_accepted = false;
+        if dropped && let Some(active) = self.active.borrow_mut().take() {
+            was_accepted = active.slot.did_drop(self.pointer, active.at);
+            self.entered
+                .borrow_mut()
+                .retain(|target| !Arc::ptr_eq(&target.slot, &active.slot));
+        }
+        self.leave_all_entered();
+        *self.active.borrow_mut() = None;
+        was_accepted
+    }
 }
 
 impl MultiDragHandle for DragSession {
     fn update(&self, details: MultiDragUpdateDetails) {
-        let config = self.config.lock();
-        let restricted = restrict_axis_delta(details.delta, config.axis);
+        let axis = self.config.lock().axis;
+        let restricted = restrict_axis_delta(details.delta, axis);
         let moved = restricted.dx.0 != 0.0 || restricted.dy.0 != 0.0;
+        if moved {
+            let step = Offset::new(Pixels(restricted.dx.0), Pixels(restricted.dy.0));
+            *self.offset.lock() += step;
+            *self.position.lock() += step;
+            if let Some(feedback) = &self.feedback {
+                feedback.set_offset(*self.offset.lock());
+                feedback.reposition();
+            }
+        }
+
+        // Unconditional, like the oracle's `updateDrag(_position)` call: only
+        // `onDragUpdate` is gated on the restricted position having moved.
+        // Targets still expect a move report for a sample that did not move
+        // them, and a rebuild elsewhere can change what is under the pointer
+        // without the pointer itself moving at all.
+        self.update_drag(*self.position.lock());
+
         if !moved {
             return;
         }
-        *self.offset.lock() += Offset::new(Pixels(restricted.dx.0), Pixels(restricted.dy.0));
-        if let Some(feedback) = &self.feedback {
-            feedback.set_offset(*self.offset.lock());
-            feedback.reposition();
-        }
-
         // Flutter's `update` passes the RAW (unrestricted) `details` through
         // to `onDragUpdate` unchanged — only the *gate* ("did the restricted
         // position move") is axis-aware, not the reported delta.
-        if let Some(callback) = &config.on_drag_update {
-            let primary_delta = match config.axis {
+        let on_drag_update = self.config.lock().on_drag_update.clone();
+        if let Some(callback) = on_drag_update {
+            let primary_delta = match axis {
                 Some(Axis::Horizontal) => details.delta.dx.0,
                 Some(Axis::Vertical) => details.delta.dy.0,
                 None => 0.0,
@@ -721,44 +1080,69 @@ impl MultiDragHandle for DragSession {
     }
 
     fn end(&self, details: MultiDragEndDetails) {
+        // The drop lands before the state change, matching the oracle's
+        // `finishDrag`: `didDrop` runs, then `onDragEnd` reports the outcome.
+        let was_accepted = self.finish_drag(true);
         self.end_active();
 
-        let config = self.config.lock();
-        // No live target discovery (see module docs): every drag ends
-        // uncaptured.
-        let velocity = Velocity {
-            pixels_per_second: restrict_axis(details.velocity.pixels_per_second, config.axis),
+        let (velocity, on_drag_end, on_drag_completed, on_draggable_canceled) = {
+            let config = self.config.lock();
+            (
+                Velocity {
+                    pixels_per_second: restrict_axis(
+                        details.velocity.pixels_per_second,
+                        config.axis,
+                    ),
+                },
+                config.on_drag_end.clone(),
+                config.on_drag_completed.clone(),
+                config.on_draggable_canceled.clone(),
+            )
         };
         let offset = *self.offset.lock();
-        if let Some(callback) = &config.on_drag_end {
+        if let Some(callback) = on_drag_end {
             callback(DraggableDetails {
-                was_accepted: false,
+                was_accepted,
                 velocity,
                 offset,
             });
         }
-        if let Some(callback) = &config.on_draggable_canceled {
+        if was_accepted {
+            if let Some(callback) = on_drag_completed {
+                callback();
+            }
+        } else if let Some(callback) = on_draggable_canceled {
             callback(velocity, offset);
         }
     }
 
     fn cancel(&self) {
+        // A cancelled drag delivers nothing, but must still leave every
+        // target it had entered — otherwise a target keeps a candidate that
+        // no live drag will ever remove.
+        self.finish_drag(false);
         self.end_active();
 
         // Flutter's `_DragAvatar.cancel` also routes through `finishDrag`,
         // which fires `onDragEnd` unconditionally (zero velocity, not
         // accepted, but the real `_lastOffset` — not zero) before
         // `onDraggableCanceled` — not a cancel-only path.
-        let config = self.config.lock();
+        let (on_drag_end, on_draggable_canceled) = {
+            let config = self.config.lock();
+            (
+                config.on_drag_end.clone(),
+                config.on_draggable_canceled.clone(),
+            )
+        };
         let offset = *self.offset.lock();
-        if let Some(callback) = &config.on_drag_end {
+        if let Some(callback) = on_drag_end {
             callback(DraggableDetails {
                 was_accepted: false,
                 velocity: Velocity::ZERO,
                 offset,
             });
         }
-        if let Some(callback) = &config.on_draggable_canceled {
+        if let Some(callback) = on_draggable_canceled {
             callback(Velocity::ZERO, offset);
         }
     }
@@ -772,6 +1156,9 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
             active_count: Arc::new(AtomicUsize::new(0)),
             config: Arc::new(Mutex::new(DragConfig::from_view(self))),
             overlay: Arc::new(Mutex::new(None)),
+            hit_test: Rc::new(RefCell::new(None)),
+            listener_node: Rc::new(Cell::new(None)),
+            pipeline: Rc::new(RefCell::new(None)),
             feedback_entry: Rc::new(RefCell::new(None)),
             feedback_config: Rc::new(RefCell::new(FeedbackConfig::from_view(self))),
             recognizer: None,
@@ -793,13 +1180,18 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         // (`interaction/focus.rs`): resolve here for the first value, and
         // again in `did_change_dependencies` for later changes.
         *self.overlay.lock() = Overlay::maybe_of(ctx);
+        *self.hit_test.borrow_mut() = ctx.hit_test_handle();
+        *self.pipeline.borrow_mut() = ctx.pipeline_owner();
 
         let active_count = Arc::clone(&self.active_count);
         let config = Arc::clone(&self.config);
         let overlay = Arc::clone(&self.overlay);
         let feedback_entry_slot = Rc::clone(&self.feedback_entry);
         let feedback_config = Rc::clone(&self.feedback_config);
-        let on_start: MultiDragStartCallback = Rc::new(move |_pointer, _position| {
+        let hit_test = Rc::clone(&self.hit_test);
+        let listener_node = Rc::clone(&self.listener_node);
+        let pipeline = Rc::clone(&self.pipeline);
+        let on_start: MultiDragStartCallback = Rc::new(move |pointer, initial_position| {
             {
                 let guard = config.lock();
                 if let Some(max) = guard.max_simultaneous_drags
@@ -839,6 +1231,16 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 active_count: Arc::clone(&active_count),
                 rebuild: rebuild.clone(),
                 config: Arc::clone(&config),
+                pointer,
+                hit_test: Rc::clone(&hit_test),
+                feedback_config: Rc::clone(&feedback_config),
+                listener_node: Rc::clone(&listener_node),
+                pipeline: Rc::clone(&pipeline),
+                // The contact's own down position, unlike `offset` below —
+                // see `DragSession::position`.
+                position: Mutex::new(initial_position),
+                entered: RefCell::new(Vec::new()),
+                active: RefCell::new(None),
                 offset: Mutex::new(Offset::ZERO),
                 feedback,
             }) as Box<dyn MultiDragHandle>) // PORT-CHECK-OK-DYN: see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
@@ -849,14 +1251,19 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         );
     }
 
-    /// Resolves the nearest ancestor `Overlay`, if any — a lifecycle hook,
-    /// not `build` (port-check trigger #22) and not the `on_start` gesture
-    /// callback above, neither of which holds a `BuildContext`. Re-resolved
-    /// on every dependency change, not just once: `Overlay::maybe_of` depends
-    /// (ADR-0036), so a *different* enclosing overlay later replacing this
-    /// one is exactly what re-fires this hook.
+    /// Re-resolves everything this widget reads from its `BuildContext`: the
+    /// nearest ancestor `Overlay`, the fresh-hit-test capability, and the
+    /// render tree.
+    ///
+    /// A lifecycle hook, not `build` (port-check trigger #22) and not the
+    /// `on_start` gesture callback above, neither of which holds a
+    /// `BuildContext`. Re-resolved on every dependency change, not just once:
+    /// `Overlay::maybe_of` depends (ADR-0036), so a *different* enclosing
+    /// overlay later replacing this one is exactly what re-fires this hook.
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         *self.overlay.lock() = Overlay::maybe_of(ctx);
+        *self.hit_test.borrow_mut() = ctx.hit_test_handle();
+        *self.pipeline.borrow_mut() = ctx.pipeline_owner();
     }
 
     fn build(&self, view: &Draggable<T>, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -903,15 +1310,27 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             }
         }
 
+        // The origin probe goes UNDER the `Listener` and OVER the content:
+        // its `find_render_object()` must land on the `Listener`'s own render
+        // node, which is the node pointer dispatch localizes against. It
+        // contributes no render node of its own, so the mounted render tree is
+        // the same shape as without it.
+        let origin = Rc::clone(&self.listener_node);
         if showing_child_when_dragging {
             let builder = view
                 .child_when_dragging
                 .clone()
                 .expect("BUG: checked is_some above");
-            listener.child(builder())
+            listener.child(DragOrigin {
+                node: origin,
+                child: builder(),
+            })
         } else {
             match view.child.clone().into_inner() {
-                Some(child) => listener.child(child),
+                Some(child) => listener.child(DragOrigin {
+                    node: origin,
+                    child,
+                }),
                 None => listener,
             }
         }
@@ -1027,24 +1446,63 @@ mod tests {
     }
 
     fn empty_config() -> Arc<Mutex<DragConfig>> {
+        config_carrying(None)
+    }
+
+    fn config_carrying(data: Option<ErasedDragData>) -> Arc<Mutex<DragConfig>> {
         Arc::new(Mutex::new(DragConfig {
             axis: None,
             max_simultaneous_drags: None,
+            data,
             on_drag_started: None,
             on_drag_update: None,
             on_draggable_canceled: None,
             on_drag_end: None,
+            on_drag_completed: None,
         }))
+    }
+
+    fn pointer(n: u64) -> PointerId {
+        PointerId::new(n).expect("contact ids start at 1")
     }
 
     fn update_details(dx: f32, dy: f32) -> MultiDragUpdateDetails {
         MultiDragUpdateDetails {
-            pointer_id: PointerId::new(1).expect("contact ids start at 1"),
+            pointer_id: pointer(1),
             global_position: Offset::new(Pixels(dx), Pixels(dy)),
             local_position: Offset::new(Pixels(dx), Pixels(dy)),
             delta: Offset::new(PixelDelta(dx), PixelDelta(dy)),
             kind: PointerType::Mouse,
             timestamp: Instant::now(),
+        }
+    }
+
+    /// A session wired to nothing but `config` and `rebuild` — for the cases
+    /// that exercise one behavior of a live drag without a mounted tree
+    /// behind it. `hit_test`/`pipeline`/`listener_node` stay empty unless the
+    /// caller fills them.
+    fn test_session(
+        pointer: PointerId,
+        config: Arc<Mutex<DragConfig>>,
+        rebuild: RebuildHandle,
+    ) -> DragSession {
+        DragSession {
+            active_count: Arc::new(AtomicUsize::new(1)),
+            rebuild,
+            config,
+            pointer,
+            hit_test: Rc::new(RefCell::new(None)),
+            feedback_config: Rc::new(RefCell::new(FeedbackConfig {
+                feedback: None,
+                feedback_offset: Offset::ZERO,
+            })),
+            listener_node: Rc::new(Cell::new(None)),
+            pipeline: Rc::new(RefCell::new(None)),
+            position: Mutex::new(Offset::ZERO),
+            entered: RefCell::new(Vec::new()),
+            active: RefCell::new(None),
+            offset: Mutex::new(Offset::ZERO),
+            feedback: None,
         }
     }
 
@@ -1129,24 +1587,14 @@ mod tests {
 
         // Session 1 "wins" the feedback slot first...
         let signal_1 = FeedbackSignal::new();
-        let session_1 = DragSession {
-            active_count: Arc::new(AtomicUsize::new(1)),
-            rebuild: rebuild.clone(),
-            config: empty_config(),
-            offset: Mutex::new(Offset::ZERO),
-            feedback: Some(signal_1.clone()),
-        };
+        let mut session_1 = test_session(pointer(1), empty_config(), rebuild.clone());
+        session_1.feedback = Some(signal_1.clone());
 
         // ...then a second session starts and evicts it — minting its OWN
         // signal per the fix, not `signal_1.clone()`.
         let signal_2 = FeedbackSignal::new();
-        let session_2 = DragSession {
-            active_count: Arc::new(AtomicUsize::new(1)),
-            rebuild,
-            config: empty_config(),
-            offset: Mutex::new(Offset::ZERO),
-            feedback: Some(signal_2.clone()),
-        };
+        let mut session_2 = test_session(pointer(2), empty_config(), rebuild);
+        session_2.feedback = Some(signal_2.clone());
 
         // Session 1 is stale/evicted but still live (its own pointer hasn't
         // lifted yet) — its `update()` calls keep landing somewhere.
@@ -1170,5 +1618,203 @@ mod tests {
             signal_2.offset(),
             "the evicted session's writes must never bleed into the surviving signal"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Live drag-target discovery, driven against a controllable probe.
+    //
+    // These reach the parts a mounted harness cannot: a render tree that
+    // reports itself BUSY (which needs the tree checked out while a pointer
+    // event is delivered — something the dispatch path itself cannot do), and
+    // two genuinely concurrent contacts (the widget harness tracks one).
+    // ------------------------------------------------------------------
+
+    /// What the next probe call answers.
+    #[derive(Clone)]
+    enum ProbeAnswer {
+        /// The tree replied with this path.
+        Path(Vec<HitTestEntry>),
+        /// A frame phase holds the tree.
+        Busy,
+    }
+
+    /// A [`HitTestProbe`] whose answer the test sets.
+    #[derive(Clone)]
+    struct ScriptedProbe {
+        answer: Rc<RefCell<ProbeAnswer>>,
+    }
+
+    impl ScriptedProbe {
+        fn new() -> Self {
+            Self {
+                answer: Rc::new(RefCell::new(ProbeAnswer::Path(Vec::new()))),
+            }
+        }
+
+        fn answer_with(&self, path: Vec<HitTestEntry>) {
+            *self.answer.borrow_mut() = ProbeAnswer::Path(path);
+        }
+
+        fn report_busy(&self) {
+            *self.answer.borrow_mut() = ProbeAnswer::Busy;
+        }
+    }
+
+    impl flui_interaction::HitTestProbe for ScriptedProbe {
+        fn probe(
+            &self,
+            _position: Offset<Pixels>,
+            result: &mut flui_interaction::HitTestResult,
+        ) -> Result<(), flui_interaction::InteractionDispatchError> {
+            match self.answer.borrow().clone() {
+                ProbeAnswer::Path(path) => {
+                    *result.path_mut() = path;
+                    Ok(())
+                }
+                ProbeAnswer::Busy => Err(flui_interaction::InteractionDispatchError::TreeBusy),
+            }
+        }
+    }
+
+    /// A hit entry carrying `slot`, as a mounted `DragTarget`'s `MetaData`
+    /// node would produce.
+    fn entry_for(slot: &Arc<DragTargetSlot>) -> HitTestEntry {
+        HitTestEntry::new(flui_foundation::RenderId::new(1))
+            .metadata(Arc::clone(slot) as Arc<dyn std::any::Any + Send + Sync>)
+    }
+
+    /// A target that counts its leaves. The returned state is what a mounted
+    /// `DragTarget` would hold; `slot()` on it is what a drag discovers, and
+    /// `candidate_data()` is how the test reads the target's standing back
+    /// through the same public surface a builder does.
+    fn counting_target(leaves: &Arc<AtomicUsize>) -> crate::DragTargetState<String> {
+        let leaves = Arc::clone(leaves);
+        let target = crate::DragTarget::<String>::new(|_candidates, _rejected| {
+            crate::SizedBox::shrink().into_view().boxed()
+        })
+        .on_leave(move |_data| {
+            leaves.fetch_add(1, Ordering::SeqCst);
+        });
+        flui_view::StatefulView::create_state(&target)
+    }
+
+    /// A tree that cannot answer is NOT a tree that answered "nothing here".
+    ///
+    /// `TreeBusy` must leave every entered target exactly where it was. Mapping
+    /// it to an empty path instead would read as "the drag is over nothing" and
+    /// fire a leave on every target, every time a frame happened to hold the
+    /// tree mid-drag. The final arm is the discriminator: an actually-empty
+    /// path DOES leave, so this test fails if the two are collapsed.
+    #[test]
+    fn a_busy_tree_changes_nothing_while_an_empty_path_leaves_everything() {
+        let lane = flui_interaction::InteractionLane::try_new().expect("a fresh lane");
+        lane.enter(|| {
+            let leaves = Arc::new(AtomicUsize::new(0));
+            let target = counting_target(&leaves);
+            let slot = target.slot();
+            let probe = ScriptedProbe::new();
+            let session = test_session(
+                pointer(1),
+                config_carrying(Some(Arc::new("parcel".to_string()))),
+                mount_and_capture_rebuild_handle(),
+            );
+            *session.hit_test.borrow_mut() = Some(flui_interaction::HitTestHandle::new(
+                lane.dispatch_handle(),
+                Rc::new(probe.clone()),
+            ));
+
+            probe.answer_with(vec![entry_for(&slot)]);
+            session.update_drag_at(Offset::ZERO);
+            assert_eq!(
+                session.entered.borrow().len(),
+                1,
+                "premise: the drag is inside the target before the tree goes busy"
+            );
+
+            probe.report_busy();
+            session.update_drag_at(Offset::ZERO);
+            assert_eq!(
+                leaves.load(Ordering::SeqCst),
+                0,
+                "a busy tree must leave the drag's standing untouched — it is \
+                 an unanswered question, not an answer of 'over nothing'"
+            );
+            assert_eq!(
+                session.entered.borrow().len(),
+                1,
+                "...and the entered list must be unchanged, not emptied"
+            );
+
+            probe.answer_with(Vec::new());
+            session.update_drag_at(Offset::ZERO);
+            assert_eq!(
+                leaves.load(Ordering::SeqCst),
+                1,
+                "an EMPTY path is a real answer and must leave the target — \
+                 without this arm the assertion above would also pass against \
+                 an implementation that never leaves anything"
+            );
+        });
+    }
+
+    /// Two contacts dragging over the same target are tracked independently:
+    /// one ending does not disturb the other's standing.
+    ///
+    /// The widget harness drives a single contact at a time, so this is the
+    /// only level at which genuinely concurrent drags are reachable.
+    #[test]
+    fn two_simultaneous_drags_over_one_target_do_not_disturb_each_other() {
+        let lane = flui_interaction::InteractionLane::try_new().expect("a fresh lane");
+        lane.enter(|| {
+            let leaves = Arc::new(AtomicUsize::new(0));
+            let target = counting_target(&leaves);
+            let slot = target.slot();
+            let rebuild = mount_and_capture_rebuild_handle();
+
+            let mut sessions = Vec::new();
+            for contact in [pointer(1), pointer(2)] {
+                let probe = ScriptedProbe::new();
+                probe.answer_with(vec![entry_for(&slot)]);
+                let session = test_session(
+                    contact,
+                    config_carrying(Some(Arc::new(format!("parcel {contact:?}")))),
+                    rebuild.clone(),
+                );
+                *session.hit_test.borrow_mut() = Some(flui_interaction::HitTestHandle::new(
+                    lane.dispatch_handle(),
+                    Rc::new(probe),
+                ));
+                session.update_drag_at(Offset::ZERO);
+                sessions.push(session);
+            }
+
+            assert_eq!(
+                target.candidate_data().len(),
+                2,
+                "premise: both contacts are over the target at once"
+            );
+
+            // The first contact is cancelled; the second is untouched.
+            sessions[0].finish_drag(false);
+            assert_eq!(
+                leaves.load(Ordering::SeqCst),
+                1,
+                "exactly the cancelled contact leaves"
+            );
+            assert_eq!(
+                target.candidate_data().len(),
+                1,
+                "the surviving contact keeps its standing with the target"
+            );
+
+            assert!(
+                sessions[1].finish_drag(true),
+                "the surviving contact's own drop still lands on the target"
+            );
+            assert!(
+                target.candidate_data().is_empty(),
+                "and once both contacts are done the target holds nothing"
+            );
+        });
     }
 }

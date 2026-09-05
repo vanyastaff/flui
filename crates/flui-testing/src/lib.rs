@@ -202,6 +202,15 @@ pub struct HeadlessBinding {
     local_post_frame: LocalPostFrameLane,
     /// Owner-affine interaction callback storage, active across every owner entry.
     interaction_lane: InteractionLane,
+    /// Stands in for the presentation's open-for-business token.
+    ///
+    /// `PipelineHitTestProbe` treats "the tree allocation is still reachable"
+    /// and "the presentation is still open" as two different facts, and takes
+    /// a `Weak` handle on the second. On screen the presentation owns it;
+    /// headlessly the binding does, so a probe minted here stops answering
+    /// when the binding is dropped rather than when the last `PipelineCell`
+    /// clone happens to go.
+    presentation_alive: std::rc::Rc<()>,
     /// The most recently committed composited [`LayerTree`], retained across a
     /// later frame that has no paint work.
     ///
@@ -279,6 +288,7 @@ impl HeadlessBinding {
             scheduler,
             local_post_frame,
             interaction_lane,
+            presentation_alive: std::rc::Rc::new(()),
             last_layer_tree: None,
             last_frame_painted: false,
             painted_frame_count: 0,
@@ -323,6 +333,35 @@ impl HeadlessBinding {
     #[must_use]
     pub fn interaction_dispatch_handle(&self) -> InteractionDispatchHandle {
         self.interaction_lane.dispatch_handle()
+    }
+
+    /// Install the fresh-hit-test capability on `build_owner`, backed by
+    /// `pipeline_owner`'s tree.
+    ///
+    /// Separate from [`install_build_capabilities`](Self::install_build_capabilities)
+    /// only because it needs the render tree, which that method does not
+    /// receive: the capability pairs realm identity (this binding's lane) with
+    /// ONE presentation's tree, and a binding may bind a different tree later.
+    ///
+    /// Without this, `BuildContext::hit_test_handle()` answers `None`
+    /// headlessly while answering `Some` on screen — and a widget whose whole
+    /// behavior rides on a fresh hit test (a `Draggable` discovering the
+    /// `DragTarget` it has moved over) would be untestable in the tier that is
+    /// supposed to cover it.
+    pub fn install_hit_test_capability(
+        &self,
+        build_owner: &mut BuildOwner,
+        pipeline_owner: &PipelineCell,
+    ) {
+        build_owner.set_hit_test_handle(flui_interaction::HitTestHandle::new(
+            self.interaction_dispatch_handle(),
+            std::rc::Rc::new(
+                flui_rendering::pipeline::hit_test_probe::PipelineHitTestProbe::new(
+                    pipeline_owner,
+                    std::rc::Rc::downgrade(&self.presentation_alive),
+                ),
+            ),
+        ));
     }
 
     /// The binding's scheduler, which owns the frame-driven async task driver.
@@ -444,6 +483,7 @@ impl HeadlessBinding {
                 .set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
             build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
             build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
+            self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
         }
         self.tree = Some(TreeBinding {
             build_owner,

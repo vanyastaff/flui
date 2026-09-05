@@ -280,7 +280,13 @@ impl HeadlessBinding {
         } = owners;
 
         match options.capabilities {
-            BuildCapabilities::Installed => self.install_build_capabilities(&mut build_owner),
+            BuildCapabilities::Installed => {
+                self.install_build_capabilities(&mut build_owner);
+                // Before the mount, not after the bind: a `ViewState::init_state`
+                // running in the `build_scope` below is exactly where the
+                // capability is supposed to be acquired.
+                self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
+            }
             BuildCapabilities::AsyncDriverOnly => {
                 build_owner.set_async_driver(self.scheduler().async_driver().clone());
             }

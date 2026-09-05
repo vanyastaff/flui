@@ -31,8 +31,9 @@ pub use dismissible::{
     Dismissible, DismissibleState,
 };
 pub use drag_target::{
-    DragTarget, DragTargetAccept, DragTargetBuilder, DragTargetDetails, DragTargetLeave,
-    DragTargetMove, DragTargetState, DragTargetWillAccept, ErasedDragData,
+    DragPosition, DragTarget, DragTargetAccept, DragTargetBuilder, DragTargetDetails,
+    DragTargetLeave, DragTargetMove, DragTargetSlot, DragTargetState, DragTargetWillAccept,
+    ErasedDragData,
 };
 pub use draggable::{Draggable, DraggableDetails, DraggableState};
 pub use focus::{
