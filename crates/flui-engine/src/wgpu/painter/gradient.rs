@@ -5,7 +5,7 @@
 // Moved from `painter.rs` into `painter/gradient.rs` as part of the
 // C1 LOC-cap refactor.  Zero behaviour changes.
 
-use flui_types::{Rect, geometry::Pixels};
+use flui_types::{Rect, geometry::Pixels, painting::BlendMode};
 
 use super::super::batches::DrawBatcher;
 use super::super::effects::{GradientStop, ShadowParams};
@@ -54,6 +54,12 @@ impl WgpuPainter {
             // per-corner path is `rrect` with a shader paint, which reaches
             // the same batcher with genuine `[tl, tr, br, bl]`.
             [corner_radius; 4],
+            // `SrcOver` by contract: this entry point takes no `Paint`, and
+            // the display-list commands behind it (`DrawGradient`,
+            // `DrawGradientRRect`) carry none either. A gradient with a blend
+            // mode arrives through `rect`/`rrect`/`circle` with a shader paint,
+            // which reaches the same batcher via `dispatch_shader_rect`.
+            BlendMode::SrcOver,
         );
     }
 
@@ -99,6 +105,12 @@ impl WgpuPainter {
             // per-corner path is `rrect` with a shader paint, which reaches
             // the same batcher with genuine `[tl, tr, br, bl]`.
             [corner_radius; 4],
+            // `SrcOver` by contract: this entry point takes no `Paint`, and
+            // the display-list commands behind it (`DrawGradient`,
+            // `DrawGradientRRect`) carry none either. A gradient with a blend
+            // mode arrives through `rect`/`rrect`/`circle` with a shader paint,
+            // which reaches the same batcher via `dispatch_shader_rect`.
+            BlendMode::SrcOver,
         );
     }
 
@@ -132,6 +144,12 @@ impl WgpuPainter {
             // per-corner path is `rrect` with a shader paint, which reaches
             // the same batcher with genuine `[tl, tr, br, bl]`.
             [corner_radius; 4],
+            // `SrcOver` by contract: this entry point takes no `Paint`, and
+            // the display-list commands behind it (`DrawGradient`,
+            // `DrawGradientRRect`) carry none either. A gradient with a blend
+            // mode arrives through `rect`/`rrect`/`circle` with a shader paint,
+            // which reaches the same batcher via `dispatch_shader_rect`.
+            BlendMode::SrcOver,
         );
     }
 

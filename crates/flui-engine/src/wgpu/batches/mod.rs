@@ -651,6 +651,7 @@ mod unit_tests {
             glam::Vec2::new(10.0, 0.0),
             &stops,
             [0.0; 4],
+            BlendMode::SrcOver,
         );
         assert!(
             !segment.current_gradient_stops.is_empty(),

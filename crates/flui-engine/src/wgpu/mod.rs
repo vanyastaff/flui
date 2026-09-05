@@ -243,10 +243,20 @@ mod sdf_smoke_test;
 #[cfg(test)]
 mod clip_layer_readback_tests;
 
+// The CPU model of the fixed-function blender that every readback suite
+// asserting an exact blended byte predicts against.
+#[cfg(test)]
+mod blend_oracle;
+
 // The clip suite's companion: same clip, but asserting the ARITHMETIC of a
 // partially covered blend rather than counting clipped pixels.
 #[cfg(test)]
 mod coverage_blend_readback_tests;
+
+// The same two questions asked of the GRADIENT path, which reaches the blender
+// through its own instanced pipelines rather than the tessellated funnel.
+#[cfg(test)]
+mod gradient_blend_readback_tests;
 
 // aa_oracle_tests contains both CPU unit tests (no GPU) and GPU readback tests.
 // Include whenever test compilation is active.

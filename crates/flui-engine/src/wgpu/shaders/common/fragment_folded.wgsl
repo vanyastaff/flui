@@ -9,9 +9,10 @@
 //
 // It also serves EVERY mode on a device without
 // `wgpu::Features::DUAL_SOURCE_BLENDING`, where the second channel does not
-// exist. There the seven coverage-destructive modes keep a hard clip edge —
-// a documented backend divergence, not a contract. See
-// `PipelineCache::new`.
+// exist. There the seven coverage-destructive modes keep a hard edge — a
+// documented backend divergence, not a contract. See ADR-0057.
+//
+// The module this is appended to supplies `VertexOutput` and `shadeFragment`.
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return premultipliedSource(shadeFragment(input));
