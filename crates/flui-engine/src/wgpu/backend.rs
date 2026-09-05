@@ -517,6 +517,29 @@ impl Drop for Backend<'_> {
     }
 }
 
+/// Whether a clip layer's mode wants a hard boundary.
+///
+/// `HardEdge` is the scissor for a rect, and a thresholded SDF for a rounded
+/// one. `AntiAlias` feathers. `None` never reaches a clip call — a render
+/// object choosing it pushes no clip layer at all — so its arm only has to be
+/// harmless, and the cheapest path is the honest answer for "no clipping
+/// wanted".
+///
+/// `AntiAliasWithSaveLayer` is treated as `AntiAlias` here, which is a real
+/// divergence and is stated rather than implied: Flutter renders the subtree
+/// into an offscreen first so the blend against the clip edge is correct,
+/// which matters only when the clipped content overlaps itself or blends
+/// non-trivially against the boundary. The offscreen machinery exists in this
+/// backend (`painter::save_layer_impl`, with group opacity, blend-mode
+/// propagation and a filter chain), so this is a deferral rather than a
+/// limitation; issue #848 carries the remaining half.
+const fn clip_is_hard(behavior: flui_types::painting::Clip) -> bool {
+    matches!(
+        behavior,
+        flui_types::painting::Clip::None | flui_types::painting::Clip::HardEdge
+    )
+}
+
 impl CommandRenderer for Backend<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
@@ -1236,14 +1259,14 @@ impl CommandRenderer for Backend<'_> {
         &mut self,
         rect: Rect<Pixels>,
         _clip_op: flui_types::painting::ClipOp,
-        _clip_behavior: flui_types::painting::Clip,
+        clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
-        // ClipOp and Clip are stored in DrawCommand and available here for future
-        // GPU-accelerated clip modes (e.g. stencil-based Difference, MSAA anti-aliased edges).
-        // Current implementation uses simple scissor clipping (Intersect + HardEdge).
+        // `ClipOp::Difference` is still unhandled (it would need a stencil);
+        // the `Clip` mode is honoured — see `clip_is_hard`.
+        let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
-            painter.clip_rect(rect);
+            painter.clip_rect(rect, hard);
         });
     }
 
@@ -1251,11 +1274,12 @@ impl CommandRenderer for Backend<'_> {
         &mut self,
         rrect: RRect,
         _clip_op: flui_types::painting::ClipOp,
-        _clip_behavior: flui_types::painting::Clip,
+        clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
+        let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
-            painter.clip_rrect(rrect);
+            painter.clip_rrect(rrect, hard);
         });
     }
 
@@ -1462,16 +1486,16 @@ impl LayerStateStack for Backend<'_> {
     // the cost is one branch per layer-stack call -- negligible
     // versus the save_layer/clip_path GPU work that follows.
 
-    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, _clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
-        self.painter.clip_rect(*rect);
+        self.painter.clip_rect(*rect, clip_is_hard(clip_behavior));
     }
 
-    fn push_clip_rrect(&mut self, rrect: &RRect, _clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
-        self.painter.clip_rrect(*rrect);
+        self.painter.clip_rrect(*rrect, clip_is_hard(clip_behavior));
     }
 
     fn push_clip_path(&mut self, path: &Path, _clip_behavior: flui_types::painting::Clip) {

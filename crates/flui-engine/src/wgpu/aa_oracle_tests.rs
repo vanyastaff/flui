@@ -2807,12 +2807,15 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
-        painter.clip_rect(flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(CLIP_BOTTOM),
-        ));
+        painter.clip_rect(
+            flui_types::Rect::from_xywh(
+                Pixels(0.0),
+                Pixels(0.0),
+                Pixels(SURFACE_WIDTH as f32),
+                Pixels(CLIP_BOTTOM),
+            ),
+            true,
+        );
         // Positioned so the run straddles the clip edge: some of it is legally
         // inside, the rest must be cut.
         painter.text(
@@ -3019,15 +3022,18 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            flui_types::Rect::from_xywh(
-                Pixels(0.0),
-                Pixels(0.0),
-                Pixels(SURFACE_WIDTH as f32),
-                Pixels(SURFACE_HEIGHT as f32),
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                flui_types::Rect::from_xywh(
+                    Pixels(0.0),
+                    Pixels(0.0),
+                    Pixels(SURFACE_WIDTH as f32),
+                    Pixels(SURFACE_HEIGHT as f32),
+                ),
+                Pixels(R),
             ),
-            Pixels(R),
-        ));
+            false,
+        );
         // Radius 90 about the centre of a 128x128 surface: every corner of the
         // surface is well inside this circle.
         painter.circle(
@@ -3204,10 +3210,10 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            full,
-            Pixels(R),
-        ));
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(full, Pixels(R)),
+            false,
+        );
         painter.gradient_rect(
             full,
             glam::Vec2::new(0.0, 0.0),
@@ -3282,10 +3288,10 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            full,
-            Pixels(R),
-        ));
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(full, Pixels(R)),
+            false,
+        );
         // A stroke this wide covers the surface, corners included. `Paint`
         // with a Stroke style routes through the tessellator, not the
         // instanced rect path.
@@ -3356,10 +3362,10 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            region,
-            Pixels(40.0),
-        ));
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(region, Pixels(40.0)),
+            false,
+        );
         // A FILL, and a large one: the SSAA gate reads the rect's own area
         // (80x80 = 6400 px², over the 256 px² threshold), not the painted
         // area — a hairline rect with a huge stroke width stays under it and
@@ -3456,10 +3462,13 @@ mod gpu_tests {
         painter.translate(flui_types::Offset::new(Pixels(64.0), Pixels(64.0)));
         painter.rotate(std::f32::consts::FRAC_PI_4);
         painter.translate(flui_types::Offset::new(Pixels(-64.0), Pixels(-64.0)));
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            flui_types::Rect::from_xywh(Pixels(24.0), Pixels(24.0), Pixels(80.0), Pixels(80.0)),
-            Pixels(12.0),
-        ));
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                flui_types::Rect::from_xywh(Pixels(24.0), Pixels(24.0), Pixels(80.0), Pixels(80.0)),
+                Pixels(12.0),
+            ),
+            false,
+        );
         // Far larger than the surface, so every sample point is inside the
         // drawn shape and only the clip can remove it.
         painter.rect(
@@ -3537,10 +3546,13 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
         painter.scale(1.0, 3.0);
-        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
-            flui_types::Rect::from_xywh(Pixels(16.0), Pixels(0.0), Pixels(96.0), Pixels(32.0)),
-            Pixels(16.0),
-        ));
+        painter.clip_rrect(
+            flui_types::geometry::RRect::from_rect_circular(
+                flui_types::Rect::from_xywh(Pixels(16.0), Pixels(0.0), Pixels(96.0), Pixels(32.0)),
+                Pixels(16.0),
+            ),
+            false,
+        );
         painter.rect(
             flui_types::Rect::from_xywh(
                 Pixels(-200.0),

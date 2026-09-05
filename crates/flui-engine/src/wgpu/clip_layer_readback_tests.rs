@@ -8,11 +8,13 @@
 //! the widget test reads layer kinds and never a pixel, and this one knows
 //! nothing about viewports. Together they say what a user sees.
 //!
-//! **What this cannot show.** The three clipped modes — `HardEdge`,
-//! `AntiAlias`, `AntiAliasWithSaveLayer` — are pixel-identical here, because
-//! the wgpu backend takes a clip layer's `Clip` value and discards it
-//! (`push_clip_rect`'s `_clip_behavior` in `backend.rs`). That gap is tracked
-//! rather than papered over with a test that would pass either way.
+//! **The modes.** `HardEdge` and `AntiAlias` now render differently, which
+//! `a_hard_clip_edge_and_a_smooth_one_differ` pins: the backend used to take a
+//! clip layer's `Clip` and discard it, so all three clipped modes were one
+//! picture. `AntiAliasWithSaveLayer` still renders as `AntiAlias` — its
+//! offscreen composite is not implemented — and that is asserted deliberately
+//! and narrowly, so the day it lands, the assertion fails in the right place
+//! rather than the divergence going quiet.
 
 use flui_layer::{LayerTree, SceneBuilder};
 use flui_painting::{Canvas, Paint};
@@ -175,5 +177,121 @@ fn an_aliased_paint_hardens_the_edge_the_default_smooths() {
         hard, 0,
         "an aliased paint must leave every pixel fully in or fully out; \
          found {hard} partial-coverage pixels",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Per-mode edges (#848)
+// ---------------------------------------------------------------------------
+
+/// Counts pixels that are neither the white ground nor the solid blue fill.
+///
+/// Only a feathered boundary produces them. This is the same discriminator
+/// `an_aliased_paint_hardens_the_edge_the_default_smooths` uses for a paint's
+/// own edge, applied here to the *clip's* edge instead.
+fn partial_coverage_pixels(pixels: &[u8]) -> usize {
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| {
+            let white = p[0] > 250 && p[1] > 250 && p[2] > 250;
+            let blue = p[0] < 5 && p[1] < 5 && p[2] > 250;
+            !white && !blue
+        })
+        .count()
+}
+
+/// A clip whose boundary crosses pixel centres at an angle, so the two modes
+/// cannot agree: `HardEdge` has to pick whole pixels, `AntiAlias` feathers.
+///
+/// The content is drawn WITHOUT anti-aliasing and strictly inside the surface,
+/// so the only edge in the frame is the clip's own. Otherwise the paint's edge
+/// would contribute partial pixels to both modes and swamp the difference —
+/// one of the ways a clip oracle goes green against both the fixed and the
+/// broken code.
+fn rotated_clip_scene(behavior: Clip) -> LayerTree {
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        // Rotate about the surface centre so the clip's edges cross pixel
+        // centres at an angle — the only geometry where the two modes must
+        // visibly disagree.
+        let centre = flui_types::Matrix4::translation(SIDE as f32 / 2.0, SIDE as f32 / 2.0, 0.0);
+        builder
+            .push_transform(centre * flui_types::Matrix4::rotation_z(std::f32::consts::FRAC_PI_6));
+        builder.push_clip_rect(
+            Rect::from_xywh(px(-18.0), px(-18.0), px(36.0), px(36.0)),
+            behavior,
+        );
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(-40.0), px(-40.0), px(80.0), px(80.0)),
+            &Paint::fill(Color::rgb(0, 0, 255)).with_anti_alias(false),
+        );
+        builder.add_picture(canvas.finish());
+        builder.build();
+    }
+    tree
+}
+
+/// `Clip::HardEdge` and `Clip::AntiAlias` must not render the same picture.
+///
+/// This is the defect #848 named: the backend took the layer's `Clip` and
+/// discarded it, so all three clipped modes were one picture. A test asserting
+/// the modes AGREE would have pinned that defect as the contract, which is why
+/// none existed before the modes were honoured.
+#[test]
+fn a_hard_clip_edge_and_a_smooth_one_differ() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |behavior: Clip| {
+        renderer
+            .render_layer_tree(&rotated_clip_scene(behavior), (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a clipped tree")
+    };
+
+    let hard = partial_coverage_pixels(&render(Clip::HardEdge));
+    let smooth = partial_coverage_pixels(&render(Clip::AntiAlias));
+
+    assert!(
+        smooth > hard,
+        "an anti-aliased clip must feather its boundary: hard={hard} smooth={smooth}"
+    );
+    assert!(
+        hard * 4 < smooth,
+        "the difference must be a real band, not a few stray pixels: \
+         hard={hard} smooth={smooth}"
+    );
+}
+
+/// `AntiAliasWithSaveLayer` currently renders as `AntiAlias`.
+///
+/// Asserting the two AGREE is normally how a defect gets pinned as a contract,
+/// so this is deliberate and narrow: the divergence is *recorded* (the mode's
+/// offscreen half is not implemented), and this test is what will fail — loudly
+/// and in the right place — when it is. It is paired with the test above, which
+/// proves the modes are not all one picture.
+#[test]
+fn anti_alias_with_save_layer_currently_matches_plain_anti_alias() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |behavior: Clip| {
+        renderer
+            .render_layer_tree(&rotated_clip_scene(behavior), (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a clipped tree")
+    };
+
+    assert_eq!(
+        render(Clip::AntiAliasWithSaveLayer),
+        render(Clip::AntiAlias),
+        "the save-layer mode is treated as plain anti-alias until its offscreen \
+         composite lands; when that changes, this test is the one to update"
     );
 }

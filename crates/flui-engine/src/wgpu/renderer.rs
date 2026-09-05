@@ -1800,7 +1800,11 @@ impl Renderer {
             .damage_rect()
             .filter(|r| r.width().0 > 0.0 && r.height().0 > 0.0);
         if let Some(damage) = partial_damage {
-            backend.painter_mut().clip_rect(damage);
+            // Hard: this is the damage-rect scissor, an internal repaint
+            // optimisation with pixel-aligned bounds, not a user clip whose
+            // edge anyone can see. Feathering it would blend the boundary of a
+            // region that is supposed to be an exact repaint window.
+            backend.painter_mut().clip_rect(damage, true);
             tracing::trace!(
                 left = damage.left().0,
                 top = damage.top().0,

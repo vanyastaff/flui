@@ -13,6 +13,15 @@
 // `common/sdf.wgsl` is a broader reference library with no `include_str!`
 // consumer — do not confuse the two. This file is the one that ships.
 
+/// Mask selecting the distance-function selector out of the packed clip lane.
+const CLIP_KIND_MASK: u32 = 3u;
+
+/// Bit 2 of the packed clip lane: set means `Clip::HardEdge`.
+///
+/// Kept next to the mask so the CPU-side packing (`RectInstance::with_clip`
+/// and friends) and this unpacking cannot drift apart on a magic number.
+const CLIP_HARD_BIT: u32 = 4u;
+
 /// Rounded box SDF with per-corner radii.
 ///
 /// `p` — point to test, centred at the origin.
@@ -83,6 +92,18 @@ fn sdfToAlpha(dist: f32) -> f32 {
 /// superellipse, anything else = rounded rect (the safe default for a kind
 /// this shader has not learned about yet).
 ///
+/// The layer's `Clip` mode rides in bit 2 of the same value
+/// ([`CLIP_HARD_BIT`]): clear feathers the boundary (`Clip::AntiAlias`), set
+/// thresholds it (`Clip::HardEdge`). Packed rather than carried as its own
+/// varying so no shader has to grow an interpolant, and every existing call
+/// site keeps its arity.
+///
+/// It is separate from the instance's own `aliased` lane on purpose — that one
+/// is the *paint's* `anti_alias`, and a shape drawn with a hard edge inside a
+/// smooth clip must still get the smooth clip. Flutter treats the two as
+/// independent for the same reason: `Clip` belongs to the clip layer,
+/// `isAntiAlias` to the paint.
+///
 /// The whole evaluation lives here rather than being pasted into each fragment
 /// shader for the same reason the distance functions do: every clip-capable
 /// primitive must agree on what a clip means, and a pasted copy is free to
@@ -91,10 +112,12 @@ fn clipAlpha(
     world_pos: vec2<f32>,
     clip_bounds: vec4<f32>,
     clip_radii: vec4<f32>,
-    clip_kind: u32,
+    clip_kind_packed: u32,
     device_to_local: vec4<f32>,
     local_origin: vec4<f32>,
 ) -> f32 {
+    let clip_kind = clip_kind_packed & CLIP_KIND_MASK;
+    let clip_hard = (clip_kind_packed & CLIP_HARD_BIT) != 0u;
     var alpha = 1.0;
     if (clip_kind != 0u && clip_bounds.z > 0.0 && clip_bounds.w > 0.0) {
         let local = vec2<f32>(
@@ -113,7 +136,14 @@ fn clipAlpha(
             clip_dist = sdRoundedBox(clip_p, clip_half, clip_radii);
         }
 
-        alpha = sdfToAlpha(clip_dist);
+        if (clip_hard) {
+            // `Clip::HardEdge`: inside or out, no partial coverage. The
+            // half-open rule matches the SDF's own sign convention — a
+            // fragment exactly on the boundary is inside.
+            alpha = select(0.0, 1.0, clip_dist <= 0.0);
+        } else {
+            alpha = sdfToAlpha(clip_dist);
+        }
     }
     return alpha;
 }

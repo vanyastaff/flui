@@ -229,7 +229,10 @@ fn draw_texture_captures_scissor() {
         .register(tex_id, gpu_tex, 1, 1, false, false);
 
     // Establish a clip region, then draw the texture inside it.
-    painter.clip_rect(Rect::from_xywh(px(10.0), px(10.0), px(80.0), px(60.0)));
+    painter.clip_rect(
+        Rect::from_xywh(px(10.0), px(10.0), px(80.0), px(60.0)),
+        true,
+    );
     let scissor_before = painter.current_scissor_for_test();
     assert!(
         scissor_before.is_some(),
@@ -338,10 +341,10 @@ fn reset_frame_state_clears_damage_scissor() {
     );
 
     // Simulate the per-frame damage clip the Renderer applies (unpaired).
-    painter.clip_rect(Rect::from_origin_size(
-        Point::ZERO,
-        Size::new(px(50.0), px(50.0)),
-    ));
+    painter.clip_rect(
+        Rect::from_origin_size(Point::ZERO, Size::new(px(50.0), px(50.0))),
+        true,
+    );
     assert!(
         painter.current_scissor_for_test().is_some(),
         "clip_rect must set the current scissor"
@@ -1592,7 +1595,7 @@ fn clip_rrect_sdf_removes_corner_pixels() {
             ),
             px(RADIUS),
         );
-        painter.clip_rrect(rrect);
+        painter.clip_rrect(rrect, false);
 
         // Fill the entire canvas RED. Only pixels passing the rrect SDF will
         // actually be painted; the rest remain BLACK (clear colour).
@@ -1749,7 +1752,10 @@ fn nested_save_clip_restore_removes_scissor() {
         // Step 2: save, clip to left half, try to paint the right half RED.
         // The RED paint must be clipped (scissor blocks x≥50).
         painter.save();
-        painter.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(SIZE as f32)));
+        painter.clip_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(SIZE as f32)),
+            true,
+        );
         painter.rect(
             Rect::from_xywh(px(50.0), px(0.0), px(50.0), px(SIZE as f32)),
             &Paint::fill(red),

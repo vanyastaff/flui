@@ -68,8 +68,19 @@ impl WgpuPainter {
     /// coordinates clamped to `[0, viewport]`).  Subsequent draw calls are
     /// rasterised only within the resulting intersection.  Call [`Self::restore`]
     /// to pop the clip state pushed by the matching [`Self::save`].
-    pub fn clip_rect(&mut self, rect: Rect<Pixels>) {
-        self.state.clip_rect(rect, self.size);
+    /// `hard` selects the layer's `Clip` mode. A hard-edged rect clip is the
+    /// scissor: integer pixel bounds, no partial coverage, and free. A
+    /// *smooth* one cannot be — the scissor has no sub-pixel notion — so it
+    /// goes through the SDF as a rounded rect with zero radii, which is the
+    /// same path a rounded clip takes and already feathers correctly under
+    /// rotation and non-uniform scale.
+    pub fn clip_rect(&mut self, rect: Rect<Pixels>, hard: bool) {
+        if hard {
+            self.state.clip_rect(rect, self.size);
+        } else {
+            self.state
+                .clip_rrect(RRect::from_rect(rect), self.size, false);
+        }
     }
 
     /// Intersect the clip region with a rounded rectangle.
@@ -80,8 +91,12 @@ impl WgpuPainter {
     /// rounded boundary.  The SDF clip is applied per-draw rather than as a
     /// hardware stencil, so it only affects shapes that read the clip uniforms
     /// (rect/circle/arc SDF batches).
-    pub fn clip_rrect(&mut self, rrect: RRect) {
-        self.state.clip_rrect(rrect, self.size);
+    /// `hard` selects the layer's `Clip` mode: a hard edge thresholds the SDF
+    /// instead of feathering it. Both go through the SDF either way — unlike a
+    /// rect, a rounded clip has no scissor equivalent that would keep the
+    /// corners.
+    pub fn clip_rrect(&mut self, rrect: RRect, hard: bool) {
+        self.state.clip_rrect(rrect, self.size, hard);
     }
 
     /// Look up or generate a tessellated superellipse path via the
