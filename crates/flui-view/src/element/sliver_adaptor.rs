@@ -52,7 +52,7 @@
 //! in `SparseChildren::by_logical_index`; they are managed solely by
 //! `service_child_requests`.
 
-use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{collections::HashMap, fmt, marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
@@ -343,6 +343,11 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// moves *within* the band need no callback: the reconcile matches
     /// residents by key on its own.
     pub(crate) find_index_by_key: Option<FindIndexByKey>,
+    /// How these children map onto the semantic set a screen reader announces.
+    ///
+    /// 1:1 by default; `SliverList::separated` overrides it, since its `2n - 1`
+    /// children are `n` members.
+    pub(crate) semantics: SemanticSetMapping,
 }
 
 impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
@@ -353,6 +358,7 @@ impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
             item_count: self.item_count,
             builder: Rc::clone(&self.builder),
             find_index_by_key: self.find_index_by_key.clone(),
+            semantics: self.semantics.clone(),
         }
     }
 }
@@ -390,7 +396,15 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             item_count,
             builder,
             find_index_by_key: None,
+            semantics: SemanticSetMapping::one_to_one(item_count),
         }
+    }
+
+    /// Replace the semantic-set mapping — see [`SemanticSetMapping`].
+    #[must_use]
+    pub fn semantics(mut self, semantics: SemanticSetMapping) -> Self {
+        self.semantics = semantics;
+        self
     }
 
     /// The item count to build a render object with, probing the builder when
@@ -715,6 +729,14 @@ impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
 /// `behavior.rs:789` site, because that generic site has no way to reach
 /// this element's child-manager.
 pub(crate) struct SliverAdaptorBehavior<R: LazyMultiBoxRender> {
+    /// This delegate's semantic-set mapping, cached off the view.
+    ///
+    /// Deliberately NOT on the manager, though cached for the same reason
+    /// `builder` is: `sliver_slot_for_child` runs from inside
+    /// `SparseChildren`'s own work, which already holds the manager lock, so
+    /// reading it there re-enters that mutex and deadlocks — six lazy-sliver
+    /// tests hung on exactly that. A plain field needs no lock at all.
+    semantics: SemanticSetMapping,
     /// Handles the render object's creation / update / removal.
     inner: RenderBehavior<SliverMultiBoxAdaptor<R>>,
     /// Shared manager; Arc lets `on_mount` insert a clone into the registry
@@ -726,6 +748,7 @@ impl<R: LazyMultiBoxRender> std::fmt::Debug for SliverAdaptorBehavior<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SliverAdaptorBehavior")
             .field("render_id", &self.inner.render_id)
+            .field("semantics", &self.semantics)
             .field("manager", &*self.manager.lock())
             .finish()
     }
@@ -735,6 +758,7 @@ impl<R: LazyMultiBoxRender> SliverAdaptorBehavior<R> {
     fn new(view: &SliverMultiBoxAdaptor<R>) -> Self {
         Self {
             inner: RenderBehavior::new(),
+            semantics: view.semantics.clone(),
             manager: Arc::new(Mutex::new(SliverAdaptorManager {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
@@ -911,6 +935,17 @@ where
         // already-built index, so without this an already-resident child
         // would show stale content forever across a `pump_widget` root-swap
         // that changes the backing item list/builder).
+        // Before the early return: the mapping can change while the delegate
+        // does not — same static children, same count, a different numbering —
+        // and a stale mapping announces a set that is no longer there.
+        let semantics_changed = self.semantics.differs_from(&core.view().semantics);
+        self.semantics = core.view().semantics.clone();
+        if semantics_changed {
+            // Residents keep the slot they were stamped with until something
+            // reconciles them. Nothing else here would.
+            self.manager.lock().needs_resident_refresh = true;
+        }
+
         if !delegate_changed(old_view, core.view()) {
             // Same builder, same key callback, same count: the residents
             // cannot read differently — Flutter's `SliverChildListDelegate.
@@ -985,6 +1020,10 @@ where
     }
     fn hosts_sparse_children(&self) -> bool {
         true
+    }
+
+    fn sliver_slot_for_child(&self, logical: usize) -> flui_rendering::parent_data::SliverSlot {
+        self.semantics.slot_for(logical)
     }
 }
 
@@ -1290,7 +1329,27 @@ impl SliverList {
                 separator
             }
         });
-        Self::new(child_count, item_extent_estimate, builder)
+        // The children are `2n - 1`; the SET is the `n` items. Without this the
+        // separators are announced as members and the real items get positions
+        // 1, 3, 5 — which is what a derivation from the logical index alone
+        // does, and why `crates/flui-rendering/ARCHITECTURE.md` named this
+        // constructor as the reason a naive derivation is wrong.
+        Self::new(child_count, item_extent_estimate, builder).semantics(
+            SemanticSetMapping::interleaved(
+                Rc::new(|logical: usize| {
+                    // Even logical index -> item `logical / 2`; odd -> a
+                    // separator, which is not a member and gets no position.
+                    // `try_from` rather than a cast: a position past i32::MAX
+                    // declines rather than wrapping, the same rule
+                    // `SliverSlot::identity` follows.
+                    logical
+                        .is_multiple_of(2)
+                        .then_some(logical / 2)
+                        .and_then(|index| i32::try_from(index).ok())
+                }),
+                item_count,
+            ),
+        )
     }
 
     /// Construct a lazy-sliver adaptor over a fixed list of pre-built child
@@ -2408,5 +2467,107 @@ mod probe_tests {
     fn item_count_is_copy_and_compares_by_value() {
         assert_eq!(ItemCount::Exact(3), ItemCount::Exact(3));
         assert_ne!(ItemCount::Exact(3), ItemCount::Unknown);
+    }
+}
+
+/// How a delegate's logical indices map onto the semantic set a screen reader
+/// announces — the "12" and the "100" of "item 12 of 100".
+///
+/// The default is 1:1 with a size from the declared item count: every child is
+/// a member at its own index. A delegate that interleaves non-members supplies
+/// its own — [`SliverList::separated`] puts items at even logical indices and
+/// separators at odd ones, so its `2n - 1` children are `n` members, and a
+/// derivation from the logical index alone would announce the separators and
+/// give the real items positions 1, 3, 5.
+///
+/// FLUI's shape of Flutter's `semanticIndexCallback` + `semanticIndexOffset`,
+/// with one difference that matters: **the size travels with the mapping**. A
+/// rule saying which children are members and a count that disagrees with it is
+/// the drift this whole design exists to prevent, so neither is settable alone.
+#[derive(Clone)]
+pub struct SemanticSetMapping {
+    /// Logical index -> position in the set, or `None` for a non-member.
+    index_of: Option<Rc<dyn Fn(usize) -> Option<i32>>>,
+    /// How many members the set has, or `None` when that is not known.
+    set_size: Option<i32>,
+}
+
+impl fmt::Debug for SemanticSetMapping {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SemanticSetMapping")
+            .field("interleaved", &self.index_of.is_some())
+            .field("set_size", &self.set_size)
+            .finish()
+    }
+}
+
+impl SemanticSetMapping {
+    /// Whether this mapping would announce differently from `other`.
+    ///
+    /// Compared by identity for the rule (a closure has no other equality) and
+    /// by value for the size. A false positive costs one restamp pass; a false
+    /// negative leaves a row announcing a set that no longer exists, so the
+    /// comparison errs toward "changed".
+    #[must_use]
+    pub fn differs_from(&self, other: &Self) -> bool {
+        if self.set_size != other.set_size {
+            return true;
+        }
+        match (&self.index_of, &other.index_of) {
+            (Some(a), Some(b)) => !Rc::ptr_eq(a, b),
+            (None, None) => false,
+            _ => true,
+        }
+    }
+
+    /// Every child is a member, at its own logical index.
+    #[must_use]
+    pub fn one_to_one(item_count: ItemCount) -> Self {
+        Self {
+            index_of: None,
+            set_size: set_size_of(item_count),
+        }
+    }
+
+    /// Members interleaved with non-members: `index_of` decides which is which,
+    /// `members` counts the former.
+    #[must_use]
+    pub fn interleaved(index_of: Rc<dyn Fn(usize) -> Option<i32>>, members: usize) -> Self {
+        Self {
+            index_of: Some(index_of),
+            set_size: i32::try_from(members).ok(),
+        }
+    }
+
+    /// The slot for the child at `logical` — position and set size together.
+    #[must_use]
+    pub fn slot_for(&self, logical: usize) -> flui_rendering::parent_data::SliverSlot {
+        use flui_rendering::parent_data::SliverSlot;
+        let base = match &self.index_of {
+            Some(map) => match map(logical) {
+                Some(semantic) => SliverSlot {
+                    logical,
+                    semantic: Some(semantic),
+                    set_size: None,
+                },
+                None => SliverSlot::unindexed(logical),
+            },
+            None => SliverSlot::identity(logical),
+        };
+        base.with_set_size(self.set_size)
+    }
+}
+
+/// A declared item count as a set size, or `None` when it is not known.
+///
+/// `None` under an unresolved [`ItemCount::Unknown`]: the count is only known
+/// after a probe walk, and running one here would charge every mount for a
+/// number the reader can do without. "item 12 of ?" is the honest degradation;
+/// a caller who wants the total declares [`ItemCount::Exact`], which that
+/// variant's own doc already recommends for unrelated reasons.
+fn set_size_of(item_count: ItemCount) -> Option<i32> {
+    match item_count {
+        ItemCount::Exact(count) => i32::try_from(count).ok(),
+        ItemCount::Unknown => None,
     }
 }

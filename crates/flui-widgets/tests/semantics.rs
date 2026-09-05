@@ -413,6 +413,146 @@ fn an_explicit_index_overrides_the_one_the_sliver_stamped() {
     }
 }
 
+/// A shrinking list stops announcing the old total.
+///
+/// Residents that keep their index are not relocated, so nothing moves them —
+/// and a stamp written only on mount or on a move leaves them announcing the
+/// set they were mounted into. A list going from six items to three would keep
+/// saying "of 6" for every row that stayed put, which is worse than saying
+/// nothing: the reader is told a definite, wrong total.
+#[test]
+fn shrinking_a_list_stops_announcing_the_old_total() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    let rows = |count: usize| {
+        Viewport::new((SliverList::new(
+            count,
+            60.0,
+            std::rc::Rc::new(move |i: usize| {
+                (i < count).then(|| {
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("row {i}"))
+                        .child(SizedBox::new(200.0, 60.0))
+                        .boxed()
+                })
+            }),
+        ),))
+    };
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        rows(6).position(controller.position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let before = laid.a11y_tree().expect("semantics enabled");
+    assert_eq!(
+        before
+            .find_by_label("row 0")
+            .expect("row 0 present")
+            .size_of_set(),
+        Some(6),
+        "precondition: the six-item list announces six",
+    );
+
+    // Same rows 0..3, still at the same indices — nothing relocates them.
+    laid.pump_widget(rows(3).position(controller.position()));
+    laid.pump();
+
+    let after = laid.a11y_tree().expect("semantics enabled");
+    assert_eq!(
+        after
+            .find_by_label("row 0")
+            .expect("row 0 survives the shrink")
+            .size_of_set(),
+        Some(3),
+        "a resident that never moved must still pick up the new total; \
+         `Some(6)` here is the set it was mounted into, which no longer exists",
+    );
+}
+
+/// A separated list counts its ITEMS, not its interleaved children.
+///
+/// `SliverList::separated` builds `2n - 1` children: items at even logical
+/// indices, separators at odd ones. A position derived from the logical index
+/// therefore announces separators as set members and gives the real items
+/// positions 1, 3, 5 — and a size taken from the child count says "of 5" on a
+/// three-item list. Both are exactly what
+/// `crates/flui-rendering/ARCHITECTURE.md` warned a naive derivation would do.
+#[test]
+fn a_separated_lists_positions_count_items_not_separators() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{ScrollController, SliverList, Viewport};
+
+    const ITEMS: usize = 3;
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        Viewport::new((SliverList::separated(
+            ITEMS,
+            50.0,
+            std::rc::Rc::new(|i: usize| {
+                (i < ITEMS).then(|| {
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("item {i}"))
+                        .child(SizedBox::new(200.0, 50.0))
+                        .boxed()
+                })
+            }),
+            std::rc::Rc::new(|i: usize| {
+                Some(
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("sep {i}"))
+                        .child(SizedBox::new(200.0, 50.0))
+                        .boxed(),
+                )
+            }),
+        ),))
+        .position(controller.position()),
+        crate::common::tight(200.0, 400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+
+    for (announced, label) in [(1usize, "item 0"), (2, "item 1"), (3, "item 2")] {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        assert_eq!(
+            node.position_in_set(),
+            Some(announced),
+            "{label} must be counted among the ITEMS; positions 1, 3, 5 mean \
+             the separators were counted too",
+        );
+        assert_eq!(
+            node.size_of_set(),
+            Some(ITEMS),
+            "{label} must announce the item count, not the interleaved child \
+             count of {}",
+            ITEMS * 2 - 1,
+        );
+    }
+
+    for label in ["sep 0", "sep 1"] {
+        let node = tree
+            .find_by_label(label)
+            .unwrap_or_else(|e| panic!("expected one {label}: {e}"));
+        assert_eq!(
+            node.position_in_set(),
+            None,
+            "{label} is not a member of the set and must announce no position",
+        );
+    }
+}
+
 /// A lazy list item publishes its position with NO wrapper widget.
 ///
 /// Flutter's delegates supply this by wrapping every materialised item in an
@@ -462,6 +602,12 @@ fn a_lazy_child_publishes_its_position_without_an_indexed_semantics_wrapper() {
             Some(announced),
             "{label} must publish a one-based set position derived from the \
              index the sliver stamped, with nothing in the tree wrapping it",
+        );
+        assert_eq!(
+            node.size_of_set(),
+            Some(ROWS),
+            "...and the set's size beside it, since the delegate's own count \
+             does describe the set these rows belong to",
         );
     }
 }
@@ -525,24 +671,20 @@ fn an_indexed_item_publishes_its_position_in_the_set() {
         );
     }
 
-    // No node publishes a set size yet, and that is the honest state rather
-    // than an oversight. AccessKit's `size_of_set` and `position_in_set`
-    // describe the SAME node, so a total on the enclosing sliver is not
-    // something a reader querying the focused row can see; and the count a
-    // lazy sliver holds is its render-child count, which for
-    // `SliverList::separated` is the interleaved `2n - 1` rather than the n
-    // items a caller indexes. Publishing that would announce "item 2 of 5" on
-    // a three-item list.
+    // No size, and that is the CONTRACT here rather than a gap. Explicit
+    // numbering exists to describe a set the delegate does not materialise —
+    // six cards numbered as three rows, or an offset numbering — so pairing
+    // these positions with the delegate's own count would announce "item 2 of
+    // 6" for a row the caller numbered within a set of three, and an offset
+    // could put the position past the size entirely.
     //
-    // Both belong on the item node, from a semantic child count that travels
-    // alongside the semantic index — one cannot land without the other,
-    // because the count a delegate should announce is the count of the items
-    // it indexes, not the render children it interleaves. So this asserts the
-    // absence rather than pinning a wrong value as the contract.
+    // A caller who wants both supplies both. "item 2 of ?" is the honest
+    // degradation, the same trade made for an unresolved `ItemCount::Unknown`.
+    // The derived path publishes both — see the sibling test below.
     let sizes: Vec<usize> = tree.nodes().filter_map(|node| node.size_of_set()).collect();
     assert!(
         sizes.is_empty(),
-        "no set size is published until it can be put on the item node with a \
-         semantic child count; found {sizes:?}",
+        "an explicitly numbered row must not be paired with the delegate's \
+         count, which describes a different set; found {sizes:?}",
     );
 }

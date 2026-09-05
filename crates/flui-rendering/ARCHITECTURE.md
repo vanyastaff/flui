@@ -49,14 +49,19 @@ delegates supply the first by wrapping every materialised item in an `IndexedSem
 `IndexedSemantics` and `RenderIndexedSemantics` exist as public widgets; FLUI's delegates do
 **not** wrap items in them by default.
 
-**Only the position is published so far.** A first attempt put `size_of_set` on the enclosing
-sliver, from its `item_count`. That is wrong twice over: AccessKit's two properties describe the
-SAME node, so a total on the container is invisible to a reader querying the focused row; and a
-lazy sliver's count is its *render-child* count, which for `SliverList::separated` is the
-interleaved `2n − 1` and would announce "item 2 of 5" on a three-item list. Both properties belong
-on the item node, from a semantic child count that travels with the semantic index — the same
-threading the derivation needs — so the total waits for that rather than shipping a wrong one. A
-missing total degrades to "item 12 of ?"; a wrong one misleads.
+**Both halves are published, and both land on the ITEM node.** A first attempt put `size_of_set`
+on the enclosing sliver, from its `item_count`. That is wrong twice over: AccessKit's two
+properties describe the SAME node, so a total on the container is invisible to a reader querying
+the focused row; and a lazy sliver's count is its *render-child* count, which for a delegate that
+interleaves non-members is not the number of items a caller indexes, and would announce "item 2 of
+5" on a three-item list.
+
+The size therefore rides with the position, minted together by the host from the delegate's
+DECLARED item count — the count of members, not of render children — and stamped into the same
+parent data. `None` under an unresolved `ItemCount::Unknown`, where the count is only known after a
+probe walk and charging every mount for one is not worth it: that degrades to "item 12 of ?", and a
+missing total is honest where a wrong one misleads. A caller who wants the total declares
+`ItemCount::Exact`, which that variant's own doc already recommends for unrelated reasons.
 
 **Placement differs from the reference.** An `IndexedSemantics` goes *inside* the row's semantics
 container here, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
@@ -94,9 +99,10 @@ published AccessKit nodes rather than the framework configuration — the whole 
 pieces before this and connected to nothing, so the near end proves nothing about what a reader
 receives:
 
-- `an_indexed_item_publishes_its_position_in_the_set` — the explicit `IndexedSemantics` path. It
-  also asserts that *nothing* publishes a set size, so that deferral stays a checked state rather
-  than an oversight, and the assertion fails the moment one is added without revisiting this entry.
+- `an_indexed_item_publishes_its_position_in_the_set` — the explicit `IndexedSemantics` path, and
+  the set size beside it. It asserts the size lands on the ITEM nodes and only on them, so a total
+  drifting onto the container — the first attempt's mistake, invisible to a reader querying a row —
+  fails rather than passing as "a size is published somewhere".
 - `a_lazy_child_publishes_its_position_without_an_indexed_semantics_wrapper` — the derived path,
   on rows carrying no wrapper at all.
 - `an_explicit_index_overrides_the_one_the_sliver_stamped` — precedence. Its declared indices are
