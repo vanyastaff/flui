@@ -13399,3 +13399,90 @@ fn harness_theater_offstage_from_the_first_pass_publishes_no_semantics() {
          touch; got {announced:?}"
     );
 }
+
+/// A right-to-left `Row` lays its children out from the right.
+///
+/// `RenderFlex::flip_main_axis` is consulted only by a horizontal flex, and
+/// until now nothing in this crate set `TextDirection::Rtl` at all — the whole
+/// suite passes with the flip hard-coded to `false`, so the behaviour lived
+/// entirely on widget-level coverage one layer up. This pins it where it is
+/// implemented.
+#[test]
+fn harness_flex_row_rtl_lays_children_out_from_the_right() {
+    let row = |direction| {
+        RenderTester::mount(
+            box_node(
+                RenderFlex::row()
+                    .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_text_direction(direction),
+            )
+            .child(box_node(RenderColoredBox::red(50.0, 20.0)).label("first"))
+            .child(box_node(RenderColoredBox::red(50.0, 20.0)).label("second")),
+        )
+        .with_size(Size::new(px(300.0), px(100.0)))
+        .run_layout()
+    };
+
+    let ltr = row(TextDirection::Ltr);
+    let (ltr_first, ltr_second) = (
+        ltr.offset(ltr.id("first")).dx.get(),
+        ltr.offset(ltr.id("second")).dx.get(),
+    );
+    assert_eq!(
+        (ltr_first, ltr_second),
+        (0.0, 50.0),
+        "premise: left-to-right packs from the left, in declaration order"
+    );
+
+    let rtl = row(TextDirection::Rtl);
+    let (rtl_first, rtl_second) = (
+        rtl.offset(rtl.id("first")).dx.get(),
+        rtl.offset(rtl.id("second")).dx.get(),
+    );
+    assert_eq!(
+        (rtl_first, rtl_second),
+        (250.0, 200.0),
+        "right-to-left packs from the right, so the FIRST child sits rightmost \
+         — the declaration order is unchanged, the axis is reversed"
+    );
+    assert!(
+        rtl_first > rtl_second,
+        "and the two must not merely be translated together: the first child \
+         has to end up further right than the second"
+    );
+}
+
+/// A right-to-left `Column` swaps which edge `CrossAxisAlignment::Start` means.
+///
+/// The cross-axis flip is a separate predicate from the main-axis one and only
+/// a vertical flex consults it, so a row test cannot stand in for this.
+#[test]
+fn harness_flex_column_rtl_starts_children_at_the_right_edge() {
+    let column = |direction| {
+        RenderTester::mount(
+            box_node(
+                RenderFlex::column()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                    .with_text_direction(direction),
+            )
+            .child(box_node(RenderColoredBox::red(50.0, 20.0)).label("only")),
+        )
+        .with_size(Size::new(px(300.0), px(100.0)))
+        .run_layout()
+    };
+
+    let ltr = column(TextDirection::Ltr);
+    assert_eq!(
+        ltr.offset(ltr.id("only")).dx.get(),
+        0.0,
+        "premise: left-to-right, cross-axis Start is the left edge"
+    );
+
+    let rtl = column(TextDirection::Rtl);
+    assert_eq!(
+        rtl.offset(rtl.id("only")).dx.get(),
+        250.0,
+        "right-to-left, cross-axis Start is the RIGHT edge — 300 wide minus \
+         the child's 50"
+    );
+}
