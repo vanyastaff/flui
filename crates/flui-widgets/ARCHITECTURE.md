@@ -127,12 +127,25 @@ shape.
   `Listener` consumer. It deserves its own design record rather than arriving
   as a side effect of wiring one widget.
 
-**Consequences named rather than left to be discovered:** a drag carrying no
-data discovers nothing (the oracle's null-data drag, which enters every target,
-has no representation — `ErasedDragData` erases a concrete value, not an
-`Option`); and `axis` restriction applies to deltas in the `Listener`'s space
-rather than the root's, which differs from the oracle only under a rotating
-ancestor.
+**Consequences named rather than left to be discovered:**
+
+- A drag carrying no data discovers nothing. The oracle's null-data drag enters
+  every target; `ErasedDragData` erases a concrete value, not an `Option`, so
+  that state has no representation here.
+- `axis` restriction applies to deltas in the `Listener`'s space rather than the
+  root's, which differs from the oracle only under a rotating ancestor.
+- **A transform that changes mid-contact is converted inconsistently.** Pointer
+  dispatch localizes with the `HitTestEntry` transform captured in the route
+  resolved at `PointerDown`, while `local_to_global` converts with the tree's
+  *current* transform. A frame that moves or scales the `Listener` between two
+  moves therefore has the drag convert a stale local point through a fresh
+  matrix, and the probe lands off the pointer until the contact ends. This is
+  not a separate defect from the round-trip above — it is the same root cause,
+  dispatch destroying the global position (issue #908), showing up on the
+  return leg. The real fix is carrying the global position through dispatch,
+  which is the rejected alternative below; recovering it per-widget cannot fix
+  it, because the widget has no access to the transform its event was actually
+  localized with. Not attempted here, and not worked around.
 
 **Replacement tests:** group 4 of `tests/parity/draggable_test.rs` drives real
 pointer input across a tree where the draggable and the targets are at
