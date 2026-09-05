@@ -598,6 +598,14 @@ pub(crate) struct AppRuntime {
     /// §2), already `RealmId`-keyed and multi-window-shaped — see its own
     /// module doc.
     pub(super) registry: WindowRegistry,
+    /// Per-presentation close-request handlers (issue #558) — the seam by
+    /// which an application vetoes a window close. `Arc`, not inline: each
+    /// window's own `on_should_close` closure holds a clone and answers
+    /// without re-entering this thread-local at all, which is what lets it
+    /// answer while a realm is checked out for dispatch. See
+    /// [`CloseRequestRouter`](super::close_request::CloseRequestRouter)'s
+    /// own doc.
+    close_requests: Arc<super::close_request::CloseRequestRouter>,
     /// Single-window `(visible, focused)` tracking for the
     /// `AppLifecycleState` derivation (ADR-0035). Both default `true`.
     ///
@@ -763,6 +771,7 @@ impl AppRuntime {
             realms: RealmRegistry::new(),
             owner_thread: None,
             registry: WindowRegistry::new(),
+            close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
             visible: true,
             focused: true,
             owner_platform: None,
@@ -1136,7 +1145,20 @@ impl AppRuntime {
     /// inside it).
     fn apply_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
         self.registry.remove_realm(id);
+        self.close_requests.forget_realm(id);
         self.realms.remove(&id)
+    }
+
+    /// A clone of this loop's close-request router (issue #558), for the
+    /// bootstrap that registers a window's handler and for the
+    /// `on_should_close` closure that consults it.
+    ///
+    /// Handing out an `Arc` rather than a borrow is the point: the
+    /// consulting closure must be able to answer a platform close request
+    /// without taking a borrow on this thread-local, since a close request
+    /// can arrive while a realm is checked out for dispatch.
+    pub(super) fn close_requests(&self) -> Arc<super::close_request::CloseRequestRouter> {
+        Arc::clone(&self.close_requests)
     }
 
     /// Requests installing a newly-constructed realm, registering `window`'s

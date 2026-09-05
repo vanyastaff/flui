@@ -241,8 +241,17 @@ pub fn run_direct(
             tracing::info!("Window closed");
         }));
 
+        // Deliberately unconditional, unlike `run_desktop`'s and
+        // `open_secondary_window`'s windows, which route this through the
+        // close-request router (issue #558). Direct mode installs no
+        // `UiRealm` at all (see step 6 above and `run_direct`'s own doc), so
+        // there is no presentation for a veto to be addressed to and no
+        // widget tree that could be holding unsaved work. An embedder that
+        // wants to refuse a close here owns the loop already and registers
+        // its own `on_should_close` on the window it was handed — the
+        // presentation-addressed API would have nothing to key on.
         window.on_should_close(Box::new(|| {
-            tracing::debug!("Window close requested, allowing");
+            tracing::debug!("Window close requested, allowing (direct mode hosts no realm)");
             true
         }));
 

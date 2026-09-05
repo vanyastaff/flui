@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
+#[cfg(not(target_os = "ios"))]
+use super::close_request::CloseRequestHandler;
 use super::execution::HostExecutors;
 use super::frame_failure::FrameFailureHandler;
 #[cfg(not(target_arch = "wasm32"))]
@@ -169,6 +171,27 @@ pub struct AppConfig {
     /// re-entrancy contract the callback must honor.
     pub frame_failure_handler: Option<FrameFailureHandler>,
 
+    /// Optional per-window close-request veto (issue #558): asked, for
+    /// each window opened with this config, whether that window may
+    /// actually close when the user requests it.
+    ///
+    /// `None` (the default): every close request is allowed, exactly as
+    /// before this seam was wired. `Some`: the handler is registered
+    /// against the presentation's own [`PresentationAddress`](flui_foundation::PresentationAddress)
+    /// and receives it back on every request, so one handler shared by
+    /// several windows can still answer per window. See
+    /// [`CloseRequestHandler`]'s own doc for the thread and panic
+    /// contract, and
+    /// [`CloseResponse::KeepOpen`](super::close_request::CloseResponse::KeepOpen)
+    /// for why a veto needs no deadline.
+    ///
+    /// Only the winit, Win32 and AppKit backends consult the underlying
+    /// platform seam; on web and Android a registered handler is inert.
+    /// Not present on iOS, where the realm-hosting machinery this rides on
+    /// is not compiled at all.
+    #[cfg(not(target_os = "ios"))]
+    pub close_request_handler: Option<CloseRequestHandler>,
+
     /// Application services to start at bootstrap (issue #558) — durable,
     /// app-lifetime background work with a declared
     /// [`ServiceLifetime`](super::lifecycle::ServiceLifetime) (does the
@@ -209,6 +232,8 @@ impl Default for AppConfig {
             exit_policy: ExitPolicy::default(),
             executors: None,
             frame_failure_handler: None,
+            #[cfg(not(target_os = "ios"))]
+            close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
         }
@@ -314,6 +339,16 @@ impl AppConfig {
     /// [`FrameFailureHandler`]'s re-entrancy contract.
     pub fn with_frame_failure_handler(mut self, handler: FrameFailureHandler) -> Self {
         self.frame_failure_handler = Some(handler);
+        self
+    }
+
+    /// Register a per-window close-request veto. See
+    /// [`Self::close_request_handler`]'s doc for what it is asked and
+    /// when, and [`CloseRequestHandler`]'s for the contract the callback
+    /// must honor.
+    #[cfg(not(target_os = "ios"))]
+    pub fn with_close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
+        self.close_request_handler = Some(handler);
         self
     }
 

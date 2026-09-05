@@ -1135,6 +1135,13 @@ pub(super) fn dispatch_platform_realm(
                         let unregistered = APP_RUNTIME
                             .with(|slot| slot.borrow_mut().registry.remove_presentation(address));
                         drop(unregistered);
+                        // Same step for the close-request router (issue
+                        // #558): this presentation can no longer be asked
+                        // about, nor closed programmatically, once its
+                        // routable address is gone.
+                        APP_RUNTIME
+                            .with(|slot| slot.borrow().close_requests())
+                            .forget(address);
 
                         // Re-stamp this realm's tracked routable address
                         // (`RealmSlot::address`) to the surviving primary
@@ -1437,6 +1444,14 @@ pub(super) fn teardown_platform_realm() {
                 "BUG: window_registry teardown read did not include the installed address"
             );
         }
+        // Close-request registrations go with the loop, not with any one
+        // realm (issue #558). Per-realm teardown already drops a realm's
+        // own entries, but an explicit platform quit, or a bootstrap that
+        // wired a window and then failed before installing its realm,
+        // leaves entries no realm removal ever names — and this same
+        // `AppRuntime` serves a SECOND `Platform::run` on this thread, so a
+        // survivor would be consulted by the next loop's windows.
+        state.close_requests().clear();
         state.owner_thread = None;
         state.dispatched_scheduler = None;
         state.dispatched_realm_id = None;
@@ -1546,6 +1561,7 @@ mod realm_dispatch_tests {
         OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform, with_owner_platform,
     };
     use super::super::secondary_window::{open_secondary_window, open_secondary_window_impl};
+    use super::super::{install_close_request_wiring, request_presentation_close};
     use super::*;
     use crate::app::AppConfig;
     use crate::app::raster_test_support::TestRasterBackend;
@@ -5606,5 +5622,544 @@ mod realm_dispatch_tests {
         );
 
         teardown_platform_realm();
+    }
+
+    // ========================================================================
+    // Close-request veto (issue #558)
+    // ========================================================================
+
+    /// Drives the platform's own USER-close path on a headless window --
+    /// the one that consults `on_should_close`, unlike
+    /// `PlatformWindow::close()`, which is the programmatic close and
+    /// deliberately bypasses the veto on every backend. Returns whether the
+    /// window actually closed.
+    fn simulate_user_close(window: &Arc<dyn flui_platform::traits::PlatformWindow>) -> bool {
+        window
+            .as_any()
+            .downcast_ref::<flui_platform::MockWindow>()
+            .expect("every window a HeadlessPlatform opens is a MockWindow")
+            .simulate_close()
+    }
+
+    /// Whether this presentation is still hosted: both its realm entry and
+    /// its routable address in the window registry.
+    fn presentation_is_hosted(address: flui_foundation::PresentationAddress) -> bool {
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            state.realms.contains_key(&address.realm_id) && state.registry.contains_address(address)
+        })
+    }
+
+    fn keep_open_handler(
+        asked: &Arc<std::sync::atomic::AtomicUsize>,
+        expected: flui_foundation::PresentationAddress,
+    ) -> crate::app::close_request::CloseRequestHandler {
+        use std::sync::atomic::Ordering;
+        let asked = Arc::clone(asked);
+        crate::app::close_request::CloseRequestHandler::new(move |request| {
+            assert_eq!(
+                request.address(),
+                expected,
+                "a handler must only ever be asked about the presentation it was registered for"
+            );
+            asked.fetch_add(1, Ordering::SeqCst);
+            crate::app::close_request::CloseResponse::KeepOpen
+        })
+    }
+
+    /// Criterion: an application can refuse a close for a named window, and
+    /// the window stays open.
+    ///
+    /// Driven through the REAL embedder seam end to end --
+    /// `open_secondary_window_impl` installs the handler from the
+    /// `AppConfig` and wires `on_should_close` itself, and the close is a
+    /// real platform user-close on the real (headless) native window. No
+    /// step of the production path is stood in for.
+    ///
+    /// The premise every assertion here rests on is checked, not assumed:
+    /// window B is genuinely open and hosted before the close, and a
+    /// CONTROL window opened the same way but with no handler closes under
+    /// the very same driver -- so "B is still hosted" cannot pass because
+    /// `simulate_user_close` never closes anything.
+    ///
+    /// If reverted: restore the hard-coded `|| true` in
+    /// `install_close_request_wiring` and B closes anyway.
+    #[test]
+    fn a_close_request_handler_keeps_its_own_window_open() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (dispatcher_a, _window_a, quit_calls, _clear_guard) =
+            install_realm_a_with_exit_policy_and_quit_counter();
+
+        let asked = Arc::new(AtomicUsize::new(0));
+        let (dispatcher_b, window_b) =
+            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("the guarded window must open")
+                .expect("headless open_window is always Ready, never Pending");
+        // Registered after the fact through the SAME production wiring the
+        // bootstrap uses, because the address only exists once the window
+        // is installed.
+        install_close_request_wiring(
+            dispatcher_b.address,
+            &window_b,
+            Some(keep_open_handler(&asked, dispatcher_b.address)),
+        );
+
+        let (_dispatcher_control, window_control) =
+            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("the control window must open")
+                .expect("headless open_window is always Ready, never Pending");
+
+        // ── premises ────────────────────────────────────────────────────
+        assert_ne!(
+            dispatcher_a.address.realm_id, dispatcher_b.address.realm_id,
+            "the guarded window must be a genuinely distinct presentation"
+        );
+        assert!(
+            presentation_is_hosted(dispatcher_b.address),
+            "premise: the guarded window is open and hosted before anything asks it to close"
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "premise: the handler has not been consulted yet"
+        );
+
+        // ── control: the same driver really does close a window ─────────
+        assert!(
+            simulate_user_close(&window_control),
+            "premise: with no handler registered, a user close closes the window"
+        );
+
+        // ── the veto ────────────────────────────────────────────────────
+        assert!(
+            !simulate_user_close(&window_b),
+            "a KeepOpen answer must stop the close at the platform seam"
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "the handler is asked exactly once per close request"
+        );
+        assert!(
+            presentation_is_hosted(dispatcher_b.address),
+            "a vetoed close must leave the presentation hosted -- no on_close, no teardown"
+        );
+        assert_eq!(
+            quit_calls.load(Ordering::SeqCst),
+            0,
+            "windows remain open, so the loop must not have exited"
+        );
+
+        teardown_platform_realm();
+    }
+
+    /// Criterion: a window kept open can be closed programmatically
+    /// afterwards -- the deferral resolves.
+    ///
+    /// This is what makes a stateless veto finite: the runtime holds no
+    /// pending obligation, and the application holds the means to finish
+    /// the close it asked for. `request_presentation_close` is the public
+    /// entry point, addressed by exactly the `PresentationAddress` the
+    /// handler received in its own `CloseRequest`.
+    ///
+    /// If reverted: drop the `register` call from
+    /// `install_close_request_wiring` and the programmatic close reports
+    /// `UnknownPresentation` instead of closing the window.
+    #[test]
+    fn a_window_kept_open_closes_on_a_later_programmatic_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (_dispatcher_a, _window_a, _quit_calls, _clear_guard) =
+            install_realm_a_with_exit_policy_and_quit_counter();
+
+        let asked = Arc::new(AtomicUsize::new(0));
+        let (dispatcher_b, window_b) =
+            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("the guarded window must open")
+                .expect("headless open_window is always Ready, never Pending");
+
+        // The address the application would have captured from the request
+        // it refused -- taken from the handler's own argument, not from the
+        // dispatcher, so the test resolves the close with the same value an
+        // application would have to.
+        let refused: Arc<parking_lot::Mutex<Option<flui_foundation::PresentationAddress>>> =
+            Arc::new(parking_lot::Mutex::new(None));
+        let refused_in_handler = Arc::clone(&refused);
+        let asked_in_handler = Arc::clone(&asked);
+        install_close_request_wiring(
+            dispatcher_b.address,
+            &window_b,
+            Some(crate::app::close_request::CloseRequestHandler::new(
+                move |request| {
+                    asked_in_handler.fetch_add(1, Ordering::SeqCst);
+                    *refused_in_handler.lock() = Some(request.address());
+                    crate::app::close_request::CloseResponse::KeepOpen
+                },
+            )),
+        );
+
+        assert!(
+            !simulate_user_close(&window_b),
+            "premise: the close is refused first, so there is something to resolve"
+        );
+        assert!(
+            presentation_is_hosted(dispatcher_b.address),
+            "premise: the window is still hosted after the refusal"
+        );
+        let refused = refused
+            .lock()
+            .expect("the handler ran and captured its address");
+
+        // The application finished its work and finishes the close.
+        request_presentation_close(refused).expect("the kept-open window must still be closable");
+
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "a programmatic close must not re-ask the handler that refused -- asking again \
+             would either loop forever or force the application to track its own closes"
+        );
+        assert!(
+            !presentation_is_hosted(dispatcher_b.address),
+            "the programmatic close must run the real teardown: on_close, close_this_window, \
+             and the presentation gone from the registry"
+        );
+        assert_eq!(
+            request_presentation_close(refused),
+            Err(
+                crate::app::close_request::CloseRequestError::UnknownPresentation {
+                    address: refused
+                }
+            ),
+            "the router entry goes with the presentation, so a second close is a typed refusal"
+        );
+
+        teardown_platform_realm();
+    }
+
+    /// Criterion: one window's veto does not reach its sibling.
+    ///
+    /// Both windows carry a handler, answering oppositely, so the oracle
+    /// cannot pass by "the second window had nothing registered". Each
+    /// handler asserts the address it is asked about, and the counters
+    /// prove a close request reaches exactly one of them.
+    ///
+    /// If reverted: key the router on `RealmId` instead of the full
+    /// `PresentationAddress`, or capture one shared address in
+    /// `install_close_request_wiring`'s callback, and the sibling
+    /// assertions fail.
+    #[test]
+    fn a_windows_veto_is_addressed_to_that_window_alone() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (_dispatcher_a, _window_a, quit_calls, _clear_guard) =
+            install_realm_a_with_exit_policy_and_quit_counter();
+
+        let (dispatcher_guarded, window_guarded) =
+            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("the guarded window must open")
+                .expect("headless open_window is always Ready, never Pending");
+        let (dispatcher_free, window_free) =
+            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("the second window must open")
+                .expect("headless open_window is always Ready, never Pending");
+
+        assert_ne!(
+            dispatcher_guarded.address, dispatcher_free.address,
+            "premise: two genuinely distinct presentations"
+        );
+        assert!(
+            presentation_is_hosted(dispatcher_guarded.address)
+                && presentation_is_hosted(dispatcher_free.address),
+            "premise: BOTH windows are open and hosted -- a sibling that was never open would \
+             make every assertion below vacuous"
+        );
+
+        let guarded_asked = Arc::new(AtomicUsize::new(0));
+        install_close_request_wiring(
+            dispatcher_guarded.address,
+            &window_guarded,
+            Some(keep_open_handler(
+                &guarded_asked,
+                dispatcher_guarded.address,
+            )),
+        );
+
+        let free_asked = Arc::new(AtomicUsize::new(0));
+        let free_asked_in_handler = Arc::clone(&free_asked);
+        let free_address = dispatcher_free.address;
+        install_close_request_wiring(
+            dispatcher_free.address,
+            &window_free,
+            Some(crate::app::close_request::CloseRequestHandler::new(
+                move |request| {
+                    assert_eq!(request.address(), free_address);
+                    free_asked_in_handler.fetch_add(1, Ordering::SeqCst);
+                    crate::app::close_request::CloseResponse::Close
+                },
+            )),
+        );
+
+        assert!(
+            simulate_user_close(&window_free),
+            "the sibling answers Close for itself and must close"
+        );
+        assert_eq!(free_asked.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            guarded_asked.load(Ordering::SeqCst),
+            0,
+            "the guarded window's handler must not be consulted about a sibling's close"
+        );
+        assert!(!presentation_is_hosted(dispatcher_free.address));
+        assert!(
+            presentation_is_hosted(dispatcher_guarded.address),
+            "a sibling closing must not disturb the guarded presentation"
+        );
+
+        assert!(
+            !simulate_user_close(&window_guarded),
+            "the guarded window still refuses on its own account"
+        );
+        assert_eq!(guarded_asked.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            free_asked.load(Ordering::SeqCst),
+            1,
+            "the already-closed sibling's handler must not be consulted again"
+        );
+        assert_eq!(quit_calls.load(Ordering::SeqCst), 0);
+
+        teardown_platform_realm();
+    }
+
+    /// Criterion: the close-request veto and the keep-alive (process-exit)
+    /// veto are ordered, and the order is causal rather than chosen.
+    ///
+    /// Two phases, one driver (`simulate_user_close`) and one observable
+    /// (`on_quit` plus whether the presentation survives), so the phases
+    /// discriminate:
+    ///
+    /// 1. **A close veto short-circuits the exit question.** The sole
+    ///    window refuses; it stays hosted and the loop never quits, because
+    ///    the backend consults the exit-policy hook only after a close has
+    ///    actually removed the last window.
+    /// 2. **A keep-alive veto cannot hold a window open.** With no close
+    ///    handler and a running `ServiceLifetime::KeepsAppAlive` service,
+    ///    the very same close SUCCEEDS -- window gone, presentation torn
+    ///    down -- and only the process exit is deferred.
+    ///
+    /// The reverse order is not merely worse, it is incoherent: "may the
+    /// process exit now that the last window is gone" cannot be asked about
+    /// a window that is still open. Phase 2 is what makes that concrete --
+    /// a process-level veto that could hold a window open would break the
+    /// messenger case (close the window, live in the tray) outright.
+    ///
+    /// If reverted: make `install_close_request_wiring` answer `true`
+    /// unconditionally and phase 1's window closes; make
+    /// `AppRuntime::should_exit` ignore `keeps_app_alive` and phase 2's
+    /// quit fires.
+    #[test]
+    fn a_close_veto_short_circuits_the_keep_alive_exit_question() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // ── phase 1: the close veto, with nothing else in play ──────────
+        {
+            let (dispatcher, window, quit_calls, _clear_guard) =
+                install_realm_a_with_exit_policy_and_quit_counter();
+            let asked = Arc::new(AtomicUsize::new(0));
+            install_close_request_wiring(
+                dispatcher.address,
+                &window,
+                Some(keep_open_handler(&asked, dispatcher.address)),
+            );
+            assert!(
+                presentation_is_hosted(dispatcher.address),
+                "premise: the sole window is hosted"
+            );
+
+            assert!(
+                !simulate_user_close(&window),
+                "the sole window refuses its own close"
+            );
+            assert_eq!(asked.load(Ordering::SeqCst), 1);
+            assert!(
+                presentation_is_hosted(dispatcher.address),
+                "the window is still open, so the exit question was never reached"
+            );
+            assert_eq!(
+                quit_calls.load(Ordering::SeqCst),
+                0,
+                "no window closed, so the exit-policy hook cannot have allowed a quit"
+            );
+
+            teardown_platform_realm();
+        }
+
+        // ── phase 2: a keep-alive service defers the EXIT, not the close ─
+        {
+            use std::sync::atomic::AtomicBool;
+
+            use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+
+            let (dispatcher, window, quit_calls, _clear_guard) =
+                install_realm_a_with_exit_policy_and_quit_counter();
+
+            let release = Arc::new(AtomicBool::new(false));
+            let waker_slot: Arc<parking_lot::Mutex<Option<std::task::Waker>>> =
+                Arc::new(parking_lot::Mutex::new(None));
+            let release_in_service = Arc::clone(&release);
+            let waker_in_service = Arc::clone(&waker_slot);
+            APP_RUNTIME.with(|slot| {
+                slot.borrow_mut()
+                    .start_service(&ServiceDefinition::new(
+                        "tray-resident",
+                        ServiceLifetime::KeepsAppAlive,
+                        move |_context| {
+                            let release = Arc::clone(&release_in_service);
+                            let waker_slot = Arc::clone(&waker_in_service);
+                            Box::pin(async move {
+                                std::future::poll_fn(move |context| {
+                                    if release.load(Ordering::Acquire) {
+                                        std::task::Poll::Ready(())
+                                    } else {
+                                        *waker_slot.lock() = Some(context.waker().clone());
+                                        std::task::Poll::Pending
+                                    }
+                                })
+                                .await;
+                            })
+                        },
+                    ))
+                    .expect("the keep-alive service must start on the loop's real IO pool");
+            });
+
+            assert!(
+                simulate_user_close(&window),
+                "a running keep-alive service must NOT hold a window open -- it defers the \
+                 process exit that follows the last window closing, a different question"
+            );
+            assert!(
+                !presentation_is_hosted(dispatcher.address),
+                "the window really closed: on_close ran and the presentation is gone"
+            );
+            assert_eq!(
+                quit_calls.load(Ordering::SeqCst),
+                0,
+                "the keep-alive veto is consulted only now, after the close, and defers the exit"
+            );
+
+            release.store(true, Ordering::Release);
+            if let Some(waker) = waker_slot.lock().take() {
+                waker.wake();
+            }
+            teardown_platform_realm();
+        }
+    }
+
+    /// A worker thread resolving a deferred close must be REFUSED with a
+    /// reason, never silently do nothing. `AppRuntime` is thread-local, so
+    /// without the owner-thread check the worker reads its own fresh,
+    /// empty runtime and the call reports "no such presentation" about an
+    /// address that is perfectly live — indistinguishable, to the caller,
+    /// from a window that already closed.
+    ///
+    /// The premise is asserted rather than assumed: after the refusal the
+    /// SAME address closes successfully from the owner thread, so the
+    /// worker's error was about the thread, not about the address.
+    ///
+    /// If reverted: drop the `owner_thread` match from
+    /// `request_presentation_close` and the worker gets
+    /// `UnknownPresentation` instead.
+    #[test]
+    fn resolving_a_deferred_close_from_a_worker_thread_is_a_typed_refusal() {
+        use crate::app::close_request::CloseRequestError;
+
+        let (_dispatcher_a, _window_a, _quit_calls, _clear_guard) =
+            install_realm_a_with_exit_policy_and_quit_counter();
+
+        let (dispatcher_b, window_b) =
+            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("the deferred-close window must open")
+                .expect("headless open_window is always Ready, never Pending");
+        install_close_request_wiring(dispatcher_b.address, &window_b, None);
+        assert!(
+            presentation_is_hosted(dispatcher_b.address),
+            "premise: the presentation is hosted, so the only thing wrong with the worker's \
+             call below is the thread it is on"
+        );
+
+        let address = dispatcher_b.address;
+        let refused = std::thread::spawn(move || request_presentation_close(address))
+            .join()
+            .expect("the worker thread must not panic");
+        assert_eq!(
+            refused,
+            Err(CloseRequestError::NoHostedRuntime),
+            "a worker thread hosts no runtime; it must learn that, not be told the presentation \
+             does not exist"
+        );
+        assert!(
+            presentation_is_hosted(address),
+            "and the refusal must leave the presentation exactly as it was"
+        );
+
+        request_presentation_close(address).expect("the owner thread closes the very same address");
+        assert!(!presentation_is_hosted(address));
+
+        teardown_platform_realm();
+    }
+
+    /// Close-request registrations must not outlive the loop. Per-realm
+    /// teardown drops a realm's own entries, but full loop-exit teardown
+    /// does not go through that path at all — and this same thread-local
+    /// `AppRuntime` serves a SECOND `Platform::run` on this thread, so a
+    /// survivor would be consulted by the next loop's windows.
+    ///
+    /// Two shapes in one run: a live presentation's entry, and an entry for
+    /// an address whose realm was never installed at all (the bootstrap
+    /// that wires a window and then fails), which no realm removal could
+    /// ever name.
+    ///
+    /// If reverted: remove the `close_requests().clear()` call from
+    /// `teardown_platform_realm` and both assertions fail.
+    #[test]
+    fn full_loop_teardown_clears_close_request_registrations() {
+        use crate::app::close_request::{CloseRequestHandler, CloseResponse};
+
+        let (dispatcher_a, window_a, _quit_calls, _clear_guard) =
+            install_realm_a_with_exit_policy_and_quit_counter();
+
+        let keep_open = CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
+        install_close_request_wiring(dispatcher_a.address, &window_a, Some(keep_open.clone()));
+
+        // The bootstrap-failure shape: a window wired before its realm
+        // exists, under an address no realm teardown will ever mention.
+        let orphan = flui_foundation::PresentationAddress {
+            realm_id: flui_foundation::RealmId::new(9_999),
+            presentation_id: flui_foundation::PresentationId::new(9_999),
+        };
+        install_close_request_wiring(orphan, &window_a, Some(keep_open));
+
+        let router = APP_RUNTIME.with(|slot| slot.borrow().close_requests());
+        assert_eq!(
+            router.consult(dispatcher_a.address),
+            CloseResponse::KeepOpen,
+            "premise: both entries answer before teardown"
+        );
+        assert_eq!(router.consult(orphan), CloseResponse::KeepOpen);
+
+        teardown_platform_realm();
+
+        let router = APP_RUNTIME.with(|slot| slot.borrow().close_requests());
+        assert_eq!(
+            router.consult(dispatcher_a.address),
+            CloseResponse::Close,
+            "a registration must not survive the loop that made it"
+        );
+        assert_eq!(
+            router.consult(orphan),
+            CloseResponse::Close,
+            "least of all one no realm teardown could have named"
+        );
     }
 }
