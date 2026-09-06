@@ -122,9 +122,21 @@ pub mod traits;
 pub mod commands;
 
 /// Backend-agnostic superellipse (iOS squircle) path generation.
-/// Pure geometry — no wgpu, no lyon. Declared here, outside the
-/// wgpu-backend feature gate, so `CommandRenderer`'s default impl
-/// can call it without the abstract trait depending on the concrete backend.
+/// Pure geometry — no wgpu, no lyon.
+///
+/// Test-only since issue #935 retired the tessellation route: a squircle clip
+/// is a signed distance field evaluated per fragment, so nothing in a shipped
+/// build asks for the path. What the CPU generator is now is the ORACLE for
+/// that SDF — `common/clip.wgsl`'s `sdRoundedSuperellipse` is the shipped
+/// evaluator of the same `n = 4` parametric form, and
+/// `the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary` holds
+/// the two to each other pixel by pixel. Compiling it only where that test is
+/// compiled says so plainly, rather than shipping a function nothing calls —
+/// and the feature half of the gate is load-bearing, not belt-and-braces: the
+/// readback suite lives under `mod wgpu`, so `--no-default-features` drops the
+/// oracle and `cfg(test)` alone would leave the generator unused there. The
+/// per-feature CI pass is what catches that; a default-feature build does not.
+#[cfg(all(test, feature = "wgpu-backend"))]
 pub(crate) mod superellipse;
 
 /// Backend-agnostic frame-driver trait ([`RasterBackend`]).

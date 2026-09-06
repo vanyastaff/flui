@@ -207,7 +207,6 @@ pub(crate) mod ssaa;
 /// be owned and delegated as a unit. Owned by `WgpuPainter` via the `state`
 /// field.
 pub(super) mod state_stack;
-pub mod superellipse_cache;
 mod tessellator;
 mod text;
 pub mod texture_cache;

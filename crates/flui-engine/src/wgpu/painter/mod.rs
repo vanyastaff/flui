@@ -551,7 +551,6 @@ impl WgpuPainter {
     ) -> crate::error::EngineResult<()> {
         // Advance batcher cache frame counters and evict stale entries.
         self.batcher.path_cache.advance_frame();
-        self.batcher.superellipse_cache.advance_frame();
 
         // Log rendering stats before finalising (so counts reflect pre-drain state).
         let text_count = self.text_renderer.text_count();

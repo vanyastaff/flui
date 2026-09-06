@@ -1435,19 +1435,6 @@ impl CommandRenderer for Backend<'_> {
         });
     }
 
-    fn superellipse_path(
-        &mut self,
-        rse: flui_types::geometry::RSuperellipse,
-    ) -> std::sync::Arc<flui_types::painting::Path> {
-        // Override the trait default (which freshly generates the path
-        // every call, no caching). Delegate to the Painter-owned bounded
-        // cache so identical superellipses across frames reuse the cached
-        // tessellation. Cache hits pay only for an Arc::clone; the
-        // ~256-command path is never deep-copied. Cache eviction follows
-        // PathCache semantics (`max_entries` + `last_used_frame`).
-        self.painter.superellipse_path(&rse)
-    }
-
     fn clip_path(
         &mut self,
         path: &Path,

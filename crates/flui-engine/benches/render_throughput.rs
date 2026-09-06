@@ -21,9 +21,6 @@
 //!
 //! - `path_cache_warm_hit` — measures the cost of a warm `PathCache::get` hit
 //!   (the borrowed-slice path; baseline proves no allocation after the fix).
-//! - `superellipse_cache_warm_hit` — measures a warm `SuperellipsePathCache::get`
-//!   hit, which deep-clones a `Path` containing 256+ `PathCommand` entries
-//!   (heap-spilled `SmallVec`).  Isolates the clone cost flagged by GLM #8 site 1.
 //! - `draw_segment_seal` — measures `DrawBatcher::finish_current_segment` with a
 //!   populated segment, isolating the per-seal allocation cost.  After the
 //!   `mem::take` fix the slot is left as a zero-cap default (`DrawSegment::default`)
@@ -35,10 +32,8 @@ use std::sync::Arc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::WgpuPainter;
 use flui_engine::wgpu::path_cache::PathCache;
-use flui_engine::wgpu::superellipse_cache::{SuperellipseKey, SuperellipsePathCache};
 use flui_painting::Paint;
 use flui_types::Rect;
-use flui_types::painting::path::Path;
 use flui_types::{Offset, geometry::px, painting::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
@@ -229,27 +224,6 @@ fn render_throughput(c: &mut Criterion) {
 // CPU-only micro-benchmarks (no GPU required)
 // ---------------------------------------------------------------------------
 
-/// Build a path with 256 `LineTo` commands — enough to spill the
-/// `SmallVec<[PathCommand; 16]>` inside `Path` to the heap.
-///
-/// This simulates what `generate_superellipse_path` produces (4 corners × 64
-/// points each), allowing the bench to measure a realistic clone cost without
-/// calling the `pub(crate)` generator.
-fn make_large_path(command_count: usize) -> Path {
-    let mut path = Path::new();
-    // MoveTo + many LineTo + Close.
-    path.move_to(flui_types::Point::new(px(0.0), px(0.0)));
-    for i in 1..command_count {
-        let angle = (i as f32) * std::f32::consts::TAU / (command_count as f32);
-        path.line_to(flui_types::Point::new(
-            px(50.0 + 50.0 * angle.cos()),
-            px(50.0 + 50.0 * angle.sin()),
-        ));
-    }
-    path.close();
-    path
-}
-
 fn alloc_micro(c: &mut Criterion) {
     let mut group = c.benchmark_group("alloc_micro");
 
@@ -281,38 +255,6 @@ fn alloc_micro(c: &mut Criterion) {
                     black_box(verts.len());
                     black_box(idxs.len());
                 }
-            });
-        });
-    }
-
-    // ── superellipse_cache_warm_hit ──────────────────────────────────────────
-    //
-    // Measures the cost of a `SuperellipsePathCache::get` on a warm entry.
-    // After the Arc<Path> refactor the returned value is an `Arc<Path>` alias
-    // (reference-count bump only, no heap allocation, no copy of the ~256
-    // `PathCommand` entries).  This bench tracks the post-refactor baseline —
-    // expected: single/low-double-digit nanoseconds vs. the pre-refactor
-    // ~1257 ns deep clone.  This is GLM audit #8 site 1.
-    {
-        use std::sync::Arc;
-
-        use flui_types::geometry::{RSuperellipse, Rect};
-        let rse = RSuperellipse::from_rect_and_radius(
-            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            flui_types::geometry::Radius::circular(px(8.0)),
-        );
-        let key = SuperellipseKey::from_superellipse(&rse);
-        // Build a realistic 256-command path to simulate the superellipse generator.
-        let path = Arc::new(make_large_path(256));
-        let mut cache = SuperellipsePathCache::new(64);
-        cache.insert(key, path);
-
-        group.bench_function("superellipse_cache_warm_hit", |b| {
-            b.iter(|| {
-                // Hit path: Arc::clone (atomic reference-count increment).
-                // No deep copy of the ~256-command path.
-                let result = cache.get(black_box(&key));
-                black_box(result)
             });
         });
     }

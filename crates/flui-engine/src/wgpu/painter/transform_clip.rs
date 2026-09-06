@@ -166,33 +166,6 @@ impl WgpuPainter {
         self.state.clip_rrect_at_composite(rrect, self.size)
     }
 
-    /// Look up or generate a tessellated superellipse path via the
-    /// Painter-owned bounded cache.
-    ///
-    /// Consulted by `Backend::superellipse_path` (the `CommandRenderer`
-    /// trait override), which since issue #921 has no caller: the squircle
-    /// clip layer evaluates an SDF rather than tessellating a path. See #935. On a miss the path
-    /// is generated via `generate_superellipse_path` (the iOS-squircle
-    /// math) and inserted; eviction follows PathCache semantics
-    /// (`max_entries` + `last_used_frame`).
-    pub(crate) fn superellipse_path(
-        &mut self,
-        rse: &flui_types::geometry::RSuperellipse,
-    ) -> std::sync::Arc<flui_types::painting::Path> {
-        let key = super::super::superellipse_cache::SuperellipseKey::from_superellipse(rse);
-        if let Some(arc_path) = self.batcher.superellipse_cache.get(&key) {
-            return arc_path;
-        }
-        // Cache miss: generate the path, wrap it in Arc, and store a clone
-        // of the Arc (reference-count bump, no deep copy). Return the Arc
-        // so the caller holds shared ownership.
-        let arc_path = std::sync::Arc::new(crate::superellipse::generate_superellipse_path(rse));
-        self.batcher
-            .superellipse_cache
-            .insert(key, std::sync::Arc::clone(&arc_path));
-        arc_path
-    }
-
     /// Set an SDF rounded-superellipse clip (iOS-squircle).
     ///
     /// Parallel to [`Self::clip_rrect`]: populates `current_rsuperellipse_clip`
