@@ -1086,13 +1086,13 @@ mod device_recovery_tests {
             fired_for_callback.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         let pointer = PointerId::new(3).expect("nonzero pointer id");
-        recognizer.add_pointer(
-            pointer,
-            flui_types::Offset::new(
-                flui_types::geometry::px(10.0),
-                flui_types::geometry::px(10.0),
-            ),
+        let at = flui_types::Offset::new(
+            flui_types::geometry::px(10.0),
+            flui_types::geometry::px(10.0),
         );
+        // A synthetic pointer in a test tree with no ancestor transform: the
+        // two spaces coincide, which is what passing the same value twice says.
+        recognizer.add_pointer(pointer, at, at);
         assert!(
             realm.gestures().has_pending_deadlines(),
             "precondition: the long-press deadline is actually armed"

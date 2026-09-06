@@ -58,7 +58,7 @@ fn replay_against(
 ) {
     let recognizer = Arc::clone(recognizer);
     binding.replay_with(script, move |_, position| {
-        recognizer.add_pointer(PointerId::PRIMARY, position);
+        recognizer.add_pointer(PointerId::PRIMARY, position, position);
         flui_interaction::HitTestResult::new()
     });
 }

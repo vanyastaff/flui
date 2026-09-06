@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_interaction::GestureRecognizer;
+use flui_interaction::PointerDispatch;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_interaction::ids::PointerId;
@@ -90,10 +91,14 @@ fn bench_tap_no_callbacks(c: &mut Criterion) {
     let pointer = PointerId::PRIMARY;
     c.bench_function("TapGestureRecognizer::handle_event (no callbacks)", |b| {
         b.iter(|| {
-            recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
-            recognizer.handle_event(black_box(&down));
-            recognizer.handle_event(black_box(&mv));
-            recognizer.handle_event(black_box(&up));
+            recognizer.add_pointer(
+                pointer,
+                Offset::new(Pixels(100.0), Pixels(100.0)),
+                Offset::new(Pixels(100.0), Pixels(100.0)),
+            );
+            recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
+            recognizer.handle_event(PointerDispatch::at_root(black_box(&mv)));
+            recognizer.handle_event(PointerDispatch::at_root(black_box(&up)));
             // Re-arm for next iter (Up closes the gesture; reset is
             // implicit in `add_pointer` overwriting primary_pointer).
             recognizer.dispose();
@@ -117,10 +122,14 @@ fn bench_tap_with_callbacks(c: &mut Criterion) {
         "TapGestureRecognizer::handle_event (with on_tap callbacks)",
         |b| {
             b.iter(|| {
-                recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
-                recognizer.handle_event(black_box(&down));
-                recognizer.handle_event(black_box(&mv));
-                recognizer.handle_event(black_box(&up));
+                recognizer.add_pointer(
+                    pointer,
+                    Offset::new(Pixels(100.0), Pixels(100.0)),
+                    Offset::new(Pixels(100.0), Pixels(100.0)),
+                );
+                recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
+                recognizer.handle_event(PointerDispatch::at_root(black_box(&mv)));
+                recognizer.handle_event(PointerDispatch::at_root(black_box(&up)));
                 recognizer.dispose();
             });
         },
@@ -137,7 +146,7 @@ fn bench_add_pointer(c: &mut Criterion) {
     let position = Offset::new(Pixels(100.0), Pixels(100.0));
     c.bench_function("TapGestureRecognizer::add_pointer", |b| {
         b.iter(|| {
-            recognizer.add_pointer(black_box(pointer), black_box(position));
+            recognizer.add_pointer(black_box(pointer), black_box(position), black_box(position));
             recognizer.dispose();
         });
     });
@@ -164,8 +173,12 @@ fn bench_secondary_button(c: &mut Criterion) {
         "TapGestureRecognizer::handle_event (primary, primary path)",
         |b| {
             b.iter(|| {
-                recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
-                recognizer.handle_event(black_box(&down));
+                recognizer.add_pointer(
+                    pointer,
+                    Offset::new(Pixels(100.0), Pixels(100.0)),
+                    Offset::new(Pixels(100.0), Pixels(100.0)),
+                );
+                recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
                 recognizer.dispose();
             });
         },

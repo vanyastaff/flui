@@ -51,5 +51,5 @@ pub trait PrimaryPointerGestureRecognizer:
     /// Called for events on the primary pointer.
     ///
     /// Flutter parity: `recognizer.dart:684+ @protected void handlePrimaryPointer(PointerEvent event)`.
-    fn handle_primary_pointer(&self, event: &crate::events::PointerEvent);
+    fn handle_primary_pointer(&self, dispatch: crate::routing::PointerDispatch<'_>);
 }

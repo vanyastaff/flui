@@ -84,7 +84,11 @@ fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
     let binding = HeadlessBinding::new();
     let pointer = PointerId::PRIMARY;
     let recognizer = TapGestureRecognizer::new(binding.arena().clone());
-    recognizer.add_pointer(pointer, Offset::new(px(4.0), px(7.0)));
+    recognizer.add_pointer(
+        pointer,
+        Offset::new(px(4.0), px(7.0)),
+        Offset::new(px(4.0), px(7.0)),
+    );
     assert!(binding.arena().is_open(pointer));
 
     let event = pointer_down(Offset::new(px(4.0), px(7.0)), device_kind_from_button(0));

@@ -22,6 +22,7 @@ use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition},
     events::{PointerEvent, PointerEventExt, PointerType},
     ids::PointerId,
+    routing::PointerDispatch,
     settings::GestureSettings,
 };
 
@@ -55,8 +56,8 @@ pub struct DoubleTapDetails {
 ///     });
 ///
 /// // Handle pointer events
-/// recognizer.add_pointer(pointer_id, position);
-/// recognizer.handle_event(&pointer_event);
+/// recognizer.add_pointer(pointer_id, position, position);
+/// recognizer.handle_event(PointerDispatch::at_root(&pointer_event));
 /// ```
 #[derive(Clone)]
 pub struct DoubleTapGestureRecognizer {
@@ -104,6 +105,10 @@ struct DoubleTapState {
     phase: DoubleTapPhase,
     /// Position of first tap down
     first_tap_position: Option<Offset<Pixels>>,
+    /// The same contact as `first_tap_position`, in the root's space —
+    /// stored because dispatch localises the event before this recognizer
+    /// sees it, so the global position exists only on arrival (issue #908).
+    first_tap_global_position: Option<Offset<Pixels>>,
     /// Time of first tap completion
     first_tap_time: Option<Instant>,
     /// Current position (for slop detection)
@@ -117,6 +122,7 @@ impl Default for DoubleTapState {
         Self {
             phase: DoubleTapPhase::Ready,
             first_tap_position: None,
+            first_tap_global_position: None,
             first_tap_time: None,
             current_position: None,
             device_kind: None,
@@ -184,7 +190,12 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer down
-    fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_down(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -192,6 +203,7 @@ impl DoubleTapGestureRecognizer {
                 // First tap down
                 state.phase = DoubleTapPhase::FirstDown;
                 state.first_tap_position = Some(position);
+                state.first_tap_global_position = Some(global_position);
                 state.current_position = Some(position);
                 state.device_kind = Some(kind);
             }
@@ -239,7 +251,12 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer move
-    fn handle_move(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_move(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let mut state = self.gesture_state.lock();
 
         state.current_position = Some(position);
@@ -255,12 +272,17 @@ impl DoubleTapGestureRecognizer {
             state.phase = DoubleTapPhase::Cancelled;
             drop(state);
 
-            self.handle_cancel(position, kind);
+            self.handle_cancel(position, global_position, kind);
         }
     }
 
     /// Handle pointer up
-    fn handle_up(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_up(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -269,6 +291,7 @@ impl DoubleTapGestureRecognizer {
                 state.phase = DoubleTapPhase::WaitingForSecond;
                 state.first_tap_time = Some(self.state.now());
                 state.first_tap_position = Some(position);
+                state.first_tap_global_position = Some(global_position);
                 drop(state); // Release before touching the arena.
 
                 // Capture the first contact and HOLD its arena entry across the
@@ -305,7 +328,7 @@ impl DoubleTapGestureRecognizer {
                 // Fire the double-tap callback once.
                 if let Some(callback) = self.callbacks.borrow().on_double_tap.clone() {
                     callback(DoubleTapDetails {
-                        global_position: position,
+                        global_position,
                         local_position: position,
                         kind,
                     });
@@ -320,6 +343,7 @@ impl DoubleTapGestureRecognizer {
                     let mut state = self.gesture_state.lock();
                     state.phase = DoubleTapPhase::Ready;
                     state.first_tap_position = None;
+                    state.first_tap_global_position = None;
                     state.first_tap_time = None;
                 }
                 self.state.stop_tracking();
@@ -329,7 +353,12 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle cancel
-    fn handle_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_cancel(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let mut state = self.gesture_state.lock();
 
         if state.phase != DoubleTapPhase::Ready && state.phase != DoubleTapPhase::Cancelled {
@@ -347,7 +376,7 @@ impl DoubleTapGestureRecognizer {
 
             if let Some(callback) = callback {
                 callback(DoubleTapDetails {
-                    global_position: position,
+                    global_position,
                     local_position: position,
                     kind,
                 });
@@ -383,6 +412,7 @@ impl DoubleTapGestureRecognizer {
                 // withdraws the double-tap from the held first entry, and
                 // releases the hold.
                 let position = state.first_tap_position.take().unwrap_or(Offset::ZERO);
+                let global_position = state.first_tap_global_position.take().unwrap_or(position);
                 let kind = state.device_kind.unwrap_or(PointerType::Touch);
                 state.phase = DoubleTapPhase::Ready;
                 state.first_tap_time = None;
@@ -390,7 +420,7 @@ impl DoubleTapGestureRecognizer {
 
                 if let Some(callback) = self.callbacks.borrow().on_double_tap_cancel.clone() {
                     callback(DoubleTapDetails {
-                        global_position: position,
+                        global_position,
                         local_position: position,
                         kind,
                     });
@@ -430,7 +460,12 @@ impl DoubleTapGestureRecognizer {
 }
 
 impl GestureRecognizer for DoubleTapGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
@@ -478,10 +513,11 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         }
 
         self.state.start_tracking(pointer, position, self);
-        self.handle_down(position, PointerType::Touch);
+        self.handle_down(position, global_position, PointerType::Touch);
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
@@ -491,16 +527,18 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         }
 
         let (position, pointer_type) = Self::extract_event_data(event);
+        // The only point at which the untransformed position exists at all.
+        let global_position = dispatch.global.position();
 
         match event {
             PointerEvent::Move(_) => {
-                self.handle_move(position, pointer_type);
+                self.handle_move(position, global_position, pointer_type);
             }
             PointerEvent::Up(_) => {
-                self.handle_up(position, pointer_type);
+                self.handle_up(position, global_position, pointer_type);
             }
             PointerEvent::Cancel(_) => {
-                self.handle_cancel(position, pointer_type);
+                self.handle_cancel(position, global_position, pointer_type);
             }
             _ => {}
         }
@@ -579,12 +617,18 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         if let Some(pos) = self.state.initial_position() {
-            let kind = self
-                .gesture_state
-                .lock()
-                .device_kind
-                .unwrap_or(PointerType::Touch);
-            self.handle_cancel(pos, kind);
+            // No event drives an arena rejection, so the global position comes
+            // from what the first contact recorded. Falling back to the local
+            // one would restate the very defect this carries (issue #908), so
+            // it is only reached when nothing was ever recorded.
+            let (kind, global_pos) = {
+                let state = self.gesture_state.lock();
+                (
+                    state.device_kind.unwrap_or(PointerType::Touch),
+                    state.first_tap_global_position.unwrap_or(pos),
+                )
+            };
+            self.handle_cancel(pos, global_pos, kind);
         }
         // If a competitor won while we held the first entry across the inter-tap
         // window, drain the hold so the entry is not left held.
@@ -624,11 +668,17 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = DoubleTapGestureRecognizer::new(arena.clone())
             .with_on_double_tap_cancel(|_| panic!("double tap cancel panic"));
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(px(1.0), px(2.0)));
+        recognizer.add_pointer(
+            PointerId::PRIMARY,
+            Offset::new(px(1.0), px(2.0)),
+            Offset::new(px(1.0), px(2.0)),
+        );
         arena.close(PointerId::PRIMARY);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+                PointerType::Touch,
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -651,9 +701,9 @@ mod tests {
         let position = Offset::new(px(100.0), px(100.0));
 
         // First tap
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
         let up_event = make_up_event(position, PointerType::Touch);
-        recognizer.handle_event(&up_event);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
 
         // Should be waiting for second tap
         let state = recognizer.gesture_state.lock();
@@ -661,9 +711,9 @@ mod tests {
         drop(state);
 
         // Second tap (need to add pointer again for new sequence)
-        recognizer.handle_down(position, PointerType::Touch);
+        recognizer.handle_down(position, position, PointerType::Touch);
         let up_event = make_up_event(position, PointerType::Touch);
-        recognizer.handle_event(&up_event);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
 
         // Should have called callback
         assert!(*tapped.lock());
@@ -698,9 +748,9 @@ mod tests {
         let position = Offset::new(px(100.0), px(100.0));
 
         // Complete the first tap.
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
         let up_event = make_up_event(position, PointerType::Touch);
-        recognizer.handle_event(&up_event);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
         assert_eq!(
             recognizer.gesture_state.lock().phase,
             DoubleTapPhase::WaitingForSecond
@@ -732,13 +782,13 @@ mod tests {
         let first_pos = Offset::new(px(100.0), px(100.0));
 
         // First tap
-        recognizer.add_pointer(pointer, first_pos);
+        recognizer.add_pointer(pointer, first_pos, first_pos);
         let up_event = make_up_event(first_pos, PointerType::Touch);
-        recognizer.handle_event(&up_event);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
 
         // Second tap too far away (> 100px)
         let second_pos = Offset::new(px(250.0), px(100.0)); // 150px away
-        recognizer.handle_down(second_pos, PointerType::Touch);
+        recognizer.handle_down(second_pos, second_pos, PointerType::Touch);
 
         // Flutter parity: an out-of-slop contact is ignored. The recognizer
         // stays in WaitingForSecond with the first entry still held — it does
@@ -748,7 +798,7 @@ mod tests {
         drop(state);
 
         let up_event = make_up_event(second_pos, PointerType::Touch);
-        recognizer.handle_event(&up_event);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
 
         // Should NOT have called double tap callback
         assert!(!*tapped.lock());
@@ -763,9 +813,9 @@ mod tests {
         let position = Offset::new(px(100.0), px(100.0));
 
         // First tap
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
         let up_event = make_up_event(position, PointerType::Touch);
-        recognizer.handle_event(&up_event);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
 
         // Wait longer than timeout
         std::thread::sleep(Duration::from_millis(350));
@@ -798,8 +848,11 @@ mod tests {
         let position = Offset::new(px(10.0), px(10.0));
 
         // Complete the first tap → `WaitingForSecond`, member still in the arena.
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            position,
+            PointerType::Touch,
+        )));
 
         // Poll before the 300ms window expires: nothing fires.
         arena.poll_deadlines();
@@ -839,8 +892,11 @@ mod tests {
 
         // Complete the first tap → `WaitingForSecond`: the give-up deadline
         // is now armed, and visible through the arena aggregate.
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            position,
+            PointerType::Touch,
+        )));
         assert!(recognizer.has_pending_deadline());
         assert!(arena.has_pending_deadlines());
 
@@ -870,8 +926,11 @@ mod tests {
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(px(10.0), px(10.0));
         let first_tap_time = arena.now();
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            position,
+            PointerType::Touch,
+        )));
 
         let expected = first_tap_time + recognizer.double_tap_timeout();
         assert_eq!(
@@ -936,8 +995,11 @@ mod tests {
         let position = Offset::new(px(100.0), px(100.0));
 
         // First tap completes → records `first_tap_time` from the virtual clock.
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            position,
+            PointerType::Touch,
+        )));
 
         // Advance virtual time past the 300ms double-tap window — no sleep.
         clock.advance(Duration::from_millis(350));
@@ -989,15 +1051,15 @@ mod tests {
 
         // --- First tap: route (add recognizers), then binding closes the arena ---
         let first_down = make_down_event(position, PointerType::Touch);
-        tap.add_pointer(first_pointer, position);
-        double_tap.add_pointer(first_pointer, position);
+        tap.add_pointer(first_pointer, position, position);
+        double_tap.add_pointer(first_pointer, position, position);
         run_pointer_lifecycle(&arena, &first_down); // close → 2 members, contested
 
         // First up: recognizers handle it first, then binding sweeps.
         // double_tap.handle_event holds the entry; the binding's sweep defers.
         let first_up = make_up_event(position, PointerType::Touch);
-        tap.handle_event(&first_up);
-        double_tap.handle_event(&first_up);
+        tap.handle_event(PointerDispatch::at_root(&first_up));
+        double_tap.handle_event(PointerDispatch::at_root(&first_up));
         run_pointer_lifecycle(&arena, &first_up); // sweep → held → has_pending_sweep
 
         // The held entry is still in the arena; the tap has not fired yet.
@@ -1018,7 +1080,7 @@ mod tests {
         // releases the hold, and restarts as a fresh first tap.
         let second_down = make_down_event(position, PointerType::Touch);
         run_pointer_lifecycle(&arena, &second_down);
-        double_tap.add_pointer(first_pointer, position);
+        double_tap.add_pointer(first_pointer, position, position);
         // After add_pointer:
         //   - check_timeout fired: double-tap withdrew from the first entry,
         //     lone tap won (single-member-wins rule), tap fired.

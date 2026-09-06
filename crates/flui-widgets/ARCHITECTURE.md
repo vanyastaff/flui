@@ -129,9 +129,14 @@ own per-recognizer parity evidence.
 
 **Alternatives rejected:**
 
-- Reading `DragUpdateDetails::global_position` — that field is still fed the
-  already-localized value, so it is a global position in name only. It is the
-  named remaining half of issue #908.
+- Reading `DragUpdateDetails::global_position` — rejected when this was
+  written, because the field was then fed the already-localized value and was a
+  global position in name only. Issue #908 has since carried the dispatch pair
+  through `GestureRecognizer::handle_event`, so the field is now genuinely
+  global. It still does not replace the probe: the probe answers where the
+  draggable's own NODE is, which no pointer event carries at all, and the
+  session converts an accumulated, axis-restricted position rather than a raw
+  event position.
 - Assuming translation-only ancestors and adding a remembered origin — wrong
   under any `Transform`, and wrong silently.
 - Stashing the `Listener`'s `dispatch.global` in a cell and having

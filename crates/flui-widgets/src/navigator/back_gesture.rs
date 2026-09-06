@@ -217,7 +217,7 @@ impl BackGestureRuntime {
         if self.gesture.borrow().is_some() {
             return;
         }
-        recognizer.add_pointer(event.pointer_id(), event.position());
+        recognizer.add_pointer(event.pointer_id(), event.position(), event.position());
     }
 
     fn on_drag_start(&self, _details: DragStartDetails) {
@@ -491,9 +491,9 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             .on_pointer_down(move |dispatch| {
                 down_runtime.on_pointer_down(&down_drag, dispatch.local);
             })
-            .on_pointer_move(move |dispatch| move_drag.handle_event(dispatch.local))
-            .on_pointer_up(move |dispatch| up_drag.handle_event(dispatch.local))
-            .on_pointer_cancel(move |dispatch| cancel_drag.handle_event(dispatch.local));
+            .on_pointer_move(move |dispatch| move_drag.handle_event(dispatch))
+            .on_pointer_up(move |dispatch| up_drag.handle_event(dispatch))
+            .on_pointer_cancel(move |dispatch| cancel_drag.handle_event(dispatch));
 
         let child = view
             .child

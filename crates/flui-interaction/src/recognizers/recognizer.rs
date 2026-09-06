@@ -14,8 +14,8 @@ use tracing::instrument;
 
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
-    events::PointerEvent,
     ids::PointerId,
+    routing::PointerDispatch,
 };
 
 /// Base trait for all gesture recognizers
@@ -40,12 +40,29 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// registered in the arena. Manufacturing an `Arc` from a cloned struct
     /// creates a different allocation, makes weak entry handles go stale as
     /// soon as the arena resolves, and cannot support post-resolution timers.
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>);
+    /// `position` is in the recognizer's own space — the one its slop,
+    /// velocity and axis maths are measured in. `global_position` is the same
+    /// contact in the root's space, carried alongside because a recognizer
+    /// cannot recover it: the event it is handed has already been localised.
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    );
 
-    /// Handle a pointer event
+    /// Handle a pointer event.
     ///
     /// Process move, up, and cancel events for tracked pointers.
-    fn handle_event(&self, event: &PointerEvent);
+    ///
+    /// Takes the whole [`PointerDispatch`] rather than one event. Dispatch
+    /// localises the event for the receiving target and keeps the untransformed
+    /// one beside it; handing a recognizer only the local half is what made
+    /// every detail struct's `global_position` a local position under a new
+    /// name (issue #908). Everything a recognizer measures against its own box
+    /// comes from `dispatch.local`; `dispatch.global` exists to be reported,
+    /// not measured with.
+    fn handle_event(&self, dispatch: PointerDispatch<'_>);
 
     /// Dispose of this recognizer
     ///
