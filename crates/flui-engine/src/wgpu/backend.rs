@@ -665,6 +665,48 @@ const fn clip_is_disabled(behavior: flui_types::painting::Clip) -> bool {
     matches!(behavior, flui_types::painting::Clip::None)
 }
 
+/// Whether this clip op can be expressed by the primitives this backend has.
+///
+/// `ClipOp::Difference` keeps the shape's COMPLEMENT. A scissor cannot express
+/// a complement — it is one rectangle — and the per-draw SDF slot evaluates the
+/// shape rather than its inverse, so no clip primitive here can honour it.
+///
+/// Installing the shape as an intersect instead is not an approximation of the
+/// request, it is its inverse: a caller punching a hole gets everything OUTSIDE
+/// the hole erased. That is destructive, where refusing is merely permissive —
+/// the caller sees content the clip should have removed, rather than losing
+/// content it asked to keep. Three of the four shapes did the first thing until
+/// issue #941; `clip_path` already did the second, because #934 forced the
+/// question for a bounding-box clip whose complement's bounding box is the
+/// whole surface.
+///
+/// Honouring it needs the machinery an exact path clip needs: a stencil pass,
+/// or a shader carrying a clip STACK that can evaluate `1 − coverage`. Both are
+/// tracked with path clipping itself.
+const fn clip_op_is_expressible(clip_op: flui_types::painting::ClipOp) -> bool {
+    matches!(clip_op, flui_types::painting::ClipOp::Intersect)
+}
+
+/// Report a clip this backend cannot express, and go on without installing it.
+///
+/// Release level, not debug: an unhonoured clip renders content the caller
+/// asked to remove, which is a visible defect a production scrape must be able
+/// to see — the same reasoning that raised `WgpuPainter::clip_path`'s own
+/// message from `trace!` to `warn!`.
+///
+/// Per call rather than latched. `ClipOp::Difference` has no in-tree producer,
+/// so this cannot spam a frame loop today; if one appears, the fix is the
+/// once-per-painter latch `clip_path` already carries, not a level downgrade.
+fn warn_unexpressible_clip_op(shape: &str) {
+    tracing::warn!(
+        "Backend::{shape}: ClipOp::Difference keeps the shape's complement, \
+         which no clip primitive here can express; the clip is NOT applied. \
+         Installing the shape as an intersect instead would invert the request \
+         and erase the content it asked to keep. Honouring it needs the stencil \
+         pass exact path clipping needs."
+    );
+}
+
 impl CommandRenderer for Backend<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
@@ -1383,15 +1425,18 @@ impl CommandRenderer for Backend<'_> {
     fn clip_rect(
         &mut self,
         rect: Rect<Pixels>,
-        _clip_op: flui_types::painting::ClipOp,
+        clip_op: flui_types::painting::ClipOp,
         clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
-        // `ClipOp::Difference` is still unhandled (it would need a stencil);
-        // the `Clip` mode is honoured — see `clip_is_hard`.
         if clip_is_disabled(clip_behavior) {
             return;
         }
+        if !clip_op_is_expressible(clip_op) {
+            warn_unexpressible_clip_op("clip_rect");
+            return;
+        }
+        // The `Clip` MODE is honoured — see `clip_is_hard`.
         let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
             painter.clip_rect(rect, hard);
@@ -1401,11 +1446,15 @@ impl CommandRenderer for Backend<'_> {
     fn clip_rrect(
         &mut self,
         rrect: RRect,
-        _clip_op: flui_types::painting::ClipOp,
+        clip_op: flui_types::painting::ClipOp,
         clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
         if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        if !clip_op_is_expressible(clip_op) {
+            warn_unexpressible_clip_op("clip_rrect");
             return;
         }
         let hard = clip_is_hard(clip_behavior);
@@ -1417,7 +1466,7 @@ impl CommandRenderer for Backend<'_> {
     fn clip_rsuperellipse(
         &mut self,
         rsuperellipse: flui_types::geometry::RSuperellipse,
-        _clip_op: flui_types::painting::ClipOp,
+        clip_op: flui_types::painting::ClipOp,
         clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
@@ -1427,6 +1476,10 @@ impl CommandRenderer for Backend<'_> {
         // rect_instanced draws apply the iOS-squircle SDF via the
         // per-instance kind=2 path.
         if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        if !clip_op_is_expressible(clip_op) {
+            warn_unexpressible_clip_op("clip_rsuperellipse");
             return;
         }
         let hard = clip_is_hard(clip_behavior);
@@ -1453,16 +1506,8 @@ impl CommandRenderer for Backend<'_> {
         if clip_is_disabled(clip_behavior) {
             return;
         }
-        // A DIFFERENCE clip keeps the path's COMPLEMENT, whose bounding box is
-        // the whole surface — so the conservative answer is no scissor at all.
-        // Installing the path's own box instead would not approximate this
-        // clip, it would invert it, erasing exactly the content the caller
-        // asked to keep. `Canvas::clip_path_ext(path, ClipOp::Difference, ..)`
-        // is public and documented (`flui-painting/README.md`), so unlike the
-        // guard above this one has live callers. The shape stays unhonoured,
-        // which is what it was before — it needs the same stencil pass an exact
-        // path clip does.
-        if clip_op == flui_types::painting::ClipOp::Difference {
+        if !clip_op_is_expressible(clip_op) {
+            warn_unexpressible_clip_op("clip_path");
             return;
         }
         self.with_transform(transform, |painter| {

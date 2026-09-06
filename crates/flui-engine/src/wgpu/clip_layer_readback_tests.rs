@@ -1799,65 +1799,112 @@ fn a_canvas_clip_with_mode_none_does_not_clip() {
     );
 }
 
-/// A DIFFERENCE path clip installs nothing rather than inverting itself.
+/// Pushes one clip shape through the canvas `_ext` API under a given `ClipOp`.
 ///
-/// `Canvas::clip_path_ext(path, ClipOp::Difference, ..)` asks to remove the
-/// pixels INSIDE the path — the region kept is its complement, whose bounding
-/// box is the whole surface. So the conservative answer for a clip that can only
-/// express a box is no clip at all: installing the path's own box would not
-/// approximate this request, it would invert it, erasing exactly the content the
-/// caller asked to keep.
+/// A function pointer rather than a closure so the four shapes can sit in one
+/// array and the loop below reads against a single geometry.
+type PushClip = fn(&mut Canvas, flui_types::painting::ClipOp, Rect<flui_types::geometry::Pixels>);
+
+/// EVERY canvas clip shape refuses `ClipOp::Difference` rather than inverting.
 ///
-/// The `Intersect` control is what makes this more than "nothing happened": it
-/// proves the same path through the same call DOES clip, so the difference arm
-/// is being refused rather than silently mis-plumbed.
+/// A difference clip asks to remove the pixels INSIDE the shape — the region
+/// kept is its complement. A scissor cannot express a complement, and the SDF
+/// slot evaluates the shape rather than its inverse, so no clip primitive here
+/// can honour the request. What the three shapes besides `path` used to do was
+/// worse than refusing: they bound `_clip_op` and installed the shape as an
+/// INTERSECT, so a caller asking to punch a hole got everything outside the
+/// hole erased instead — the exact inverse of the request, and destructive
+/// where refusing is merely permissive (issue #941).
 ///
-/// The clip stays unhonoured, which is what it was before — expressing it needs
-/// the same stencil pass an exact path clip does. The three sibling shapes still
-/// install an INVERTED clip for this op, which is issue #941; that asymmetry is
-/// deliberate and predates nothing here.
+/// `Canvas::clip_path_ext(&path, ClipOp::Difference, ..)` is public and
+/// documented in `flui-painting`'s README as the way to punch a hole, so these
+/// are reachable from outside the workspace, not just in principle.
+///
+/// Both arms are asserted for every shape. The `Intersect` control is what
+/// makes this more than "nothing happened": it proves the same shape through
+/// the same call DOES clip, so the difference arm is being refused rather than
+/// silently mis-plumbed.
+///
+/// Read on RED: the content is blue and the cleared ground is white, so the two
+/// agree on blue and an assertion there would pass either way.
 #[test]
-fn a_difference_path_clip_installs_nothing_rather_than_inverting() {
+fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
     let Ok(renderer) = HeadlessRenderer::new() else {
         eprintln!("skipping: no GPU adapter available");
         return;
     };
 
-    let scene = |op: flui_types::painting::ClipOp| {
-        let mut tree = LayerTree::new();
-        {
-            let mut builder = SceneBuilder::new(&mut tree);
-            let mut canvas = Canvas::new();
-            let mut path = flui_types::painting::Path::new();
-            path.add_rect(Rect::from_xywh(px(16.0), px(16.0), px(32.0), px(32.0)));
-            canvas.clip_path_ext(&path, op, Clip::AntiAlias);
-            canvas.draw_rect(
-                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
-                &Paint::fill(Color::rgb(0, 0, 255)),
-            );
-            builder.add_picture(canvas.finish());
-            builder.build();
-        }
-        renderer
-            .render_layer_tree(&tree, (SIDE, SIDE))
-            .expect("the headless capture path must rasterize a canvas-clipped tree")
-    };
+    // The same box for every shape, so the sample points read against one
+    // geometry: (2, 2) is far outside it under all four.
+    let box_rect = Rect::from_xywh(px(16.0), px(16.0), px(32.0), px(32.0));
 
-    // Read on RED: the content is blue and the cleared ground is white, so the
-    // two agree on blue and an assertion there would pass either way.
-    let intersect = sample(&scene(flui_types::painting::ClipOp::Intersect), 2, 2);
-    assert!(
-        intersect[0] > 200,
-        "the control must actually clip — outside the path's box expects the \
-         white ground, got {intersect:?}, so the sample point proves nothing"
-    );
-    let difference = sample(&scene(flui_types::painting::ClipOp::Difference), 2, 2);
-    assert!(
-        difference[0] < 64,
-        "a difference clip must install nothing, so content outside the path \
-         is still painted, got {difference:?}. Painted white here means the \
-         path's own box was installed and the clip inverted"
-    );
+    let shapes: [(&str, PushClip); 4] = [
+        ("rect", |canvas, op, r| {
+            canvas.clip_rect_ext(r, op, Clip::AntiAlias);
+        }),
+        ("rrect", |canvas, op, r| {
+            canvas.clip_rrect_ext(
+                flui_types::geometry::RRect::from_rect_and_radius(
+                    r,
+                    flui_types::geometry::Radius::circular(px(4.0)),
+                ),
+                op,
+                Clip::AntiAlias,
+            );
+        }),
+        ("superellipse", |canvas, op, r| {
+            canvas.clip_rsuperellipse_ext(
+                flui_types::geometry::RSuperellipse::from_rect_and_radius(
+                    r,
+                    flui_types::geometry::Radius::circular(px(4.0)),
+                ),
+                op,
+                Clip::AntiAlias,
+            );
+        }),
+        ("path", |canvas, op, r| {
+            let mut path = flui_types::painting::Path::new();
+            path.add_rect(r);
+            canvas.clip_path_ext(&path, op, Clip::AntiAlias);
+        }),
+    ];
+
+    for (name, push) in shapes {
+        let scene = |op: flui_types::painting::ClipOp| {
+            let mut tree = LayerTree::new();
+            {
+                let mut builder = SceneBuilder::new(&mut tree);
+                let mut canvas = Canvas::new();
+                push(&mut canvas, op, box_rect);
+                canvas.draw_rect(
+                    Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+                    &Paint::fill(Color::rgb(0, 0, 255)),
+                );
+                builder.add_picture(canvas.finish());
+                builder.build();
+            }
+            renderer
+                .render_layer_tree(&tree, (SIDE, SIDE))
+                .expect("the headless capture path must rasterize a canvas-clipped tree")
+        };
+
+        let intersect = sample(&scene(flui_types::painting::ClipOp::Intersect), 2, 2);
+        assert!(
+            intersect[0] > 200,
+            "control for {name}: an INTERSECT clip must actually clip, so (2, 2) \
+             expects the white ground, got {intersect:?} — without this the \
+             difference assertion below proves nothing"
+        );
+
+        let difference = sample(&scene(flui_types::painting::ClipOp::Difference), 2, 2);
+        assert!(
+            difference[0] < 64,
+            "a DIFFERENCE {name} clip must install nothing, so content outside \
+             the shape is still painted, got {difference:?}. White here means \
+             the shape was installed as an intersect and the clip inverted \
+             (issue #941)"
+        );
+    }
 }
 
 /// A destructive blend mode must not escape a rounded clip's corners.
