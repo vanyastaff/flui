@@ -268,9 +268,9 @@ impl SharedFontSystem {
     ///
     /// Returns the style's own family when the font database carries it, the
     /// matching generic when the style names one (`"monospace"`, `"serif"`, …),
-    /// and [`Family::SansSerif`] when it names a family that is not installed
-    /// — which the generic binding points at a carried family whenever the
-    /// database holds any Latin-capable face.
+    /// and [`Family::SansSerif`] when it names a family that is not
+    /// installed. The generic binding points that fallback at a carried family
+    /// whenever the database holds any Latin-capable face.
     ///
     /// # Why a style's family cannot go to the shaper unchecked
     ///

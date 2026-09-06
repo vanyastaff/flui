@@ -255,9 +255,11 @@ Replacement coverage, per rule #1, in two tests because no single fixture gives 
 hermetically and in both fixture orders so that no load order satisfies it — but its fixture carries
 no emoji face, so it never observes the letters and the space landing apart.
 `oversized_space_from_an_emoji_face_is_closed` is the one that does: it builds its fixture from the
-host's emoji font, asserts the red state (space above 1 em, on a different face from the letters)
-before asserting the fix, and **skips where the host has no emoji font** — real coverage where one
-exists, not an oracle to rely on everywhere. A fully hermetic version needs a committed fixture face
+host's emoji font and asserts the red state (space above 1 em, on a different face from the letters)
+before asserting the fix. Where no emoji font is installed it degrades instead of failing — but a
+Rust test that returns early is reported PASSED, so CI installs `fonts-noto-color-emoji` and sets
+`FLUI_REQUIRE_EMOJI_FONT`, which turns that branch into a hard failure. The graceful skip is a
+developer-machine convenience, not a hole in the gate. A fully hermetic version needs a committed fixture face
 carrying `' '` but no letters; neither in-tree icon font qualifies (both lack `' '` entirely).
 
 ### Net unsafe delta: 0

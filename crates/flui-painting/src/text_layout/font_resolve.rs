@@ -46,8 +46,8 @@
 //!   tail. Each generic is re-pointed only when its configured family is
 //!   missing.
 //! * [`resolve_family`] degrades a named family the database lacks to
-//!   `Family::SansSerif`, which the binding above points at a carried family
-//!   whenever the database holds any Latin-capable face at all. This is
+//!   `Family::SansSerif`; the binding above points that generic at a carried
+//!   family whenever the database holds any Latin-capable face. This is
 //!   the Cupertino path, whose roles all name `CupertinoSystemText` — a family
 //!   Flutter's engine aliases to San Francisco and that exists nowhere else.
 //!
@@ -314,8 +314,8 @@ impl InstalledFamilies {
 ///
 /// Returns the style's own family when the database carries it, the matching
 /// generic when the style names one, and `Family::SansSerif` when the style
-/// names a family that is absent — which the generic binding points at a
-/// carried family whenever the database holds a Latin-capable face. A generic is returned *as a generic*, so
+/// names a family that is absent. The generic binding points that fallback at
+/// a carried family whenever the database holds a Latin-capable face. A generic is returned *as a generic*, so
 /// `Family::Monospace` keeps cosmic-text's monospace-specific fallback path —
 /// its `is_mono` bypass of the exact-weight filter, and its panose-driven
 /// monospace candidate set.
