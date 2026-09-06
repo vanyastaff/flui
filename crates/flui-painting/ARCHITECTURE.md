@@ -15,7 +15,7 @@ Companion deep-dive docs live in [`docs/`](docs/) and are kept alongside this te
 
 ## Flutter source mapping
 
-The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `package:flutter/src/painting/` (decoration/text/clip helpers). The `Skia SkCanvas` is the semantic reference for the recording API; cosmic-text is the Rust crate used in place of Skia's text shaping; path tessellation lives in `flui-engine`, not in this crate.
+The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `package:flutter/src/painting/` (decoration/text/clip helpers). The `Skia SkCanvas` is the semantic reference for the recording API; cosmic-text is the Rust crate used in place of Skia's text shaping (a decision with recorded re-open triggers — [ADR-0059](../../docs/adr/ADR-0059-flui-stays-on-cosmic-text.md)); path tessellation lives in `flui-engine`, not in this crate.
 
 | Flutter / Skia source | FLUI module | Notes |
 |---|---|---|
