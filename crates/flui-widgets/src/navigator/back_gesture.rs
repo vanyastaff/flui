@@ -38,7 +38,7 @@ use flui_foundation::Listenable;
 use flui_interaction::recognizers::drag_variants::horizontal_drag;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
-    PointerEvent, PointerEventExt,
+    PointerEventExt,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::typography::TextDirection;
@@ -206,7 +206,12 @@ struct BackGestureRuntime {
 }
 
 impl BackGestureRuntime {
-    fn on_pointer_down(&self, recognizer: &Arc<DragGestureRecognizer>, event: &PointerEvent) {
+    fn on_pointer_down(
+        &self,
+        recognizer: &Arc<DragGestureRecognizer>,
+        dispatch: flui_interaction::PointerDispatch<'_>,
+    ) {
+        let event = dispatch.local;
         if !(self.enabled)() {
             return;
         }
@@ -217,7 +222,16 @@ impl BackGestureRuntime {
         if self.gesture.borrow().is_some() {
             return;
         }
-        recognizer.add_pointer(event.pointer_id(), event.position(), event.position());
+        // Both spaces, from the pair the Listener hands over: passing the
+        // localised position twice is how a recogniser ends up reporting a
+        // local position under the name `global_position` (issue #908), and
+        // the transform between them is exactly what an edge-anchored back
+        // gesture sits behind.
+        recognizer.add_pointer(
+            event.pointer_id(),
+            event.position(),
+            dispatch.global.position(),
+        );
     }
 
     fn on_drag_start(&self, _details: DragStartDetails) {
@@ -489,7 +503,7 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             // The drag recognizer tracks one space; hand it the local one,
             // which is what it has always received.
             .on_pointer_down(move |dispatch| {
-                down_runtime.on_pointer_down(&down_drag, dispatch.local);
+                down_runtime.on_pointer_down(&down_drag, dispatch);
             })
             .on_pointer_move(move |dispatch| move_drag.handle_event(dispatch))
             .on_pointer_up(move |dispatch| up_drag.handle_event(dispatch))
@@ -985,7 +999,7 @@ mod tests {
             flui_types::geometry::Offset::ZERO,
             flui_interaction::events::PointerType::Touch,
         );
-        runtime.on_pointer_down(&drag, &event);
+        runtime.on_pointer_down(&drag, flui_interaction::PointerDispatch::at_root(&event));
         assert_eq!(
             attempts.load(Ordering::SeqCst),
             1,
@@ -1022,7 +1036,7 @@ mod tests {
             flui_types::geometry::Offset::ZERO,
             flui_interaction::events::PointerType::Touch,
         );
-        runtime.on_pointer_down(&drag, &down_1);
+        runtime.on_pointer_down(&drag, flui_interaction::PointerDispatch::at_root(&down_1));
         assert!(
             runtime.gesture.borrow().is_none(),
             "on_pointer_down alone does not start a gesture (that's on_drag_start); \
@@ -1042,7 +1056,7 @@ mod tests {
         // (per `a_second_pointer_down_mid_drag_is_ignored` above) an enabled
         // predicate DOES reach `add_pointer`. The direct assertion is that
         // `enabled` itself, not a cached bool, gates this call.
-        runtime.on_pointer_down(&drag, &down_2);
+        runtime.on_pointer_down(&drag, flui_interaction::PointerDispatch::at_root(&down_2));
         assert!(!(runtime.enabled)());
     }
 }

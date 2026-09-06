@@ -432,16 +432,18 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         self: &Arc<Self>,
         pointer: PointerId,
         position: Offset<Pixels>,
-        // Multi-tap reports per-pointer tap callbacks that carry no
-        // position, so there is nothing here to report the global one to.
-        _global_position: Offset<Pixels>,
+        // Multi-tap's per-pointer callbacks carry no position, so none of them
+        // reports the global one. The base records it anyway — the stored
+        // contact is one value in two spaces, and half of it is a trap.
+        global_position: Offset<Pixels>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
-            self.state.start_tracking(pointer, position, self);
+            self.state
+                .start_tracking(pointer, position, global_position, self);
         }
 
         self.handle_pointer_down(pointer, position, PointerType::Touch);

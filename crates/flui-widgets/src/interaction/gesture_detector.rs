@@ -649,10 +649,12 @@ impl GestureDetectorState {
         let on_up = group.clone();
         let on_cancel = group;
 
-        // Recognizers still consume a single-space event, so they are handed
-        // the LOCAL one — the space they have always tracked. The pair's
-        // global half stops here; carrying it into the recognizers means
-        // giving them Flutter's `OffsetPair`, which is its own change.
+        // The whole `PointerDispatch` goes through, both spaces. Dispatch
+        // rewrites an event into the receiving node's coordinates before a
+        // handler runs, so the untransformed position exists nowhere below
+        // this point except in the pair's global half — a recogniser handed
+        // only the local event has no way to report a global position and can
+        // only restate the local one under that name (issue #908).
         Listener::new()
             .on_pointer_down(move |dispatch| down.handle_down(dispatch))
             .on_pointer_move(move |dispatch| on_move.forward(dispatch))

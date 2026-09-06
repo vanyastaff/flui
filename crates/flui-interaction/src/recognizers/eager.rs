@@ -124,9 +124,12 @@ impl GestureRecognizer for EagerGestureRecognizer {
         self: &Arc<Self>,
         pointer: PointerId,
         position: Offset<Pixels>,
-        // Eager wins in the arena before any event arrives and reports no
-        // position of its own, so it has nothing to carry the global one to.
-        _global_position: Offset<Pixels>,
+        // Eager reports no position in any callback of its own, but the base
+        // records the contact in both spaces all the same: `initial_position`
+        // and `initial_global_position` are read through the
+        // `PrimaryPointerGestureRecognizer` trait, and a half-recorded contact
+        // there would be a trap for the next reader.
+        global_position: Offset<Pixels>,
     ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
@@ -141,7 +144,8 @@ impl GestureRecognizer for EagerGestureRecognizer {
         // records the primary pointer / initial position on the base.
         // No nested lock hold — `start_tracking` returns before the
         // `accept` call below touches the arena again.
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
         // Eager accept: resolve the arena in our favor immediately. If
         // the arena is still open we register as the eager winner
         // (auto-resolves on close); if it is already closed we resolve
@@ -238,7 +242,7 @@ impl GestureArenaMember for EagerGestureRecognizer {
         // the arena's per-entry lock; another `arena.resolve` call would
         // re-deadlock under `parking_lot::Mutex`.
         self.state.set_primary_pointer(None);
-        self.state.set_initial_position(None);
+        self.state.clear_initial_contact();
     }
 }
 

@@ -728,7 +728,8 @@ impl GestureRecognizer for DragGestureRecognizer {
             return;
         }
         // Start tracking this pointer
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
 
         // Handle pointer down
         self.handle_down(position, global_position, PointerType::Touch);

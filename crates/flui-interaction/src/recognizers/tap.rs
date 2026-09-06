@@ -698,7 +698,8 @@ impl GestureRecognizer for TapGestureRecognizer {
         *self.pending_up.lock() = None;
         *self.sequence_pointer.lock() = Some(pointer);
         // Start tracking this exact recognizer allocation.
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
 
         // Stage the down so the documented `add_pointer` = "pointer is down"
         // contract holds: a subsequent up fires the tap even when no separate
@@ -765,9 +766,14 @@ impl GestureRecognizer for TapGestureRecognizer {
                 self.handle_tap_up(position, global_position, data.pointer.pointer_type, button);
             }
             PointerEvent::Cancel(info) => {
-                // Cancel doesn't have position, use initial position
+                // A cancel carries no position at all, in EITHER space — the
+                // event's own `position()` answers `Offset::ZERO`. Both halves
+                // therefore fall back to the recorded contact, and they fall
+                // back together: reporting the stored local beside a zero
+                // global would restate the very defect this pair exists to fix.
                 if let Some(pos) = self.state.initial_position() {
-                    self.handle_tap_cancel(pos, global_position, info.pointer_type);
+                    let global = self.state.initial_global_position().unwrap_or(pos);
+                    self.handle_tap_cancel(pos, global, info.pointer_type);
                 }
             }
             _ => {}
@@ -1118,6 +1124,50 @@ mod tests {
 
     /// Right-click down + up fires `on_secondary_tap`; primary slot
     /// stays silent.
+    /// A CANCEL reports the down contact in both spaces, not `Offset::ZERO`.
+    ///
+    /// `PointerEvent::Cancel` carries no position at all, so a recogniser
+    /// reporting a cancelled gesture has to fall back to what it recorded at
+    /// the down. The local half always did; the global half read the cancel
+    /// event's own position, which is `Offset::ZERO` — so a cancel reported a
+    /// real local position beside a global one that named the top-left corner
+    /// of the window, whatever the gesture had actually touched.
+    ///
+    /// The two are 150 px apart here, the shape a nested node produces. A test
+    /// where they coincide cannot tell a fixed recogniser from a broken one.
+    #[test]
+    fn a_cancel_reports_the_down_contact_in_both_spaces() {
+        let arena = GestureArena::new();
+        let cancelled: Arc<Mutex<Vec<TapDetails>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&cancelled);
+        let recognizer = TapGestureRecognizer::new(arena)
+            .with_on_tap_cancel(move |details| sink.lock().push(details));
+
+        let offset = Offset::new(Pixels(150.0), Pixels(150.0));
+        let down_local = Offset::new(Pixels(10.0), Pixels(10.0));
+        let down_global = down_local + offset;
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, down_local, down_global);
+
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+            PointerType::Touch,
+        )));
+
+        let reported = cancelled.lock();
+        let details = reported
+            .first()
+            .expect("the cancel must have been reported");
+        assert_eq!(
+            details.local_position, down_local,
+            "the local half falls back to the recorded contact, as it always did"
+        );
+        assert_eq!(
+            details.global_position, down_global,
+            "the global half must fall back with it — reading the cancel \
+             event's own position gives Offset::ZERO"
+        );
+    }
+
     #[test]
     fn secondary_button_routes_to_secondary_callbacks() {
         let arena = GestureArena::new();

@@ -492,15 +492,18 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         self: &Arc<Self>,
         pointer: PointerId,
         position: Offset<Pixels>,
-        // Force-press details carry pressure, not a position, so there is
-        // nothing here to report the global one to.
-        _global_position: Offset<Pixels>,
+        // Force-press DETAILS carry pressure, not a position, so no callback
+        // of this recogniser reports the global one. The base records it
+        // anyway: `initial_position`/`initial_global_position` are one stored
+        // contact, and writing half of it is how the two drift apart.
+        global_position: Offset<Pixels>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // Start tracking this pointer
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {

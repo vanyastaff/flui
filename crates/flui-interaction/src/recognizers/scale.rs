@@ -637,18 +637,20 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         self: &Arc<Self>,
         pointer: PointerId,
         position: Offset<Pixels>,
-        // Scale reports a focal point computed from every tracked contact,
-        // which is a derived quantity in the recognizer's own space; a single
-        // contact's global position has nowhere to go. Issue #908's follow-up
-        // for a global focal point needs all contacts' globals, not one.
-        _global_position: Offset<Pixels>,
+        // Scale reports a focal point derived from every tracked contact, in
+        // the recogniser's own space — a global focal point needs all the
+        // contacts' globals, not this one, and is not attempted here. The base
+        // still records this contact in both spaces, because the stored pair
+        // is one value and a half-written one is a trap for the next reader.
+        global_position: Offset<Pixels>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
-            self.state.start_tracking(pointer, position, self);
+            self.state
+                .start_tracking(pointer, position, global_position, self);
         }
 
         self.handle_pointer_down(pointer, position);

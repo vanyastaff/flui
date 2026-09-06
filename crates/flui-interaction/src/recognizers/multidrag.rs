@@ -526,10 +526,22 @@ impl MultiDragGestureRecognizer {
     }
 
     /// Handle pointer up.
-    fn handle_up(&self, pointer: PointerId, _position: Offset<Pixels>, _kind: PointerType) {
+    fn handle_up(
+        &self,
+        pointer: PointerId,
+        _position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        _kind: PointerType,
+    ) {
         let Some(mut state) = self.remove_pointer(pointer) else {
             return;
         };
+        // The up carries a fresher contact than the last move did, and a lift
+        // with no move before it carries the ONLY one after the down. Recording
+        // it here rather than reading `last_global_position` as it stands is
+        // what keeps `MultiDragEndDetails` from reporting where the finger was
+        // rather than where it left.
+        state.last_global_position = global_position;
         let mut first_panic = Self::retire_arena_entry(state.arena_entry.as_ref());
         if let Some(client) = state.client.take() {
             // Read the velocity first (it borrows the tracker mutably to
@@ -628,7 +640,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             PointerEvent::Move(_) => {
                 self.handle_move(pointer, position, global_position, kind, self.state.now());
             }
-            PointerEvent::Up(_) => self.handle_up(pointer, position, kind),
+            PointerEvent::Up(_) => self.handle_up(pointer, position, global_position, kind),
             _ => {}
         }
     }

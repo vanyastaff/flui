@@ -540,7 +540,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         // owner-frame deadline registry. The latter deliberately outlives
         // default arena victory.
         self.stop_deadline_polling();
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
         let member: Arc<dyn GestureArenaMember> = Arc::<Self>::clone(self);
         let registration = self
             .state
@@ -583,9 +584,19 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 self.handle_up(position, global_position, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(info) => {
-                // Cancel doesn't have position, use last known position
+                // A cancel carries no position at all, in EITHER space — the
+                // event's own `position()` answers `Offset::ZERO`. The local
+                // half falls back to the recorded contact, so the global half
+                // must too: the freshest one this gesture saw if a move has
+                // arrived, the down contact otherwise.
                 if let Some(pos) = self.state.initial_position() {
-                    self.handle_cancel(pos, global_position, info.pointer_type);
+                    let global = self
+                        .gesture_state
+                        .lock()
+                        .current_global_position
+                        .or_else(|| self.state.initial_global_position())
+                        .unwrap_or(pos);
+                    self.handle_cancel(pos, global, info.pointer_type);
                 }
             }
             _ => {}

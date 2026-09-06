@@ -1341,11 +1341,12 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let cancel_recognizer = recognizer;
 
         let listener = Listener::new()
-            // `dispatch.local` throughout: the multi-drag recognizer tracks a
-            // single space, and everything downstream of it — `DragSession`'s
-            // accumulated position, `to_global`, the `DragOrigin` probe — is
-            // built on that being the `Listener`'s own space. See the module's
-            // divergence note 2 for why the global half stops here.
+            // The whole pair goes through. `DragSession`'s accumulated
+            // position, `to_global` and the `DragOrigin` probe are all built
+            // on the LOCAL half being the `Listener`'s own space, and stay
+            // that way; the global half is what lets a recogniser report a
+            // global position at all, since dispatch rewrote it away before
+            // any handler here runs.
             .on_pointer_down(move |dispatch| {
                 if let Some(max) = max
                     && active_count.load(Ordering::Acquire) >= max

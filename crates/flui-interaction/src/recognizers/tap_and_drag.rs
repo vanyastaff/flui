@@ -389,7 +389,8 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
 
         // Initialise drag state for the new pointer.
         {

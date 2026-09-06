@@ -512,7 +512,8 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             }
         }
 
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
         self.handle_down(position, global_position, PointerType::Touch);
     }
 
