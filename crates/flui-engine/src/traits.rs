@@ -10,8 +10,6 @@
 //! - **Dependency Inversion**: High-level code depends on abstractions (SOLID)
 //! - **Extensible**: New backends implement these traits
 
-use std::sync::Arc;
-
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
     geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect},
@@ -312,36 +310,6 @@ pub trait CommandRenderer {
         transform: &Matrix4,
     );
 
-    /// Generate (or retrieve from cache) a tessellated path for an
-    /// `RSuperellipse`.
-    ///
-    /// Returns `Arc<Path>` so the caller holds shared ownership of the
-    /// ~256-command path without paying for a deep clone on every cache
-    /// hit. All call sites use the path read-only (`&Path` via deref),
-    /// so shared ownership is safe.
-    ///
-    /// The default implementation freshly generates the path every call
-    /// via the iOS-squircle math (`n = 4`, ~64 sample points per corner)
-    /// and does NOT cache — suitable for `DebugBackend` / `MockRenderer`
-    /// where performance is not the concern. The production `Backend`
-    /// overrides to consult its `Painter`-owned `SuperellipsePathCache`
-    /// so identical superellipses across frames reuse the cached
-    /// tessellation (cache hit = `Arc::clone`, no deep copy).
-    ///
-    /// # No in-tree caller
-    ///
-    /// `ClipSuperellipseLayer::render` was the only one, and issue #921 moved
-    /// it to [`LayerStateStack::push_clip_rsuperellipse`] — a squircle clip is
-    /// an SDF, not a tessellated path. Kept rather than deleted because
-    /// `wgpu::superellipse_cache` is a public module and a backend that
-    /// tessellates instead of evaluating an SDF would still need this;
-    /// removing it is its own semver event. Issue #935 owns that decision and
-    /// is where the current caller count belongs — a doc that asserts one goes
-    /// stale silently.
-    fn superellipse_path(&mut self, rse: RSuperellipse) -> Arc<Path> {
-        Arc::new(crate::superellipse::generate_superellipse_path(&rse))
-    }
-
     // ===== Viewport Information =====
 
     /// Get the viewport bounds
@@ -447,8 +415,7 @@ pub trait LayerStateStack {
 
     /// Push a rounded-superellipse (iOS squircle) clip onto the clip stack.
     ///
-    /// Required rather than defaulted, unlike
-    /// [`CommandRenderer::superellipse_path`]. The obvious default —
+    /// Required rather than defaulted. The obvious default —
     /// approximating with the rounded rectangle that shares this shape's outer
     /// rect and radii — is not the conservative choice it reads as: that rrect
     /// is **inscribed** in the squircle, so it clips strictly MORE and silently

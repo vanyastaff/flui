@@ -1,9 +1,10 @@
 //! Backend-agnostic superellipse (iOS squircle) path generation.
 //!
 //! Pure geometry — no wgpu, no lyon; depends only on `flui_types`.
-//! Moved here from `crate::wgpu::layer_render` so `CommandRenderer`'s
-//! default `superellipse_path` impl can call it without the abstract
-//! trait reaching into the concrete wgpu module.
+//!
+//! The CPU statement of the shape the GPU evaluates as a signed distance
+//! field. Nothing in a shipped build calls it — see the module declaration in
+//! `lib.rs` for why it is `cfg(test)` and what it is for.
 
 use flui_types::{
     geometry::{Pixels, Point, RSuperellipse, px},
@@ -24,12 +25,8 @@ use flui_types::{
 ///
 /// # Caching
 ///
-/// This function performs no caching — it regenerates the path on every call.
-/// No backend reaches this today — `ClipSuperellipseLayer` evaluates an SDF
-/// since issue #921, and nothing else asks for the path (#935). The production
-/// wgpu backend overrides `CommandRenderer::superellipse_path`
-/// to consult its `Painter`-owned `SuperellipsePathCache` instead.
-/// `DebugBackend` / `MockRenderer` use this uncached path directly.
+/// None: it regenerates the path on every call. It is called once per test,
+/// so a cache would buy nothing and would have to be kept correct.
 pub(crate) fn generate_superellipse_path(superellipse: &RSuperellipse) -> Path {
     let rect = superellipse.outer_rect();
     let tl = superellipse.tl_radius();

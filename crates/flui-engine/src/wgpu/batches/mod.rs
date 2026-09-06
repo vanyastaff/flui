@@ -4,7 +4,6 @@
 //! draw recording:
 //! - `tessellator`        — Lyon-based path tessellator
 //! - `path_cache`         — per-frame tessellation cache (keyed by path hash + scale)
-//! - `superellipse_cache` — per-frame iOS-squircle path cache
 //!
 //! For each record call the caller (`WgpuPainter`) passes in the GPU draw-state
 //! and the accumulation targets via **plain borrowed parameters**:
@@ -51,7 +50,6 @@ use super::{
     path_cache::PathCache,
     pipeline::PipelineKey,
     state_stack::GpuStateStack,
-    superellipse_cache::SuperellipsePathCache,
     tessellator::Tessellator,
     vertex::Vertex,
 };
@@ -64,7 +62,7 @@ mod shapes;
 /// Owns the tessellator and per-frame geometry caches used during draw recording.
 ///
 /// Separated from `WgpuPainter` so the record-side mutable state (`tessellator`,
-/// `path_cache`, `superellipse_cache`) can be borrowed independently from the
+/// `path_cache`) can be borrowed independently from the
 /// flush-side state (`texture_batch`) and the draw accumulation targets
 /// (`current_segment`, `draw_order`).  See the module-level doc for the borrow
 /// seam contract.
@@ -75,13 +73,6 @@ pub(super) struct DrawBatcher {
     /// Per-frame tessellation cache: avoids re-tessellating identical paths within
     /// a frame.
     pub(super) path_cache: PathCache,
-
-    /// Per-frame iOS-squircle path cache.
-    ///
-    /// Mirrors `PathCache` ownership and eviction semantics (`max_entries` +
-    /// frame-based eviction).  Consulted by `WgpuPainter::superellipse_path` (the
-    /// `Backend::superellipse_path` override).
-    pub(super) superellipse_cache: SuperellipsePathCache,
 }
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
@@ -93,7 +84,6 @@ impl DrawBatcher {
         Self {
             tessellator: Tessellator::new(),
             path_cache: PathCache::new(512),
-            superellipse_cache: SuperellipsePathCache::new(256),
         }
     }
 

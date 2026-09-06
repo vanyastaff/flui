@@ -617,6 +617,97 @@ fn icon_squircle() -> flui_types::geometry::RSuperellipse {
     )
 }
 
+/// The squircle the GPU clips to is the squircle the CPU generator describes.
+///
+/// The two are independent expressions of the same shape:
+/// `sdRoundedSuperellipse` in `shaders/common/clip.wgsl` evaluates a signed
+/// distance in the fragment shader, and `superellipse::generate_superellipse_path`
+/// walks the same parametric form on the CPU into a `Path`. The shader's own
+/// doc cites the generator as where its `n = 4` comes from — a citation nothing
+/// checked until here.
+///
+/// The neighbouring tests pin three hand-computed sample points, which proves
+/// the SDF is not the approximating rounded rectangle but says nothing about
+/// the rest of the boundary. This walks a whole grid and asks the CPU path
+/// whether each pixel is in or out, so a divergence anywhere on the curve
+/// surfaces as a coordinate rather than as a demo that looks slightly wrong.
+///
+/// **Points near the boundary are skipped, and skipped by construction rather
+/// than by a tolerance.** A pixel whose eight neighbours do not all agree with
+/// it sits within a pixel of the edge, where the SDF is deliberately feathering
+/// and the CPU predicate is a hard in/out — so the two must disagree there and
+/// an assertion would be measuring anti-aliasing, not geometry. The count of
+/// surviving points is asserted too: a filter that excluded everything would
+/// otherwise leave this test green and empty.
+#[test]
+fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let squircle = icon_squircle();
+    let tree = inside_a_clip(
+        Clip::AntiAlias,
+        |builder, behavior| {
+            builder.push_clip_superellipse(squircle, behavior);
+        },
+        fill_everything,
+    );
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+
+    let path = crate::superellipse::generate_superellipse_path(&squircle);
+    let inside_cpu = |x: u32, y: u32| {
+        path.contains(flui_types::Point::new(
+            px(x as f32 + 0.5),
+            px(y as f32 + 0.5),
+        ))
+    };
+
+    let mut compared = 0_usize;
+    for y in 1..SIDE - 1 {
+        for x in 1..SIDE - 1 {
+            let here = inside_cpu(x, y);
+            let unanimous = (-1i64..=1)
+                .flat_map(|dy| (-1i64..=1).map(move |dx| (dx, dy)))
+                .all(|(dx, dy)| {
+                    inside_cpu(
+                        u32::try_from(i64::from(x) + dx).expect("x stays in 0..SIDE"),
+                        u32::try_from(i64::from(y) + dy).expect("y stays in 0..SIDE"),
+                    ) == here
+                });
+            if !unanimous {
+                continue;
+            }
+            compared += 1;
+            let pixel = sample(&frame, x, y);
+            if here {
+                assert!(
+                    pixel[1] > 128 && pixel[0] < 64,
+                    "({x}, {y}) is inside the CPU squircle, so the clip must \
+                     keep the fill there, got {pixel:?}"
+                );
+            } else {
+                assert!(
+                    pixel[0] > 200 && pixel[1] < 64,
+                    "({x}, {y}) is outside the CPU squircle, so the backdrop \
+                     must survive there, got {pixel:?}"
+                );
+            }
+        }
+    }
+
+    assert!(
+        compared > 2_000,
+        "the boundary filter must leave the interior and the far exterior to \
+         compare; only {compared} of {} points survived, which means it \
+         excluded almost everything and the loop above asserted nothing",
+        (SIDE - 2) * (SIDE - 2)
+    );
+}
+
 /// A `ClipSuperellipseLayer` clips its subtree, and clips it to the SQUIRCLE
 /// rather than to the rounded rectangle that bounds it.
 ///
