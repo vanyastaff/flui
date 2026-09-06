@@ -551,10 +551,20 @@ pub enum WindowEvent {
     /// Window was created
     Created(WindowId),
 
-    /// Window close was requested by the user (close button, compositor)
-    /// and the window's should-close veto passed. Not emitted for a
-    /// programmatic [`PlatformWindow::close`], which asks no veto — that
-    /// route reports only [`Closed`](Self::Closed).
+    /// A close was *asked for* and the window's should-close veto passed.
+    ///
+    /// The rule is the veto, not the caller: this event accompanies every
+    /// close that consults `on_should_close` and survives it. A refused close
+    /// emits nothing at all.
+    ///
+    /// In practice that means the user route — a close button or compositor
+    /// close on winit, `WM_CLOSE` on Win32, `simulate_close` on the headless
+    /// double. A programmatic [`PlatformWindow::close`] on the owning thread
+    /// is a decision rather than a request, asks no veto, and so reports only
+    /// [`Closed`](Self::Closed). The one case where a programmatic close does
+    /// emit this is Win32's *cross-thread* route, which cannot call
+    /// `DestroyWindow` and posts `WM_CLOSE` instead — so the veto is re-asked
+    /// and the close becomes a request, exactly as that impl documents.
     ///
     /// Ordering: emitted BEFORE the window's own `on_close` callback runs,
     /// so a global handler observes the window still intact when told the
@@ -562,17 +572,6 @@ pub enum WindowEvent {
     /// window has left the backend's tracking. (Earlier winit versions ran
     /// `on_close` first — a deliberate change, made when both close routes
     /// were unified into one teardown.)
-    ///
-    /// Belongs to the *user* route on every backend that emits it: a
-    /// compositor or window-manager close on winit, `WM_CLOSE` on Win32,
-    /// the headless double's `simulate_close`. A close the application
-    /// itself initiated on the owning thread was a decision, not a request,
-    /// and produces only [`Closed`](Self::Closed). Win32's *cross-thread*
-    /// programmatic close is the exception its own impl documents: it posts
-    /// `WM_CLOSE`, so the veto is re-asked and this event is emitted.
-    ///
-    /// Emitted after the window's `on_should_close` veto has passed and
-    /// before any teardown; a refused close emits nothing at all.
     CloseRequested {
         /// The window whose close button was activated
         window_id: WindowId,

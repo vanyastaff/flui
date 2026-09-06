@@ -745,13 +745,19 @@ impl MockWindow {
             return;
         };
         let handler = { platform_state.lock().handlers.window_event.take() };
-        let Some(mut handler) = handler else {
+        let Some(handler) = handler else {
             return;
         };
-        handler(event);
-        let mut state = platform_state.lock();
-        if state.handlers.window_event.is_none() {
-            state.handlers.window_event = Some(handler);
+        // Restored by the guard's `Drop`, not by a line after the call: a
+        // panicking handler would otherwise be dropped on the floor and every
+        // later event silently lost, which is a worse failure than the panic.
+        // `WinitPlatform`'s own lease restores in `Drop` for the same reason.
+        let mut lease = WindowEventLease {
+            platform_state: &platform_state,
+            handler: Some(handler),
+        };
+        if let Some(handler) = lease.handler.as_mut() {
+            handler(event);
         }
     }
 
@@ -794,38 +800,36 @@ impl MockWindow {
         // the lock (see this function's own doc for why). If the registry
         // is not actually empty, the hook is left installed untouched
         // (never taken) for the window close that does empty it.
-        let (windows_empty, window_event) = {
+        {
             let mut state = platform_state.lock();
             state.windows.retain(|w| w.id != self.id);
             if state.active_window == Some(self.id) {
                 state.active_window = state.windows.first().map(|w| w.id);
             }
-            // Leased, not invoked here: the global handler re-enters the
-            // embedder's runtime (flui-app drops the removed realm's state,
-            // whose destructors may call back into this platform), and this
-            // lock is held. Same take/invoke-outside/restore discipline the
-            // exit hook below uses, and for the same reason (ADR-0039).
-            (state.windows.is_empty(), state.handlers.window_event.take())
-        };
+        }
 
-        // Emitted for EVERY close, not only the last one. `Closed` is the
+        // Emitted for EVERY close, not only the last one: `Closed` is the
         // event a consumer tracks windows by, so skipping it while other
-        // windows remain would leave the consumer believing a closed window
+        // windows remain would leave that consumer believing a closed window
         // is still open — the multi-window case these events exist for.
-        if let Some(mut handler) = window_event {
-            handler(WindowEvent::Closed(self.id));
-            let mut state = platform_state.lock();
-            if state.handlers.window_event.is_none() {
-                state.handlers.window_event = Some(handler);
-            }
-        }
-
-        if !windows_empty {
-            return;
-        }
+        // Leased, so the handler runs outside the state lock (ADR-0039) and
+        // survives its own panic.
+        self.emit_window_event(WindowEvent::Closed(self.id));
 
         let hook = {
             let mut state = platform_state.lock();
+            // Re-checked HERE rather than carried down from the lock above.
+            // Before the global `Closed` event existed, emptiness and the
+            // hook were read in one acquisition precisely so nothing could
+            // open a window in between. Emitting the event splits that
+            // acquisition in two — and the thing running in the gap is a
+            // consumer callback, which is exactly the code that opens
+            // windows (a close handler showing the next one). Carrying the
+            // earlier answer would let this consult the hook, and quit,
+            // with a window tracked.
+            if !state.windows.is_empty() {
+                return;
+            }
             state.handlers.exit_policy.take()
         };
 
@@ -930,6 +934,34 @@ impl MockWindow {
             self.complete_close();
         }
         should
+    }
+}
+
+/// Holds the global window-event handler out of [`HeadlessState`] for the
+/// duration of one invocation and puts it back on the way out — including
+/// while unwinding.
+///
+/// The handler cannot be invoked under the state lock: on the close path it
+/// re-enters the embedder's runtime, which drops realm state whose destructors
+/// call back into this platform (ADR-0039). Taking it out is what makes that
+/// safe; restoring it in `Drop` is what keeps a panicking handler from
+/// silently disabling every later event.
+struct WindowEventLease<'a> {
+    platform_state: &'a Arc<Mutex<HeadlessState>>,
+    handler: Option<Box<dyn FnMut(WindowEvent) + Send>>,
+}
+
+impl Drop for WindowEventLease<'_> {
+    fn drop(&mut self) {
+        let Some(handler) = self.handler.take() else {
+            return;
+        };
+        let mut state = self.platform_state.lock();
+        // Only if nothing fresher was installed while the lease was out: a
+        // handler registered during the callback is the newer intent.
+        if state.handlers.window_event.is_none() {
+            state.handlers.window_event = Some(handler);
+        }
     }
 }
 
@@ -1425,6 +1457,8 @@ impl Clipboard for MockClipboard {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+
     use super::*;
 
     #[test]
@@ -1643,10 +1677,10 @@ mod tests {
     #[test]
     fn both_close_routes_emit_the_lifecycle_events_that_belong_to_them() {
         let platform = HeadlessPlatform::new();
-        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::new(Mutex::new(Vec::<WindowEvent>::new()));
         let seen_for_handler = Arc::clone(&seen);
         platform.on_window_event(Box::new(move |event| {
-            seen_for_handler.lock().push(format!("{event:?}"));
+            seen_for_handler.lock().push(event);
         }));
 
         let programmatic = platform
@@ -1659,15 +1693,10 @@ mod tests {
 
         programmatic.close();
         let after_programmatic = seen.lock().clone();
-        assert_eq!(
-            after_programmatic.len(),
-            1,
-            "the application's own close emits `Closed` and nothing else — it \
-             was never a request. Saw {after_programmatic:?}"
-        );
         assert!(
-            after_programmatic[0].starts_with("Closed"),
-            "saw {after_programmatic:?}"
+            matches!(after_programmatic.as_slice(), [WindowEvent::Closed(id)] if *id == programmatic.id()),
+            "the application's own close emits `Closed` for that window and \
+             nothing else — it was never a request. Saw {after_programmatic:?}"
         );
 
         // The user route, through the same window callbacks a compositor
@@ -1679,14 +1708,17 @@ mod tests {
         assert!(user.simulate_close(), "nothing vetoes this close");
 
         let all = seen.lock().clone();
-        assert_eq!(all.len(), 3, "saw {all:?}");
         assert!(
-            all[1].starts_with("CloseRequested"),
-            "the user route asks first: saw {all:?}"
-        );
-        assert!(
-            all[2].starts_with("Closed"),
-            "and reports the close after it: saw {all:?}"
+            matches!(
+                all.as_slice(),
+                [
+                    WindowEvent::Closed(_),
+                    WindowEvent::CloseRequested { window_id: asked },
+                    WindowEvent::Closed(reported),
+                ] if *asked == user_id && *reported == user_id
+            ),
+            "the user route asks first and reports the close after it, both \
+             for the window that closed: saw {all:?}"
         );
     }
 
@@ -1726,6 +1758,60 @@ mod tests {
         );
     }
 
+    /// A window opened from inside the `Closed` handler vetoes the exit by
+    /// existing — the emptiness that decides it is read where it is used.
+    ///
+    /// Before the global events existed, the window's removal, the emptiness
+    /// check and taking the exit hook happened in **one** lock acquisition,
+    /// with a comment saying why: nothing may open a window in between.
+    /// Emitting `Closed` splits that acquisition, and the code running in the
+    /// gap is a consumer callback — precisely the thing that opens windows.
+    /// Carrying the earlier answer down would consult the hook, and quit, with
+    /// a window tracked.
+    ///
+    /// The shape is not hypothetical: a close handler that shows the next
+    /// window is the ordinary reason to register one.
+    #[test]
+    fn a_window_opened_from_the_closed_handler_prevents_the_exit_consult() {
+        let platform = Arc::new(HeadlessPlatform::new());
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls_for_hook = Arc::clone(&hook_calls);
+        platform.set_exit_policy_hook(Box::new(move || {
+            hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
+            true
+        }));
+
+        let reopened = Arc::new(Mutex::new(None));
+        let platform_for_handler = Arc::clone(&platform);
+        let reopened_for_handler = Arc::clone(&reopened);
+        platform.on_window_event(Box::new(move |event| {
+            if matches!(event, WindowEvent::Closed(_)) {
+                // The replacement opens while the closing window has already
+                // left the registry and the exit hook has not been consulted.
+                *reopened_for_handler.lock() = platform_for_handler
+                    .open_window(WindowOptions::default())
+                    .ok();
+            }
+        }));
+
+        let only = platform
+            .open_window(WindowOptions::default())
+            .expect("headless opens a window");
+        only.close();
+
+        assert!(
+            reopened.lock().is_some(),
+            "precondition: the handler must have opened the replacement, or \
+             this test asserts nothing"
+        );
+        assert_eq!(
+            hook_calls.load(Ordering::SeqCst),
+            0,
+            "a window exists again by the time the exit decision is taken, so \
+             the hook must not be consulted at all"
+        );
+    }
+
     /// A vetoed close emits neither event and tears nothing down.
     ///
     /// Green before issue #924 as well — the double emitted no events at all —
@@ -1735,10 +1821,10 @@ mod tests {
     #[test]
     fn a_vetoed_close_emits_no_lifecycle_event() {
         let platform = HeadlessPlatform::new();
-        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::new(Mutex::new(Vec::<WindowEvent>::new()));
         let seen_for_handler = Arc::clone(&seen);
         platform.on_window_event(Box::new(move |event| {
-            seen_for_handler.lock().push(format!("{event:?}"));
+            seen_for_handler.lock().push(event);
         }));
 
         let window = platform
