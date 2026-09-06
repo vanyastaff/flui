@@ -587,6 +587,194 @@ fn inside_a_clip(
     tree
 }
 
+/// The squircle used by the `ClipSuperellipseLayer` tests: the whole surface,
+/// corner radius equal to the half-extent — an iOS app-icon shape.
+///
+/// The sample points below are derived from the SDF this shape is evaluated
+/// with, `sdRoundedSuperellipse` in `shaders/common/clip.wgsl`. With
+/// `b = (32, 32)` and `r3 = 32`, `q = |p|` for every pixel, so the corner
+/// branch is always the active one and the distance is
+/// `(⁴√(ax⁴ + ay⁴) − 1) · 32` where `ax = ay = |p| / 32`. The rounded-box SDF
+/// the *approximating* rrect would use replaces that fourth-power norm with the
+/// Euclidean one, which is what makes point B below discriminate.
+///
+/// | point | pixel centre | \|p\| | squircle | circle of the same radius |
+/// |---|---|---|---|---|
+/// | A `(2, 2)` | `(2.5, 2.5)` | 29.5 | **+3.08 outside** | +9.72 outside |
+/// | B `(7, 7)` | `(7.5, 7.5)` | 24.5 | **−2.87 inside** | **+2.65 outside** |
+/// | C `(32, 32)` | `(32.5, 32.5)` | 0.5 | −31.4 inside | −31.29 inside |
+///
+/// Every margin clears the roughly one-pixel anti-aliasing band, so no
+/// assertion below depends on a coverage threshold.
+fn icon_squircle() -> flui_types::geometry::RSuperellipse {
+    flui_types::geometry::RSuperellipse::from_rect_circular(
+        Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+        px(SIDE as f32 / 2.0),
+    )
+}
+
+/// A `ClipSuperellipseLayer` clips its subtree, and clips it to the SQUIRCLE
+/// rather than to the rounded rectangle that bounds it.
+///
+/// Before this was routed, the layer tessellated a squircle path and handed it
+/// to `push_clip_path` — a painter call that installs nothing — so the subtree
+/// rendered entirely unclipped (issue #921).
+///
+/// Point B is what makes this more than "some clip happened": it lies inside
+/// the squircle and outside the circle of the same radius, so substituting the
+/// rounded rectangle that shares this shape's outer rect and radii — the
+/// approximation any future refactor is most likely to reach for, and one that
+/// reads as conservative while being INSCRIBED in the squircle and therefore
+/// clipping more — fails here and passes everywhere else. The rrect control
+/// below asserts that discrimination directly rather than trusting the
+/// arithmetic in `icon_squircle`.
+#[test]
+fn a_clip_superellipse_layer_clips_to_the_squircle_not_its_bounding_rrect() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |push_clip: &dyn Fn(&mut SceneBuilder<'_>, Clip)| {
+        let tree = inside_a_clip(Clip::AntiAlias, push_clip, |canvas| {
+            full_surface(canvas, Color::rgb(0, 0, 255));
+        });
+        renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize the scene")
+    };
+
+    // The BLUE channel discriminates: `inside_a_clip` lays a red (255, 0, 0)
+    // backdrop and the content above is blue (0, 0, 255), so they disagree
+    // only there.
+    let squircle = render(&|builder, behavior| {
+        builder.push_clip_superellipse(icon_squircle(), behavior);
+    });
+
+    let corner = sample(&squircle, 2, 2);
+    assert!(
+        corner[2] < 32,
+        "point A is 3 px outside the squircle and must show the red backdrop, \
+         got {corner:?} — a blue channel here means the layer installed no clip"
+    );
+
+    let interior = sample(&squircle, 32, 32);
+    assert!(
+        interior[2] > 200,
+        "point C is deep inside the squircle and must show the blue content, \
+         got {interior:?}"
+    );
+
+    let discriminating = sample(&squircle, 7, 7);
+    assert!(
+        discriminating[2] > 200,
+        "point B is 2.9 px INSIDE the squircle and must show the blue content, \
+         got {discriminating:?} — the squircle is fuller in its corners than \
+         the rounded rectangle bounding it"
+    );
+
+    // The control. Same geometry, same radius, rounded rectangle instead: point
+    // B must now be clipped away. Without this, an approximation by the
+    // bounding rrect would satisfy every assertion above.
+    let rrect = render(&|builder, behavior| {
+        builder.push_clip_rrect(
+            flui_types::geometry::RRect::from_rect_and_radius(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+                flui_types::geometry::Radius::circular(px(SIDE as f32 / 2.0)),
+            ),
+            behavior,
+        );
+    });
+    let approximated = sample(&rrect, 7, 7);
+    assert!(
+        approximated[2] < 32,
+        "control: point B is 2.7 px OUTSIDE the circle of the same radius, so \
+         a rounded-rectangle clip must remove it, got {approximated:?}. If this \
+         fails the point no longer discriminates and the assertion above proves \
+         only that some clip exists"
+    );
+}
+
+/// `Clip::AntiAliasWithSaveLayer` on a superellipse opens the offscreen the
+/// mode names, rather than degrading to per-draw coverage.
+///
+/// Two scenes, because neither alone is enough. The **eraser** shows that an
+/// offscreen opened at all: with none it composites straight onto the backdrop
+/// and removes it, with one it is confined to the group. But an eraser is
+/// invisible outside the clip whatever coverage the composite applies, so that
+/// scene passes against an empty `ResolvedClip` or a rounded-rectangle one.
+/// The **unbounded fill** is what pins the coverage itself, and with it the
+/// only genuinely new code on this route,
+/// `GpuStateStack::clip_rsuperellipse_at_composite`: its two sample points are
+/// A and B from `icon_squircle`, which disagree about a squircle and a circle
+/// of the same radius.
+#[test]
+fn a_superellipse_clip_with_save_layer_confines_an_eraser_to_its_group() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let render = |behavior: Clip, paint_inside: fn(&mut Canvas)| {
+        let tree = inside_a_clip(
+            behavior,
+            |builder, behavior| {
+                builder.push_clip_superellipse(icon_squircle(), behavior);
+            },
+            paint_inside,
+        );
+        renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize the scene")
+    };
+
+    // Scene 1, isolation. Premise first, so the assertion after it is not
+    // vacuous. Point C is deep inside the clip under every candidate shape.
+    let per_draw = sample(&render(Clip::AntiAlias, erase_everything), 32, 32);
+    assert!(
+        per_draw[0] < 8,
+        "premise: with the coverage applied per draw and no group, the eraser \
+         reaches the backdrop and removes it, got {per_draw:?}"
+    );
+
+    let grouped = sample(
+        &render(Clip::AntiAliasWithSaveLayer, erase_everything),
+        32,
+        32,
+    );
+    assert!(
+        grouped[0] > 200,
+        "the save-layer mode must open an offscreen, confining the eraser to \
+         the group and leaving the red backdrop underneath, got {grouped:?}"
+    );
+
+    // Scene 2, coverage — and this is the half that pins the new code. An
+    // eraser is invisible outside the clip either way, so scene 1 alone passes
+    // against `ResolvedClip::NONE` or against a `kind` of 1: it observes only
+    // that *an* offscreen opened. An unbounded fill is not invisible outside
+    // the clip, so what the group composite applies decides these two pixels.
+    let filled = render(Clip::AntiAliasWithSaveLayer, fill_everything);
+
+    let outside = sample(&filled, 2, 2);
+    assert!(
+        outside[1] < 32,
+        "point A is outside the squircle, so the composite must not paint the \
+         group there, got {outside:?} — a green channel means the coverage \
+         handed to the composite was empty (`ResolvedClip::NONE`), not the \
+         squircle"
+    );
+
+    let inside_only_the_squircle = sample(&filled, 7, 7);
+    assert!(
+        inside_only_the_squircle[1] > 120,
+        "point B is inside the squircle and outside the circle of the same \
+         radius, so the composite must paint it, got \
+         {inside_only_the_squircle:?} — a red backdrop here means the coverage \
+         reached the composite as a rounded rectangle (`kind = 1`) rather than \
+         as a squircle"
+    );
+}
+
 /// A full-surface eraser.
 fn erase_everything(canvas: &mut Canvas) {
     canvas.draw_rect(
@@ -688,12 +876,13 @@ fn a_rect_clip_in_the_save_layer_mode_isolates_a_destructive_blend() {
 /// group composite has no edge to composite against.
 ///
 /// Both halves are asserted, precondition first. A test that pinned only the
-/// consequence would keep passing after its premise was repaired — and that
-/// repair is imminent: issue #921 records that `ClipSuperellipseLayer` routes
-/// its squircle through this same call and so does not clip at all, even though
-/// `GpuStateStack::clip_rsuperellipse` implements one. When `clip_path` starts
-/// installing, the precondition assertion fails first and says exactly what
-/// changed; the consequence follows on its own, with no code to update.
+/// consequence would keep passing after its premise was repaired. That is not
+/// hypothetical: `ClipSuperellipseLayer` used to reach this same call and so
+/// did not clip either, and issue #921 moved it to
+/// `push_clip_rsuperellipse` — leaving this test measuring what it always
+/// named, a genuine path clip. When `clip_path` itself starts installing, the
+/// precondition assertion fails first and says exactly what changed; the
+/// consequence follows on its own, with no code to update.
 #[test]
 fn a_path_clip_opens_no_offscreen_because_it_installs_no_clip() {
     let Ok(renderer) = HeadlessRenderer::new() else {

@@ -679,25 +679,8 @@ impl GpuStateStack {
         // which is a different clip's answer.
         self.current_clip_hard = hard;
         let rect = rse.outer_rect();
-        let tl_r = rse.tl_radius();
-        let tr_r = rse.tr_radius();
-        let br_r = rse.br_radius();
-        let bl_r = rse.bl_radius();
 
-        self.current_rsuperellipse_clip = [
-            rect.left().0,
-            rect.top().0,
-            rect.width().0,
-            rect.height().0,
-            tl_r.x.0,
-            tl_r.y.0,
-            tr_r.x.0,
-            tr_r.y.0,
-            br_r.x.0,
-            br_r.y.0,
-            bl_r.x.0,
-            bl_r.y.0,
-        ];
+        self.current_rsuperellipse_clip = Self::rsuperellipse_slots(rse);
         self.current_clip_inv = Self::device_to_local(self.current_transform);
         // Clear the rrect clip to prevent `apply_active_clip` from falling
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
@@ -711,6 +694,67 @@ impl GpuStateStack {
     // =========================================================================
     // SDF clip application
     // =========================================================================
+
+    /// Lay a rounded superellipse out into the twelve-float slot form:
+    /// `[x, y, w, h]` then `rx, ry` per corner, clockwise from top-left.
+    ///
+    /// Shared by [`Self::clip_rsuperellipse`] and
+    /// [`Self::clip_rsuperellipse_at_composite`] for the reason
+    /// [`Self::resolve_rrect_clip`]'s doc gives about its own pair: a second
+    /// copy of this arithmetic would let the per-draw and at-composite routes
+    /// disagree about where the same clip is, with nothing failing.
+    fn rsuperellipse_slots(rse: flui_types::geometry::RSuperellipse) -> [f32; 12] {
+        let rect = rse.outer_rect();
+        let tl_r = rse.tl_radius();
+        let tr_r = rse.tr_radius();
+        let br_r = rse.br_radius();
+        let bl_r = rse.bl_radius();
+        [
+            rect.left().0,
+            rect.top().0,
+            rect.width().0,
+            rect.height().0,
+            tl_r.x.0,
+            tl_r.y.0,
+            tr_r.x.0,
+            tr_r.y.0,
+            br_r.x.0,
+            br_r.y.0,
+            bl_r.x.0,
+            bl_r.y.0,
+        ]
+    }
+
+    /// The squircle counterpart of [`Self::clip_rrect_at_composite`]: install
+    /// the bounding scissor only, and hand the squircle coverage back for the
+    /// group composite to apply **once**.
+    ///
+    /// The per-draw slot is deliberately left alone, exactly as in the rrect
+    /// case — installing it as well would apply the coverage a second time,
+    /// per draw, which is the artifact `Clip::AntiAliasWithSaveLayer` exists
+    /// to avoid.
+    ///
+    /// Needs no shader work: `ResolvedClip` already carries `kind = 2` and
+    /// [`Self::active_clip`] already builds one this way, and every
+    /// clip-evaluating shader — the offscreen composite's
+    /// `texture_instanced.wgsl` included — routes `kind == 2` to
+    /// `sdRoundedSuperellipse` through `clipAlpha` in `common/clip.wgsl`.
+    pub(super) fn clip_rsuperellipse_at_composite(
+        &mut self,
+        rse: flui_types::geometry::RSuperellipse,
+        surface_size: (u32, u32),
+    ) -> ResolvedClip {
+        // Soft, always, for the reason `clip_rrect_at_composite` gives: the
+        // mode is `AntiAliasWithSaveLayer` and a hard edge would threshold the
+        // coverage the composite exists to feather.
+        let resolved = ResolvedClip {
+            rrect: super::instancing::reduce_superellipse_clip(Self::rsuperellipse_slots(rse)),
+            kind: [2, 0, 0, 0],
+            device_to_local: Self::device_to_local(self.current_transform),
+        };
+        self.clip_rect(rse.outer_rect(), surface_size);
+        resolved
+    }
 
     /// The currently-active SDF clip, resolved to the single form every
     /// consumer stores.

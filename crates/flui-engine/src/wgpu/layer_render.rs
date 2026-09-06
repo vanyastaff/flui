@@ -213,8 +213,11 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
         if !self.clips() {
             return;
         }
-        let arc_path = renderer.superellipse_path(*self.clip_superellipse());
-        renderer.push_clip_path(&arc_path, self.clip_behavior());
+        // The squircle goes to the shaper of squircles, not through a
+        // tessellated path: `push_clip_path` reaches a painter call that
+        // installs nothing, so this layer used to tessellate a shape and hand
+        // it to a discard, leaving its subtree unclipped (issue #921).
+        renderer.push_clip_rsuperellipse(self.clip_superellipse(), self.clip_behavior());
     }
 
     fn cleanup(&self, renderer: &mut R) {
@@ -756,6 +759,17 @@ mod tests {
         fn push_clip_rrect(&mut self, _rrect: &RRect, _clip_behavior: Clip) {
             self.calls.push("push_clip_rrect".to_string());
         }
+        // Recorded under its own name, so the routing assertion below can
+        // tell the squircle call from the rounded-rectangle one it must not
+        // reach. The trait requires the method, so a mock cannot silently
+        // report the wrong operation by omitting it.
+        fn push_clip_rsuperellipse(
+            &mut self,
+            _rse: &flui_types::geometry::RSuperellipse,
+            _clip_behavior: Clip,
+        ) {
+            self.calls.push("push_clip_rsuperellipse".to_string());
+        }
         fn push_clip_path(&mut self, _path: &Path, _clip_behavior: Clip) {
             self.calls.push("push_clip_path".to_string());
         }
@@ -942,6 +956,33 @@ mod tests {
 
         layer.cleanup(&mut renderer);
         assert_eq!(renderer.calls, vec!["push_clip_rect", "pop_clip"]);
+    }
+
+    /// The squircle layer reaches the squircle call, not the path call that
+    /// discards its argument (issue #921).
+    ///
+    /// The GPU readback in `clip_layer_readback_tests` is the oracle for what
+    /// the clip *does*; this is the CPU-only pin on where it goes, so the
+    /// routing is gated on every run rather than only where an adapter exists.
+    #[test]
+    fn clip_superellipse_layer_routes_to_the_squircle_call() {
+        let mut renderer = MockRenderer::new();
+        let squircle = flui_types::geometry::RSuperellipse::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(24.0),
+        );
+        let layer = flui_layer::ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
+
+        layer.render(&mut renderer);
+        assert_eq!(
+            renderer.calls,
+            vec!["push_clip_rsuperellipse"],
+            "the layer must not reach `push_clip_path`, whose painter call \
+             installs nothing"
+        );
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_clip_rsuperellipse", "pop_clip"]);
     }
 
     #[test]

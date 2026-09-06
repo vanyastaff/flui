@@ -422,6 +422,21 @@ impl LayerStateStack for DebugBackend {
         );
     }
 
+    // Logged under its own name. The trait requires this method precisely so
+    // an implementor cannot fall back to an approximation without deciding to
+    // — and a debug backend that renamed the operation it is recording would
+    // be worse than one that recorded nothing.
+    fn push_clip_rsuperellipse(
+        &mut self,
+        rse: &flui_types::geometry::RSuperellipse,
+        clip_behavior: flui_types::painting::Clip,
+    ) {
+        self.log_command(
+            "push_clip_rsuperellipse",
+            &format!("rse={rse:?}, behavior={clip_behavior:?}"),
+        );
+    }
+
     fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
             "push_clip_path",

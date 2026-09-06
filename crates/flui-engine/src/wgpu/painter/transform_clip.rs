@@ -149,6 +149,16 @@ impl WgpuPainter {
     /// apply the clip's coverage twice — once per draw and once to the group —
     /// which reads as a darker, more opaque edge wherever the content overlaps
     /// itself. See `GpuStateStack::clip_rrect_at_composite`.
+    /// The squircle counterpart of [`Self::clip_rrect_at_composite`]: installs
+    /// the bounding scissor and returns the coverage for the group composite
+    /// to apply once. See `GpuStateStack::clip_rsuperellipse_at_composite`.
+    pub(crate) fn clip_rsuperellipse_at_composite(
+        &mut self,
+        rse: flui_types::geometry::RSuperellipse,
+    ) -> super::super::state_stack::ResolvedClip {
+        self.state.clip_rsuperellipse_at_composite(rse, self.size)
+    }
+
     pub(crate) fn clip_rrect_at_composite(
         &mut self,
         rrect: RRect,
@@ -160,8 +170,8 @@ impl WgpuPainter {
     /// Painter-owned bounded cache.
     ///
     /// Consulted by `Backend::superellipse_path` (the `CommandRenderer`
-    /// trait override) so `ClipSuperellipseLayer::render`'s layer-tree
-    /// clip path benefits from frame-bounded caching. On a miss the path
+    /// trait override), which since issue #921 has no caller: the squircle
+    /// clip layer evaluates an SDF rather than tessellating a path. See #935. On a miss the path
     /// is generated via `generate_superellipse_path` (the iOS-squircle
     /// math) and inserted; eviction follows PathCache semantics
     /// (`max_entries` + `last_used_frame`).
@@ -211,9 +221,15 @@ impl WgpuPainter {
     /// offscreen only where a clip was actually installed — a group composite
     /// needs an edge to composite against — and returning the answer from here
     /// is what makes that decision correct the day this body starts installing
-    /// one, with no second place to remember. Issue #921 tracks the nearest
-    /// case: `ClipSuperellipseLayer` routes its squircle here and so does not
-    /// clip, even though `Self::clip_rsuperellipse` implements one.
+    /// one, with no second place to remember.
+    ///
+    /// `ClipSuperellipseLayer` used to route its squircle here and so did not
+    /// clip at all (issue #921); it now reaches
+    /// [`Self::clip_rsuperellipse`] through
+    /// `LayerStateStack::push_clip_rsuperellipse`. What still arrives here is
+    /// a genuine arbitrary path — including `RenderPhysicalShape`'s `Path`
+    /// variant, whose `draw_paint` then fills the viewport rather than the
+    /// shape (issue #934).
     #[must_use]
     pub fn clip_path(&mut self, _path: &Path) -> ClipOutcome {
         // Path clipping requires stencil buffer or path tessellation
