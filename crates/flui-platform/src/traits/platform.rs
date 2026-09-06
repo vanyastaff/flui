@@ -563,10 +563,16 @@ pub enum WindowEvent {
     /// `on_close` first — a deliberate change, made when both close routes
     /// were unified into one teardown.)
     ///
-    /// Wired on winit and Win32. The headless backend routes no window
-    /// lifecycle through the global handler at all (it emits only
-    /// [`Created`](Self::Created)); use the window's own `on_should_close`
-    /// / `on_close` there.
+    /// Belongs to the *user* route on every backend that emits it: a
+    /// compositor or window-manager close on winit, `WM_CLOSE` on Win32,
+    /// the headless double's `simulate_close`. A close the application
+    /// itself initiated on the owning thread was a decision, not a request,
+    /// and produces only [`Closed`](Self::Closed). Win32's *cross-thread*
+    /// programmatic close is the exception its own impl documents: it posts
+    /// `WM_CLOSE`, so the veto is re-asked and this event is emitted.
+    ///
+    /// Emitted after the window's `on_should_close` veto has passed and
+    /// before any teardown; a refused close emits nothing at all.
     CloseRequested {
         /// The window whose close button was activated
         window_id: WindowId,
@@ -576,8 +582,9 @@ pub enum WindowEvent {
     /// (user-initiated or programmatic) took it there. Emitted after the
     /// window's own `on_close` callback and before the exit-policy consult.
     ///
-    /// Wired on winit and Win32; the headless backend does not emit it (see
-    /// [`CloseRequested`](Self::CloseRequested)).
+    /// Emitted for *every* window that closes, not only the last one: a
+    /// consumer tracking open windows by these events would otherwise believe
+    /// a closed window is still open whenever another remains.
     Closed(WindowId),
 
     /// Window focus changed
