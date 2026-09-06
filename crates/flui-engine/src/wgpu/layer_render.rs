@@ -214,9 +214,12 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
             return;
         }
         // The squircle goes to the shaper of squircles, not through a
-        // tessellated path: `push_clip_path` reaches a painter call that
-        // installs nothing, so this layer used to tessellate a shape and hand
-        // it to a discard, leaving its subtree unclipped (issue #921).
+        // tessellated path. `push_clip_path` reached a painter call that
+        // installed nothing, so this layer used to tessellate a shape and hand
+        // it to a discard, leaving its subtree unclipped (issue #921). That
+        // call now clips to the path's bounding box (issue #934) — which for a
+        // squircle is its outer rect, still not the shape, so the routing
+        // below is what earns the corners.
         renderer.push_clip_rsuperellipse(self.clip_superellipse(), self.clip_behavior());
     }
 
@@ -977,8 +980,8 @@ mod tests {
         assert_eq!(
             renderer.calls,
             vec!["push_clip_rsuperellipse"],
-            "the layer must not reach `push_clip_path`, whose painter call \
-             installs nothing"
+            "the layer must not reach `push_clip_path`, which clips to a \
+             path's bounding box and would square off the corners"
         );
 
         layer.cleanup(&mut renderer);

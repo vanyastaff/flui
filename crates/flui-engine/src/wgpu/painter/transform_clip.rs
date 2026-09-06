@@ -208,71 +208,50 @@ impl WgpuPainter {
         self.state.clip_rsuperellipse(rse, self.size, hard);
     }
 
-    /// Clip to an arbitrary path (currently unimplemented; emits a `tracing::warn!`).
+    /// Clip to an arbitrary path, approximated by its BOUNDING BOX.
     ///
-    /// Path clipping requires a stencil-buffer pass (even-odd or non-zero fill
-    /// rule) that is not yet wired in this engine.  All calls are no-ops at
-    /// the GPU level and will emit a release-build warning via `tracing::warn!`.
-    /// Use [`Self::clip_rect`] or [`Self::clip_rrect`] for hardware-accelerated
-    /// clipping; [`Self::clip_rsuperellipse`] for iOS-squircle clips.
+    /// The exact edge needs a stencil pass (even-odd / non-zero fill rule) this
+    /// engine does not have, so what is installed is the path's conservative
+    /// bounding rectangle as a hardware scissor. A bounding box is a superset
+    /// of the shape it bounds, so this can only remove content the exact clip
+    /// would also remove — it never clips away a pixel the path keeps. What
+    /// still renders is everything inside the box but outside the shape: the
+    /// notch of a star, the bite of a crescent. That is the whole of the
+    /// remaining gap, and it is the reason this still reports itself.
     ///
-    /// The [`ClipOutcome`] is what callers key behaviour on instead of asking
-    /// which shape they passed. `Clip::AntiAliasWithSaveLayer` opens an
-    /// offscreen only where a clip was actually installed — a group composite
-    /// needs an edge to composite against — and returning the answer from here
-    /// is what makes that decision correct the day this body starts installing
-    /// one, with no second place to remember.
+    /// Until this, nothing was installed at all, which is issue #934.
+    /// `RenderPhysicalShape` under `Clip::AntiAliasWithSaveLayer` fills its
+    /// colour with `Canvas::draw_paint` INSIDE the clip scope — deliberate
+    /// Flutter parity, so the shape's edge is anti-aliased once rather than
+    /// twice (`proxy_box.dart:2346`, citing flutter/flutter#18057) — and a fill
+    /// with no geometry of its own is bounded by nothing but the clip. A
+    /// `Material` therefore painted the entire window.
     ///
-    /// `ClipSuperellipseLayer` used to route its squircle here and so did not
-    /// clip at all (issue #921); it now reaches
-    /// [`Self::clip_rsuperellipse`] through
-    /// `LayerStateStack::push_clip_rsuperellipse`. What still arrives here is
-    /// a genuine arbitrary path — including `RenderPhysicalShape`'s `Path`
-    /// variant, whose `draw_paint` then fills the viewport rather than the
-    /// shape (issue #934).
-    #[must_use]
-    pub fn clip_path(&mut self, _path: &Path) -> ClipOutcome {
-        // Path clipping requires stencil buffer or path tessellation
-        // This is a complex feature that needs:
-        // 1. Stencil buffer configuration in render pass
-        // 2. Tessellate path and render to stencil buffer
-        // 3. Enable stencil test for subsequent draws
-        // 4. Stack management for nested clips
-        // 5. Handle even-odd vs non-zero fill rules
-        //
-        // Additionally, Path::bounds() requires &mut Path for caching,
-        // but we only have &Path in this context.
-        //
-        // For now, this is a no-op. Applications should use ClipRect or ClipRRect
-        // for hardware-accelerated clipping. Path clipping will be implemented
-        // in a future version with proper stencil buffer support.
-
-        // This path used to emit a debug-only `tracing::trace!` and
-        // return silently. Production scrapes never saw the missing
-        // clip — content rendered without the intended clip. Upgrade
-        // to release-build `tracing::warn!` so any consumer that hits
-        // the path gets a visible signal.
-        tracing::warn!(
-            "WgpuPainter::clip_path: path clipping not implemented; \
-             content will render without the intended clip. \
-             Use ClipRect or ClipRRect for hardware-accelerated clipping. \
-             Path clipping requires stencil-buffer support"
-        );
-        ClipOutcome::NothingInstalled
+    /// The scissor is rounded OUTWARD, by `GpuStateStack::clip_rect_enclosing`
+    /// rather than the truncating `clip_rect` every other clip uses. Truncation
+    /// would take the superset property away and up to a column and a row of
+    /// content the path keeps with it; a rounded clip can afford it because its
+    /// exact SDF is what actually cuts the edge, and it deliberately does not
+    /// pad outward for the mirror-image reason — there the pad would let text
+    /// leak past a real edge. The rounding has to happen after the transform,
+    /// which is why it is not done here: a box grown to whole pixels in local
+    /// space is re-fractioned by any translation with a fractional part.
+    ///
+    /// Under a rotation the scissor is the AABB of the transformed box, which
+    /// is larger again — the approximation gets looser, never tighter, so the
+    /// superset property survives.
+    pub fn clip_path(&mut self, path: &Path) {
+        if !self.path_clip_approximated {
+            self.path_clip_approximated = true;
+            tracing::warn!(
+                "WgpuPainter::clip_path: exact path clipping is not implemented; \
+                 clipping to the path's bounding box instead, so content inside \
+                 the box but outside the path shape still renders. Use ClipRect, \
+                 ClipRRect or ClipRSuperellipse for an exact clip. Reported once \
+                 per painter."
+            );
+        }
+        self.state
+            .clip_rect_enclosing(path.compute_bounds(), self.size);
     }
-}
-
-/// Whether a clip call left a clip in force.
-///
-/// One value rather than a caller-side table of which shapes clip, because the
-/// table would be a second place to update: `WgpuPainter::clip_path` is the only
-/// call that can answer [`Self::NothingInstalled`] today, and the day it stops
-/// doing so every consumer's behaviour follows from the same return.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ClipOutcome {
-    /// A clip is in force for subsequent draws.
-    Installed,
-    /// Nothing was installed: the call warned and returned, and subsequent
-    /// draws are unclipped by it.
-    NothingInstalled,
 }

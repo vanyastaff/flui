@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use super::{
     command_ir::{GammaDirection, ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
-    painter::{ClipOutcome, WgpuPainter},
+    painter::WgpuPainter,
     state_stack::ResolvedClip,
 };
 use crate::{
@@ -256,23 +256,24 @@ impl<'frame> Backend<'frame> {
     /// clipped by its bounding box with the coverage dropped on the floor —
     /// worse than either answer.
     ///
-    /// Three things must all hold:
+    /// Two things must both hold:
     ///
     /// - the mode asks for it ([`clip_opens_a_layer`]);
-    /// - a clip was actually installed. A group composite needs an edge to
-    ///   composite against, and `Painter::clip_path` installs none — keying on
-    ///   the ANSWER rather than on which shape was pushed is what makes this
-    ///   correct the day path clipping lands, with no second place to update;
     /// - no enclosing layer routes through a bounds-growing image filter. Those
     ///   layers discard nested `DrawItem::OpacityLayer`s, and everything already
     ///   flushed beside them, so opening one there deletes content rather than
     ///   improving an edge. Degrading the mode to per-draw coverage loses an
     ///   edge; opening the layer loses the subtree. See
     ///   `LayerCompositor::inside_image_filter_layer`.
-    fn opens_offscreen(&self, behavior: flui_types::painting::Clip, clip: ClipOutcome) -> bool {
-        clip_opens_a_layer(behavior)
-            && clip == ClipOutcome::Installed
-            && !self.painter.inside_image_filter_layer()
+    ///
+    /// Every one of the four `push_clip_*` sites installs a clip, so there is no
+    /// third condition asking whether one landed: a mode that asks for NO clip
+    /// is refused a layer earlier, by [`clip_is_disabled`] on the canvas route
+    /// and by the layer's own `clips()` gate on the layer route. See
+    /// `ARCHITECTURE.md` for why that condition once existed and what removing
+    /// it proved.
+    fn opens_offscreen(&self, behavior: flui_types::painting::Clip) -> bool {
+        clip_opens_a_layer(behavior) && !self.painter.inside_image_filter_layer()
     }
 
     /// Open the offscreen a clip asked for, if it asked for one, and record the
@@ -647,8 +648,8 @@ const fn clip_is_hard(behavior: flui_types::painting::Clip) -> bool {
 /// change, not a side effect.
 ///
 /// This answers only the MODE half of the question. Whether a layer is actually
-/// opened is [`Backend::opens_offscreen`], which also requires that a clip was
-/// installed at all and that no enclosing image-filter layer would discard it.
+/// opened is [`Backend::opens_offscreen`], which also requires that no
+/// enclosing image-filter layer would discard it.
 const fn clip_opens_a_layer(behavior: flui_types::painting::Clip) -> bool {
     matches!(behavior, flui_types::painting::Clip::AntiAliasWithSaveLayer)
 }
@@ -1450,17 +1451,35 @@ impl CommandRenderer for Backend<'_> {
     fn clip_path(
         &mut self,
         path: &Path,
-        _clip_op: flui_types::painting::ClipOp,
-        _clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_types::painting::ClipOp,
+        clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     ) {
+        // `Clip::None` asks for no clipping, and this is where the three sibling
+        // shapes honour it. `Canvas`'s whole `_ext` family refuses the mode
+        // before recording a command, so none of the four guards is reachable
+        // from the only producer in the tree today — they are the second half
+        // of a two-sided invariant, held here so a future producer of
+        // `DrawCommand::ClipPath` cannot make this the one entry point that
+        // honours "do not clip" by clipping. Omitting it from this arm alone
+        // would be the asymmetry, not the guard.
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        // A DIFFERENCE clip keeps the path's COMPLEMENT, whose bounding box is
+        // the whole surface — so the conservative answer is no scissor at all.
+        // Installing the path's own box instead would not approximate this
+        // clip, it would invert it, erasing exactly the content the caller
+        // asked to keep. `Canvas::clip_path_ext(path, ClipOp::Difference, ..)`
+        // is public and documented (`flui-painting/README.md`), so unlike the
+        // guard above this one has live callers. The shape stays unhonoured,
+        // which is what it was before — it needs the same stencil pass an exact
+        // path clip does.
+        if clip_op == flui_types::painting::ClipOp::Difference {
+            return;
+        }
         self.with_transform(transform, |painter| {
-            // The outcome has no consumer on the CANVAS path: a saveLayer here
-            // is a `DrawCommand` of its own, emitted by the caller
-            // (`flui_painting`'s `ClipContext`), so this function opens no
-            // layer whose existence could depend on the answer. Only
-            // `LayerStateStack::push_clip_path` acts on it.
-            let _ = painter.clip_path(path);
+            painter.clip_path(path);
         });
     }
 
@@ -1635,7 +1654,7 @@ impl LayerStateStack for Backend<'_> {
         // `ResolvedClip::NONE`. The layer is still opened, for the half of the
         // mode a scissor cannot give: isolation from the backdrop.
         let composite_clip = self
-            .opens_offscreen(clip_behavior, ClipOutcome::Installed)
+            .opens_offscreen(clip_behavior)
             .then_some(ResolvedClip::NONE);
         self.open_clip_frame(composite_clip);
     }
@@ -1646,7 +1665,7 @@ impl LayerStateStack for Backend<'_> {
         // Decided BEFORE installing anything: the two calls below clip the
         // content differently, and picking the wrong one because the layer was
         // refused afterwards would drop the rounded coverage entirely.
-        let composite_clip = if self.opens_offscreen(clip_behavior, ClipOutcome::Installed) {
+        let composite_clip = if self.opens_offscreen(clip_behavior) {
             // Bounding scissor only: the rounded coverage is what the group
             // composite applies, once. Installing the SDF slot as well would
             // apply it a second time, per draw — the defect the mode exists to
@@ -1675,7 +1694,7 @@ impl LayerStateStack for Backend<'_> {
         // rounded rectangle sharing this squircle's outer rect and radii is
         // INSCRIBED in it, so substituting one would clip corner content the
         // squircle keeps.
-        let composite_clip = if self.opens_offscreen(clip_behavior, ClipOutcome::Installed) {
+        let composite_clip = if self.opens_offscreen(clip_behavior) {
             Some(self.painter.clip_rsuperellipse_at_composite(*rse))
         } else {
             self.painter
@@ -1688,13 +1707,15 @@ impl LayerStateStack for Backend<'_> {
     fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
-        // `clip_path` reports whether it installed anything, and today it does
-        // not. That answer — not this function's identity — is what decides the
-        // offscreen, so when path clipping lands the layer follows it here with
-        // nothing else to change.
-        let outcome = self.painter.clip_path(path);
+        // The clip installed is the path's BOUNDING BOX, not the path — see
+        // `WgpuPainter::clip_path`. That makes this exactly the rect case: the
+        // scissor is binary and has already clipped every draw going into the
+        // offscreen, so re-applying it to the group would change nothing, hence
+        // `ResolvedClip::NONE`. The layer is still opened for the half a
+        // scissor cannot give — isolation from the backdrop.
+        self.painter.clip_path(path);
         let composite_clip = self
-            .opens_offscreen(clip_behavior, outcome)
+            .opens_offscreen(clip_behavior)
             .then_some(ResolvedClip::NONE);
         self.open_clip_frame(composite_clip);
     }
