@@ -40,6 +40,15 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 }
 
 /// Rounded superellipse SDF (iOS-squircle, n=4) with per-corner radii.
+///
+/// This is the SHIPPED evaluator — every clip-evaluating shader is prepended
+/// with this file. `flui_engine::superellipse::generate_superellipse_path`
+/// walks the same `n = 4` parametric form on the CPU, and
+/// `the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary` holds
+/// this function and that one to each other pixel by pixel. Changing the
+/// corner maths here without changing it there fails that test with a
+/// coordinate. (`common/sdf.wgsl` carries a reference copy of the same maths
+/// that reaches no GPU and is pinned by nothing.)
 fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // (top, bottom) radii for the active side — see sdRoundedBox.
     let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);

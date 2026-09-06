@@ -622,9 +622,11 @@ fn icon_squircle() -> flui_types::geometry::RSuperellipse {
 /// The two are independent expressions of the same shape:
 /// `sdRoundedSuperellipse` in `shaders/common/clip.wgsl` evaluates a signed
 /// distance in the fragment shader, and `superellipse::generate_superellipse_path`
-/// walks the same parametric form on the CPU into a `Path`. The shader's own
-/// doc cites the generator as where its `n = 4` comes from — a citation nothing
-/// checked until here.
+/// walks the same parametric form on the CPU into a `Path`. `clip.wgsl` is the
+/// SHIPPED evaluator — every clip-evaluating shader is prepended with it — and
+/// until this test nothing held the two statements of the shape to each other.
+/// (`common/sdf.wgsl` carries a reference copy that reaches no GPU; it is not
+/// what this measures, and its doc now says so.)
 ///
 /// The neighbouring tests pin three hand-computed sample points, which proves
 /// the SDF is not the approximating rounded rectangle but says nothing about

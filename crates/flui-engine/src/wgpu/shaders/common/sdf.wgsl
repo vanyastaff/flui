@@ -63,19 +63,18 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 ///
 /// Same signature as `sdRoundedBox` so callers can swap between them by
 /// branching on a clip-kind flag. The corner curve uses Flutter's
-/// iOS-squircle parametric form with `n = 4` hardcoded — the same math
-/// `flui_engine::superellipse::generate_superellipse_path` walks on the CPU,
-/// and the two are pinned against each other pixel by pixel by
-/// `the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary`.
-/// The interior (non-corner) regions reduce to the standard axis-aligned
-/// rect SDF.
+/// iOS-squircle parametric form with `n = 4` hardcoded. The interior
+/// (non-corner) regions reduce to the standard axis-aligned rect SDF.
+///
+/// Reference copy. The evaluator that ships is the one in `common/clip.wgsl`,
+/// and it is the one pinned against the CPU generator — see its doc. Editing
+/// this one changes no rendering and fails no test.
 ///
 /// p: point to test (centered at origin)
 /// b: half-extents (half width, half height)
 /// r: corner radii [top-left, top-right, bottom-right, bottom-left]
 ///
-/// Reference: Flutter painting/clip.dart + `n = 4` from
-/// `flui_engine::superellipse::generate_superellipse_path`.
+/// Reference: Flutter painting/clip.dart.
 fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // Per-corner radius selection (identical branchless pattern to
     // sdRoundedBox).
