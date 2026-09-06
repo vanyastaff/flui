@@ -432,48 +432,116 @@ impl GpuStateStack {
     /// used to clamp the scissor to the surface bounds. It is passed as a
     /// parameter rather than stored on the stack so the painter remains the
     /// single owner of the surface dimensions.
+    ///
+    /// A fractional edge TRUNCATES: a clip ending at column 10.75 ends the
+    /// scissor at column 10, so the outer fraction of that column is lost.
+    /// Every clip that reaches here carries something behind it that makes
+    /// that acceptable — a rounded or squircle clip has its exact SDF, and a
+    /// rect clip's own edge is what the caller asked to cut on. A clip with
+    /// NOTHING behind it must not lose that fraction; see
+    /// [`Self::clip_rect_enclosing`].
     pub(super) fn clip_rect(&mut self, rect: Rect<Pixels>, surface_size: (u32, u32)) {
-        let transform = self.current_transform;
+        let (x, y, width, height) = self.scissor_of(rect, surface_size);
+        self.commit_scissor(rect, (x, y, width, height), surface_size);
+    }
 
-        // Compute axis-aligned bounding box in screen space.
-        let (x, y, width, height) = if transform == glam::Mat4::IDENTITY {
-            // Fast path: no transform.
+    /// Set an axis-aligned scissor clip rounded OUTWARD to the pixel grid.
+    ///
+    /// The sibling of [`Self::clip_rect`] for a clip that is the whole of its
+    /// own enforcement. `WgpuPainter::clip_path` approximates an arbitrary path
+    /// by its bounding box, and the property that makes that safe is that the
+    /// box is a SUPERSET of the shape — truncating its right and bottom edges
+    /// takes the superset away and with it up to a column and a row of content
+    /// the path genuinely keeps.
+    ///
+    /// The growth happens HERE, after the transform, and cannot be done by the
+    /// caller: the scissor is derived from the transformed corners, so a clip
+    /// rect the caller has already grown to whole pixels is re-fractioned by
+    /// any translation with a fractional part — which is every node at a
+    /// non-integer offset, and every node at all under a fractional device
+    /// pixel ratio. Growing before the transform is not merely insufficient,
+    /// it is inert.
+    pub(super) fn clip_rect_enclosing(&mut self, rect: Rect<Pixels>, surface_size: (u32, u32)) {
+        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
+        let x = min_x.floor().max(0.0).min(surface_size.0 as f32) as u32;
+        let y = min_y.floor().max(0.0).min(surface_size.1 as f32) as u32;
+        let right = max_x.ceil().max(0.0).min(surface_size.0 as f32) as u32;
+        let bottom = max_y.ceil().max(0.0).min(surface_size.1 as f32) as u32;
+        let scissor = (x, y, right.saturating_sub(x), bottom.saturating_sub(y));
+        self.commit_scissor(rect, scissor, surface_size);
+    }
+
+    /// The clip rect's axis-aligned bounding box in device space, unrounded.
+    ///
+    /// The identity case is exact; otherwise the four corners are transformed
+    /// and their AABB taken, which is conservative for a rotation — the box
+    /// around a rotated box is larger than the box.
+    fn device_aabb(&self, rect: Rect<Pixels>) -> (f32, f32, f32, f32) {
+        let transform = self.current_transform;
+        if transform == glam::Mat4::IDENTITY {
+            return (rect.left().0, rect.top().0, rect.right().0, rect.bottom().0);
+        }
+        let corners = [
+            transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0)),
+            transform.transform_point3(glam::Vec3::new(rect.right().0, rect.top().0, 0.0)),
+            transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0)),
+            transform.transform_point3(glam::Vec3::new(rect.left().0, rect.bottom().0, 0.0)),
+        ];
+        (
+            corners.iter().map(|c| c.x).fold(f32::INFINITY, f32::min),
+            corners.iter().map(|c| c.y).fold(f32::INFINITY, f32::min),
+            corners
+                .iter()
+                .map(|c| c.x)
+                .fold(f32::NEG_INFINITY, f32::max),
+            corners
+                .iter()
+                .map(|c| c.y)
+                .fold(f32::NEG_INFINITY, f32::max),
+        )
+    }
+
+    /// The truncating rounding [`Self::clip_rect`] has always used, kept
+    /// bit-for-bit: the identity fast path floors every edge independently,
+    /// and the transformed branch floors the origin and ceils the EXTENT. The
+    /// two do not agree on a fractional rect, and unifying them would move the
+    /// scissor of every rect, rounded and squircle clip in the engine.
+    fn scissor_of(&self, rect: Rect<Pixels>, surface_size: (u32, u32)) -> (u32, u32, u32, u32) {
+        let transform = self.current_transform;
+        if transform == glam::Mat4::IDENTITY {
             let x = rect.left().0.max(0.0) as u32;
             let y = rect.top().0.max(0.0) as u32;
             let right = rect.right().0.min(surface_size.0 as f32) as u32;
             let bottom = rect.bottom().0.min(surface_size.1 as f32) as u32;
-            (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
-        } else {
-            // Transform all four corners and compute a conservative AABB.
-            let corners = [
-                transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0)),
-                transform.transform_point3(glam::Vec3::new(rect.right().0, rect.top().0, 0.0)),
-                transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0)),
-                transform.transform_point3(glam::Vec3::new(rect.left().0, rect.bottom().0, 0.0)),
-            ];
-            let min_x = corners.iter().map(|c| c.x).fold(f32::INFINITY, f32::min);
-            let min_y = corners.iter().map(|c| c.y).fold(f32::INFINITY, f32::min);
-            let max_x = corners
-                .iter()
-                .map(|c| c.x)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let max_y = corners
-                .iter()
-                .map(|c| c.y)
-                .fold(f32::NEG_INFINITY, f32::max);
+            return (x, y, right.saturating_sub(x), bottom.saturating_sub(y));
+        }
+        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
+        let x = min_x.max(0.0) as u32;
+        let y = min_y.max(0.0) as u32;
+        let w = (max_x.min(surface_size.0 as f32) - min_x.max(0.0))
+            .ceil()
+            .max(0.0) as u32;
+        let h = (max_y.min(surface_size.1 as f32) - min_y.max(0.0))
+            .ceil()
+            .max(0.0) as u32;
+        (x, y, w, h)
+    }
 
-            let x = min_x.max(0.0) as u32;
-            let y = min_y.max(0.0) as u32;
-            let w = (max_x.min(surface_size.0 as f32) - min_x.max(0.0))
-                .ceil()
-                .max(0.0) as u32;
-            let h = (max_y.min(surface_size.1 as f32) - min_y.max(0.0))
-                .ceil()
-                .max(0.0) as u32;
-            (x, y, w, h)
-        };
-
-        // Intersect with the existing scissor when one is active.
+    /// Intersect a freshly computed scissor with any active one, clamp it to
+    /// the attachment, and store it.
+    ///
+    /// wgpu rejects a scissor whose origin or right/bottom edge lies outside
+    /// the attachment, and the origin is the half the AABB maths above leaves
+    /// unclamped — a clip lying entirely past the right or bottom edge would
+    /// emit an out-of-bounds `x`/`y`, and clamping the origin first keeps the
+    /// `surface - origin` extent subtraction from underflowing.
+    fn commit_scissor(
+        &mut self,
+        rect: Rect<Pixels>,
+        scissor: (u32, u32, u32, u32),
+        surface_size: (u32, u32),
+    ) {
+        let (x, y, width, height) = scissor;
         let new_scissor = if let Some((cur_x, cur_y, cur_w, cur_h)) = self.current_scissor {
             let inter_x = x.max(cur_x);
             let inter_y = y.max(cur_y);
@@ -484,12 +552,6 @@ impl GpuStateStack {
             (x, y, width, height)
         };
 
-        // Clamp the scissor to the render target. wgpu rejects a scissor whose
-        // origin or right/bottom edge lies outside the attachment; the AABB math
-        // above clamps the right/bottom edges but leaves the origin unclamped, so
-        // a clip lying entirely past the right/bottom edge (left >= surface width)
-        // would emit an out-of-bounds `x`/`y`. Clamping the origin first keeps the
-        // `surface - origin` extent subtraction from underflowing.
         let (raw_x, raw_y, raw_w, raw_h) = new_scissor;
         let clamped_x = raw_x.min(surface_size.0);
         let clamped_y = raw_y.min(surface_size.1);
@@ -511,6 +573,8 @@ impl GpuStateStack {
             clamped_scissor.2,
             clamped_scissor.3,
         );
+        #[cfg(not(debug_assertions))]
+        let _ = rect;
     }
 
     /// Set a SDF rounded-rectangle clip and clear any active rsuperellipse
@@ -1114,6 +1178,98 @@ mod tests {
     /// `set_scissor_rect` that `x` alone fails wgpu's scissor-containment
     /// validation regardless of `width` being zero.
     ///
+    /// `clip_rect_enclosing` grows to whole pixels on BOTH scissor branches.
+    ///
+    /// The two are picked between on `transform == Mat4::IDENTITY`, bit-exact,
+    /// and they round differently — so covering one says nothing about the
+    /// other. The transformed branch is the one every real frame takes: the
+    /// root carries `scale(dpr)` and every intervening offset composes into
+    /// the same matrix.
+    #[test]
+    fn clip_rect_enclosing_grows_outward_on_both_branches() {
+        let surface = (64, 64);
+        let fractional = Rect::from_ltrb(
+            flui_types::geometry::px(8.2),
+            flui_types::geometry::px(8.2),
+            flui_types::geometry::px(32.6),
+            flui_types::geometry::px(32.6),
+        );
+
+        let mut identity = identity_stack();
+        identity.clip_rect_enclosing(fractional, surface);
+        assert_eq!(
+            identity.current_scissor(),
+            Some((8, 8, 25, 25)),
+            "identity branch: [8.2, 32.6] must become [8, 33), which is 25 \
+             columns — truncating would give [8, 32) and drop the column the \
+             rect partly covers"
+        );
+
+        let mut translated = identity_stack();
+        translated.translate(Offset::new(
+            flui_types::geometry::px(0.5),
+            flui_types::geometry::px(0.5),
+        ));
+        translated.clip_rect_enclosing(fractional, surface);
+        assert_eq!(
+            translated.current_scissor(),
+            Some((8, 8, 26, 26)),
+            "transformed branch: [8.7, 33.1] must become [8, 34). Growing the \
+             rect to whole pixels BEFORE the transform cannot produce this — a \
+             fractional translation re-fractions it"
+        );
+    }
+
+    /// The degenerate inputs `Path::compute_bounds` can hand a scissor.
+    ///
+    /// These stopped being hypothetical when a path clip started feeding its
+    /// bounding box to `clip_rect_enclosing`: an empty path answers
+    /// `Rect::ZERO`, a path may sit at negative coordinates or entirely past
+    /// the surface, and `compute_bounds_internal` guards finiteness on x alone,
+    /// so an all-NaN y column yields `top = +inf` / `bottom = -inf`. None may
+    /// produce a scissor wgpu rejects.
+    #[test]
+    fn clip_rect_enclosing_survives_the_bounds_a_degenerate_path_produces() {
+        let surface = (64, 64);
+        let px = flui_types::geometry::px;
+
+        for (name, rect) in [
+            ("empty path", Rect::ZERO),
+            (
+                "negative origin",
+                Rect::from_ltrb(px(-12.5), px(-12.5), px(20.0), px(20.0)),
+            ),
+            (
+                "entirely past the surface",
+                Rect::from_ltrb(px(900.0), px(900.0), px(950.0), px(950.0)),
+            ),
+            (
+                "inverted, right < left",
+                Rect::from_ltrb(px(40.0), px(40.0), px(10.0), px(10.0)),
+            ),
+            (
+                "non-finite, as an all-NaN axis yields",
+                Rect::from_ltrb(px(0.0), px(f32::INFINITY), px(20.0), px(f32::NEG_INFINITY)),
+            ),
+        ] {
+            let mut stack = identity_stack();
+            stack.clip_rect_enclosing(rect, surface);
+            let (x, y, w, h) = stack
+                .current_scissor()
+                .expect("clip_rect_enclosing always sets a scissor, even a zero-area one");
+            assert!(
+                x <= surface.0 && y <= surface.1,
+                "{name}: origin ({x}, {y}) must stay inside the attachment, or \
+                 wgpu's scissor containment validation rejects the pass"
+            );
+            assert!(
+                x + w <= surface.0 && y + h <= surface.1,
+                "{name}: scissor ({x}, {y}, {w}, {h}) must not extend past the \
+                 attachment {surface:?}"
+            );
+        }
+    }
+
     /// Red-check: remove the `raw_x.min(surface_size.0)` / `raw_y.min(...)`
     /// origin clamp (restoring `clamped_x = raw_x`, `clamped_y = raw_y`) and
     /// this test fails — the stored scissor's `x` becomes 900, past the

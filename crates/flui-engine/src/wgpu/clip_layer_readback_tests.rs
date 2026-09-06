@@ -21,12 +21,16 @@
 //! - `AntiAliasWithSaveLayer` renders the clipped subtree into an offscreen and
 //!   applies the clip's coverage ONCE, to the finished group
 //!   (`the_save_layer_mode_composites_the_clipped_group_once`). The offscreen
-//!   is declined in two cases, neither keyed on the clip's shape: where no clip
-//!   was installed at all, and inside a bounds-growing image-filter layer,
-//!   which would discard it along with its siblings. Their tests are
-//!   `a_path_clip_opens_no_offscreen_because_it_installs_no_clip` and
-//!   `a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`;
-//!   both are reasoned in the crate's `ARCHITECTURE.md`.
+//!   is declined in one case, and it is not keyed on the clip's shape: inside a
+//!   bounds-growing image-filter layer, which would discard the offscreen along
+//!   with its siblings
+//!   (`a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`,
+//!   reasoned in the crate's `ARCHITECTURE.md`). There used to be a second
+//!   decline — a clip that installed nothing had no edge for a group composite,
+//!   which was every PATH clip. `WgpuPainter::clip_path` now installs the
+//!   path's bounding box (issue #934) and the decline went with it;
+//!   `a_path_clip_installs_its_box_and_the_save_layer_mode_isolates` is where
+//!   that pair is pinned.
 
 use flui_layer::{LayerTree, SceneBuilder};
 use flui_painting::{Canvas, Paint};
@@ -617,8 +621,11 @@ fn icon_squircle() -> flui_types::geometry::RSuperellipse {
 /// rather than to the rounded rectangle that bounds it.
 ///
 /// Before this was routed, the layer tessellated a squircle path and handed it
-/// to `push_clip_path` — a painter call that installs nothing — so the subtree
-/// rendered entirely unclipped (issue #921).
+/// to `push_clip_path`, which at the time installed nothing at all, so the
+/// subtree rendered entirely unclipped (issue #921). That call now installs the
+/// path's bounding box (issue #934), which would have left the squircle clipped
+/// to its outer rect — closer, and still not the shape. Point B below is what
+/// tells those two apart.
 ///
 /// Point B is what makes this more than "some clip happened": it lies inside
 /// the squircle and outside the circle of the same radius, so substituting the
@@ -868,23 +875,31 @@ fn a_rect_clip_in_the_save_layer_mode_isolates_a_destructive_blend() {
     );
 }
 
-/// A PATH clip opens no offscreen BECAUSE it installs no clip.
+/// A PATH clip installs its bounding box, and the save-layer mode therefore
+/// opens the offscreen like every other shape.
 ///
-/// The offscreen is granted on `ClipOutcome`, not on which `push_clip_*` was
-/// entered, so this is a consequence rather than an exemption:
-/// `WgpuPainter::clip_path` warns and returns without touching any state, and a
-/// group composite has no edge to composite against.
+/// This test used to pin the opposite — that a path clip installed nothing and
+/// so was refused a layer. Both halves changed together, which is the point:
+/// the offscreen is granted on whether a clip was installed, never on which
+/// `push_clip_*` was entered, so repairing `WgpuPainter::clip_path` moved the
+/// offscreen with it and no backend code had to be touched.
 ///
-/// Both halves are asserted, precondition first. A test that pinned only the
-/// consequence would keep passing after its premise was repaired. That is not
-/// hypothetical: `ClipSuperellipseLayer` used to reach this same call and so
-/// did not clip either, and issue #921 moved it to
-/// `push_clip_rsuperellipse` — leaving this test measuring what it always
-/// named, a genuine path clip. When `clip_path` itself starts installing, the
-/// precondition assertion fails first and says exactly what changed; the
-/// consequence follows on its own, with no code to update.
+/// The eraser is the probe. Under `AntiAlias` no layer is opened, so the eraser
+/// shares a pass with the backdrop and reaches it — but only where the clip
+/// lets it, which is now the path's box. Under `AntiAliasWithSaveLayer` the
+/// subtree is composited as a group with `SrcOver`, so the eraser cannot reach
+/// a ground painted outside it at all. That difference is the offscreen, and it
+/// replaces this test's old closing assertion that the two modes were
+/// necessarily identical.
+///
+/// A note on what the old version could NOT see, so the next reader does not
+/// rebuild it: its precondition sampled the BLUE channel outside the path.
+/// `BlendMode::Clear` writes `(0, 0, 0, 0)` and the backdrop is `(255, 0, 0)`,
+/// so blue is zero either way — the assertion held whether or not the clip
+/// installed, and the change was caught by the consequence assertion below
+/// instead. Red is the channel that discriminates here.
 #[test]
-fn a_path_clip_opens_no_offscreen_because_it_installs_no_clip() {
+fn a_path_clip_installs_its_box_and_the_save_layer_mode_isolates() {
     let Ok(renderer) = HeadlessRenderer::new() else {
         eprintln!("skipping: no GPU adapter available");
         return;
@@ -905,33 +920,307 @@ fn a_path_clip_opens_no_offscreen_because_it_installs_no_clip() {
             .expect("the headless capture path must rasterize the scene")
     };
 
-    // The PRECONDITION the rest of this test rests on, asserted rather than
-    // assumed: `clip_path` installs nothing, so its content is unclipped.
-    // (32, 32) is inside the path; (2, 2) is far outside it and must be painted
-    // all the same. Read on the BLUE channel — the ground is white, so the red
-    // backdrop is the one that discriminates.
-    let outside_the_path = sample(&render(Clip::AntiAliasWithSaveLayer), 2, 2);
-    assert!(
-        outside_the_path[2] < 8,
-        "precondition: `Painter::clip_path` installs no clip, so the backdrop \
-         is painted outside the path too, got {outside_the_path:?}. If this \
-         fails, path clipping now works (#921) — and the offscreen below \
-         follows from `ClipOutcome` with no code change, so update this test, \
-         not the backend"
-    );
+    // The clip installs: an eraser inside it cannot reach (2, 2), which is
+    // outside the path's box, under either mode.
+    for behavior in [Clip::AntiAlias, Clip::AntiAliasWithSaveLayer] {
+        let outside_the_box = sample(&render(behavior), 2, 2);
+        assert!(
+            outside_the_box[0] > 200,
+            "the clip must confine the eraser to the path's box, so the red \
+             backdrop survives at (2, 2) under {behavior:?}, got \
+             {outside_the_box:?}"
+        );
+    }
 
-    let escaped = sample(&render(Clip::AntiAliasWithSaveLayer), 32, 32);
+    // Inside the box the two modes part company, and the offscreen is the
+    // whole of the difference.
+    let no_layer = sample(&render(Clip::AntiAlias), 32, 32);
     assert!(
-        escaped[0] < 8,
-        "with no clip installed there is no edge for a group composite, so no \
-         offscreen is opened and an eraser inside still reaches the backdrop, \
-         got {escaped:?}"
+        no_layer[0] < 8,
+        "with no offscreen the eraser shares a pass with the backdrop and \
+         erases it inside the clip, got {no_layer:?}"
     );
-    assert_eq!(
-        render(Clip::AntiAliasWithSaveLayer),
-        render(Clip::AntiAlias),
-        "a path clip installs no clip at all, so its modes cannot differ"
+    let isolated = sample(&render(Clip::AntiAliasWithSaveLayer), 32, 32);
+    assert!(
+        isolated[0] > 200,
+        "the save-layer mode composites the subtree as a group with SrcOver, \
+         so a destructive blend inside it cannot reach a backdrop painted \
+         outside it, got {isolated:?}"
     );
+}
+
+/// An unbounded fill inside a PATH clip stays inside the path's own box —
+/// under EVERY clipping mode.
+///
+/// This is issue #934's shape end to end. `RenderPhysicalShape` with
+/// `Clip::AntiAliasWithSaveLayer` draws its colour with `Canvas::draw_paint`
+/// INSIDE the clip scope — deliberate Flutter parity, so the shape's edge is
+/// anti-aliased once rather than twice (`proxy_box.dart:2346`, citing
+/// flutter/flutter#18057). A fill with no geometry of its own is bounded by
+/// nothing but the clip, so a clip that installs nothing lets it reach the
+/// whole surface: the reported symptom is a `Material` painting the entire
+/// window.
+///
+/// **All three modes, not just the reported one.** Under
+/// `AntiAliasWithSaveLayer` the offscreen's composite rect is itself
+/// `clip_bounds()` (`Backend::open_clip_frame`), so that mode crops TWICE and
+/// would go green on the composite alone even if the per-draw scissor never
+/// reached a draw. `AntiAlias` and `HardEdge` open no layer, so there the
+/// scissor is the only mechanism there is — and `AntiAlias` is what
+/// `RenderClipPath` ships and what Flutter's `ClipPath` defaults to.
+///
+/// `(2, 2)` is far outside the path — 14 px clear of the nearest edge, so no
+/// anti-aliasing band reaches the sample — and must keep the backdrop.
+/// `(32, 32)` is the centre and must carry the fill: without it the test would
+/// pass just as well against a clip that discarded everything, which is the
+/// failure mode of asserting only that something is absent.
+#[test]
+fn an_unbounded_fill_inside_a_path_clip_stays_inside_the_paths_box() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    for behavior in [
+        Clip::AntiAliasWithSaveLayer,
+        Clip::AntiAlias,
+        Clip::HardEdge,
+    ] {
+        let tree = inside_a_clip(
+            behavior,
+            |builder, behavior| {
+                let mut path = flui_types::painting::Path::new();
+                path.add_rect(Rect::from_xywh(px(16.0), px(16.0), px(32.0), px(32.0)));
+                builder.push_clip_path(path, behavior);
+            },
+            fill_everything,
+        );
+        let frame = renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize the scene");
+
+        let outside = sample(&frame, 2, 2);
+        assert!(
+            outside[0] > 200 && outside[1] < 64,
+            "the red backdrop must survive outside the clip path under \
+             {behavior:?}: the fill has no geometry of its own, so only the \
+             clip keeps it off (2, 2), got {outside:?}"
+        );
+
+        let inside = sample(&frame, 32, 32);
+        assert!(
+            inside[1] > 128 && inside[0] < 64,
+            "premise: the fill must still land inside the path under \
+             {behavior:?}, got {inside:?}"
+        );
+    }
+}
+
+/// The bounding box is an APPROXIMATION, and content it lets through is the
+/// documented remainder — not an accident to be quietly narrowed later.
+///
+/// The clip is a triangle. `(40, 20)` lies inside the triangle's bounding box
+/// but outside the triangle itself, and the fill reaches it. An exact path clip
+/// would not. Pinning it here means the day a stencil pass lands, this test
+/// fails and says which promise changed, rather than the gap being closed
+/// silently or — worse — the approximation being mistaken for exactness by a
+/// reader of the tests.
+#[test]
+fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let tree = inside_a_clip(
+        Clip::AntiAlias,
+        |builder, behavior| {
+            // A right triangle filling (8,8)-(48,48): the diagonal runs from
+            // the bottom-left corner to the top-right, so the region above it
+            // — where (40, 20) sits — is box-but-not-shape.
+            let mut path = flui_types::painting::Path::new();
+            path.move_to(flui_types::Point::new(px(8.0), px(48.0)));
+            path.line_to(flui_types::Point::new(px(48.0), px(48.0)));
+            path.line_to(flui_types::Point::new(px(8.0), px(8.0)));
+            path.close();
+            builder.push_clip_path(path, behavior);
+        },
+        fill_everything,
+    );
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+
+    let in_box_outside_shape = sample(&frame, 40, 20);
+    assert!(
+        in_box_outside_shape[1] > 128,
+        "the bounding-box approximation still paints inside the box but \
+         outside the triangle at (40, 20), got {in_box_outside_shape:?}. If \
+         this fails, path clipping became exact — update this test and \
+         `WgpuPainter::clip_path`'s doc, which promises the gap"
+    );
+    let outside_the_box = sample(&frame, 2, 2);
+    assert!(
+        outside_the_box[0] > 200,
+        "premise: outside the BOX the backdrop still survives, got \
+         {outside_the_box:?}"
+    );
+}
+
+/// A FRACTIONAL path edge keeps the pixel it partly covers.
+///
+/// A scissor is integer, and `GpuStateStack::clip_rect` reaches one by
+/// truncating — so a bounding box ending at x = 32.6 would end the scissor at
+/// column 32, dropping a column the path genuinely covers. Behind a rounded
+/// clip the SDF restores what the scissor over-keeps, which is why that one
+/// deliberately does not pad outward; behind a path clip the scissor IS the
+/// clip, so `enclosing_pixel_rect` grows the box to the pixel grid first.
+///
+/// Column 32 is the whole test: it is inside the path (32.6 > 32) and outside a
+/// truncated scissor. Column 33 is the control — outside the path either way,
+/// so a scissor that simply grew by a pixel too many would fail here rather
+/// than pass silently.
+#[test]
+fn a_path_clip_keeps_the_pixel_its_fractional_edge_partly_covers() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let tree = inside_a_clip(
+        Clip::AntiAlias,
+        |builder, behavior| {
+            let mut path = flui_types::painting::Path::new();
+            path.add_rect(Rect::from_ltrb(px(8.0), px(8.0), px(32.6), px(40.0)));
+            builder.push_clip_path(path, behavior);
+        },
+        fill_everything,
+    );
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+
+    let partly_covered = sample(&frame, 32, 20);
+    assert!(
+        partly_covered[1] > 128,
+        "the clip must keep column 32, which the path covers to x = 32.6; a \
+         truncating scissor ends at 32 and drops it, got {partly_covered:?}"
+    );
+    let beyond = sample(&frame, 33, 20);
+    assert!(
+        beyond[0] > 200 && beyond[1] < 64,
+        "control: column 33 is outside the path under either rounding, so the \
+         backdrop must survive there, got {beyond:?}"
+    );
+}
+
+/// The same fractional edge, under a FRACTIONAL OFFSET — the branch every
+/// real frame takes.
+///
+/// `GpuStateStack` has two scissor paths and picks between them on
+/// `transform == Mat4::IDENTITY`, bit-exact. `inside_a_clip` pushes
+/// `Offset::ZERO`, so every other test in this file exercises only the identity
+/// one — while production never does: the root carries `scale(dpr)` and every
+/// intervening offset layer composes into the same matrix, so any node at a
+/// non-integer offset, and every node at all under a fractional device pixel
+/// ratio, takes the transformed branch.
+///
+/// The two branches round differently, and the transformed one derives the
+/// scissor from the transformed corners — so growing the box to whole pixels
+/// before the transform is not merely insufficient, a fractional translation
+/// re-fractions it and the growth is inert. This test is the one that says so:
+/// with a half-pixel offset the path covers up to x = 33.1, and a scissor that
+/// rounds anywhere but outward ends at 33 and drops the column.
+#[test]
+fn a_path_clip_keeps_its_fractional_edge_under_a_fractional_offset() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let mut tree = LayerTree::new();
+    {
+        let mut builder = SceneBuilder::new(&mut tree);
+        // The half pixel is the whole point: it makes the CTM fractional, so
+        // the scissor comes from the transformed-corner branch. It wraps the
+        // backdrop too, exactly as a real ancestor offset would.
+        builder.push_offset(flui_types::Offset::new(px(0.5), px(0.5)));
+
+        let mut canvas = Canvas::new();
+        full_surface(&mut canvas, Color::rgb(255, 0, 0));
+        builder.add_picture(canvas.finish());
+
+        let mut path = flui_types::painting::Path::new();
+        path.add_rect(Rect::from_ltrb(px(8.0), px(8.0), px(32.6), px(40.0)));
+        builder.push_clip_path(path, Clip::AntiAlias);
+        let mut canvas = Canvas::new();
+        fill_everything(&mut canvas);
+        builder.add_picture(canvas.finish());
+        builder.pop().expect("the clip is open");
+        builder.build();
+    }
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+
+    // Offset by 0.5, the path spans x in [8.5, 33.1]: column 33 is partly
+    // covered and must survive.
+    let partly_covered = sample(&frame, 33, 20);
+    assert!(
+        partly_covered[1] > 128,
+        "the clip must keep column 33, which the offset path covers to \
+         x = 33.1; a scissor derived from the transformed corners without \
+         outward rounding ends at 33 and drops it, got {partly_covered:?}"
+    );
+    let beyond = sample(&frame, 34, 20);
+    assert!(
+        beyond[0] > 200 && beyond[1] < 64,
+        "control: column 34 is outside the path under any rounding, so the \
+         backdrop must survive there, got {beyond:?}"
+    );
+}
+
+/// An EMPTY clip path clips everything away.
+///
+/// `Path::compute_bounds` answers `Rect::ZERO` for a path with no commands, so
+/// the scissor is zero-area and the draw is dropped. That is the same answer
+/// Flutter gives — `clipPath(Path())` leaves nothing visible — and it is the
+/// one case where the bounding-box approximation is EXACT, since the box and
+/// the shape are both empty. Asserted rather than assumed: the previous
+/// behaviour was that an empty clip path clipped nothing at all, and the chain
+/// that turns a zero-area scissor into a dropped draw runs through three files.
+#[test]
+fn an_empty_clip_path_clips_everything() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    // Both modes, because `AntiAliasWithSaveLayer` now opens an offscreen for a
+    // path clip where it never did before — so an empty path hands
+    // `save_layer_clipped` a zero-area `clip_bounds()`, a state this change
+    // created. Asserting only the layerless mode would leave it unexercised.
+    for behavior in [Clip::AntiAlias, Clip::AntiAliasWithSaveLayer] {
+        let tree = inside_a_clip(
+            behavior,
+            |builder, behavior| {
+                builder.push_clip_path(flui_types::painting::Path::new(), behavior);
+            },
+            fill_everything,
+        );
+        let frame = renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize the scene");
+
+        for (x, y) in [(2, 2), (32, 32), (61, 61)] {
+            let pixel = sample(&frame, x, y);
+            assert!(
+                pixel[0] > 200 && pixel[1] < 64,
+                "an empty clip path keeps nothing, so the red backdrop must \
+                 survive everywhere under {behavior:?} — ({x}, {y}) got {pixel:?}"
+            );
+        }
+    }
 }
 
 /// The clip's subtree and a sibling drawn before it, inside a blur layer.
@@ -1414,6 +1703,67 @@ fn a_canvas_clip_with_mode_none_does_not_clip() {
         none[0] < 64,
         "Clip::None must not clip: content below the rect should still be painted \
          blue, got {none:?}"
+    );
+}
+
+/// A DIFFERENCE path clip installs nothing rather than inverting itself.
+///
+/// `Canvas::clip_path_ext(path, ClipOp::Difference, ..)` asks to remove the
+/// pixels INSIDE the path — the region kept is its complement, whose bounding
+/// box is the whole surface. So the conservative answer for a clip that can only
+/// express a box is no clip at all: installing the path's own box would not
+/// approximate this request, it would invert it, erasing exactly the content the
+/// caller asked to keep.
+///
+/// The `Intersect` control is what makes this more than "nothing happened": it
+/// proves the same path through the same call DOES clip, so the difference arm
+/// is being refused rather than silently mis-plumbed.
+///
+/// The clip stays unhonoured, which is what it was before — expressing it needs
+/// the same stencil pass an exact path clip does. The three sibling shapes still
+/// install an INVERTED clip for this op, which is issue #941; that asymmetry is
+/// deliberate and predates nothing here.
+#[test]
+fn a_difference_path_clip_installs_nothing_rather_than_inverting() {
+    let Ok(renderer) = HeadlessRenderer::new() else {
+        eprintln!("skipping: no GPU adapter available");
+        return;
+    };
+
+    let scene = |op: flui_types::painting::ClipOp| {
+        let mut tree = LayerTree::new();
+        {
+            let mut builder = SceneBuilder::new(&mut tree);
+            let mut canvas = Canvas::new();
+            let mut path = flui_types::painting::Path::new();
+            path.add_rect(Rect::from_xywh(px(16.0), px(16.0), px(32.0), px(32.0)));
+            canvas.clip_path_ext(&path, op, Clip::AntiAlias);
+            canvas.draw_rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
+                &Paint::fill(Color::rgb(0, 0, 255)),
+            );
+            builder.add_picture(canvas.finish());
+            builder.build();
+        }
+        renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("the headless capture path must rasterize a canvas-clipped tree")
+    };
+
+    // Read on RED: the content is blue and the cleared ground is white, so the
+    // two agree on blue and an assertion there would pass either way.
+    let intersect = sample(&scene(flui_types::painting::ClipOp::Intersect), 2, 2);
+    assert!(
+        intersect[0] > 200,
+        "the control must actually clip — outside the path's box expects the \
+         white ground, got {intersect:?}, so the sample point proves nothing"
+    );
+    let difference = sample(&scene(flui_types::painting::ClipOp::Difference), 2, 2);
+    assert!(
+        difference[0] < 64,
+        "a difference clip must install nothing, so content outside the path \
+         is still painted, got {difference:?}. Painted white here means the \
+         path's own box was installed and the clip inverted"
     );
 }
 
