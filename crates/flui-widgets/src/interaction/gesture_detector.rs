@@ -6,7 +6,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
     DragStartDetails, DragUpdateDetails, GestureRecognizer, LongPressGestureRecognizer,
-    PointerEvent, PointerEventExt, TapGestureRecognizer,
+    PointerDispatch, PointerEventExt, TapGestureRecognizer,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -649,15 +649,17 @@ impl GestureDetectorState {
         let on_up = group.clone();
         let on_cancel = group;
 
-        // Recognizers still consume a single-space event, so they are handed
-        // the LOCAL one — the space they have always tracked. The pair's
-        // global half stops here; carrying it into the recognizers means
-        // giving them Flutter's `OffsetPair`, which is its own change.
+        // The whole `PointerDispatch` goes through, both spaces. Dispatch
+        // rewrites an event into the receiving node's coordinates before a
+        // handler runs, so the untransformed position exists nowhere below
+        // this point except in the pair's global half — a recogniser handed
+        // only the local event has no way to report a global position and can
+        // only restate the local one under that name (issue #908).
         Listener::new()
-            .on_pointer_down(move |dispatch| down.handle_down(dispatch.local))
-            .on_pointer_move(move |dispatch| on_move.forward(dispatch.local))
-            .on_pointer_up(move |dispatch| on_up.forward(dispatch.local))
-            .on_pointer_cancel(move |dispatch| on_cancel.forward(dispatch.local))
+            .on_pointer_down(move |dispatch| down.handle_down(dispatch))
+            .on_pointer_move(move |dispatch| on_move.forward(dispatch))
+            .on_pointer_up(move |dispatch| on_up.forward(dispatch))
+            .on_pointer_cancel(move |dispatch| on_cancel.forward(dispatch))
     }
 }
 
@@ -716,46 +718,53 @@ impl RecognizerGroup {
     /// it is the arena's front member). The binding closes the arena only after
     /// Down has reached the entire hit-test path, so overlapping detectors can
     /// all join before the single close.
-    fn handle_down(&self, event: &PointerEvent) {
+    fn handle_down(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         let pointer = event.pointer_id();
         let position = event.position();
+        // Carried, not discarded: a recognizer cannot recover it, because the
+        // event it is handed has already been localised (issue #908).
+        let global_position = dispatch.global.position();
         if self.tap_active() {
-            self.tap.add_pointer(pointer, position);
+            self.tap.add_pointer(pointer, position, global_position);
             // Forward the real Down so the recognizer refines the provisional
             // Primary button `add_pointer` staged to the actual button
             // (Primary / Secondary / Tertiary).
-            self.tap.handle_event(event);
+            self.tap.handle_event(dispatch);
         }
         if self.long_press_active() {
-            self.long_press.add_pointer(pointer, position);
+            self.long_press
+                .add_pointer(pointer, position, global_position);
         }
         if self.double_tap_active() {
-            self.double_tap.add_pointer(pointer, position);
+            self.double_tap
+                .add_pointer(pointer, position, global_position);
         }
         if self.drag_active() {
-            self.drag.add_pointer(pointer, position);
+            self.drag.add_pointer(pointer, position, global_position);
         }
         if self.horizontal_drag_active() {
-            self.horizontal_drag.add_pointer(pointer, position);
+            self.horizontal_drag
+                .add_pointer(pointer, position, global_position);
         }
     }
 
     /// Forward a move / up / cancel event to every participating recognizer.
-    fn forward(&self, event: &PointerEvent) {
+    fn forward(&self, dispatch: PointerDispatch<'_>) {
         if self.tap_active() {
-            self.tap.handle_event(event);
+            self.tap.handle_event(dispatch);
         }
         if self.long_press_active() {
-            self.long_press.handle_event(event);
+            self.long_press.handle_event(dispatch);
         }
         if self.double_tap_active() {
-            self.double_tap.handle_event(event);
+            self.double_tap.handle_event(dispatch);
         }
         if self.drag_active() {
-            self.drag.handle_event(event);
+            self.drag.handle_event(dispatch);
         }
         if self.horizontal_drag_active() {
-            self.horizontal_drag.handle_event(event);
+            self.horizontal_drag.handle_event(dispatch);
         }
     }
 }

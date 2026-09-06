@@ -10126,7 +10126,11 @@ mod tests {
             )
             .with_on_long_press(move || fired_for_callback.store(true, Ordering::SeqCst));
             let pointer = PointerId::new(2).expect("nonzero pointer id");
-            recognizer.add_pointer(pointer, flui_types::Offset::new(px(10.0), px(10.0)));
+            recognizer.add_pointer(
+                pointer,
+                flui_types::Offset::new(px(10.0), px(10.0)),
+                flui_types::Offset::new(px(10.0), px(10.0)),
+            );
 
             // Real wall-clock wait past the deadline: the arena's own clock
             // is the real OS clock here (`GestureBinding::new()`), same as
@@ -10199,6 +10203,7 @@ mod tests {
             recognizer_a.add_pointer(
                 PointerId::new(2).expect("nonzero pointer id"),
                 flui_types::Offset::new(px(10.0), px(10.0)),
+                flui_types::Offset::new(px(10.0), px(10.0)),
             );
 
             let before_b = Instant::now();
@@ -10217,6 +10222,7 @@ mod tests {
             .with_on_long_press(|| {});
             recognizer_b.add_pointer(
                 PointerId::new(3).expect("nonzero pointer id"),
+                flui_types::Offset::new(px(20.0), px(20.0)),
                 flui_types::Offset::new(px(20.0), px(20.0)),
             );
 
@@ -10259,6 +10265,7 @@ mod tests {
             long_press.add_pointer(
                 PointerId::new(2).expect("nonzero pointer id"),
                 flui_types::Offset::new(px(10.0), px(10.0)),
+                flui_types::Offset::new(px(10.0), px(10.0)),
             );
 
             let before_double_tap = Instant::now();
@@ -10266,10 +10273,12 @@ mod tests {
                 DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap_cancel(|_| {});
             let pointer = PointerId::new(3).expect("nonzero pointer id");
             let position = flui_types::Offset::new(px(20.0), px(20.0));
-            double_tap.add_pointer(pointer, position);
-            double_tap.handle_event(&flui_interaction::events::make_up_event(
-                position,
-                flui_interaction::events::PointerType::Touch,
+            double_tap.add_pointer(pointer, position, position);
+            double_tap.handle_event(flui_interaction::PointerDispatch::at_root(
+                &flui_interaction::events::make_up_event(
+                    position,
+                    flui_interaction::events::PointerType::Touch,
+                ),
             ));
 
             let next_deadline = arena

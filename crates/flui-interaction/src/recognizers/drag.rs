@@ -25,6 +25,7 @@ use crate::{
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
+    routing::PointerDispatch,
     settings::GestureSettings,
     traits::{DragAxis, PointerEventExtTrait},
 };
@@ -199,8 +200,19 @@ struct DragState {
     /// Position reported in [`DragStartDetails`] — depends on
     /// `start_behavior` (down position or slop-crossing position).
     start_position: Option<Offset<Pixels>>,
+    /// The same contact as `start_position`, in the root's space.
+    ///
+    /// Stored rather than derived: dispatch localises the event before a
+    /// recognizer sees it, so the global position exists only at the moment
+    /// the event arrives (issue #908).
+    start_global_position: Option<Offset<Pixels>>,
+    /// The contact position at Down, in the root's space — the global
+    /// counterpart of the shared state's `initial_position`.
+    down_global_position: Option<Offset<Pixels>>,
     /// Last update position
     last_position: Option<Offset<Pixels>>,
+    /// The same contact as `last_position`, in the root's space.
+    last_global_position: Option<Offset<Pixels>>,
     /// Last update time (for velocity calculation)
     last_time: Option<Instant>,
     /// Device kind captured at Down, needed when arena acceptance arrives
@@ -223,7 +235,10 @@ impl Default for DragState {
             state: DragPhase::Ready,
             start_time: None,
             start_position: None,
+            start_global_position: None,
+            down_global_position: None,
             last_position: None,
+            last_global_position: None,
             last_time: None,
             device_kind: None,
             velocity_tracker: VelocityTracker::new(),
@@ -378,7 +393,12 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer down - start tracking
-    fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_down(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         // Read the arena's clock, not the OS clock directly: production binds
         // it to `SystemClock` (so this is `Instant::now()` either way), but a
         // headless frame driver binds it to a `ManualClock` it advances
@@ -390,7 +410,10 @@ impl DragGestureRecognizer {
         state.state = DragPhase::Possible;
         state.start_time = Some(now);
         state.start_position = None;
+        state.start_global_position = None;
+        state.down_global_position = Some(global_position);
         state.last_position = Some(position);
+        state.last_global_position = Some(global_position);
         state.last_time = Some(now);
         state.device_kind = Some(kind);
         state.velocity_tracker.reset();
@@ -400,7 +423,7 @@ impl DragGestureRecognizer {
         // Call on_down callback (pointer contact before drag starts)
         if let Some(callback) = self.callbacks.borrow().on_down.clone() {
             let details = DragDownDetails {
-                global_position: position,
+                global_position,
                 local_position: position,
                 kind,
             };
@@ -409,7 +432,12 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer move - check slop and start/update drag
-    fn handle_move(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_move(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let mut state = self.drag_state.lock();
 
         match state.state {
@@ -420,6 +448,7 @@ impl DragGestureRecognizer {
                 let distance = self.calculate_primary_delta(position - initial_pos);
                 let now = self.state.now();
                 state.last_position = Some(position);
+                state.last_global_position = Some(global_position);
                 state.last_time = Some(now);
                 state.device_kind = Some(kind);
                 state.velocity_tracker.add_position(now, position);
@@ -439,6 +468,7 @@ impl DragGestureRecognizer {
                     let now = self.state.now();
                     let delta = self.project_delta(position - last_pos);
                     state.last_position = Some(position);
+                    state.last_global_position = Some(global_position);
                     state.last_time = Some(now);
                     state.velocity_tracker.add_position(now, position);
 
@@ -455,7 +485,7 @@ impl DragGestureRecognizer {
 
                     if let Some(callback) = self.callbacks.borrow().on_update.clone() {
                         let details = DragUpdateDetails {
-                            global_position: position,
+                            global_position,
                             local_position: position,
                             delta,
                             primary_delta,
@@ -483,17 +513,29 @@ impl DragGestureRecognizer {
                 return;
             };
             let accepted_position = state.last_position.unwrap_or(initial);
+            // The global counterparts of the same two anchors. Both are
+            // OBSERVED values, never re-derived: a recognizer holds no
+            // transform, so a local delta cannot be mapped into the root's
+            // space here.
+            let initial_global = state.down_global_position.unwrap_or(initial);
+            let accepted_global = state.last_global_position.unwrap_or(initial_global);
             let start_position = match self.start_behavior {
                 DragStartBehavior::Down => initial,
                 DragStartBehavior::Start => accepted_position,
+            };
+            let start_global = match self.start_behavior {
+                DragStartBehavior::Down => initial_global,
+                DragStartBehavior::Start => accepted_global,
             };
             let timestamp = state.last_time.unwrap_or_else(|| self.state.now());
             let kind = state.device_kind.unwrap_or(PointerType::Touch);
             state.state = DragPhase::Started;
             state.start_position = Some(start_position);
+            state.start_global_position = Some(start_global);
             state.last_position = Some(accepted_position);
+            state.last_global_position = Some(accepted_global);
             let start_details = DragStartDetails {
-                global_position: start_position,
+                global_position: start_global,
                 local_position: start_position,
                 kind,
                 timestamp,
@@ -508,8 +550,17 @@ impl DragGestureRecognizer {
                 .filter(|delta| delta.dx.0 != 0.0 || delta.dy.0 != 0.0)
                 .map(|delta| {
                     let corrected_position = initial + delta.to_pixels();
+                    // `corrected_position` is SYNTHESIZED — the down anchor
+                    // plus an axis-projected delta — so it has no global
+                    // counterpart a recognizer can compute: mapping a local
+                    // delta into the root's space needs the transform, which
+                    // dispatch applied and did not hand over. The observed
+                    // global at acceptance is reported instead: it is where
+                    // the pointer actually is, which is what a consumer of
+                    // this field wants, while the local half stays projected
+                    // for the widget's own axis maths.
                     DragUpdateDetails {
-                        global_position: corrected_position,
+                        global_position: accepted_global,
                         local_position: corrected_position,
                         primary_delta: self.calculate_primary_delta(delta.to_pixels()),
                         delta,
@@ -530,7 +581,12 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer up - end drag
-    fn handle_up(&self, position: Offset<Pixels>, _kind: PointerType) {
+    fn handle_up(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        _kind: PointerType,
+    ) {
         let mut state = self.drag_state.lock();
 
         if state.state == DragPhase::Started {
@@ -548,7 +604,7 @@ impl DragGestureRecognizer {
             if let Some(callback) = callback {
                 callback(DragEndDetails {
                     velocity,
-                    global_position: position,
+                    global_position,
                     local_position: position,
                     primary_velocity,
                 });
@@ -588,6 +644,7 @@ impl DragGestureRecognizer {
                 // Flutter's `didStopTrackingLastPointer` ends an accepted
                 // drag even when the terminal event is PointerCancel.
                 let position = state.last_position.unwrap_or(Offset::ZERO);
+                let global_position = state.last_global_position.unwrap_or(position);
                 let velocity = state.velocity_tracker.get_velocity();
                 let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
                 let callback = self.callbacks.borrow().on_end.clone();
@@ -598,7 +655,7 @@ impl DragGestureRecognizer {
                 if let Some(callback) = callback {
                     callback(DragEndDetails {
                         velocity,
-                        global_position: position,
+                        global_position,
                         local_position: position,
                         primary_velocity,
                     });
@@ -661,18 +718,24 @@ impl DragGestureRecognizer {
 }
 
 impl GestureRecognizer for DragGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // Start tracking this pointer
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
 
         // Handle pointer down
-        self.handle_down(position, PointerType::Touch);
+        self.handle_down(position, global_position, PointerType::Touch);
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
@@ -680,19 +743,23 @@ impl GestureRecognizer for DragGestureRecognizer {
         let Some(primary) = self.state.primary_pointer() else {
             return;
         };
+        let event = dispatch.local;
         // Filter to the primary pointer we are tracking.
         if event.pointer_id() != primary {
             return;
         }
 
         let (position, pointer_type) = Self::extract_event_data(event);
+        // Read here and threaded on, never re-derived: this is the only point
+        // at which the untransformed position is available at all.
+        let global_position = dispatch.global.position();
 
         match event {
             PointerEvent::Move(_) => {
-                self.handle_move(position, pointer_type);
+                self.handle_move(position, global_position, pointer_type);
             }
             PointerEvent::Up(_) => {
-                self.handle_up(position, pointer_type);
+                self.handle_up(position, global_position, pointer_type);
             }
             PointerEvent::Cancel(_) => {
                 self.handle_cancel();
@@ -818,7 +885,11 @@ mod tests {
             .with_on_start(move |_| *callback_starts.lock() += 1);
         let pointer = PointerId::PRIMARY;
 
-        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(20.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(10.0), Pixels(20.0)),
+            Offset::new(Pixels(10.0), Pixels(20.0)),
+        );
         arena.close(pointer);
         assert_eq!(
             *starts.lock(),
@@ -858,10 +929,13 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = Offset::new(Pixels(10.0), Pixels(20.0));
 
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
         arena.add(pointer, Arc::new(Winner(Arc::clone(&accepted))));
         arena.close(pointer);
-        recognizer.handle_event(&crate::events::make_up_event(position, PointerType::Touch));
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_up_event(
+            position,
+            PointerType::Touch,
+        )));
         arena.drain_deferred_resolutions();
 
         assert_eq!(*cancels.lock(), 1);
@@ -879,11 +953,17 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
             .with_on_cancel(|| panic!("drag cancel panic"));
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        recognizer.add_pointer(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+        );
         arena.close(PointerId::PRIMARY);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+                PointerType::Touch,
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -912,13 +992,13 @@ mod tests {
         let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
-        recognizer.add_pointer(pointer, start_pos);
+        recognizer.add_pointer(pointer, start_pos, start_pos);
         close_with_competitor(&arena, pointer);
 
         // Move vertically beyond slop
         let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px down
         let move_event = make_move_event(moved_pos, PointerType::Touch);
-        recognizer.handle_event(&move_event);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event));
 
         // Should have started
         assert!(*started.lock());
@@ -926,7 +1006,7 @@ mod tests {
         // Move more
         let moved_pos2 = Offset::new(Pixels(100.0), Pixels(150.0));
         let move_event2 = make_move_event(moved_pos2, PointerType::Touch);
-        recognizer.handle_event(&move_event2);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event2));
 
         // Should have updated
         assert!(*updated.lock());
@@ -954,7 +1034,11 @@ mod tests {
         let recognizer =
             DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical).with_on_start(on_start);
         let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+        );
         close_with_competitor(&arena, pointer);
         (recognizer, arena, pointer)
     }
@@ -971,7 +1055,10 @@ mod tests {
         // touch slop (18.0px) the old, kind-blind code always applied
         // regardless of the pointer's actual kind — the defect this closes.
         let moved = Offset::new(Pixels(100.0), Pixels(110.0));
-        recognizer.handle_event(&make_move_event(moved, PointerType::Mouse));
+        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
+            moved,
+            PointerType::Mouse,
+        )));
 
         assert!(
             *started.lock(),
@@ -992,7 +1079,10 @@ mod tests {
         });
 
         let moved = Offset::new(Pixels(100.0), Pixels(110.0));
-        recognizer.handle_event(&make_move_event(moved, PointerType::Touch));
+        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
+            moved,
+            PointerType::Touch,
+        )));
 
         assert!(
             !*started.lock(),
@@ -1014,7 +1104,10 @@ mod tests {
                 *started_clone.lock() = true;
             });
 
-            recognizer.handle_event(&make_move_event(moved, PointerType::Mouse));
+            recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
+                moved,
+                PointerType::Mouse,
+            )));
 
             assert_eq!(
                 *started.lock(),
@@ -1069,13 +1162,13 @@ mod tests {
 
         let pointer = PointerId::PRIMARY;
         let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
-        recognizer.add_pointer(pointer, down_pos);
+        recognizer.add_pointer(pointer, down_pos, down_pos);
         close_with_competitor(&arena, pointer);
 
         // Cross slop with one big move (50→80 → 30px travel).
         let move_event =
             make_move_event(Offset::new(Pixels(80.0), Pixels(80.0)), PointerType::Touch);
-        recognizer.handle_event(&move_event);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event));
 
         // With `Down` behavior, the reported start position is the down
         // position, NOT the slop-crossing position.
@@ -1097,12 +1190,12 @@ mod tests {
 
         let pointer = PointerId::PRIMARY;
         let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
-        recognizer.add_pointer(pointer, down_pos);
+        recognizer.add_pointer(pointer, down_pos, down_pos);
         close_with_competitor(&arena, pointer);
 
         let crossing_pos = Offset::new(Pixels(80.0), Pixels(80.0));
         let move_event = make_move_event(crossing_pos, PointerType::Touch);
-        recognizer.handle_event(&move_event);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event));
 
         // With `Start` behavior, the reported start position is the
         // slop-crossing position itself.
@@ -1127,13 +1220,13 @@ mod tests {
 
         let pointer = PointerId::PRIMARY;
         let down = Offset::new(Pixels(10.0), Pixels(20.0));
-        recognizer.add_pointer(pointer, down);
+        recognizer.add_pointer(pointer, down, down);
         close_with_competitor(&arena, pointer);
 
-        recognizer.handle_event(&make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(40.0), Pixels(70.0)),
             PointerType::Touch,
-        ));
+        )));
 
         assert_eq!(*calls.lock(), vec!["start", "update"]);
         let reported = updates.lock();
@@ -1145,9 +1238,90 @@ mod tests {
         );
         assert_eq!(reported[0].primary_delta, 30.0);
         assert_eq!(
-            reported[0].global_position,
+            reported[0].local_position,
             Offset::new(Pixels(40.0), Pixels(20.0)),
-            "the initial Down-behavior update uses the axis-corrected position"
+            "the initial Down-behavior update reports the axis-corrected \
+             position in the recognizer's own space"
+        );
+        // This assertion moved from `global_position` to `local_position` when
+        // issue #908 made the two fields mean different things, and the pairing
+        // below is the deliberate half of that.
+        //
+        // The corrected position is SYNTHESIZED — the down anchor plus an
+        // axis-projected delta — so it has no global counterpart a recognizer
+        // can compute: mapping a local delta into the root's space needs the
+        // transform, which dispatch applied and did not hand over. The observed
+        // global at acceptance is reported instead, which is where the pointer
+        // actually is. Under `at_root` the two spaces coincide, so this is the
+        // move event's own position, unprojected.
+        assert_eq!(
+            reported[0].global_position,
+            Offset::new(Pixels(40.0), Pixels(70.0)),
+            "the global half reports the observed contact, not the projection"
+        );
+    }
+
+    /// Under a non-identity ancestor transform the two reported positions
+    /// differ, and each reports its own space.
+    ///
+    /// This is the regression for issue #908. Dispatch rewrites an event into
+    /// the receiving node's space before a recognizer sees it, and every detail
+    /// struct used to assign that one localised value to BOTH fields — so
+    /// `global_position` was a global position in name only, correct exactly
+    /// when the ancestor chain was identity and silently wrong by the composed
+    /// transform everywhere else. It was measured at the time: a draggable at
+    /// (150, 150) with the pointer at global (160, 160) delivered (10, 10).
+    ///
+    /// Every other test in this file drives the recognizer through
+    /// `PointerDispatch::at_root`, where the two spaces coincide — which is
+    /// exactly why none of them could catch this. Here they are made to
+    /// disagree by 150 px, the shape a nested widget produces.
+    #[test]
+    fn a_localised_event_reports_both_spaces_and_they_differ() {
+        let arena = GestureArena::new();
+        let updates = Arc::new(Mutex::new(Vec::<DragUpdateDetails>::new()));
+        let updates_for_callback = Arc::clone(&updates);
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
+            .with_drag_start_behavior(DragStartBehavior::Down)
+            .with_on_update(move |details| {
+                updates_for_callback.lock().push(details);
+            });
+
+        // The node sits at (150, 150) in the root's space, so a contact at
+        // global (160, 160) is local (10, 10).
+        let offset = Offset::new(Pixels(150.0), Pixels(150.0));
+        let down_local = Offset::new(Pixels(10.0), Pixels(10.0));
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, down_local, down_local + offset);
+        close_with_competitor(&arena, pointer);
+
+        // Drag well past slop, in both spaces at once.
+        let move_local = Offset::new(Pixels(60.0), Pixels(10.0));
+        let move_global = move_local + offset;
+        recognizer.handle_event(PointerDispatch {
+            local: &make_move_event(move_local, PointerType::Touch),
+            global: &make_move_event(move_global, PointerType::Touch),
+        });
+
+        let reported = updates.lock();
+        assert!(
+            !reported.is_empty(),
+            "the drag must have started and updated"
+        );
+        let update = reported.last().expect("at least one update");
+        assert_eq!(
+            update.local_position, move_local,
+            "the local half is the contact in the node's own space"
+        );
+        assert_eq!(
+            update.global_position, move_global,
+            "the global half is the same contact in the root's space — before \
+             issue #908 this carried the local value instead"
+        );
+        assert_ne!(
+            update.global_position, update.local_position,
+            "the two must not be interchangeable: a test where they coincide \
+             cannot tell a fixed recognizer from a broken one"
         );
     }
 
@@ -1163,10 +1337,16 @@ mod tests {
             .with_on_cancel(move || *cancels_for_callback.lock() += 1);
         let pointer = PointerId::PRIMARY;
 
-        recognizer.add_pointer(pointer, Offset::new(Pixels(5.0), Pixels(5.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(5.0), Pixels(5.0)),
+            Offset::new(Pixels(5.0), Pixels(5.0)),
+        );
         arena.close(pointer);
         assert_eq!(arena.drain_deferred_resolutions(), 1);
-        recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+            PointerType::Touch,
+        )));
 
         assert_eq!(*ends.lock(), 1);
         assert_eq!(*cancels.lock(), 0);
@@ -1188,19 +1368,23 @@ mod tests {
                 });
 
         let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
         close_with_competitor(&arena, pointer);
 
         // 20px vertical move — under 25px vertical slop, no start yet.
         let move_event =
             make_move_event(Offset::new(Pixels(0.0), Pixels(20.0)), PointerType::Touch);
-        recognizer.handle_event(&move_event);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event));
         assert!(!*started.lock());
 
         // 30px vertical move — crosses 25px slop, drag starts.
         let move_event2 =
             make_move_event(Offset::new(Pixels(0.0), Pixels(30.0)), PointerType::Touch);
-        recognizer.handle_event(&move_event2);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event2));
         assert!(*started.lock());
     }
 
@@ -1221,20 +1405,24 @@ mod tests {
                 });
 
         let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
         close_with_competitor(&arena, pointer);
 
         // Move 50px down, 5px right — horizontal projection (5px) is under
         // the 10px horizontal slop, no start.
         let move_event =
             make_move_event(Offset::new(Pixels(5.0), Pixels(50.0)), PointerType::Touch);
-        recognizer.handle_event(&move_event);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event));
         assert!(!*started.lock());
 
         // Move 15px right — crosses 10px slop on horizontal axis.
         let move_event2 =
             make_move_event(Offset::new(Pixels(15.0), Pixels(50.0)), PointerType::Touch);
-        recognizer.handle_event(&move_event2);
+        recognizer.handle_event(PointerDispatch::at_root(&move_event2));
         assert!(*started.lock());
     }
 
@@ -1256,40 +1444,44 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(pointer, Offset::new(Pixels(5.0), Pixels(400.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(5.0), Pixels(400.0)),
+            Offset::new(Pixels(5.0), Pixels(400.0)),
+        );
         close_with_competitor(&arena, pointer);
 
         // Cross slop (down=5 -> 30, no update fires — start only).
-        recognizer.handle_event(&make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(30.0), Pixels(400.0)),
             PointerType::Touch,
-        ));
+        )));
         assert!(
             reported.lock().is_empty(),
             "slop-crossing move fires on_start, not on_update"
         );
 
         // First real update: 30 -> 185, delta = +155.
-        recognizer.handle_event(&make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(185.0), Pixels(400.0)),
             PointerType::Touch,
-        ));
+        )));
         assert_eq!(*reported.lock(), vec![155.0]);
 
         // Second update reverses direction: 185 -> 150, delta = -35.
         // Cumulative-since-start would report 150 - 30 = 120 instead.
-        recognizer.handle_event(&make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(150.0), Pixels(400.0)),
             PointerType::Touch,
-        ));
+        )));
         assert_eq!(*reported.lock(), vec![155.0, -35.0]);
 
         // Third update returns to the slop-crossing position: 150 -> 30,
         // delta = -120. Cumulative-since-start would report 30 - 30 = 0.
-        recognizer.handle_event(&make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(30.0), Pixels(400.0)),
             PointerType::Touch,
-        ));
+        )));
         assert_eq!(*reported.lock(), vec![155.0, -35.0, -120.0]);
     }
 

@@ -14,8 +14,8 @@ use tracing::instrument;
 
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
-    events::PointerEvent,
     ids::PointerId,
+    routing::PointerDispatch,
 };
 
 /// Base trait for all gesture recognizers
@@ -40,12 +40,29 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// registered in the arena. Manufacturing an `Arc` from a cloned struct
     /// creates a different allocation, makes weak entry handles go stale as
     /// soon as the arena resolves, and cannot support post-resolution timers.
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>);
+    /// `position` is in the recognizer's own space — the one its slop,
+    /// velocity and axis maths are measured in. `global_position` is the same
+    /// contact in the root's space, carried alongside because a recognizer
+    /// cannot recover it: the event it is handed has already been localised.
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    );
 
-    /// Handle a pointer event
+    /// Handle a pointer event.
     ///
     /// Process move, up, and cancel events for tracked pointers.
-    fn handle_event(&self, event: &PointerEvent);
+    ///
+    /// Takes the whole [`PointerDispatch`] rather than one event. Dispatch
+    /// localises the event for the receiving target and keeps the untransformed
+    /// one beside it; handing a recognizer only the local half is what made
+    /// every detail struct's `global_position` a local position under a new
+    /// name (issue #908). Everything a recognizer measures against its own box
+    /// comes from `dispatch.local`; `dispatch.global` exists to be reported,
+    /// not measured with.
+    fn handle_event(&self, dispatch: PointerDispatch<'_>);
 
     /// Dispose of this recognizer
     ///
@@ -79,8 +96,15 @@ pub struct RecognizerBase {
     /// `NonZeroU64`-backed, so `0` is an unambiguous "none" sentinel.
     primary_pointer: Arc<AtomicU64>,
 
-    /// Initial position of primary pointer
-    initial_position: Arc<Mutex<Option<Offset<Pixels>>>>,
+    /// Where the primary pointer went down, in BOTH spaces.
+    ///
+    /// One field rather than two, because the two must agree about which
+    /// contact they describe and a caller that could set them apart would
+    /// eventually do so. That is not hypothetical: the cancel paths fall back
+    /// to the stored LOCAL position because a `Cancel` event carries none, and
+    /// the global half was left reading the event's own `Offset::ZERO` until
+    /// they became one value.
+    initial_contact: Arc<Mutex<Option<InitialContact>>>,
 
     /// Whether recognizer has been disposed. Checked on every event via
     /// `assert_not_disposed`, so a lock-free `AtomicBool`.
@@ -92,13 +116,26 @@ pub struct RecognizerBase {
     tracked_entry: Arc<Mutex<Option<GestureArenaEntry>>>,
 }
 
+/// Where a gesture's primary pointer went down, in both coordinate spaces.
+///
+/// Recorded as one value by [`RecognizerBase::start_tracking`] and never
+/// written apart, so the two halves always describe the same contact.
+#[derive(Debug, Clone, Copy)]
+struct InitialContact {
+    /// The receiving node's space — what a `Move`/`Up` event carries after
+    /// hit-test dispatch has rewritten it.
+    local: Offset<Pixels>,
+    /// The root's space — what dispatch rewrote away.
+    global: Offset<Pixels>,
+}
+
 impl RecognizerBase {
     /// Create new recognizer base data with arena
     pub fn new(arena: GestureArena) -> Self {
         Self {
             arena,
             primary_pointer: Arc::new(AtomicU64::new(0)),
-            initial_position: Arc::new(Mutex::new(None)),
+            initial_contact: Arc::new(Mutex::new(None)),
             disposed: Arc::new(AtomicBool::new(false)),
             tracked_entry: Arc::new(Mutex::new(None)),
         }
@@ -132,15 +169,27 @@ impl RecognizerBase {
         self.primary_pointer.store(raw, Ordering::Relaxed);
     }
 
-    /// Get the initial position of the primary pointer
+    /// Where the primary pointer went down, in the receiving node's space.
     #[inline]
     pub fn initial_position(&self) -> Option<Offset<Pixels>> {
-        *self.initial_position.lock()
+        self.initial_contact.lock().map(|c| c.local)
     }
 
-    /// Set the initial position
-    pub fn set_initial_position(&self, position: Option<Offset<Pixels>>) {
-        *self.initial_position.lock() = position;
+    /// Where the primary pointer went down, in the root's space.
+    ///
+    /// The half a `Cancel` cannot supply: dispatch rewrites an event into the
+    /// receiving node's coordinates, and a cancel carries no position at all,
+    /// so a recogniser reporting a cancelled gesture has nowhere else to read
+    /// an untransformed position from.
+    #[inline]
+    pub fn initial_global_position(&self) -> Option<Offset<Pixels>> {
+        self.initial_contact.lock().map(|c| c.global)
+    }
+
+    /// Forget the recorded contact. Set only by
+    /// [`start_tracking`](Self::start_tracking), so the pair cannot drift.
+    pub fn clear_initial_contact(&self) {
+        *self.initial_contact.lock() = None;
     }
 
     /// Check if recognizer has been disposed
@@ -200,6 +249,7 @@ impl RecognizerBase {
         &self,
         pointer: PointerId,
         position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
         recognizer: &Arc<T>,
     ) {
         if self.is_disposed() {
@@ -207,7 +257,10 @@ impl RecognizerBase {
         }
 
         self.set_primary_pointer(Some(pointer));
-        self.set_initial_position(Some(position));
+        *self.initial_contact.lock() = Some(InitialContact {
+            local: position,
+            global: global_position,
+        });
 
         // Register with the arena and retain the exact slot/member identity.
         let member: Arc<dyn GestureArenaMember> = recognizer.clone();
@@ -271,7 +324,7 @@ impl RecognizerBase {
             entry.sweep();
         }
         self.set_primary_pointer(None);
-        self.set_initial_position(None);
+        self.clear_initial_contact();
         self.tracked_entry.lock().take();
     }
 
@@ -302,7 +355,7 @@ impl RecognizerBase {
         // remain); a competition that still has rivals must keep running until
         // one accepts or the pointer lifts.
         self.set_primary_pointer(None);
-        self.set_initial_position(None);
+        self.clear_initial_contact();
         if let Some(entry) = entry {
             entry.resolve(GestureDisposition::Rejected);
         }
@@ -383,6 +436,18 @@ pub mod constants {
 mod tests {
     use super::*;
 
+    /// The minimum an arena entry needs: `start_tracking` registers a member,
+    /// and nothing in these tests resolves the competition.
+    #[derive(Clone)]
+    struct TestMember;
+
+    impl crate::sealed::arena_member::Sealed for TestMember {}
+
+    impl GestureArenaMember for TestMember {
+        fn accept_gesture(&self, _pointer: PointerId) {}
+        fn reject_gesture(&self, _pointer: PointerId) {}
+    }
+
     #[test]
     fn test_recognizer_base_creation() {
         let arena = GestureArena::new();
@@ -400,16 +465,25 @@ mod tests {
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(200.0));
+        // Deliberately different, so a test that confused the two spaces would
+        // read the wrong number rather than the right one by coincidence.
+        let global_position = Offset::new(Pixels(250.0), Pixels(350.0));
+        let member = Arc::new(TestMember);
 
-        base.set_primary_pointer(Some(pointer));
-        base.set_initial_position(Some(position));
+        base.start_tracking(pointer, position, global_position, &member);
 
         assert_eq!(base.primary_pointer(), Some(pointer));
         assert_eq!(base.initial_position(), Some(position));
+        assert_eq!(base.initial_global_position(), Some(global_position));
 
         base.stop_tracking();
         assert_eq!(base.primary_pointer(), None);
         assert_eq!(base.initial_position(), None);
+        assert_eq!(
+            base.initial_global_position(),
+            None,
+            "the two halves are one stored contact, so clearing must take both"
+        );
     }
 
     #[test]

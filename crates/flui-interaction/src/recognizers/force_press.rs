@@ -20,6 +20,7 @@ use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType},
     ids::PointerId,
+    routing::PointerDispatch,
     settings::GestureSettings,
 };
 
@@ -70,8 +71,8 @@ pub type ForcePressEndCallback = Rc<dyn Fn(ForcePressDetails)>;
 ///     });
 ///
 /// // Add to arena and handle events
-/// recognizer.add_pointer(pointer_id, position);
-/// recognizer.handle_event(&pointer_event);
+/// recognizer.add_pointer(pointer_id, position, position);
+/// recognizer.handle_event(PointerDispatch::at_root(&pointer_event));
 /// ```
 #[derive(Clone)]
 pub struct ForcePressGestureRecognizer {
@@ -487,15 +488,26 @@ impl ForcePressGestureRecognizer {
 }
 
 impl GestureRecognizer for ForcePressGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        // Force-press DETAILS carry pressure, not a position, so no callback
+        // of this recogniser reports the global one. The base records it
+        // anyway: `initial_position`/`initial_global_position` are one stored
+        // contact, and writing half of it is how the two drift apart.
+        global_position: Offset<Pixels>,
+    ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // Start tracking this pointer
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
@@ -636,14 +648,14 @@ mod tests {
         let recognizer = ForcePressGestureRecognizer::new(arena.clone())
             .with_on_end(|_| panic!("force press cancel panic"));
         let position = Offset::new(Pixels(1.0), Pixels(2.0));
-        recognizer.add_pointer(PointerId::PRIMARY, position);
+        recognizer.add_pointer(PointerId::PRIMARY, position, position);
         arena.close(PointerId::PRIMARY);
         recognizer.handle_down(position, 0.5);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
                 crate::events::PointerType::Touch,
-            ));
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -676,7 +688,7 @@ mod tests {
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Directly call handle_down with pressure above threshold
         recognizer.handle_down(position, 0.5);
@@ -698,7 +710,7 @@ mod tests {
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Directly call handle_down without pressure (mouse)
         recognizer.handle_down(position, 0.0);
@@ -721,7 +733,7 @@ mod tests {
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Down with moderate pressure
         recognizer.handle_down(position, 0.5);
@@ -750,7 +762,7 @@ mod tests {
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Down with pressure above threshold
         recognizer.handle_down(position, 0.5);
@@ -776,7 +788,7 @@ mod tests {
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Down with pressure
         recognizer.handle_down(position, 0.5);
@@ -816,7 +828,7 @@ mod tests {
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let origin = Offset::new(Pixels(100.0), Pixels(100.0));
-        recognizer.add_pointer(pointer, origin);
+        recognizer.add_pointer(pointer, origin, origin);
 
         // Down at a pressure UNDER the start threshold: phase is `Possible`,
         // which is the arm this test is about.
@@ -887,7 +899,7 @@ mod tests {
 
             let pointer = PointerId::new(2).expect("nonzero pointer id");
             let origin = Offset::new(Pixels(100.0), Pixels(100.0));
-            recognizer.add_pointer(pointer, origin);
+            recognizer.add_pointer(pointer, origin, origin);
             recognizer.handle_down(origin, 0.5);
 
             let drifted = Offset::new(Pixels(100.0 + drift), Pixels(100.0));

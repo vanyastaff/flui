@@ -257,7 +257,7 @@ mod tests {
         // See `flui_testing::log_capture`.
         flui_testing::log_capture::disarm_interest_cache();
         tracing::subscriber::with_default(subscriber, || {
-            base.start_tracking(pointer, position, &recognizer);
+            base.start_tracking(pointer, position, position, &recognizer);
             base.accept_tracked();
         });
     }

@@ -21,6 +21,7 @@ use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType},
     ids::PointerId,
+    routing::PointerDispatch,
     settings::GestureSettings,
 };
 
@@ -59,9 +60,9 @@ pub struct MultiTapDetails {
 ///     });
 ///
 /// // Add multiple pointers
-/// recognizer.add_pointer(pointer1, position1);
-/// recognizer.add_pointer(pointer2, position2);
-/// recognizer.handle_event(&pointer_event);
+/// recognizer.add_pointer(pointer1, position1, position1);
+/// recognizer.add_pointer(pointer2, position2, position2);
+/// recognizer.handle_event(PointerDispatch::at_root(&pointer_event));
 /// ```
 #[derive(Clone)]
 pub struct MultiTapGestureRecognizer {
@@ -427,19 +428,29 @@ impl MultiTapGestureRecognizer {
 }
 
 impl GestureRecognizer for MultiTapGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        // Multi-tap's per-pointer callbacks carry no position, so none of them
+        // reports the global one. The base records it anyway — the stored
+        // contact is one value in two spaces, and half of it is a trap.
+        global_position: Offset<Pixels>,
+    ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
-            self.state.start_tracking(pointer, position, self);
+            self.state
+                .start_tracking(pointer, position, global_position, self);
         }
 
         self.handle_pointer_down(pointer, position, PointerType::Touch);
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
@@ -521,11 +532,17 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = MultiTapGestureRecognizer::new(arena.clone(), 2)
             .with_on_multi_tap_cancel(|_| panic!("multi tap cancel panic"));
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        recognizer.add_pointer(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+        );
         arena.close(PointerId::PRIMARY);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+                PointerType::Touch,
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -554,7 +571,11 @@ mod tests {
         let recognizer = MultiTapGestureRecognizer::new(arena, 3)
             .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
 
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(0.0), Pixels(0.0)));
+        recognizer.add_pointer(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
         assert_eq!(
             recognizer.gesture_state.lock().phase,
             MultiTapPhase::Collecting,
@@ -614,16 +635,17 @@ mod tests {
                 .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
 
             let origin = Offset::new(Pixels(100.0), Pixels(100.0));
-            recognizer.add_pointer(PointerId::PRIMARY, origin);
+            recognizer.add_pointer(PointerId::PRIMARY, origin, origin);
             recognizer.add_pointer(
                 PointerId::new(3).expect("nonzero pointer id"),
                 Offset::new(Pixels(200.0), Pixels(100.0)),
+                Offset::new(Pixels(200.0), Pixels(100.0)),
             );
 
-            recognizer.handle_event(&crate::events::make_move_event(
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
                 Offset::new(Pixels(100.0 + drift), Pixels(100.0)),
                 kind,
-            ));
+            )));
 
             let tracked = recognizer.gesture_state.lock().pointers.len();
             // `reject` withdraws only this member and deliberately leaves the
@@ -670,8 +692,16 @@ mod tests {
         let pointer2 = PointerId::new(3).expect("nonzero pointer id");
 
         // Add two pointers
-        recognizer.add_pointer(pointer1, Offset::new(Pixels(100.0), Pixels(100.0)));
-        recognizer.add_pointer(pointer2, Offset::new(Pixels(200.0), Pixels(100.0)));
+        recognizer.add_pointer(
+            pointer1,
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+        );
+        recognizer.add_pointer(
+            pointer2,
+            Offset::new(Pixels(200.0), Pixels(100.0)),
+            Offset::new(Pixels(200.0), Pixels(100.0)),
+        );
 
         // Verify collecting phase
         let state = recognizer.gesture_state.lock();
@@ -707,13 +737,16 @@ mod tests {
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
             Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
         );
         recognizer.add_pointer(
             PointerId::new(3).expect("nonzero pointer id"),
             Offset::new(Pixels(200.0), Pixels(100.0)),
+            Offset::new(Pixels(200.0), Pixels(100.0)),
         );
         recognizer.add_pointer(
             PointerId::new(4).expect("nonzero pointer id"),
+            Offset::new(Pixels(150.0), Pixels(200.0)),
             Offset::new(Pixels(150.0), Pixels(200.0)),
         );
 
@@ -757,9 +790,11 @@ mod tests {
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
             Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
         );
         recognizer.add_pointer(
             PointerId::new(3).expect("nonzero pointer id"),
+            Offset::new(Pixels(100.0), Pixels(0.0)),
             Offset::new(Pixels(100.0), Pixels(0.0)),
         );
 
@@ -794,13 +829,16 @@ mod tests {
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
             Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
         );
         recognizer.add_pointer(
             PointerId::new(3).expect("nonzero pointer id"),
             Offset::new(Pixels(200.0), Pixels(100.0)),
+            Offset::new(Pixels(200.0), Pixels(100.0)),
         );
         recognizer.add_pointer(
             PointerId::new(4).expect("nonzero pointer id"),
+            Offset::new(Pixels(150.0), Pixels(200.0)),
             Offset::new(Pixels(150.0), Pixels(200.0)),
         );
 

@@ -52,6 +52,7 @@ use crate::{
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
+    routing::PointerDispatch,
     settings::GestureSettings,
     traits::PointerEventExtTrait,
 };
@@ -171,8 +172,14 @@ struct TapDragCallbacks {
 struct DragState {
     /// Initial position at down.
     initial: Option<Offset<Pixels>>,
+    /// The same contact as `initial`, in the root's space — stored because
+    /// dispatch localises the event before this recognizer sees it, so the
+    /// global position exists only on arrival (issue #908).
+    initial_global: Option<Offset<Pixels>>,
     /// Last update position.
     last: Option<Offset<Pixels>>,
+    /// The same contact as `last`, in the root's space.
+    last_global: Option<Offset<Pixels>>,
     /// Velocity tracker for end-of-drag velocity.
     velocity_tracker: VelocityTracker,
     /// `true` while a tap outcome is still possible. Set `false` once the
@@ -185,7 +192,9 @@ impl Default for DragState {
     fn default() -> Self {
         Self {
             initial: None,
+            initial_global: None,
             last: None,
+            last_global: None,
             velocity_tracker: VelocityTracker::new(),
             tap_viable: true,
         }
@@ -349,6 +358,7 @@ impl TapAndDragGestureRecognizer {
         *self.accepted.lock() = None;
         let mut ds = self.drag_state.lock();
         ds.initial = None;
+        ds.initial_global = None;
         ds.last = None;
         ds.tap_viable = true;
         ds.velocity_tracker.reset();
@@ -364,7 +374,12 @@ impl TapAndDragGestureRecognizer {
 }
 
 impl GestureRecognizer for TapAndDragGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap_and_drag.add_pointer",
@@ -374,12 +389,14 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
 
         // Initialise drag state for the new pointer.
         {
             let mut ds = self.drag_state.lock();
             ds.initial = Some(position);
+            ds.initial_global = Some(global_position);
             ds.last = Some(position);
             ds.tap_viable = true;
             ds.velocity_tracker.reset();
@@ -392,7 +409,8 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         *self.phase.lock() = Phase::Down;
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap_and_drag.handle_event",
@@ -409,24 +427,27 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if event.pointer_id() != primary {
             return;
         }
+        // Read once, here: this is the only point at which the untransformed
+        // position is available at all (issue #908).
+        let global_position = dispatch.global.position();
 
         match event {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 let kind = data.pointer.pointer_type;
-                self.handle_move(position, kind);
+                self.handle_move(position, global_position, kind);
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                self.handle_up(position, data.pointer.pointer_type);
+                self.handle_up(position, global_position, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(info) => {
                 if let Some(pos) = self.state.initial_position() {
-                    self.handle_cancel(Some(pos), info.pointer_type);
+                    self.handle_cancel(Some(pos), Some(global_position), info.pointer_type);
                 } else {
-                    self.handle_cancel(None, info.pointer_type);
+                    self.handle_cancel(None, None, info.pointer_type);
                 }
             }
             _ => {}
@@ -451,7 +472,12 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
 }
 
 impl TapAndDragGestureRecognizer {
-    fn handle_move(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_move(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let phase = *self.phase.lock();
         match phase {
             Phase::Down => {
@@ -468,7 +494,11 @@ impl TapAndDragGestureRecognizer {
                     // warn and bail rather than panicking in a gesture
                     // hot path. The recogniser will simply not promote
                     // this move to a drag — the next move can retry.
-                    let Some(initial) = self.drag_state.lock().initial else {
+                    let (initial_opt, initial_global_opt) = {
+                        let ds = self.drag_state.lock();
+                        (ds.initial, ds.initial_global)
+                    };
+                    let Some(initial) = initial_opt else {
                         tracing::warn!(
                             target: "flui_interaction::tap_and_drag",
                             "drag_state.initial unset in handle_move; \
@@ -481,7 +511,7 @@ impl TapAndDragGestureRecognizer {
                     let down_cb = self.callbacks.borrow().on_tap_down.clone();
                     if let Some(cb) = down_cb {
                         cb(TapDragDownDetails {
-                            global_position: initial,
+                            global_position: initial_global_opt.unwrap_or(initial),
                             local_position: initial,
                             kind,
                         });
@@ -491,6 +521,7 @@ impl TapAndDragGestureRecognizer {
                     {
                         let mut ds = self.drag_state.lock();
                         ds.last = Some(position);
+                        ds.last_global = Some(global_position);
                         ds.velocity_tracker.reset();
                         ds.velocity_tracker.add_position(self.state.now(), position);
                     }
@@ -498,7 +529,7 @@ impl TapAndDragGestureRecognizer {
                     let start_cb = self.callbacks.borrow().on_drag_start.clone();
                     if let Some(cb) = start_cb {
                         cb(TapDragStartDetails {
-                            global_position: initial,
+                            global_position: initial_global_opt.unwrap_or(initial),
                             local_position: initial,
                             kind,
                         });
@@ -509,7 +540,7 @@ impl TapAndDragGestureRecognizer {
                     let update_cb = self.callbacks.borrow().on_drag_update.clone();
                     if let Some(cb) = update_cb {
                         cb(TapDragUpdateDetails {
-                            global_position: position,
+                            global_position,
                             local_position: position,
                             delta,
                             kind,
@@ -540,7 +571,7 @@ impl TapAndDragGestureRecognizer {
                 let cb = self.callbacks.borrow().on_drag_update.clone();
                 if let Some(cb) = cb {
                     cb(TapDragUpdateDetails {
-                        global_position: position,
+                        global_position,
                         local_position: position,
                         delta,
                         kind,
@@ -551,13 +582,18 @@ impl TapAndDragGestureRecognizer {
         }
     }
 
-    fn handle_up(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_up(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let phase = *self.phase.lock();
         match phase {
             Phase::Down => {
-                let (initial, tap_viable) = {
+                let (initial, initial_global, tap_viable) = {
                     let ds = self.drag_state.lock();
-                    (ds.initial, ds.tap_viable)
+                    (ds.initial, ds.initial_global, ds.tap_viable)
                 };
                 *self.phase.lock() = Phase::Finished;
 
@@ -577,7 +613,7 @@ impl TapAndDragGestureRecognizer {
                         let down_cb = self.callbacks.borrow().on_tap_down.clone();
                         if let Some(cb) = down_cb {
                             cb(TapDragDownDetails {
-                                global_position: initial,
+                                global_position: initial_global.unwrap_or(initial),
                                 local_position: initial,
                                 kind,
                             });
@@ -586,7 +622,7 @@ impl TapAndDragGestureRecognizer {
                     let up_cb = self.callbacks.borrow().on_tap_up.clone();
                     if let Some(cb) = up_cb {
                         cb(TapDragUpDetails {
-                            global_position: position,
+                            global_position,
                             local_position: position,
                             kind,
                         });
@@ -601,7 +637,7 @@ impl TapAndDragGestureRecognizer {
                 if let Some(cb) = end_cb {
                     cb(TapDragEndDetails {
                         velocity,
-                        global_position: position,
+                        global_position,
                         local_position: position,
                     });
                 }
@@ -613,14 +649,21 @@ impl TapAndDragGestureRecognizer {
         }
     }
 
-    fn handle_cancel(&self, position: Option<Offset<Pixels>>, _kind: PointerType) {
+    fn handle_cancel(
+        &self,
+        position: Option<Offset<Pixels>>,
+        global_position: Option<Offset<Pixels>>,
+        _kind: PointerType,
+    ) {
         let phase = *self.phase.lock();
         if phase == Phase::Ready || phase == Phase::Finished {
             return;
         }
         // We were mid-gesture. Withdraw and reset before invoking user code.
         let cb = self.callbacks.borrow().on_cancel.clone();
-        let _ = position; // Currently unused — cancel details don't carry position.
+        // Cancel carries no details, in either space, so both positions are
+        // accepted and dropped rather than being made to look meaningful.
+        let _ = (position, global_position);
         *self.phase.lock() = Phase::Finished;
         self.state.reject();
         self.reset();
@@ -689,6 +732,7 @@ impl GestureArenaMember for TapAndDragGestureRecognizer {
         *self.phase.lock() = Phase::Ready;
         let mut ds = self.drag_state.lock();
         ds.initial = None;
+        ds.initial_global = None;
         ds.last = None;
         ds.velocity_tracker.reset();
     }
@@ -729,17 +773,21 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        rec.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+        rec.add_pointer(
+            pointer,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
 
         // Move 20px: past tap slop (10) but under drag slop (30) — voids the tap.
-        rec.handle_event(&make_move_event(
+        rec.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(20.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
-        rec.handle_event(&make_up_event(
+        )));
+        rec.handle_event(PointerDispatch::at_root(&make_up_event(
             Offset::new(Pixels(20.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
+        )));
 
         assert!(!*tap_down.lock(), "voided tap must not fire on_tap_down");
         assert!(!*tap_up.lock(), "voided tap must not fire on_tap_up");
@@ -772,16 +820,19 @@ mod tests {
 
         let pointer = PointerId::PRIMARY;
         let pos = Offset::new(Pixels(50.0), Pixels(50.0));
-        rec.add_pointer(pointer, pos);
+        rec.add_pointer(pointer, pos, pos);
 
         // Tiny move (5px) — well under both tap and drag slop.
-        rec.handle_event(&make_move_event(
+        rec.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(53.0), Pixels(52.0)),
             PointerType::Touch,
-        ));
+        )));
 
         // Up — tap resolves.
-        rec.handle_event(&make_up_event(pos, PointerType::Touch));
+        rec.handle_event(PointerDispatch::at_root(&make_up_event(
+            pos,
+            PointerType::Touch,
+        )));
 
         assert!(*tap_down.lock(), "tap_down should fire on tap resolution");
         assert!(*tap_up.lock(), "tap_up should fire on tap resolution");
@@ -825,8 +876,11 @@ mod tests {
                 .with_on_drag_start(move |_| *started.lock() = true);
 
             let origin = Offset::new(Pixels(0.0), Pixels(0.0));
-            rec.add_pointer(PointerId::PRIMARY, origin);
-            rec.handle_event(&make_move_event(Offset::new(Pixels(dx), Pixels(0.0)), kind));
+            rec.add_pointer(PointerId::PRIMARY, origin, origin);
+            rec.handle_event(PointerDispatch::at_root(&make_move_event(
+                Offset::new(Pixels(dx), Pixels(0.0)),
+                kind,
+            )));
 
             let started = *drag_start.lock();
             let tap_viable = rec.drag_state.lock().tap_viable;
@@ -892,11 +946,14 @@ mod tests {
 
         let pointer = PointerId::PRIMARY;
         let pos = Offset::new(Pixels(0.0), Pixels(0.0));
-        rec.add_pointer(pointer, pos);
+        rec.add_pointer(pointer, pos, pos);
 
         // Big move (40px) — past the default 18px drag slop.
         let big_pos = Offset::new(Pixels(40.0), Pixels(0.0));
-        rec.handle_event(&make_move_event(big_pos, PointerType::Touch));
+        rec.handle_event(PointerDispatch::at_root(&make_move_event(
+            big_pos,
+            PointerType::Touch,
+        )));
 
         // Drag started on slop crossing.
         assert!(*drag_start.lock(), "drag_start fires when slop crossed");
@@ -906,20 +963,20 @@ mod tests {
         );
 
         // One more move.
-        rec.handle_event(&make_move_event(
+        rec.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(60.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
+        )));
 
         // We expect 2 updates: one from the slop-crossing event itself,
         // one from the follow-up move.
         assert_eq!(*drag_update_count.lock(), 2, "two drag updates expected");
 
         // Up — drag ends.
-        rec.handle_event(&make_up_event(
+        rec.handle_event(PointerDispatch::at_root(&make_up_event(
             Offset::new(Pixels(60.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
+        )));
         assert!(*drag_end.lock(), "drag_end fires on pointer up");
     }
 
@@ -934,12 +991,16 @@ mod tests {
         });
 
         let pointer = PointerId::PRIMARY;
-        rec.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+        rec.add_pointer(
+            pointer,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
 
         // Drive a cancel event. We need a cancel-shaped PointerEvent
         // — pull from the events module.
         let cancel = crate::events::make_cancel_event(PointerType::Touch);
-        rec.handle_event(&cancel);
+        rec.handle_event(PointerDispatch::at_root(&cancel));
 
         assert!(*cancelled.lock());
         // Explicitly drop the recogniser to verify no Drop-induced hang.
@@ -951,11 +1012,17 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = TapAndDragGestureRecognizer::new(arena.clone())
             .with_on_cancel(|| panic!("tap and drag cancel panic"));
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        recognizer.add_pointer(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+        );
         arena.close(PointerId::PRIMARY);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+                PointerType::Touch,
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -970,8 +1037,11 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let pos = Offset::new(Pixels(0.0), Pixels(0.0));
 
-        rec.add_pointer(pointer, pos);
-        rec.handle_event(&make_up_event(pos, PointerType::Touch));
+        rec.add_pointer(pointer, pos, pos);
+        rec.handle_event(PointerDispatch::at_root(&make_up_event(
+            pos,
+            PointerType::Touch,
+        )));
         assert_eq!(*rec.phase.lock(), Phase::Ready);
         assert!(rec.drag_state.lock().initial.is_none());
     }
@@ -983,17 +1053,17 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let pos = Offset::new(Pixels(0.0), Pixels(0.0));
 
-        rec.add_pointer(pointer, pos);
+        rec.add_pointer(pointer, pos, pos);
         // Cross slop.
-        rec.handle_event(&make_move_event(
+        rec.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(40.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
+        )));
         // End drag.
-        rec.handle_event(&make_up_event(
+        rec.handle_event(PointerDispatch::at_root(&make_up_event(
             Offset::new(Pixels(40.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
+        )));
 
         assert_eq!(*rec.phase.lock(), Phase::Ready);
         assert!(rec.drag_state.lock().initial.is_none());
@@ -1019,14 +1089,14 @@ mod tests {
         });
 
         // No add_pointer — primary_pointer() is None.
-        rec.handle_event(&make_move_event(
+        rec.handle_event(PointerDispatch::at_root(&make_move_event(
             Offset::new(Pixels(40.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
-        rec.handle_event(&make_up_event(
+        )));
+        rec.handle_event(PointerDispatch::at_root(&make_up_event(
             Offset::new(Pixels(40.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
+        )));
 
         assert!(!*drag_start.lock());
     }
@@ -1087,13 +1157,17 @@ mod tests {
                 move |_| *f.lock() = true
             });
 
-        rec.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0))); // later member
+        rec.add_pointer(
+            pointer,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        ); // later member
         // Plain tap (no move past slop): the up resolves the arena, and the
         // earlier competitor — not this recogniser — wins.
-        rec.handle_event(&make_up_event(
+        rec.handle_event(PointerDispatch::at_root(&make_up_event(
             Offset::new(Pixels(0.0), Pixels(0.0)),
             PointerType::Touch,
-        ));
+        )));
 
         assert!(
             !*tap_down.lock(),
@@ -1159,16 +1233,19 @@ mod clock_source_tests {
         });
 
         let at = |x: f32| Offset::new(Pixels(x), Pixels(0.0));
-        recognizer.add_pointer(PointerId::PRIMARY, at(0.0));
+        recognizer.add_pointer(PointerId::PRIMARY, at(0.0), at(0.0));
         for sample in 1..=6 {
             clock.advance(step);
-            recognizer.handle_event(&make_move_event(
+            recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
                 at(40.0 * sample as f32),
                 PointerType::Touch,
-            ));
+            )));
         }
         clock.advance(step);
-        recognizer.handle_event(&make_up_event(at(240.0), PointerType::Touch));
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            at(240.0),
+            PointerType::Touch,
+        )));
 
         let velocity = *reported.lock();
         velocity.abs()

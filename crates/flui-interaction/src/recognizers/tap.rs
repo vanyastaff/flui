@@ -34,6 +34,7 @@ use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType},
     ids::PointerId,
+    routing::PointerDispatch,
     settings::GestureSettings,
     traits::PointerEventExtTrait,
 };
@@ -439,11 +440,17 @@ impl TapGestureRecognizer {
     /// `button` is locked at down-time; a primary-button down that
     /// later receives a secondary up is treated as cancel (button
     /// mismatch), matching Flutter's `_route` rejection path.
-    fn handle_tap_down(&self, position: Offset<Pixels>, kind: PointerType, button: TapButton) {
+    fn handle_tap_down(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+        button: TapButton,
+    ) {
         *self.gesture_state.lock() = TapState::Down;
         *self.pending_down.lock() = Some(PendingDown {
             details: TapDetails {
-                global_position: position,
+                global_position,
                 local_position: position,
                 kind,
             },
@@ -511,7 +518,13 @@ impl TapGestureRecognizer {
     /// the tap rather than firing the secondary slot — Flutter
     /// `tap.dart::_checkUp` routes the up to whichever button stream
     /// initiated the down.
-    fn handle_tap_up(&self, position: Offset<Pixels>, kind: PointerType, button: TapButton) {
+    fn handle_tap_up(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+        button: TapButton,
+    ) {
         let current_state = *self.gesture_state.lock();
 
         if current_state != TapState::Down {
@@ -528,7 +541,7 @@ impl TapGestureRecognizer {
             let cancel_cb = self.callbacks.borrow().cancel(down_btn).cloned();
             if let Some(cb) = cancel_cb {
                 let details = TapDetails {
-                    global_position: position,
+                    global_position,
                     local_position: position,
                     kind,
                 };
@@ -541,7 +554,7 @@ impl TapGestureRecognizer {
 
         *self.gesture_state.lock() = TapState::Ready;
         let details = TapDetails {
-            global_position: position,
+            global_position,
             local_position: position,
             kind,
         };
@@ -560,7 +573,12 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap cancel event.
-    fn handle_tap_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_tap_cancel(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -579,7 +597,7 @@ impl TapGestureRecognizer {
             self.state.reject();
             if let Some(cb) = cancel_cb {
                 cb(TapDetails {
-                    global_position: position,
+                    global_position,
                     local_position: position,
                     kind,
                 });
@@ -588,7 +606,12 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap move event (pointer moved within slop tolerance)
-    fn handle_tap_move(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_tap_move(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -597,7 +620,7 @@ impl TapGestureRecognizer {
             // still observed by `on_tap_move`).
             if let Some(callback) = self.callbacks.borrow().on_tap_move.clone() {
                 let details = TapDetails {
-                    global_position: position,
+                    global_position,
                     local_position: position,
                     kind,
                 };
@@ -643,7 +666,12 @@ impl TapGestureRecognizer {
 }
 
 impl GestureRecognizer for TapGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap.add_pointer",
@@ -670,7 +698,8 @@ impl GestureRecognizer for TapGestureRecognizer {
         *self.pending_up.lock() = None;
         *self.sequence_pointer.lock() = Some(pointer);
         // Start tracking this exact recognizer allocation.
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
 
         // Stage the down so the documented `add_pointer` = "pointer is down"
         // contract holds: a subsequent up fires the tap even when no separate
@@ -679,10 +708,16 @@ impl GestureRecognizer for TapGestureRecognizer {
         // `handle_event` refines them before any up. `handle_tap_down` only
         // records pending state (it fires no callback), so this cannot
         // accidentally win the arena or double-fire `on_tap_down`.
-        self.handle_tap_down(position, PointerType::Touch, TapButton::Primary);
+        self.handle_tap_down(
+            position,
+            global_position,
+            PointerType::Touch,
+            TapButton::Primary,
+        );
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap.handle_event",
@@ -701,13 +736,16 @@ impl GestureRecognizer for TapGestureRecognizer {
         if event.pointer_id() != primary {
             return;
         }
+        // Read once, here: this is the only point at which the untransformed
+        // position is available at all (issue #908).
+        let global_position = dispatch.global.position();
 
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 let button = Self::down_button(event);
-                self.handle_tap_down(position, data.pointer.pointer_type, button);
+                self.handle_tap_down(position, global_position, data.pointer.pointer_type, button);
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
@@ -715,22 +753,27 @@ impl GestureRecognizer for TapGestureRecognizer {
                 let pointer_type = data.pointer.pointer_type;
                 // Check if moved too far (slop detection)
                 if self.check_slop(position) {
-                    self.handle_tap_cancel(position, pointer_type);
+                    self.handle_tap_cancel(position, global_position, pointer_type);
                 } else {
                     // Still within slop - call tap move callback
-                    self.handle_tap_move(position, pointer_type);
+                    self.handle_tap_move(position, global_position, pointer_type);
                 }
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 let button = Self::up_button(event);
-                self.handle_tap_up(position, data.pointer.pointer_type, button);
+                self.handle_tap_up(position, global_position, data.pointer.pointer_type, button);
             }
             PointerEvent::Cancel(info) => {
-                // Cancel doesn't have position, use initial position
+                // A cancel carries no position at all, in EITHER space — the
+                // event's own `position()` answers `Offset::ZERO`. Both halves
+                // therefore fall back to the recorded contact, and they fall
+                // back together: reporting the stored local beside a zero
+                // global would restate the very defect this pair exists to fix.
                 if let Some(pos) = self.state.initial_position() {
-                    self.handle_tap_cancel(pos, info.pointer_type);
+                    let global = self.state.initial_global_position().unwrap_or(pos);
+                    self.handle_tap_cancel(pos, global, info.pointer_type);
                 }
             }
             _ => {}
@@ -813,10 +856,10 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognize
         self.state.initial_position()
     }
 
-    fn handle_primary_pointer(&self, event: &PointerEvent) {
+    fn handle_primary_pointer(&self, dispatch: PointerDispatch<'_>) {
         // Tap dispatches all primary-pointer events through handle_event;
         // delegate via the supertrait method.
-        <Self as GestureRecognizer>::handle_event(self, event);
+        <Self as GestureRecognizer>::handle_event(self, dispatch);
     }
 }
 
@@ -894,11 +937,13 @@ mod tests {
         let recognizer = TapGestureRecognizer::new(arena.clone())
             .with_on_tap_cancel(|_| panic!("tap cancel panic"));
         let position = pos(1.0, 2.0);
-        recognizer.add_pointer(PointerId::PRIMARY, position);
+        recognizer.add_pointer(PointerId::PRIMARY, position, position);
         arena.close(PointerId::PRIMARY);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+                PointerType::Touch,
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -959,9 +1004,9 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = pos(100.0, 100.0);
 
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&primary_down(position));
-        recognizer.handle_event(&primary_up(position));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&primary_down(position)));
+        recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
 
         assert!(*tapped.lock());
     }
@@ -979,9 +1024,9 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = pos(24.0, 42.0);
 
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&primary_down(position));
-        recognizer.handle_event(&primary_up(position));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&primary_down(position)));
+        recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
 
         assert_eq!(taps.get(), 1);
     }
@@ -1002,8 +1047,8 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = pos(4.0, 4.0);
 
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&primary_up(position));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
 
         assert!(
             *tapped.lock(),
@@ -1031,15 +1076,15 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let start_pos = pos(100.0, 100.0);
 
-        recognizer.add_pointer(pointer, start_pos);
-        recognizer.handle_event(&primary_down(start_pos));
+        recognizer.add_pointer(pointer, start_pos, start_pos);
+        recognizer.handle_event(PointerDispatch::at_root(&primary_down(start_pos)));
 
         // 30px away — beyond TAP_SLOP = 18px.
         let moved_pos = pos(100.0, 130.0);
-        recognizer.handle_event(&crate::events::make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
-        ));
+        )));
 
         assert!(*cancelled.lock());
         assert!(!*tapped.lock());
@@ -1058,17 +1103,17 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let start_pos = pos(100.0, 100.0);
 
-        recognizer.add_pointer(pointer, start_pos);
-        recognizer.handle_event(&primary_down(start_pos));
+        recognizer.add_pointer(pointer, start_pos, start_pos);
+        recognizer.handle_event(PointerDispatch::at_root(&primary_down(start_pos)));
 
         // ~7px — within slop.
         let moved_pos = pos(105.0, 105.0);
-        recognizer.handle_event(&crate::events::make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
-        ));
+        )));
 
-        recognizer.handle_event(&primary_up(moved_pos));
+        recognizer.handle_event(PointerDispatch::at_root(&primary_up(moved_pos)));
 
         assert!(*tapped.lock());
     }
@@ -1079,6 +1124,50 @@ mod tests {
 
     /// Right-click down + up fires `on_secondary_tap`; primary slot
     /// stays silent.
+    /// A CANCEL reports the down contact in both spaces, not `Offset::ZERO`.
+    ///
+    /// `PointerEvent::Cancel` carries no position at all, so a recogniser
+    /// reporting a cancelled gesture has to fall back to what it recorded at
+    /// the down. The local half always did; the global half read the cancel
+    /// event's own position, which is `Offset::ZERO` — so a cancel reported a
+    /// real local position beside a global one that named the top-left corner
+    /// of the window, whatever the gesture had actually touched.
+    ///
+    /// The two are 150 px apart here, the shape a nested node produces. A test
+    /// where they coincide cannot tell a fixed recogniser from a broken one.
+    #[test]
+    fn a_cancel_reports_the_down_contact_in_both_spaces() {
+        let arena = GestureArena::new();
+        let cancelled: Arc<Mutex<Vec<TapDetails>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&cancelled);
+        let recognizer = TapGestureRecognizer::new(arena)
+            .with_on_tap_cancel(move |details| sink.lock().push(details));
+
+        let offset = Offset::new(Pixels(150.0), Pixels(150.0));
+        let down_local = Offset::new(Pixels(10.0), Pixels(10.0));
+        let down_global = down_local + offset;
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, down_local, down_global);
+
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+            PointerType::Touch,
+        )));
+
+        let reported = cancelled.lock();
+        let details = reported
+            .first()
+            .expect("the cancel must have been reported");
+        assert_eq!(
+            details.local_position, down_local,
+            "the local half falls back to the recorded contact, as it always did"
+        );
+        assert_eq!(
+            details.global_position, down_global,
+            "the global half must fall back with it — reading the cancel \
+             event's own position gives Offset::ZERO"
+        );
+    }
+
     #[test]
     fn secondary_button_routes_to_secondary_callbacks() {
         let arena = GestureArena::new();
@@ -1094,9 +1183,9 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = pos(50.0, 50.0);
 
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&secondary_down(position));
-        recognizer.handle_event(&secondary_up(position));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&secondary_down(position)));
+        recognizer.handle_event(PointerDispatch::at_root(&secondary_up(position)));
 
         assert!(*secondary_tapped.lock());
         assert!(!*primary_tapped.lock());
@@ -1119,9 +1208,9 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = pos(60.0, 60.0);
 
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&tertiary_down(position));
-        recognizer.handle_event(&tertiary_up(position));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&tertiary_down(position)));
+        recognizer.handle_event(PointerDispatch::at_root(&tertiary_up(position)));
 
         assert!(*tertiary_tapped.lock());
         assert!(!*primary_tapped.lock());
@@ -1149,10 +1238,10 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = pos(70.0, 70.0);
 
-        recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&primary_down(position));
+        recognizer.add_pointer(pointer, position, position);
+        recognizer.handle_event(PointerDispatch::at_root(&primary_down(position)));
         // Up carries a different button — cancels the primary tap.
-        recognizer.handle_event(&secondary_up(position));
+        recognizer.handle_event(PointerDispatch::at_root(&secondary_up(position)));
 
         assert!(*cancelled.lock());
         assert!(!*tapped.lock());
@@ -1176,16 +1265,16 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let start_pos = pos(80.0, 80.0);
 
-        recognizer.add_pointer(pointer, start_pos);
-        recognizer.handle_event(&secondary_down(start_pos));
+        recognizer.add_pointer(pointer, start_pos, start_pos);
+        recognizer.handle_event(PointerDispatch::at_root(&secondary_down(start_pos)));
 
         // 30px move — past TAP_SLOP. Slop detection routes to the
         // secondary cancel slot because the down button is Secondary.
         let moved_pos = pos(80.0, 110.0);
-        recognizer.handle_event(&crate::events::make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
-        ));
+        )));
 
         assert!(*secondary_cancelled.lock());
         assert!(!*primary_cancelled.lock());
@@ -1230,10 +1319,10 @@ mod tests {
 
         // Held, so the up doesn't self-sweep-resolve immediately — mirrors
         // the shape of the overlapping-contact tests below.
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
         recognizer.state.arena().hold(pointer);
-        recognizer.handle_event(&primary_down(position));
-        recognizer.handle_event(&primary_up(position));
+        recognizer.handle_event(PointerDispatch::at_root(&primary_down(position)));
+        recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
         assert_eq!(*taps.lock(), 0, "held: resolution not yet delivered");
 
         recognizer.accept_gesture(pointer);
@@ -1266,18 +1355,18 @@ mod tests {
 
         // Pointer A: down + up, held — its arena entry never resolves here,
         // simulating a double-tap's inter-tap window.
-        recognizer.add_pointer(pointer_a, pos_a);
+        recognizer.add_pointer(pointer_a, pos_a, pos_a);
         recognizer.state.arena().hold(pointer_a);
-        recognizer.handle_event(&down_for(pointer_a, pos_a));
-        recognizer.handle_event(&up_for(pointer_a, pos_a));
+        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_a, pos_a)));
+        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_a, pos_a)));
         assert_eq!(*taps.lock(), 0, "A's win is held, resolution deferred");
 
         // Pointer B replaces A as the tracked sequence before A resolves.
         // B's own (unheld, sole-member) arena entry self-sweep-resolves on
         // its own up.
-        recognizer.add_pointer(pointer_b, pos_b);
-        recognizer.handle_event(&down_for(pointer_b, pos_b));
-        recognizer.handle_event(&up_for(pointer_b, pos_b));
+        recognizer.add_pointer(pointer_b, pos_b, pos_b);
+        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_b, pos_b)));
+        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_b, pos_b)));
         assert_eq!(*taps.lock(), 1, "B's tap fires exactly once");
 
         // A's held win eventually arrives — ignored, not fired as a
@@ -1310,21 +1399,21 @@ mod tests {
         let pos_b = pos(200.0, 200.0);
 
         // Pointer A: down + up, held.
-        recognizer.add_pointer(pointer_a, pos_a);
+        recognizer.add_pointer(pointer_a, pos_a, pos_a);
         recognizer.state.arena().hold(pointer_a);
-        recognizer.handle_event(&down_for(pointer_a, pos_a));
-        recognizer.handle_event(&up_for(pointer_a, pos_a));
+        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_a, pos_a)));
+        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_a, pos_a)));
 
         // Pointer B replaces A before A resolves, and is still mid-sequence
         // (down only) when A's stale rejection arrives.
-        recognizer.add_pointer(pointer_b, pos_b);
-        recognizer.handle_event(&down_for(pointer_b, pos_b));
+        recognizer.add_pointer(pointer_b, pos_b, pos_b);
+        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_b, pos_b)));
 
         // Stale rejection for the abandoned pointer A must not wipe B's
         // in-flight `pending_down`.
         recognizer.reject_gesture(pointer_a);
 
-        recognizer.handle_event(&up_for(pointer_b, pos_b));
+        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_b, pos_b)));
         assert_eq!(
             *taps.lock(),
             1,

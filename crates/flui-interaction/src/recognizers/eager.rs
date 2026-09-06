@@ -40,7 +40,7 @@
 //! // pointer event is required. The owner closes the arena after routing Down.
 //! let pointer = PointerId::PRIMARY;
 //! let position = Offset::new(Pixels(50.0), Pixels(50.0));
-//! recognizer.add_pointer(pointer, position);
+//! recognizer.add_pointer(pointer, position, position);
 //! assert!(arena.contains(pointer));
 //! arena.close(pointer);
 //! assert!(arena.contains(pointer));
@@ -68,8 +68,8 @@ use parking_lot::Mutex;
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::{GestureArena, GestureArenaMember, GestureDisposition},
-    events::PointerEvent,
     ids::PointerId,
+    routing::PointerDispatch,
     settings::GestureSettings,
 };
 
@@ -120,7 +120,17 @@ impl EagerGestureRecognizer {
 }
 
 impl GestureRecognizer for EagerGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        // Eager reports no position in any callback of its own, but the base
+        // records the contact in both spaces all the same: `initial_position`
+        // and `initial_global_position` are read through the
+        // `PrimaryPointerGestureRecognizer` trait, and a half-recorded contact
+        // there would be a trap for the next reader.
+        global_position: Offset<Pixels>,
+    ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "eager.add_pointer",
@@ -134,7 +144,8 @@ impl GestureRecognizer for EagerGestureRecognizer {
         // records the primary pointer / initial position on the base.
         // No nested lock hold — `start_tracking` returns before the
         // `accept` call below touches the arena again.
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
         // Eager accept: resolve the arena in our favor immediately. If
         // the arena is still open we register as the eager winner
         // (auto-resolves on close); if it is already closed we resolve
@@ -142,7 +153,8 @@ impl GestureRecognizer for EagerGestureRecognizer {
         self.state.accept_tracked();
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "eager.handle_event",
@@ -205,11 +217,11 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for EagerGestureRecogni
         self.state.initial_position()
     }
 
-    fn handle_primary_pointer(&self, event: &PointerEvent) {
+    fn handle_primary_pointer(&self, dispatch: PointerDispatch<'_>) {
         // Eager funnels all primary-pointer events through the base
         // `handle_event` (no per-event logic). Delegate via the
         // supertrait method so the disposed-state guard runs.
-        <Self as GestureRecognizer>::handle_event(self, event);
+        <Self as GestureRecognizer>::handle_event(self, dispatch);
     }
 }
 
@@ -230,7 +242,7 @@ impl GestureArenaMember for EagerGestureRecognizer {
         // the arena's per-entry lock; another `arena.resolve` call would
         // re-deadlock under `parking_lot::Mutex`.
         self.state.set_primary_pointer(None);
-        self.state.set_initial_position(None);
+        self.state.clear_initial_contact();
     }
 }
 
@@ -302,7 +314,7 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let position = pos(50.0, 50.0);
 
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         assert!(arena.contains(pointer));
         assert!(arena.is_open(pointer));
@@ -331,7 +343,7 @@ mod tests {
         arena.add(pointer, competitor.clone());
 
         // Eager joins + immediately claims eager-winner.
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Close the arena — the eager winner takes the contest.
         arena.close(pointer);
@@ -347,7 +359,7 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = EagerGestureRecognizer::new(arena);
 
-        recognizer.add_pointer(PointerId::PRIMARY, pos(10.0, 20.0));
+        recognizer.add_pointer(PointerId::PRIMARY, pos(10.0, 20.0), pos(10.0, 20.0));
 
         assert_eq!(recognizer.primary_pointer(), Some(PointerId::PRIMARY));
     }
@@ -364,7 +376,7 @@ mod tests {
         let recognizer = EagerGestureRecognizer::new(arena);
 
         let position = pos(33.0, 44.0);
-        recognizer.add_pointer(PointerId::PRIMARY, position);
+        recognizer.add_pointer(PointerId::PRIMARY, position, position);
 
         assert_eq!(recognizer.initial_position(), Some(position));
     }
@@ -378,18 +390,21 @@ mod tests {
 
         let pointer = PointerId::PRIMARY;
         let position = pos(5.0, 5.0);
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Down / Move / Up should all run without panic or state change.
-        recognizer.handle_event(&crate::events::make_down_event(
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_down_event(
             position,
             PointerType::Touch,
-        ));
-        recognizer.handle_event(&crate::events::make_move_event(
+        )));
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
             position,
             PointerType::Touch,
-        ));
-        recognizer.handle_event(&crate::events::make_up_event(position, PointerType::Touch));
+        )));
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_up_event(
+            position,
+            PointerType::Touch,
+        )));
 
         // Primary pointer / initial position are still set (Eager does
         // not auto-stop on Up — the caller decides when to dispose).
@@ -403,7 +418,7 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = EagerGestureRecognizer::new(arena.clone());
 
-        recognizer.add_pointer(PointerId::PRIMARY, pos(0.0, 0.0));
+        recognizer.add_pointer(PointerId::PRIMARY, pos(0.0, 0.0), pos(0.0, 0.0));
         assert_eq!(recognizer.primary_pointer(), Some(PointerId::PRIMARY));
 
         recognizer.dispose();
@@ -418,7 +433,7 @@ mod tests {
         // guarantee holds in release; we gate the live call on that
         // condition so this test runs cleanly in both profiles.
         if !cfg!(debug_assertions) {
-            recognizer.add_pointer(PointerId::PRIMARY, pos(1.0, 1.0));
+            recognizer.add_pointer(PointerId::PRIMARY, pos(1.0, 1.0), pos(1.0, 1.0));
             assert_eq!(recognizer.primary_pointer(), None);
             assert!(!arena.contains(PointerId::PRIMARY));
         }
@@ -443,7 +458,7 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = EagerGestureRecognizer::new(arena);
 
-        recognizer.add_pointer(PointerId::PRIMARY, pos(10.0, 10.0));
+        recognizer.add_pointer(PointerId::PRIMARY, pos(10.0, 10.0), pos(10.0, 10.0));
         assert_eq!(recognizer.primary_pointer(), Some(PointerId::PRIMARY));
 
         <EagerGestureRecognizer as GestureArenaMember>::reject_gesture(
@@ -475,15 +490,18 @@ mod tests {
         let position = pos(0.0, 0.0);
 
         // Should not panic, should not resurrect cleared state.
-        recognizer.handle_event(&crate::events::make_down_event(
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_down_event(
             position,
             PointerType::Touch,
-        ));
-        recognizer.handle_event(&crate::events::make_move_event(
+        )));
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
             position,
             PointerType::Touch,
-        ));
-        recognizer.handle_event(&crate::events::make_up_event(position, PointerType::Touch));
+        )));
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_up_event(
+            position,
+            PointerType::Touch,
+        )));
 
         assert!(recognizer.state.is_disposed());
         assert_eq!(recognizer.primary_pointer(), None);

@@ -41,13 +41,16 @@
 //!    `PointerEvent` carries `position` (global) *and* `localPosition`, so a
 //!    widget always has both. FLUI's pointer events are `ui_events` types with
 //!    room for one position, so dispatch delivers the pair beside the event
-//!    instead, as a `PointerDispatch` — but that pair stops at the `Listener`.
-//!    This widget does not read pointer events itself: it feeds them to a
-//!    `MultiDragGestureRecognizer`, and the `GestureRecognizer` contract still
-//!    carries a single space, as do the `Drag*Details` structs it produces. So
-//!    this drag still knows only where the pointer is inside its *own* node,
-//!    and a hit test needs the root's space. The conversion between exactly
-//!    those two spaces is `PipelineOwner::local_to_global`, which needs the
+//!    instead, as a `PointerDispatch`. Issue #908 carried that pair the rest
+//!    of the way: `GestureRecognizer::handle_event` takes the dispatch, and
+//!    every `Drag*Details` reports its `global_position` from the
+//!    untransformed half. So a drag now knows both spaces, and a consumer
+//!    reaching for the global one gets a global one.
+//!
+//!    What survives is the ORIGIN probe below, for a different reason: it
+//!    needs the position of the draggable's own node, not of the pointer, and
+//!    no event carries that. The conversion between exactly those two spaces
+//!    is `PipelineOwner::local_to_global`, which needs the
 //!    `RenderId` of the node the local point belongs to, and [`DragOrigin`] —
 //!    a payload-free view mounted as the `Listener`'s direct child — is how
 //!    this widget learns it: its `find_render_object()` stops at the
@@ -1338,11 +1341,12 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let cancel_recognizer = recognizer;
 
         let listener = Listener::new()
-            // `dispatch.local` throughout: the multi-drag recognizer tracks a
-            // single space, and everything downstream of it — `DragSession`'s
-            // accumulated position, `to_global`, the `DragOrigin` probe — is
-            // built on that being the `Listener`'s own space. See the module's
-            // divergence note 2 for why the global half stops here.
+            // The whole pair goes through. `DragSession`'s accumulated
+            // position, `to_global` and the `DragOrigin` probe are all built
+            // on the LOCAL half being the `Listener`'s own space, and stay
+            // that way; the global half is what lets a recogniser report a
+            // global position at all, since dispatch rewrote it away before
+            // any handler here runs.
             .on_pointer_down(move |dispatch| {
                 if let Some(max) = max
                     && active_count.load(Ordering::Acquire) >= max
@@ -1350,11 +1354,15 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                     return;
                 }
                 let event = dispatch.local;
-                down_recognizer.add_pointer(event.pointer_id(), event.position());
+                down_recognizer.add_pointer(
+                    event.pointer_id(),
+                    event.position(),
+                    dispatch.global.position(),
+                );
             })
-            .on_pointer_move(move |dispatch| move_recognizer.handle_event(dispatch.local))
-            .on_pointer_up(move |dispatch| up_recognizer.handle_event(dispatch.local))
-            .on_pointer_cancel(move |dispatch| cancel_recognizer.handle_event(dispatch.local));
+            .on_pointer_move(move |dispatch| move_recognizer.handle_event(dispatch))
+            .on_pointer_up(move |dispatch| up_recognizer.handle_event(dispatch))
+            .on_pointer_cancel(move |dispatch| cancel_recognizer.handle_event(dispatch));
 
         let currently_active = self.active_count.load(Ordering::Acquire);
         let showing_child_when_dragging =

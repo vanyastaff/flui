@@ -2875,6 +2875,10 @@ mod realm_dispatch_tests {
                         flui_types::geometry::px(10.0),
                         flui_types::geometry::px(10.0),
                     ),
+                    flui_types::Offset::new(
+                        flui_types::geometry::px(10.0),
+                        flui_types::geometry::px(10.0),
+                    ),
                 );
                 recognizers_a.borrow_mut().push(recognizer);
             })),
@@ -2896,6 +2900,10 @@ mod realm_dispatch_tests {
                 let pointer = PointerId::new(3).expect("nonzero pointer id");
                 recognizer.add_pointer(
                     pointer,
+                    flui_types::Offset::new(
+                        flui_types::geometry::px(20.0),
+                        flui_types::geometry::px(20.0),
+                    ),
                     flui_types::Offset::new(
                         flui_types::geometry::px(20.0),
                         flui_types::geometry::px(20.0),

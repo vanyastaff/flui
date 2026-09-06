@@ -24,7 +24,9 @@ use crate::{
     arena::{GestureArenaMember, GestureDeadlineRegistration},
     events::{PointerEvent, PointerType},
     ids::PointerId,
+    routing::PointerDispatch,
     settings::GestureSettings,
+    traits::PointerEventExtTrait,
 };
 
 /// Callback for long press down events (initial contact)
@@ -146,6 +148,10 @@ struct LongPressState {
     down_time: Option<Instant>,
     /// Current position
     current_position: Option<Offset<Pixels>>,
+    /// The same contact as `current_position`, in the root's space — stored
+    /// because dispatch localises the event before this recognizer sees it,
+    /// so the global position exists only on arrival (issue #908).
+    current_global_position: Option<Offset<Pixels>>,
     /// Pointer device kind
     device_kind: Option<PointerType>,
 }
@@ -269,18 +275,24 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer down event
-    fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_down(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         let mut state = self.gesture_state.lock();
         state.phase = LongPressPhase::Possible;
         state.down_time = Some(self.state.now());
         state.current_position = Some(position);
+        state.current_global_position = Some(global_position);
         state.device_kind = Some(kind);
         drop(state); // Release lock before callback
 
         // Call on_long_press_down callback (initial contact)
         if let Some(callback) = self.callbacks.borrow().on_long_press_down.clone() {
             let details = LongPressDownDetails {
-                global_position: position,
+                global_position,
                 local_position: position,
                 kind,
             };
@@ -289,7 +301,12 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer move event
-    fn handle_move(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_move(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         // Cache settings to avoid multiple locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -302,7 +319,7 @@ impl LongPressGestureRecognizer {
                     if settings.exceeds_touch_slop(delta.distance()) {
                         // Moved too far, cancel
                         drop(state); // Release lock before calling handle_cancel
-                        self.handle_cancel(position, kind);
+                        self.handle_cancel(position, global_position, kind);
                         return;
                     }
                 }
@@ -316,12 +333,13 @@ impl LongPressGestureRecognizer {
             LongPressPhase::Started => {
                 // Long press already started, update position
                 state.current_position = Some(position);
+                state.current_global_position = Some(global_position);
                 drop(state); // Release lock before calling callback
 
                 // Call on_long_press_move_update callback
                 if let Some(callback) = self.callbacks.borrow().on_long_press_move_update.clone() {
                     let details = LongPressDetails {
-                        global_position: position,
+                        global_position,
                         local_position: position,
                         kind,
                     };
@@ -333,7 +351,12 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer up event
-    fn handle_up(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_up(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         // Terminal input wins over a due timer in the same owner turn.
         self.stop_deadline_polling();
         let mut state = self.gesture_state.lock();
@@ -355,7 +378,7 @@ impl LongPressGestureRecognizer {
                 drop(state); // Release lock before calling callback
 
                 let details = LongPressDetails {
-                    global_position: position,
+                    global_position,
                     local_position: position,
                     kind,
                 };
@@ -377,7 +400,12 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle cancel event
-    fn handle_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_cancel(
+        &self,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        kind: PointerType,
+    ) {
         self.stop_deadline_polling();
         let mut state = self.gesture_state.lock();
 
@@ -389,7 +417,7 @@ impl LongPressGestureRecognizer {
             self.state.reject();
             if let Some(callback) = callback {
                 callback(LongPressDetails {
-                    global_position: position,
+                    global_position,
                     local_position: position,
                     kind,
                 });
@@ -430,9 +458,13 @@ impl LongPressGestureRecognizer {
             }
             state.phase = LongPressPhase::Started;
             state.current_position = Some(position);
-            (state.device_kind, position)
+            // Read, never written, on this path: the deadline fires with no
+            // event behind it, so the global position is whatever the last
+            // real event recorded.
+            let fired_global = state.current_global_position.unwrap_or(position);
+            (state.device_kind, position, fired_global)
         };
-        let (kind, fired_pos) = snapshot;
+        let (kind, fired_pos, fired_global) = snapshot;
 
         // Retire the timer before invoking application code. A callback may
         // synchronously dispose or start another sequence on this recognizer.
@@ -457,7 +489,7 @@ impl LongPressGestureRecognizer {
         }
         if let Some(callback) = self.callbacks.borrow().on_long_press_start.clone() {
             let details = LongPressStartDetails {
-                global_position: fired_pos,
+                global_position: fired_global,
                 local_position: fired_pos,
                 kind: kind.unwrap_or(PointerType::Touch),
             };
@@ -489,7 +521,12 @@ impl LongPressGestureRecognizer {
 }
 
 impl GestureRecognizer for LongPressGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "long_press.add_pointer",
@@ -503,7 +540,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         // owner-frame deadline registry. The latter deliberately outlives
         // default arena victory.
         self.stop_deadline_polling();
-        self.state.start_tracking(pointer, position, self);
+        self.state
+            .start_tracking(pointer, position, global_position, self);
         let member: Arc<dyn GestureArenaMember> = Arc::<Self>::clone(self);
         let registration = self
             .state
@@ -512,10 +550,11 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         *self.deadline_registration.borrow_mut() = Some(registration);
 
         // Handle pointer down
-        self.handle_down(position, PointerType::Touch);
+        self.handle_down(position, global_position, PointerType::Touch);
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "long_press.handle_event",
@@ -529,22 +568,35 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         if self.state.primary_pointer().is_none() {
             return;
         }
+        // Read once, here: this is the only point at which the untransformed
+        // position is available at all (issue #908).
+        let global_position = dispatch.global.position();
 
         match event {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                self.handle_move(position, data.pointer.pointer_type);
+                self.handle_move(position, global_position, data.pointer.pointer_type);
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                self.handle_up(position, data.pointer.pointer_type);
+                self.handle_up(position, global_position, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(info) => {
-                // Cancel doesn't have position, use last known position
+                // A cancel carries no position at all, in EITHER space — the
+                // event's own `position()` answers `Offset::ZERO`. The local
+                // half falls back to the recorded contact, so the global half
+                // must too: the freshest one this gesture saw if a move has
+                // arrived, the down contact otherwise.
                 if let Some(pos) = self.state.initial_position() {
-                    self.handle_cancel(pos, info.pointer_type);
+                    let global = self
+                        .gesture_state
+                        .lock()
+                        .current_global_position
+                        .or_else(|| self.state.initial_global_position())
+                        .unwrap_or(pos);
+                    self.handle_cancel(pos, global, info.pointer_type);
                 }
             }
             _ => {}
@@ -641,8 +693,8 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRec
         self.state.accept_tracked();
     }
 
-    fn handle_primary_pointer(&self, event: &PointerEvent) {
-        <Self as GestureRecognizer>::handle_event(self, event);
+    fn handle_primary_pointer(&self, dispatch: PointerDispatch<'_>) {
+        <Self as GestureRecognizer>::handle_event(self, dispatch);
     }
 }
 
@@ -693,12 +745,18 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         // We lost the arena - cancel the gesture
         self.stop_deadline_polling();
         if let Some(pos) = self.state.initial_position() {
-            let kind = self
-                .gesture_state
-                .lock()
-                .device_kind
-                .unwrap_or(PointerType::Touch);
-            self.handle_cancel(pos, kind);
+            // An arena rejection is driven by no event, so the global position
+            // comes from what the contact last recorded. Falling back to the
+            // local one would restate the defect this carries (issue #908), so
+            // that path is reached only when nothing was ever recorded.
+            let (kind, global_pos) = {
+                let state = self.gesture_state.lock();
+                (
+                    state.device_kind.unwrap_or(PointerType::Touch),
+                    state.current_global_position.unwrap_or(pos),
+                )
+            };
+            self.handle_cancel(pos, global_pos, kind);
         }
     }
 }
@@ -731,11 +789,17 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = LongPressGestureRecognizer::new(arena.clone())
             .with_on_long_press_cancel(|_| panic!("long press cancel panic"));
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        recognizer.add_pointer(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+        );
         arena.close(PointerId::PRIMARY);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
+                PointerType::Touch,
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -761,7 +825,11 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = LongPressGestureRecognizer::new(arena.clone());
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(10.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(10.0), Pixels(10.0)),
+            Offset::new(Pixels(10.0), Pixels(10.0)),
+        );
 
         // A competing recognizer (e.g. a tap) contends for the same pointer.
         let rejected = Arc::new(Mutex::new(false));
@@ -806,10 +874,10 @@ mod tests {
 
         let recognizer = LongPressGestureRecognizer::new(arena.clone());
         let position = Offset::new(Pixels(10.0), Pixels(10.0));
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Lift before the deadline: must complete without deadlocking.
-        recognizer.handle_up(position, PointerType::Touch);
+        recognizer.handle_up(position, position, PointerType::Touch);
         assert_eq!(recognizer.primary_pointer(), None);
     }
 
@@ -828,7 +896,7 @@ mod tests {
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Check immediately - should not be pressed yet
         assert!(!*pressed.lock());
@@ -864,14 +932,14 @@ mod tests {
         let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
-        recognizer.add_pointer(pointer, start_pos);
+        recognizer.add_pointer(pointer, start_pos, start_pos);
 
         // Move too far (beyond TAP_SLOP = 18px)
         let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px away
-        recognizer.handle_event(&crate::events::make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
-        ));
+        )));
 
         // Should have cancelled
         assert!(*cancelled.lock());
@@ -894,7 +962,7 @@ mod tests {
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Wait for timer
         std::thread::sleep(Duration::from_millis(550));
@@ -902,10 +970,10 @@ mod tests {
 
         // Move slightly (within slop)
         let moved_pos = Offset::new(Pixels(105.0), Pixels(105.0));
-        recognizer.handle_event(&crate::events::make_move_event(
+        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
-        ));
+        )));
 
         // Should have called move callback
         assert!(*moved.lock());
@@ -936,7 +1004,7 @@ mod tests {
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Wait past the deadline.
         std::thread::sleep(Duration::from_millis(150));
@@ -966,7 +1034,7 @@ mod tests {
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(50.0), Pixels(50.0));
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Before deadline — no fire.
         assert!(!recognizer.check_timer());
@@ -1008,7 +1076,7 @@ mod tests {
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(50.0), Pixels(50.0));
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         // Contact down, deadline not yet reached: armed.
         assert!(recognizer.has_pending_deadline());
@@ -1045,7 +1113,7 @@ mod tests {
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(50.0), Pixels(50.0));
         let down_time = arena.now();
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
 
         let expected = down_time + timeout;
         assert_eq!(
@@ -1076,13 +1144,13 @@ mod tests {
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(50.0), Pixels(50.0));
-        recognizer.add_pointer(pointer, position);
+        recognizer.add_pointer(pointer, position, position);
         assert!(recognizer.has_pending_deadline());
 
         // Up before the deadline cancels the gesture (`Possible` -> `Ready`);
         // a keep-alive keyed on this predicate must stop requesting frames.
         let up = crate::events::make_up_event(position, PointerType::Touch);
-        recognizer.handle_event(&up);
+        recognizer.handle_event(PointerDispatch::at_root(&up));
         assert!(!recognizer.has_pending_deadline());
     }
 
@@ -1112,7 +1180,11 @@ mod tests {
             GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
         );
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(10.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(10.0), Pixels(10.0)),
+            Offset::new(Pixels(10.0), Pixels(10.0)),
+        );
 
         // A competing recognizer (e.g. a tap) joins the same arena entry.
         let rejected = Arc::new(Mutex::new(false));
@@ -1172,7 +1244,7 @@ mod tests {
         );
         let pointer = PointerId::new(3).expect("nonzero pointer id");
         let start = Offset::new(Pixels(10.0), Pixels(10.0));
-        recognizer.add_pointer(pointer, start);
+        recognizer.add_pointer(pointer, start, start);
 
         let rejected = Arc::new(Mutex::new(false));
         arena.add(
@@ -1193,7 +1265,7 @@ mod tests {
         clock.advance(Duration::from_millis(150));
         let drift = Offset::new(Pixels(11.0), Pixels(11.0));
         let mv = crate::events::make_move_event(drift, PointerType::Touch);
-        recognizer.handle_event(&mv);
+        recognizer.handle_event(PointerDispatch::at_root(&mv));
 
         assert!(*fired.lock(), "precondition: the move fired the long press");
         assert!(
@@ -1220,7 +1292,11 @@ mod tests {
         .with_on_long_press(move || *callback_count.lock() += 1);
         let pointer = PointerId::new(2).expect("nonzero pointer id");
 
-        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(10.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(10.0), Pixels(10.0)),
+            Offset::new(Pixels(10.0), Pixels(10.0)),
+        );
         assert_eq!(arena.deadline_member_count(), 1);
         arena.close(pointer);
         assert_eq!(arena.drain_deferred_resolutions(), 1);
@@ -1250,19 +1326,19 @@ mod tests {
         let pointer = PointerId::new(2).expect("nonzero pointer id");
 
         let released = LongPressGestureRecognizer::new(arena.clone());
-        released.add_pointer(pointer, position);
+        released.add_pointer(pointer, position, position);
         assert_eq!(arena.deadline_member_count(), 1);
-        released.handle_up(position, PointerType::Touch);
+        released.handle_up(position, position, PointerType::Touch);
         assert_eq!(arena.deadline_member_count(), 0);
 
         let cancelled = LongPressGestureRecognizer::new(arena.clone());
-        cancelled.add_pointer(pointer, position);
+        cancelled.add_pointer(pointer, position, position);
         assert_eq!(arena.deadline_member_count(), 1);
-        cancelled.handle_cancel(position, PointerType::Touch);
+        cancelled.handle_cancel(position, position, PointerType::Touch);
         assert_eq!(arena.deadline_member_count(), 0);
 
         let disposed = LongPressGestureRecognizer::new(arena.clone());
-        disposed.add_pointer(pointer, position);
+        disposed.add_pointer(pointer, position, position);
         assert_eq!(arena.deadline_member_count(), 1);
         disposed.dispose();
         assert_eq!(arena.deadline_member_count(), 0);
@@ -1288,7 +1364,11 @@ mod tests {
         .with_on_long_press_start(move |_| *s_clone.lock() = true);
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
+        recognizer.add_pointer(
+            pointer,
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+        );
 
         // No moves. Polling before the deadline elapses fires nothing.
         arena.poll_deadlines();

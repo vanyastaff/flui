@@ -22,6 +22,7 @@ use crate::{
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
+    routing::PointerDispatch,
     settings::GestureSettings,
 };
 
@@ -101,9 +102,9 @@ pub struct ScaleEndDetails {
 ///     });
 ///
 /// // Multi-touch events will be tracked
-/// recognizer.add_pointer(pointer1_id, position1);
-/// recognizer.add_pointer(pointer2_id, position2);
-/// recognizer.handle_event(&pointer_event);
+/// recognizer.add_pointer(pointer1_id, position1, position1);
+/// recognizer.add_pointer(pointer2_id, position2, position2);
+/// recognizer.handle_event(PointerDispatch::at_root(&pointer_event));
 /// ```
 #[derive(Clone)]
 pub struct ScaleGestureRecognizer {
@@ -632,19 +633,31 @@ impl ScaleGestureRecognizer {
 }
 
 impl GestureRecognizer for ScaleGestureRecognizer {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        // Scale reports a focal point derived from every tracked contact, in
+        // the recogniser's own space — a global focal point needs all the
+        // contacts' globals, not this one, and is not attempted here. The base
+        // still records this contact in both spaces, because the stored pair
+        // is one value and a half-written one is a trap for the next reader.
+        global_position: Offset<Pixels>,
+    ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
-            self.state.start_tracking(pointer, position, self);
+            self.state
+                .start_tracking(pointer, position, global_position, self);
         }
 
         self.handle_pointer_down(pointer, position);
     }
 
-    fn handle_event(&self, event: &PointerEvent) {
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
@@ -774,17 +787,22 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = ScaleGestureRecognizer::new(arena.clone())
             .with_on_scale_cancel(|| panic!("scale cancel panic"));
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        recognizer.add_pointer(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(Pixels(1.0), Pixels(2.0)),
+        );
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
+            Offset::new(Pixels(3.0), Pixels(4.0)),
             Offset::new(Pixels(3.0), Pixels(4.0)),
         );
         arena.close(PointerId::PRIMARY);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(&crate::events::make_cancel_event(
+            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
                 crate::events::PointerType::Touch,
-            ));
+            )));
         }));
 
         assert!(unwind.is_err());
@@ -813,8 +831,16 @@ mod tests {
 
         let finger1 = PointerId::new(2).expect("nonzero pointer id");
         let finger2 = PointerId::new(3).expect("nonzero pointer id");
-        recognizer.add_pointer(finger1, Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(finger2, Offset::new(Pixels(100.0), Pixels(0.0)));
+        recognizer.add_pointer(
+            finger1,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        recognizer.add_pointer(
+            finger2,
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+        );
         // The start now waits on arena acceptance, so the arena must be closed
         // for it to land -- dispatch closes it after the pointer-down burst.
         arena.close(finger1);
@@ -825,13 +851,13 @@ mod tests {
             Offset::new(Pixels(200.0), Pixels(0.0)),
             PointerType::Touch,
         );
-        recognizer.handle_event(&move2); // crosses a tier -> arena accepts -> Started
+        recognizer.handle_event(PointerDispatch::at_root(&move2)); // crosses a tier -> arena accepts -> Started
         let move2b = make_move_event_for_id(
             finger2,
             Offset::new(Pixels(220.0), Pixels(0.0)),
             PointerType::Touch,
         );
-        recognizer.handle_event(&move2b);
+        recognizer.handle_event(PointerDispatch::at_root(&move2b));
 
         assert!(
             updates.load(Ordering::SeqCst) >= 1,
@@ -849,7 +875,7 @@ mod tests {
             Offset::new(Pixels(220.0), Pixels(0.0)),
             PointerType::Touch,
         );
-        recognizer.handle_event(&up2);
+        recognizer.handle_event(PointerDispatch::at_root(&up2));
         assert_eq!(recognizer.gesture_state.lock().pointers.len(), 1);
         assert!(
             recognizer
@@ -954,8 +980,16 @@ mod tests {
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
-        recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(p2, Offset::new(Pixels(SEPARATION), Pixels(0.0)));
+        recognizer.add_pointer(
+            p1,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        recognizer.add_pointer(
+            p2,
+            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+        );
         arena.close(p1);
 
         let mut max_span_drift: f32 = 0.0;
@@ -1029,8 +1063,16 @@ mod tests {
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
-        recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(p2, Offset::new(Pixels(1000.0), Pixels(0.0)));
+        recognizer.add_pointer(
+            p1,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        recognizer.add_pointer(
+            p2,
+            Offset::new(Pixels(1000.0), Pixels(0.0)),
+            Offset::new(Pixels(1000.0), Pixels(0.0)),
+        );
         arena.add(p1, Arc::new(Competitor(Arc::clone(&log))));
         arena.close(p1);
 
@@ -1102,8 +1144,16 @@ mod tests {
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
-        recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(p2, Offset::new(Pixels(SEPARATION), Pixels(0.0)));
+        recognizer.add_pointer(
+            p1,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        recognizer.add_pointer(
+            p2,
+            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+        );
         // The arena must be closed for an acceptance to land, exactly as
         // dispatch closes it after the pointer-down burst.
         arena.close(p1);
@@ -1163,8 +1213,16 @@ mod tests {
                 PointerId::new(2).expect("nonzero pointer id"),
                 PointerId::new(3).expect("nonzero pointer id"),
             );
-            recognizer.add_pointer(p1, Offset::new(Pixels(0.0), Pixels(0.0)));
-            recognizer.add_pointer(p2, Offset::new(Pixels(SEPARATION), Pixels(0.0)));
+            recognizer.add_pointer(
+                p1,
+                Offset::new(Pixels(0.0), Pixels(0.0)),
+                Offset::new(Pixels(0.0), Pixels(0.0)),
+            );
+            recognizer.add_pointer(
+                p2,
+                Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+                Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+            );
             arena.close(p1);
             for (p, to) in [(p1, -GROWTH), (p2, SEPARATION + GROWTH)] {
                 recognizer.handle_pointer_move(p, Offset::new(Pixels(to), Pixels(0.0)), kind);
@@ -1196,8 +1254,16 @@ mod tests {
         let pointer2 = PointerId::new(3).expect("nonzero pointer id");
 
         // Add two pointers 100px apart
-        recognizer.add_pointer(pointer1, Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(pointer2, Offset::new(Pixels(100.0), Pixels(0.0)));
+        recognizer.add_pointer(
+            pointer1,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        recognizer.add_pointer(
+            pointer2,
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+        );
 
         // Verify we have 2 pointers and initial span is set
         let state = recognizer.gesture_state.lock();

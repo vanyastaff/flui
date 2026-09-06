@@ -1118,13 +1118,13 @@ mod desktop_pacing_tests {
         )
         .with_on_long_press(move || fired_for_callback.store(true, Ordering::SeqCst));
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        recognizer.add_pointer(
-            pointer,
-            flui_types::Offset::new(
-                flui_types::geometry::px(10.0),
-                flui_types::geometry::px(10.0),
-            ),
+        let at = flui_types::Offset::new(
+            flui_types::geometry::px(10.0),
+            flui_types::geometry::px(10.0),
         );
+        // A synthetic pointer in a test tree with no ancestor transform: the
+        // two spaces coincide, which is what passing the same value twice says.
+        recognizer.add_pointer(pointer, at, at);
 
         let produced_before = realm.primary_produced_count_for_test();
         let submits_before = backend.render_scene_calls;
