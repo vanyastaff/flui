@@ -14,8 +14,8 @@ use flui_types::{
 use crate::{
     layer::{
         BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
-        ColorFilterLayer, ImageFilterLayer, Layer, OffsetLayer, OpacityLayer, ShaderMaskLayer,
-        TextureLayer, TransformLayer,
+        ClipSuperellipseLayer, ColorFilterLayer, ImageFilterLayer, Layer, OffsetLayer,
+        OpacityLayer, ShaderMaskLayer, TextureLayer, TransformLayer,
     },
     tree::LayerTree,
 };
@@ -256,6 +256,30 @@ impl<'a> SceneBuilder<'a> {
     /// * `clip` - Clip behavior
     pub fn push_clip_rrect(&mut self, rrect: RRect, clip: Clip) -> LayerId {
         self.push_layer(Layer::ClipRRect(ClipRRectLayer::new(rrect, clip)))
+    }
+
+    /// Pushes a rounded-superellipse (iOS squircle) clip layer.
+    ///
+    /// The sibling of [`Self::push_clip_rrect`] for the shape Flutter calls
+    /// `RSuperellipse`. Added because [`ClipSuperellipseLayer`] had no
+    /// producer at all: the layer type, its bounds and its render arm all
+    /// existed, and nothing could construct one into a scene.
+    ///
+    /// Note that a render object clipping to a squircle reaches the GPU
+    /// through the *canvas* command instead
+    /// (`ClipContext::clip_rsuperellipse_and_paint`), which is a separate,
+    /// working route. This is the layer-tree route.
+    ///
+    /// # Arguments
+    ///
+    /// * `rsuperellipse` - The rounded superellipse to clip to
+    /// * `clip` - Clip behavior
+    pub fn push_clip_superellipse(
+        &mut self,
+        rsuperellipse: flui_types::geometry::RSuperellipse,
+        clip: Clip,
+    ) -> LayerId {
+        self.push_layer(Layer::from(ClipSuperellipseLayer::new(rsuperellipse, clip)))
     }
 
     /// Pushes a clip path layer.

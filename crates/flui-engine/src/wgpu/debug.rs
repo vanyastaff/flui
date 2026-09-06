@@ -422,6 +422,21 @@ impl LayerStateStack for DebugBackend {
         );
     }
 
+    // Logged under its own name rather than inherited from the trait default,
+    // which would report a `push_clip_rrect` that the caller never made — a
+    // debug backend that renames the operation it is recording is worse than
+    // one that records nothing.
+    fn push_clip_rsuperellipse(
+        &mut self,
+        rse: &flui_types::geometry::RSuperellipse,
+        clip_behavior: flui_types::painting::Clip,
+    ) {
+        self.log_command(
+            "push_clip_rsuperellipse",
+            &format!("rse={rse:?}, behavior={clip_behavior:?}"),
+        );
+    }
+
     fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
             "push_clip_path",

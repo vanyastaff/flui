@@ -327,6 +327,17 @@ pub trait CommandRenderer {
     /// overrides to consult its `Painter`-owned `SuperellipsePathCache`
     /// so identical superellipses across frames reuse the cached
     /// tessellation (cache hit = `Arc::clone`, no deep copy).
+    ///
+    /// # No in-tree caller
+    ///
+    /// `ClipSuperellipseLayer::render` was the only one, and issue #921 moved
+    /// it to [`LayerStateStack::push_clip_rsuperellipse`] — a squircle clip is
+    /// an SDF, not a tessellated path. `grep -rn '\.superellipse_path(' crates/`
+    /// returns nothing outside this method's own two implementations. The
+    /// method, the cache and `generate_superellipse_path` are kept rather than
+    /// deleted because `wgpu::superellipse_cache` is a public module and a
+    /// backend that tessellates rather than evaluating an SDF still needs
+    /// this; removing them is its own semver event, tracked in issue #935.
     fn superellipse_path(&mut self, rse: RSuperellipse) -> Arc<Path> {
         Arc::new(crate::superellipse::generate_superellipse_path(&rse))
     }
@@ -433,6 +444,35 @@ pub trait LayerStateStack {
 
     /// Push an arbitrary path clip onto the clip stack
     fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip);
+
+    /// Push a rounded-superellipse (iOS squircle) clip onto the clip stack.
+    ///
+    /// The default approximates the squircle with its bounding rounded
+    /// rectangle, corner radii carried across unchanged. That is the same
+    /// approximate-by-default / override-exactly split
+    /// [`CommandRenderer::superellipse_path`] uses for this shape, and it is
+    /// why this method has a body at all: a default that forwarded to
+    /// [`push_clip_path`](Self::push_clip_path) would install nothing on a
+    /// backend where path clipping is a no-op, which is the defect this method
+    /// was added to remove (issue #921) — reintroduced for every implementor
+    /// that did not notice.
+    ///
+    /// The `wgpu` backend overrides it with the real superellipse SDF, which
+    /// is strictly tighter in the corners than the rounded rectangle below.
+    fn push_clip_rsuperellipse(
+        &mut self,
+        rse: &RSuperellipse,
+        clip_behavior: flui_types::painting::Clip,
+    ) {
+        let approximation = RRect::from_rect_and_corners(
+            rse.outer_rect(),
+            rse.tl_radius(),
+            rse.tr_radius(),
+            rse.br_radius(),
+            rse.bl_radius(),
+        );
+        self.push_clip_rrect(&approximation, clip_behavior);
+    }
 
     /// Pop the most recent clip from the clip stack
     fn pop_clip(&mut self);

@@ -213,8 +213,11 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
         if !self.clips() {
             return;
         }
-        let arc_path = renderer.superellipse_path(*self.clip_superellipse());
-        renderer.push_clip_path(&arc_path, self.clip_behavior());
+        // The squircle goes to the shaper of squircles, not through a
+        // tessellated path: `push_clip_path` reaches a painter call that
+        // installs nothing, so this layer used to tessellate a shape and hand
+        // it to a discard, leaving its subtree unclipped (issue #921).
+        renderer.push_clip_rsuperellipse(self.clip_superellipse(), self.clip_behavior());
     }
 
     fn cleanup(&self, renderer: &mut R) {
@@ -755,6 +758,17 @@ mod tests {
         }
         fn push_clip_rrect(&mut self, _rrect: &RRect, _clip_behavior: Clip) {
             self.calls.push("push_clip_rrect".to_string());
+        }
+        // Recorded under its own name, not inherited from the trait default:
+        // the default forwards to `push_clip_rrect`, so a mock without this
+        // would report the approximation and the routing assertion would pass
+        // against a layer that never reached the squircle path.
+        fn push_clip_rsuperellipse(
+            &mut self,
+            _rse: &flui_types::geometry::RSuperellipse,
+            _clip_behavior: Clip,
+        ) {
+            self.calls.push("push_clip_rsuperellipse".to_string());
         }
         fn push_clip_path(&mut self, _path: &Path, _clip_behavior: Clip) {
             self.calls.push("push_clip_path".to_string());

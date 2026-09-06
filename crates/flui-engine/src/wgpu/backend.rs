@@ -1659,6 +1659,31 @@ impl LayerStateStack for Backend<'_> {
         self.open_clip_frame(composite_clip);
     }
 
+    fn push_clip_rsuperellipse(
+        &mut self,
+        rse: &flui_types::geometry::RSuperellipse,
+        clip_behavior: flui_types::painting::Clip,
+    ) {
+        self.flush_active_transform();
+        self.painter.save();
+        // The rrect shape exactly: decided BEFORE installing anything, because
+        // the two calls below clip the content differently and picking the
+        // wrong one because the layer was refused afterwards would drop the
+        // squircle coverage entirely.
+        //
+        // Overrides the trait default, which approximates the squircle with
+        // its bounding rounded rectangle. The SDF below is strictly tighter in
+        // the corners, which is the whole point of the shape.
+        let composite_clip = if self.opens_offscreen(clip_behavior, ClipOutcome::Installed) {
+            Some(self.painter.clip_rsuperellipse_at_composite(*rse))
+        } else {
+            self.painter
+                .clip_rsuperellipse(*rse, clip_is_hard(clip_behavior));
+            None
+        };
+        self.open_clip_frame(composite_clip);
+    }
+
     fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
