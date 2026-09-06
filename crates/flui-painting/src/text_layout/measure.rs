@@ -10,8 +10,7 @@ use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping, Style, Weight};
 use flui_types::typography::{FontStyle, FontWeight, TextStyle};
 
 use super::TextLayoutResult;
-use super::font_resolve;
-use super::layout::{FontState, font_system};
+use super::layout::font_system;
 
 /// Converts FLUI `TextStyle` to cosmic-text `Attrs`.
 ///
@@ -80,14 +79,10 @@ pub fn measure_text(
 
     {
         let mut state = font_system().lock();
-        let FontState {
-            system,
-            installed_families,
-        } = &mut *state;
-        let family = font_resolve::resolve_family(style, system, installed_families);
+        let family = state.resolve_family(style);
         let attrs = style_to_attrs(style, family);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
-        buffer.shape_until_scroll(system, false);
+        buffer.shape_until_scroll(&mut state.system, false);
     }
 
     super::layout::metrics_from_shaped_buffer(&buffer, line_height, false)

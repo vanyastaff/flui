@@ -241,8 +241,8 @@ fn pick_family(db: &Database, want_monospace: bool) -> Option<String> {
 #[derive(Debug, Default)]
 pub(crate) struct InstalledFamilies {
     names: HashSet<Box<str>>,
-    /// The `Database::len()` the set was built from — the staleness check.
-    faces_len: usize,
+    /// The database-mutation generation the set was built from.
+    built_at: u64,
     /// Distinguishes "never built" from "built against an empty database",
     /// which a `names.is_empty()` check would conflate into a rebuild on
     /// every call.
@@ -284,9 +284,8 @@ impl InstalledFamilies {
     /// the set stale.
     ///
     /// Average and worst case O(1) when fresh, O(faces) on the rebuild.
-    fn sync(&mut self, font_system: &mut FontSystem) {
-        let faces_len = font_system.db().len();
-        if self.built && faces_len == self.faces_len {
+    fn sync(&mut self, font_system: &mut FontSystem, db_generation: u64) {
+        if self.built && db_generation == self.built_at {
             return;
         }
 
@@ -301,7 +300,7 @@ impl InstalledFamilies {
                 }
             }
         }
-        self.faces_len = faces_len;
+        self.built_at = db_generation;
         self.built = true;
     }
 
@@ -333,8 +332,9 @@ pub(crate) fn resolve_family<'a>(
     style: Option<&'a TextStyle>,
     font_system: &mut FontSystem,
     installed: &mut InstalledFamilies,
+    db_generation: u64,
 ) -> Family<'a> {
-    installed.sync(font_system);
+    installed.sync(font_system, db_generation);
 
     let Some(requested) = style.and_then(|style| style.font_family.as_deref()) else {
         // Matches what `Attrs::new()` has always defaulted to; a style naming
@@ -387,9 +387,16 @@ mod tests {
         }
     }
 
+    /// Resolves against a freshly-built index, so the generation is
+    /// irrelevant — a test that MUTATES the database between resolves must
+    /// keep its own generation instead (see
+    /// `a_face_loaded_after_the_first_resolve_is_picked_up`).
     fn resolved(system: &mut FontSystem, style: &TextStyle) -> String {
         let mut installed = InstalledFamilies::default();
-        format!("{:?}", resolve_family(Some(style), system, &mut installed))
+        format!(
+            "{:?}",
+            resolve_family(Some(style), system, &mut installed, 0)
+        )
     }
 
     #[test]
@@ -410,7 +417,7 @@ mod tests {
         ] {
             let style = styled(Some(written));
             assert_eq!(
-                resolve_family(Some(&style), &mut system, &mut installed),
+                resolve_family(Some(&style), &mut system, &mut installed, 0),
                 expected,
                 "{written:?} must resolve to its generic, not to a concrete family"
             );
@@ -440,7 +447,7 @@ mod tests {
         let mut system = font_system(database(&[ROBOTO]));
         let mut installed = InstalledFamilies::default();
         assert_eq!(
-            resolve_family(None, &mut system, &mut installed),
+            resolve_family(None, &mut system, &mut installed, 0),
             Family::SansSerif
         );
         assert_eq!(resolved(&mut system, &styled(None)), "SansSerif");
@@ -538,7 +545,7 @@ mod tests {
         let mut font_system = font_system(db);
         let family = if resolve {
             let mut installed = InstalledFamilies::default();
-            resolve_family(Some(style), &mut font_system, &mut installed)
+            resolve_family(Some(style), &mut font_system, &mut installed, 0)
         } else {
             // The pre-fix path: the style's family goes to the shaper unchecked.
             style
@@ -677,8 +684,10 @@ mod tests {
     /// Rust test that returns early is reported **PASSED**, so a silent
     /// degradation would inflate the pass count with coverage that did not
     /// run. `FLUI_REQUIRE_EMOJI_FONT` makes the absent-font branch a hard
-    /// failure; CI sets it and installs the package, so the skip is a
-    /// developer-machine convenience and never a hole in the gate. Its
+    /// failure. CI exports it from the same step that installs the font
+    /// package, so the requirement and its guarantee share one condition and
+    /// a runner without the install can never be told to require it. The skip
+    /// is a developer-machine convenience, never a hole in the gate. Its
     /// hermetic counterpart, `an_uninstalled_family_shapes_in_the_bound_generic_both_ways`,
     /// pins the same fix through family selection and needs no fixture.
     /// Reports a missing fixture precondition: loud where the environment
@@ -755,18 +764,69 @@ mod tests {
         let mut system = font_system(database(&[ROBOTO]));
         let mut installed = InstalledFamilies::default();
         let style = styled(Some("Material Icons"));
+        // The generation stands in for `SharedFontSystem::with_mut`, which
+        // bumps it on every call that could touch the database.
+        let mut db_generation = 0;
         assert_eq!(
-            resolve_family(Some(&style), &mut system, &mut installed),
+            resolve_family(Some(&style), &mut system, &mut installed, db_generation),
             Family::SansSerif,
             "precondition: the icon family is absent to begin with"
         );
 
         system.db_mut().load_font_data(MATERIAL_ICONS.to_vec());
+        db_generation += 1;
 
         assert_eq!(
-            resolve_family(Some(&style), &mut system, &mut installed),
+            resolve_family(Some(&style), &mut system, &mut installed, db_generation),
             Family::Name("Material Icons"),
             "a face loaded after the first resolve must be seen"
+        );
+    }
+
+    /// A remove-then-add through the database leaves the face COUNT unchanged
+    /// and the index stale — which is why the index is keyed on a mutation
+    /// generation and not on that count.
+    ///
+    /// `SharedFontSystem::with_mut` hands out `&mut FontSystem`, so this is
+    /// reachable from outside the crate today, not only from a hypothetical
+    /// future caller: swap one family for another and every later style
+    /// resolves against a database that no longer exists.
+    #[test]
+    fn swapping_one_face_for_another_invalidates_the_index() {
+        let mut system = font_system(database(&[ROBOTO]));
+        let mut installed = InstalledFamilies::default();
+        let arial = styled(Some("Arial"));
+
+        let mut db_generation = 0;
+        assert_eq!(
+            resolve_family(Some(&arial), &mut system, &mut installed, db_generation),
+            Family::SansSerif,
+            "precondition: Arial is absent to begin with"
+        );
+
+        // Remove one face, add one face: the count is what it was.
+        let roboto_id = system
+            .db()
+            .faces()
+            .next()
+            .expect("the fixture has a face")
+            .id;
+        let faces_before = system.db().len();
+        system.db_mut().remove_face(roboto_id);
+        system.db_mut().load_font_data(ARIAL.to_vec());
+        assert_eq!(
+            system.db().len(),
+            faces_before,
+            "the fixture must leave the count unchanged, or this test does not \
+             exercise what it is named for"
+        );
+        db_generation += 1;
+
+        assert_eq!(
+            resolve_family(Some(&arial), &mut system, &mut installed, db_generation),
+            Family::Name("Arial"),
+            "the family that arrived must be seen even though the face count \
+             never moved"
         );
     }
 
@@ -793,7 +853,7 @@ mod tests {
         let mut installed = InstalledFamilies::default();
         let style = styled(Some("CupertinoSystemText"));
         assert_eq!(
-            resolve_family(Some(&style), &mut system, &mut installed),
+            resolve_family(Some(&style), &mut system, &mut installed, 1),
             Family::SansSerif
         );
         assert_eq!(

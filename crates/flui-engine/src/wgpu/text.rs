@@ -751,10 +751,17 @@ impl TextRenderer {
             // takes the same lock and `parking_lot::Mutex` is not reentrant.
             // A family this host does not carry must not reach the shaper —
             // see `flui_painting::SharedFontSystem::resolve_family`.
+            //
+            // One acquisition for the whole paragraph, not one per span: this
+            // lock is shared with the glyph pipeline, and a span's family does
+            // not depend on its neighbours' answers.
+            let families = self
+                .font_system
+                .resolve_families(runs.iter().map(|(_, style)| style.as_ref()));
             let owned_attrs: Vec<AttrsOwned> = runs
                 .iter()
-                .map(|(_, style)| {
-                    let family = self.font_system.resolve_family(style.as_ref());
+                .zip(families)
+                .map(|((_, style), family)| {
                     style_to_attrs_owned(style.as_ref(), base_color, family)
                 })
                 .collect();

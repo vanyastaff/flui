@@ -33,7 +33,18 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 #[derive(Debug)]
 pub(super) struct FontState {
     pub(super) system: FontSystem,
-    pub(super) installed_families: InstalledFamilies,
+    installed_families: InstalledFamilies,
+    /// Bumped by every [`SharedFontSystem::with_mut`], the one door through
+    /// which anything outside this module reaches the database.
+    ///
+    /// The index was keyed on the face count until review pointed out what
+    /// that misses: `with_mut` hands out `&mut FontSystem`, so a caller can
+    /// remove one face and load another and leave the count identical — after
+    /// which the index describes a database that no longer exists and styles
+    /// resolve through the wrong family indefinitely. Counting *mutations*
+    /// cannot be defeated that way, because what is counted is the door, not
+    /// what was done behind it.
+    db_generation: u64,
 }
 
 impl FontState {
@@ -41,7 +52,23 @@ impl FontState {
         Self {
             system,
             installed_families: InstalledFamilies::default(),
+            db_generation: 0,
         }
+    }
+
+    /// The family `style` should be shaped with — see
+    /// [`SharedFontSystem::resolve_family`], which this backs.
+    ///
+    /// Lives here so the borrow of the database and of the index describing it
+    /// are taken together: no call site can pair one with the other's
+    /// generation.
+    pub(super) fn resolve_family<'a>(&mut self, style: Option<&'a TextStyle>) -> Family<'a> {
+        let Self {
+            system,
+            installed_families,
+            db_generation,
+        } = self;
+        font_resolve::resolve_family(style, system, installed_families, *db_generation)
     }
 }
 
@@ -261,6 +288,12 @@ impl SharedFontSystem {
     /// glyph rendering), not the per-command hot path.
     pub fn with_mut<R>(&self, f: impl FnOnce(&mut FontSystem) -> R) -> R {
         let mut state = self.0.lock();
+        // Counted unconditionally: the closure receives `&mut FontSystem`, so
+        // this call is a mutation whether or not it was used as one.
+        // Over-invalidating the family index costs one rebuild;
+        // under-invalidating it means shaping through a family the database no
+        // longer carries, with nothing failing.
+        state.db_generation = state.db_generation.wrapping_add(1);
         f(&mut state.system)
     }
 
@@ -293,14 +326,35 @@ impl SharedFontSystem {
     /// reentrant.
     ///
     /// The returned `Family` borrows `style`, so this allocates nothing.
+    ///
+    /// Resolving several styles takes the lock once each — use
+    /// [`Self::resolve_families`] for a whole paragraph.
     #[must_use]
     pub fn resolve_family<'a>(&self, style: Option<&'a TextStyle>) -> Family<'a> {
+        self.0.lock().resolve_family(style)
+    }
+
+    /// Resolves a whole run of styles under **one** lock acquisition.
+    ///
+    /// A rich paragraph resolves one family per span and then shapes, so
+    /// calling [`Self::resolve_family`] per span takes this lock once per span
+    /// plus once more for the shape pass. The lock is shared with the render
+    /// engine's glyph pipeline (ADR-0016), so that is contention paid for
+    /// nothing: the answers do not depend on each other and the database does
+    /// not change in between.
+    ///
+    /// Each returned `Family` borrows its own style, so only the `Vec` is
+    /// allocated.
+    #[must_use]
+    pub fn resolve_families<'a>(
+        &self,
+        styles: impl IntoIterator<Item = Option<&'a TextStyle>>,
+    ) -> Vec<Family<'a>> {
         let mut state = self.0.lock();
-        let FontState {
-            system,
-            installed_families,
-        } = &mut *state;
-        font_resolve::resolve_family(style, system, installed_families)
+        styles
+            .into_iter()
+            .map(|style| state.resolve_family(style))
+            .collect()
     }
 }
 
@@ -450,13 +504,8 @@ impl TextLayout {
         // briefly.
         let runs: Vec<OwnedRun> = {
             let mut state = font_system().lock();
-            let FontState {
-                system,
-                installed_families,
-            } = &mut *state;
 
-            let default_family =
-                font_resolve::resolve_family(default_style, system, installed_families);
+            let default_family = state.resolve_family(default_style);
             let default_attrs =
                 cosmic_text::AttrsOwned::new(&style_to_attrs(default_style, default_family));
 
@@ -465,11 +514,7 @@ impl TextLayout {
                 .map(|(text, style)| {
                     let attrs = match &style {
                         Some(style) => {
-                            let family = font_resolve::resolve_family(
-                                Some(style),
-                                system,
-                                installed_families,
-                            );
+                            let family = state.resolve_family(Some(style));
                             let mut attrs = style_to_attrs(Some(style), family);
                             // Per-span font size/line height ride on the attrs
                             // (cosmic's per-span Metrics); spans without one
