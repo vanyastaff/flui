@@ -1,14 +1,18 @@
 # ADR-0060: The runtime owns a durable store; what goes in it is the application's business
 
-- **Status:** Accepted
+*Issue #558's last criterion asks the runtime for a place to put bytes that survives a kill — not for a state-restoration framework. `DurableStore` is a small typed crash-safe store written off the frame thread and flushed within a deadline at shutdown, using two-slot ping-pong with a sequence and a CRC rather than atomic replace; `Platform::data_dir()` is **defaulted** to a typed `Err` so a backend without durable local storage says so instead of naming a wrong path. What an application journals stays the application's business, which is what the plan this criterion comes from means by keeping product features in the example.*
+
+---
+
+- **Status:** Accepted (2026-09-06)
 - **Date:** 2026-09-06
-- **Relates to:** [ADR-0049](ADR-0049-task-worker-service-lifecycles.md) (the
-  lifecycle layer this extends), [ADR-0047](ADR-0047-unified-execution-services.md)
-  (`ExecutionServices`' IO lane — that number is used twice, see #947),
-  [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (concurrent realms, which this
-  must not assume away)
-- **Supersedes nothing.** Closes the design half of issue #558's last open
-  criterion.
+- **Deciders:** @vanyastaff
+- **Scope:** the durable-store mechanism — a new `DurableStore` under `AppRuntime`, `Platform::data_dir()`, the flush leg between `ServiceRegistry::shutdown` and `ExecutionServices::shutdown` in `app/runner/realm_dispatch.rs`, and window geometry as its first consumer. **Not** in scope: a restoration framework (bucket tree, restoration IDs, a `BuildContext` capability).
+- **Related:** [ADR-0049](ADR-0049-task-worker-service-lifecycles.md) (the lifecycle layer this extends, and where the deferred "journaled recoverable state" slice is named); [ADR-0047](ADR-0047-unified-execution-services.md) (`ExecutionServices`' IO lane — that number is used twice, see [#947](https://github.com/vanyastaff/flui/issues/947)); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (concurrent realms, which the single-writer rule must not assume away); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) §"Validate with an adversarial multi-window reference application", where this criterion originates
+- **Issue:** [#558](https://github.com/vanyastaff/flui/issues/558) — the last open criterion; the other five are satisfied and audited on the issue
+- **Supersedes nothing.**
+
+---
 
 ## Context
 
