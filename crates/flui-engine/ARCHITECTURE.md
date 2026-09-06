@@ -235,6 +235,22 @@ Under a rotation the scissor is the AABB of the transformed box, which is larger
 
 **Alternatives rejected:** keeping the cache against a future tessellating backend. Such a backend would implement `push_clip_rsuperellipse` and tessellate with its own tessellator, keyed by its own needs — it would not adopt a cache shaped for the wgpu path cache's eviction, and `git show` is a cheaper way to find this one than carrying it. Deleting the generator with the rest: it is the only CPU statement of the shape in the tree, and the shader's correctness argument rests on it.
 
+### 11. A clip op this backend cannot express is refused, never inverted
+
+**Rule:** Prime Directive #1 — a contract the framework user can express is one the engine honours or refuses, never one it accepts and turns into something else.
+
+**Reference:** `dart:ui`'s `Canvas.clipRect`/`clipRRect`/`clipPath` take a `ClipOp`, and Skia implements `difference` with the same coverage machinery it uses for `intersect`.
+
+**Choice:** `Backend::clip_rect` / `clip_rrect` / `clip_rsuperellipse` / `clip_path` refuse `ClipOp::Difference` — no clip installed, one `tracing::warn!` naming the shape — through one shared predicate, `clip_op_is_expressible`.
+
+A difference clip keeps the shape's COMPLEMENT. A scissor is one rectangle and cannot express a complement; the per-draw SDF slot evaluates the shape rather than its inverse. So no clip primitive in this backend can honour the request.
+
+**What the three non-path shapes did instead was worse than refusing.** They bound the parameter as `_clip_op` and installed the shape as an intersect, so a caller punching a hole got everything OUTSIDE the hole erased — the exact inverse of the request. That is destructive; refusing is merely permissive, and the difference is which way the error falls. A caller who sees content the clip should have removed can find the bug; a caller whose content vanished has nothing left to look at. `Canvas::clip_path_ext(&path, ClipOp::Difference, ..)` is public and documented in `flui-painting`'s README as the way to punch a hole, so this was reachable from outside the workspace (issue #941).
+
+`clip_path` already refused, because issue #934 forced the question: a bounding-box approximation of a difference clip would have to bound the complement, whose bounding box is the whole surface. This entry generalises that answer to the other three rather than leaving one arm disagreeing.
+
+**Alternatives rejected:** honouring it needs the machinery exact path clipping needs — a stencil pass, or a shader carrying a clip STACK that can evaluate `1 − coverage`. For the SDF shapes the second is nearly free (one flag, one sign), and for a plain rect it is not expressible at all short of splitting each draw across up to four scissor bands. Doing it for the rounded shapes alone would leave the four disagreeing again, in the opposite direction, so it waits for the clip stack. Downgrading the report to `debug!` was rejected for the reason `WgpuPainter::clip_path`'s own message was raised to `warn!`: an unhonoured clip renders content the caller asked to remove, which a production scrape must be able to see.
+
 ### `Clip::AntiAliasWithSaveLayer`: what the offscreen costs, and where it is declined
 
 **Reference:** `.flutter/packages/flutter/lib/src/painting/clip.dart`'s `ClipContext._clipAndPaint` clips anti-aliased and then calls `canvas.saveLayer(bounds, Paint())` — for every clip shape, and with the clip's BOUNDS passed explicitly. `Backend::push_clip_rect` / `push_clip_rrect` / `push_clip_rsuperellipse` / `push_clip_path` match the shape of that, and `save_layer_clipped` passes the bounds. Two places diverge, both recorded here.
