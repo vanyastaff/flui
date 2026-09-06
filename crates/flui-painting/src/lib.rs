@@ -202,6 +202,9 @@ pub use error::{PaintingError, Result};
 // directly. Deliberate boundary decision per ADR-0016 (pins this crate's
 // semver to cosmic-text, intentionally).
 pub use cosmic_text::FontSystem;
+// Same boundary, same reason: `SharedFontSystem::resolve_family` returns a
+// `Family`, and a consumer that cannot name it cannot hold the result.
+pub use cosmic_text::fontdb::Family;
 pub use table_border::paint_table_border;
 pub use text_layout::{
     LineInfo, SharedFontSystem, TextLayout, TextLayoutResult, detect_text_direction,

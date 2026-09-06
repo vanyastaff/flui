@@ -209,6 +209,57 @@ out, and nothing for the default. Printing it unconditionally would have added a
 line of every snapshot and changed all of them at once; printing only the deviation keeps existing
 snapshots untouched while making the opt-out visible to any test reading those lines.
 
+### 9. A style's font family is resolved against the host before it reaches the shaper
+
+**Rule:** Prime Directive rule #1 — a behavioural divergence from the reference is recorded with the
+test that replaces the reference's own coverage.
+
+**Choice:** [`src/text_layout/font_resolve.rs`](src/text_layout/font_resolve.rs) picks the family a
+`TextStyle` is shaped with, instead of handing `style.font_family` to cosmic-text unchanged. A named
+family the font database does not carry degrades to `Family::SansSerif`, and the five generic family
+names are pointed at families the database actually carries when their configured targets are
+missing (`FontSystem::new` hard-codes sans-serif to *Open Sans*, which a stock Debian/Ubuntu desktop
+does not install).
+
+This exists because an unresolvable family lets an emoji face shape the **space** of an ordinary
+Latin run at roughly 1.24 em instead of 0.25. Shaping runs per word, which is what lets the letters
+and the space diverge: the letters are absent from an emoji face and move on, the space is present
+in it and stays. Two independent routes reach that face, and closing only one leaves the defect
+live — cosmic-text's unix `common_fallback()` list *ends* in `"Noto Color Emoji"`, so the walk
+reaches it at **any** weight (400 included, measured) when no earlier text family from that list is
+installed; and its candidate filter `font_weight_diff == 0 || variable_weight_match || is_mono`
+empties every list for a family shipping only 400 and 700, dropping the run into an unfiltered tail
+whose derived ordering puts emoji faces first. Naming a family the database carries forecloses both,
+because `Database::query`'s front-insert puts the CSS-matched face ahead of the emoji entry in each.
+
+**Alternatives:**
+- Snap the requested *weight* to one the family provides — rejected, and it is worse than doing
+  nothing. `FontSystem::get_font` instances a variable face at the requested weight, so a snap
+  strips the requested instance from every variable face reached afterwards. It is also
+  unnecessary: with the family resolved, `Database::query` applies CSS font matching itself.
+- A custom `Fallback` impl whose `forbidden_fallback()` excludes emoji families — a real option,
+  and complementary rather than competing: it would suppress emoji in the unfiltered tail on paths
+  where no family resolves at all. Not taken here; it needs a per-platform emoji family list and its
+  own red test.
+
+**Accepted trade-off — this is where the divergence lies.** Flutter's `fontFamilyFallback`
+(`packages/flutter/lib/src/painting/text_style.dart`) is searched **per glyph**: each family in the
+chain is consulted when a glyph is missing from a higher-priority one. `Attrs::family` holds exactly
+one family, so an ordered per-style chain cannot be expressed, and
+`TextStyle::font_family_fallback` is consequently **not read at all** — resolution goes from the
+style's own family straight to the sans-serif generic. A style naming a present-but-narrow family
+therefore stops there where Flutter would fall through: `font_family: "CupertinoIcons",
+font_family_fallback: ["Noto Sans"]` on Latin text renders tofu here and text in Flutter.
+Replacement coverage, per rule #1, in two tests because no single fixture gives both properties.
+`an_uninstalled_family_shapes_in_the_bound_generic_both_ways` pins which family a run shapes in,
+hermetically and in both fixture orders so that no load order satisfies it — but its fixture carries
+no emoji face, so it never observes the letters and the space landing apart.
+`oversized_space_from_an_emoji_face_is_closed` is the one that does: it builds its fixture from the
+host's emoji font, asserts the red state (space above 1 em, on a different face from the letters)
+before asserting the fix, and **skips where the host has no emoji font** — real coverage where one
+exists, not an oracle to rely on everywhere. A fully hermetic version needs a committed fixture face
+carrying `' '` but no letters; neither in-tree icon font qualifies (both lack `' '` entirely).
+
 ### Net unsafe delta: 0
 
 The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before and after the chain. Zero `unsafe` blocks introduced; zero removed. Distinct from the `flui-layer` chain's -39 net delta (flui-layer had 39 cargo-cult `unsafe impl Send + Sync` blocks to delete; flui-painting never had them).

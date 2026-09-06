@@ -9,13 +9,19 @@
 //! and `'CupertinoSystemDisplay'` — internal aliases the Flutter *engine*
 //! resolves to the platform's San Francisco font on iOS/macOS. FLUI has no
 //! engine-level alias table and ships no bundled SF font (license), so this
-//! port keeps the oracle's exact family name (for citation fidelity — a
-//! reader diffing against `text_theme.dart` sees the same string) and adds a
-//! `font_family_fallback` chain of common system sans-serif fonts for
-//! `cosmic-text` to actually resolve against. This is **metrics parity, not
-//! pixel parity**: sizes/weights/letter-spacing match the oracle's tables
-//! exactly, but the rendered glyphs come from whatever system font
-//! `cosmic-text` finds, not San Francisco.
+//! port keeps the oracle's exact family name, for citation fidelity: a reader
+//! diffing against `text_theme.dart` sees the same string. This is **metrics
+//! parity, not pixel parity** — sizes, weights and letter-spacing match the
+//! oracle's tables exactly, but off Apple platforms the glyphs come from
+//! whatever the host provides.
+//!
+//! What resolves that name off Apple platforms is
+//! `flui_painting`'s family resolution, which degrades a family the host does
+//! not carry to the sans-serif generic. The `font_family_fallback` chain set
+//! on each style below is **not** consulted: nothing in the workspace reads
+//! `TextStyle::font_family_fallback`. It is carried for fidelity to the
+//! oracle's own style data and does not affect rendering. Wiring it is tracked
+//! in issue #928.
 
 use flui_types::Color;
 use flui_types::typography::{FontWeight, TextStyle};

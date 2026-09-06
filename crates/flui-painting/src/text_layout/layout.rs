@@ -10,6 +10,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use cosmic_text::fontdb::Family;
 use cosmic_text::{Buffer, Cursor, FontSystem, Metrics, Shaping};
 use flui_types::{
     geometry::{Offset, Pixels, Rect},
@@ -19,7 +20,30 @@ use flui_types::{
 };
 use parking_lot::Mutex;
 
+use super::font_resolve::{self, InstalledFamilies};
 use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
+
+/// The font database and the derived index that describes it, kept together so
+/// the index cannot be consulted about a database it was not built from.
+///
+/// They travel behind one lock rather than two: every read of the index
+/// happens while the database is borrowed, so the index can never be observed
+/// stale relative to it, and there is no second lock whose acquisition order
+/// could invert against the raster thread's.
+#[derive(Debug)]
+pub(super) struct FontState {
+    pub(super) system: FontSystem,
+    pub(super) installed_families: InstalledFamilies,
+}
+
+impl FontState {
+    fn new(system: FontSystem) -> Self {
+        Self {
+            system,
+            installed_families: InstalledFamilies::default(),
+        }
+    }
+}
 
 /// Global font system instance.
 ///
@@ -45,7 +69,7 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 // the accept-the-corruption trade-off above still holds. By this date
 // either land the wrapper, or re-verify the trade-off and set a new
 // explicit date — do not let the footnote drift unverified.
-static FONT_SYSTEM: OnceLock<Arc<Mutex<FontSystem>>> = OnceLock::new();
+static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>> = OnceLock::new();
 
 /// Gets or initializes the process-wide font system as a shared handle.
 ///
@@ -55,10 +79,24 @@ static FONT_SYSTEM: OnceLock<Arc<Mutex<FontSystem>>> = OnceLock::new();
 /// [`PaintingBinding::register_font`](crate::PaintingBinding::register_font)
 /// becomes visible to both measurement and rendering, closing the historic
 /// two-`FontSystem` gap where a registered face could measure but not paint.
-fn font_system_arc() -> &'static Arc<Mutex<FontSystem>> {
+fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
     FONT_SYSTEM.get_or_init(|| {
         tracing::debug!("Initializing global FontSystem");
-        Arc::new(Mutex::new(FontSystem::new()))
+        // Host discovery first, then point the generic families at what it
+        // actually found. `FontSystem::new` hard-codes sans-serif to
+        // "Open Sans", which a stock Debian/Ubuntu desktop does not install,
+        // and a generic resolving to nothing takes every style naming no
+        // family into cosmic-text's unfiltered, emoji-first fallback tail.
+        //
+        // Bound after construction rather than before: the constructor derives
+        // its monospace and per-script tables from each face's `monospaced`
+        // flag and its GPOS/GSUB scripts, never from the generic names, so
+        // binding afterwards changes nothing it froze — and building the
+        // database twice would repeat a full system-font scan plus a skrifa
+        // parse of every monospace face.
+        let mut system = FontSystem::new();
+        font_resolve::bind_generic_families(system.db_mut());
+        Arc::new(Mutex::new(FontState::new(system)))
     })
 }
 
@@ -132,11 +170,13 @@ pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale
     db.set_fantasy_family(default_family);
 
     let font_system = FontSystem::new_with_locale_and_db(locale.to_owned(), db);
-    FONT_SYSTEM.set(Arc::new(Mutex::new(font_system))).is_ok()
+    FONT_SYSTEM
+        .set(Arc::new(Mutex::new(FontState::new(font_system))))
+        .is_ok()
 }
 
 /// Gets or initializes the global font system for in-crate shaping.
-pub(super) fn font_system() -> &'static Mutex<FontSystem> {
+pub(super) fn font_system() -> &'static Mutex<FontState> {
     // Deref-coerces `&Arc<Mutex<_>>` → `&Mutex<_>` at the return site.
     font_system_arc()
 }
@@ -211,7 +251,7 @@ pub(super) fn metrics_from_shaped_buffer(
 /// [`PaintingBinding::register_font`](crate::PaintingBinding::register_font)
 /// is visible to both measurement and rendering.
 #[derive(Clone)]
-pub struct SharedFontSystem(Arc<Mutex<FontSystem>>);
+pub struct SharedFontSystem(Arc<Mutex<FontState>>);
 
 impl SharedFontSystem {
     /// Runs `f` with exclusive access to the font system, holding the lock
@@ -220,8 +260,47 @@ impl SharedFontSystem {
     /// Keep the closure short — it runs on the per-shape path (measurement,
     /// glyph rendering), not the per-command hot path.
     pub fn with_mut<R>(&self, f: impl FnOnce(&mut FontSystem) -> R) -> R {
-        let mut font_system = self.0.lock();
-        f(&mut font_system)
+        let mut state = self.0.lock();
+        f(&mut state.system)
+    }
+
+    /// The font family `style` should be shaped with on *this* machine.
+    ///
+    /// Returns the style's own family when the font database carries it, the
+    /// matching generic when the style names one (`"monospace"`, `"serif"`, …),
+    /// and [`Family::SansSerif`] when it names a family that is not installed
+    /// — which the generic binding points at a carried family whenever the
+    /// database holds any Latin-capable face.
+    ///
+    /// # Why a style's family cannot go to the shaper unchecked
+    ///
+    /// An unresolvable family lets an emoji face shape the SPACE of an
+    /// ordinary Latin run at roughly 1.24 em — shaping is per word, so the
+    /// letters move on to a text face while the space, which an emoji face
+    /// does have, stays. Two independent routes lead there: cosmic-text's
+    /// platform fallback list ends in `"Noto Color Emoji"`, so the walk
+    /// reaches it at ANY weight when no earlier text family is installed; and
+    /// its exact-weight candidate filter empties every list for a family that
+    /// ships only 400 and 700, dropping the run into an unfiltered, emoji-first
+    /// tail. Naming a family the database carries forecloses both, because it
+    /// puts the CSS-matched face ahead of the emoji entry in each.
+    /// The crate's `font_resolve` module carries the full mechanism. The requested
+    /// **weight** is passed through untouched:
+    /// adjusting it would strip the requested instance off every variable face
+    /// reached afterwards, because a face is instanced at the weight asked for.
+    ///
+    /// Call this *before* [`Self::with_mut`], never inside it: the lock is not
+    /// reentrant.
+    ///
+    /// The returned `Family` borrows `style`, so this allocates nothing.
+    #[must_use]
+    pub fn resolve_family<'a>(&self, style: Option<&'a TextStyle>) -> Family<'a> {
+        let mut state = self.0.lock();
+        let FontState {
+            system,
+            installed_families,
+        } = &mut *state;
+        font_resolve::resolve_family(style, system, installed_families)
     }
 }
 
@@ -360,45 +439,68 @@ impl TextLayout {
         );
 
         let line_height = line_height.unwrap_or(font_size * 1.2);
-        let default_attrs = cosmic_text::AttrsOwned::new(&style_to_attrs(default_style));
 
-        let runs: Vec<OwnedRun> = spans
-            .into_iter()
-            .map(|(text, style)| {
-                let attrs = match &style {
-                    Some(style) => {
-                        let mut attrs = style_to_attrs(Some(style));
-                        // Per-span font size/line height ride on the attrs
-                        // (cosmic's per-span Metrics); spans without one
-                        // inherit the buffer-level default.
-                        // f64 style sizes → f32 shaping space
-                        if let Some(size) = style.font_size.map(|s| s as f32) {
-                            let span_line_height =
-                                style.height.map_or(size * 1.2, |h| h as f32 * size);
-                            attrs = attrs.metrics(Metrics::new(size, span_line_height));
-                            // cosmic letter spacing is in EM; ours is in
-                            // logical px.
-                            if let Some(spacing) = style.letter_spacing.map(|s| s as f32)
-                                && size > 0.0
-                            {
-                                attrs = attrs.letter_spacing(spacing / size);
+        // Two short critical sections rather than one long one. Family
+        // resolution reads the font database, so it has to hold the lock —
+        // but `AttrsOwned` owns its family, so the guard is dropped the moment
+        // the runs are built and re-taken for the shape pass. Everything
+        // between (the buffer, the concatenated text) needs no database, and
+        // this mutex is shared with the render engine's glyph thread, which is
+        // why `SharedFontSystem::with_mut` documents it as one to hold
+        // briefly.
+        let runs: Vec<OwnedRun> = {
+            let mut state = font_system().lock();
+            let FontState {
+                system,
+                installed_families,
+            } = &mut *state;
+
+            let default_family =
+                font_resolve::resolve_family(default_style, system, installed_families);
+            let default_attrs =
+                cosmic_text::AttrsOwned::new(&style_to_attrs(default_style, default_family));
+
+            spans
+                .into_iter()
+                .map(|(text, style)| {
+                    let attrs = match &style {
+                        Some(style) => {
+                            let family = font_resolve::resolve_family(
+                                Some(style),
+                                system,
+                                installed_families,
+                            );
+                            let mut attrs = style_to_attrs(Some(style), family);
+                            // Per-span font size/line height ride on the attrs
+                            // (cosmic's per-span Metrics); spans without one
+                            // inherit the buffer-level default.
+                            // f64 style sizes → f32 shaping space
+                            if let Some(size) = style.font_size.map(|s| s as f32) {
+                                let span_line_height =
+                                    style.height.map_or(size * 1.2, |h| h as f32 * size);
+                                attrs = attrs.metrics(Metrics::new(size, span_line_height));
+                                // cosmic letter spacing is in EM; ours is in
+                                // logical px.
+                                if let Some(spacing) = style.letter_spacing.map(|s| s as f32)
+                                    && size > 0.0
+                                {
+                                    attrs = attrs.letter_spacing(spacing / size);
+                                }
                             }
+                            cosmic_text::AttrsOwned::new(&attrs)
                         }
-                        cosmic_text::AttrsOwned::new(&attrs)
-                    }
-                    None => default_attrs.clone(),
-                };
-                OwnedRun { text, attrs }
-            })
-            .collect();
+                        None => default_attrs.clone(),
+                    };
+                    OwnedRun { text, attrs }
+                })
+                .collect()
+        };
 
         // cosmic-text 0.19: `new_empty` skips the empty-string shape pass
-        // `Buffer::new` performs, and `set_size` is lazy — the first (and
-        // only) shape happens in `shape_runs` below, so the global
-        // `FONT_SYSTEM` lock is taken only once the buffer is fully set up.
+        // `Buffer::new` performs, and `set_size` is lazy, so the buffer is
+        // fully described outside the lock.
         let mut buffer = Buffer::new_empty(Metrics::new(font_size, line_height));
         buffer.set_size(max_width, None);
-        let mut font_system = font_system().lock();
 
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let mut this = Self {
@@ -410,12 +512,16 @@ impl TextLayout {
             direction,
             truncated: false,
         };
-        this.shape_runs(&mut font_system);
 
-        if let Some(max_lines) = max_lines
-            && max_lines > 0
         {
-            this.enforce_max_lines(&mut font_system, max_lines, ellipsis, max_width);
+            let mut state = font_system().lock();
+            this.shape_runs(&mut state.system);
+
+            if let Some(max_lines) = max_lines
+                && max_lines > 0
+            {
+                this.enforce_max_lines(&mut state.system, max_lines, ellipsis, max_width);
+            }
         }
 
         this
@@ -571,7 +677,7 @@ impl TextLayout {
 
         let cursor = Cursor::new(0, position.offset);
 
-        if let Some(layout_cursor) = self.buffer.layout_cursor(&mut font_system, cursor) {
+        if let Some(layout_cursor) = self.buffer.layout_cursor(&mut font_system.system, cursor) {
             let mut x = 0.0f32;
             let mut y = 0.0f32;
 

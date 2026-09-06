@@ -108,8 +108,12 @@ pub(super) fn collect_styled_spans(
 /// API verified against cosmic-text 0.19.0's `src/attrs.rs`: `:323`
 /// (`Attrs::color`), `:329` (`Attrs::family`), `:341` (`Attrs::style`),
 /// `:347` (`Attrs::weight`), `:365` (`Attrs::metrics`).
-pub(super) fn style_to_attrs_owned(style: Option<&TextStyle>, base_color: Color) -> AttrsOwned {
-    let mut attrs = Attrs::new();
+pub(super) fn style_to_attrs_owned(
+    style: Option<&TextStyle>,
+    base_color: Color,
+    family: Family<'_>,
+) -> AttrsOwned {
+    let mut attrs = Attrs::new().family(family);
 
     // Resolve color: foreground > color > base_color
     let color = style
@@ -118,18 +122,6 @@ pub(super) fn style_to_attrs_owned(style: Option<&TextStyle>, base_color: Color)
     attrs = attrs.color(GlyphonColor::rgba(color.r, color.g, color.b, color.a));
 
     if let Some(style) = style {
-        // Font family
-        if let Some(ref family) = style.font_family {
-            attrs = attrs.family(match family.as_str() {
-                "serif" | "Serif" => Family::Serif,
-                "sans-serif" | "SansSerif" | "sans" => Family::SansSerif,
-                "monospace" | "Monospace" | "mono" => Family::Monospace,
-                "cursive" | "Cursive" => Family::Cursive,
-                "fantasy" | "Fantasy" => Family::Fantasy,
-                name => Family::Name(name),
-            });
-        }
-
         // Font weight
         if let Some(weight) = style.font_weight {
             attrs = attrs.weight(match weight {
@@ -214,14 +206,23 @@ impl Hash for RichTextCacheKey {
 }
 
 impl RichTextCacheKey {
-    /// The key must fingerprint EVERY field `style_to_attrs_owned` feeds the
-    /// shaper (the `TextStyle::layout_affecting_eq` set), or two
+    /// The key must fingerprint every style field `style_to_attrs_owned` feeds
+    /// the shaper (the `TextStyle::layout_affecting_eq` set), or two
     /// identically-worded but differently-styled spans collide and reuse the
     /// wrong shaped buffer: family, weight, style, font_size, color,
     /// letter_spacing, height (per-run `Metrics` line height), plus the
     /// buffer-level `base_font_size` default and the `wrap_width` (which
     /// controls line-breaking, so two identical runs at different wrap widths
     /// must produce distinct shaped buffers).
+    ///
+    /// The family recorded here is the one the STYLE names, not the one
+    /// `SharedFontSystem::resolve_family` picks for it. The two differ only
+    /// while the font database grows between two otherwise identical
+    /// requests, and this cache is already stale in that case for the reason
+    /// it always was: nothing invalidates it when a face is registered
+    /// (`PaintingBinding::register_font` notifies `SystemFontsNotifier`, which
+    /// has no listeners). Recording the resolved family would not close that
+    /// gap — it needs an invalidation hook.
     fn new(
         runs: &[(String, Option<TextStyle>)],
         base_font_size: f32,
@@ -623,6 +624,21 @@ impl TextRenderer {
             Entry::Vacant(e) => {
                 let font_size = f32::from_bits(key.font_size_bits);
                 let line_height = font_size * 1.2;
+                // The plain path carries no style, so it shapes through the
+                // sans-serif generic. Resolving `None` is how it gets there:
+                // the family it returns IS `Family::SansSerif`, but the call
+                // also brings the generic bindings up to date with the font
+                // database, and nothing else on this path would. That matters
+                // on a host whose database was empty when the font system was
+                // built — `TextRenderer::new` loads the embedded faces
+                // afterwards, and a generic still naming a family the database
+                // lacks hands the space to an emoji face at ANY weight, 400
+                // included, because the platform fallback list ends in one.
+                //
+                // Taken BEFORE `with_mut` below, never inside it: resolution
+                // acquires the same non-reentrant lock.
+                let family = self.font_system.resolve_family(None);
+
                 // Shape against the shared FontSystem; the closure holds the
                 // lock only for the shaping calls and captures no `self`
                 // field, so the vacant `plain_cache` entry `e` stays valid.
@@ -630,7 +646,7 @@ impl TextRenderer {
                     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
                     // Unbounded width — wrap-width matching is a follow-up (paint seam).
                     buffer.set_size(Some(f32::MAX), None);
-                    let attrs = Attrs::new().family(Family::SansSerif);
+                    let attrs = Attrs::new().family(family);
                     buffer.set_text(&key.text, &attrs, Shaping::Advanced, None);
                     buffer.shape_until_scroll(font_system, false);
                     buffer
@@ -731,9 +747,16 @@ impl TextRenderer {
 
             // Build per-run AttrsOwned; the iterator borrows from the vec
             // of owned values, satisfying set_rich_text's lifetime.
+            // Resolved BEFORE `with_mut` below, never inside it: resolution
+            // takes the same lock and `parking_lot::Mutex` is not reentrant.
+            // A family this host does not carry must not reach the shaper —
+            // see `flui_painting::SharedFontSystem::resolve_family`.
             let owned_attrs: Vec<AttrsOwned> = runs
                 .iter()
-                .map(|(_, style)| style_to_attrs_owned(style.as_ref(), base_color))
+                .map(|(_, style)| {
+                    let family = self.font_system.resolve_family(style.as_ref());
+                    style_to_attrs_owned(style.as_ref(), base_color, family)
+                })
                 .collect();
 
             // Shape against the shared FontSystem; the closure holds the lock
