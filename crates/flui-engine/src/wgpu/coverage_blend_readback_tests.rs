@@ -131,8 +131,7 @@ fn coverage_folded(mode: BlendMode, coverage: f32) -> [f32; 4] {
 
 /// The whole contract for one blend mode, asserted against both devices.
 fn assert_partial_coverage_feathers(mode: BlendMode) {
-    let Ok(feathering) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
     let folded = HeadlessRenderer::without_dual_source_blending()
@@ -311,8 +310,7 @@ fn exactly_the_modes_that_need_correcting_are_the_ones_marked_for_it() {
 /// this change reached a mode it was not meant to.
 #[test]
 fn dst_out_renders_the_same_with_and_without_a_second_blend_source() {
-    let Ok(feathering) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
     if !feathering.supports_dual_source_blending() {

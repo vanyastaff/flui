@@ -275,8 +275,7 @@ fn gradient_through_an_anti_aliased_clip(
 /// pipeline were never built, the pixel would be the bare destination.
 #[test]
 fn each_gradient_kind_paints_through_its_own_pipeline() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -313,8 +312,7 @@ fn each_gradient_kind_paints_through_its_own_pipeline() {
 /// gradient's own SDF and the (absent) clip. That keeps this half independent
 /// of the coverage correction: it asserts the mode, not the feathering.
 fn every_porter_duff_mode_renders_as_itself(kind: GradientKind) {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -368,8 +366,7 @@ fn a_sweep_gradient_renders_every_porter_duff_mode() {
 /// both devices — the same shape as the tessellated path's suite, because it is
 /// the same contract (ADR-0057).
 fn assert_partial_coverage_feathers(kind: GradientKind, mode: BlendMode) {
-    let Ok(feathering) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
     let folded = HeadlessRenderer::without_dual_source_blending()
@@ -521,8 +518,7 @@ fn a_sweep_gradient_feathers_dst_in() {
 /// predictions are the same number by construction.
 #[test]
 fn a_gradient_does_not_correct_dst_out() {
-    let Ok(feathering) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
     if !feathering.supports_dual_source_blending() {
@@ -668,8 +664,7 @@ fn assert_within_one_bit(actual: [u8; 4], expected: [u8; 4], what: &str) {
 ///   modules rather than a chosen row.
 #[test]
 fn srcover_gradients_are_unchanged_to_within_one_bit() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 

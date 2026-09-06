@@ -232,8 +232,13 @@ mod readback_dump;
 // test_support is the other half of the shared scaffolding: adapter/device
 // acquisition, render-target creation, clear passes, and the padded-row
 // staging readback that every GPU suite previously carried its own copy of.
-// GPU-only, so it is gated on `enable-wgpu-tests` like its consumers.
-#[cfg(all(test, feature = "enable-wgpu-tests"))]
+//
+// Gated on `cfg(test)` alone, not on `enable-wgpu-tests`. It was gated on the
+// feature "like its consumers" while every consumer was a feature-gated filter
+// suite; the three readback suites below are `cfg(test)` only, and they are the
+// ones that needed `renderer_or_skip` — a helper that lives behind a feature its
+// callers do not have is a helper they cannot call.
+#[cfg(test)]
 pub(crate) mod test_support;
 
 #[cfg(test)]
