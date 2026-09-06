@@ -67,9 +67,11 @@ the first version claimed, and this record states it as such.
 arithmetic is whether parley has a glyphon-equivalent — a wgpu glyph atlas with
 batching.
 
-**It does not.** `glifo` 0.3.0 (linebender/vello, first published 2026-05-15) is
-the closest thing, and its dependency set is `vello_common`, `skrifa`, `peniko`,
-`bytemuck`, `hashbrown`, `smallvec`, `foldhash`, `log` — **no wgpu at all**. It
+**It does not.** `glifo` (linebender/vello; first released 2026-05-15, 0.3.0 on
+2026-08-07) is the closest thing, and 0.3.0's dependency set is `vello_common`,
+`skrifa`, `peniko`, `bytemuck`, `hashbrown`, `smallvec`, `foldhash`, `log`, plus
+optional `core_maths` and `png` — **no wgpu at all**, verified against the
+registry rather than read off a README. It
 is CPU-side glyph caching shaped to vello's rendering model, not a standalone
 atlas-and-batching renderer. That leaves two routes, both larger than a text
 swap:
