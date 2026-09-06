@@ -636,7 +636,7 @@ evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/traits/platform.rs", contains = "fn set_exit_policy_hook" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn complete_window_close" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn request_close_window" },
-    { kind = "test", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn programmatic_close_runs_the_full_teardown_and_exits_the_loop" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/winit/platform/real_loop_tests.rs", contains = "fn programmatic_close_runs_the_full_teardown_and_exits_the_loop" },
     { kind = "test", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn winit_control_close_request_is_nonstarvable_coalesced_per_window_and_taken_once" },
     { kind = "symbol", file = "crates/flui-platform/src/shared/handlers.rs", contains = "pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn two_realms_via_separate_windows_policy_share_nothing" },
