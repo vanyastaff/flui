@@ -1774,12 +1774,21 @@ affine by AppKit convention) on the one backend CI compiles but never \
 executes, so nothing would go red; and the wake hook is `Send + Sync`-bound \
 while realm/presentation state is `!Send`, which blocks capturing UI state \
 into it at compile time but does nothing to stop a hook that skips the \
-relay and calls a platform API directly, compiling and being wrong. Today \
-no raster thread is spawned anywhere in production -- \
-`RasterOwner::run_until_shutdown` is exercised only by this module's own \
-threaded test harness -- so the ordering constraint is not yet live; it \
-becomes load-bearing the moment a production raster-thread spawn lands, \
-which is why it is recorded here ahead of that change rather than after.\
+relay and calls a platform API directly, compiling and being wrong. \
+\
+CORRECTION (2026-09-06, issue #949): this entry used to say the constraint \
+"is not yet live" because no raster thread is spawned in production. The \
+premise is true and the conclusion does not follow. The ASYNC lane already \
+reaches `PlatformWindow::request_redraw` from a non-owner thread without any \
+raster thread: `UiRealm::construct` installs `AppRuntime::frame_wake_callback` \
+as the scheduler's `on_frame_scheduled` hook, an `AsyncDriver` task waker \
+fires on whichever thread completed the future, and `FrameWakeHandle::\
+wake_frame` calls `request_redraw` directly -- deliberately, pinned by \
+`frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler`. \
+So `MacOSWindow`'s `unsafe impl Send` precondition is falsifiable on a \
+shipping path today, and the relay is owed now rather than at thread-spawn \
+time. The ordering constraint on the raster thread stands unchanged; what \
+changes is that it is no longer the first thing to need the relay.\
 """
 state = "partial"
 domain = "raster"

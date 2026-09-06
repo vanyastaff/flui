@@ -198,10 +198,24 @@ struct InFlightAccounting {
     /// must neither block NOR PANIC — a panic from the unwind-path
     /// invocation is a panic during a `Drop` in flight, which aborts the
     /// process and cannot be contained by the caller's `catch_unwind`.
-    /// Treat it as a bare wake signal — push to a channel,
-    /// call `PlatformWindow::request_redraw` — the same contract
-    /// `flui_scheduler`'s `on_frame_scheduled` hook and `flui-app`'s
-    /// `FrameWakeHandle` already keep.
+    /// Treat it as a bare wake signal: set a flag, or push onto a channel
+    /// the OWNER thread drains — the same contract `flui_scheduler`'s
+    /// `on_frame_scheduled` hook keeps.
+    ///
+    /// **Do not call `PlatformWindow::request_redraw` from it.** This doc used
+    /// to offer that as an example, and it is the one thing the hook must not
+    /// do. `PlatformWindow` is `Send + Sync`, so the call compiles from any
+    /// thread; on macOS it messages the NSWindow's content view, and
+    /// `MacOSWindow`'s `unsafe impl Send` states its whole justification as
+    /// "the NSWindow pointer is only messaged from the main thread". That
+    /// backend is compiled by CI and never linked or executed, so a hook that
+    /// gets this wrong goes green everywhere. `flui-app`'s `FrameWakeHandle`
+    /// does make the call directly — it is not the example to copy here, and
+    /// issue #949 tracks the same defect on its own path.
+    ///
+    /// ADR-0045 decision 5 names the shape that is correct for a hook fired
+    /// off the owner thread: push onto a channel, and let the platform's own
+    /// event-loop waker drain it where the window may be touched.
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
