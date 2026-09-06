@@ -551,10 +551,20 @@ pub enum WindowEvent {
     /// Window was created
     Created(WindowId),
 
-    /// Window close was requested by the user (close button, compositor)
-    /// and the window's should-close veto passed. Not emitted for a
-    /// programmatic [`PlatformWindow::close`], which asks no veto — that
-    /// route reports only [`Closed`](Self::Closed).
+    /// A close was *asked for* and the window's should-close veto passed.
+    ///
+    /// The rule is the veto, not the caller: this event accompanies every
+    /// close that consults `on_should_close` and survives it. A refused close
+    /// emits nothing at all.
+    ///
+    /// In practice that means the user route — a close button or compositor
+    /// close on winit, `WM_CLOSE` on Win32, `simulate_close` on the headless
+    /// double. A programmatic [`PlatformWindow::close`] on the owning thread
+    /// is a decision rather than a request, asks no veto, and so reports only
+    /// [`Closed`](Self::Closed). The one case where a programmatic close does
+    /// emit this is Win32's *cross-thread* route, which cannot call
+    /// `DestroyWindow` and posts `WM_CLOSE` instead — so the veto is re-asked
+    /// and the close becomes a request, exactly as that impl documents.
     ///
     /// Ordering: emitted BEFORE the window's own `on_close` callback runs,
     /// so a global handler observes the window still intact when told the
@@ -562,11 +572,6 @@ pub enum WindowEvent {
     /// window has left the backend's tracking. (Earlier winit versions ran
     /// `on_close` first — a deliberate change, made when both close routes
     /// were unified into one teardown.)
-    ///
-    /// Wired on winit and Win32. The headless backend routes no window
-    /// lifecycle through the global handler at all (it emits only
-    /// [`Created`](Self::Created)); use the window's own `on_should_close`
-    /// / `on_close` there.
     CloseRequested {
         /// The window whose close button was activated
         window_id: WindowId,
@@ -576,8 +581,9 @@ pub enum WindowEvent {
     /// (user-initiated or programmatic) took it there. Emitted after the
     /// window's own `on_close` callback and before the exit-policy consult.
     ///
-    /// Wired on winit and Win32; the headless backend does not emit it (see
-    /// [`CloseRequested`](Self::CloseRequested)).
+    /// Emitted for *every* window that closes, not only the last one: a
+    /// consumer tracking open windows by these events would otherwise believe
+    /// a closed window is still open whenever another remains.
     Closed(WindowId),
 
     /// Window focus changed

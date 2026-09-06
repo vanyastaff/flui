@@ -275,16 +275,25 @@ pub trait PlatformWindow: Send + Sync {
     /// Never bypasses the *bookkeeping* once the close proceeds: the backend
     /// runs the same teardown a user-initiated close takes — the
     /// [`on_close`](Self::on_close) callback, removal from the backend's window
-    /// tracking, cleanup of per-window input state, and the exit-policy consult
-    /// that ends the loop when this was the last window.
+    /// tracking, cleanup of per-window input state, the global
+    /// [`WindowEvent::Closed`](crate::WindowEvent::Closed), and the exit-policy
+    /// consult that ends the loop when this was the last window. That
+    /// bookkeeping is universal; the *timing* below is not.
     ///
     /// Callable from any thread the native windowing API permits. On winit the
     /// teardown, and so `on_close`, runs on the owner thread's next turn —
-    /// never synchronously within this call, whichever thread makes it. The
-    /// headless test double, by contrast, runs `on_close` synchronously
-    /// inside `close()`: a test that asserts state right after `close()`
-    /// pins that double, not this contract. AppKit's `close()` has no thread
-    /// marshaling today: call it from the main thread only.
+    /// never synchronously within this call, whichever thread makes it. Win32's
+    /// same-thread route is the opposite: `DestroyWindow` dispatches
+    /// `WM_DESTROY`, and with it `on_close` and `Closed`, before this call
+    /// returns. The headless double follows Win32's shape and runs the teardown
+    /// synchronously, which is what the tests asserting state right after
+    /// `close()` pin; issue #937 tracks an opt-in mode for winit's timing, for
+    /// when something needs to observe it headlessly. AppKit's `close()` has no
+    /// thread marshaling today: call it from the main thread only.
+    ///
+    /// One thing the double does *not* model, and cannot until #937 lands: it
+    /// runs `on_close` on the calling thread, while this trait requires every
+    /// window callback to run on the thread that registered it.
     fn close(&self) {}
 
     /// Set the window's background appearance (backdrop material)
