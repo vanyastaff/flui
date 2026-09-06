@@ -271,9 +271,10 @@ impl<'a> SceneBuilder<'a> {
     /// working route. This is the layer-tree route.
     ///
     /// Named for the layer it builds, matching this crate's own spelling
-    /// (`ClipSuperellipseLayer`, `Layer::clip_superellipse`). The engine spells
-    /// the same shape `rsuperellipse` after Flutter's `RSuperellipse`; the two
-    /// conventions predate this method and it follows the one in its own crate.
+    /// ([`ClipSuperellipseLayer`], the `Layer::ClipSuperellipse` variant). The
+    /// engine spells the same shape `rsuperellipse` after Flutter's
+    /// `RSuperellipse`; the two conventions predate this method and it follows
+    /// the one in its own crate.
     ///
     /// # Arguments
     ///

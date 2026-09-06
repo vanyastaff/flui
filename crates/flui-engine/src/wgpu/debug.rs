@@ -422,10 +422,10 @@ impl LayerStateStack for DebugBackend {
         );
     }
 
-    // Logged under its own name rather than inherited from the trait default,
-    // which would report a `push_clip_rrect` that the caller never made — a
-    // debug backend that renames the operation it is recording is worse than
-    // one that records nothing.
+    // Logged under its own name. The trait requires this method precisely so
+    // an implementor cannot fall back to an approximation without deciding to
+    // — and a debug backend that renamed the operation it is recording would
+    // be worse than one that recorded nothing.
     fn push_clip_rsuperellipse(
         &mut self,
         rse: &flui_types::geometry::RSuperellipse,

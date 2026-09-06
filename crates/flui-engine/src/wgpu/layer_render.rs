@@ -759,10 +759,10 @@ mod tests {
         fn push_clip_rrect(&mut self, _rrect: &RRect, _clip_behavior: Clip) {
             self.calls.push("push_clip_rrect".to_string());
         }
-        // Recorded under its own name, not inherited from the trait default:
-        // the default forwards to `push_clip_rrect`, so a mock without this
-        // would report the approximation and the routing assertion would pass
-        // against a layer that never reached the squircle path.
+        // Recorded under its own name, so the routing assertion below can
+        // tell the squircle call from the rounded-rectangle one it must not
+        // reach. The trait requires the method, so a mock cannot silently
+        // report the wrong operation by omitting it.
         fn push_clip_rsuperellipse(
             &mut self,
             _rse: &flui_types::geometry::RSuperellipse,
