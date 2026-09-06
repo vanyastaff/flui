@@ -332,12 +332,12 @@ pub trait CommandRenderer {
     ///
     /// `ClipSuperellipseLayer::render` was the only one, and issue #921 moved
     /// it to [`LayerStateStack::push_clip_rsuperellipse`] — a squircle clip is
-    /// an SDF, not a tessellated path. `grep -rn '\.superellipse_path(' crates/`
-    /// returns nothing outside this method's own two implementations. The
-    /// method, the cache and `generate_superellipse_path` are kept rather than
-    /// deleted because `wgpu::superellipse_cache` is a public module and a
-    /// backend that tessellates rather than evaluating an SDF still needs
-    /// this; removing them is its own semver event, tracked in issue #935.
+    /// an SDF, not a tessellated path. Kept rather than deleted because
+    /// `wgpu::superellipse_cache` is a public module and a backend that
+    /// tessellates instead of evaluating an SDF would still need this;
+    /// removing it is its own semver event. Issue #935 owns that decision and
+    /// is where the current caller count belongs — a doc that asserts one goes
+    /// stale silently.
     fn superellipse_path(&mut self, rse: RSuperellipse) -> Arc<Path> {
         Arc::new(crate::superellipse::generate_superellipse_path(&rse))
     }
@@ -405,7 +405,7 @@ pub trait CommandRenderer {
 /// Compositor hand-off interface for the flui-layer clip/transform/effect
 /// stacks.
 ///
-/// These 13 methods used to live on [`CommandRenderer`] alongside its 34
+/// These methods used to live on [`CommandRenderer`] alongside its 34
 /// per-command visitor methods. They were split out into this dedicated
 /// trait because:
 ///
@@ -447,32 +447,28 @@ pub trait LayerStateStack {
 
     /// Push a rounded-superellipse (iOS squircle) clip onto the clip stack.
     ///
-    /// The default approximates the squircle with its bounding rounded
-    /// rectangle, corner radii carried across unchanged. That is the same
-    /// approximate-by-default / override-exactly split
-    /// [`CommandRenderer::superellipse_path`] uses for this shape, and it is
-    /// why this method has a body at all: a default that forwarded to
-    /// [`push_clip_path`](Self::push_clip_path) would install nothing on a
-    /// backend where path clipping is a no-op, which is the defect this method
-    /// was added to remove (issue #921) — reintroduced for every implementor
-    /// that did not notice.
+    /// Required rather than defaulted, unlike
+    /// [`CommandRenderer::superellipse_path`]. The obvious default —
+    /// approximating with the rounded rectangle that shares this shape's outer
+    /// rect and radii — is not the conservative choice it reads as: that rrect
+    /// is **inscribed** in the squircle, so it clips strictly MORE and silently
+    /// discards corner content. (`a_clip_superellipse_layer_clips_to_the_squircle_
+    /// not_its_bounding_rrect` measures the gap: 2.9 px at a 64 px shape.) A
+    /// default forwarding to [`push_clip_path`](Self::push_clip_path) would be
+    /// worse still on a backend where path clipping is a no-op — it would
+    /// reinstate the silent no-op this method exists to remove (issue #921).
     ///
-    /// The `wgpu` backend overrides it with the real superellipse SDF, which
-    /// is strictly tighter in the corners than the rounded rectangle below.
+    /// The in-tree precedent for a degrading default on this trait has already
+    /// misfired: `MockRenderer` never overrode
+    /// [`push_opacity_blend`](Self::push_opacity_blend), so a blend-mode
+    /// opacity is still recorded as a plain `push_opacity`. An implementor that
+    /// cannot evaluate a squircle should choose its approximation deliberately
+    /// and say so, which a compile error asks for and a default does not.
     fn push_clip_rsuperellipse(
         &mut self,
         rse: &RSuperellipse,
         clip_behavior: flui_types::painting::Clip,
-    ) {
-        let approximation = RRect::from_rect_and_corners(
-            rse.outer_rect(),
-            rse.tl_radius(),
-            rse.tr_radius(),
-            rse.br_radius(),
-            rse.bl_radius(),
-        );
-        self.push_clip_rrect(&approximation, clip_behavior);
-    }
+    );
 
     /// Pop the most recent clip from the clip stack
     fn pop_clip(&mut self);

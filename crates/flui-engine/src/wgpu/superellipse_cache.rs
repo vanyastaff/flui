@@ -2,7 +2,8 @@
 //!
 //! Mirrors the [`PathCache`](super::path_cache::PathCache) shape exactly,
 //! providing capacity- and frame-based eviction for the path-tessellation
-//! route used by `ClipSuperellipseLayer::render`. Replaces the previously
+//! route that `ClipSuperellipseLayer::render` used before issue #921 moved it
+//! to the squircle SDF. It has had no caller since; see #935. Replaces the previously
 //! unbounded `thread_local! { static SUPERELLIPSE_CACHE: ... }` that lived
 //! in `layer_render.rs` and accumulated entries monotonically across the
 //! application lifetime.

@@ -958,6 +958,33 @@ mod tests {
         assert_eq!(renderer.calls, vec!["push_clip_rect", "pop_clip"]);
     }
 
+    /// The squircle layer reaches the squircle call, not the path call that
+    /// discards its argument (issue #921).
+    ///
+    /// The GPU readback in `clip_layer_readback_tests` is the oracle for what
+    /// the clip *does*; this is the CPU-only pin on where it goes, so the
+    /// routing is gated on every run rather than only where an adapter exists.
+    #[test]
+    fn clip_superellipse_layer_routes_to_the_squircle_call() {
+        let mut renderer = MockRenderer::new();
+        let squircle = flui_types::geometry::RSuperellipse::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(24.0),
+        );
+        let layer = flui_layer::ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
+
+        layer.render(&mut renderer);
+        assert_eq!(
+            renderer.calls,
+            vec!["push_clip_rsuperellipse"],
+            "the layer must not reach `push_clip_path`, whose painter call \
+             installs nothing"
+        );
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_clip_rsuperellipse", "pop_clip"]);
+    }
+
     #[test]
     fn test_clip_rect_layer_no_clip_is_noop() {
         let mut renderer = MockRenderer::new();

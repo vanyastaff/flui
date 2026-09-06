@@ -1671,9 +1671,10 @@ impl LayerStateStack for Backend<'_> {
         // wrong one because the layer was refused afterwards would drop the
         // squircle coverage entirely.
         //
-        // Overrides the trait default, which approximates the squircle with
-        // its bounding rounded rectangle. The SDF below is strictly tighter in
-        // the corners, which is the whole point of the shape.
+        // The SDF is the shape itself, not an approximation of it: the
+        // rounded rectangle sharing this squircle's outer rect and radii is
+        // INSCRIBED in it, so substituting one would clip corner content the
+        // squircle keeps.
         let composite_clip = if self.opens_offscreen(clip_behavior, ClipOutcome::Installed) {
             Some(self.painter.clip_rsuperellipse_at_composite(*rse))
         } else {

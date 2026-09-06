@@ -75,9 +75,10 @@ pub enum DrawCommand {
     /// rendering is backend-dependent: the `CommandRenderer::clip_rsuperellipse`
     /// default falls back to an `RRect` approximation built from the
     /// superellipse's outer rect plus per-corner radii, and a backend may
-    /// override with a real superellipse SDF for pixel-perfect parity (see
-    /// `flui-engine::wgpu::layer_render::get_or_generate_superellipse_path`
-    /// for the path-tessellation route used by `ClipSuperellipseLayer`).
+    /// override with a real superellipse SDF for pixel-perfect parity, which
+    /// the wgpu backend does. Note the direction of that approximation: the
+    /// rrect built from the same outer rect and radii is INSCRIBED in the
+    /// squircle, so it clips more, not less.
     /// Matches Flutter's `Canvas.clipRSuperellipse` and
     /// `ClipContext.clipRSuperellipseAndPaint` at the command-vocabulary
     /// level.

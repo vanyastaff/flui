@@ -270,6 +270,11 @@ impl<'a> SceneBuilder<'a> {
     /// (`ClipContext::clip_rsuperellipse_and_paint`), which is a separate,
     /// working route. This is the layer-tree route.
     ///
+    /// Named for the layer it builds, matching this crate's own spelling
+    /// (`ClipSuperellipseLayer`, `Layer::clip_superellipse`). The engine spells
+    /// the same shape `rsuperellipse` after Flutter's `RSuperellipse`; the two
+    /// conventions predate this method and it follows the one in its own crate.
+    ///
     /// # Arguments
     ///
     /// * `rsuperellipse` - The rounded superellipse to clip to

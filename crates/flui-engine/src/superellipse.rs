@@ -25,7 +25,9 @@ use flui_types::{
 /// # Caching
 ///
 /// This function performs no caching — it regenerates the path on every call.
-/// The production wgpu backend overrides `CommandRenderer::superellipse_path`
+/// No backend reaches this today — `ClipSuperellipseLayer` evaluates an SDF
+/// since issue #921, and nothing else asks for the path (#935). The production
+/// wgpu backend overrides `CommandRenderer::superellipse_path`
 /// to consult its `Painter`-owned `SuperellipsePathCache` instead.
 /// `DebugBackend` / `MockRenderer` use this uncached path directly.
 pub(crate) fn generate_superellipse_path(superellipse: &RSuperellipse) -> Path {

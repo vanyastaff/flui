@@ -170,8 +170,8 @@ impl WgpuPainter {
     /// Painter-owned bounded cache.
     ///
     /// Consulted by `Backend::superellipse_path` (the `CommandRenderer`
-    /// trait override) so `ClipSuperellipseLayer::render`'s layer-tree
-    /// clip path benefits from frame-bounded caching. On a miss the path
+    /// trait override), which since issue #921 has no caller: the squircle
+    /// clip layer evaluates an SDF rather than tessellating a path. See #935. On a miss the path
     /// is generated via `generate_superellipse_path` (the iOS-squircle
     /// math) and inserted; eviction follows PathCache semantics
     /// (`max_entries` + `last_used_frame`).

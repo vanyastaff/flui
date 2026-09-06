@@ -170,7 +170,7 @@ pub use flui_layer::{
 pub use flui_painting::Paint;
 // CommandRenderer trait split into render-visitor
 // (CommandRenderer, ~34 methods) + layer-tree state-stack
-// (LayerStateStack, 13 methods). Backends that only emit
+// (LayerStateStack). Backends that only emit
 // commands implement CommandRenderer only; compositors implement
 // both. See traits.rs for the split's commentary.
 pub use traits::{CommandRenderer, LayerStateStack};

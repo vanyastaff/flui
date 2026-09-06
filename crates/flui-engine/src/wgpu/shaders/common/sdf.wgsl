@@ -64,7 +64,7 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 /// Same signature as `sdRoundedBox` so callers can swap between them by
 /// branching on a clip-kind flag. The corner curve uses Flutter's
 /// iOS-squircle parametric form with `n = 4` hardcoded — matches the
-/// `generate_superellipse_path` math used by `ClipSuperellipseLayer`'s
+/// `generate_superellipse_path` math used by the now-callerless (#935)
 /// path-tessellation fallback. The interior (non-corner) regions reduce
 /// to the standard axis-aligned rect SDF.
 ///
