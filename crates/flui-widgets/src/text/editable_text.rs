@@ -36,6 +36,48 @@ type ImeFocusTransition = Rc<dyn Fn(bool)>;
 // EditableText
 // ============================================================================
 
+/// Flutter's own `EditableText.obscuringCharacter` default, U+2022 BULLET.
+const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
+
+/// The masked text, and the caret offset mapped into it.
+///
+/// One mask character per SOURCE `char` — Unicode scalar, not grapheme
+/// cluster and not UTF-16 code unit.
+///
+/// **Why not the reference's unit.** Flutter builds the mask as
+/// `obscuringCharacter * text.length`, and Dart's `String.length` counts
+/// UTF-16 code units, so a single emoji becomes TWO bullets and a
+/// family-emoji ZWJ sequence becomes eleven. That is an artifact of Dart's
+/// string representation rather than a designed contract, and it leaks: the
+/// bullet count tells an onlooker which keystrokes were astral. Flutter's own
+/// docs warn against `String.length` for user-visible character counts
+/// (`editable_text.dart:1440-1444`) — the obscuring path just predates or
+/// ignores that.
+///
+/// **Why not grapheme clusters either**, which would be the ideal unit:
+/// `TextEditingController` moves and deletes by `char`, and its own docs
+/// record grapheme segmentation as a deferred unit needing a new dependency
+/// (ROADMAP Cross.H). Masking per grapheme while the caret steps per scalar
+/// would put the two out of step — a Backspace would remove one scalar of a
+/// ZWJ sequence while the mask still showed one bullet, so the visible width
+/// would not change and the field would look frozen. Matching the caret's own
+/// granularity is the honest choice until that unit lands, and this function's
+/// doc is where it should be revisited when it does.
+fn obscure(text: &str, caret_byte_offset: usize, mask: char) -> (String, usize) {
+    let mask_len = mask.len_utf8();
+    let mut masked = String::with_capacity(text.chars().count() * mask_len);
+    let mut mapped_caret = 0;
+    for (byte_offset, _) in text.char_indices() {
+        // The caret sits at a char boundary (the controller clamps it), so
+        // "chars strictly before it" is the count that maps.
+        if byte_offset < caret_byte_offset {
+            mapped_caret += mask_len;
+        }
+        masked.push(mask);
+    }
+    (masked, mapped_caret)
+}
+
 /// A single-line text field that accepts keyboard input when focused.
 ///
 /// Flutter parity: `widgets/editable_text.dart` `EditableText` — the low-level
@@ -98,7 +140,6 @@ type ImeFocusTransition = Rc<dyn Fn(bool)>;
 /// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
 /// - **Multi-line** — newlines are inserted as literal characters but line
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
-/// - **`obscureText`** — password masking is not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
 /// - **Scroll when text overflows** — the rendered text clips without scrolling.
 /// - **Swapping the controller on a live field** — `EditableTextState` pins
@@ -140,6 +181,23 @@ pub struct EditableText {
     /// Style applied to the field's [`TextSpan`], flowing through
     /// [`TextSpan::with_style`]. `None` renders with the span's own default.
     pub(super) text_style: Option<TextStyle>,
+    /// Replace every character with [`obscuring_character`](Self::obscuring_character)
+    /// before the render view is built — a password field.
+    ///
+    /// "Before the render view", not "when painting": the substitution is
+    /// upstream of the render object, so it governs semantics and diagnostics
+    /// as much as pixels. That scope IS the feature — see below.
+    ///
+    /// The substitution happens where the controller's text becomes the
+    /// render view's, so nothing below this widget ever receives the real
+    /// text: `RenderEditable`'s `plain_text`, its `TextPainter`, the layer
+    /// tree and every diagnostic downstream all carry the mask. That is
+    /// stronger than redacting at each of those points, because it cannot be
+    /// forgotten at a new one.
+    pub(super) obscure_text: bool,
+    /// The character painted in place of each source character. Flutter's
+    /// default, and Flutter asserts it is exactly one character.
+    pub(super) obscuring_character: char,
 }
 
 impl EditableText {
@@ -153,6 +211,8 @@ impl EditableText {
             caret_color: Color::BLACK,
             enabled: true,
             text_style: None,
+            obscure_text: false,
+            obscuring_character: DEFAULT_OBSCURING_CHARACTER,
         }
     }
 
@@ -167,6 +227,31 @@ impl EditableText {
     #[must_use]
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = color;
+        self
+    }
+
+    /// Replace every character with
+    /// [`obscuring_character`](Self::obscuring_character) before the render
+    /// view is built — a password field (default `false`).
+    ///
+    /// Not only paint: the render object never receives the real characters,
+    /// so its diagnostics and anything derived from its text carry the mask
+    /// too. See the [`obscure_text`](Self::obscure_text) field's doc.
+    #[must_use]
+    pub fn obscure_text(mut self, obscure: bool) -> Self {
+        self.obscure_text = obscure;
+        self
+    }
+
+    /// Override the character painted in place of each source character
+    /// (default `'\u{2022}'`, Flutter's own).
+    ///
+    /// Takes a `char`, so "exactly one character" is a type rather than the
+    /// `assert(obscuringCharacter.length == 1)` the reference performs at
+    /// runtime on a `String`.
+    #[must_use]
+    pub fn obscuring_character(mut self, character: char) -> Self {
+        self.obscuring_character = character;
         self
     }
 
@@ -585,10 +670,14 @@ impl ViewState<EditableText> for EditableTextState {
     fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
         let controller = self.controller.clone();
         let focus_node = Rc::clone(&self.focus_node);
-        let caret_height = view.caret_height;
-        let caret_color = view.caret_color;
         let enabled = view.enabled;
-        let text_style = view.text_style.clone();
+        let appearance = FieldAppearance {
+            caret_height: view.caret_height,
+            caret_color: view.caret_color,
+            text_style: view.text_style.clone(),
+            obscure_text: view.obscure_text,
+            obscuring_character: view.obscuring_character,
+        };
         let inner_anchor = self.inner_anchor.clone();
 
         crate::navigator::AnchoredBox::new(
@@ -597,10 +686,8 @@ impl ViewState<EditableText> for EditableTextState {
                 build_field_view(
                     &controller,
                     &focus_node,
-                    caret_height,
-                    caret_color,
                     enabled,
-                    text_style.clone(),
+                    &appearance,
                     inner_anchor.clone(),
                 )
             }),
@@ -1022,24 +1109,51 @@ impl_render_view!(EditableTextRenderView);
 /// `transform_to` starts right at the editable — not at the outer `anchor`
 /// wrapping this whole field (which also spans the `AnimatedBuilder` between
 /// the two, zero-offset by convention only).
+/// Everything about how the field LOOKS, as one value.
+///
+/// Introduced when adding obscuring pushed `build_field_view` past clippy's
+/// argument limit — which was the right signal rather than a threshold to
+/// suppress: caret size, caret colour, text style and the obscuring pair are
+/// one concept (the field's appearance) that had been travelling as loose
+/// parameters, and a caller could already pass a caret colour where a caret
+/// height belonged.
+#[derive(Clone, Debug)]
+struct FieldAppearance {
+    caret_height: f32,
+    caret_color: Color,
+    text_style: Option<TextStyle>,
+    /// Paint each source character as [`Self::obscuring_character`].
+    obscure_text: bool,
+    obscuring_character: char,
+}
+
 fn build_field_view(
     controller: &TextEditingController,
     focus_node: &Rc<FocusNode>,
-    caret_height: f32,
-    caret_color: Color,
     enabled: bool,
-    text_style: Option<TextStyle>,
+    appearance: &FieldAppearance,
     inner_anchor: flui_objects::SubtreeAnchor,
 ) -> BoxedView {
     // `enabled` is defensive here: `did_update_view` already unfocuses a
     // field that becomes disabled while focused, so `has_primary_focus`
     // should already be `false` by the time this runs.
     let focused = enabled && focus_node.has_primary_focus();
+    // The masking happens HERE, at the one point the controller's text becomes
+    // the render view's, so nothing below ever receives the real characters.
+    let (text, caret_byte_offset) = if appearance.obscure_text {
+        obscure(
+            &controller.text(),
+            controller.caret_byte_offset(),
+            appearance.obscuring_character,
+        )
+    } else {
+        (controller.text(), controller.caret_byte_offset())
+    };
     crate::navigator::AnchoredBox::new(
         inner_anchor,
         EditableTextRenderView {
-            text: controller.text(),
-            caret_byte_offset: controller.caret_byte_offset(),
+            text,
+            caret_byte_offset,
             show_caret: focused && !controller.caret_hidden_by_ime(),
             // Composing-region underline gated on the same `focused` check
             // as `show_caret` — Flutter's `buildTextSpan`'s
@@ -1048,14 +1162,22 @@ fn build_field_view(
             // tag `3.44.0`): an unfocused field must not keep painting a
             // stale composing underline for text it no longer owns input
             // for.
-            composing_range: if focused {
+            // Suppressed entirely while obscured, matching the reference:
+            // its obscured branch returns a plain span and never applies the
+            // composing decoration. Two reasons, and the second is the one
+            // that matters — the underline's extent would report how many
+            // characters the in-progress IME composition holds, which is a
+            // leak the mask exists to prevent; and the range is in SOURCE
+            // byte space, so painting it against masked text would underline
+            // the wrong run.
+            composing_range: if focused && !appearance.obscure_text {
                 controller.composing_range()
             } else {
                 None
             },
-            caret_height,
-            caret_color,
-            text_style,
+            caret_height: appearance.caret_height,
+            caret_color: appearance.caret_color,
+            text_style: appearance.text_style.clone(),
         },
     )
     .boxed()
@@ -1065,6 +1187,72 @@ fn build_field_view(
 mod tests {
     use super::*;
     use crate::text::controller::TextEditingController;
+
+    /// The mask is one character per SOURCE `char`, and the caret lands where
+    /// it should in the masked string.
+    ///
+    /// "£" is two UTF-8 bytes and "😀" is four, so a byte-count mask would
+    /// show 2 and 4 bullets and a byte-copied caret offset would land in the
+    /// middle of one. The reference's UTF-16 unit count would show 1 and 2.
+    /// One per `char` shows one each — matching what
+    /// `TextEditingController` moves and deletes by, which is the granularity
+    /// that has to agree.
+    #[test]
+    fn the_mask_is_one_character_per_source_char_whatever_it_encodes_to() {
+        let (masked, caret) = obscure("a£😀b", 0, '\u{2022}');
+        assert_eq!(
+            masked.chars().count(),
+            4,
+            "four source characters must produce four mask characters, not \
+             the eight UTF-8 bytes they occupy nor the five UTF-16 units \
+             Flutter would count"
+        );
+        assert!(
+            masked.chars().all(|c| c == '\u{2022}'),
+            "every character is replaced, got {masked:?}"
+        );
+        assert_eq!(caret, 0, "a caret before the first char maps to 0");
+    }
+
+    /// The caret offset is mapped into the masked string, not copied.
+    ///
+    /// Copying it would be correct only for all-ASCII text — the case a test
+    /// written with "abc" cannot tell apart from a real mapping.
+    #[test]
+    fn the_caret_offset_is_mapped_into_the_masked_string() {
+        let source = "a£😀b";
+        let mask = '\u{2022}';
+        let mask_len = mask.len_utf8();
+
+        // After "a£" — byte offset 3 in the source (1 + 2), which is the
+        // SECOND character boundary.
+        let (masked, caret) = obscure(source, 3, mask);
+        assert_eq!(
+            caret,
+            2 * mask_len,
+            "two source characters precede the caret, so it maps to two mask \
+             characters in; copying the source offset would give 3"
+        );
+        assert!(
+            masked.is_char_boundary(caret),
+            "the mapped caret must land on a char boundary of the mask"
+        );
+
+        // The end of the text maps to the end of the mask.
+        let (masked_end, caret_end) = obscure(source, source.len(), mask);
+        assert_eq!(caret_end, masked_end.len(), "end maps to end");
+    }
+
+    /// An empty field masks to nothing, with the caret at zero.
+    #[test]
+    fn an_empty_field_masks_to_an_empty_string() {
+        let (masked, caret) = obscure("", 0, '\u{2022}');
+        assert!(
+            masked.is_empty(),
+            "no source characters, no mask characters"
+        );
+        assert_eq!(caret, 0);
+    }
 
     /// A field constructed disabled keeps its explicit node attached for
     /// lifecycle correctness but refuses focus acquisition.
@@ -2116,6 +2304,65 @@ mod tests {
     fn caret_rect(harness: &crate::test_harness::Harness) -> Rect {
         with_render_editable(harness, RenderEditable::caret_local_rect)
             .expect("a mounted EditableText always has a RenderEditable")
+    }
+
+    /// An obscured field's real characters never reach the render object.
+    ///
+    /// This is the criterion — "obscured text never leaks through paint,
+    /// semantics, or diagnostics" — asserted where it is decidable. The
+    /// substitution happens at the one point the controller's text becomes
+    /// the render view's, so `RenderEditable::plain_text` is downstream of it
+    /// and so is everything below: the `TextPainter`, the layer tree, and
+    /// every diagnostic that renders the tree. Redacting at each of those
+    /// instead would leave the next one to be remembered.
+    ///
+    /// The assertion is on the ABSENCE of the plaintext, not merely on the
+    /// presence of bullets: a mask built beside a still-forwarded original
+    /// would satisfy the second and fail this.
+    #[test]
+    fn an_obscured_field_never_hands_its_real_text_to_the_render_object() {
+        let controller = TextEditingController::with_text("hunter2");
+        let focus_node = FocusNode::with_debug_label("obscured field");
+        let harness = crate::test_harness::mount_with_ime(
+            EditableText::new(controller, Rc::clone(&focus_node)).obscure_text(true),
+        );
+
+        let painted = with_render_editable(&harness, |editable| editable.plain_text().to_string())
+            .expect("a mounted EditableText always has a RenderEditable");
+
+        assert_eq!(
+            painted, "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}",
+            "seven source characters must reach the render object as seven \
+             bullets, got {painted:?}"
+        );
+        assert!(
+            !painted.contains("hunter") && !painted.contains('h') && !painted.contains('2'),
+            "no fragment of the plaintext may reach the render object, got \
+             {painted:?}"
+        );
+    }
+
+    /// The same field WITHOUT the flag hands its text through unchanged.
+    ///
+    /// The control for the test above: without it, a mask applied
+    /// unconditionally — or a field that rendered nothing at all — would look
+    /// identical from the assertion's side.
+    #[test]
+    fn a_plain_field_still_hands_its_real_text_to_the_render_object() {
+        let controller = TextEditingController::with_text("hunter2");
+        let focus_node = FocusNode::with_debug_label("plain field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller,
+            Rc::clone(&focus_node),
+        ));
+
+        let painted = with_render_editable(&harness, |editable| editable.plain_text().to_string())
+            .expect("a mounted EditableText always has a RenderEditable");
+
+        assert_eq!(
+            painted, "hunter2",
+            "an unobscured field is unchanged by this feature"
+        );
     }
 
     /// `Preedit { cursor: None }` while focused hides the caret and starts
