@@ -985,3 +985,75 @@ fn a_structural_alpha_change_falls_back_to_a_repaint() {
         "a fully opaque node emits no OpacityLayer",
     );
 }
+
+/// A pending layer update on a node whose subtree is removed does not outlive
+/// it.
+///
+/// The capture is evicted with the subtree (`remove_subtree`), and `RenderId`
+/// is generational, so a recycled slab slot cannot be served the old entry.
+/// This pins the pair: after removal the boundary count drops, and the frame
+/// that follows is still correct rather than replaying a capture whose node is
+/// gone.
+#[test]
+fn removing_a_subtree_with_a_pending_layer_update_evicts_its_capture() {
+    let (owner, opacity_id, _sibling, _painted) = mount_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let retained_before = owner.retained_boundary_count();
+    assert!(
+        retained_before > 0,
+        "precondition: the first frame retains at least one boundary",
+    );
+
+    // Ask for an update, then delete the subtree that would have served it
+    // before the frame that would have applied it ever runs.
+    set_opacity(&mut owner, opacity_id, 0.25);
+    let boundary = owner
+        .render_tree()
+        .get(opacity_id)
+        .and_then(|node| node.links().parent())
+        .expect("the opacity sits under a repaint boundary");
+    owner.remove_render_object(boundary);
+
+    let (owner, result) = owner.run_frame();
+    result.expect("the frame after a removal must still succeed");
+    assert!(
+        owner.retained_boundary_count() < retained_before,
+        "the removed boundary's retained output must be evicted, not left for \
+         a later frame to graft",
+    );
+}
+
+/// A boundary that lost and regained its retained output repaints rather than
+/// serving a stale capture.
+///
+/// `mark_needs_composited_layer_update`'s eligibility is
+/// `is_repaint_boundary_flag() && was_repaint_boundary()` — the same predicate
+/// `mark_needs_paint` stops at. A boundary with no retained output yet fails
+/// it, so the mark degrades to a paint mark instead of addressing a capture
+/// that does not exist.
+#[test]
+fn a_layer_update_without_retained_output_degrades_to_a_repaint() {
+    let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
+    // No first frame: nothing has painted, so no boundary has retained output
+    // and `was_repaint_boundary()` is false everywhere.
+    let mut owner = owner;
+    set_opacity(&mut owner, opacity_id, 0.25);
+
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > 0,
+        "with nothing retained the update must degrade to a paint, so the \
+         subtree paints",
+    );
+    assert_eq!(
+        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "and the painted result carries the new alpha",
+    );
+}
