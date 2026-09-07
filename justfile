@@ -134,6 +134,12 @@ wasm-test:
     # visibility: an integration test (tests/wasm32.rs) sees only the public
     # API, while a `pub(crate)` seam -- flui-app's `Backend::Sequential`, for
     # instance -- is reachable ONLY from a lib test.
+    # Mirror the CI step's environment, not just its command. CI denies build
+    # warnings workspace-wide; the wasm lib-test configuration legitimately has
+    # dead code (its callers are the native-only test modules), so that step
+    # relaxes the deny and this must too -- otherwise a local green means less
+    # than CI's, which is the one thing this recipe exists not to do.
+    export CARGO_BUILD_WARNINGS=warn
     total=0
     crates=0
     for manifest in crates/*/Cargo.toml; do

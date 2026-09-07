@@ -504,7 +504,7 @@ pub(crate) struct UiRealm {
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
             reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
@@ -1292,7 +1292,7 @@ impl UiRealm {
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
             reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
@@ -1924,7 +1924,10 @@ impl UiRealm {
     /// reason [`Self::vsync`] is — production topology's current ratchet
     /// is exactly one presentation per realm.
     #[cfg_attr(
-        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        all(
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+            not(test)
+        ),
         expect(
             dead_code,
             reason = "this method's only caller, bootstrap_desktop's on_request_frame \

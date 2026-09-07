@@ -1066,6 +1066,26 @@ jobs:
       # prints "0 passed", which is indistinguishable from a passing suite, so
       # the count is asserted rather than trusted.
       - name: Execute the wasm32 tests
+        env:
+          # Relax the workflow-level deny for THIS STEP ONLY, following the
+          # precedent the miri job sets below.
+          #
+          # Building flui-app's lib-test target for wasm32 is a configuration
+          # nothing ships, and in it ~17 production items have no caller —
+          # `install_*`, `close_*`, `uninstall_platform_realm`, the
+          # `*_for_test` helpers — because their only callers are the test
+          # modules that are `cfg(not(wasm32))` for good reasons (tokio,
+          # desktop teardown, the service lifecycle). That is the expected
+          # shape of a mostly-native crate in a test configuration, not a
+          # defect, and denying it would buy ~17 `expect(dead_code)`
+          # attributes whose only job is to silence a build nobody runs.
+          #
+          # What this does NOT relax: the SHIPPING wasm configuration. The
+          # `cargo clippy (wasm32, lib + bin targets)` step above still runs
+          # under the workflow's deny plus `-D warnings`, and it is green —
+          # verified, not assumed. A genuinely dead item in the code that
+          # ships still fails there.
+          CARGO_BUILD_WARNINGS: warn
         run: |
           set -euo pipefail
           # DISCOVER the participating crates rather than list them: naming

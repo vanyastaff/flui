@@ -1501,7 +1501,7 @@ impl AppRuntime {
     /// release path is [`Self::release_redraw_window_for`] at window close,
     /// while the loop is still alive.
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
             reason = "only teardown_platform_realm calls this, and that function \
@@ -1559,7 +1559,7 @@ impl AppRuntime {
     /// replacing a prior installation; see [`Drop`]'s impl for the third,
     /// last-resort path).
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
             reason = "only teardown_platform_realm calls this, and that function \
