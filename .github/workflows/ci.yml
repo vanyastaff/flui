@@ -724,7 +724,7 @@ jobs:
           # Run with the summary suppressed, then surface only news. A run that
           # reports the status quo on every wgpu bump would train readers to
           # ignore the one that does not.
-          out=$(GITHUB_STEP_SUMMARY= bash scripts/probe-metal-acquire-main-thread.sh 2>&1) || true
+          out=$(env -u GITHUB_STEP_SUMMARY bash scripts/probe-metal-acquire-main-thread.sh 2>&1) || true
           printf '%s\n' "$out"
           if grep -qE 'CHANGED|INCONCLUSIVE|Out of this probe.s reach|Could not reach crates.io' <<<"$out"; then
             {
