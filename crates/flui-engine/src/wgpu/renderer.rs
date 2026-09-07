@@ -1535,7 +1535,7 @@ impl Renderer {
         // every frame is a full repaint.
         //
         // The design this comment used to anticipate — widgets reporting their
-        // own bounds on state change — does not work, and ADR-0047 records why:
+        // own bounds on state change — does not work, and ADR-0061 records why:
         // the paint walk repaints all inline content every frame, so the union
         // of repainted bounds is the whole surface no matter how many repaint
         // boundaries the tree has. Damage has to come from comparing

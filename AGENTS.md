@@ -109,7 +109,7 @@ Additionally, CI gates on two checks with no `just` recipe:
 
 ## Architecture Constraints (port methodology)
 
-These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 22 refusal triggers plus FR-033.
+These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 23 refusal triggers plus FR-033.
 
 | Rule | Why |
 |------|-----|
