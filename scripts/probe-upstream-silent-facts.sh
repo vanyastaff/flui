@@ -29,8 +29,11 @@
 # costs one read. The forcing function is the winit 0.31 bump (ROADMAP-TRACKER
 # H10), which should not land without these re-verified.
 #
-# Predicates are by CONTENT, never by line number -- citation rot into a moving
-# dependency is the defect this whole issue family exists to stop.
+# Predicates locate by CONTENT, never by a hardcoded line number -- citation rot
+# into a moving dependency is the defect this whole issue family exists to stop.
+# The X11 check does compare two line numbers, but they are the positions of two
+# CONTENT matches relative to each other, which survives the file moving; nothing
+# here asserts "the call is at line N".
 set -uo pipefail
 
 say() {
@@ -105,7 +108,11 @@ for entry in "${hals[@]}"; do
     if [[ -z "$f" ]]; then
         say "- **wgpu-hal $ver — INCONCLUSIVE.** no \`min_image_count\` under \`src/vulkan\`;"
         say "  the swapchain path moved. ADR-0058's pacing premise needs a hand re-read."
-    elif grep -q 'min_image_count(config.maximum_frame_latency + 1)' "$f"; then
+    # Whitespace-tolerant: rustfmt moving the argument onto its own line is not a
+    # change to the FORMULA, and reporting it as one trains readers to ignore the
+    # probe -- the failure mode an advisory can least afford.
+    elif tr -s '[:space:]' ' ' < "$f" \
+         | grep -Eq 'min_image_count\( *config\.maximum_frame_latency *\+ *1 *,? *\)'; then
         say "- **wgpu-hal $ver — unchanged.** swapchain still requests"
         say "  \`maximum_frame_latency + 1\` images; ADR-0058's pacer arithmetic holds."
     else
