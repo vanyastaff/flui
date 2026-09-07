@@ -1607,12 +1607,23 @@ fi
 # This is a check rather than a convention because the convention did not hold:
 # 0047 was used twice for two months (issue #947), and neither review caught it.
 # -----------------------------------------------------------------------------
-duplicate_adr_numbers=$(
-  find "${repo_root}/docs/adr" -maxdepth 1 -name 'ADR-[0-9][0-9][0-9][0-9]-*.md' -printf '%f\n' 2>/dev/null |
-    sed -n 's/^ADR-\([0-9]\{4\}\)-.*/\1/p' |
-    sort |
-    uniq -d
-)
+# Globbed rather than `find -printf`: `-printf` is a GNU extension that BSD
+# find (macOS) does not have, and under `set -e` this trigger would abort the
+# whole script there rather than check anything. A shallow fixed directory
+# needs no find at all. The empty-array guard is for bash 3.2, which macOS
+# still ships and which errors on `"${arr[@]}"` when the array is empty under
+# `set -u`.
+adr_numbers=()
+for adr_path in "${repo_root}"/docs/adr/ADR-[0-9][0-9][0-9][0-9]-*.md; do
+  [[ -e "${adr_path}" ]] || continue
+  adr_base="${adr_path##*/}"
+  adr_numbers+=("${adr_base:4:4}")
+done
+if [[ "${#adr_numbers[@]}" -eq 0 ]]; then
+  duplicate_adr_numbers=""
+else
+  duplicate_adr_numbers=$(printf '%s\n' "${adr_numbers[@]}" | sort | uniq -d)
+fi
 if [[ -n "${duplicate_adr_numbers}" ]]; then
   echo "VIOLATION 23: two or more ADRs share a number"
   echo "             an ADR number is a citable identifier; a duplicate makes"
@@ -1620,7 +1631,10 @@ if [[ -n "${duplicate_adr_numbers}" ]]; then
   while read -r dup; do
     [[ -z "${dup}" ]] && continue
     echo "  ADR-${dup}:"
-    find "${repo_root}/docs/adr" -maxdepth 1 -name "ADR-${dup}-*.md" -printf '    %f\n'
+    for adr_path in "${repo_root}"/docs/adr/ADR-"${dup}"-*.md; do
+      [[ -e "${adr_path}" ]] || continue
+      echo "    ${adr_path##*/}"
+    done
   done <<< "${duplicate_adr_numbers}"
   echo ""
   violations=$((violations + 1))
