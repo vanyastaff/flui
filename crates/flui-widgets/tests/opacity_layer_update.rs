@@ -1,4 +1,4 @@
-//! An `Opacity` widget rebuild updates its layer without repainting its child.
+//! An `Opacity` widget rebuild reaches the composited layer.
 //!
 //! Every other test for issue #536's update-only commits drives the render
 //! tree directly. This one goes through the widget layer, which is the seam an
@@ -7,6 +7,12 @@
 //! the owner. A mechanism that works only when a test pokes the render object
 //! is the defect class this repository keeps finding — correct code that no
 //! production path reaches.
+//!
+//! What it pins is exactly that WIRING: dropping the widget's `impact |=`
+//! forwarding turns it red. It does **not** show the frame took the cheap arm —
+//! the alpha oracle here is satisfied by a full repaint too, and proving the
+//! child was spared belongs to the render-level tests that can count paints
+//! (`an_alpha_change_updates_the_layer_without_repainting_the_subtree`).
 
 use flui_widgets::testing::{lay_out, tight};
 use flui_widgets::{Opacity, SizedBox};

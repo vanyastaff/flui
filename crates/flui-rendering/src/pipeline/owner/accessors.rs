@@ -1500,11 +1500,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if impact.needs_paint() && !impact.needs_layout() {
             self.mark_needs_paint(node_id);
         }
-        // Strictly after the paint marks above, and that ordering is the
-        // whole "paint wins" rule: a setter reporting BOTH (a compositing-bits
-        // flip implies `PAINT`) leaves the node already needing paint, so this
-        // mark refuses itself rather than enqueueing a weaker second entry.
-        if impact.needs_composited_layer_update() {
+        // "Paint wins" is expressed as a CONDITION, not as ordering. Relying on
+        // the marks above having run first is wrong for `LAYOUT`, which
+        // contains `PAINT_BIT` but is deliberately not marked here (layout owns
+        // its own eventual paint) — so a setter reporting `LAYOUT |
+        // COMPOSITED_LAYER_UPDATE` would reach this line with nothing marked
+        // and classify its boundary as update-only. It happens to be rescued
+        // today by `run_layout` marking every boundary it lays out, but that
+        // does not hold for a node whose parent stops laying it out.
+        if impact.needs_composited_layer_update() && !impact.needs_paint() {
             self.mark_needs_composited_layer_update(node_id);
         }
         if impact.needs_semantics_update() {

@@ -80,6 +80,10 @@ impl PipelineOwner<PaintPhase> {
         // don't shift under that change.
         self.scheduler.sort_paint_deep_first();
 
+        // Which queued nodes the descent actually reached — the residue scan's
+        // oracle. Empty when there is no root to descend from, which correctly
+        // makes every queued entry unreached.
+        let mut reached: FxHashSet<RenderId> = FxHashSet::default();
         if let Some(root_id) = self.root_id
             && self.render_tree.get(root_id).is_some()
         {
@@ -108,31 +112,27 @@ impl PipelineOwner<PaintPhase> {
             // boundary becomes graft-eligible only by appearing in this set —
             // the pre-existing retention path cannot change behaviour when
             // nothing requested an update.
-            // The two classifications are mutually exclusive by construction:
-            // `mark_needs_paint` withdraws the update record when it queues a
-            // boundary, and `mark_needs_composited_layer_update` refuses to add
-            // one to a boundary that already needs paint. The filter below
-            // would mask a third path that broke that, and masking is exactly
-            // what goes wrong after a failed pass clears the flag — so assert
-            // it rather than rely on the filter.
-            debug_assert!(
-                self.scheduler
-                    .layer_update_boundaries()
-                    .keys()
-                    .all(|id| self.render_tree.get(*id).is_none_or(|n| !n.needs_paint())),
-                "BUG: a boundary is classified for BOTH a repaint and a \
-                 composited-layer update; a pass that fails partway would \
-                 downgrade the retry to update-only and lose the repaint",
-            );
+            // Membership in this map IS the classification, and it is the only
+            // one consulted. It is deliberately not cross-checked against
+            // `needs_paint()`: the paint walk clears that flag while
+            // `run_paint`'s error arm returns before `clear_paint_queue`, so
+            // after a pass that failed partway a boundary sits in the queue with
+            // the flag already false. A filter reading it would then let a
+            // pending REPAINT through as an update, graft the pre-error capture
+            // and patch only the effect layer — which is the bug this map exists
+            // to make unrepresentable.
+            //
+            // The invariant is enforced where the records are written, not read:
+            // `mark_needs_paint` withdraws the entry where it queues a boundary,
+            // `mark_needs_composited_layer_update` refuses to add one to a
+            // boundary already queued for a repaint, and `retain_paint_queue`
+            // drops it with the queue entry when a boundary is lost. All three
+            // test surviving records rather than a walk-mutated flag.
             let layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>> = self
                 .scheduler
                 .layer_update_boundaries()
                 .iter()
-                .filter(|(id, _)| {
-                    self.render_tree
-                        .get(**id)
-                        .is_some_and(|node| !node.needs_paint())
-                })
+                .filter(|(id, _)| self.render_tree.get(**id).is_some())
                 .map(|(&id, targets)| (id, targets.clone()))
                 .collect();
 
@@ -152,7 +152,9 @@ impl PipelineOwner<PaintPhase> {
                         retained_captures,
                         layer_patches,
                         consumed_updates,
+                        visited,
                     ) = composer.finish();
+                    reached = visited;
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
 
                     // Commit the walk's retention decisions now that its
@@ -296,13 +298,21 @@ impl PipelineOwner<PaintPhase> {
             }
         }
 
-        // Dirty-list residue scan: any node still flagged needs_paint
-        // AFTER the root descent was not reached by it (multi-root or
-        // detached subtree). Warn + clear so the bug is visible AND the
-        // dirty list doesn't accumulate across frames.
+        // Dirty-list residue scan: any queued node the root descent did not
+        // REACH (multi-root, detached subtree, or a child its parent stopped
+        // laying out). Warn + clear so the bug is visible AND the dirty list
+        // doesn't accumulate across frames.
+        //
+        // Keyed on what the walk recorded, not on the node still being flagged
+        // needs-paint. That flag is cleared by the walk itself while
+        // `run_paint`'s error arm keeps the queue for a retry, so after a pass
+        // that failed partway the flag test skips exactly the entries this scan
+        // exists to catch — and since the scan is also the only diagnostic on
+        // that path, it fails silently. A boundary left with a stale capture
+        // that way is grafted forever.
         for dirty_node in self.scheduler.nodes_needing_paint() {
-            if let Some(render_node) = self.render_tree.get(dirty_node.id)
-                && render_node.needs_paint()
+            if !reached.contains(&dirty_node.id)
+                && let Some(render_node) = self.render_tree.get(dirty_node.id)
             {
                 tracing::warn!(
                     id = ?dirty_node.id,
@@ -486,6 +496,10 @@ impl PipelineOwner<PaintPhase> {
         let Some(render_node) = self.render_tree.get(node_id) else {
             return Ok(());
         };
+        // Reached, whatever happens below: the early returns for skip-paint,
+        // pending layout and invisible slivers are all decisions the descent
+        // MADE about this node, not evidence it never got here.
+        composer.visited.insert(node_id);
 
         let is_repaint_boundary = render_node.is_repaint_boundary();
 
@@ -723,6 +737,25 @@ impl PipelineOwner<PaintPhase> {
                                     layers = patches.len(),
                                     "paint: composited-layer update, subtree replayed"
                                 );
+                            }
+                            // Reused rather than descended into, but reached.
+                            composer.visited.insert(child_id);
+                            // A graft clones this boundary's whole flattened
+                            // output in, INCLUDING the layers of every boundary
+                            // nested beneath it — but the walk does not descend,
+                            // so `note_boundary` never fires for any of them and
+                            // the enclosing capture would embed boundaries it
+                            // does not name. That is not a bookkeeping nicety:
+                            // the graft refusal and both evictions are keyed on
+                            // this list, so an unnamed grandchild can go dirty
+                            // while its enclosing capture is reused, replaying
+                            // stale layers that nothing then repaints.
+                            //
+                            // Re-noting the capture's own list is what makes the
+                            // relation transitive. Two levels of nesting always
+                            // repaint fresh and hide the need for it.
+                            for &nested in &subtree.nested_boundaries {
+                                composer.note_boundary(nested);
                             }
                             composer.graft(subtree, &patches);
                             composer.consumed_updates.extend(consumed);
@@ -978,6 +1011,16 @@ struct FragmentComposer {
     /// Nodes whose pending-update flag this pass's patches serve, cleared by
     /// `run_paint` on the commit path only — see [`LayerPatch::consumed`].
     consumed_updates: Vec<RenderId>,
+    /// Every render node this pass's descent actually reached.
+    ///
+    /// The residue scan needs "was this queued node reached", and the only
+    /// honest answer is one the walk records. Its previous test — is the node
+    /// STILL flagged needs-paint — is blind after a pass that failed partway,
+    /// because the walk clears that flag as it goes while `run_paint`'s error
+    /// arm keeps the queue for the retry. The scan would then skip exactly the
+    /// entries it exists to catch, silently, since it is also the only
+    /// diagnostic on that path.
+    visited: FxHashSet<RenderId>,
 }
 
 impl FragmentComposer {
@@ -1020,6 +1063,7 @@ impl FragmentComposer {
             effect_owner: FxHashMap::default(),
             layer_patches: Vec::new(),
             consumed_updates: Vec::new(),
+            visited: FxHashSet::default(),
         }
     }
 
@@ -1277,6 +1321,7 @@ impl FragmentComposer {
         Vec<(RenderId, Option<RetainedSubtree>)>,
         Vec<(RenderId, Vec<(usize, Layer)>)>,
         Vec<RenderId>,
+        FxHashSet<RenderId>,
     ) {
         self.seal_picture();
         debug_assert_eq!(
@@ -1292,6 +1337,7 @@ impl FragmentComposer {
             self.retained_captures,
             self.layer_patches,
             self.consumed_updates,
+            self.visited,
         )
     }
 }
@@ -1553,8 +1599,15 @@ mod tests {
                 &FxHashMap::default(),
             )
             .expect("paint_subtree should succeed");
-        let (layer_tree, _link_registry, follower_correlations, _retained, _patches, _consumed) =
-            composer.finish();
+        let (
+            layer_tree,
+            _link_registry,
+            follower_correlations,
+            _retained,
+            _patches,
+            _consumed,
+            _visited,
+        ) = composer.finish();
 
         assert_eq!(
             follower_correlations.len(),

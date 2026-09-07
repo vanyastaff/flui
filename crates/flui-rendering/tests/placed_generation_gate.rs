@@ -421,3 +421,160 @@ fn a_layer_update_on_a_skipped_boundary_is_not_lost() {
          capture taken before it; the update would be lost for good",
     );
 }
+
+/// The residue scan must catch a queued boundary the descent never reached,
+/// even when a previous pass already cleared its dirty flag.
+///
+/// The scan's job is to notice a queued node the walk did not reach and evict
+/// its stale capture. Keyed on `needs_paint()` it cannot do that after a pass
+/// that failed partway: the walk clears the flag as it goes, `run_paint`'s
+/// error arm keeps the queue for the retry, and the next frame's scan then
+/// skips exactly the entry it exists for — silently, since the scan is also the
+/// only diagnostic on that path.
+///
+/// Four frames, and each is load-bearing:
+/// 1. paint everything, capturing the boundary;
+/// 2. queue a repaint for its content and POISON the pass after the boundary
+///    has painted — flag cleared, queue kept, nothing committed;
+/// 3. succeed, but with the boundary unplaced by its parent, so the descent
+///    never reaches it;
+/// 4. place it again with unchanged constraints, so its own layout
+///    short-circuits and requeues nothing. Only the capture stands between the
+///    user and the update.
+#[test]
+fn the_residue_scan_evicts_after_a_failed_pass_cleared_the_flag() {
+    use flui_objects::{RenderFlex, RenderRepaintBoundary};
+    use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, testing::tree};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    #[derive(Debug)]
+    struct PaintCounter(Arc<AtomicUsize>);
+    impl flui_foundation::Diagnosticable for PaintCounter {}
+    impl RenderBox for PaintCounter {
+        type Arity = flui_tree::Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, flui_tree::Leaf, BoxParentData>,
+        ) -> Size {
+            ctx.constrain(Size::new(px(10.0), px(10.0)))
+        }
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+        fn hit_test(
+            &self,
+            _ctx: &mut BoxHitTestContext<'_, flui_tree::Leaf, BoxParentData>,
+        ) -> bool {
+            false
+        }
+    }
+
+    #[derive(Debug)]
+    struct PoisonOnDemand(Arc<AtomicBool>);
+    impl flui_foundation::Diagnosticable for PoisonOnDemand {}
+    impl RenderBox for PoisonOnDemand {
+        type Arity = flui_tree::Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, flui_tree::Leaf, BoxParentData>,
+        ) -> Size {
+            ctx.constrain(Size::new(px(10.0), px(10.0)))
+        }
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+            assert!(
+                !self.0.load(Ordering::Relaxed),
+                "PoisonOnDemand: armed, poisoning this paint pass on purpose",
+            );
+        }
+        fn hit_test(
+            &self,
+            _ctx: &mut BoxHitTestContext<'_, flui_tree::Leaf, BoxParentData>,
+        ) -> bool {
+            false
+        }
+    }
+
+    let armed = Arc::new(AtomicBool::new(false));
+    let painted = Arc::new(AtomicUsize::new(0));
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(LaysOutFirstN { laid_out: 2 })
+                    .label("gate")
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0)))
+                    .child(
+                        box_node(RenderRepaintBoundary::new())
+                            .child(box_node(PaintCounter(Arc::clone(&painted))).label("target")),
+                    ),
+            )
+            // Painted after the gate's subtree, so the poison lands once the
+            // boundary has already been repainted this pass.
+            .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let gate = registry.get("gate").expect("gate is labelled");
+    let target = registry.get("target").expect("target is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // Frame 2: queue a repaint for the boundary's content, then poison.
+    owner.mark_needs_paint(target);
+    armed.store(true, Ordering::Relaxed);
+    let (mut owner, result) = owner.run_frame();
+    assert!(
+        result.is_err(),
+        "precondition: the armed leaf poisons this pass"
+    );
+
+    // Frame 3: succeeds, but the boundary is unplaced — never reached.
+    armed.store(false, Ordering::Relaxed);
+    owner
+        .render_tree_mut()
+        .get_mut(gate)
+        .expect("gate node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<LaysOutFirstN>()
+        .expect("LaysOutFirstN")
+        .laid_out = 1;
+    owner.mark_needs_layout(gate);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("third frame");
+    let before_replace = painted.load(Ordering::Relaxed);
+
+    // Frame 4: placed again, constraints unchanged, so layout requeues nothing.
+    owner
+        .render_tree_mut()
+        .get_mut(gate)
+        .expect("gate node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<LaysOutFirstN>()
+        .expect("LaysOutFirstN")
+        .laid_out = 2;
+    owner.mark_needs_layout(gate);
+    let (owner, result) = owner.run_frame();
+    result.expect("fourth frame");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > before_replace,
+        "the boundary's capture predates a repaint that was queued and never \
+         served, so it must have been evicted when the descent missed it; \
+         grafting it replays content the user already asked to change",
+    );
+}

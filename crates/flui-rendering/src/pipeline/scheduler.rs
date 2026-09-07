@@ -444,20 +444,31 @@ impl DirtyTracker {
                 && node.links().parent().is_some()
             {
                 // A real repaint already owns this boundary, so do NOT add the
-                // weaker classification on top. The mirror of the removal in
-                // `mark_needs_paint`: that covers update-then-paint, this
-                // covers paint-then-update, and together they keep a boundary
-                // out of both records at once.
+                // weaker classification on top.
+                //
+                // The test is queue ROLE, never `needs_paint()`. That flag is
+                // cleared by the paint walk while `run_paint`'s error arm
+                // returns before `clear_paint_queue`, so after a pass that
+                // failed partway a boundary sits in the queue with the flag
+                // already false — and a guard reading it would classify a
+                // pending repaint as update-only and graft stale content. Both
+                // operands here survive a failed pass, because both are the
+                // records the retry runs on.
+                //
+                // "Queued and not classified for an update" is what a real
+                // repaint looks like: `mark_needs_paint` withdraws the update
+                // record where it queues (below), and this function is the only
+                // thing that adds one. Testing paint-queue membership ALONE
+                // would be wrong and would disable the feature outright, since
+                // an update queues the boundary too.
                 //
                 // Checked on the BOUNDARY, not on the requesting node — the
                 // early return at the top of this function only sees the
                 // requester, and a sibling of the repainting node is not on the
                 // path `mark_needs_paint` flagged.
-                //
-                // The requester keeps its flag: the repaint paints it and the
-                // frame's commit clears it, so the request is served by the
-                // stronger arm.
-                if node.needs_paint() {
+                let queued_for_repaint = self.dirty.needs_paint.contains(&current)
+                    && !self.layer_update_boundaries.contains_key(&current);
+                if queued_for_repaint {
                     return;
                 }
                 // Record WHICH node asked, not just that the boundary has work.
@@ -601,6 +612,13 @@ impl DirtyTracker {
         }
         self.dirty.evict(removed_ids);
         self.mid_layout_marks.evict(removed_ids);
+        // The update classification is part of the paint queue's meaning, so it
+        // is evicted with it. Harmless to omit today — `RenderId` is
+        // generational, so a stale key can never match a live node — but a
+        // reset primitive that silently skips one of the queues it claims to
+        // clear is how the next divergence gets in.
+        self.layer_update_boundaries
+            .retain(|id, _| !removed_ids.contains(id));
     }
 
     #[cfg(test)]
@@ -612,6 +630,7 @@ impl DirtyTracker {
     pub(super) fn clear_all(&mut self) {
         self.dirty.clear();
         self.mid_layout_marks.clear();
+        self.layer_update_boundaries.clear();
     }
 
     // =========================================================================

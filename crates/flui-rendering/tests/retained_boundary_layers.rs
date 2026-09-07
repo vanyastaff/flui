@@ -929,9 +929,13 @@ fn a_repaint_in_the_same_frame_wins_over_a_layer_update() {
 /// An alpha leaving the layered range drops the layer entirely, which a patch
 /// cannot express — so paint is the fallback.
 ///
-/// This is the structure guard. `paint_alpha()` returns `None` at alpha 255, so
-/// the captured shape no longer applies and replaying it would keep a layer the
-/// node no longer emits.
+/// It does NOT reach the paint phase's structure guard, despite the shape:
+/// `set_opacity(0.5 -> 1.0)` flips `needs_compositing`, so the impact carries
+/// `COMPOSITING_BITS` (which contains `PAINT`), the update mark refuses itself,
+/// and `layer_patches_for` is never called. What this pins is the IMPACT
+/// ALGEBRA — that a shape change reports a repaint at the setter. The guard
+/// itself is pinned by `an_effect_layer_shape_change_falls_back_to_a_repaint`'s
+/// count arm.
 #[test]
 fn a_structural_alpha_change_falls_back_to_a_repaint() {
     let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
@@ -1003,6 +1007,11 @@ fn removing_a_subtree_with_a_pending_layer_update_evicts_its_capture() {
 /// `mark_needs_paint` stops at. A boundary with no retained output yet fails
 /// it, so the mark degrades to a paint mark instead of addressing a capture
 /// that does not exist.
+///
+/// Non-discriminating by construction, and kept as a regression guard rather
+/// than as evidence: mounting schedules an initial paint, so the first frame is
+/// a full root descent whatever the mark did, and the alpha is read live during
+/// it. Replacing the degrade arm with a bare `return` leaves this green.
 #[test]
 fn a_layer_update_without_retained_output_degrades_to_a_repaint() {
     let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
@@ -1338,8 +1347,14 @@ fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
 /// Body of the test above, run once per arm.
 ///
 /// Both arms clear the pending flag, in different places — the graft arm in
-/// `layer_patches_for`, the repaint arm in the paint walk — and both must defer
-/// it to the frame's commit.
+/// `layer_patches_for`, the repaint arm in the paint walk — and both defer it
+/// to the frame's commit.
+///
+/// Only the GRAFT arm is pinned here. The repaint arm's retry is rescued
+/// anyway, because `mark_needs_paint` withdrew the update record when it queued
+/// the boundary, so the retry repaints and rebuilds from live properties;
+/// clearing that arm's flag mid-walk leaves this green. It runs both orderings
+/// to document the pair, not because both discriminate.
 fn poisoned_frame_keeps_the_update(repaint_arm: bool) {
     use std::sync::atomic::AtomicBool;
 
@@ -2251,6 +2266,116 @@ fn two_opacities_under_one_boundary_both_update_without_repainting() {
     );
 }
 
+/// The mirror of the two orderings above: the marks arrive AFTER the failure.
+///
+/// Rounds seven and eight both fixed mark-then-fail. This is fail-then-mark,
+/// and it defeats the guard those fixes rely on. After a poisoned pass the
+/// boundary sits in the paint queue with `NEEDS_PAINT` already cleared by the
+/// walk — so a layer update arriving next sees a boundary that looks clean,
+/// classifies it update-only, and the retry grafts the pre-failure capture with
+/// only the effect layer patched. The content change that queued the repaint is
+/// gone, and `clear_paint_queue` erases the evidence.
+///
+/// Every earlier poisoned-frame test issues its marks BEFORE the failure, where
+/// `mark_needs_paint`'s own withdrawal has already run. That is one ordering
+/// tested three times; this is the one that was not.
+#[test]
+fn a_mark_arriving_after_a_failed_pass_does_not_downgrade_the_repaint() {
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Debug)]
+    struct PoisonOnDemand(Arc<AtomicBool>);
+
+    impl flui_foundation::Diagnosticable for PoisonOnDemand {}
+
+    impl flui_rendering::traits::RenderBox for PoisonOnDemand {
+        type Arity = flui_tree::Leaf;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            ctx.constrain(Size::new(px(10.0), px(10.0)))
+        }
+
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+            assert!(
+                !self.0.load(Ordering::Relaxed),
+                "PoisonOnDemand: armed, poisoning this paint pass on purpose",
+            );
+        }
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+    }
+
+    let armed = Arc::new(AtomicBool::new(false));
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderFlex::row())
+                        .child(
+                            box_node(RenderOpacity::new(0.5))
+                                .label("opacity")
+                                .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                        )
+                        .child(box_node(PaintCounter(Arc::clone(&painted))).label("content")),
+                ),
+            )
+            .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+    let content = registry.get("content").expect("content is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // A real repaint is queued, and the pass fails while serving it.
+    owner.mark_needs_paint(content);
+    armed.store(true, Ordering::Relaxed);
+    let (mut owner, result) = owner.run_frame();
+    assert!(
+        result.is_err(),
+        "precondition: the armed leaf poisons this pass"
+    );
+    let after_error = painted.load(Ordering::Relaxed);
+
+    // ONLY NOW does the layer update arrive — an animation tick landing on the
+    // frame after a failure. The boundary's `needs_paint` was cleared by the
+    // failed walk, so a guard reading that flag sees a clean boundary.
+    set_opacity(&mut owner, opacity_id, 0.25);
+
+    armed.store(false, Ordering::Relaxed);
+    let (owner, result) = owner.run_frame();
+    result.expect("the retry paints cleanly");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > after_error,
+        "the queued repaint must still be honoured; a mark arriving after the \
+         failure must not downgrade it to an update and graft stale content",
+    );
+}
+
 /// A boundary that LOSES boundary status drops its update classification.
 ///
 /// The compositing walk's lost-boundary branch removes the node's stale
@@ -2296,4 +2421,73 @@ fn losing_boundary_status_withdraws_a_pending_update() {
     let (owner, result) = owner.run_frame();
     result.expect("the frame after a boundary is lost must not abort");
     drop(owner);
+}
+
+/// `nested_boundaries` must survive a graft, or a THREE-level nest goes stale.
+///
+/// `note_boundary` records a boundary into every open capture scope, and
+/// `open_capture` wraps only the REPAINT arm. So when an outer boundary
+/// repaints while a middle one is merely grafted, the walk never descends past
+/// the middle — and the grandchild boundary, whose layers the graft physically
+/// clones into the outer capture, is never noted in the outer's list.
+///
+/// The outer capture then embeds a boundary it does not name, so the graft
+/// refusal that exists to stop exactly this cannot see it: the grandchild goes
+/// dirty, the outer is clean and its list does not mention it, the outer is
+/// reused, and the grandchild's stale layers are replayed. The evictions miss
+/// it for the same reason.
+///
+/// Two levels always paint fresh and hide it — which is why every other nesting
+/// test in this file passes either way.
+#[test]
+fn a_grandchild_boundary_is_still_named_after_its_parent_was_grafted() {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).label("outer").child(
+                box_node(RenderFlex::row())
+                    // A direct child of `outer`, so it can be dirtied without
+                    // touching either boundary below.
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("direct"))
+                    .child(
+                        box_node(RenderRepaintBoundary::new()).label("middle").child(
+                            box_node(RenderRepaintBoundary::new()).label("inner").child(
+                                box_node(PaintCounter(Arc::clone(&painted))).label("target"),
+                            ),
+                        ),
+                    ),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let direct = registry.get("direct").expect("direct is labelled");
+    let target = registry.get("target").expect("target is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // Frame 2: dirty only the OUTER boundary's own content. It repaints and
+    // grafts `middle` without descending — so `inner` is never noted into the
+    // outer capture, even though the graft clones its layers in.
+    owner.mark_needs_paint(direct);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("second frame");
+    let before = painted.load(Ordering::Relaxed);
+
+    // Frame 3: dirty the innermost content. `mark_needs_paint` stops at
+    // `inner`, so the outer is clean — and must still refuse to graft.
+    owner.mark_needs_paint(target);
+    let (owner, result) = owner.run_frame();
+    result.expect("third frame");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > before,
+        "the outer capture embeds the grandchild boundary's layers, so it must \
+         name it and decline to graft while it is dirty; otherwise the \
+         grandchild's stale output is replayed and nothing ever repaints it",
+    );
 }
