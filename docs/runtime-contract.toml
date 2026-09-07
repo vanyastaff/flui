@@ -2762,7 +2762,7 @@ owner = "platform backend (one per process; consumed by run())"
 failure_semantics = "typed thiserror surface, no anyhow token anywhere in the trait: run returns Result<(), PlatformError> (Bootstrap wraps on_ready's BootstrapError as source; EventLoop covers loop-level failure), open_window returns Result<Arc<dyn PlatformWindow>, OpenWindowError> (the same taxonomy the capability surfaces use), app_path/prompt_for_paths/prompt_for_new_path return PlatformError (AppPath/Dialog variants). Owner-affinity on the trait's own methods is still a runtime debug_assert (OwnerAffinity), not a compile-time property, until slice 3 moves them off. The compile-time guarantee this issue actually delivers lives on the capability holders: OwnerPlatform is !Send, and its shared() escape hatch returns the restricted SharedPlatform (Clone + Send + Sync, no owner-affine method) rather than this trait's own &dyn Platform."
 consumers = ["runner bootstrap", "run_direct", "examples"]
 owner_issue = 551
-notes = "De-facto crate-sealed post-flip: minting an OwnerPlatform requires the pub(crate) constructor in traits/owner.rs, so an out-of-crate impl Platform cannot supply what its own run() must hand to on_ready. An external-embedder minting seam is #560 design work, not this issue's scope. Same residual class, named on the owner-platform-capability contract rather than repeated here: headless_platform()'s Box<dyn Platform> return, and the publicly re-exported concrete backend types (WinitPlatform et al., whose own pub methods -- e.g. WinitPlatform::run_event_loop -- need no dyn Platform object at all to reach an owner-affine method off-thread)."
+notes = "SHRANK 2026-09-07 (#551, executing ADR-0039 §2): five methods were removed from this trait outright -- hide, hide_other_apps, unhide_other_apps, should_auto_hide_scrollbars, window_stack. The first four were default bodies with no backend override and no caller; window_stack had three impls and still no caller (winit None, macOS/Windows/Android inheriting the default, toy values from only the headless double and web), so its only implementations were the ones that could not fail. Recorded here deliberately because this entry's `contains` pin checks only that the trait still exists and would not have noticed; the forbidden_pattern entries added in the same change are what actually ratchet the removal. The EIGHT owner-affine methods named in thread_affinity above are NOT part of this and remain on the trait -- moving them is gated on the Android on-device validation ADR-0039 makes its precondition, and until then the three residual wrong-thread escape routes below stay open. De-facto crate-sealed post-flip: minting an OwnerPlatform requires the pub(crate) constructor in traits/owner.rs, so an out-of-crate impl Platform cannot supply what its own run() must hand to on_ready. An external-embedder minting seam is #560 design work, not this issue's scope. Same residual class, named on the owner-platform-capability contract rather than repeated here: headless_platform()'s Box<dyn Platform> return, and the publicly re-exported concrete backend types (WinitPlatform et al., whose own pub methods -- e.g. WinitPlatform::run_event_loop -- need no dyn Platform object at all to reach an owner-affine method off-thread)."
 
 [[surface]]
 path = "flui_platform::PlatformReadyCallback"
@@ -3365,6 +3365,35 @@ markers = [
 # Substring scans over crates/**/*.rs (comments included — the strings below
 # are retired identifiers that must not reappear even in prose). `allow_files`
 # lists exact files permitted to contain the pattern.
+
+[[forbidden_pattern]]
+pattern = "hide_other_apps"
+why = """
+Removed from `flui_platform::Platform` on 2026-09-07 (#551, ADR-0039 §2) as a default body with no backend override and no caller anywhere in the workspace. Substring-matches `unhide_other_apps` too, so one entry ratchets both. They return, on `OwnerPlatform` if owner-affine, with a real implementation AND a real consumer -- ADR-0034's rule -- not as a stub that rides along. Zero hits when this entry was added.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "should_auto_hide_scrollbars"
+why = """
+Removed from `flui_platform::Platform` on 2026-09-07 (#551, ADR-0039 §2): a default body returning `false`, with no backend override and no caller. Zero hits when this entry was added.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "window_stack"
+why = """
+Removed from `flui_platform::Platform` on 2026-09-07 (#551, ADR-0039 §2). The instructive one: it had THREE implementations and still no consumer -- winit returned None ("not easily supported"), macOS/Windows/Android inherited the default, and only the headless double and the web backend returned toy values, so its only implementations were the ones that could not fail. Zero hits when this entry was added.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "fn hide("
+scope = "crates/flui-platform/src/traits/platform.rs"
+why = """
+`Platform::hide` was removed on 2026-09-07 (#551, ADR-0039 §2) -- an empty default body with no override and no call site. Deliberately SCOPED to the trait's own file rather than workspace-wide: `PlatformWindow::hide` (`crates/flui-platform/src/window.rs`) is a live, unrelated method on a different trait, so an unscoped pattern would either forbid a shipping API or have to allow-list it and stop meaning anything. Zero hits in this file when the entry was added.\
+"""
+allow_files = []
 
 [[forbidden_pattern]]
 pattern = "PR-0"
