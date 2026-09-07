@@ -14,28 +14,18 @@ use super::layout::font_system;
 
 /// Converts FLUI `TextStyle` to cosmic-text `Attrs`.
 ///
+/// `family` comes from the crate's font resolution rather than from
+/// `style.font_family` directly: a family the host does not
+/// carry must not reach the shaper, or the run falls into cosmic-text's
+/// unfiltered, emoji-first fallback tail. The caller resolves it because
+/// resolution needs the font database, and the caller is what holds the lock.
+///
 /// The returned `Attrs` borrows the style's family string for
 /// `Family::Name`, hence the shared lifetime.
-pub(super) fn style_to_attrs(style: Option<&TextStyle>) -> Attrs<'_> {
-    let mut attrs = Attrs::new();
+pub(super) fn style_to_attrs<'a>(style: Option<&'a TextStyle>, family: Family<'a>) -> Attrs<'a> {
+    let mut attrs = Attrs::new().family(family);
 
     if let Some(style) = style {
-        if let Some(ref family) = style.font_family {
-            attrs = attrs.family(match family.as_str() {
-                "serif" | "Serif" => Family::Serif,
-                "sans-serif" | "SansSerif" | "sans" => Family::SansSerif,
-                "monospace" | "Monospace" | "mono" => Family::Monospace,
-                "cursive" | "Cursive" => Family::Cursive,
-                "fantasy" | "Fantasy" => Family::Fantasy,
-                // A NAMED family resolves against the FontSystem's
-                // discovered fonts (cosmic falls back internally when
-                // the name is unknown). Pre-fix every named font —
-                // "Inter", "JetBrains Mono", … — silently became
-                // SansSerif.
-                name => Family::Name(name),
-            });
-        }
-
         if let Some(weight) = style.font_weight {
             let cosmic_weight = match weight {
                 FontWeight::W100 => Weight::THIN,
@@ -78,18 +68,21 @@ pub fn measure_text(
 
     let line_height = line_height.unwrap_or(font_size * 1.2);
 
-    // cosmic-text 0.19: `set_size`/`set_text` are lazy and `new_empty` skips
-    // the empty-string shape pass `Buffer::new` performs, so the buffer is
-    // fully described before the global `FONT_SYSTEM` lock is taken — the
-    // lock now brackets only the shape pass itself.
+    // cosmic-text 0.19: `Buffer::new_empty` skips the empty-string shape pass
+    // `Buffer::new` performs, and `set_size` is lazy, so the expensive part of
+    // describing the buffer stays outside the global `FONT_SYSTEM` lock. The
+    // lock brackets family resolution (which reads the font database), the
+    // lazy `set_text`, and the shape pass — resolution has to be inside it
+    // because the two must agree on one database.
     let mut buffer = Buffer::new_empty(Metrics::new(font_size, line_height));
     buffer.set_size(max_width, None);
 
-    let attrs = style_to_attrs(style);
-    buffer.set_text(text, &attrs, Shaping::Advanced, None);
     {
-        let mut font_system = font_system().lock();
-        buffer.shape_until_scroll(&mut font_system, false);
+        let mut state = font_system().lock();
+        let family = state.resolve_family(style);
+        let attrs = style_to_attrs(style, family);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut state.system, false);
     }
 
     super::layout::metrics_from_shaped_buffer(&buffer, line_height, false)

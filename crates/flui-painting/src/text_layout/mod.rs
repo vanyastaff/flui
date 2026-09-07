@@ -14,6 +14,7 @@
 //! Files:
 //!
 //! - `detect`   -- RTL/LTR detection helpers.
+//! - `font_resolve` -- picking a family the host actually carries.
 //! - `layout`   -- `FONT_SYSTEM` static + `TextLayout` struct + cursor/hit-test methods.
 //! - `measure`  -- `measure_text` + `measure_inline_span` + `style_to_attrs` helpers.
 
@@ -23,6 +24,7 @@ use flui_types::{
 };
 
 pub(crate) mod detect;
+pub(crate) mod font_resolve;
 pub(crate) mod layout;
 pub(crate) mod measure;
 
