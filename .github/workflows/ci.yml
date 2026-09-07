@@ -1068,23 +1068,51 @@ jobs:
       - name: Execute the wasm32 tests
         run: |
           set -euo pipefail
-          # Branch on the command rather than assigning its output directly:
+          # DISCOVER the suites rather than list them: naming crates here means
+          # the next one to grow a tests/wasm32.rs is silently never run, which
+          # is the defect these steps exist to fix, reintroduced one level up.
+          #
+          # Branch on each command rather than assigning its output directly:
           # under `set -e` a failing `cargo test` exits AT THE ASSIGNMENT, and
           # the captured panic and runner diagnostics -- the only things that
           # say why -- never reach the log. A wasm failure has to arrive with
           # its message or it is not actionable from a CI run.
-          if ! out="$(cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32 2>&1)"; then
+          total=0
+          suites=0
+          for manifest in crates/*/Cargo.toml; do
+            crate="$(dirname "$manifest")"
+            [ -f "$crate/tests/wasm32.rs" ] || continue
+            name="$(basename "$crate")"
+            suites=$((suites + 1))
+            if ! out="$(cargo test -p "$name" --locked --target wasm32-unknown-unknown --test wasm32 2>&1)"; then
+              echo "$out"
+              echo "::error::wasm32 test run failed for $name" >&2
+              exit 1
+            fi
             echo "$out"
-            echo "::error::wasm32 test run failed" >&2
+            passed="$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)"
+            # Per suite, not only in aggregate. A NEW tests/wasm32.rs compiling
+            # to zero tests contributes 0, and a healthy sibling keeps the total
+            # non-zero -- so exactly the suite someone just added is the one
+            # that can be silently inert. Reject it where it happens.
+            if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
+              echo "::error::$name/tests/wasm32.rs executed no assertions -- inert" >&2
+              exit 1
+            fi
+            total=$((total + passed))
+          done
+          # Two ways this goes quietly inert, and both look like success: a
+          # runner that finds no tests exits 0 printing "0 passed", and a `for`
+          # over a glob matching nothing never runs its body. Assert both.
+          if [ "$suites" -eq 0 ]; then
+            echo "::error::found no crates/*/tests/wasm32.rs -- nothing was run" >&2
             exit 1
           fi
-          echo "$out"
-          passed="$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)"
-          if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
-            echo "::error::no wasm32 test executed -- the harness is inert" >&2
+          if [ "$total" -eq 0 ]; then
+            echo "::error::$suites suite(s) but 0 assertions executed -- the harness is inert" >&2
             exit 1
           fi
-          echo "$passed wasm32 assertions executed"
+          echo "$total wasm32 assertions executed across $suites suite(s)"
 
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.

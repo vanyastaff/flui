@@ -121,21 +121,49 @@ wasm-test:
     # things that say WHY -- are captured and then thrown away. Branch on the
     # command so the output is printed either way. `--locked` matches CI and
     # keeps a local run from quietly re-resolving Cargo.lock.
-    if ! out=$(cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32 2>&1); then
+    # DISCOVER the suites rather than list them. Naming crates here means the
+    # next one to grow a tests/wasm32.rs is silently never run -- which is the
+    # defect this whole recipe exists to fix, reintroduced one level up.
+    total=0
+    suites=0
+    for manifest in crates/*/Cargo.toml; do
+        crate=$(dirname "$manifest")
+        [ -f "$crate/tests/wasm32.rs" ] || continue
+        name=$(basename "$crate")
+        suites=$((suites + 1))
+        # `out=$(cargo test ...)` under `set -e` exits AT THE ASSIGNMENT when
+        # cargo fails, so the panic message and the runner's own diagnostics --
+        # the only things that say WHY -- are captured and then thrown away.
+        # Branch on the command so the output is printed either way. `--locked`
+        # matches CI and keeps a local run from re-resolving Cargo.lock.
+        if ! out=$(cargo test -p "$name" --locked --target wasm32-unknown-unknown --test wasm32 2>&1); then
+            echo "$out"
+            exit 1
+        fi
         echo "$out"
+        passed=$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)
+        # Per suite, not only in aggregate. A NEW tests/wasm32.rs that compiles
+        # to zero tests contributes 0, and a healthy sibling keeps the total
+        # non-zero -- so exactly the suite someone just added is the one that
+        # can be silently inert. Reject it where it happens.
+        if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
+            echo "wasm-test: $name/tests/wasm32.rs executed no assertions -- inert" >&2
+            exit 1
+        fi
+        total=$((total + passed))
+    done
+    # Two ways this goes quietly inert, and both look like success: a runner
+    # that finds no tests still exits 0 printing "0 passed", and a `for` over a
+    # glob that matches nothing never runs its body at all. Assert both.
+    if [ "$suites" -eq 0 ]; then
+        echo "wasm-test: found no crates/*/tests/wasm32.rs -- nothing was run" >&2
         exit 1
     fi
-    echo "$out"
-    # A runner that finds no tests still exits 0 and prints "0 passed", which is
-    # indistinguishable from a passing suite. Assert a non-zero count so the
-    # harness cannot go quietly inert -- this issue exists because compile-only
-    # coverage read as real coverage for months.
-    passed=$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)
-    if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
-        echo "wasm-test: no wasm32 test executed -- the harness is inert" >&2
+    if [ "$total" -eq 0 ]; then
+        echo "wasm-test: $suites suite(s) but 0 assertions executed -- inert" >&2
         exit 1
     fi
-    echo "wasm-test: $passed wasm32 assertions executed"
+    echo "wasm-test: $total wasm32 assertions executed across $suites suite(s)"
 
 # `cargo check` does not link, and on wasm32 even a link does not fail on an
 # undefined symbol (rust-lld turns it into an import) — hence the committed
