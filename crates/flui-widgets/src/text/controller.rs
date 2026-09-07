@@ -158,6 +158,23 @@ impl TextEditingController {
     pub fn is_same_controller(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.inner, &other.inner)
     }
+
+    /// How many change listeners are registered.
+    ///
+    /// Crate-internal, and it exists for one reason: a test that claims a
+    /// mounted field registers its listener exactly once, and moves it rather
+    /// than duplicating it on a controller swap, has to be able to SEE that.
+    /// Asserting the visible text instead would pass just as well against a
+    /// field that had accumulated a listener per rebuild.
+    ///
+    /// `cfg(test)`, because that is the whole of its purpose: a shipped build
+    /// has no caller, and leaving it compiled would be a public-ish accessor
+    /// existing for a reason the code does not show.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn listener_count(&self) -> usize {
+        self.notifier.len()
+    }
 }
 
 impl std::fmt::Debug for TextEditingController {

@@ -1802,13 +1802,16 @@ mod tests {
         );
     }
 
-    /// Rebuilding with the SAME controller changes nothing.
+    /// Rebuilding with the SAME controller registers no second listener.
     ///
-    /// The control for the test above: a `did_update_view` that retargeted
-    /// unconditionally would re-register the listener on every rebuild, and
-    /// nothing in the positive test could tell that apart from a correct swap.
+    /// The control for the test above, and it needs an observable the visible
+    /// text cannot give: a `did_update_view` that retargeted unconditionally
+    /// would drop and re-add the listener on every rebuild, which paints
+    /// identically. The first version of this test asserted the text and a
+    /// tautology (`a.is_same_controller(&a.clone())`, which cannot fail);
+    /// `listener_count` is what actually pins it.
     #[test]
-    fn rebuilding_with_the_same_controller_keeps_one_listener() {
+    fn rebuilding_with_the_same_controller_registers_no_second_listener() {
         let controller = TextEditingController::with_text("stable");
         let focus_node = FocusNode::with_debug_label("same controller rebuild");
         let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
@@ -1816,6 +1819,13 @@ mod tests {
             Rc::clone(&focus_node),
         ));
         harness.tick();
+
+        let after_mount = controller.listener_count();
+        assert!(
+            after_mount > 0,
+            "premise: a mounted field registers a change listener, got \
+             {after_mount}"
+        );
 
         for _ in 0..3 {
             harness.swap_root(EditableText::new(
@@ -1825,15 +1835,57 @@ mod tests {
             harness.tick();
         }
 
-        // One notification per change, not one per rebuild-registered
-        // listener: a duplicated listener would multiply the rebuilds a
-        // single keystroke causes.
-        let painted = with_render_editable(&harness, |editable| editable.plain_text().to_string())
-            .expect("a mounted EditableText always has a RenderEditable");
-        assert_eq!(painted, "stable");
+        assert_eq!(
+            controller.listener_count(),
+            after_mount,
+            "three rebuilds with the same controller must leave the listener \
+             count where mounting put it — a retarget that did not check \
+             identity would have added three more"
+        );
+    }
+
+    /// The change listener MOVES on a swap: off the original, onto the
+    /// replacement.
+    ///
+    /// The one part of the retarget that cannot ride on the shared cell,
+    /// because it is registered ON the controller rather than read FROM it —
+    /// so it is the part most likely to be forgotten, and the only one with a
+    /// count to check.
+    #[test]
+    fn swapping_the_controller_moves_the_change_listener_rather_than_adding_one() {
+        let original = TextEditingController::with_text("original");
+        let replacement = TextEditingController::with_text("replacement");
+        let focus_node = FocusNode::with_debug_label("listener move");
+        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+            original.clone(),
+            Rc::clone(&focus_node),
+        ));
+        harness.tick();
+
+        let original_after_mount = original.listener_count();
+        let replacement_before = replacement.listener_count();
         assert!(
-            controller.is_same_controller(&controller.clone()),
-            "a clone is the same controller — the identity this rebuild relies on"
+            original_after_mount > 0,
+            "premise: the mounted field listens to the original"
+        );
+
+        harness.swap_root(EditableText::new(
+            replacement.clone(),
+            Rc::clone(&focus_node),
+        ));
+        harness.tick();
+
+        assert_eq!(
+            original.listener_count(),
+            original_after_mount - 1,
+            "the field must DEREGISTER from the original — leaving it \
+             attached would keep an unmounted-from controller waking this \
+             field for edits it no longer shows"
+        );
+        assert_eq!(
+            replacement.listener_count(),
+            replacement_before + 1,
+            "and register on the replacement exactly once"
         );
     }
 
