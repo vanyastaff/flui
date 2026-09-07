@@ -208,6 +208,92 @@ fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
     }) == Some(Some(true))
 }
 
+/// Keeps emoji families out of cosmic-text's UNFILTERED fallback tail.
+///
+/// # The defect this works around
+///
+/// `FontMatchKey` derives `Ord` with `not_emoji: bool` as its **first** field
+/// (`font/system.rs:20-30`) and `font_match_keys.sort()` is ascending, so
+/// `false` — the emoji faces — sorts first. The comment on that very sort says
+/// *"Sort so we get the keys with weight_offset=0 first"*, which the field
+/// order contradicts: it reads as unintended rather than designed. The tail
+/// itself (`font/fallback/mod.rs:468-480`) is unordered by weight distance, so
+/// once it is reached the choice is arbitrary and emoji-first.
+///
+/// Issue #927 made the requested family resolve, which puts a real text face at
+/// index 0 — but that relies on the tail's FIRST ENTRY being right rather than
+/// on the tail being safe. The tail is still reachable on a path resolution
+/// does not cover: a word whose script the resolved family lacks meets the same
+/// exact-weight filter in the SCRIPT fallback list, and on a host whose CJK
+/// face is installed at a non-400 weight it drops through with nothing useful
+/// at index 0 (issue #930).
+///
+/// # Why this is safe for real emoji
+///
+/// `forbidden_fallback` is consulted in exactly ONE place — the tail loop at
+/// `font/fallback/mod.rs:469` — verified by grep across the crate: the other
+/// three sites are the trait declaration and `Fallbacks`' own list
+/// construction. Nothing on the `common_fallback` or `script_fallback` path
+/// reads it. Genuine emoji resolve through `script_fallback`, so forbidding
+/// these families suppresses them in the junk tail and nowhere else.
+///
+/// # Why the list is scanned rather than hard-coded
+///
+/// The trait returns `&[&'static str]` borrowed from `&self`, not
+/// `&'static [&'static str]` — so the LIST may be computed, and only the names
+/// need be `'static`. A per-platform hard-coded list would be a guess about the
+/// host: it misses an emoji font not on it, and wrongly forbids a text family
+/// whose name resembles one. Scanning the database with cosmic-text's own
+/// predicate — `post_script_name.contains("Emoji")` (`font/system.rs:35`), the
+/// very one that produces the `not_emoji` sort key — cannot be less accurate
+/// about the host than cosmic-text is about itself. The names are leaked once,
+/// for a font system that lives as long as the process.
+pub(crate) struct EmojiForbiddenFallback {
+    inner: cosmic_text::PlatformFallback,
+    forbidden: Vec<&'static str>,
+}
+
+impl EmojiForbiddenFallback {
+    /// Scan `db` for the families cosmic-text would classify as emoji.
+    pub(crate) fn new(db: &Database) -> Self {
+        let mut forbidden: Vec<&'static str> = Vec::new();
+        for face in db.faces() {
+            if !face.post_script_name.contains("Emoji") {
+                continue;
+            }
+            for (family, _) in &face.families {
+                if forbidden.contains(&family.as_str()) {
+                    continue;
+                }
+                // Leaked deliberately: `Fallback` hands out `&'static str`
+                // and the names are only known after a runtime scan, so there
+                // is no borrow that satisfies it. Bounded by the host's emoji
+                // family count — single digits — and paid once per font
+                // system, which production constructs once per process.
+                forbidden.push(Box::leak(family.clone().into_boxed_str()));
+            }
+        }
+        Self {
+            inner: cosmic_text::PlatformFallback,
+            forbidden,
+        }
+    }
+}
+
+impl cosmic_text::Fallback for EmojiForbiddenFallback {
+    fn common_fallback(&self) -> &[&'static str] {
+        self.inner.common_fallback()
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        &self.forbidden
+    }
+
+    fn script_fallback(&self, script: unicode_script::Script, locale: &str) -> &[&'static str] {
+        self.inner.script_fallback(script, locale)
+    }
+}
+
 /// Whether any face in `family` is one cosmic-text would accept at `weight`.
 ///
 /// Mirrors the filter in `FontFallbackIter::default_font_match_key`
@@ -1201,6 +1287,70 @@ mod tests {
     /// All three are reported because the defect this module exists for
     /// splits the letters from the space: a test reading only the first glyph
     /// would not see it.
+    /// `shape_probe`'s sibling, with the emoji-forbidding fallback installed.
+    ///
+    /// Separate rather than a flag, because the two build DIFFERENT font
+    /// systems and the difference is the whole subject: this one is the
+    /// shipping construction, and `shape_probe` is what it replaces.
+    fn shape_probe_with_forbidden_emoji(
+        db: Database,
+        style: &TextStyle,
+        weight: u16,
+    ) -> (String, String, f32) {
+        use cosmic_text::{Attrs, AttrsOwned, Buffer, Metrics, Shaping, Weight};
+
+        const TEXT: &str = "Ao Bo";
+        const SIZE: f32 = 17.0;
+
+        let forbidden = EmojiForbiddenFallback::new(&db);
+        let mut font_system =
+            FontSystem::new_with_locale_and_db_and_fallback("en-US".to_owned(), db, forbidden);
+        // The pre-resolution path deliberately: the tail is what this tests,
+        // and resolution exists to keep the run from reaching it.
+        let family = style
+            .font_family
+            .as_deref()
+            .map_or(Family::SansSerif, Family::Name);
+        let attrs = Attrs::new()
+            .family(family)
+            .weight(Weight(weight))
+            .metrics(Metrics::new(SIZE, SIZE * 1.2));
+        let owned = AttrsOwned::new(&attrs);
+
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(SIZE, SIZE * 1.2));
+        buffer.set_size(Some(f32::MAX), None);
+        buffer.set_rich_text(
+            std::iter::once((TEXT, owned.as_attrs())),
+            &Attrs::new(),
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+
+        let name_of = |id| {
+            font_system
+                .db()
+                .face(id)
+                .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+                .unwrap_or_else(|| "<unknown face>".to_owned())
+        };
+        let run = buffer
+            .layout_runs()
+            .next()
+            .expect("one line of shaped text");
+        let letter = run.glyphs.first().expect("a letter glyph");
+        let space = run
+            .glyphs
+            .iter()
+            .find(|glyph| &TEXT[glyph.start..glyph.end] == " ")
+            .expect("a space glyph");
+        (
+            name_of(letter.font_id),
+            name_of(space.font_id),
+            space.w / SIZE,
+        )
+    }
+
     fn shape_probe(
         db: Database,
         style: &TextStyle,
@@ -1340,6 +1490,51 @@ mod tests {
                 "the space must shape in the same family as the letters"
             );
         }
+    }
+
+    /// An emoji face does not win the unfiltered fallback tail once its family
+    /// is forbidden — and its own control shows it wins without that.
+    ///
+    /// This is the path issue #927's resolution does NOT cover. Resolution
+    /// keeps a run from reaching the tail at all; the tail stays emoji-first by
+    /// construction underneath, and a word whose script the resolved family
+    /// lacks still drops into it. So the fix and the mitigation are different
+    /// answers to different halves, and this test deliberately takes the
+    /// pre-resolution path to reach the half the mitigation owns.
+    ///
+    /// Hermetic only because `DECOY_WIDE_SPACE` carries "Emoji" in its
+    /// PostScript name — the predicate cosmic-text classifies faces by. Before
+    /// that fixture was committed (issue #932) this test needed the host's
+    /// emoji font and could not be written honestly.
+    #[test]
+    fn a_forbidden_emoji_family_loses_the_fallback_tail_to_a_text_face() {
+        let style = styled(Some("Absent Family"));
+        let fixture = || database(&[ROBOTO, DECOY_WIDE_SPACE]);
+
+        // Control: without the mitigation the tail hands the space to the
+        // emoji face, which is the whole defect.
+        let (_, unguarded_space, unguarded_em) = shape_probe(fixture(), &style, 400, false);
+        assert_eq!(
+            unguarded_space, "FLUI Decoy Emoji",
+            "precondition: the unfiltered tail is emoji-first, so the space \
+             comes from the decoy"
+        );
+        assert!(
+            unguarded_em > 1.0,
+            "precondition: and at the decoy's 1.3 em, got {unguarded_em}"
+        );
+
+        let (letter, space, em) = shape_probe_with_forbidden_emoji(fixture(), &style, 400);
+        assert_eq!(
+            space, "Roboto",
+            "with the decoy's family forbidden the tail must reach the text \
+             face instead"
+        );
+        assert_eq!(space, letter, "and it is the same face the letters use");
+        assert!(
+            em < 0.5,
+            "a space of {em} em is a foreign face's advance, not a text face's"
+        );
     }
 
     /// Issue #927's actual symptom: an emoji face shaping the SPACE of a Latin
