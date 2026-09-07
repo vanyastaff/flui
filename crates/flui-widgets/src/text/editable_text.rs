@@ -39,7 +39,16 @@ type ImeFocusTransition = Rc<dyn Fn(bool)>;
 /// Flutter's own `EditableText.obscuringCharacter` default, U+2022 BULLET.
 const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
 
-/// The masked text, and the caret offset mapped into it.
+/// The masked text, and each of `offsets` mapped into it.
+///
+/// `offsets` is rewritten in place: every entry arrives as a byte offset into
+/// `text` and leaves as the corresponding byte offset into the returned mask.
+/// A slice rather than one value because the caret is never the only offset
+/// that has to make the trip — the selection's two ends do too, and mapping
+/// them separately meant three walks over the text where the mask itself only
+/// needs one. It also keeps the correspondence in a single place: a selection
+/// mapped by a different rule than the caret would paint a highlight that does
+/// not line up with the caret inside it.
 ///
 /// One mask character per SOURCE `char` — Unicode scalar, not grapheme
 /// cluster and not UTF-16 code unit.
@@ -63,37 +72,26 @@ const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
 /// would not change and the field would look frozen. Matching the caret's own
 /// granularity is the honest choice until that unit lands, and this function's
 /// doc is where it should be revisited when it does.
-fn obscure(text: &str, caret_byte_offset: usize, mask: char) -> (String, usize) {
+///
+/// Average and worst case O(chars × offsets); `offsets` is three entries at
+/// its largest, so this is the single walk the mask needs either way.
+fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
     let mask_len = mask.len_utf8();
     let mut masked = String::with_capacity(text.chars().count() * mask_len);
-    let mut mapped_caret = 0;
+    let mut mapped = vec![0_usize; offsets.len()];
     for (byte_offset, _) in text.char_indices() {
-        // The caret sits at a char boundary (the controller clamps it), so
-        // "chars strictly before it" is the count that maps.
-        if byte_offset < caret_byte_offset {
-            mapped_caret += mask_len;
+        for (slot, source) in mapped.iter_mut().zip(offsets.iter()) {
+            // Every offset sits at a char boundary (the controller clamps
+            // both ends), so "chars strictly before it" is the count that
+            // maps.
+            if byte_offset < *source {
+                *slot += mask_len;
+            }
         }
         masked.push(mask);
     }
-    (masked, mapped_caret)
-}
-
-/// The masked byte offset a source byte offset maps to — [`obscure`]'s caret
-/// mapping, exposed for the other offsets that have to make the same trip.
-///
-/// One mask character per source `char`, so the answer is "how many source
-/// chars lie before this offset" times the mask's width. Sharing the rule with
-/// [`obscure`] rather than restating it is the point: a selection masked by a
-/// different count than the caret would paint a highlight that does not line
-/// up with the caret inside it, and nothing in a same-width fixture would
-/// show it — [`DEFAULT_OBSCURING_CHARACTER`] is three bytes and source text is
-/// usually one.
-fn mask_offset_of(source: &str, source_offset: usize, mask: char) -> usize {
-    source
-        .char_indices()
-        .take_while(|(byte_offset, _)| *byte_offset < source_offset)
-        .count()
-        * mask.len_utf8()
+    offsets.copy_from_slice(&mapped);
+    masked
 }
 
 /// A single-line text field that accepts keyboard input when focused.
@@ -1234,10 +1232,15 @@ fn build_field_view(
     let source = controller.text();
     let source_selection = controller.selection();
     let (text, caret_byte_offset, selection) = if appearance.obscure_text {
-        let mask = appearance.obscuring_character;
-        let (masked, caret) = obscure(&source, controller.caret_byte_offset(), mask);
-        let start = mask_offset_of(&source, source_selection.start, mask);
-        let end = mask_offset_of(&source, source_selection.end, mask);
+        // Caret and both selection ends mapped in the one walk the mask needs
+        // anyway, and by the one rule — see `obscure`.
+        let mut offsets = [
+            controller.caret_byte_offset(),
+            source_selection.start,
+            source_selection.end,
+        ];
+        let masked = obscure(&source, &mut offsets, appearance.obscuring_character);
+        let [caret, start, end] = offsets;
         (masked, caret, start..end)
     } else {
         (source, controller.caret_byte_offset(), source_selection)
@@ -1297,7 +1300,9 @@ mod tests {
     /// that has to agree.
     #[test]
     fn the_mask_is_one_character_per_source_char_whatever_it_encodes_to() {
-        let (masked, caret) = obscure("a£😀b", 0, '\u{2022}');
+        let mut offsets = [0];
+        let masked = obscure("a£😀b", &mut offsets, '\u{2022}');
+        let [caret] = offsets;
         assert_eq!(
             masked.chars().count(),
             4,
@@ -1324,7 +1329,9 @@ mod tests {
 
         // After "a£" — byte offset 3 in the source (1 + 2), which is the
         // SECOND character boundary.
-        let (masked, caret) = obscure(source, 3, mask);
+        let mut offsets = [3];
+        let masked = obscure(source, &mut offsets, mask);
+        let [caret] = offsets;
         assert_eq!(
             caret,
             2 * mask_len,
@@ -1337,14 +1344,18 @@ mod tests {
         );
 
         // The end of the text maps to the end of the mask.
-        let (masked_end, caret_end) = obscure(source, source.len(), mask);
+        let mut end_offsets = [source.len()];
+        let masked_end = obscure(source, &mut end_offsets, mask);
+        let [caret_end] = end_offsets;
         assert_eq!(caret_end, masked_end.len(), "end maps to end");
     }
 
     /// An empty field masks to nothing, with the caret at zero.
     #[test]
     fn an_empty_field_masks_to_an_empty_string() {
-        let (masked, caret) = obscure("", 0, '\u{2022}');
+        let mut offsets = [0];
+        let masked = obscure("", &mut offsets, '\u{2022}');
+        let [caret] = offsets;
         assert!(
             masked.is_empty(),
             "no source characters, no mask characters"

@@ -1,5 +1,8 @@
-//! [`TextEditingController`] — owns the text buffer and caret position for an
-//! [`EditableText`](super::editable_text::EditableText) field.
+//! [`TextEditingController`] — owns the text buffer and selection for an
+//! [`EditableText`](super::editable_text::EditableText) field. The caret is
+//! the collapsed case of that selection, not a separate value:
+//! [`TextEditingController::caret_byte_offset`] reports the extent and
+//! [`TextEditingController::selection`] the span.
 
 use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -11,10 +14,6 @@ use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
 // ControllerInner
 // ============================================================================
 
-/// Mutable interior of a [`TextEditingController`].
-///
-/// Guarded by a `Mutex` inside `Arc` so any clone of the controller refers to
-/// the same live text and caret state.
 /// The selection, as Flutter models it: the caret is a **collapsed
 /// selection**, not a separate concept (`services/text_editing.dart`'s
 /// `TextSelection`, whose `TextSelection.collapsed` sets `baseOffset ==
@@ -92,6 +91,10 @@ impl Selection {
     }
 }
 
+/// Mutable interior of a [`TextEditingController`].
+///
+/// Guarded by a `Mutex` inside `Arc` so any clone of the controller refers to
+/// the same live text and caret state.
 struct ControllerInner {
     text: String,
     /// The selection, of which the caret is the collapsed case — see
@@ -191,8 +194,13 @@ struct ComposingState {
 /// # DEFERRED (v1)
 ///
 /// The following behaviors are absent in v1 and must not be faked:
-/// - **Text selection**: only a collapsed caret (anchor == focus) is tracked.
-///   Drag-to-select and selection rendering are not implemented.
+/// - **Selection GESTURES**: a selection is tracked and rendered
+///   ([`Self::set_selection`], painted by `RenderEditable`), and every edit
+///   honours it — typing replaces it, Backspace and Delete remove it, an
+///   arrow collapses it. What is absent is anything that *produces* one from
+///   a pointer: tap-to-place, drag-to-select, shift-click and
+///   double-tap-word are not wired, so a selection only ever arrives from a
+///   caller driving this controller.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
 /// - **Grapheme-cluster-aware deletion**: [`Self::backspace`]/[`Self::delete_forward`]
