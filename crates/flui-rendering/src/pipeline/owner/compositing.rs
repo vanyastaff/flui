@@ -93,6 +93,17 @@ impl PipelineOwner<Compositing> {
         if !actions.remove_from_paint_queue.is_empty() {
             self.scheduler
                 .retain_paint_queue(&actions.remove_from_paint_queue);
+            // NOT evicting `retained_boundaries` here, deliberately. It looks
+            // like the matching move — a node that stopped being a boundary
+            // should not keep output it captured while it was one — but this
+            // branch reads the `IS_REPAINT_BOUNDARY` FLAG while the paint walk
+            // reads the live `is_repaint_boundary()` trait answer, and today
+            // those cannot disagree for any production render object (the flag
+            // is insert-time configuration; see issue #995). So a node reaching
+            // this branch is still a boundary as far as paint is concerned: it
+            // re-captures on the same frame, and an eviction here would be
+            // churn rather than correctness. It becomes the right move only
+            // once #995 makes the two agree.
         }
         for id in actions.mark_needs_paint {
             self.mark_needs_paint(id);

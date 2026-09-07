@@ -3582,14 +3582,56 @@ fn harness_animated_opacity_tick_marks_needs_paint() {
         "a settled first frame must leave nothing pending"
     );
 
+    // 0.0 -> 0.5 crosses alpha ZERO, which is the arm that still marks paint:
+    // at alpha 0 the node emits no `OpacityLayer` and suppresses its subtree, so
+    // the change is to what the frame CONTAINS and no layer patch can express
+    // it. The in-range arm — which takes the composited-layer-update path
+    // instead — is covered by the sibling test below; keeping both is the point,
+    // since this fixture's value happens to pick one of the two.
     controller.set_value(0.5);
     let report = run.pump();
 
     assert!(
         report.painted,
-        "a controller tick that changes the effective alpha must reach the \
-         pipeline through the attach()-registered listener and trigger a \
-         repaint: {report}"
+        "a controller tick across alpha zero must reach the pipeline through \
+         the attach()-registered listener and trigger a repaint: {report}"
+    );
+}
+
+/// A tick that stays INSIDE the layered range takes the composited-layer-update
+/// path, and still reaches the emitted layer.
+///
+/// The test above starts at 0.0, so its tick crosses zero and exercises the
+/// paint arm. Nothing here covered the arm an ordinary fade actually spends its
+/// time in — every frame between the endpoints — where the listener reports a
+/// composited-layer update and the frame patches the layer instead of
+/// repainting the subtree.
+#[test]
+fn harness_animated_opacity_in_range_tick_updates_the_layer() {
+    let controller = ticking_controller(100, 0.25);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedOpacity::new(
+            animation_from(&controller),
+            false,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let before = run
+        .opacity_alpha()
+        .expect("a layered alpha emits an OpacityLayer");
+
+    // Both endpoints are strictly inside 0..255, so neither the layered
+    // predicate nor `skip_paint` moves — only the layer property.
+    controller.set_value(0.75);
+    let _ = run.pump();
+
+    let after = run.opacity_alpha().expect("still layered after the tick");
+    assert!(
+        (after - before).abs() > 0.1,
+        "an in-range tick must reach the composited layer through the \
+         attach()-registered listener; got {before} then {after}"
     );
 }
 

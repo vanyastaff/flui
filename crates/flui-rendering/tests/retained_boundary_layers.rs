@@ -2406,6 +2406,12 @@ fn losing_boundary_status_withdraws_a_pending_update() {
         .and_then(|node| node.links().parent())
         .expect("the opacity sits under a repaint boundary");
 
+    let retained_before = owner.retained_boundary_count();
+    assert!(
+        retained_before > 0,
+        "precondition: the first frame retained the boundary under test",
+    );
+
     // A descendant asks for a layer update, so the boundary is classified.
     owner.mark_needs_composited_layer_update(opacity_id);
 
@@ -2419,7 +2425,26 @@ fn losing_boundary_status_withdraws_a_pending_update() {
     owner.mark_needs_compositing_bits_update(boundary);
 
     let (owner, result) = owner.run_frame();
-    result.expect("the frame after a boundary is lost must not abort");
+    let tree = result
+        .expect("the frame after a boundary is lost must not abort")
+        .expect("the frame produces a layer tree");
+
+    // An output assertion, not just "it did not abort". The `debug_assert` in
+    // `run_paint` is the sharper oracle but compiles out of a release build, so
+    // without this the test would prove nothing where it matters most: the node
+    // is now an ordinary non-boundary, and the frame must render its subtree
+    // rather than replay retained output it no longer owns.
+    assert!(
+        opacity_alpha(&tree).is_some(),
+        "the subtree must still be composited after its boundary is lost",
+    );
+    // Deliberately NOT asserting the capture was evicted. The compositing
+    // walk reads the `IS_REPAINT_BOUNDARY` flag this test flips, while the
+    // paint walk reads the live `is_repaint_boundary()` trait answer — which
+    // still says "boundary", so the node re-captures on this very frame. The
+    // two oracles cannot be made to agree from a test while issue #995 stands,
+    // and asserting on the count here would only pin that disagreement.
+    let _ = retained_before;
     drop(owner);
 }
 
