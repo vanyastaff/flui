@@ -19,6 +19,7 @@
 //! Not served here: `profiler.rs`'s acquisition (it negotiates timestamp-query
 //! features and inspects the adapter, a genuinely different contract).
 
+#[cfg(feature = "enable-wgpu-tests")]
 use std::sync::Arc;
 
 /// Requests the low-power test adapter every GPU suite uses.
@@ -27,6 +28,7 @@ use std::sync::Arc;
 /// embedders exposing a GPU to untrusted content; tests want the adapter's
 /// real limits. Same answer as the production sites in
 /// [`super::adapter::trusted_adapter_options`].
+#[cfg(feature = "enable-wgpu-tests")]
 fn request_test_adapter() -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -37,6 +39,7 @@ fn request_test_adapter() -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
     }))
 }
 
+#[cfg(feature = "enable-wgpu-tests")]
 fn request_device(adapter: &wgpu::Adapter, label: &str) -> (wgpu::Device, wgpu::Queue) {
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some(label),
@@ -48,6 +51,7 @@ fn request_device(adapter: &wgpu::Adapter, label: &str) -> (wgpu::Device, wgpu::
 /// Acquires the shared test device + queue, panicking when no adapter exists.
 ///
 /// `label` names the device in wgpu validation errors — pass the suite name.
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn test_device_and_queue(label: &str) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     let adapter =
         request_test_adapter().expect("a GPU adapter must be available on a GPU-enabled test host");
@@ -57,6 +61,7 @@ pub(crate) fn test_device_and_queue(label: &str) -> (Arc<wgpu::Device>, Arc<wgpu
 
 /// Like [`test_device_and_queue`], but yields `None` when no adapter exists so
 /// callers can self-skip: `let Some((device, queue)) = … else { return; };`
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn try_test_device_and_queue(
     label: &str,
 ) -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
@@ -70,6 +75,7 @@ pub(crate) fn try_test_device_and_queue(
 }
 
 /// Device-only variant for construction tests that never submit work.
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn test_device(label: &str) -> wgpu::Device {
     let (device, _queue) = request_device(
         &request_test_adapter()
@@ -80,6 +86,7 @@ pub(crate) fn test_device(label: &str) -> wgpu::Device {
 }
 
 /// Creates a 2D single-sample render target with the given usage set.
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn create_target(
     device: &wgpu::Device,
     label: &str,
@@ -109,6 +116,7 @@ pub(crate) fn create_target(
 /// [`create_target`] with the sampleable-attachment usage set the filter and
 /// blend suites need (`RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC |
 /// COPY_DST`).
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn create_sampleable_target(
     device: &wgpu::Device,
     label: &str,
@@ -130,6 +138,7 @@ pub(crate) fn create_sampleable_target(
 }
 
 /// Clears `view` to `color` with a standalone submitted render pass.
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn clear_target(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -166,6 +175,7 @@ pub(crate) fn clear_target(
 /// with `PollType::Wait`, and dumps the frame via [`super::readback_dump`]
 /// (a no-op unless `FLUI_READBACK_DUMP_DIR` is set). The texture must use a
 /// 4-byte-per-texel format and have `COPY_SRC` usage.
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn readback_bytes(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -237,6 +247,7 @@ pub(crate) fn readback_bytes(
 }
 
 /// Reads `width × height` texels back as `[r, g, b, a]` u8 quads.
+#[cfg(feature = "enable-wgpu-tests")]
 pub(crate) fn readback_pixels(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -248,4 +259,116 @@ pub(crate) fn readback_pixels(
         .as_chunks::<4>()
         .0
         .to_vec()
+}
+
+// =============================================================================
+// Adapter acquisition — and making its absence loud where it must be
+// =============================================================================
+
+/// Whether this run demands a working GPU adapter.
+///
+/// Reads `FLUI_REQUIRE_GPU`. Set it where an adapter is guaranteed — CI's
+/// `gpu-test` job runs the readback suites on WARP — and leave it unset on a
+/// developer machine, which is the shape `FLUI_REQUIRE_EMOJI_FONT` already uses
+/// for the font-fallback fixture.
+pub(crate) fn require_gpu() -> bool {
+    demanded_by(std::env::var_os("FLUI_REQUIRE_GPU").as_deref())
+}
+
+/// The rule [`require_gpu`] applies, as a pure function of the variable.
+///
+/// PRESENCE is the signal, not truthiness: `FLUI_REQUIRE_GPU=0` still demands
+/// an adapter, matching `FLUI_REQUIRE_EMOJI_FONT`'s existing shape. Separated
+/// so a test can pin that without mutating the process environment — which is
+/// `unsafe` since the 2024 edition, and which the production path calls through
+/// rather than around.
+fn demanded_by(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some()
+}
+
+/// What an unavailable GPU means, given whether this run demands one.
+///
+/// "Unavailable", not "no adapter": `HeadlessRenderer::new`'s own `# Errors`
+/// says it fails "when no GPU adapter **or device** is available", so device
+/// creation failing on a host that has an adapter reaches here too. The
+/// carried `reason` is the underlying error, and naming only the adapter would
+/// send a reader looking at enumeration for a device-request failure.
+///
+/// Split out from [`renderer_or_skip`] so the demanding branch has a test that
+/// does not need a GPU-less host to reach it: the test and the production path
+/// call this same function, rather than the test restating the rule.
+pub(crate) fn resolve_unavailable_gpu(reason: &str, require: bool) {
+    assert!(
+        !require,
+        "FLUI_REQUIRE_GPU is set, so an unavailable GPU is a failure rather \
+         than a skip: {reason}. A readback test that returns early is reported \
+         PASSED, so without this the whole merge-blocking GPU suite goes green \
+         having rendered nothing. The cause is whichever of adapter \
+         enumeration or device creation the message above names."
+    );
+    eprintln!("skipping: no usable GPU ({reason})");
+}
+
+/// The headless renderer, or `None` when this host has no usable GPU.
+///
+/// Every readback suite opens with this. The skip it performs is the reason it
+/// exists: a Rust test that returns early is reported **PASSED**, so a host
+/// where adapter enumeration or device creation fails turns the entire GPU
+/// suite green while rendering nothing, and the pass count moves too little for
+/// anyone to notice. `FLUI_REQUIRE_GPU` converts that into a loud failure.
+///
+/// This covers the GPU being unusable at all. A test that skips because the adapter
+/// lacks a specific capability — `DUAL_SOURCE_BLENDING`, in the blend suites —
+/// is a narrower and legitimate skip, and is deliberately left soft: WARP's
+/// capability set is not this crate's to require, and forcing it would make CI
+/// fail on a fact about the runner rather than about the code.
+pub(crate) fn renderer_or_skip() -> Option<super::headless::HeadlessRenderer> {
+    match super::headless::HeadlessRenderer::new() {
+        Ok(renderer) => Some(renderer),
+        Err(error) => {
+            resolve_unavailable_gpu(&error.to_string(), require_gpu());
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod adapter_gate_tests {
+    use super::{demanded_by, resolve_unavailable_gpu};
+
+    /// Without the demand, an unavailable GPU is a skip.
+    #[test]
+    fn an_unavailable_gpu_is_a_skip_when_nothing_demands_one() {
+        resolve_unavailable_gpu("device request failed, for the test", false);
+    }
+
+    /// With it, the same absence is a failure — the whole point of the knob.
+    ///
+    /// Asserted on the panic MESSAGE, not merely that a panic happened, so a
+    /// future panic added for an unrelated reason cannot make this pass.
+    #[test]
+    #[should_panic(expected = "FLUI_REQUIRE_GPU is set")]
+    fn an_unavailable_gpu_is_a_failure_when_the_run_demands_one() {
+        resolve_unavailable_gpu("device request failed, for the test", true);
+    }
+
+    /// The knob reads the variable by PRESENCE, not truthiness.
+    ///
+    /// `FLUI_REQUIRE_GPU=0` still demands an adapter — the same shape
+    /// `FLUI_REQUIRE_EMOJI_FONT` uses. Pinned through the pure rule rather than
+    /// by mutating the process environment, which is `unsafe` since the 2024
+    /// edition; `require_gpu` calls this same function, so the test is not a
+    /// restatement of it.
+    #[test]
+    fn the_knob_is_read_by_presence_not_by_value() {
+        assert!(!demanded_by(None), "unset must not demand an adapter");
+        assert!(
+            demanded_by(Some(std::ffi::OsStr::new(""))),
+            "even empty is presence"
+        );
+        assert!(
+            demanded_by(Some(std::ffi::OsStr::new("0"))),
+            "presence is the signal, so even \"0\" demands an adapter"
+        );
+    }
 }

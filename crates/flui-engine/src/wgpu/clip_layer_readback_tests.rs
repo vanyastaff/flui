@@ -79,10 +79,7 @@ fn render_and_sample(renderer: &HeadlessRenderer, tree: &LayerTree) -> [u8; 4] {
 /// "clipped away" reads as white and "painted" reads as blue.
 #[test]
 fn a_clip_rect_layer_clips_its_content_and_its_absence_does_not() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        // No adapter on this machine. CI's gpu-test job runs on WARP, where
-        // this always resolves.
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
     let mut clipped_tree = LayerTree::new();
@@ -134,8 +131,7 @@ fn a_clip_rect_layer_clips_its_content_and_its_absence_does_not() {
 /// looks the same either way and the test would pass against both.
 #[test]
 fn an_aliased_paint_hardens_the_edge_the_default_smooths() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -268,8 +264,7 @@ fn rotated_clip_scene(behavior: Clip) -> LayerTree {
 /// and text routes through the same mask, this is the test that fails.
 #[test]
 fn a_rect_clip_renders_the_same_under_both_modes_for_now() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -472,8 +467,7 @@ fn largest_channel_difference(left: &[u8], right: &[u8]) -> (i32, usize) {
 /// compositing once means.
 #[test]
 fn the_save_layer_mode_composites_the_clipped_group_once() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -524,8 +518,7 @@ fn the_save_layer_mode_composites_the_clipped_group_once() {
 /// too.
 #[test]
 fn the_save_layer_mode_leaves_non_overlapping_content_alone() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -643,8 +636,7 @@ fn icon_squircle() -> flui_types::geometry::RSuperellipse {
 /// otherwise leave this test green and empty.
 #[test]
 fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -730,8 +722,7 @@ fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
 /// arithmetic in `icon_squircle`.
 #[test]
 fn a_clip_superellipse_layer_clips_to_the_squircle_not_its_bounding_rrect() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -810,8 +801,7 @@ fn a_clip_superellipse_layer_clips_to_the_squircle_not_its_bounding_rrect() {
 /// of the same radius.
 #[test]
 fn a_superellipse_clip_with_save_layer_confines_an_eraser_to_its_group() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -910,8 +900,7 @@ fn fill_everything(canvas: &mut Canvas) {
 /// alone leaves nothing whose confinement could be measured.
 #[test]
 fn a_rect_clip_in_the_save_layer_mode_isolates_a_destructive_blend() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -993,8 +982,7 @@ fn a_rect_clip_in_the_save_layer_mode_isolates_a_destructive_blend() {
 /// instead. Red is the channel that discriminates here.
 #[test]
 fn a_path_clip_installs_its_box_and_the_save_layer_mode_isolates() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1069,8 +1057,7 @@ fn a_path_clip_installs_its_box_and_the_save_layer_mode_isolates() {
 /// failure mode of asserting only that something is absent.
 #[test]
 fn an_unbounded_fill_inside_a_path_clip_stays_inside_the_paths_box() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1120,8 +1107,7 @@ fn an_unbounded_fill_inside_a_path_clip_stays_inside_the_paths_box() {
 /// reader of the tests.
 #[test]
 fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1175,8 +1161,7 @@ fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
 /// than pass silently.
 #[test]
 fn a_path_clip_keeps_the_pixel_its_fractional_edge_partly_covers() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1226,8 +1211,7 @@ fn a_path_clip_keeps_the_pixel_its_fractional_edge_partly_covers() {
 /// rounds anywhere but outward ends at 33 and drops the column.
 #[test]
 fn a_path_clip_keeps_its_fractional_edge_under_a_fractional_offset() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1284,8 +1268,7 @@ fn a_path_clip_keeps_its_fractional_edge_under_a_fractional_offset() {
 /// that turns a zero-area scissor into a dropped draw runs through three files.
 #[test]
 fn an_empty_clip_path_clips_everything() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1385,8 +1368,7 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
 /// could tell them apart, so no assertion pretends to.
 #[test]
 fn a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1450,8 +1432,7 @@ fn a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings() {
 /// the corner would fill in.
 #[test]
 fn an_ancestor_clip_still_clips_the_draws_inside_a_save_layer_offscreen() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1599,8 +1580,7 @@ fn nested_mixed_clip_tree(outer: Clip, inner: Clip) -> LayerTree {
 /// each, and a stack that is wrong in one direction can be right in the other.
 #[test]
 fn nested_clips_of_mixed_modes_close_in_the_order_they_opened() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1697,8 +1677,7 @@ fn rounded_clip_scene(behavior: Clip) -> LayerTree {
 
 #[test]
 fn a_rounded_clip_honours_hard_edge_and_anti_alias_differently() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1750,8 +1729,7 @@ fn a_rounded_clip_honours_hard_edge_and_anti_alias_differently() {
 /// clipped content the caller had explicitly asked to leave alone.
 #[test]
 fn a_canvas_clip_with_mode_none_does_not_clip() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1829,8 +1807,7 @@ type PushClip = fn(&mut Canvas, flui_types::painting::ClipOp, Rect<flui_types::g
 /// agree on blue and an assertion there would pass either way.
 #[test]
 fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -1934,8 +1911,7 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
 fn a_destructive_blend_does_not_escape_a_rounded_clip() {
     use flui_types::painting::{BlendMode, ClipOp};
 
-    let Ok(renderer) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
         return;
     };
 
@@ -2074,8 +2050,7 @@ fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
             .expect("the headless capture path must rasterize the scene")
     }
 
-    let Ok(feathering) = HeadlessRenderer::new() else {
-        eprintln!("skipping: no GPU adapter available");
+    let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
     let folded = HeadlessRenderer::without_dual_source_blending()
