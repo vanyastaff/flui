@@ -376,9 +376,16 @@ impl PipelineOwner<PaintPhase> {
                 return None;
             }
             for (&index, layer) in slots.indices.iter().zip(fresh) {
-                if std::mem::discriminant(&layer)
-                    != std::mem::discriminant(&subtree.nodes[index].layer)
-                {
+                // Indices come from this same capture, so they are in range by
+                // construction — but this runs inside the paint walk, where an
+                // out-of-range index would panic a frame rather than lose one
+                // reuse. Refusing degrades to a repaint, which is always
+                // correct.
+                let Some(captured) = subtree.nodes.get(index) else {
+                    debug_assert!(false, "BUG: effect slot index outside its own capture");
+                    return None;
+                };
+                if std::mem::discriminant(&layer) != std::mem::discriminant(&captured.layer) {
                     return None;
                 }
                 patches.push((index, layer));
