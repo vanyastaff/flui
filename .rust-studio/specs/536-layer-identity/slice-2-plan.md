@@ -41,6 +41,42 @@ rasterising entirely, which is the largest single win available.
 `Option`, or `Full` stays and a separate "unchanged" bit rides alongside.
 Decide before writing.
 
+#### The trap that would freeze an opacity animation — measured, not predicted
+
+The obvious "nothing changed" test is *every `PictureLayer`'s `Arc` is
+pointer-identical*. **It is wrong, and it fails on this issue's own acceptance
+criterion #1** ("animated opacity ticks update alpha without repainting the
+child subtree").
+
+`RenderOpacity` wrapping a repaint-boundary child: changing the alpha marks
+the opacity node needs-paint, but the child is a boundary and is GRAFTED, so
+its picture comes back as the same `Arc`. Only the `OpacityLayer`'s own alpha
+differs. Probed on a real two-frame run:
+
+```text
+picture Arc  frame 1 = 137511296843184
+picture Arc  frame 2 = 137511296843184     identical
+OpacityLayer frame 1 = alpha 0.5019608
+OpacityLayer frame 2 = alpha 0.2509804     changed
+```
+
+A picture-only comparison reports "unchanged" and the screen freezes at the
+old alpha — silently, on the single most important case the feature exists
+for.
+
+So the comparison must include **each layer's own payload**, not just picture
+identity: alpha, transform, clip geometry, offset, filter parameters. The
+cheap shape is to compare `Layer` values structurally with `PictureLayer`
+compared by `Arc::ptr_eq` (its `DisplayList` is the only field a walk would be
+expensive on). Confirm every `Layer` variant is actually covered before
+relying on it — a variant whose payload is skipped is a frozen frame for
+whatever animates through it, and that failure is invisible to any test that
+does not animate that specific property.
+
+This also settles a question 2b would otherwise have to revisit: the same
+per-layer payload comparison is what tells a MOVED boundary from an unchanged
+one, since an `OffsetLayer`'s offset is exactly the field that differs.
+
 ### 2b — bounds for a changed boundary
 
 A boundary's root is an `OffsetLayer`, which deliberately has **no** intrinsic
