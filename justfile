@@ -574,8 +574,28 @@ watch-test crate="":
 # what the pre-push hook runs. Every gate this repository lost time to
 # recently was caught by something in here, not by a test.
 [group("ci")]
+[doc("Spell-check (typos) and TOML formatting (taplo) — the two CI gates with no cargo step")]
+text-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Skipped with a message rather than failing when the tool is absent: these
+    # are two extra binaries, and a contributor without them should still be
+    # able to run `just gate`. CI installs both, so a skip here is a slower
+    # feedback loop, never a hole in the gate.
+    if command -v typos >/dev/null 2>&1; then
+        typos
+    else
+        echo "typos: not installed, skipped (cargo install typos-cli)"
+    fi
+    if command -v taplo >/dev/null 2>&1; then
+        taplo fmt --check
+    else
+        echo "taplo: not installed, skipped (cargo install taplo-cli)"
+    fi
+
+[group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
-gate: fmt-check inventory-check runtime-conformance-check panic-policy-check port-check clippy doc-strict
+gate: fmt-check text-check inventory-check runtime-conformance-check panic-policy-check port-check clippy doc-strict
 
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]

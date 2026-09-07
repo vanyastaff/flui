@@ -103,9 +103,11 @@ cargo test -p flui-objects --test render_object_harness  # catalog guard for ren
 just port-check-verbose                                  # per-trigger pass/fail + marker totals
 ```
 
-Additionally, CI gates on two checks with no `just` recipe:
-- **`taplo fmt --check`** — TOML formatting (config: `.taplo.toml`)
-- **`typos`** — spell checking (config: `typos.toml`)
+Both of CI's non-cargo gates now run inside `just gate` (and so inside `just ci`), through the
+`text-check` recipe — **`typos`** (config: `typos.toml`) and **`taplo fmt --check`** (config:
+`.taplo.toml`). Each is skipped with a printed message when its binary is absent, so a green
+`just ci` on a machine without them is weaker than CI's: install both
+(`cargo install typos-cli taplo-cli`) if you want the local gate to mean what CI means.
 
 ## Architecture Constraints (port methodology)
 
