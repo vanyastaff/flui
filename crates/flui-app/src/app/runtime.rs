@@ -1780,6 +1780,70 @@ mod wake_and_clipboard_tests {
         );
     }
 
+    /// The frame wake pokes the platform window from whatever thread completed
+    /// the future — the violation of `PlatformWindow::request_redraw`'s
+    /// owner-thread rule that issue #949 is about, made executable.
+    ///
+    /// **This test is green because the defect is present.** It pins the
+    /// current behaviour, not the desired one. `frame_wake_callback` is
+    /// deliberately `Send + Sync` and is installed as the scheduler's
+    /// `on_frame_scheduled` hook and handed to spawned futures' wakers, so in
+    /// production this poke lands on an executor thread; on the macOS backend
+    /// that reaches `-[NSView setNeedsDisplay:]` off the main thread, which is
+    /// what makes `MacOSWindow`'s `unsafe impl Send` justification untrue.
+    ///
+    /// When the `PlatformProxy` redraw verb lands (ADR-0045 decision 5, scoped
+    /// with #559/#551) this test must be **re-targeted, not deleted** — it is
+    /// the mechanical trigger that makes the fix visible here instead of
+    /// silently passing either way. It can fail in two shapes, and each
+    /// assertion below says which: the poke arrives on the owner thread
+    /// (invert the thread assertion), or no direct poke happens at all because
+    /// the worker posted to the proxy (re-point the test at the proxy).
+    ///
+    /// The sibling `wake_frame_calls_platform_request_redraw` covers the
+    /// same-thread call; a counter alone cannot distinguish the two, which is
+    /// why `TestWindow` records the calling thread.
+    #[test]
+    fn the_frame_wake_pokes_the_window_from_the_thread_that_fired_it() {
+        use flui_types::geometry::{Size, device_px, px};
+
+        let window = crate::app::window_test_support::TestWindow::new().with_sizes(
+            Size::new(device_px(800), device_px(600)),
+            Size::new(px(800.0), px(600.0)),
+        );
+        let redraw_threads = window.redraw_threads_handle();
+
+        let runtime = AppRuntime::new();
+        runtime.set_redraw_window(Arc::new(window));
+
+        // The production shape: the `Send + Sync` closure, fired from a thread
+        // that is not the one owning the runtime.
+        let wake = runtime.frame_wake_callback();
+        let worker = std::thread::spawn(move || {
+            wake();
+            std::thread::current().id()
+        });
+        let worker_id = worker.join().expect("the wake must not panic off-thread");
+
+        let observed = redraw_threads.lock().clone();
+        assert_eq!(
+            observed.len(),
+            1,
+            "the wake must poke the installed window exactly once. A 0 here is \
+             the OTHER way the fix shows up: the worker posted to the proxy \
+             instead of poking, or got `Unsupported` back. That is #949 \
+             progressing, not a regression -- re-target this test at the proxy \
+             rather than restoring the direct poke."
+        );
+        assert_eq!(
+            observed[0], worker_id,
+            "TODAY the window is poked on the firing thread, not the owner \
+             thread -- this is issue #949's defect, pinned deliberately. If \
+             this now fails because the poke arrived on the owner thread, the \
+             relay has landed: invert this assertion rather than restoring it."
+        );
+    }
+
     /// `AppRuntime::clipboard()` reaching the platform clipboard installed
     /// via `set_platform_clipboard` — migrated from the retired
     /// `AppBinding`'s test module.
