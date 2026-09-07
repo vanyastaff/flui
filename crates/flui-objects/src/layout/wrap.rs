@@ -54,21 +54,43 @@ const PRECISION_TOLERANCE: f32 = 1e-6;
 /// * `item_spacing` — mandatory gap between adjacent items,
 /// * `item_count` — number of items (children in the run, or runs).
 ///
-/// Mirrors Flutter `WrapAlignment._distributeSpace` with
-/// `flipped = false` (LTR / TTB — no RTL support in FLUI yet).
+/// * `flipped` — whether this axis runs in the reverse direction.
+///
+/// Mirrors Flutter `WrapAlignment._distributeSpace`. Only `Start` and `End`
+/// are flip-sensitive: reversing the visitation order alone does NOT move
+/// `Start` to the opposite physical edge when there is free space, because the
+/// leading space is still measured from the unflipped edge. `Center`,
+/// `SpaceAround` and `SpaceEvenly` are symmetric, so the flag cannot change
+/// them; `SpaceBetween` is symmetric too except in the one-item case, where the
+/// reference delegates to `Start` and therefore inherits the flip.
 fn distribute_space(
     alignment: WrapAlignment,
     free_space: f32,
     item_spacing: f32,
     item_count: usize,
+    flipped: bool,
 ) -> (f32, f32) {
     match alignment {
-        WrapAlignment::Start => (0.0, item_spacing),
-        WrapAlignment::End => (free_space, item_spacing),
+        WrapAlignment::Start => (if flipped { free_space } else { 0.0 }, item_spacing),
+        // `End` is `Start` with the flip inverted -- the reference's own
+        // definition, kept as a delegation so the two cannot drift apart.
+        WrapAlignment::End => distribute_space(
+            WrapAlignment::Start,
+            free_space,
+            item_spacing,
+            item_count,
+            !flipped,
+        ),
         WrapAlignment::Center => (free_space / 2.0, item_spacing),
         WrapAlignment::SpaceBetween => {
             if item_count < 2 {
-                (0.0, item_spacing)
+                distribute_space(
+                    WrapAlignment::Start,
+                    free_space,
+                    item_spacing,
+                    item_count,
+                    flipped,
+                )
             } else {
                 let between = free_space / (item_count - 1) as f32 + item_spacing;
                 (0.0, between)
@@ -646,21 +668,27 @@ impl RenderBox for RenderWrap {
 
         // ── Phase 3: position children ────────────────────────────────────────
 
-        let num_runs = runs.len();
-        // Recompute total_cross from runs to drive free-cross distribution.
-        let total_cross: f32 = runs.iter().map(|r| r.cross_axis_extent).sum::<f32>()
-            + self.run_spacing * num_runs.saturating_sub(1) as f32;
-
-        let free_cross = (container_cross - total_cross).max(0.0);
-        let (mut cross_cursor, run_gap) =
-            distribute_space(self.run_alignment, free_cross, self.run_spacing, num_runs);
-
         // Flipping is purely a POSITIONING concern here. The reference also
         // threads `flipMainAxis` through run assembly, but only to remember
         // which child leads a run for its linked-list traversal; run
         // MEMBERSHIP is identical either way, and this port addresses children
         // by index, so `compute_runs` needs no flip.
         let (flip_main, flip_cross) = self.axes_flipped();
+
+        let num_runs = runs.len();
+        // Recompute total_cross from runs to drive free-cross distribution.
+        let total_cross: f32 = runs.iter().map(|r| r.cross_axis_extent).sum::<f32>()
+            + self.run_spacing * num_runs.saturating_sub(1) as f32;
+
+        let free_cross = (container_cross - total_cross).max(0.0);
+        let (mut cross_cursor, run_gap) = distribute_space(
+            self.run_alignment,
+            free_cross,
+            self.run_spacing,
+            num_runs,
+            flip_cross,
+        );
+
         let effective_cross_alignment = if flip_cross {
             match self.cross_axis_alignment {
                 WrapCrossAlignment::Start => WrapCrossAlignment::End,
@@ -671,33 +699,44 @@ impl RenderBox for RenderWrap {
             self.cross_axis_alignment
         };
 
-        // `flip_cross` reverses the ORDER runs are visited in, so the first run
-        // ends up at the far edge; the cursor arithmetic below is unchanged.
-        let ordered_runs: Vec<&RunMetrics> = if flip_cross {
-            runs.iter().rev().collect()
-        } else {
-            runs.iter().collect()
-        };
+        for run_position in 0..num_runs {
+            // `flip_cross` reverses the ORDER runs are visited in, so the first
+            // run ends up at the far edge. Indexed rather than collected into a
+            // reversed Vec: this is the layout hot path and the allocation
+            // bought nothing.
+            let run = &runs[if flip_cross {
+                num_runs - 1 - run_position
+            } else {
+                run_position
+            }];
 
-        for run in ordered_runs {
             let free_main = (container_main - run.main_axis_extent).max(0.0);
-            let (mut main_cursor, child_gap) =
-                distribute_space(self.alignment, free_main, self.spacing, run.child_count);
+            let (mut main_cursor, child_gap) = distribute_space(
+                self.alignment,
+                free_main,
+                self.spacing,
+                run.child_count,
+                flip_main,
+            );
 
             let run_end = run.first_child_index + run.child_count;
-            for (position_in_run, &child_size) in child_sizes[run.first_child_index..run_end]
-                .iter()
-                .enumerate()
-            {
+            for position_in_run in 0..run.child_count {
                 // `flip_main` walks the run's children from the far end while
                 // the cursor still advances forward, which places the LAST
                 // child at the leading edge -- the reference's
                 // `nextChild = flipMainAxis ? childBefore : childAfter`.
+                //
+                // The SIZE has to follow the child being positioned, not the
+                // iteration step. Reading it from a forward iterator while
+                // positioning a reversed index advances the cursor by another
+                // child's extent, which overlaps unequal children -- and is
+                // invisible to any fixture whose children are the same size.
                 let child_index = if flip_main {
                     run_end - 1 - position_in_run
                 } else {
                     run.first_child_index + position_in_run
                 };
+                let child_size = child_sizes[child_index];
                 let child_main = self.main_extent(child_size);
                 let child_cross = self.cross_extent(child_size);
 
@@ -862,21 +901,21 @@ mod tests {
 
     #[test]
     fn distribute_space_start_zero_leading_spacing_gap() {
-        let (leading, between) = distribute_space(WrapAlignment::Start, 100.0, 10.0, 3);
+        let (leading, between) = distribute_space(WrapAlignment::Start, 100.0, 10.0, 3, false);
         assert_eq!(leading, 0.0);
         assert_eq!(between, 10.0);
     }
 
     #[test]
     fn distribute_space_end_full_leading_spacing_gap() {
-        let (leading, between) = distribute_space(WrapAlignment::End, 100.0, 10.0, 3);
+        let (leading, between) = distribute_space(WrapAlignment::End, 100.0, 10.0, 3, false);
         assert_eq!(leading, 100.0);
         assert_eq!(between, 10.0);
     }
 
     #[test]
     fn distribute_space_center_half_leading() {
-        let (leading, between) = distribute_space(WrapAlignment::Center, 100.0, 10.0, 3);
+        let (leading, between) = distribute_space(WrapAlignment::Center, 100.0, 10.0, 3, false);
         assert!((leading - 50.0).abs() < 1e-5);
         assert_eq!(between, 10.0);
     }
@@ -884,14 +923,16 @@ mod tests {
     #[test]
     fn distribute_space_space_between_spreads_between_items() {
         // 3 items, 80 free, 10 spacing → between = 80/2 + 10 = 50
-        let (leading, between) = distribute_space(WrapAlignment::SpaceBetween, 80.0, 10.0, 3);
+        let (leading, between) =
+            distribute_space(WrapAlignment::SpaceBetween, 80.0, 10.0, 3, false);
         assert_eq!(leading, 0.0);
         assert!((between - 50.0).abs() < 1e-5);
     }
 
     #[test]
     fn distribute_space_space_between_single_item_falls_back_to_start() {
-        let (leading, between) = distribute_space(WrapAlignment::SpaceBetween, 50.0, 10.0, 1);
+        let (leading, between) =
+            distribute_space(WrapAlignment::SpaceBetween, 50.0, 10.0, 1, false);
         assert_eq!(leading, 0.0);
         assert_eq!(between, 10.0);
     }
@@ -899,7 +940,7 @@ mod tests {
     #[test]
     fn distribute_space_space_around_half_gap_at_edges() {
         // 3 items, 60 free, 0 spacing → per_item=20, leading=10, between=20
-        let (leading, between) = distribute_space(WrapAlignment::SpaceAround, 60.0, 0.0, 3);
+        let (leading, between) = distribute_space(WrapAlignment::SpaceAround, 60.0, 0.0, 3, false);
         assert!((leading - 10.0).abs() < 1e-5);
         assert!((between - 20.0).abs() < 1e-5);
     }
@@ -907,7 +948,7 @@ mod tests {
     #[test]
     fn distribute_space_space_evenly_equal_gaps_including_edges() {
         // 3 items, 80 free, 0 spacing → per_gap = 80/4 = 20
-        let (leading, between) = distribute_space(WrapAlignment::SpaceEvenly, 80.0, 0.0, 3);
+        let (leading, between) = distribute_space(WrapAlignment::SpaceEvenly, 80.0, 0.0, 3, false);
         assert!((leading - 20.0).abs() < 1e-5);
         assert!((between - 20.0).abs() < 1e-5);
     }

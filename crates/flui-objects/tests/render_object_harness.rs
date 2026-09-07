@@ -13563,13 +13563,21 @@ fn harness_flex_row_rtl_lays_children_out_from_the_right() {
     );
 }
 
-/// A right-to-left horizontal `Wrap` fills each run from the right.
+/// A right-to-left horizontal `Wrap` packs its run against the RIGHT edge.
 ///
 /// `RenderWrap` documented "no axis flipping" until this landed, so nothing in
-/// the crate set a direction on it and the whole suite passed with the flip
-/// hard-coded off. This pins the main-axis half where it is implemented.
+/// the crate set a direction on it.
+///
+/// The children are deliberately UNEQUAL (40 then 80) and the container leaves
+/// free space. Both matter, and an earlier version of this test had neither:
+///
+/// * equal children hide a size/index mismatch — positioning child *i* while
+///   advancing the cursor by child *j*'s extent overlaps them, and two same-size
+///   children make that invisible;
+/// * with no free space, `Start` lands on the same coordinate whether or not
+///   the alignment itself is flipped, so the test cannot see that half at all.
 #[test]
-fn harness_wrap_horizontal_rtl_fills_each_run_from_the_right() {
+fn harness_wrap_horizontal_rtl_packs_its_run_against_the_right_edge() {
     let wrap = |direction| {
         RenderTester::mount(
             box_node(
@@ -13577,8 +13585,8 @@ fn harness_wrap_horizontal_rtl_fills_each_run_from_the_right() {
                     .with_direction(Axis::Horizontal)
                     .with_text_direction(direction),
             )
-            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("first"))
-            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("second")),
+            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("narrow"))
+            .child(box_node(RenderColoredBox::red(80.0, 20.0)).label("wide")),
         )
         .with_size(Size::new(px(200.0), px(100.0)))
         .run_layout()
@@ -13587,28 +13595,34 @@ fn harness_wrap_horizontal_rtl_fills_each_run_from_the_right() {
     let ltr = wrap(TextDirection::Ltr);
     assert_eq!(
         (
-            ltr.offset(ltr.id("first")).dx.get(),
-            ltr.offset(ltr.id("second")).dx.get()
+            ltr.offset(ltr.id("narrow")).dx.get(),
+            ltr.offset(ltr.id("wide")).dx.get()
         ),
         (0.0, 40.0),
-        "premise: left-to-right fills the run from the left in declaration order"
+        "premise: left-to-right packs against the LEFT edge in declaration \
+         order, so the 40px child sits at 0 and the 80px one directly after it"
     );
 
     let rtl = wrap(TextDirection::Rtl);
-    let (first, second) = (
-        rtl.offset(rtl.id("first")).dx.get(),
-        rtl.offset(rtl.id("second")).dx.get(),
+    let (narrow, wide) = (
+        rtl.offset(rtl.id("narrow")).dx.get(),
+        rtl.offset(rtl.id("wide")).dx.get(),
     );
     assert_eq!(
-        (first, second),
-        (40.0, 0.0),
-        "right-to-left fills the run from the right, so the FIRST child sits \
-         rightmost -- declaration order unchanged, the axis reversed"
+        (narrow, wide),
+        (160.0, 80.0),
+        "right-to-left packs against the RIGHT edge: the run's 120px of content \
+         starts at x=80, the FIRST child takes the rightmost 40px at x=160, and \
+         the second sits immediately left of it"
     );
-    assert!(
-        first > second,
-        "and not merely translated together: the first child must end up \
-         further right than the second"
+    // The two children must ABUT, not overlap. `narrow` spans [160,200) and
+    // `wide` spans [80,160). Advancing the cursor by the wrong child's extent
+    // is exactly what produces an overlap here.
+    assert_eq!(
+        wide + 80.0,
+        narrow,
+        "the wide child's right edge must meet the narrow child's left edge -- \
+         a cursor advanced by the other child's extent overlaps them instead"
     );
 }
 
@@ -13620,7 +13634,7 @@ fn harness_wrap_horizontal_rtl_fills_each_run_from_the_right() {
 /// so `Rtl` moves a vertical wrap's RUNS right-to-left while leaving its
 /// children top-to-bottom. An implementation that applied the reading
 /// direction to the main axis regardless of `direction` passes the horizontal
-/// test above and fails here.
+/// test above and fails only here.
 #[test]
 fn harness_wrap_vertical_rtl_lays_runs_out_right_to_left_not_its_children() {
     let wrap = |direction| {
@@ -13630,41 +13644,42 @@ fn harness_wrap_vertical_rtl_lays_runs_out_right_to_left_not_its_children() {
                     .with_direction(Axis::Vertical)
                     .with_text_direction(direction),
             )
-            // Two children of 60px in a 100px-tall wrap: the second cannot fit
-            // in the first run, so this produces TWO runs side by side --
-            // which is what makes the cross-axis order observable at all.
-            .child(box_node(RenderColoredBox::red(30.0, 60.0)).label("first"))
-            .child(box_node(RenderColoredBox::red(30.0, 60.0)).label("second")),
+            // 60px tall each in a 100px-tall wrap, so the second cannot join
+            // the first's run -- that is what makes run ORDER observable. The
+            // widths differ so the run positions cannot coincide by accident.
+            .child(box_node(RenderColoredBox::red(30.0, 60.0)).label("thin"))
+            .child(box_node(RenderColoredBox::red(50.0, 60.0)).label("thick")),
         )
         .with_size(Size::new(px(200.0), px(100.0)))
         .run_layout()
     };
 
     let ltr = wrap(TextDirection::Ltr);
-    let (ltr_first, ltr_second) = (ltr.offset(ltr.id("first")), ltr.offset(ltr.id("second")));
+    let (ltr_thin, ltr_thick) = (ltr.offset(ltr.id("thin")), ltr.offset(ltr.id("thick")));
     assert_eq!(
-        (ltr_first.dx.get(), ltr_second.dx.get()),
+        (ltr_thin.dx.get(), ltr_thick.dx.get()),
         (0.0, 30.0),
-        "premise: two runs, laid out left-to-right"
+        "premise: two runs packed against the left edge, in declaration order"
     );
     assert_eq!(
-        (ltr_first.dy.get(), ltr_second.dy.get()),
+        (ltr_thin.dy.get(), ltr_thick.dy.get()),
         (0.0, 0.0),
         "premise: each run starts at the top -- the MAIN axis is vertical here"
     );
 
     let rtl = wrap(TextDirection::Rtl);
-    let (first, second) = (rtl.offset(rtl.id("first")), rtl.offset(rtl.id("second")));
+    let (thin, thick) = (rtl.offset(rtl.id("thin")), rtl.offset(rtl.id("thick")));
     assert_eq!(
-        (first.dx.get(), second.dx.get()),
-        (30.0, 0.0),
-        "Rtl reverses the RUN order of a vertical wrap: the first run sits to \
-         the right of the second"
+        (thin.dx.get(), thick.dx.get()),
+        (170.0, 120.0),
+        "Rtl packs the RUNS against the right edge and reverses their order: \
+         the 80px of runs starts at x=120, the FIRST run takes the rightmost \
+         30px at x=170"
     );
     assert_eq!(
-        (first.dy.get(), second.dy.get()),
+        (thin.dy.get(), thick.dy.get()),
         (0.0, 0.0),
-        "and leaves the main axis alone -- both runs still start at the top. \
+        "and leaves the MAIN axis alone -- both runs still start at the top. \
          An implementation that flipped the main axis instead would move these"
     );
 }
