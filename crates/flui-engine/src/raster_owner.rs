@@ -199,8 +199,12 @@ struct InFlightAccounting {
     /// invocation is a panic during a `Drop` in flight, which aborts the
     /// process and cannot be contained by the caller's `catch_unwind`.
     /// Treat it as a bare wake signal: set a flag, or push onto a channel
-    /// the OWNER thread drains — the same contract `flui_scheduler`'s
-    /// `on_frame_scheduled` hook keeps.
+    /// the OWNER thread drains. `flui_scheduler`'s `on_frame_scheduled` hook
+    /// shares this hook's LOCK and REENTRANCY rules — it may run while callers
+    /// hold their own locks and must not re-enter the scheduler — but not its
+    /// rule about what it may touch: that one names `request_redraw` as an
+    /// example of acceptable wake machinery, which is the defect #949 is
+    /// about. Copy the reentrancy discipline from it, not the example.
     ///
     /// **Do not call `PlatformWindow::request_redraw` from it.** This doc used
     /// to offer that as an example, and it is the one thing the hook must not

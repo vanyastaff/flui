@@ -1428,8 +1428,21 @@ impl UpdateScheduler {
     /// `platformDispatcher.scheduleFrame`).
     ///
     /// The hook runs on whichever thread schedules the frame and may run
-    /// while callers hold their own locks — it must only touch wake
-    /// machinery (e.g. `request_redraw`), never re-enter the scheduler.
+    /// while callers hold their own locks — it must only touch wake machinery,
+    /// never re-enter the scheduler.
+    ///
+    /// "Whichever thread" is not a formality: an `AsyncDriver` task waker fires
+    /// this from whatever thread completed the future, which for a job on
+    /// `ExecutionServices`' IO lane is a pool worker. This doc used to offer
+    /// `request_redraw` as the example of acceptable wake machinery, and
+    /// `flui-app`'s `FrameWakeHandle` — the hook production installs — calls it
+    /// directly. On macOS that messages the NSWindow's content view, while
+    /// `MacOSWindow`'s `unsafe impl Send` justifies itself with "the NSWindow
+    /// pointer is only messaged from the main thread"; that backend is compiled
+    /// by CI and never executed, so nothing disagrees. Issue #949 carries the
+    /// chain and the fix. Until it lands, a NEW hook should set a flag or push
+    /// onto a channel the owner thread drains rather than reach a platform API
+    /// from here.
     pub fn set_on_frame_scheduled(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
         *self.inner.binding.on_frame_scheduled.lock() = hook;
     }
