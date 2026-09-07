@@ -42,45 +42,64 @@ say() {
 say "## Upstream facts that fail silently (issue #983)"
 say ""
 
+if ! command -v jq >/dev/null 2>&1; then
+    say "- **INCONCLUSIVE.** \`jq\` is not installed, so nothing could be resolved."
+    say "  This is a broken probe, not an absence of findings."
+    exit 0
+fi
+
 meta=$(cargo metadata --format-version 1 2>/dev/null)
 if [[ -z "$meta" ]]; then
     say "- **INCONCLUSIVE.** \`cargo metadata\` produced nothing; nothing probed."
     exit 0
 fi
 
-resolve() { jq -r --arg n "$1" '.packages[] | select(.name==$n) | "\(.version)\t\(.manifest_path)"' <<<"$meta" | head -1; }
+# Every resolved copy, not the first: `cargo update` can leave two, and the one
+# cargo metadata lists first is not guaranteed to be the one FLUI builds against.
+# An older copy reporting "unchanged" beside an updated copy that changed is the
+# exact false reassurance this probe exists to avoid.
+resolve_all() { jq -r --arg n "$1" '.packages[] | select(.name==$n) | "\(.version)\t\(.manifest_path)"' <<<"$meta"; }
 
 # --- 1. XInitThreads before XOpenDisplay -------------------------------------
-entry=$(resolve winit)
-if [[ -z "$entry" ]]; then
+mapfile -t winits < <(resolve_all winit)
+if (( ${#winits[@]} == 0 )); then
     say "- **winit — INCONCLUSIVE.** not in this resolution."
-else
+fi
+for entry in "${winits[@]}"; do
     ver="${entry%%$'\t'*}"; dir=$(dirname "${entry#*$'\t'}")
     f="$dir/src/platform_impl/linux/x11/xdisplay.rs"
     if [[ ! -f "$f" ]]; then
         say "- **winit $ver — INCONCLUSIVE.** \`x11/xdisplay.rs\` is gone; the X11 backend"
         say "  was restructured, so ADR-0045's X11 bullet needs a hand re-read."
-    else
-        init=$(grep -n 'XInitThreads' "$f" | head -1 | cut -d: -f1)
-        open=$(grep -n 'XOpenDisplay' "$f" | head -1 | cut -d: -f1)
-        if [[ -z "$init" ]]; then
-            say "- **winit $ver — CHANGED.** \`XInitThreads\` is no longer called in"
-            say "  \`xdisplay.rs\`. ADR-0045 decision 1 permits off-thread X11 surface work"
-            say "  ONLY because it was. Re-read before the next raster-lane change."
-        elif [[ -n "$open" && "$init" -gt "$open" ]]; then
-            say "- **winit $ver — CHANGED.** \`XInitThreads\` is called AFTER \`XOpenDisplay\`."
-            say "  Xlib requires it first; the ordering ADR-0045 relies on no longer holds."
-        else
-            say "- **winit $ver — unchanged.** \`XInitThreads\` still precedes \`XOpenDisplay\`."
-        fi
+        continue
     fi
-fi
+    init=$(grep -n 'XInitThreads' "$f" | head -1 | cut -d: -f1)
+    open=$(grep -n 'XOpenDisplay' "$f" | head -1 | cut -d: -f1)
+    if [[ -z "$init" ]]; then
+        say "- **winit $ver — CHANGED.** \`XInitThreads\` is no longer called in"
+        say "  \`xdisplay.rs\`. ADR-0045 decision 1 permits off-thread X11 surface work"
+        say "  ONLY because it was. Re-read before the next raster-lane change."
+    elif [[ -z "$open" ]]; then
+        # Without the second marker there is no ordering to compare. Reporting
+        # "still precedes" here would be the silent false negative this probe
+        # exists to prevent, so the absence is itself the finding.
+        say "- **winit $ver — INCONCLUSIVE.** \`XInitThreads\` is present but"
+        say "  \`XOpenDisplay\` is not in \`xdisplay.rs\`, so the ORDER ADR-0045 relies on"
+        say "  cannot be checked here. The display open moved; re-read by hand."
+    elif (( init > open )); then
+        say "- **winit $ver — CHANGED.** \`XInitThreads\` is called AFTER \`XOpenDisplay\`."
+        say "  Xlib requires it first; the ordering ADR-0045 relies on no longer holds."
+    else
+        say "- **winit $ver — unchanged.** \`XInitThreads\` still precedes \`XOpenDisplay\`."
+    fi
+done
 
 # --- 2. min_image_count(maximum_frame_latency + 1) ---------------------------
-entry=$(resolve wgpu-hal)
-if [[ -z "$entry" ]]; then
+mapfile -t hals < <(resolve_all wgpu-hal)
+if (( ${#hals[@]} == 0 )); then
     say "- **wgpu-hal — INCONCLUSIVE.** not in this resolution."
-else
+fi
+for entry in "${hals[@]}"; do
     ver="${entry%%$'\t'*}"; dir=$(dirname "${entry#*$'\t'}")
     f=$(find "$dir/src/vulkan" -name '*.rs' -exec grep -ln 'min_image_count' {} + 2>/dev/null | head -1)
     if [[ -z "$f" ]]; then
@@ -95,7 +114,7 @@ else
         say "  that formula on EVERY platform. Re-measure before trusting the pacing."
         grep -n 'min_image_count' "$f" | head -3 | while read -r l; do say "  - \`$l\`"; done
     fi
-fi
+done
 
 say ""
 say "Advisory — never a gate. Neither fact can be seen by a test, a panic, or the"
