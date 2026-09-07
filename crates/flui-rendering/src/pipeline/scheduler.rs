@@ -29,7 +29,8 @@
 //! See the chief-architect design document §1a for the full rationale.
 
 use flui_foundation::RenderId;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use crate::storage::RenderTree;
 
@@ -86,7 +87,7 @@ pub(super) struct DirtyTracker {
     /// Paint precedence needs no bookkeeping here: `run_paint` intersects this
     /// with "does not need paint", so a boundary later marked for a real
     /// repaint drops out on its own.
-    layer_update_boundaries: FxHashSet<RenderId>,
+    layer_update_boundaries: FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
 
     /// Side queue for marks made WHILE a phase is running.
     ///
@@ -125,7 +126,7 @@ impl DirtyTracker {
     pub(super) fn new(notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>) -> Self {
         Self {
             dirty: DirtySets::new(),
-            layer_update_boundaries: FxHashSet::default(),
+            layer_update_boundaries: FxHashMap::default(),
             mid_layout_marks: DirtySets::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
@@ -404,7 +405,16 @@ impl DirtyTracker {
                 return;
             };
             if node.is_repaint_boundary_flag() && node.was_repaint_boundary() {
-                self.layer_update_boundaries.insert(current);
+                // Record WHICH node asked, not just that the boundary has work.
+                // A node whose effect layers did not exist when the boundary
+                // was captured has no slot to patch, and a patch pass that only
+                // walks existing slots cannot see it — it would graft the old
+                // output and silently drop the request. Knowing the targets
+                // lets the graft refuse and repaint instead.
+                self.layer_update_boundaries
+                    .entry(current)
+                    .or_default()
+                    .push(id);
                 self.schedule_paint_boundary(current, node.depth() as usize);
                 return;
             }
@@ -763,7 +773,7 @@ impl DirtyTracker {
     /// Membership alone does not mean the boundary may be reused —
     /// `run_paint` still requires the node not to need paint, which is where
     /// "paint wins" is enforced.
-    pub(super) fn layer_update_boundaries(&self) -> &FxHashSet<RenderId> {
+    pub(super) fn layer_update_boundaries(&self) -> &FxHashMap<RenderId, SmallVec<[RenderId; 2]>> {
         &self.layer_update_boundaries
     }
 

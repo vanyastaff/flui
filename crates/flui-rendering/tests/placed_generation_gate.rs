@@ -331,3 +331,93 @@ fn evicting_a_skipped_capture_also_evicts_the_ones_embedding_it() {
         run.display_commands()
     );
 }
+
+/// A composited-layer update on a boundary the walk never reaches is not lost.
+///
+/// The sibling case above covers a paint-only update landing in the residue
+/// scan. A layer update is invisible to that scan — it leaves the boundary
+/// WITHOUT `needs_paint`, so the `if render_node.needs_paint()` guard skips it
+/// and the capture is neither evicted nor refreshed — which looks like it
+/// should strand the update.
+///
+/// It does not, and the two reasons are the property this test pins:
+///
+/// - The patch is derived from the render object's CURRENT properties at graft
+///   time, never from a delta recorded when the mark was made. A mark that was
+///   coalesced, swallowed, or never queued costs nothing as long as the node is
+///   eventually painted or grafted.
+/// - `layer_patches_for` runs on EVERY graft of a boundary, not only on one the
+///   scheduler queued, so a flag left set by a frame that never reached the
+///   boundary is applied by the next frame that does. A stale flag self-heals.
+///
+/// Both matter: without the second, a node whose flag survived an unreached
+/// frame could never be re-marked (a mark refuses itself while the flag is
+/// set) and its capture would replay the old value for good.
+#[test]
+fn a_layer_update_on_a_skipped_boundary_is_not_lost() {
+    use flui_objects::{RenderOpacity, RenderRepaintBoundary};
+
+    let mut run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 2 })
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("kept"))
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderOpacity::new(0.5))
+                        .label("opacity")
+                        .child(box_node(RenderColoredBox::green(40.0, 40.0))),
+                ),
+            ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_frame();
+
+    let root = run.root();
+    let opacity = run.id("opacity");
+    assert_eq!(
+        run.opacity_alpha().map(|a| (a * 100.0).round()),
+        Some(50.0),
+        "precondition: the first frame paints the opacity at its initial alpha",
+    );
+
+    // Drop the boundary from layout AND change the alpha while it is unplaced.
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 1);
+    // Apply the impact the setter REPORTS rather than a blanket paint mark:
+    // `update_paint` calls `mark_needs_paint` unconditionally, which would
+    // exercise the pre-existing residue-scan path and say nothing about the
+    // layer-update one. (The first draft of this test did exactly that and was
+    // green against the defect.)
+    let impact = {
+        let owner = run.owner_mut();
+        let reported = owner
+            .render_tree_mut()
+            .get_mut(opacity)
+            .expect("opacity node")
+            .as_box_mut()
+            .expect("box entry")
+            .render_object_mut()
+            .as_any_mut()
+            .downcast_mut::<RenderOpacity>()
+            .expect("RenderOpacity")
+            .set_opacity(0.25);
+        owner.apply_render_update_impact(opacity, reported);
+        reported
+    };
+    assert!(
+        impact.needs_composited_layer_update() && !impact.needs_paint(),
+        "precondition: this must be a layer-update-only change, or the test          exercises the paint path instead; got {impact:?}",
+    );
+    let mut run = run.run_frame_again();
+
+    // Place it again. Constraints are unchanged, so its layout short-circuits
+    // and requeues nothing.
+    run.update::<LaysOutFirstN>(root, |object| object.laid_out = 2);
+    let run = run.run_frame_again();
+
+    assert_eq!(
+        run.opacity_alpha().map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "a boundary skipped while a layer update was pending must not graft the \
+         capture taken before it; the update would be lost for good",
+    );
+}

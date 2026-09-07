@@ -108,16 +108,16 @@ impl PipelineOwner<PaintPhase> {
             // boundary becomes graft-eligible only by appearing in this set —
             // the pre-existing retention path cannot change behaviour when
             // nothing requested an update.
-            let layer_updates: FxHashSet<RenderId> = self
+            let layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>> = self
                 .scheduler
                 .layer_update_boundaries()
                 .iter()
-                .copied()
-                .filter(|&id| {
+                .filter(|(id, _)| {
                     self.render_tree
-                        .get(id)
+                        .get(**id)
                         .is_some_and(|node| !node.needs_paint())
                 })
+                .map(|(&id, targets)| (id, targets.clone()))
                 .collect();
 
             let mut composer = FragmentComposer::new(self.device_pixel_ratio, root_boundary);
@@ -135,6 +135,7 @@ impl PipelineOwner<PaintPhase> {
                         follower_correlations,
                         retained_captures,
                         layer_patches,
+                        consumed_updates,
                     ) = composer.finish();
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
 
@@ -157,6 +158,16 @@ impl PipelineOwner<PaintPhase> {
                     // boundary the loop above just replaced or evicted: that
                     // capture is fresh output, already carrying the current
                     // properties.
+                    // Now that the frame has committed, the requests those
+                    // patches serve are satisfied. An error above returned
+                    // before this point, leaving the flags set so the retry
+                    // re-derives them.
+                    for render_id in consumed_updates {
+                        if let Some(node) = self.render_tree.get(render_id) {
+                            node.clear_needs_composited_layer_update();
+                        }
+                    }
+
                     for (boundary_id, patches) in layer_patches {
                         let Some(subtree) = self.retained_boundaries.get_mut(&boundary_id) else {
                             continue;
@@ -292,7 +303,7 @@ impl PipelineOwner<PaintPhase> {
         node_id: RenderId,
         origin: Offset,
         dirty_set: &FxHashSet<RenderId>,
-        layer_updates: &FxHashSet<RenderId>,
+        layer_updates: &FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
     ) -> crate::error::RenderResult<()> {
         ensure_stack(|| {
             self.paint_subtree_impl(composer, node_id, origin, dirty_set, layer_updates)
@@ -315,8 +326,36 @@ impl PipelineOwner<PaintPhase> {
     /// served by a repaint. Comparing the discriminant per position rather
     /// than just the count is what catches the case where one effect appears
     /// as another disappears and the count is unchanged.
-    fn layer_patches_for(&self, subtree: &RetainedSubtree) -> Option<Vec<(usize, Layer)>> {
+    fn layer_patches_for(
+        &self,
+        subtree: &RetainedSubtree,
+        targets: &[RenderId],
+    ) -> Option<LayerPatch> {
+        // A node that asked for an update this frame but owns no slot in this
+        // capture cannot be served by a patch: its effect layers did not exist
+        // when the capture was taken, so there is nothing to replace and the
+        // loop below would never even look at it. That is a shape change, and
+        // a repaint is the only thing that can express it.
+        //
+        // Latent today — every shipped caller reports a repaint itself when its
+        // effect layers appear or disappear — but the loop below walks EXISTING
+        // slots, so without this the next caller to get that wrong would graft
+        // stale output silently instead of failing loudly.
+        if targets
+            .iter()
+            .any(|target| !subtree.effect_slots.contains_key(target))
+        {
+            return None;
+        }
         let mut patches = Vec::new();
+        // Nodes whose request this patch serves. Returned rather than cleared
+        // here, and cleared by `run_paint` only once the frame commits: the
+        // walk can still fail after this point (a later sibling's `paint_raw`
+        // can poison), and that path discards the composer with its patches
+        // while the dirty queue survives for the retry. Clearing during the
+        // walk would leave the retry seeing no pending request, grafting the
+        // old layer, and going visibly stale until something else mutates.
+        let mut consumed: SmallVec<[RenderId; 2]> = SmallVec::new();
         for (&render_id, slots) in &subtree.effect_slots {
             let Some(node) = self.render_tree.get(render_id) else {
                 // The node is gone but its layers are still in the capture.
@@ -344,11 +383,9 @@ impl PipelineOwner<PaintPhase> {
                 }
                 patches.push((index, layer));
             }
-            // Cleared here rather than in the paint walk: this arm never
-            // enters `paint_subtree_impl` for the node, so nothing else would.
-            node.clear_needs_composited_layer_update();
+            consumed.push(render_id);
         }
-        Some(patches)
+        Some(LayerPatch { patches, consumed })
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
@@ -359,7 +396,7 @@ impl PipelineOwner<PaintPhase> {
         node_id: RenderId,
         origin: Offset,
         dirty_set: &FxHashSet<RenderId>,
-        layer_updates: &FxHashSet<RenderId>,
+        layer_updates: &FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
     ) -> crate::error::RenderResult<()> {
         let Some(render_node) = self.render_tree.get(node_id) else {
             return Ok(());
@@ -548,7 +585,7 @@ impl PipelineOwner<PaintPhase> {
                         // thing queued for this boundary is a composited-layer
                         // update: that is a request to rebuild some node's own
                         // effect layers, not to repaint anything.
-                        let layer_update = layer_updates.contains(&child_id);
+                        let layer_update = layer_updates.contains_key(&child_id);
                         let retained = (!dirty_set.contains(&child_id) || layer_update)
                             .then(|| self.retained_boundaries.get(&child_id))
                             .flatten()
@@ -580,8 +617,14 @@ impl PipelineOwner<PaintPhase> {
                         // layer-update request (a node gained or lost an effect
                         // layer), which a patch cannot express — fall back to a
                         // full repaint, which rebuilds it correctly.
-                        let patches = retained.and_then(|subtree| self.layer_patches_for(subtree));
-                        if let (Some(subtree), Some(patches)) = (retained, patches) {
+                        let patch = retained.and_then(|subtree| {
+                            self.layer_patches_for(
+                                subtree,
+                                layer_updates.get(&child_id).map_or(&[][..], |t| t),
+                            )
+                        });
+                        if let (Some(subtree), Some(patch)) = (retained, patch) {
+                            let LayerPatch { patches, consumed } = patch;
                             if !patches.is_empty() {
                                 tracing::trace!(
                                     boundary = ?child_id,
@@ -590,6 +633,7 @@ impl PipelineOwner<PaintPhase> {
                                 );
                             }
                             composer.graft(subtree, &patches);
+                            composer.consumed_updates.extend(consumed);
                             if !patches.is_empty() {
                                 // The stored capture has to move too. Patching
                                 // only the emitted frame would leave the cache
@@ -701,6 +745,15 @@ pub(super) struct RetainedSubtree {
     /// levels down is addressable without being a boundary of its own, which
     /// is the whole reason this design does not need to promote one.
     effect_slots: FxHashMap<RenderId, EffectSlots>,
+}
+
+/// One boundary's worth of composited-layer update work, decided during the
+/// paint walk and applied by `run_paint` once the frame commits.
+struct LayerPatch {
+    /// `(index into RetainedSubtree::nodes, replacement layer)`.
+    patches: Vec<(usize, Layer)>,
+    /// The nodes whose pending-update flag this patch serves.
+    consumed: SmallVec<[RenderId; 2]>,
 }
 
 /// Where one render node's own effect layers live inside a [`RetainedSubtree`],
@@ -826,6 +879,9 @@ struct FragmentComposer {
     /// revert the property permanently — the failure a two-frame test cannot
     /// see.
     layer_patches: Vec<(RenderId, Vec<(usize, Layer)>)>,
+    /// Nodes whose pending-update flag this pass's patches serve, cleared by
+    /// `run_paint` on the commit path only — see [`LayerPatch::consumed`].
+    consumed_updates: Vec<RenderId>,
 }
 
 impl FragmentComposer {
@@ -867,6 +923,7 @@ impl FragmentComposer {
             capture_scopes: Vec::new(),
             effect_owner: FxHashMap::default(),
             layer_patches: Vec::new(),
+            consumed_updates: Vec::new(),
         }
     }
 
@@ -1123,6 +1180,7 @@ impl FragmentComposer {
         Vec<(RenderId, LayerId)>,
         Vec<(RenderId, Option<RetainedSubtree>)>,
         Vec<(RenderId, Vec<(usize, Layer)>)>,
+        Vec<RenderId>,
     ) {
         self.seal_picture();
         debug_assert_eq!(
@@ -1137,6 +1195,7 @@ impl FragmentComposer {
             self.follower_correlations,
             self.retained_captures,
             self.layer_patches,
+            self.consumed_updates,
         )
     }
 }
@@ -1395,10 +1454,10 @@ mod tests {
                 root_id,
                 Offset::ZERO,
                 &dirty_ids,
-                &FxHashSet::default(),
+                &FxHashMap::default(),
             )
             .expect("paint_subtree should succeed");
-        let (layer_tree, _link_registry, follower_correlations, _retained, _patches) =
+        let (layer_tree, _link_registry, follower_correlations, _retained, _patches, _consumed) =
             composer.finish();
 
         assert_eq!(

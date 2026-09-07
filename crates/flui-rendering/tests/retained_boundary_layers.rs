@@ -1241,3 +1241,234 @@ fn an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale() {
          UPDATED alpha; a stale inner capture silently restores the old value",
     );
 }
+
+/// A frame that fails after patching a boundary does not swallow the update.
+///
+/// The patch itself lives on the composer and dies with it when a later
+/// sibling's `paint_raw` poisons the pass — but the pending-update FLAG is
+/// state on the render node, and clearing it during the walk would survive the
+/// failure. The dirty queue is deliberately kept across a paint error for the
+/// retry, and that retry would then find nothing pending, graft the old layer,
+/// and stay visibly stale until something else mutated the property.
+///
+/// So the flags are cleared only once the frame commits.
+#[test]
+fn a_paint_error_after_a_patch_leaves_the_update_pending_for_the_retry() {
+    use std::sync::atomic::AtomicBool;
+
+    /// A leaf that panics in `paint` while armed.
+    #[derive(Debug)]
+    struct PoisonOnDemand(Arc<AtomicBool>);
+
+    impl flui_foundation::Diagnosticable for PoisonOnDemand {}
+
+    impl flui_rendering::traits::RenderBox for PoisonOnDemand {
+        type Arity = flui_tree::Leaf;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            ctx.constrain(Size::new(px(10.0), px(10.0)))
+        }
+
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+            assert!(
+                !self.0.load(Ordering::Relaxed),
+                "PoisonOnDemand: armed, poisoning this paint pass on purpose",
+            );
+        }
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+    }
+
+    let armed = Arc::new(AtomicBool::new(false));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderOpacity::new(0.5))
+                        .label("opacity")
+                        .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                ),
+            )
+            // Ordered AFTER the boundary, so the failure lands once the
+            // boundary has already been grafted and patched this pass.
+            .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame paints cleanly");
+
+    // Second frame: request the update, and poison the pass after it lands.
+    set_opacity(&mut owner, opacity_id, 0.25);
+    armed.store(true, Ordering::Relaxed);
+    let (owner, result) = owner.run_frame();
+    assert!(
+        result.is_err(),
+        "precondition: the armed leaf must poison this pass, or the test is \
+         asserting about an ordinary frame",
+    );
+
+    // Retry: nothing new is requested, exactly as a real retry would.
+    armed.store(false, Ordering::Relaxed);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("the retry paints cleanly")
+        .expect("the retry produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "the update must survive a failed frame; clearing its flag mid-walk \
+         loses it for good, because the retry sees nothing pending",
+    );
+}
+
+/// An effect layer that APPEARS falls back to a repaint.
+///
+/// The structure guard compares a node's rebuilt effect layers against the ones
+/// the capture holds — but a node whose layers did not exist when the capture
+/// was taken has no slot at all, so a guard that only walks existing slots
+/// never examines it. Grafting would then replay output that predates the
+/// effect entirely, and the request would be dropped silently.
+///
+/// No shipped render object reaches this today: opacity reports a repaint
+/// itself whenever its layer appears or disappears. This models the next one
+/// that will (a transform, per the follow-up issue) and pins that the frame
+/// refuses rather than trusting the caller.
+#[test]
+fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
+    /// A proxy whose transform can be switched on at runtime, reporting only a
+    /// composited-layer update — deliberately the WRONG impact for a shape
+    /// change, so the paint phase's own guard is what is under test.
+    #[derive(Debug, Default)]
+    struct AppearingTransform {
+        enabled: bool,
+    }
+
+    impl flui_foundation::Diagnosticable for AppearingTransform {}
+
+    impl flui_rendering::traits::RenderBox for AppearingTransform {
+        type Arity = flui_tree::Single;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            if ctx.child_count() > 0 {
+                ctx.layout_child(0, constraints)
+            } else {
+                constraints.smallest()
+            }
+        }
+
+        flui_rendering::forward_single_child_box_queries!();
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+
+        fn paint_transform(&self, _size: Size) -> Option<flui_types::Matrix4> {
+            self.enabled
+                .then(|| flui_types::Matrix4::translation(3.0, 5.0, 0.0))
+        }
+    }
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(AppearingTransform::default())
+                    .label("fx")
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let fx = registry.get("fx").expect("fx is labelled");
+
+    let (owner, result) = owner.run_frame();
+    let first = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    assert_eq!(
+        transform_count(&first),
+        0,
+        "precondition: no transform layer while the effect is off",
+    );
+
+    // Switch the effect on and ask for a layer-only update — the wrong impact
+    // for a shape change, which is exactly what the guard must catch.
+    let mut owner = owner;
+    owner
+        .render_tree_mut()
+        .get_mut(fx)
+        .expect("fx node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<AppearingTransform>()
+        .expect("AppearingTransform")
+        .enabled = true;
+    owner.mark_needs_composited_layer_update(fx);
+
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        transform_count(&tree),
+        1,
+        "an effect layer that did not exist in the capture cannot be patched \
+         into it; the frame must repaint and emit the new layer",
+    );
+}
+
+/// Number of `TransformLayer`s in a tree.
+fn transform_count(t: &flui_layer::LayerTree) -> usize {
+    fn walk(t: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> usize {
+        let Some(node) = t.get(id) else { return 0 };
+        usize::from(matches!(node.layer(), flui_layer::Layer::Transform(_)))
+            + node.children().iter().map(|&c| walk(t, c)).sum::<usize>()
+    }
+    t.root().map_or(0, |root| walk(t, root))
+}
