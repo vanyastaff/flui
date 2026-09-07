@@ -662,6 +662,13 @@ jobs:
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The workflow default is `contents: read` only. The wgpu-bump probe below
+    # reads this PR's changed files, and GitHub documents `pull-requests: read`
+    # for that endpoint — without it both `gh api` calls 403 and the probe
+    # silently reports "nothing changed" on exactly the PRs it exists for.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -706,19 +713,26 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -uo pipefail
-          patch=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
-                    --jq '.[] | select(.filename=="Cargo.lock") | .patch' 2>/dev/null || true)
-          if [ -z "$patch" ]; then
-            if gh api "repos/$REPO/pulls/$PR/files" --paginate \
-                 --jq '.[].filename' 2>/dev/null | grep -qx 'Cargo.lock'; then
+          # Ask once, and keep the API's own success/failure separate from the
+          # answer. Conflating them is how the previous shape turned a 403 into
+          # a confident "nothing changed" and skipped the very PRs this exists
+          # for -- the failure it was written to avoid.
+          if ! files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename'); then
+            echo "Could not list this PR's files (see the error above) -- probing anyway"
+            echo "rather than reporting a skip we cannot justify."
+          elif ! grep -qx 'Cargo.lock' <<<"$files"; then
+            echo "Cargo.lock untouched by this PR; nothing for the macOS reopen probe to re-read."
+            exit 0
+          elif patch=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+                         --jq '.[] | select(.filename=="Cargo.lock") | .patch'); then
+            if [ -z "$patch" ]; then
               echo "Cargo.lock changed but GitHub returned no patch (diff too large) -- probing anyway."
-            else
-              echo "Cargo.lock untouched by this PR; nothing for the macOS reopen probe to re-read."
+            elif ! grep -qi 'wgpu' <<<"$patch"; then
+              echo "Cargo.lock moved but no wgpu entry changed; skipping the macOS reopen probe."
               exit 0
             fi
-          elif ! grep -qi 'wgpu' <<<"$patch"; then
-            echo "Cargo.lock moved but no wgpu entry changed; skipping the macOS reopen probe."
-            exit 0
+          else
+            echo "Could not read the Cargo.lock patch -- probing anyway."
           fi
 
           # Run with the summary suppressed, then surface only news. A run that
