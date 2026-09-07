@@ -11,6 +11,12 @@ name: Weekly
 #                 are noisy, so the numbers support "did this drift over
 #                 weeks", not "did this PR regress" — real A/B comparisons
 #                 happen locally via `just bench-save` / `just bench-compare`.
+#   parity-reference — runs the parity inventory WITH the pinned Flutter
+#                 checkout, which PR CI never has. Without it
+#                 `manifest_matches_pinned_reference` skips itself: no case
+#                 counts checked, no claimed name resolved, no new upstream
+#                 test file detected. That is a 62 MB clone, which is why it
+#                 is weekly rather than per-PR.
 #   release-lints — clippy over the workspace in the RELEASE profile. PR CI
 #                 only ever compiles release through `cargo bench -p
 #                 flui-rendering --no-run`, so every crate outside that one
@@ -179,6 +185,54 @@ jobs:
       # patching — this step only makes the count visible week over week.
       - name: Duplicate dependency versions (metric, informational)
         run: cargo tree --workspace --duplicates --edges normal
+
+  parity-reference:
+    name: parity inventory (against the pinned Flutter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The one check that needs `.flutter`. `parity_inventory`'s reference-gated
+    # half — oracle case counts, every claimed case name resolving, and a new
+    # upstream `*_test.dart` that has no manifest row — SKIPS unless
+    # `git describe --tags` inside the checkout prints the manifest's tag. PR
+    # CI has no checkout at all, so until this job existed those checks had
+    # never run anywhere except a developer machine that happened to clone
+    # correctly, and the repository's own restore command did not pin the tag.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Read the tag from the manifest rather than repeating it here. A second
+      # copy is how the restore command and the test drifted apart in the first
+      # place: bumping `source.tag` has to move this job with it, and reading
+      # it makes that automatic instead of remembered.
+      - name: Clone the pinned Flutter reference
+        run: |
+          set -euo pipefail
+          tag="$(sed -n 's/^tag = "\(.*\)"$/\1/p' \
+            crates/flui-widgets/tests/parity/manifest.toml | head -1)"
+          if [ -z "$tag" ]; then
+            echo "could not read source.tag from the parity manifest" >&2
+            exit 1
+          fi
+          echo "pinned tag: $tag"
+          git clone --depth 1 --branch "$tag" --filter=blob:none --sparse \
+            https://github.com/flutter/flutter.git .flutter
+          git -C .flutter sparse-checkout set packages/flutter/lib packages/flutter/test
+          # The gate keys on this exactly; fail loudly here rather than let the
+          # test skip and report a green that checked nothing.
+          described="$(git -C .flutter describe --tags)"
+          echo "describe --tags: $described"
+          [ "$described" = "$tag" ]
+
+      - name: cargo test parity_inventory (reference-gated checks armed)
+        run: cargo test -p flui-widgets --test parity_inventory --locked -- --nocapture
 
   release-lints:
     name: release-profile clippy (advisory)
