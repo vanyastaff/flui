@@ -19,7 +19,7 @@ way a guess is not.
 Exit status is 0 unless --strict is passed: this is a measurement, not a gate.
 """
 from __future__ import annotations
-import argparse, pathlib, re, sys
+import argparse, itertools, pathlib, re, sys
 from collections import defaultdict
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -42,6 +42,12 @@ SYMBOL_CITE = re.compile(r"`([A-Za-z_][A-Za-z_/0-9.-]*\.rs)`'s `([A-Za-z_][A-Za-
 # silently omitted -- there are more of them than absolute citations, and a
 # conversion that deletes their anchor orphans them invisibly.
 RELATIVE = re.compile(r"`:[0-9][0-9,+/ -]*`")
+# Citations also appear UNBACKTICKED, typically in a `//` comment inside a fenced
+# block -- `// crates/flui-foundation/src/binding.rs:106` in ADR-0002, and more in
+# ADR-0012 and ADR-0038. Skipping them understates the corpus, which is the same
+# denominator dishonesty this tool exists to expose. The lookbehind keeps it from
+# re-matching the inside of a backticked path.
+BARE_CITE = re.compile(r"(?<![`/\w.-])([a-z_][A-Za-z_/0-9.-]*\.rs):([0-9][0-9,-]*)(?![`\w])")
 
 def rust_files() -> dict[str, list[pathlib.Path]]:
     """Every .rs file, indexed by each of its path suffixes, so a partial
@@ -55,6 +61,28 @@ def rust_files() -> dict[str, list[pathlib.Path]]:
         for i in range(len(parts)):
             index["/".join(parts[i:])].append(rel)
     return index
+
+_LINE_COUNT: dict[pathlib.Path, int] = {}
+
+
+def line_count(rel: pathlib.Path) -> int:
+    """Cached: an ADR cites the same file many times over."""
+    if rel not in _LINE_COUNT:
+        _LINE_COUNT[rel] = len(
+            (ROOT / rel).read_text(encoding="utf-8", errors="replace").splitlines()
+        )
+    return _LINE_COUNT[rel]
+
+
+# Top-level directories a citation into THIS repository can start with. A path
+# that matches none of them and is not found is likelier a pointer into a
+# dependency's own tree than repo rot.
+REPO_ROOTS = {"crates", "tools", "examples", "scripts", "docs", "benches", "src", "tests"}
+
+
+def repo_shaped(path: str) -> bool:
+    return path.split("/", 1)[0] in REPO_ROOTS or "flui" in path
+
 
 def max_line(spec: str) -> int:
     """Highest line number a citation names (`12,40-42` -> 42)."""
@@ -89,11 +117,18 @@ def main() -> int:
                 counts["symbol_broken"] += 1
                 per_adr[adr.name] += 1
                 stale.append(f"{adr.name}: `{path}`'s `{sym}` -- symbol not in file")
-        for m in CITE.finditer(text):
+        for m in itertools.chain(CITE.finditer(text), BARE_CITE.finditer(text)):
             path, spec = m.group(1), m.group(2)
             counts["total"] += 1
             hits = index.get(path, [])
             if not hits:
+                # A miss under ROOT does not prove staleness when the citation
+                # names a DEPENDENCY's tree. ADR-0059 cites cosmic-text's own
+                # `font/system.rs` deliberately; counting those as repo rot
+                # inflated the headline number on the first pass.
+                if not repo_shaped(path):
+                    counts["maybe_upstream"] += 1
+                    continue
                 counts["path_gone"] += 1
                 per_adr[adr.name] += 1
                 stale.append(f"{adr.name}: `{path}:{spec}` -- no such file")
@@ -111,7 +146,7 @@ def main() -> int:
             # The verdict lands stale either way, but for the wrong reason, and
             # a reader deserves to know which.
             bare = "/" not in path
-            n = len(( ROOT / hits[0]).read_text(encoding="utf-8", errors="replace").splitlines())
+            n = line_count(hits[0])
             note = " (bare name -- may not be the file meant)" if bare else ""
             if max_line(spec) > n:
                 counts["out_of_range"] += 1
@@ -131,6 +166,8 @@ def main() -> int:
     print(f"  not disproved  : {counts['in_range']}  (in range -- NOT the same as correct;"
           f" {counts['in_range_bare']} resolved from a bare filename)")
     print(f"  unresolvable   : {counts['ambiguous']}  (path suffix matches several files)")
+    print(f"  maybe upstream : {counts['maybe_upstream']}  (path missing AND not repo-shaped"
+          f" -- a dependency's own tree, not proof of rot)")
     if total:
         print(f"  lower-bound rot: {100 * broken / total:.1f}%")
     if per_adr:

@@ -33,7 +33,7 @@ Yet the codebase pays a pervasive `Send + Sync` tax: ~300 `Arc` in gestures, ~25
 The entire control-plane `Send + Sync` edifice is forced by **one supertrait**:
 
 ```rust
-// crates/flui-foundation/src/binding.rs:106
+// crates/flui-foundation/src/binding.rs — since deleted with the binding retirement
 pub trait BindingBase: Sized + Send + Sync + 'static { … }
 ```
 
