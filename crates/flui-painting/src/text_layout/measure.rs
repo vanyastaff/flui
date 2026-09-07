@@ -7,7 +7,7 @@
 //! singleton from [`super::layout`].
 
 use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping, Style, Weight};
-use flui_types::typography::{FontStyle, FontWeight, TextStyle};
+use flui_types::typography::{FontStyle, TextStyle};
 
 use super::TextLayoutResult;
 use super::layout::font_system;
@@ -22,23 +22,23 @@ use super::layout::font_system;
 ///
 /// The returned `Attrs` borrows the style's family string for
 /// `Family::Name`, hence the shared lifetime.
-pub(super) fn style_to_attrs<'a>(style: Option<&'a TextStyle>, family: Family<'a>) -> Attrs<'a> {
+pub(super) fn style_to_attrs<'a>(
+    style: Option<&'a TextStyle>,
+    family: Family<'a>,
+    weight: Option<u16>,
+) -> Attrs<'a> {
     let mut attrs = Attrs::new().family(family);
 
     if let Some(style) = style {
-        if let Some(weight) = style.font_weight {
-            let cosmic_weight = match weight {
-                FontWeight::W100 => Weight::THIN,
-                FontWeight::W200 => Weight::EXTRA_LIGHT,
-                FontWeight::W300 => Weight::LIGHT,
-                FontWeight::W400 => Weight::NORMAL,
-                FontWeight::W500 => Weight::MEDIUM,
-                FontWeight::W600 => Weight::SEMIBOLD,
-                FontWeight::W700 => Weight::BOLD,
-                FontWeight::W800 => Weight::EXTRA_BOLD,
-                FontWeight::W900 => Weight::BLACK,
-            };
-            attrs = attrs.weight(cosmic_weight);
+        // `weight` is the style's own request AFTER the resolved family has
+        // been consulted (`FontState::resolve_family_and_weight`): unchanged
+        // when the family can serve it, and the nearest weight the family does
+        // carry when it cannot. Asking for a weight the family has no face for
+        // makes cosmic-text discard the family entirely in favour of a
+        // `common_fallback()` one that happens to own it (issue #929), so the
+        // request that survives here is the one that keeps the family.
+        if let Some(weight) = weight {
+            attrs = attrs.weight(Weight(weight));
         }
 
         if let Some(font_style) = style.font_style {
@@ -79,8 +79,8 @@ pub fn measure_text(
 
     {
         let mut state = font_system().lock();
-        let family = state.resolve_family(style);
-        let attrs = style_to_attrs(style, family);
+        let (family, weight) = state.resolve_family_and_weight(style);
+        let attrs = style_to_attrs(style, family, weight);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut state.system, false);
     }

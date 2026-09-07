@@ -70,6 +70,34 @@ impl FontState {
         } = self;
         font_resolve::resolve_family(style, system, installed_families, *db_generation)
     }
+
+    /// The family AND the weight to shape `style` with, resolved together.
+    ///
+    /// Together because the weight decision depends on the family: cosmic-text
+    /// abandons a family that carries no face at the requested weight, taking a
+    /// `common_fallback()` family that happens to own it — so a run in a
+    /// present family renders in a platform font instead (issue #929). Asking
+    /// for a weight the resolved family can serve is what keeps it.
+    ///
+    /// One call rather than two so the pair cannot be taken from different
+    /// states, and so both are answered under the single lock this module's
+    /// own doc asks callers to hold briefly.
+    pub(super) fn resolve_family_and_weight<'a>(
+        &mut self,
+        style: Option<&'a TextStyle>,
+    ) -> (Family<'a>, Option<u16>) {
+        let family = self.resolve_family(style);
+        // `FontWeight::value()`, never `as u16`: the enum carries no explicit
+        // discriminants, so a cast yields the VARIANT INDEX — `W400 as u16` is
+        // 3, not 400 — and every snap below would then be computed against a
+        // number no face can carry.
+        let requested = style
+            .and_then(|style| style.font_weight)
+            .map(|weight| weight.value());
+        let snapped = requested
+            .map(|requested| font_resolve::snap_weight(self.system.db(), &family, requested));
+        (family, snapped)
+    }
 }
 
 /// Global font system instance.
@@ -505,17 +533,20 @@ impl TextLayout {
         let runs: Vec<OwnedRun> = {
             let mut state = font_system().lock();
 
-            let default_family = state.resolve_family(default_style);
-            let default_attrs =
-                cosmic_text::AttrsOwned::new(&style_to_attrs(default_style, default_family));
+            let (default_family, default_weight) = state.resolve_family_and_weight(default_style);
+            let default_attrs = cosmic_text::AttrsOwned::new(&style_to_attrs(
+                default_style,
+                default_family,
+                default_weight,
+            ));
 
             spans
                 .into_iter()
                 .map(|(text, style)| {
                     let attrs = match &style {
                         Some(style) => {
-                            let family = state.resolve_family(Some(style));
-                            let mut attrs = style_to_attrs(Some(style), family);
+                            let (family, weight) = state.resolve_family_and_weight(Some(style));
+                            let mut attrs = style_to_attrs(Some(style), family, weight);
                             // Per-span font size/line height ride on the attrs
                             // (cosmic's per-span Metrics); spans without one
                             // inherit the buffer-level default.
