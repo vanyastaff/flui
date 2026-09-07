@@ -2250,3 +2250,50 @@ fn two_opacities_under_one_boundary_both_update_without_repainting() {
         "both opacity layers must carry their new alpha",
     );
 }
+
+/// A boundary that LOSES boundary status drops its update classification.
+///
+/// The compositing walk's lost-boundary branch removes the node's stale
+/// paint-queue entry and re-enqueues it through `mark_needs_paint`. That walk
+/// starts at the node and goes UP to the nearest boundary — past this node,
+/// which is no longer one — so `mark_needs_paint`'s own withdrawal clears the
+/// ANCESTOR's update record, never this node's.
+///
+/// Left behind, the node sits in both classifications at once: queued for a
+/// real repaint and still named as an update target. That is the state
+/// `run_paint` asserts against, so without the fix this ordering aborts every
+/// debug build — and in a release build it is the lost-repaint bug rounds seven
+/// and eight were about.
+///
+/// Reaching it needs `set_repaint_boundary_flag`, because the flag is
+/// insert-time configuration today and no production render object varies its
+/// boundary status (issue #995). That makes this latent rather than live, and
+/// it is exactly the trap #995 would spring.
+#[test]
+fn losing_boundary_status_withdraws_a_pending_update() {
+    let (owner, opacity_id, _sibling, _painted) = mount_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    let boundary = owner
+        .render_tree()
+        .get(opacity_id)
+        .and_then(|node| node.links().parent())
+        .expect("the opacity sits under a repaint boundary");
+
+    // A descendant asks for a layer update, so the boundary is classified.
+    owner.mark_needs_composited_layer_update(opacity_id);
+
+    // …and then the boundary stops being one, which is what drives the
+    // compositing walk's lost-boundary branch.
+    owner
+        .render_tree()
+        .get(boundary)
+        .expect("boundary node")
+        .set_repaint_boundary_flag(false);
+    owner.mark_needs_compositing_bits_update(boundary);
+
+    let (owner, result) = owner.run_frame();
+    result.expect("the frame after a boundary is lost must not abort");
+    drop(owner);
+}

@@ -786,15 +786,25 @@ impl DirtyTracker {
         self.dirty.needs_compositing.as_slice()
     }
 
-    /// Removes entries from the paint queue whose id is in `remove_ids`.
+    /// Removes entries from the paint queue whose id is in `remove_ids`, and
+    /// withdraws any composited-layer-update classification they carried.
     ///
     /// Used by the compositing walk's lost-boundary branch: a node that
     /// was a repaint boundary is removed from the paint queue (the old
     /// boundary-targeted entry) and re-enqueued at its new depth.
+    ///
+    /// The update record has to go with it. It addresses retained output the
+    /// node no longer owns, and the re-enqueue that follows walks PAST the node
+    /// to an ancestor boundary — so `mark_needs_paint`'s own withdrawal clears
+    /// the ancestor's record, never this one. Leaving it behind puts the node
+    /// in both classifications at once, which is the state `run_paint` asserts
+    /// against and, worse, the one a failed pass turns into a lost repaint.
     pub(super) fn retain_paint_queue(&mut self, remove_ids: &rustc_hash::FxHashSet<RenderId>) {
         self.dirty
             .needs_paint
             .retain(|d| !remove_ids.contains(&d.id));
+        self.layer_update_boundaries
+            .retain(|id, _| !remove_ids.contains(id));
     }
 
     /// Clears the compositing queue without processing it.
