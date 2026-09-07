@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use accesskit::{Action, ActionRequest, Node, NodeId, Role, Tree, TreeId, TreeUpdate};
+use accesskit::{Action, ActionRequest, Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use flui_platform::{FakeAccessibility, PlatformAccessibility};
 
 /// A one-node tree published under `id`.
@@ -21,7 +21,7 @@ fn tree_update(id: u64, label: &str) -> TreeUpdate {
     node.set_label(label.to_string());
     TreeUpdate {
         nodes: vec![(root, node)],
-        tree: Some(Tree::new(root)),
+        tree: Some(TreeInfo::new(root)),
         tree_id: TreeId::ROOT,
         focus: root,
     }

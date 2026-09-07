@@ -25,7 +25,7 @@
 //! extraneous events, so that is correct but not free. Incremental diffing is a
 //! later optimisation and needs its own oracle; it is not smuggled in here.
 
-use accesskit::{Node, NodeId, Rect, Role, TextDirection, Toggled, Tree, TreeId, TreeUpdate};
+use accesskit::{Node, NodeId, Rect, Role, TextDirection, Toggled, TreeId, TreeInfo, TreeUpdate};
 
 use crate::action::SemanticsAction;
 use crate::flags::SemanticsFlag;
@@ -505,7 +505,7 @@ pub fn tree_to_update(
 
     Some(TreeUpdate {
         nodes,
-        tree: Some(Tree::new(root_node_id)),
+        tree: Some(TreeInfo::new(root_node_id)),
         tree_id: TreeId::ROOT,
         focus,
     })
