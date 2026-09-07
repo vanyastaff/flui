@@ -238,7 +238,13 @@ impl PaintQueue {
     }
 
     /// Queues `id`, or raises an existing entry's kind. Returns `true` when a
-    /// NEW entry was pushed (the caller's cue to fire a frame request).
+    /// NEW entry was pushed.
+    ///
+    /// The return value is the caller's cue to fire a frame request, and an
+    /// UPGRADE deliberately returns `false`: the boundary was already queued,
+    /// so a frame is already scheduled and a second wake would be spurious.
+    /// This is not a "nothing happened" signal — the entry may have changed
+    /// kind. Read it as "did the queue gain an entry", nothing more.
     ///
     /// Never downgrades: an entry already queued for a repaint stays one, and a
     /// `LayerUpdate` arriving for it is dropped rather than weakening it. An
@@ -270,9 +276,27 @@ impl PaintQueue {
     }
 
     /// Why `id` is queued, or `None` when it is not.
+    ///
+    /// The `debug_assert` is the one check this shape still needs and can
+    /// falsify. Collapsing the classification into the entry made "a boundary
+    /// is queued for exactly one reason" true by construction — there is no
+    /// second record left to disagree with — but it moved the risk to the
+    /// position index, which every reorder and removal invalidates. A stale
+    /// index does not fail loudly: it hands back a NEIGHBOUR's kind, so a
+    /// repaint reads as an update and grafts stale output. Checking the id
+    /// round-trips is what makes that observable.
     #[inline]
     pub fn kind_of(&self, id: RenderId) -> Option<&PaintKind> {
-        self.index.get(&id).map(|&i| &self.entries[i].kind)
+        self.index.get(&id).map(|&i| {
+            let entry = &self.entries[i];
+            debug_assert_eq!(
+                entry.id, id,
+                "BUG: paint-queue index is stale — it points at another \
+                 entry, so this boundary's reason for being queued is being \
+                 read off the wrong one",
+            );
+            &entry.kind
+        })
     }
 
     /// Whether `id` is queued at all.
@@ -302,9 +326,16 @@ impl PaintQueue {
     /// Sorts deepest-first and rebuilds the index.
     ///
     /// Every reordering or removal invalidates the positions the index holds,
-    /// so each one rebuilds it. Both operations are already at least O(n), so
-    /// this costs nothing asymptotically — and a stale index would silently
-    /// upgrade the wrong entry.
+    /// so each one rebuilds it. Both are already at least O(n), so it costs
+    /// nothing asymptotically.
+    ///
+    /// Defensive, and measured to be so: removing either `reindex` call leaves
+    /// the whole suite green, because today nothing reads the index between a
+    /// reorder or removal and the next `clear` — `run_paint` sorts, walks under
+    /// `&self`, then clears. They stay because the type's contract is that the
+    /// index tracks positions, and the first caller to enqueue after a retain
+    /// would otherwise corrupt an unrelated entry in silence. The
+    /// `debug_assert` in [`Self::enqueue`] is what would catch that.
     pub fn sort_deep_first(&mut self) {
         self.entries
             .sort_unstable_by_key(|e| std::cmp::Reverse(e.depth));

@@ -502,7 +502,14 @@ impl PipelineOwner<PaintPhase> {
         // Reached, whatever happens below: the early returns for skip-paint,
         // pending layout and invisible slivers are all decisions the descent
         // MADE about this node, not evidence it never got here.
-        composer.visited.insert(node_id);
+        //
+        // Recorded only for QUEUED nodes. The residue scan never asks about
+        // anything else, and paint is a full-tree descent every frame — an
+        // unconditional insert would cost a hash write per render object per
+        // frame to answer a question about a handful of ids.
+        if dirty_set.contains(&node_id) {
+            composer.visited.insert(node_id);
+        }
 
         let is_repaint_boundary = render_node.is_repaint_boundary();
 
@@ -745,7 +752,10 @@ impl PipelineOwner<PaintPhase> {
                                 );
                             }
                             // Reused rather than descended into, but reached.
-                            composer.visited.insert(child_id);
+                            // Same queue-scoped rule as the walk's own record.
+                            if dirty_set.contains(&child_id) {
+                                composer.visited.insert(child_id);
+                            }
                             // A graft clones this boundary's whole flattened
                             // output in, INCLUDING the layers of every boundary
                             // nested beneath it — but the walk does not descend,
