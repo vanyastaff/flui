@@ -91,6 +91,74 @@ impl InheritedView for Directionality {
 
 impl_inherited_view!(Directionality);
 
+/// Resolve an [`AlignmentGeometry`](flui_types::layout::AlignmentGeometry) against
+/// the ambient [`Directionality`].
+///
+/// The one seam at which a directional alignment becomes a physical one. Call
+/// it inside a `build`, where a [`BuildContext`] exists, and hand the result to
+/// a render-object widget — [`Align`](crate::Align), `OverflowBox`, a
+/// [`Stack`](crate::Stack) — which stays physical and knows nothing about
+/// reading direction.
+///
+/// # Why the caller resolves, rather than the widget
+///
+/// A `RenderView` cannot read `Directionality` at all in this tree, and the
+/// reason is worth knowing before reaching for a wrapper: `RenderObjectContext`
+/// carries no inherited-dependency access, and — the part that bites — a render
+/// element that IS marked dirty never re-pushes its configuration.
+/// `RenderBehavior::build_into_views` clears the dirty flag without calling
+/// `update_render_object`; the only invocation is on a parent-driven view swap.
+/// So a dependency registered on a render element would mark it dirty, rebuild
+/// it, and change nothing: an RTL flip would silently do nothing, with no panic
+/// and no failing test. FLUI has no equivalent of Flutter's
+/// `RenderObjectElement.performRebuild() -> updateRenderObject`.
+///
+/// [`Flex`](crate::Flex) and [`ListBody`](crate::ListBody) answer this by being
+/// public `StatelessView`s over private render views. This function applies the
+/// same rule one level up, so a caller who wants a directional alignment pays
+/// for it and a caller who does not pays nothing — no widget layer is added to
+/// the 60-odd `Align::new` sites, nor inside every aligned
+/// [`Container`](crate::Container).
+///
+/// # An absolute alignment registers no dependency
+///
+/// By construction rather than by a conditional that could drift: only the
+/// `Directional` arm reaches [`Directionality::maybe_of`], so an absolute
+/// alignment never becomes a dependent and a direction change never rebuilds
+/// it. Same shape, and same reason, as
+/// `axis_direction_from_axis_reverse_and_directionality`'s vertical arm below.
+///
+/// This matters more than it looks: `InheritedDependencies` has no per-rebuild
+/// clear, so a registration is monotonic — a widget that depends once keeps
+/// depending until it deactivates. A widget that never registers is the only
+/// widget that is reliably not a dependent.
+///
+/// **Not covered by a test, deliberately.** The dependency registry is
+/// `pub(crate)` to `flui-view`, and the widget harness cannot separate "did not
+/// depend" from "did not rebuild for another reason": swapping the root to flip
+/// the direction replaces the child's view as well, so both an absolute and a
+/// directional caller rebuild, and an assertion either way would pass for the
+/// wrong reason. The property is held by the shape of the `match` — there is no
+/// path from the `Absolute` arm to [`Directionality::maybe_of`] — and hoisting
+/// that call above the match is the way to break it. A reviewer, not a test, is
+/// what catches that today.
+///
+/// With no [`Directionality`] ancestor the direction defaults to
+/// [`TextDirection::Ltr`], matching every other FLUI widget that reads one.
+#[must_use]
+pub fn resolve_alignment(
+    ctx: &dyn BuildContext,
+    alignment: impl Into<flui_types::layout::AlignmentGeometry>,
+) -> flui_types::Alignment {
+    match alignment.into() {
+        flui_types::layout::AlignmentGeometry::Absolute(alignment) => alignment,
+        flui_types::layout::AlignmentGeometry::Directional(directional) => {
+            let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+            directional.resolve(text_direction.is_ltr())
+        }
+    }
+}
+
 /// Resolves an [`AxisDirection`] from a layout/scroll `axis`, its `reverse`
 /// flag, and the ambient [`Directionality`] — Flutter's
 /// `getAxisDirectionFromAxisReverseAndDirectionality` (`widgets/basic.dart`).
@@ -143,6 +211,53 @@ fn resolve_horizontal_axis_direction(
 mod tests {
     use super::*;
     use crate::SizedBox;
+    use flui_types::Alignment;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// A directional alignment resolves to opposite edges under the two
+    /// directions, through a real mounted `Directionality`.
+    ///
+    /// The whole point of the seam: `AlignmentGeometry::resolve(is_ltr)` was
+    /// already correct and already tested, and the parity corpus called it at
+    /// the call site with a literal `false` because "no widget-surface path
+    /// reads one" (`tests/parity/align_test.rs`). This is that path.
+    #[test]
+    fn a_directional_alignment_resolves_against_a_mounted_directionality() {
+        use flui_types::layout::AlignmentDirectional;
+
+        #[derive(Clone, StatelessView)]
+        struct Probe {
+            seen: Rc<Cell<Option<Alignment>>>,
+        }
+
+        impl StatelessView for Probe {
+            fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+                self.seen.set(Some(resolve_alignment(
+                    ctx,
+                    AlignmentDirectional::new(-1.0, 0.0),
+                )));
+                SizedBox::shrink()
+            }
+        }
+
+        for (direction, expected_x) in [(TextDirection::Ltr, -1.0), (TextDirection::Rtl, 1.0)] {
+            let seen = Rc::new(Cell::new(None));
+            let _harness = crate::test_harness::mount(Directionality::new(
+                direction,
+                Probe {
+                    seen: Rc::clone(&seen),
+                },
+            ));
+            let resolved = seen.get().expect("the probe must have built");
+            assert!(
+                (resolved.x - expected_x).abs() < f32::EPSILON,
+                "start is the {direction:?} reading edge, so x must be \
+                 {expected_x}, got {}",
+                resolved.x
+            );
+        }
+    }
 
     #[test]
     fn directionality_new_wires_direction_and_child() {
