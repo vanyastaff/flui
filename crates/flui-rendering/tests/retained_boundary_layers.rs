@@ -1794,3 +1794,145 @@ fn an_animated_opacity_crossing_zero_adds_and_removes_its_content() {
         "and a tick back must bring it in again",
     );
 }
+
+/// A patched transform layer is rebuilt at the origin it was CAPTURED at.
+///
+/// A transform is conjugated by the accumulated paint origin, so the patch
+/// path stores that origin in the capture and replays it. Nothing else pins
+/// it: opacity layers are origin-independent (always `Offset::ZERO`), so a
+/// mutation replacing the stored origin with zero leaves every other test
+/// green while silently moving any patched transform.
+///
+/// The fixture puts the effect behind a `RenderPadding` so its origin inside
+/// the boundary is non-zero — at the boundary root the origin is zero and the
+/// bug would be invisible. The oracle is a second owner that PAINTS the same
+/// final state, so the patch is compared against what a repaint produces
+/// rather than against a matrix written out by hand.
+#[test]
+fn a_patched_transform_uses_the_origin_it_was_captured_at() {
+    #[derive(Debug)]
+    struct Shifter {
+        dx: f32,
+    }
+
+    impl flui_foundation::Diagnosticable for Shifter {}
+
+    impl flui_rendering::traits::RenderBox for Shifter {
+        type Arity = flui_tree::Single;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            if ctx.child_count() > 0 {
+                ctx.layout_child(0, constraints)
+            } else {
+                constraints.smallest()
+            }
+        }
+
+        flui_rendering::forward_single_child_box_queries!();
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+
+        fn paint_transform(&self, _size: Size) -> Option<flui_types::Matrix4> {
+            // A SCALE, not a translation. Conjugation by the origin is
+            // `T(o)·M·T(-o)`, and translations commute with translations — so
+            // a translating fixture cancels the origin entirely and cannot
+            // tell a right answer from a wrong one. A scale does not commute,
+            // which is what makes the captured origin observable.
+            Some(flui_types::Matrix4::scaling(self.dx, self.dx, 1.0))
+        }
+    }
+
+    fn mount_shifter(
+        dx: f32,
+    ) -> (
+        PipelineOwner<flui_rendering::pipeline::Idle>,
+        flui_foundation::RenderId,
+    ) {
+        let mut owner = PipelineOwner::new();
+        let (root_id, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderFlex::row()).child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    // Non-zero origin for the effect inside the boundary.
+                    box_node(flui_objects::RenderPadding::all(12.0)).child(
+                        box_node(Shifter { dx })
+                            .label("fx")
+                            .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                    ),
+                ),
+            ),
+        );
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        let fx = registry.get("fx").expect("fx is labelled");
+        (owner, fx)
+    }
+
+    fn only_transform(t: &flui_layer::LayerTree) -> flui_types::Matrix4 {
+        fn find(
+            t: &flui_layer::LayerTree,
+            id: flui_foundation::LayerId,
+        ) -> Option<flui_types::Matrix4> {
+            let node = t.get(id)?;
+            if let flui_layer::Layer::Transform(tr) = node.layer() {
+                return Some(*tr.transform());
+            }
+            node.children().iter().find_map(|&c| find(t, c))
+        }
+        find(t, t.root().expect("root")).expect("a transform layer must be present")
+    }
+
+    // Patch path: capture at scale 2, then switch to scale 7 as a layer update.
+    let (owner, fx) = mount_shifter(2.0);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    owner
+        .render_tree_mut()
+        .get_mut(fx)
+        .expect("fx node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<Shifter>()
+        .expect("Shifter")
+        .dx = 7.0;
+    owner.mark_needs_composited_layer_update(fx);
+    let (owner, result) = owner.run_frame();
+    let patched = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    // Reference: a fresh owner that PAINTS dx = 7 from scratch.
+    let (reference, _) = mount_shifter(7.0);
+    let (_, result) = reference.run_frame();
+    let repainted = result
+        .expect("reference frame")
+        .expect("reference frame produces a layer tree");
+
+    assert_eq!(
+        only_transform(&patched),
+        only_transform(&repainted),
+        "a patched transform must equal the one a repaint produces; rebuilding \
+         it at the wrong origin moves the layer silently",
+    );
+}

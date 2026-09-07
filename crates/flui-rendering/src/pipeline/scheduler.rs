@@ -375,6 +375,10 @@ impl DirtyTracker {
     ///   rebuilds the layer from current properties anyway, so an update on top
     ///   of it would be redundant work; and letting the update mark run would
     ///   enqueue a second, weaker entry for a node the walk is going to repaint.
+    ///   Parity and efficiency rather than correctness: `run_paint` filters a
+    ///   boundary that needs paint out of the update set regardless, so a
+    ///   mutation removing this line changes no output — it only lets pointless
+    ///   marks through.
     /// - **No retained output, no shortcut.** If no ancestor boundary owns
     ///   output to patch, this degrades to [`Self::mark_needs_paint`], which is
     ///   what Flutter's `else { markNeedsPaint(); }` branch does. The flag is
@@ -399,6 +403,13 @@ impl DirtyTracker {
         // `owns_retained_layer` predicate `mark_needs_paint` stops at, for the
         // same reason: a boundary that has not painted as one yet has nothing
         // to patch.
+        //
+        // `was_repaint_boundary` is parity and efficiency here rather than
+        // correctness — a boundary queued without retained output finds no
+        // capture and repaints, which is the same outcome by a longer route, so
+        // a mutation dropping it changes no output. It stays because stopping
+        // the walk at a boundary that cannot serve the request is the rule the
+        // sibling `mark_needs_paint` already follows.
         let mut current = id;
         loop {
             let Some(node) = tree.get(current) else {
