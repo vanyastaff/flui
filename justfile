@@ -520,6 +520,16 @@ port-check:
 port-check-verbose:
     bash scripts/port-check.sh -v
 
+# Advisory by design, and NOT part of `just ci`. It reports a LOWER BOUND on
+# citation rot: an out-of-range line or a vanished path is provably stale, but a
+# line still in range is only "not disproved" -- lines move under edits far more
+# often than files shrink. Gating on a number that cannot see most of its own
+# subject would buy false confidence, not accuracy (issue #993).
+[group("docs")]
+[doc("Measure provably-stale line-number citations in docs/adr/ (issue #993)")]
+adr-citations *args:
+    python3 scripts/check-adr-citations.py {{args}}
+
 [group("port")]
 [doc("Per-file breakdown of TODO(port) / PERF(port) / PORT NOTE markers across crates/")]
 port-markers:
