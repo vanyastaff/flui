@@ -25,7 +25,41 @@ to revisit that "once a `Partial` variant lands".
 
 ## Sub-slices, in dependency order
 
-### 2a — "nothing changed" (no bounds math, safe failure mode)
+### 2a — WITHDRAWN: the frames it would catch do not exist
+
+**Do not build this.** The premise was tested before implementing and does not
+hold.
+
+`PipelineOwner::run_paint` returns early when nothing is dirty
+(`if !self.scheduler.has_paint_work() { return Ok(()) }`), so a clean frame
+produces **no `LayerTree` at all** — there is nothing to compare. Above it,
+`flui-app` calls that outcome `FramePaintOutcome::Idle`, "nothing was dirty
+this frame; no new content to composite", and its own doc records that such a
+frame "never reaches `render_scene`" — established there by a probe rather
+than assumed. The skip this sub-slice proposed to add already exists, upstream
+and cheaper than a tree walk.
+
+The remaining shape — a frame where something WAS dirty but the tree came out
+identical — is not reachable either: the dirty node re-records, which yields a
+fresh `DisplayList` allocation, so a comparison keyed on picture identity
+correctly reports "changed". Conservative and right, and worth nothing.
+
+This was found by writing the baseline test first
+(`an_untouched_tree_renders_the_same_frame_twice`): the second frame returned
+no tree, which is the whole answer.
+
+**What this does not invalidate.** A per-boundary comparison is still needed —
+by 2b, to decide WHICH boundaries changed. Its shape differs from what 2a
+would have built: per boundary, not whole-tree. The
+[opacity trap](#the-trap-that-would-freeze-an-opacity-animation--measured-not-predicted)
+recorded below applies to it unchanged, and is the reason it cannot key on
+picture identity alone.
+
+**So the first sub-slice is 2b.** Damage's value is entirely in narrowing the
+scissor for a frame that DID change, which is where ADR-0061's 0.18× / 0.06× /
+0.02× measurements come from.
+
+### 2a (withdrawn, kept for the reasoning) — "nothing changed"
 
 Retain the previous frame's `LayerTree` per presentation. Pair the two by
 `render_id`; if every boundary pairs AND every `PictureLayer`'s `DisplayList`
