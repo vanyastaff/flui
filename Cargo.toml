@@ -312,7 +312,10 @@ rustc-hash = "2.1"
 lasso = { version = "0.7", features = ["multi-threaded"] }
 
 # PERFORMANCE & PROFILING
-criterion = "0.8"
+criterion = { version = "0.8", default-features = false, features = [
+    "plotters",
+    "cargo_bench_support",
+] }
 
 # SNAPSHOT TESTING - render-harness paint-phase (sub-project A) and any crate
 # that needs deterministic output assertions. Test-only; not compiled in release.
