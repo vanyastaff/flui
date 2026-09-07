@@ -1061,6 +1061,10 @@ impl<V> crate::element::InheritedElementAccess for InheritedBehavior<V>
 where
     V: InheritedView,
 {
+    fn dependent_count(&self) -> usize {
+        self.dependents.len()
+    }
+
     fn view_as_any(&self) -> &dyn std::any::Any {
         // Expose the cached view-clone as `&dyn Any` so the caller's
         // typed downcast (`.downcast_ref::<V>()`) can succeed inside

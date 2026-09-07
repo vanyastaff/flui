@@ -45,6 +45,7 @@ use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
 use flui_types::{Offset, Pixels, Rect, Size};
 use flui_view::View;
+use flui_view::element::InheritedElementAccess;
 
 use crate::{FocusRoot, GestureArenaScope};
 
@@ -345,6 +346,39 @@ impl LaidOut {
             .iter_nodes()
             .filter(|(_id, node)| node.element().view_type_id() == expected)
             .count()
+    }
+
+    /// How many elements depend on the inherited view of type `V`.
+    ///
+    /// Answers a question no other seam can: whether a widget took an
+    /// inherited dependency. Rebuild counting cannot substitute — changing an
+    /// inherited value means rebuilding the widget that provides it, which
+    /// rebuilds the whole subtree regardless of who depends on what, so a
+    /// rebuild-counting oracle reports the same thing for a dependent and a
+    /// non-dependent child.
+    ///
+    /// Panics if the tree holds no element of that view type, because a silent
+    /// zero would be indistinguishable from "mounted, and nothing depends on
+    /// it" — the exact answer such a test is usually trying to establish.
+    pub fn inherited_dependent_count<V: View>(&mut self) -> usize {
+        let expected = TypeId::of::<V>();
+        let found = self
+            .binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_id, node)| node.element().view_type_id() == expected)
+            .find_map(|(_id, node)| {
+                node.element()
+                    .as_inherited()
+                    .map(InheritedElementAccess::dependent_count)
+            });
+        found.unwrap_or_else(|| {
+            panic!(
+                "no mounted inherited element of type {} -- a zero here would \
+                 be indistinguishable from a real 'nothing depends on it'",
+                std::any::type_name::<V>()
+            )
+        })
     }
 
     /// The `i`-th render-tree child of `id`.

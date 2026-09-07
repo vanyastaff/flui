@@ -40,6 +40,18 @@ pub trait InheritedElementAccess {
     /// returns to the dependent's `BuildContext`.
     fn view_as_any(&self) -> &dyn std::any::Any;
 
+    /// How many elements currently depend on this inherited element.
+    ///
+    /// The read half of [`record_dependent`](Self::record_dependent) /
+    /// [`remove_dependent`](Self::remove_dependent). Exposed because a
+    /// dependency is otherwise unobservable: whether a widget took one is a
+    /// real behavioural property -- a widget that depends on `Directionality`
+    /// it cannot use rebuilds on every direction change -- and no other seam
+    /// can answer it. Rebuild counting cannot: changing an inherited value
+    /// means rebuilding the widget that provides it, which rebuilds the whole
+    /// subtree regardless of who depends on what.
+    fn dependent_count(&self) -> usize;
+
     /// Register a dependent element with this `InheritedElement`.
     ///
     /// `depth` is the dependent's depth in the element tree, threaded
