@@ -276,12 +276,15 @@ impl InstalledFamilies {
     ///
     /// # Staleness signal
     ///
-    /// `Database::len()` is O(1); counting the face iterator would put back
-    /// the O(faces) scan this set exists to remove. Length is sufficient only
-    /// because nothing removes faces — `Database::remove_face` has no caller
-    /// in this workspace. A future caller must replace this with a generation
-    /// counter, since a remove-then-add pair leaves the length unchanged and
-    /// the set stale.
+    /// `db_generation` counts *mutations*, not faces: it is bumped once per
+    /// `SharedFontSystem::with_mut`, the single door through which anything
+    /// outside this module reaches the database. Face count was the obvious
+    /// signal and is the wrong one — `with_mut` hands out `&mut FontSystem`,
+    /// so a caller can remove one face and load another and leave the count
+    /// identical, after which the set describes a database that no longer
+    /// exists and every style resolves through the wrong family
+    /// indefinitely. Counting the door cannot be defeated that way, whatever
+    /// happens behind it.
     ///
     /// Average and worst case O(1) when fresh, O(faces) on the rebuild.
     fn sync(&mut self, font_system: &mut FontSystem, db_generation: u64) {
