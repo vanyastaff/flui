@@ -569,7 +569,7 @@ ways:
 
 | Path | Order | Consequence |
 |---|---|---|
-| `AppBinding` / runner (`app/runner.rs:279+283`, `:559+562`, `:755+764` — all three sites) | `handle_begin_frame` → **`handle_draw_frame()`** → `binding.render_frame()` | The post-frame queue is drained (`scheduler.rs:685-706`) **before** build/layout/paint. A callback sees the *previous* frame's geometry. **One frame stale.** |
+| `AppBinding` / runner (all three sites in `app/runner.rs` before its split into `runner/`; `AppBinding` has since been deleted) | `handle_begin_frame` → **`handle_draw_frame()`** → `binding.render_frame()` | The post-frame queue is drained (`scheduler.rs:685-706`) **before** build/layout/paint. A callback sees the *previous* frame's geometry. **One frame stale.** |
 | `HeadlessBinding::pump_frame` (`flui-testing/src/lib.rs:424-490`) | clock → gestures → `vsync.tick_all` → `drive_async_tasks` → `build_scope` → `run_frame_with_layout_builders` → `service_child_requests` | It never calls `handle_draw_frame` or `handle_begin_frame` at all. The post-frame queue is **never drained**, and no scheduler frame is ever opened, so even calling the drain would be a no-op — `handle_draw_frame` guards on `current_frame` being `Some` (`scheduler.rs:687`). |
 
 ### The experiment

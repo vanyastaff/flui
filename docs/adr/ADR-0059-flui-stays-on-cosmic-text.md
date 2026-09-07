@@ -15,13 +15,13 @@ Issue #927 — every Cupertino text run rendering a ~1.24 em space wherever
 in `cosmic-text` 0.19, not in FLUI:
 
 1. **`FontMatchKey` sorts emoji first.** It derives `Ord` with `not_emoji: bool`
-   as its first field (`font/system.rs:20-30`) and `font_match_keys.sort()`
-   (`:380`) is ascending, so `false` — the emoji faces — sorts ahead of
+   as its first field (`cosmic-text` 0.19's `FontMatchKey`, `font/system.rs`)
+   and its `font_match_keys.sort()` is ascending, so `false` — the emoji faces — sorts ahead of
    everything else in the unfiltered fallback tail. The comment on that sort
    states the opposite intent.
 2. **The candidate filter abandons a family over one missing weight.**
    `font_weight_diff == 0 || variable_weight_match || is_mono`
-   (`font/fallback/mod.rs:299-303`) drops an entire present family when the
+   (`cosmic-text` 0.19's candidate filter in `font/fallback/mod.rs`) drops an entire present family when the
    exact requested weight is absent, and the next family in the tail — which
    may be an emoji face, per 1 — takes the run.
 

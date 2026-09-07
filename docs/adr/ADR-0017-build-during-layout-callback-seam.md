@@ -61,7 +61,7 @@ Two independent, load-bearing facts — both verified in-tree, not assumed:
    `PipelineOwner::layout_node_with_children` builds a
    `SubtreeArena::from_tree(&mut self.render_tree, id, …)` and only drops it
    *after* the recursive walk returns
-   (`crates/flui-rendering/src/pipeline/owner/layout.rs:600-665`). Structural
+   (`pipeline/owner/layout.rs`'s `SubtreeArena::from_tree`). Structural
    mutation mid-walk is therefore an aliasing violation, which is exactly why
    the arena exposes **sinks** (`take_pending_child_requests`,
    `take_pending_retain_bands`) drained after the walk, rather than letting a
