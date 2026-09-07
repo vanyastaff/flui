@@ -151,7 +151,7 @@ console_error_panic_hook = "0.1"
 # there is no lighter path, but an application that does not want a
 # screen-reader bridge should not link a D-Bus stack.
 [target.'cfg(target_os = "linux")'.dependencies]
-accesskit_unix = { version = "0.22", optional = true }
+accesskit_unix = { version = "0.23", optional = true }
 
 # UIA bridge for Windows, same `a11y` feature. Version cohort must match the
 # workspace `accesskit` (0.24) -- 0.34 is that cohort -- and its `windows`
