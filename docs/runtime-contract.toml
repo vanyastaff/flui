@@ -2916,7 +2916,28 @@ kind = "trait"
 declared_in = "crates/flui-platform/src/traits/platform.rs"
 contains = "pub struct WindowId"
 classification = "transitional"
-thread_affinity = "PlatformWindow: Send + Sync, which permits storage and wake plumbing, not driving a window from any thread; every window-driving method is owner-thread-only unless it documents otherwise (the trait's Thread affinity section states this default; it is not inherited from an ADR), while callback REGISTRATION is thread-safe and only delivery is owner-bound; a worker reaches the owner through PlatformProxy (ADR-0039 section 3), whose transport only winit supplies today -- every other backend returns ClosedTransport/Unsupported; close() is the one documented exception, callable from any thread the native API permits, AppKit excepted, and winit's close() defers its whole teardown (on_close included) to the owner's next turn whatever thread called it (issue #919); request_redraw is owner-thread-only per ADR-0045 decision 5 and is VIOLATED on two paths -- flui-app's frame wake handle, unconditional and pinned by the_frame_wake_pokes_the_window_from_the_thread_that_fired_it, and flui-app's AccessKit activation listener, which needs the non-default a11y feature plus an attached assistive technology and has NO executable pin -- both open under issue #949 pending the PlatformProxy redraw verb"
+thread_affinity = """
+`PlatformWindow: Send + Sync` permits storage and wake plumbing, not driving a \
+window from any thread. Every window-DRIVING method is owner-thread-only \
+unless it documents otherwise -- the trait's own `Thread affinity` section \
+states this default; it is not inherited from an ADR. Callback REGISTRATION \
+stays thread-safe; only delivery is bound to the registering event-loop \
+thread. The cross-thread-to-owner lane is `PlatformProxy` (ADR-0039 \
+section 3), and it is INCOMPLETE: it carries only `open_window` and \
+`request_quit`, and only winit supplies a transport at all -- every other \
+backend returns `ClosedTransport`/`Unsupported`. `close()` is the one \
+documented exception to the default, callable from any thread the native API \
+permits (AppKit excepted); winit's `close()` defers its whole teardown \
+(`on_close` included) to the owner's next turn whatever thread called it \
+(issue #919). `request_redraw` is owner-thread-only per ADR-0045 decision 5 \
+and is VIOLATED on two paths, neither fixable at its call site because no \
+proxy redraw verb exists on ANY backend yet: flui-app's frame wake handle \
+(unconditional, pinned by \
+`the_frame_wake_pokes_the_window_from_the_thread_that_fired_it`) and \
+flui-app's AccessKit activation listener (needs the non-default `a11y` \
+feature plus an attached assistive technology, and has NO executable pin). \
+Both open under issue #949.\
+"""
 owner = "platform-internal native window key and handle — WindowId must never become realm-facing identity; canonical definition (this one) is the only one PlatformWindow::id() returns"
 failure_semantics = "callback installation is install-only today (no cancellation ownership)"
 consumers = [
