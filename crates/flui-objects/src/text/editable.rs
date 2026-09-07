@@ -8,15 +8,20 @@
 //! an IME composing region — see its "IME composition" doc section), matching
 //! Flutter's widget/render split.
 //!
-//! Scope of this first slice:
+//! Scope so far:
 //! - single-line text layout, caret margin, caret paint;
 //! - dry layout, intrinsics, baseline, and hit-test-self;
-//! - collapsed caret only.
+//! - collapsed caret;
+//! - selection highlight, painted behind the glyphs
+//!   ([`RenderEditable::paint_selection`]).
 //!
-//! Deferred: selection painting, a hidden caret while composing rendered as
-//! a *separate* render-object state (the owning widget instead suppresses
-//! this object's ordinary `show_caret` — see `flui_widgets::EditableText`'s
-//! doc), scroll offset, multiline viewport behavior, and obscured text.
+//! Deferred: a hidden caret while composing rendered as a *separate*
+//! render-object state (the owning widget instead suppresses this object's
+//! ordinary `show_caret` — see `flui_widgets::EditableText`'s doc), scroll
+//! offset, multiline viewport behavior, and obscured text. The *gesture*
+//! policy that produces a selection — tap, shift-click, drag — lives above
+//! this object and is not here either; this object is told a range, it does
+//! not decide one.
 //!
 //! **Composing-region underline** (ADR-0033): [`RenderEditable::composing_range`]
 //! paints one thin rect per selection box under the composing text — a
@@ -85,8 +90,23 @@ pub struct RenderEditable {
     /// if any — paints an underline (ADR-0033), never a selection highlight.
     /// Always char-boundary-clamped against the current text, mirroring
     /// [`Self::caret_byte_offset`]'s own clamping — see
-    /// [`Self::clamp_composing_range`].
+    /// [`Self::clamp_text_range`].
     composing_range: Option<Range<usize>>,
+    /// The selected byte range into [`Self::plain_text`], if any — paints the
+    /// highlight behind the glyphs. Clamped through the same
+    /// [`Self::clamp_text_range`] as the composing range.
+    ///
+    /// A *collapsed* range is the caret's business, not the highlight's:
+    /// `paint` skips it, matching Flutter's `_TextHighlightPainter`, which
+    /// returns early on `range.isCollapsed`. Storing it collapsed rather than
+    /// normalising it to `None` keeps the setter's dedupe honest — a caller
+    /// that moves a collapsed selection is not making a paint-visible change,
+    /// and the impact it reports says so.
+    selection: Option<Range<usize>>,
+    /// Fill for the selection highlight. Fully transparent by default so a
+    /// caller that sets a selection without choosing a colour paints nothing,
+    /// which is the arm Flutter reaches with a null `selectionColor`.
+    selection_color: Color,
 }
 
 impl RenderEditable {
@@ -114,6 +134,8 @@ impl RenderEditable {
             force_line: true,
             caret_offset: Offset::ZERO,
             composing_range: None,
+            selection: None,
+            selection_color: Color::TRANSPARENT,
         }
     }
 
@@ -172,7 +194,28 @@ impl RenderEditable {
     /// the caret.
     #[must_use]
     pub fn with_composing_range(mut self, range: Option<Range<usize>>) -> Self {
-        self.composing_range = range.map(|r| self.clamp_composing_range(r));
+        self.composing_range = range.map(|r| self.clamp_text_range(r));
+        self
+    }
+
+    /// Sets the selected byte range (builder form) — `None` when nothing is
+    /// selected. Clamped to valid UTF-8 boundaries against the current text,
+    /// the same way [`Self::with_composing_range`] clamps the composing
+    /// region.
+    #[must_use]
+    pub fn with_selection(mut self, range: Option<Range<usize>>) -> Self {
+        self.selection = range.map(|r| self.clamp_text_range(r));
+        self
+    }
+
+    /// Sets the selection highlight fill (builder form).
+    ///
+    /// Defaults to [`Color::TRANSPARENT`], so a caller that sets a selection
+    /// and no colour paints nothing — the arm Flutter reaches with a null
+    /// `selectionColor`.
+    #[must_use]
+    pub fn with_selection_color(mut self, color: Color) -> Self {
+        self.selection_color = color;
         self
     }
 
@@ -192,13 +235,17 @@ impl RenderEditable {
         self.plain_text = text.to_plain_text();
         self.caret_byte_offset = self.safe_caret_offset(self.caret_byte_offset);
         // Defense in depth, mirroring the caret re-clamp just above: a
-        // composing range that outlived a text replacement degrades to an
-        // in-bounds (if wrong) slice instead of a `get_boxes_for_selection`
-        // out-of-range read.
+        // composing range or selection that outlived a text replacement
+        // degrades to an in-bounds (if wrong) slice instead of a
+        // `get_boxes_for_selection` out-of-range read.
         self.composing_range = self
             .composing_range
             .take()
-            .map(|range| self.clamp_composing_range(range));
+            .map(|range| self.clamp_text_range(range));
+        self.selection = self
+            .selection
+            .take()
+            .map(|range| self.clamp_text_range(range));
         match self.painter.set_text(Some(text)) {
             Invalidation::None => flui_rendering::RenderUpdateImpact::NONE,
             Invalidation::Paint => flui_rendering::RenderUpdateImpact::PAINT,
@@ -216,11 +263,38 @@ impl RenderEditable {
         &mut self,
         range: Option<Range<usize>>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let clamped = range.map(|r| self.clamp_composing_range(r));
+        let clamped = range.map(|r| self.clamp_text_range(r));
         if clamped == self.composing_range {
             flui_rendering::RenderUpdateImpact::NONE
         } else {
             self.composing_range = clamped;
+            flui_rendering::RenderUpdateImpact::PAINT
+        }
+    }
+
+    /// Replaces the selected range and returns the invalidation level —
+    /// always paint-only: a selection changes what gets a highlight, never
+    /// glyph shaping or the box's size.
+    pub fn set_selection(
+        &mut self,
+        range: Option<Range<usize>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let clamped = range.map(|r| self.clamp_text_range(r));
+        if clamped == self.selection {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            self.selection = clamped;
+            flui_rendering::RenderUpdateImpact::PAINT
+        }
+    }
+
+    /// Replaces the selection highlight fill and returns the invalidation
+    /// level.
+    pub fn set_selection_color(&mut self, color: Color) -> flui_rendering::RenderUpdateImpact {
+        if self.selection_color == color {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            self.selection_color = color;
             flui_rendering::RenderUpdateImpact::PAINT
         }
     }
@@ -408,13 +482,13 @@ impl RenderEditable {
             .unwrap_or(self.plain_text.len())
     }
 
-    /// Clamp a composing-region range to `plain_text`'s current bounds and
+    /// Clamp a byte range to `plain_text`'s current bounds and
     /// char boundaries, the same way [`Self::safe_caret_offset`] clamps a
     /// single index. A range whose start outlived the text (`start > end`
     /// after clamping) collapses to a zero-width range at the clamped
     /// start — matching an empty composing region rather than reordering
     /// the bounds.
-    fn clamp_composing_range(&self, range: Range<usize>) -> Range<usize> {
+    fn clamp_text_range(&self, range: Range<usize>) -> Range<usize> {
         let start = self.safe_caret_offset(range.start);
         let end = self.safe_caret_offset(range.end);
         if start > end {
@@ -483,6 +557,13 @@ impl Diagnosticable for RenderEditable {
                 .as_ref()
                 .map_or_else(|| "none".to_string(), |r| format!("{}..{}", r.start, r.end)),
         );
+        properties.add(
+            "selection",
+            self.selection
+                .as_ref()
+                .map_or_else(|| "none".to_string(), |r| format!("{}..{}", r.start, r.end)),
+        );
+        properties.add("selection_color", format!("{:?}", self.selection_color));
     }
 }
 
@@ -566,6 +647,8 @@ impl RenderBox for RenderEditable {
             return;
         }
 
+        self.paint_selection(ctx);
+
         self.painter.paint(ctx.canvas(), Offset::ZERO);
 
         if let Some(range) = self.composing_range.clone()
@@ -584,6 +667,69 @@ impl RenderBox for RenderEditable {
         if self.show_caret && self.caret_width > 0.0 && self.caret_height > 0.0 {
             ctx.canvas()
                 .draw_rect(self.caret_local_rect(), &Paint::fill(self.caret_color));
+        }
+    }
+}
+
+impl RenderEditable {
+    /// Paints the selection highlight behind the glyphs.
+    ///
+    /// Mirrors Flutter's `_TextHighlightPainter.paint`
+    /// (`rendering/editable.dart`), which is composed into `_builtInPainters`
+    /// — the *background* painter list, run before `_textPainter.paint` — so
+    /// the fill sits under the text rather than over it.
+    ///
+    /// # Divergence: no clip to the text box
+    ///
+    /// Flutter intersects every highlight box with
+    /// `Rect.fromLTWH(0, 0, textPainter.width, textPainter.height)`. It needs
+    /// that because `getBoxesForSelection` takes `BoxHeightStyle` /
+    /// `BoxWidthStyle`, and the non-`tight` styles deliberately return boxes
+    /// larger than the glyphs — up to the strut. FLUI's
+    /// [`TextPainter::get_boxes_for_selection`] takes no such parameter: every
+    /// box comes from the same layout that produced
+    /// [`TextPainter::size`], so none can exceed it. The intersection was
+    /// written and then removed, because reverting it changed no test and no
+    /// measured output — it is unreachable here, and shipping it would have
+    /// been dead code with a green test that could not fail. It comes back
+    /// with the box-style parameters, if they ever land.
+    ///
+    /// This does **not** clip the highlight to the render object's box, and
+    /// the highlight overflows a narrow box exactly as far as the text does —
+    /// single-line layout takes unbounded max width by design, so a 250 px
+    /// text paints 250 px wide in a 60 px box today. That deferral belongs to
+    /// the text and the highlight equally; see `text_width_constraints`.
+    ///
+    /// # What the early returns are for
+    ///
+    /// The collapsed-range and transparent-colour checks are short-circuits,
+    /// not the thing that makes those cases safe: a collapsed range yields no
+    /// boxes downstream anyway, and removing the check leaves every test
+    /// green. They are here because the collapsed case is the *common* one —
+    /// a caret with no selection is the steady state of a focused field — and
+    /// it should not reach a box query on every frame.
+    ///
+    /// The box **deduplication** is different: it is Flutter's (it collects
+    /// into a `Set`) and it is unpinned here, because no input FLUI's layout
+    /// accepts produces a duplicate box today. With a translucent highlight a
+    /// duplicate blends twice and reads as a darker rectangle, so it is kept
+    /// as cheap insurance against a layout change, not as a proven guard.
+    fn paint_selection(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        let Some(range) = self.selection.as_ref() else {
+            return;
+        };
+        if range.is_empty() || self.selection_color.a == 0 {
+            return;
+        }
+
+        let mut drawn: Vec<Rect> = Vec::new();
+        let paint = Paint::fill(self.selection_color);
+        for text_box in self.painter.get_boxes_for_selection(range.start, range.end) {
+            if text_box.rect.is_empty() || drawn.contains(&text_box.rect) {
+                continue;
+            }
+            drawn.push(text_box.rect);
+            ctx.canvas().draw_rect(text_box.rect, &paint);
         }
     }
 }
@@ -618,6 +764,76 @@ mod tests {
             RenderEditable::new(TextSpan::new("a€b"), TextDirection::Ltr).with_caret_byte_offset(2);
 
         assert_eq!(editable.caret_byte_offset(), 4);
+    }
+
+    #[test]
+    fn selection_offsets_are_clamped_to_utf8_boundaries() {
+        let editable = RenderEditable::new(TextSpan::new("a€b"), TextDirection::Ltr)
+            // 2 lands inside the euro sign's three bytes; 9 is past the end.
+            .with_selection(Some(2..9));
+
+        assert_eq!(
+            editable.selection,
+            Some(4..5),
+            "both ends must move to the next char boundary, not slice a codepoint"
+        );
+    }
+
+    /// A text replacement must re-clamp the selection, or a range that
+    /// outlived its text reaches `get_boxes_for_selection` out of range —
+    /// which panics on its own documented precondition rather than degrading.
+    #[test]
+    fn replacing_the_text_reclamps_the_selection() {
+        let mut editable = RenderEditable::new(TextSpan::new("abcdefghij"), TextDirection::Ltr)
+            .with_selection(Some(4..9));
+
+        let _ = editable.set_text(TextSpan::new("ab"));
+
+        assert_eq!(
+            editable.selection,
+            Some(2..2),
+            "a selection past the new end collapses to the clamped start"
+        );
+    }
+
+    #[test]
+    fn set_selection_dedupes_unchanged_and_invalidates_paint_on_change() {
+        let mut editable = RenderEditable::new(TextSpan::new("abcdef"), TextDirection::Ltr);
+
+        assert_eq!(
+            editable.set_selection(Some(1..3)),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            editable.set_selection(Some(1..3)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            editable.set_selection(Some(1..4)),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            editable.set_selection(None),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            editable.set_selection(None),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+    }
+
+    #[test]
+    fn set_selection_color_dedupes_unchanged_and_invalidates_paint_on_change() {
+        let mut editable = RenderEditable::new(TextSpan::new("abcdef"), TextDirection::Ltr);
+
+        assert_eq!(
+            editable.set_selection_color(Color::BLUE),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            editable.set_selection_color(Color::BLUE),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]

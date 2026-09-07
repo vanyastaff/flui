@@ -1456,6 +1456,117 @@ fn harness_editable_hidden_caret_paints_no_caret_rect() {
     );
 }
 
+/// The selection highlight paints **behind** the glyphs, matching Flutter's
+/// `_TextHighlightPainter`, which is composed into `_builtInPainters` — the
+/// background list, run before `_textPainter.paint`.
+///
+/// The caret is hidden so the only `DrawRect` in the frame is the highlight;
+/// the assertion is a strict index comparison, not "a rect exists somewhere".
+///
+/// Red-check: move `self.paint_selection(ctx)` after `self.painter.paint(..)`
+/// in `RenderEditable::paint` — the indices invert and this fails.
+#[test]
+fn harness_editable_paints_the_selection_behind_the_glyphs() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_show_caret(false)
+            .with_selection(Some(0..4))
+            .with_selection_color(Color::BLUE),
+    ))
+    .with_constraints(loose(160.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let highlight = commands
+        .iter()
+        .position(|command| command.line.contains("DrawRect"))
+        .unwrap_or_else(|| panic!("a selection must paint a rect; commands: {commands:#?}"));
+    let glyphs = commands
+        .iter()
+        .position(|command| command.line.contains("DrawTextSpan"))
+        .unwrap_or_else(|| panic!("the text must paint; commands: {commands:#?}"));
+
+    assert!(
+        highlight < glyphs,
+        "the highlight must precede the glyphs it sits behind, got \
+         highlight at {highlight} and glyphs at {glyphs}; commands: {commands:#?}"
+    );
+}
+
+/// A collapsed selection paints nothing: that case belongs to the caret, and a
+/// zero-width fill would draw a stray hairline over it. Flutter returns early
+/// on `range.isCollapsed` for the same reason.
+///
+/// The non-collapsed control is what makes this discriminating — without it
+/// the assertion would also hold for a highlight that never paints at all.
+///
+/// What this does NOT pin is the early return in `paint_selection`: deleting
+/// that line leaves this green, because a collapsed range yields no boxes
+/// downstream either. Measured, not assumed. The behaviour is what is under
+/// test here; the short-circuit is there for the cost of the query, and
+/// `paint_selection`'s own doc says so.
+#[test]
+fn harness_editable_collapsed_selection_paints_no_highlight() {
+    let collapsed = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_show_caret(false)
+            .with_selection(Some(3..3))
+            .with_selection_color(Color::BLUE),
+    ))
+    .with_constraints(loose(160.0))
+    .run_frame();
+
+    assert!(
+        !collapsed
+            .display_commands()
+            .iter()
+            .any(|command| command.line.contains("DrawRect")),
+        "a collapsed selection must not paint a highlight; commands: {:#?}",
+        collapsed.display_commands()
+    );
+
+    let extended = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_show_caret(false)
+            .with_selection(Some(3..5))
+            .with_selection_color(Color::BLUE),
+    ))
+    .with_constraints(loose(160.0))
+    .run_frame();
+
+    assert!(
+        extended
+            .display_commands()
+            .iter()
+            .any(|command| command.line.contains("DrawRect")),
+        "control: the same fixture with a non-collapsed range must paint one; \
+         commands: {:#?}",
+        extended.display_commands()
+    );
+}
+
+/// A transparent highlight colour paints nothing — the arm Flutter reaches
+/// with a null `selectionColor`, and the default this render object ships so a
+/// caller that sets a selection without choosing a colour draws no fill.
+#[test]
+fn harness_editable_transparent_selection_color_paints_no_highlight() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_show_caret(false)
+            .with_selection(Some(0..4)),
+    ))
+    .with_constraints(loose(160.0))
+    .run_frame();
+
+    assert!(
+        !run.display_commands()
+            .iter()
+            .any(|command| command.line.contains("DrawRect")),
+        "the default transparent selection colour must paint nothing; commands: {:#?}",
+        run.display_commands()
+    );
+}
+
 #[test]
 fn harness_editable_hit_tests_self() {
     let run = RenderTester::mount(box_node(RenderEditable::new(
