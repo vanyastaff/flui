@@ -11,6 +11,15 @@ description = "Application framework for FLUI - Flutter-inspired UI"
 [lib]
 crate-type = ["rlib"]
 
+# Executing wasm32 unit tests — `ExecutionServices` is `pub(crate)`, so its
+# `Backend::Sequential` branch is only reachable from a LIB test, never an
+# integration one. Pinned to the release that pairs with the locked
+# wasm-bindgen; the unpinned "0.3" resolves to one requiring a newer
+# wasm-bindgen and would bump the workspace lock as a side effect of adding a
+# dev-dependency. flui-foundation carries the same pin for the same reason.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.77"
+
 [features]
 default = ["desktop"]
 

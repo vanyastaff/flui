@@ -1382,6 +1382,10 @@ mod tests {
     /// REAL tokio build failure needs OS thread/resource exhaustion, which
     /// no test can produce deterministically without destabilizing the
     /// process it runs in.
+    // `DefaultPools`/`PoolSlot`/tokio are `cfg(not(wasm32))`: wasm32 uses
+    // `Backend::Sequential` and builds no pools at all, so there is no
+    // pool-start failure to simulate there.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn pool_start_failure_refuses_the_spawn_and_recovers() {
         let slot = parking_lot::Mutex::new(PoolSlot::NotStarted);
@@ -1425,5 +1429,73 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+}
+
+/// Assertions that only hold on wasm32, EXECUTED there.
+///
+/// `ExecutionServices` is `pub(crate)`, so `Backend::Sequential` — the whole
+/// wasm execution model — is unreachable from an integration test no matter how
+/// it is written. It needs a lib test, which is why flui-app's lib-test target
+/// had to build for wasm32 at all (issue #985).
+///
+/// Both assertions below are FALSE on native, which is the point: a wasm test
+/// that would pass identically on a native target buys a wasm build and no
+/// coverage. Run with `just wasm-test`.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_sequential_backend_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    use super::*;
+
+    /// With no host executors, wasm32 selects `Backend::Sequential`, whose
+    /// entire content is that a compute job runs **inline at the spawn site** —
+    /// there is no thread to hand it to.
+    ///
+    /// On native the same call hands the job to a pool and returns before it
+    /// runs, so this assertion is false there. It is the divergence, not a
+    /// property of the queue.
+    #[wasm_bindgen_test]
+    fn a_compute_job_has_already_run_when_spawn_compute_returns() {
+        let services = ExecutionServices::with_defaults();
+        let ran = Arc::new(AtomicUsize::new(0));
+
+        let flag = Arc::clone(&ran);
+        services
+            .spawn_compute(Box::new(move || {
+                flag.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("the sequential backend has no admission failure to report");
+
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "Backend::Sequential must run the job inline before spawn_compute returns"
+        );
+    }
+
+    /// The sequential backend builds no pools at all — there is no
+    /// `DefaultPools` on this target — so nothing can report one as started,
+    /// before or after work is spawned. On native the same sequence starts a
+    /// tokio runtime and flips this to `true`.
+    #[wasm_bindgen_test]
+    fn the_sequential_backend_never_starts_a_default_pool() {
+        let services = ExecutionServices::with_defaults();
+        assert!(
+            !services.default_pools_started(),
+            "no pool exists to start on wasm32"
+        );
+
+        services
+            .spawn_compute(Box::new(|| {}))
+            .expect("the sequential backend has no admission failure to report");
+
+        assert!(
+            !services.default_pools_started(),
+            "running work must not conjure a pool on the sequential backend"
+        );
     }
 }

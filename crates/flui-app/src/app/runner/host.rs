@@ -244,6 +244,9 @@ pub(super) fn desktop_secondary_wake_deadline(
 }
 
 #[cfg(all(test, not(target_os = "ios")))]
+// `desktop_secondary_wake_deadline` is a desktop-loop concern and is
+// `cfg(not(wasm32))`; the web backend drives frames from RAF instead.
+#[cfg(not(target_arch = "wasm32"))]
 mod desktop_secondary_wake_deadline_tests {
     use web_time::Instant;
 

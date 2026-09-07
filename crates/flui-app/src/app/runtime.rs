@@ -1501,7 +1501,7 @@ impl AppRuntime {
     /// release path is [`Self::release_redraw_window_for`] at window close,
     /// while the loop is still alive.
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
             reason = "only teardown_platform_realm calls this, and that function \
@@ -1559,7 +1559,7 @@ impl AppRuntime {
     /// replacing a prior installation; see [`Drop`]'s impl for the third,
     /// last-resort path).
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
             reason = "only teardown_platform_realm calls this, and that function \
@@ -2104,6 +2104,9 @@ mod execution_wiring_tests {
     }
 }
 
+// `crate::app::lifecycle` (Task/Worker/Service) is `cfg(not(wasm32))`, so
+// every test in here is about a seam that does not exist on wasm32.
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod service_lifecycle_wiring_tests {
     use std::sync::Arc;
