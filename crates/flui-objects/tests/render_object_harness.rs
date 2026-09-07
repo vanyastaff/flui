@@ -10987,6 +10987,82 @@ fn harness_table_border_interior_lines_sit_exactly_on_the_column_and_row_boundar
     );
 }
 
+/// A right-to-left `RenderTable` puts column 0 at the RIGHT edge, and moves
+/// its interior divider with it.
+///
+/// Two assertions, and the second is the one worth having. Cell offsets are the
+/// obvious half; the DIVIDER is where a port goes silently wrong, because the
+/// entry to drop when computing interior boundaries is the table's own left
+/// edge -- index 0 under `Ltr` and the LAST index under `Rtl`. Slicing `[1..]`
+/// unconditionally keeps drawing a line, just at x=0 (the table's edge) instead
+/// of the real boundary, and nothing about that picture looks wrong enough to
+/// notice without an assertion.
+#[test]
+fn harness_table_rtl_places_column_zero_at_the_right_and_moves_its_divider() {
+    let border = TableBorder::all(BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid));
+    let table = |direction| {
+        RenderTester::mount(
+            // Fixed(50) + Flex under a tight 200 -> widths [50, 150], which
+            // are UNEQUAL so the divider lands somewhere different in each
+            // direction (x=50 vs x=150) rather than at the midpoint either way.
+            box_node(
+                RenderTable::new(2)
+                    .with_column_widths(HashMap::from([(0, TableColumnWidth::Fixed(50.0))]))
+                    .with_border(Some(border))
+                    .with_text_direction(direction),
+            )
+            .child(box_node(RenderColoredBox::red(50.0, 10.0)).label("col0"))
+            .child(box_node(RenderColoredBox::green(150.0, 10.0)).label("col1")),
+        )
+        .with_constraints(table_tight_width_loose_height(200.0, 800.0))
+        .run_frame()
+    };
+
+    let ltr = table(TextDirection::Ltr);
+    assert_eq!(
+        (
+            ltr.offset(ltr.id("col0")).dx.get(),
+            ltr.offset(ltr.id("col1")).dx.get()
+        ),
+        (0.0, 50.0),
+        "premise: left-to-right puts column 0 at the left edge"
+    );
+    let ltr_divider = ltr
+        .display_commands()
+        .into_iter()
+        .find(|c| c.kind == DrawKind::Path)
+        .expect("an interior vertical line must be drawn");
+    assert!(
+        ltr_divider.line.contains("bounds=(50.00,"),
+        "premise: the interior divider sits at the column boundary x=50; got: {}",
+        ltr_divider.line,
+    );
+
+    let rtl = table(TextDirection::Rtl);
+    assert_eq!(
+        (
+            rtl.offset(rtl.id("col0")).dx.get(),
+            rtl.offset(rtl.id("col1")).dx.get()
+        ),
+        (150.0, 0.0),
+        "right-to-left puts column 0 at the RIGHT: it takes the rightmost 50px \
+         at x=150, and column 1's 150px fills the rest from x=0"
+    );
+    let rtl_divider = rtl
+        .display_commands()
+        .into_iter()
+        .find(|c| c.kind == DrawKind::Path)
+        .expect("an interior vertical line must be drawn");
+    assert!(
+        rtl_divider.line.contains("bounds=(150.00,"),
+        "the divider must MOVE with the columns to x=150. Slicing the column \
+         positions as `[1..]` regardless of direction draws it at x=0 -- the \
+         table's own left edge, which is not an interior boundary at all; \
+         got: {}",
+        rtl_divider.line,
+    );
+}
+
 #[test]
 fn harness_table_hit_test_per_cell_and_miss_outside_bounds() {
     let run = RenderTester::mount(
