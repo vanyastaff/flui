@@ -225,6 +225,27 @@ impl RenderAnimatedOpacity {
         // compositing-bits mark above; that walk marks paint, which wins over
         // this by the `!needs_paint()` filter in `run_paint`. Flutter's
         // `_updateOpacity` has exactly this shape.
+        // Crossing alpha 0 starts or stops suppressing the subtree's paint
+        // entirely, and that is invisible to the layer-update path: at both
+        // alpha 0 and alpha 255 no `OpacityLayer` is emitted, so there is no
+        // effect-layer slot to patch and a graft would replay the old content —
+        // leaving a transparent subtree on screen, or a restored one missing.
+        // Only a repaint can add or remove that content.
+        if (old_alpha == 0) != (new_alpha == 0) {
+            if let Err(error) = handle.mark_needs_paint() {
+                tracing::warn!(
+                    %error,
+                    old_alpha,
+                    new_alpha,
+                    "RenderAnimatedOpacity: paint mark send failed on a visibility change; \
+                     alpha cache left at the old value so the next tick retries"
+                );
+                return false;
+            }
+            alpha.store(new_alpha, Ordering::Relaxed);
+            return true;
+        }
+
         if let Err(error) = handle.mark_needs_composited_layer_update() {
             tracing::warn!(
                 %error,

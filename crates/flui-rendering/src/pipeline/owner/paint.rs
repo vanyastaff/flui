@@ -554,14 +554,27 @@ impl PipelineOwner<PaintPhase> {
                             .flatten()
                             // A cached subtree replays its nested boundaries'
                             // layers too, so it is reusable only while none of
-                            // them needs a REPAINT — see `nested_boundaries`.
-                            // A nested boundary queued only for a layer update
-                            // is fine: its effect layers were flattened into
-                            // this capture, so the patch below reaches them.
+                            // them has pending work of ANY kind — see
+                            // `nested_boundaries`.
+                            //
+                            // A layer update counts. It is tempting not to let
+                            // it, since a nested boundary's effect layers are
+                            // flattened into this capture and the patch below
+                            // could reach them — but serving the update from
+                            // here patches only THIS capture and clears the
+                            // flag, while the nested boundary keeps its own
+                            // capture at the old value. The next frame that
+                            // repaints this boundary descends, finds the nested
+                            // one clean, and grafts that stale capture: the
+                            // property silently reverts, permanently. Declining
+                            // sends the walk down to the nested boundary, which
+                            // patches its own capture, and this one re-captures
+                            // the result on the way back out.
                             .filter(|subtree| {
-                                !subtree.nested_boundaries.iter().any(|nested| {
-                                    dirty_set.contains(nested) && !layer_updates.contains(nested)
-                                })
+                                !subtree
+                                    .nested_boundaries
+                                    .iter()
+                                    .any(|nested| dirty_set.contains(nested))
                             });
                         // `None` here means the structure changed under a
                         // layer-update request (a node gained or lost an effect
@@ -797,12 +810,14 @@ struct FragmentComposer {
     /// recorded into all of them, so each capture learns the boundaries nested
     /// anywhere beneath it — see `RetainedSubtree::nested_boundaries`.
     capture_scopes: Vec<Vec<RenderId>>,
-    /// Effect layers pushed this pass: `(render id, layer id, origin)`.
+    /// Which render node owns each effect layer pushed this pass, and the
+    /// origin it painted at.
     ///
-    /// Recorded flat during the walk and resolved into per-capture
-    /// [`EffectSlots`] by [`Self::capture`], which is the only place the
-    /// mapping from `LayerId` to a flattened index exists.
-    effect_layers: Vec<(RenderId, LayerId, Offset)>,
+    /// Maintained incrementally rather than as a log the captures re-index:
+    /// `capture` runs once per repainted boundary, so rebuilding this map
+    /// inside it would make the paint pass O(boundaries x effect layers) even
+    /// though each capture only looks up the layers it actually visits.
+    effect_owner: FxHashMap<LayerId, (RenderId, Offset)>,
     /// Patches applied to a grafted capture this pass, to be written back into
     /// the stored capture by `run_paint` once the walk's `&self` borrow ends.
     ///
@@ -850,7 +865,7 @@ impl FragmentComposer {
             follower_correlations: Vec::new(),
             retained_captures: Vec::new(),
             capture_scopes: Vec::new(),
-            effect_layers: Vec::new(),
+            effect_owner: FxHashMap::default(),
             layer_patches: Vec::new(),
         }
     }
@@ -944,7 +959,7 @@ impl FragmentComposer {
     /// layers can be flattened into SEVERAL captures at once when boundaries
     /// nest, so the resolution has to happen per capture rather than here.
     fn record_effect_layer(&mut self, render_id: RenderId, layer_id: LayerId, origin: Offset) {
-        self.effect_layers.push((render_id, layer_id, origin));
+        self.effect_owner.insert(layer_id, (render_id, origin));
     }
 
     /// Records a `(RenderId, LayerId)` correlation for a pushed
@@ -987,15 +1002,11 @@ impl FragmentComposer {
 
     fn capture(&self, root: LayerId) -> Option<RetainedSubtree> {
         let mut nodes: Vec<RetainedNode> = Vec::new();
-        // Reverse index over the flat effect-layer log, so the walk below can
-        // ask "is this layer somebody's effect layer" in O(1). Built per
-        // capture because the same layer can be captured more than once when
-        // boundaries nest.
-        let effect_owner: FxHashMap<LayerId, (RenderId, Offset)> = self
-            .effect_layers
-            .iter()
-            .map(|&(render_id, layer_id, origin)| (layer_id, (render_id, origin)))
-            .collect();
+        // `effect_owner` is maintained incrementally by `record_effect_layer`,
+        // so this walk answers "is this layer somebody's effect layer" in O(1)
+        // without re-indexing anything per capture. The same layer can be
+        // captured more than once when boundaries nest, which is why the
+        // per-capture SLOTS below are still built here rather than shared.
         let mut effect_slots: FxHashMap<RenderId, EffectSlots> = FxHashMap::default();
 
         // (tree id, parent index in `nodes`)
@@ -1014,7 +1025,7 @@ impl FragmentComposer {
                 return None;
             }
             let index = nodes.len();
-            if let Some(&(render_id, origin)) = effect_owner.get(&id) {
+            if let Some(&(render_id, origin)) = self.effect_owner.get(&id) {
                 effect_slots
                     .entry(render_id)
                     .or_insert_with(|| EffectSlots {

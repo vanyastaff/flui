@@ -232,11 +232,31 @@ every leaf is its own boundary). (b) It needs `is_repaint_boundary()` to vary at
 runtime, which the storage flag does not support — see the `IS_REPAINT_BOUNDARY`
 note below.
 
-**Accepted trade-off:** an effect expressed through some mechanism OTHER than the
-`paint_alpha()` / `paint_transform()` node hooks has no update-only path. Clips
-and physical models are recorded as fragment scopes rather than node hooks, so
-they are not covered and would need their own design. Unchanged from before, so
-no regression — stated rather than assumed.
+**Accepted trade-off:** three of them, all narrowing WHEN the fast path applies,
+never whether the frame is correct.
+
+1. An effect expressed through some mechanism OTHER than the `paint_alpha()` /
+   `paint_transform()` node hooks has no update-only path. Clips and physical
+   models are recorded as fragment scopes rather than node hooks, so they are
+   not covered and would need their own design. Unchanged from before, so no
+   regression — stated rather than assumed.
+2. **A boundary declines to graft while any boundary nested inside it has
+   pending work of any kind, including a layer update.** Serving a nested
+   boundary's update from an enclosing capture is possible — the layers are
+   flattened into it — but it patches only that capture and clears the flag,
+   leaving the nested boundary's own capture at the old value for the next
+   frame that grafts it to replay. Declining costs the outer boundary's reuse
+   on those frames and keeps both captures consistent, because the outer
+   re-captures the patched result on its way back out.
+   (`an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale`
+   is red without this, restoring the old alpha on the third frame.)
+3. **The root boundary is never retained, so an effect whose only enclosing
+   boundary is the root gets no fast path.** `run_paint` enters through
+   `paint_subtree(root)` directly rather than the boundary-child arm that
+   creates captures, so `RenderView` — which declares itself a boundary — has
+   none. The mark still degrades correctly (the frame repaints), it is simply
+   not accelerated. A tree with any `RepaintBoundary` above the effect, which
+   includes every per-item boundary in a list, is unaffected.
 
 **Replacement tests:** `an_alpha_change_updates_the_layer_without_repainting_the_subtree`,
 `a_layer_update_is_written_back_into_the_retained_capture` (three frames — a

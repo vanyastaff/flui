@@ -1057,3 +1057,187 @@ fn a_layer_update_without_retained_output_degrades_to_a_repaint() {
         "and the painted result carries the new alpha",
     );
 }
+
+/// Going fully transparent actually hides the subtree.
+///
+/// The trap: at alpha 255 and at alpha 0 `RenderOpacity` emits no
+/// `OpacityLayer` either way, and `needs_compositing()` is false at both, so
+/// nothing structural appears to change. But `skip_paint()` flips, and a node
+/// with no effect layer has no slot in `effect_slots` for the update arm to
+/// patch — so an update-only commit would graft the old, visible capture and
+/// leave the subtree on screen at opacity 0.
+///
+/// The oracle is the emitted picture count rather than the paint counter: the
+/// question is what the frame CONTAINS, and a graft of stale content paints
+/// nothing while still emitting it.
+#[test]
+fn going_fully_transparent_removes_the_subtree_from_the_frame() {
+    let (owner, opacity_id) = mount_drawing_opacity(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // 0.5 -> 1.0 first: both endpoints of the real transition must have no
+    // OpacityLayer, so the bug is about `skip_paint`, not about a layer.
+    set_opacity(&mut owner, opacity_id, 1.0);
+    let (mut owner, result) = owner.run_frame();
+    let opaque = result
+        .expect("opaque frame")
+        .expect("opaque frame produces a layer tree");
+    assert!(
+        picture_count(&opaque) > 0,
+        "precondition: the subtree is visible while opaque",
+    );
+
+    set_opacity(&mut owner, opacity_id, 0.0);
+    let (owner, result) = owner.run_frame();
+    let transparent = result
+        .expect("transparent frame")
+        .expect("transparent frame produces a layer tree");
+    drop(owner);
+
+    assert!(
+        picture_count(&transparent) < picture_count(&opaque),
+        "a fully transparent opacity must drop its subtree's content from the \
+         frame; got {} pictures at alpha 0 vs {} at alpha 255",
+        picture_count(&transparent),
+        picture_count(&opaque),
+    );
+}
+
+/// …and coming back from fully transparent restores it.
+///
+/// The mirror of the case above: at alpha 0 the node paints nothing, so the
+/// boundary's capture holds no content. Serving 0 -> 255 as an update-only
+/// commit would replay that empty capture and leave the subtree invisible.
+#[test]
+fn leaving_fully_transparent_restores_the_subtree_to_the_frame() {
+    let (owner, opacity_id) = mount_drawing_opacity(0.0);
+    let (mut owner, result) = owner.run_frame();
+    let hidden = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    let hidden_pictures = picture_count(&hidden);
+
+    set_opacity(&mut owner, opacity_id, 1.0);
+    let (owner, result) = owner.run_frame();
+    let shown = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert!(
+        picture_count(&shown) > hidden_pictures,
+        "leaving alpha 0 must bring the subtree's content back into the frame; \
+         got {} pictures at alpha 255 vs {hidden_pictures} at alpha 0",
+        picture_count(&shown),
+    );
+}
+
+/// Root row → boundary → opacity → a leaf that actually DRAWS.
+///
+/// Deliberately not `mount_opacity_under_boundary`: that fixture's leaf is a
+/// `PaintCounter`, which records a call and emits no draw commands, so it
+/// produces no `PictureLayer` and a picture-count oracle over it cannot tell a
+/// visible subtree from a hidden one. Content that draws is what makes the
+/// assertion mean anything.
+fn mount_drawing_opacity(
+    opacity: f32,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+) {
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderOpacity::new(opacity))
+                    .label("opacity")
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+    (owner, opacity_id)
+}
+
+/// Number of `PictureLayer`s in a tree.
+fn picture_count(t: &flui_layer::LayerTree) -> usize {
+    fn walk(t: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> usize {
+        let Some(node) = t.get(id) else { return 0 };
+        let self_count = usize::from(matches!(node.layer(), flui_layer::Layer::Picture(_)));
+        self_count + node.children().iter().map(|&c| walk(t, c)).sum::<usize>()
+    }
+    t.root().map_or(0, |root| walk(t, root))
+}
+
+/// An update served by grafting an OUTER boundary must not leave the inner
+/// boundary's own capture stale.
+///
+/// The shape: outer boundary → inner boundary → opacity → content.
+/// `mark_needs_composited_layer_update` walks up to the INNER boundary, since
+/// that is the first one owning retained output. But the outer boundary's
+/// capture flattens the inner one's layers, so if the outer is allowed to graft
+/// it can serve the update from its own copy — patching that copy and clearing
+/// the flag while the inner boundary's capture keeps the old value.
+///
+/// The third frame is where that shows: repaint the outer for an unrelated
+/// reason and it descends to the inner, which is clean, and grafts the stale
+/// capture — restoring the old alpha permanently.
+#[test]
+fn an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale() {
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).label("outer").child(
+                    box_node(RenderRepaintBoundary::new()).child(
+                        box_node(RenderOpacity::new(0.5))
+                            .label("opacity")
+                            .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                    ),
+                ),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+            ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let outer = registry.get("outer").expect("outer is labelled");
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    set_opacity(&mut owner, opacity_id, 0.25);
+    let (mut owner, result) = owner.run_frame();
+    let updated = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    assert_eq!(
+        opacity_alpha(&updated).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "precondition: the update lands in the frame it was requested for",
+    );
+
+    // Third frame: repaint the OUTER boundary for an unrelated reason. It
+    // descends to the inner boundary, which is clean, and grafts its capture.
+    owner.mark_needs_paint(outer);
+    let (owner, result) = owner.run_frame();
+    let regrafted = result
+        .expect("third frame")
+        .expect("third frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        opacity_alpha(&regrafted).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "an outer repaint that grafts the inner boundary must replay the \
+         UPDATED alpha; a stale inner capture silently restores the old value",
+    );
+}

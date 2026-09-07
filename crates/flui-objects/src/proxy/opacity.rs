@@ -86,6 +86,10 @@ impl RenderOpacity {
         }
         let old_needs_compositing = self.needs_compositing();
         let old_is_visible = self.alpha > 0;
+        // Whether this node suppresses its subtree's paint entirely. Read
+        // through the trait method rather than re-deriving `alpha == 0`, so
+        // this stays correct if that predicate changes.
+        let old_skips_paint = <Self as RenderBox>::skip_paint(self);
         self.opacity = clamped;
         self.alpha = Self::opacity_to_alpha(clamped);
         // A pure alpha change lands ONLY on the `OpacityLayer` this node
@@ -105,6 +109,16 @@ impl RenderOpacity {
         }
         if old_is_visible != (self.alpha > 0) {
             impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
+        }
+        // Starting or stopping suppressing the subtree's paint is a change to
+        // what the frame CONTAINS, not to a layer property, and it is invisible
+        // to the layer-update path: at both alpha 255 and alpha 0 this node
+        // emits no `OpacityLayer` at all, so it has no effect-layer slot for an
+        // update to patch and a graft would replay the old content — leaving a
+        // fully transparent subtree on screen, or a restored one missing.
+        // Only a repaint can add or remove that content.
+        if old_skips_paint != <Self as RenderBox>::skip_paint(self) {
+            impact |= flui_rendering::RenderUpdateImpact::PAINT;
         }
         impact
     }
@@ -323,10 +337,12 @@ mod tests {
         assert_eq!(
             opacity.set_opacity(0.0),
             flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
-                | flui_rendering::RenderUpdateImpact::SEMANTICS,
-            "becoming invisible changes semantics; the layer change itself is still \
-             just this node's own layer, and `paint_alpha()` dropping to None is \
-             caught by the paint phase's structure guard",
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+                | flui_rendering::RenderUpdateImpact::PAINT,
+            "becoming invisible must REPAINT, not just update a layer: at both \
+             alpha 255 and alpha 0 this node emits no OpacityLayer, so there is \
+             no effect-layer slot for an update to patch and a graft would \
+             replay the old, visible content",
         );
         assert_eq!(
             opacity.set_opacity(0.0),
