@@ -140,7 +140,6 @@ fn obscure(text: &str, caret_byte_offset: usize, mask: char) -> (String, usize) 
 /// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
 /// - **Multi-line** — newlines are inserted as literal characters but line
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
-/// - **`obscureText`** — password masking is not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
 /// - **Scroll when text overflows** — the rendered text clips without scrolling.
 /// - **Swapping the controller on a live field** — `EditableTextState` pins

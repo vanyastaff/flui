@@ -43,7 +43,6 @@ use crate::text::editable_text::EditableText;
 /// - Text selection by drag + selection rendering
 /// - Clipboard (copy / paste / cut)
 /// - Multi-line support
-/// - `obscureText` (password masking)
 /// - Input formatters
 /// - Scroll when text overflows the visible width
 /// - Label / hint text / error text / `InputDecoration` in general
@@ -62,6 +61,8 @@ pub struct TextField {
     caret_color: Color,
     /// Inner padding between the decoration border and the text.
     content_padding: EdgeInsets,
+    /// Forwarded to [`EditableText::obscure_text`] — a password field.
+    obscure_text: bool,
 }
 
 impl TextField {
@@ -74,6 +75,7 @@ impl TextField {
             caret_height: 18.0,
             caret_color: Color::BLACK,
             content_padding: EdgeInsets::symmetric(px(8.0), px(12.0)),
+            obscure_text: false,
         }
     }
 
@@ -96,6 +98,15 @@ impl TextField {
     #[must_use]
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = color;
+        self
+    }
+
+    /// Paint every character as a bullet — a password field (default
+    /// `false`). Forwards to [`EditableText::obscure_text`], where the
+    /// substitution happens before the render object sees the text.
+    #[must_use]
+    pub fn obscure_text(mut self, obscure: bool) -> Self {
+        self.obscure_text = obscure;
         self
     }
 
@@ -146,7 +157,8 @@ impl ViewState<TextField> for TextFieldState {
     fn build(&self, view: &TextField, _ctx: &dyn BuildContext) -> impl IntoView {
         let editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
             .caret_height(view.caret_height)
-            .caret_color(view.caret_color);
+            .caret_color(view.caret_color)
+            .obscure_text(view.obscure_text);
 
         let padded = Padding::new(view.content_padding).child(editable);
         let decorated = DecoratedBox::new(field_border_decoration()).child(padded);
