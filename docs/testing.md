@@ -72,9 +72,17 @@ Three versions must agree or the runner refuses to start: the locked `wasm-bindg
 and would bump the workspace lock as a side effect of adding a dev-dependency), and
 `wasm-bindgen-cli`, whose version the recipe and the CI step both read out of `Cargo.lock`.
 
-Still compile-only, and named rather than implied: `flui-app`'s wasm32 execution path
-(`ExecutionServices`' sequential branches) and `flui-platform`'s web backend. `flui-app`'s test
-targets do not build for wasm32 yet — see #985 for the four reasons.
+`just wasm-test` **discovers** its suites (`crates/*/tests/wasm32.rs`) rather than naming crates,
+because a list is how the next suite gets silently never run — the same defect one level up. Both
+guards it asserts exist for that reason: a glob matching nothing never runs the loop body, and a
+runner finding no tests still exits 0.
+
+Still compile-only, and narrowed rather than dropped: `ExecutionServices`' own
+`#[cfg(target_arch = "wasm32")]` branches are `pub(crate)`, so only a unit test reaches them, and
+`flui-app`'s **lib-test** target does not build for wasm32 (14 errors, all test code reaching
+`cfg(not(wasm32))`-gated APIs). Its *integration* test target does build, which is why
+`crates/flui-app/tests/wasm32.rs` covers the public execution seam an embedder actually touches.
+`flui-platform`'s web backend remains entirely compile-only. See #985.
 
 ## Quality Gates
 

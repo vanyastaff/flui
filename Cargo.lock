@@ -1784,6 +1784,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-time",
 ]
 
