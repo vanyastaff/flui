@@ -1230,6 +1230,111 @@ fn a_paint_error_after_a_patch_leaves_the_update_pending_for_the_retry() {
     }
 }
 
+/// A real repaint queued alongside an update is not downgraded by a failed pass.
+///
+/// A boundary can be queued for BOTH: some node's layer property moved, and
+/// something it paints changed. The walk clears `needs_paint` as it goes, so
+/// after a poisoned pass the retry sees a boundary that no longer needs paint
+/// while both queue entries survive — and would reclassify it as update-only,
+/// graft the pre-error capture, and patch just the effect layer. The content
+/// change that required the repaint would stay stale.
+///
+/// Note this is a regression the update path can introduce and the paint path
+/// alone cannot: without an update queued, the still-queued boundary is in
+/// `dirty_set` and refuses the graft outright.
+#[test]
+fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Debug)]
+    struct PoisonOnDemand(Arc<AtomicBool>);
+
+    impl flui_foundation::Diagnosticable for PoisonOnDemand {}
+
+    impl flui_rendering::traits::RenderBox for PoisonOnDemand {
+        type Arity = flui_tree::Leaf;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            ctx.constrain(Size::new(px(10.0), px(10.0)))
+        }
+
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+            assert!(
+                !self.0.load(Ordering::Relaxed),
+                "PoisonOnDemand: armed, poisoning this paint pass on purpose",
+            );
+        }
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+    }
+
+    let armed = Arc::new(AtomicBool::new(false));
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderOpacity::new(0.5))
+                        .label("opacity")
+                        .child(box_node(PaintCounter(Arc::clone(&painted))).label("content")),
+                ),
+            )
+            .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+    let content = registry.get("content").expect("content is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // Both reasons at once: a layer property moved AND painted content changed.
+    set_opacity(&mut owner, opacity_id, 0.25);
+    owner.mark_needs_paint(content);
+    armed.store(true, Ordering::Relaxed);
+    let (owner, result) = owner.run_frame();
+    assert!(
+        result.is_err(),
+        "precondition: the armed leaf poisons this pass"
+    );
+    // Counted AFTER the failure, not before it: the poisoned pass repaints the
+    // boundary before reaching the sibling that poisons it, so a count taken
+    // before the failure is already incremented and cannot say anything about
+    // what the retry did.
+    let after_error = painted.load(Ordering::Relaxed);
+
+    armed.store(false, Ordering::Relaxed);
+    let (owner, result) = owner.run_frame();
+    result.expect("the retry paints cleanly");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > after_error,
+        "the retry must REPAINT the boundary, not graft it and patch only the layer: \
+         the content change that required the repaint would be lost",
+    );
+}
+
 /// Body of the test above, run once per arm.
 ///
 /// Both arms clear the pending flag, in different places — the graft arm in

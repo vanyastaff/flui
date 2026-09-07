@@ -305,6 +305,21 @@ impl DirtyTracker {
                 node.is_repaint_boundary_flag() && node.was_repaint_boundary();
 
             if owns_retained_layer || parent.is_none() {
+                // A real repaint supersedes any composited-layer update queued
+                // for this boundary, and the record has to go NOW rather than
+                // be inferred later from `needs_paint`. The paint walk clears
+                // that flag as it goes, so after a pass that fails partway the
+                // retry would see a boundary that no longer needs paint while
+                // both queue entries survive — reclassify it as update-only,
+                // graft the pre-error capture, and patch only the effect layer,
+                // silently dropping the content change that required the
+                // repaint.
+                //
+                // The paint path alone cannot regress this way: a still-queued
+                // boundary is in `dirty_set` and refuses the graft outright. It
+                // is the update classification that makes it graft-eligible, so
+                // the update classification is what has to be withdrawn.
+                self.layer_update_boundaries.remove(&current);
                 self.schedule_paint_boundary(current, node.depth() as usize);
                 return;
             }
