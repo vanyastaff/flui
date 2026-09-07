@@ -1224,11 +1224,6 @@ mod tests {
         );
     }
 
-    /// An unlinked follower with `show_when_unlinked == false`
-    /// produces no `last_follower_offsets` entry, and is recorded in
-    /// `last_hidden_follower_ids` so the hit-test walk can skip
-    /// its subtree instead of silently falling through to normal
-    /// traversal.
     /// A render object whose `is_repaint_boundary()` varies after insert is the
     /// trap issue #995 names: the FLAG is bootstrapped once at insert and never
     /// re-synced, while paint asks the trait live. The two then disagree, and the
@@ -1240,6 +1235,11 @@ mod tests {
     /// `paint_subtree_impl` the run below completes silently and this test fails
     /// for want of a panic — which is the point: the assert is the only thing
     /// standing between a future dynamic boundary and permanent corruption.
+    // The guard is a `debug_assert_eq!`, so `just test-release` compiles it out
+    // and this `#[should_panic]` would fail there for want of a panic. Gated
+    // rather than weakened: a release build genuinely has no guard, and saying
+    // so is more honest than asserting something that does not run.
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "repaint-boundary flag and trait answer disagree")]
     fn a_boundary_that_changes_after_insert_trips_the_source_of_truth_guard() {
@@ -1299,6 +1299,11 @@ mod tests {
         let _ = owner.run_paint();
     }
 
+    /// An unlinked follower with `show_when_unlinked == false`
+    /// produces no `last_follower_offsets` entry, and is recorded in
+    /// `last_hidden_follower_ids` so the hit-test walk can skip
+    /// its subtree instead of silently falling through to normal
+    /// traversal.
     #[test]
     fn run_paint_marks_unlinked_follower_hidden_when_show_when_unlinked_is_false() {
         let mut owner = PipelineOwner::new();
