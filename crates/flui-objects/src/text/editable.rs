@@ -44,7 +44,7 @@ use flui_tree::Leaf;
 use flui_types::{
     Color, Offset, Point, Rect, Size,
     geometry::px,
-    typography::{InlineSpan, TextAlign, TextDirection, TextPosition},
+    typography::{InlineSpan, TextAffinity, TextAlign, TextDirection, TextPosition},
 };
 
 use flui_rendering::{
@@ -416,6 +416,43 @@ impl RenderEditable {
             Point::new(self.caret_offset.dx, self.caret_offset.dy),
             Size::new(px(self.caret_width), px(self.caret_height)),
         )
+    }
+
+    /// The byte offset in [`Self::plain_text`] that a point in this render
+    /// object's local coordinates falls on.
+    ///
+    /// The query a gesture layer needs to turn a tap or a drag into a caret
+    /// position — Flutter's `RenderEditable::getPositionForPoint`, minus the
+    /// global-to-local conversion, which happens above this object.
+    ///
+    /// Returns `None` before layout, because there is no geometry to ask.
+    /// Callers that know layout has run may treat that as the start of the
+    /// text; this does not decide it for them, since "the caret belongs at 0"
+    /// and "there is nothing laid out" are different facts and only one of
+    /// them should move a caret.
+    ///
+    /// Clamped to a char boundary the same way
+    /// [`Self::with_caret_byte_offset`] clamps, so a point landing inside a
+    /// multi-byte character cannot produce an offset that slices it.
+    #[must_use]
+    pub fn byte_offset_for_local_offset(&self, point: Offset) -> Option<usize> {
+        if !self.painter.has_layout() {
+            return None;
+        }
+        Some(self.safe_caret_offset(self.painter.get_position_for_offset(point).offset))
+    }
+
+    /// The word surrounding the byte offset a point falls on, as a byte range.
+    ///
+    /// Backs double-tap word selection. Returns `None` before layout, for the
+    /// reason [`Self::byte_offset_for_local_offset`] gives.
+    #[must_use]
+    pub fn word_range_at_local_offset(&self, point: Offset) -> Option<Range<usize>> {
+        let offset = self.byte_offset_for_local_offset(point)?;
+        let word = self
+            .painter
+            .get_word_boundary(TextPosition::new(offset, TextAffinity::Downstream));
+        Some(self.clamp_text_range(word.start..word.end))
     }
 
     /// The selected byte range, if any.

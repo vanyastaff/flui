@@ -194,13 +194,11 @@ struct ComposingState {
 /// # DEFERRED (v1)
 ///
 /// The following behaviors are absent in v1 and must not be faked:
-/// - **Selection GESTURES**: a selection is tracked and rendered
-///   ([`Self::set_selection`], painted by `RenderEditable`), and every edit
-///   honours it — typing replaces it, Backspace and Delete remove it, an
-///   arrow collapses it. What is absent is anything that *produces* one from
-///   a pointer: tap-to-place, drag-to-select, shift-click and
-///   double-tap-word are not wired, so a selection only ever arrives from a
-///   caller driving this controller.
+/// - **Multi-tap and modified selection gestures**: a selection is tracked,
+///   rendered, honoured by every edit, and produced by a tap or a drag on the
+///   field. What is absent is anything needing a click count or a modifier —
+///   shift-click extension, double-tap word selection, triple-tap line
+///   selection — plus the selection handles and toolbar.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
 /// - **Grapheme-cluster-aware deletion**: [`Self::backspace`]/[`Self::delete_forward`]
