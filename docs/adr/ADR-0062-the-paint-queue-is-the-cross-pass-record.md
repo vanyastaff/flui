@@ -53,9 +53,19 @@ Two rules make ordering a non-issue rather than a family of guards:
 - `PaintQueue::enqueue` **upgrades** `LayerUpdate → Repaint` and never
   downgrades. A repaint subsumes an update.
 - `enqueue` is reached through one write site, `DirtyTracker::enqueue_paint`,
-  which owns mid-phase routing *and* the join — the mid-phase queue and the main
-  queue can each hold an entry for the same boundary, so an upgrade has to find
-  the id in either before pushing a new one.
+  which owns mid-phase routing. **Routing comes first, and the cross-queue join
+  is deferred to `PaintQueue::append`.** While a pass is running every mark goes
+  to the side queue, even for a boundary already in the main one; outside a pass
+  the kind is raised wherever the id already lives.
+
+  The tempting rule — "find the id in either queue, then upgrade in place" — is
+  the one that loses work, and it is worth stating because it reads as the
+  obvious simplification. An upgrade written to the MAIN queue during a pass is
+  invisible to that pass (it snapshotted its dispositions before the walk) and
+  is then deleted by `clear_paint_queue` before `exit_phase` drains the side
+  queue: the boundary grafts this frame and is not queued the next. `append`
+  upgrading on collision — where `DirtySet::append` skips duplicates — is what
+  makes the deferred join safe.
 
 Consequently update-then-paint, paint-then-update, and a mark arriving after a
 failed pass all reduce to the same entry.

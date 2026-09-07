@@ -405,7 +405,8 @@ fn a_layer_update_on_a_skipped_boundary_is_not_lost() {
     };
     assert!(
         impact.needs_composited_layer_update() && !impact.needs_paint(),
-        "precondition: this must be a layer-update-only change, or the test          exercises the paint path instead; got {impact:?}",
+        "precondition: this must be a layer-update-only change, or the test \
+         exercises the paint path instead; got {impact:?}",
     );
     let mut run = run.run_frame_again();
 

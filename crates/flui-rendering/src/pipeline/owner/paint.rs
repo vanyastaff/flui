@@ -1272,6 +1272,14 @@ impl FragmentComposer {
     /// produced — the layers themselves are clones, cheap because a
     /// `PictureLayer` shares its `DisplayList` behind an `Arc`.
     fn graft(&mut self, retained: &RetainedSubtree, patches: &[(usize, Layer)]) {
+        // Indexed once rather than scanned per node. A linear `find` inside the
+        // clone loop is O(retained nodes x patched layers), and both operands
+        // grow together on exactly the tree this feature targets — many
+        // animated opacities under one boundary, all updating in one frame.
+        let patch_by_index: FxHashMap<usize, &Layer> = patches
+            .iter()
+            .map(|(index, layer)| (*index, layer))
+            .collect();
         // Seal first: an open picture run belongs BEFORE the grafted content
         // in draw order, exactly as it would if the boundary had painted.
         self.seal_picture();
@@ -1297,10 +1305,9 @@ impl FragmentComposer {
             // render object's CURRENT properties instead of the captured one;
             // everything else is the cheap `Arc`-sharing clone retention is
             // built on.
-            let layer = patches
-                .iter()
-                .find(|(patched, _)| *patched == index)
-                .map_or_else(|| node.layer.clone(), |(_, layer)| layer.clone());
+            let layer = patch_by_index
+                .get(&index)
+                .map_or_else(|| node.layer.clone(), |layer| (*layer).clone());
             let mut layer_node = flui_layer::LayerNode::new(layer);
             if let Some(render_id) = node.render_id {
                 layer_node = layer_node.with_render_id(render_id);

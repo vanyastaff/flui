@@ -343,12 +343,17 @@ impl DirtyTracker {
 
     /// The ONE place a paint-queue entry is written.
     ///
-    /// Owns both mid-phase routing and the kind join, because those two
-    /// interact: the mid-phase queue and the main queue can each hold an entry
-    /// for the same boundary, so an upgrade has to find the id in EITHER before
-    /// deciding to push a new one. Splitting the two responsibilities is how a
-    /// repaint queued mid-paint ends up alongside a stale update entry instead
-    /// of replacing it.
+    /// Routing comes FIRST, and the cross-queue join is deferred to
+    /// [`PaintQueue::append`](super::dirty::PaintQueue::append). While a pass
+    /// is running every mark goes to the
+    /// side queue, even for a boundary already in the main one.
+    ///
+    /// The obvious-looking alternative — find the id in either queue and
+    /// upgrade it in place — is the one that loses work, which is why it is
+    /// named here rather than left to be rediscovered: an upgrade written to
+    /// the main queue during a pass is invisible to that pass, and
+    /// `clear_paint_queue` then deletes it before `exit_phase` drains the side
+    /// queue.
     ///
     /// `PaintQueue::enqueue` never downgrades, so callers do not need to check
     /// what is already there — a repaint wins whatever order the marks arrive
