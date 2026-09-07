@@ -307,11 +307,15 @@ tests = 35
 rust = "editable_text_test"
 family = "text-input"
 oracles = ["widgets/editable_text_test.dart"]
-tests = 1
+tests = 4
 
 [[targets.claims]]
 oracle = "widgets/editable_text_test.dart"
-cases = ["Composing text is underlined and underline is cleared when losing focus"]
+cases = [
+    "Composing text is underlined and underline is cleared when losing focus",
+    "selection persists when unfocused",
+    "password fields can have their obscuring character customized",
+]
 
 [[targets]]
 rust = "error_widget_test"
@@ -1317,7 +1321,7 @@ cases = [
 "widgets/editable_text_shortcuts_test.dart" = { cases = 120, claimed = 0, status = "pending" }
 "widgets/editable_text_show_on_screen_test.dart" = { cases = 14, claimed = 0, status = "pending" }
 "widgets/editable_text_styles_test.dart" = { cases = 4, claimed = 0, status = "pending" }
-"widgets/editable_text_test.dart" = { cases = 324, claimed = 5, status = "partial" }
+"widgets/editable_text_test.dart" = { cases = 324, claimed = 7, status = "partial" }
 "widgets/ensure_visible_test.dart" = { cases = 23, claimed = 0, status = "pending" }
 "widgets/error_widget_builder_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/error_widget_test.dart" = { cases = 3, claimed = 0, status = "pending" }

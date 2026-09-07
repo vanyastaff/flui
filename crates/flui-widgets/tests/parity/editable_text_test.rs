@@ -12,13 +12,31 @@
 //! explicitly, citing existing well-covered internal tests rather than
 //! duplicating a harness that already exercises the exact behavior.
 //!
-//! `EditableText`'s own module doc already states most of the portable-core
-//! constraints this file works within: v1 has no selection (only a collapsed
-//! caret), no clipboard, no multiline, no `obscureText`, no input formatters,
-//! and no controller-swap re-registration — every Flutter oracle test that
-//! depends on one of those is out of scope, listed below with its reason.
+//! `EditableText`'s own module doc states the portable-core constraints this
+//! file works within. **Two of them have since been lifted**, and the cases
+//! they used to exclude are now portable: `obscureText` with a customizable
+//! obscuring character, and a real selection — tracked, rendered, honoured by
+//! every edit, and produced by a tap, a drag, or Shift with an arrow. What is
+//! still absent, and still excludes its oracle cases: no clipboard, no
+//! multiline, no input formatters, no selection handles or toolbar, no
+//! floating cursor, and no click-count or pointer-modifier gestures
+//! (shift-click, double-tap word, triple-tap line).
 //!
 //! ## Ported (new test code here)
+//! - [`a_selection_survives_focus_and_blur`] — oracle: `'selection persists
+//!   when unfocused'`, the non-web branch. Flutter's web branch asserts the
+//!   opposite (focusing a single-line input selects the whole field); that is
+//!   a browser input-element quirk, not a framework contract, and FLUI has no
+//!   web focus behaviour to port it against.
+//! - [`an_obscuring_character_replaces_every_source_character`] — oracle:
+//!   `'password fields can have their obscuring character customized'`. The
+//!   oracle's fixture is ASCII, where Flutter's UTF-16 unit count and FLUI's
+//!   `char` count agree, so its assertion ports exactly.
+//!   [`the_mask_counts_characters_where_flutter_counts_utf16_units`] is the
+//!   replacement coverage rule #1 requires where they do NOT agree: `"a😀b"`
+//!   is three chars and four UTF-16 units, so Flutter paints four bullets and
+//!   leaks which keystroke was astral. The divergence and its reason are
+//!   recorded at `obscure`'s own doc.
 //! - [`composing_underline_geometry_appears_while_composing_and_disappears_after_unfocus`]
 //!   — oracle: `'Composing text is underlined and underline is cleared when
 //!   losing focus'`. Flutter's assertion reads the actual `TextSpan` tree
@@ -79,10 +97,11 @@
 //!   `'Composing region can truncate grapheme'` — no input-formatter
 //!   pipeline (`DEFERRED (v1)`).
 //! - Every `Floating cursor *` case, the whole `text selection toolbar`
-//!   group, `'bringIntoView brings the caret into view...'` — drag-selection,
-//!   selection handles, and the floating cursor are all selection-model
-//!   features FLUI does not implement (collapsed caret only, `DEFERRED
-//!   (v1)`).
+//!   group, `'bringIntoView brings the caret into view...'` — selection
+//!   handles, the toolbar, and the floating cursor are still absent. Note
+//!   this reason is NARROWER than it was: drag-selection is no longer among
+//!   them, which is what made `'selection persists when unfocused'` portable
+//!   below.
 //! - `'does not refocus when it is unmounted'`, `'does not refocus when it is
 //!   hidden by a new route'`, `'does not refocus when scrolled away in a
 //!   ListView'`, `'closed connection reopened when user focused'` and its
@@ -204,4 +223,114 @@ fn composing_underline_geometry_appears_while_composing_and_disappears_after_unf
     );
 
     focus_manager.unfocus();
+}
+
+/// Oracle: `'selection persists when unfocused'` (`editable_text_test.dart`,
+/// tag `3.44.0`) — direct port of the non-web branch.
+///
+/// Flutter's web branch asserts the opposite (focusing a single-line input
+/// selects the whole field); FLUI has no web-specific focus behaviour to
+/// port, and its own doc calls that a platform quirk of the browser's input
+/// element rather than a framework contract.
+///
+/// The oracle compares whole `TextEditingValue`s; FLUI's controller has no
+/// such struct, so text and selection are asserted separately — the same two
+/// facts.
+#[test]
+fn a_selection_survives_focus_and_blur() {
+    let controller = TextEditingController::with_text("test test");
+    controller.set_selection(5, 7);
+    let focus_node = FocusNode::with_debug_label("parity selection persistence");
+    let mut laid = lay_out(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)),
+        loose(200.0),
+    );
+    let focus_manager = laid.focus_manager();
+
+    assert_eq!(controller.selection(), 5..7);
+    assert!(!focus_node.has_primary_focus(), "precondition: unfocused");
+
+    focus_node.request_focus();
+    laid.tick();
+    assert!(focus_node.has_primary_focus());
+    assert_eq!(
+        controller.selection(),
+        5..7,
+        "gaining focus must not disturb the selection"
+    );
+    assert_eq!(controller.text(), "test test");
+
+    focus_manager.unfocus();
+    laid.tick();
+    assert!(!focus_node.has_primary_focus());
+    assert_eq!(
+        controller.selection(),
+        5..7,
+        "losing focus must not disturb it either — the oracle's own assertion"
+    );
+    assert_eq!(controller.text(), "test test");
+}
+
+/// Oracle: `'password fields can have their obscuring character customized'`
+/// (`editable_text_test.dart`, tag `3.44.0`).
+///
+/// The oracle expects `obscuringCharacter * originalText.length`, where
+/// Dart's `String.length` counts UTF-16 code units. FLUI emits one mask per
+/// source `char` — a **declared divergence**, recorded at `obscure`'s own doc
+/// with the reason (the UTF-16 count leaks which keystrokes were astral, and
+/// Flutter's own docs warn against `String.length` for user-visible character
+/// counts). The oracle's fixture is ASCII, where the two agree, so this ports
+/// its assertion exactly; the second half below is the FLUI-side replacement
+/// that pins the divergence where they do not.
+#[test]
+fn an_obscuring_character_replaces_every_source_character() {
+    let controller = TextEditingController::with_text("super-secret-password!!1");
+    let focus_node = FocusNode::with_debug_label("parity custom obscuring char");
+    let laid = lay_out(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node))
+            .obscure_text(true)
+            .obscuring_character('#'),
+        loose(200.0),
+    );
+
+    let painted = with_render_editable(&laid, |editable| editable.plain_text().to_string())
+        .expect("a mounted EditableText always has a RenderEditable");
+
+    assert_eq!(
+        painted,
+        "#".repeat("super-secret-password!!1".chars().count()),
+        "every source character is replaced by the chosen mask"
+    );
+}
+
+/// The FLUI-side replacement for the oracle assertion above where the two
+/// diverge, per Prime Directive rule #1: a mask counted in `char`s, not in
+/// UTF-16 code units.
+///
+/// `"a😀b"` is three chars and FOUR UTF-16 units — the emoji is a surrogate
+/// pair. Flutter would paint four bullets and tell an onlooker that one of
+/// the three keystrokes was astral; FLUI paints three.
+#[test]
+fn the_mask_counts_characters_where_flutter_counts_utf16_units() {
+    let source = "a😀b";
+    assert_eq!(source.chars().count(), 3);
+    assert_eq!(source.encode_utf16().count(), 4, "the oracle's own unit");
+
+    let controller = TextEditingController::with_text(source);
+    let focus_node = FocusNode::with_debug_label("parity astral mask");
+    let laid = lay_out(
+        EditableText::new(controller, Rc::clone(&focus_node))
+            .obscure_text(true)
+            .obscuring_character('#'),
+        loose(200.0),
+    );
+
+    let painted = with_render_editable(&laid, |editable| editable.plain_text().to_string())
+        .expect("a mounted EditableText always has a RenderEditable");
+
+    assert_eq!(
+        painted, "###",
+        "three source characters, three mask characters — four would leak \
+         which keystroke was astral"
+    );
 }
