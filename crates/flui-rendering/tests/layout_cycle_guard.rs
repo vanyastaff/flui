@@ -136,6 +136,91 @@ fn callback_reentry_poisons_structural_cycle() {
     );
 }
 
+/// A poisoned node keeps the geometry its LAST SUCCESSFUL layout committed,
+/// rather than the `Size::ZERO` the failing callback collapses to.
+///
+/// This is the distinction issue #561's sixth criterion asks for — "tests
+/// distinguish last-good retention from zero-value fake recovery" — and it is
+/// exactly the distinction a `Size::ZERO` result cannot make on its own. A node
+/// that never laid out successfully and one whose layout just failed both read
+/// as zero unless the retained value is asserted against a *known previous*
+/// size. So this lays out cleanly first, keeps that size, and only then
+/// introduces the cycle.
+///
+/// `poison.rs` states the contract this pins: the last committed geometry
+/// "stands in… or `Size::ZERO` / `SliverGeometry::ZERO` when it never
+/// succeeded".
+#[test]
+fn a_poisoned_node_keeps_its_last_committed_size_instead_of_collapsing_to_zero() {
+    let mut pipeline = fresh_layout_pipeline();
+    let p1 = pipeline
+        .render_tree_mut()
+        .insert_box(Box::new(RenderPadding::all(5.0)));
+    let p2 = pipeline
+        .render_tree_mut()
+        .insert_box_child(p1, Box::new(RenderPadding::all(2.0)))
+        .expect("p2 insert");
+
+    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+
+    // 1. A clean pass first — this is what makes the assertion below able to
+    //    tell retention from a zero that merely looks like one.
+    pipeline
+        .layout_dirty_root(p1, constraints)
+        .expect("the acyclic tree lays out");
+    let committed = pipeline
+        .render_tree()
+        .get(p2)
+        .expect("p2 in tree")
+        .size()
+        .expect("a clean pass commits a size");
+    assert_ne!(
+        committed,
+        Size::ZERO,
+        "precondition: the clean pass must commit a NON-zero size, or this test \
+         cannot distinguish retention from collapse"
+    );
+
+    // 2. Now make it cyclic and lay out again. P2 re-enters P1, the guard
+    //    returns `LayoutCycle`, and the callback collapses that child to
+    //    `Size::ZERO` before the poison bookkeeping tips the node.
+    pipeline
+        .render_tree_mut()
+        .get_mut(p2)
+        .expect("p2 in tree")
+        .add_child(p1);
+    let _ = pipeline.layout_dirty_root(p1, constraints);
+
+    // The poison must actually have engaged, or this test passes for the wrong
+    // reason: an unchanged size proves nothing if the cyclic pass never ran.
+    // `NEEDS_LAYOUT` cleared by the poison bookkeeping is the same evidence
+    // `callback_reentry_poisons_structural_cycle` uses.
+    assert!(
+        !pipeline
+            .render_tree()
+            .get(p2)
+            .expect("p2 in tree")
+            .needs_layout(),
+        "precondition: the cyclic pass must have engaged the layout poison, \
+         otherwise the size below is unchanged trivially"
+    );
+
+    // 3. The collapse must not have been committed. P2's geometry is still the
+    //    one its last SUCCESSFUL layout produced.
+    let retained = pipeline
+        .render_tree()
+        .get(p2)
+        .expect("p2 in tree")
+        .size()
+        .expect("a poisoned node keeps its committed geometry");
+    assert_eq!(
+        retained, committed,
+        "a poisoned node must retain the geometry its last successful layout \
+         committed; collapsing to Size::ZERO here would be the zero-value fake \
+         recovery issue #561 separates from real last-good retention"
+    );
+}
+
 // ============================================================================
 // Drop-guard panic safety — guard removes id on perform_layout panic
 // ============================================================================
