@@ -1,4 +1,4 @@
-# ADR-0047: Partial repaint needs cross-frame layer identity, not paint-phase bookkeeping
+# ADR-0061: Partial repaint needs cross-frame layer identity, not paint-phase bookkeeping
 
 *Damage cannot be derived from which render objects repainted, because the ones
 that always repaint cover the screen. It has to come from comparing consecutive

@@ -460,6 +460,18 @@ Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by 
 
 **Allowlist:** none. Nothing in `crates/` acquires a lifecycle-only presentation capability in a guarded body today.
 
+### 23. Two ADRs sharing a number
+
+An ADR number is a **citable identifier**, not a filename detail. `AGENTS.md` names `ADR-NNNN` as one of the two marker forms allowed to stay in shipped code *because it is mechanically grepped*, and `docs/runtime-contract.toml`, this document's own trigger table and every crate `ARCHITECTURE.md` cite records that way.
+
+A duplicate number makes each of those citations ambiguous, and — the part that makes it a defect rather than untidiness — a reader who follows one to the wrong record gets a **coherent-sounding answer about the wrong subsystem**. `ADR-0047` named both "Unified execution services under `AppRuntime`" and "Partial repaint needs cross-frame layer identity" for two months; nine of its ten inbound citations meant the first and one meant the second, and nothing said so.
+
+The check scans filenames rather than contents: `docs/adr/ADR-NNNN-*.md`, numbers extracted, `uniq -d` must be empty.
+
+> **Why a check and not a convention.** The convention already existed and did not hold. The collision reached `main` in a reviewed PR and survived every subsequent one, because no gate looked and no reader had reason to. Issue #947.
+
+**Allowlist:** none. A number is used once.
+
 ### Reactive lint promotion
 
 Triggers grow reactively. A new trigger is added to this list when an anti-pattern is caught in review; it does not pre-exist its first observation.
@@ -1132,7 +1144,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, and `ADR-0037/focus-owner` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 23 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass, and trigger 23 scans filenames rather than contents) plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, and `ADR-0037/focus-owner` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

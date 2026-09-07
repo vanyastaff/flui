@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 22 refusal triggers (1-22, with #9 numbered for FR-036)
+# Verifies the 23 refusal triggers (1-23, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
 # guard, Cross.H2 canonical-type-home guards, the Cross.H3
@@ -33,7 +33,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 22 triggers + extra guards; silent on pass
+#   bash scripts/port-check.sh             # check all 23 triggers + extra guards; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -1594,6 +1594,43 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 23 — no two ADRs share a number.
+#
+# An ADR number is a CITABLE identifier. AGENTS.md names `ADR-NNNN` as one of
+# the two marker forms that stay in shipped code precisely because they are
+# mechanically grepped, and `docs/runtime-contract.toml`, the port-check table
+# and the crate ARCHITECTURE.md files all cite records that way. A duplicate
+# number makes every one of those citations ambiguous, and a reader who follows
+# one to the wrong record gets a coherent-sounding answer about the wrong
+# subsystem.
+#
+# This is a check rather than a convention because the convention did not hold:
+# 0047 was used twice for two months (issue #947), and neither review caught it.
+# -----------------------------------------------------------------------------
+duplicate_adr_numbers=$(
+  find "${repo_root}/docs/adr" -maxdepth 1 -name 'ADR-[0-9][0-9][0-9][0-9]-*.md' -printf '%f\n' 2>/dev/null |
+    sed -n 's/^ADR-\([0-9]\{4\}\)-.*/\1/p' |
+    sort |
+    uniq -d
+)
+if [[ -n "${duplicate_adr_numbers}" ]]; then
+  echo "VIOLATION 23: two or more ADRs share a number"
+  echo "             an ADR number is a citable identifier; a duplicate makes"
+  echo "             every 'see ADR-NNNN' reference ambiguous (issue #947)"
+  while read -r dup; do
+    [[ -z "${dup}" ]] && continue
+    echo "  ADR-${dup}:"
+    find "${repo_root}/docs/adr" -maxdepth 1 -name "ADR-${dup}-*.md" -printf '    %f\n'
+  done <<< "${duplicate_adr_numbers}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    23: every ADR number is used exactly once"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1602,7 +1639,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner grep clean"
+echo "port-check: all 23 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B
