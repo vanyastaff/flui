@@ -481,6 +481,57 @@ mod tests {
         );
     }
 
+    /// The recorded divergence from Flutter, pinned so it cannot drift
+    /// unnoticed in either direction.
+    ///
+    /// Flutter searches `fontFamilyFallback` **per glyph**: a family that is
+    /// installed but lacks the glyph is skipped and the next one is tried
+    /// (`painting/text_style.dart`, the `fontFamily` doc). `Attrs::family`
+    /// holds exactly one family, so the walk here can only ask "is this
+    /// family installed" — and `Material Icons` IS installed while carrying no
+    /// Latin at all. The chain therefore stops on it, and the `Roboto` entry
+    /// behind it is never reached; Flutter would render the text.
+    ///
+    /// The two directions this guards:
+    ///
+    /// * If someone "fixes" the walk to skip a present family, this fails and
+    ///   points at `ARCHITECTURE.md`'s mapping decision — the change would
+    ///   need to be per-glyph to be a fix rather than a different guess.
+    /// * If per-glyph fallback ever does land, this fails too, which is the
+    ///   signal to retire the divergence record instead of leaving it stale.
+    ///
+    /// The control matters: the same chain with an ABSENT primary reaches
+    /// `Roboto`, so the stop is about presence and not about the chain being
+    /// unread.
+    #[test]
+    fn a_present_but_narrow_family_stops_the_chain_where_flutter_would_not() {
+        let mut system = font_system(database(&[ROBOTO, MATERIAL_ICONS]));
+        let mut installed = InstalledFamilies::default();
+
+        let narrow = TextStyle {
+            font_family: Some("Material Icons".to_owned()),
+            font_family_fallback: vec!["Roboto".to_owned()],
+            ..TextStyle::default()
+        };
+        assert_eq!(
+            resolve_family(Some(&narrow), &mut system, &mut installed, 0),
+            Family::Name("Material Icons"),
+            "an installed family stops the walk even though it carries no \
+             Latin -- Flutter would fall through to Roboto per glyph"
+        );
+
+        let absent = TextStyle {
+            font_family: Some("Nothing Carries This".to_owned()),
+            font_family_fallback: vec!["Roboto".to_owned()],
+            ..TextStyle::default()
+        };
+        assert_eq!(
+            resolve_family(Some(&absent), &mut system, &mut installed, 0),
+            Family::Name("Roboto"),
+            "control: the chain IS walked -- an absent primary reaches it"
+        );
+    }
+
     fn styled(family: Option<&str>) -> TextStyle {
         TextStyle {
             font_family: family.map(str::to_owned),
