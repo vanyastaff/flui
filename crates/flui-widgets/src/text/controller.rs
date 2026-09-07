@@ -15,10 +15,88 @@ use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
 ///
 /// Guarded by a `Mutex` inside `Arc` so any clone of the controller refers to
 /// the same live text and caret state.
+/// The selection, as Flutter models it: the caret is a **collapsed
+/// selection**, not a separate concept (`services/text_editing.dart`'s
+/// `TextSelection`, whose `TextSelection.collapsed` sets `baseOffset ==
+/// extentOffset`).
+///
+/// # Why one field, not `anchor` beside `caret`
+///
+/// The same reasoning [`ComposingState`] records for folding its two fields
+/// into one option. Two independent `usize`s carry an invariant — "the anchor
+/// equals the caret unless a selection is active" — that nothing enforces:
+/// every mutator that collapses would have to remember to write BOTH, and one
+/// that forgets leaves a phantom selection that paints a highlight the user
+/// never made. Making the caret a projection of the selection means there is
+/// no second field to forget.
+///
+/// Both offsets are byte offsets into [`ControllerInner::text`] and always sit
+/// on UTF-8 char boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Selection {
+    /// Where the selection started — Flutter's `baseOffset`. Unmoved by
+    /// extension; a drag moves the caret, not this.
+    anchor: usize,
+    /// Where the caret is — Flutter's `extentOffset`. The end a further
+    /// extension moves.
+    caret: usize,
+}
+
+impl ControllerInner {
+    /// Remove the selected span from `text` and return the offset the caret
+    /// belongs at afterwards — the span's start, which is where a replacement
+    /// is inserted and where a deletion leaves the caret.
+    ///
+    /// A no-op for a collapsed selection, returning the caret unchanged, so
+    /// every caller can call it unconditionally.
+    fn delete_selected_range(&mut self) -> usize {
+        let range = self.selection.range();
+        if range.is_empty() {
+            return self.selection.caret;
+        }
+        self.text.drain(range.clone());
+        range.start
+    }
+}
+
+impl Selection {
+    /// A caret: a selection with nothing between its ends.
+    const fn collapsed(offset: usize) -> Self {
+        Self {
+            anchor: offset,
+            caret: offset,
+        }
+    }
+
+    /// The selected span in ascending order, which is what text operations
+    /// need — the anchor may sit after the caret when the user dragged
+    /// backwards.
+    const fn range(self) -> Range<usize> {
+        if self.anchor <= self.caret {
+            self.anchor..self.caret
+        } else {
+            self.caret..self.anchor
+        }
+    }
+
+    const fn is_collapsed(self) -> bool {
+        self.anchor == self.caret
+    }
+
+    /// The positive of [`Self::is_collapsed`]: something is actually
+    /// selected. Named rather than negated at each site because every caller
+    /// is asking "is there a selection to replace/delete/collapse", and that
+    /// question reads forwards.
+    const fn is_extended(self) -> bool {
+        !self.is_collapsed()
+    }
+}
+
 struct ControllerInner {
     text: String,
-    /// Byte offset of the caret into `text`.  Always a valid UTF-8 char boundary.
-    caret_byte_offset: usize,
+    /// The selection, of which the caret is the collapsed case — see
+    /// [`Selection`].
+    selection: Selection,
     /// The in-progress IME composition, if any. `None` means no composition
     /// is active — see [`ComposingState`]'s doc for why its two fields are
     /// folded into one option rather than a sibling `caret_hidden: bool`
@@ -182,7 +260,7 @@ impl std::fmt::Debug for TextEditingController {
         let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         f.debug_struct("TextEditingController")
             .field("text", &guard.text)
-            .field("caret_byte_offset", &guard.caret_byte_offset)
+            .field("selection", &guard.selection)
             .field("composing", &guard.composing)
             // `notifier` is intentionally omitted: its Arc-backed listener list
             // is noise in debug output and has no stable representation.
@@ -203,7 +281,7 @@ impl TextEditingController {
         Self {
             inner: Arc::new(Mutex::new(ControllerInner {
                 text: String::new(),
-                caret_byte_offset: 0,
+                selection: Selection::collapsed(0),
                 composing: None,
             })),
             notifier: ChangeNotifier::new(),
@@ -214,11 +292,11 @@ impl TextEditingController {
     #[must_use]
     pub fn with_text(initial_text: impl Into<String>) -> Self {
         let text = initial_text.into();
-        let caret_byte_offset = text.len();
+        let selection = Selection::collapsed(text.len());
         Self {
             inner: Arc::new(Mutex::new(ControllerInner {
                 text,
-                caret_byte_offset,
+                selection,
                 composing: None,
             })),
             notifier: ChangeNotifier::new(),
@@ -246,12 +324,90 @@ impl TextEditingController {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .caret_byte_offset
+            .selection
+            .caret
+    }
+
+    /// The selected span as a byte range into [`Self::text`], in ascending
+    /// order.
+    ///
+    /// Empty when nothing is selected — the caret is a collapsed selection
+    /// (Flutter's `TextSelection.collapsed`), so
+    /// `selection().is_empty() == true` and `selection().start ==
+    /// caret_byte_offset()` is the resting state of a focused field.
+    ///
+    /// Ascending order, not anchor-then-caret: the anchor sits *after* the
+    /// caret whenever the user dragged backwards, and every consumer of this
+    /// — painting a highlight, deleting a range — needs the span, not the
+    /// direction. [`Self::caret_byte_offset`] is where the direction lives.
+    #[must_use]
+    pub fn selection(&self) -> Range<usize> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .selection
+            .range()
+    }
+
+    /// Whether anything is selected, i.e. the selection is not collapsed.
+    #[must_use]
+    pub fn has_selection(&self) -> bool {
+        !self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .selection
+            .is_collapsed()
     }
 
     // =========================================================================
     // Mutation — each method notifies listeners after the change
     // =========================================================================
+
+    /// Place the caret at `offset`, discarding any selection.
+    ///
+    /// `offset` is clamped to the buffer and to a UTF-8 char boundary, so a
+    /// caller working from a hit test cannot produce an offset that slices a
+    /// codepoint. Notifies only on an actual change.
+    ///
+    /// Does **not** clear the composing region: moving the caret is not a text
+    /// edit, and the IME keeps owning its composition. It does clear
+    /// [`Self::caret_hidden_by_ime`], for the reason
+    /// [`Self::move_caret_left`] documents — the user reaching for the caret
+    /// directly means the IME no longer owns its position.
+    pub fn set_caret_byte_offset(&self, offset: usize) {
+        self.set_selection(offset, offset);
+    }
+
+    /// Select from `anchor` to `extent`, leaving the caret at `extent`.
+    ///
+    /// The two are given in the order the user made them — a backwards drag
+    /// passes an `anchor` greater than the `extent` — so that a later
+    /// extension moves the right end. [`Self::selection`] normalises.
+    ///
+    /// Both offsets are clamped to the buffer and to char boundaries. Passing
+    /// the same value twice is a collapse, which is what
+    /// [`Self::set_caret_byte_offset`] is.
+    ///
+    /// Notifies only on an actual change, so a drag that re-reports the same
+    /// offset — which a pointer-move stream does constantly — does not
+    /// rebuild the field on every event.
+    pub fn set_selection(&self, anchor: usize, extent: usize) {
+        let changed = {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let next = Selection {
+                anchor: clamp_to_char_boundary(&guard.text, anchor),
+                caret: clamp_to_char_boundary(&guard.text, extent),
+            };
+            let moved = guard.selection != next;
+            guard.selection = next;
+            let unhid = clear_caret_hidden(&mut guard);
+            moved || unhid
+        };
+        if changed {
+            self.notifier.notify_listeners();
+        }
+    }
 
     /// Insert `text` at the current caret position and advance the caret past it.
     ///
@@ -268,9 +424,13 @@ impl TextEditingController {
     pub fn insert_str(&self, text: &str) {
         {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let caret = guard.caret_byte_offset;
-            guard.text.insert_str(caret, text);
-            guard.caret_byte_offset = caret + text.len();
+            // A non-collapsed selection is REPLACED, which is what every text
+            // editor does and what `TextEditingController.text`'s setter
+            // amounts to in Flutter. Deleting first and inserting at the
+            // range's start keeps this one notification, not two.
+            let at = guard.delete_selected_range();
+            guard.text.insert_str(at, text);
+            guard.selection = Selection::collapsed(at + text.len());
             guard.composing = None;
         }
         self.notifier.notify_listeners();
@@ -285,19 +445,29 @@ impl TextEditingController {
     pub fn backspace(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let caret = guard.caret_byte_offset;
-            if caret == 0 {
-                false
-            } else {
-                // Walk back to the previous char boundary.
-                let prev_boundary = guard.text[..caret]
-                    .char_indices()
-                    .next_back()
-                    .map_or(0, |(idx, _)| idx);
-                guard.text.drain(prev_boundary..caret);
-                guard.caret_byte_offset = prev_boundary;
+            // With a selection, Backspace deletes the selection rather than
+            // one character — the character before its start is not part of
+            // what the user asked to remove.
+            if guard.selection.is_extended() {
+                let at = guard.delete_selected_range();
+                guard.selection = Selection::collapsed(at);
                 guard.composing = None;
                 true
+            } else {
+                let caret = guard.selection.caret;
+                if caret == 0 {
+                    false
+                } else {
+                    // Walk back to the previous char boundary.
+                    let prev_boundary = guard.text[..caret]
+                        .char_indices()
+                        .next_back()
+                        .map_or(0, |(idx, _)| idx);
+                    guard.text.drain(prev_boundary..caret);
+                    guard.selection = Selection::collapsed(prev_boundary);
+                    guard.composing = None;
+                    true
+                }
             }
         };
         if changed {
@@ -314,15 +484,23 @@ impl TextEditingController {
     pub fn delete_forward(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let caret = guard.caret_byte_offset;
-            if caret == guard.text.len() {
-                false
-            } else {
-                // Width of the char starting at `caret`.
-                let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
-                guard.text.drain(caret..caret + char_width);
+            // Same rule as Backspace: a selection is what gets deleted.
+            if guard.selection.is_extended() {
+                let at = guard.delete_selected_range();
+                guard.selection = Selection::collapsed(at);
                 guard.composing = None;
                 true
+            } else {
+                let caret = guard.selection.caret;
+                if caret == guard.text.len() {
+                    false
+                } else {
+                    // Width of the char starting at `caret`.
+                    let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
+                    guard.text.drain(caret..caret + char_width);
+                    guard.composing = None;
+                    true
+                }
             }
         };
         if changed {
@@ -339,16 +517,27 @@ impl TextEditingController {
     pub fn move_caret_left(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let caret = guard.caret_byte_offset;
-            let moved = if caret == 0 {
-                false
-            } else {
-                let prev_boundary = guard.text[..caret]
-                    .char_indices()
-                    .next_back()
-                    .map_or(0, |(idx, _)| idx);
-                guard.caret_byte_offset = prev_boundary;
+            // With a selection, Left COLLAPSES to its logical start and moves
+            // no further — `widgets/editable_text.dart:685`,
+            // `ExtendSelectionByCharacterIntent(collapseSelection: true)`:
+            // "Collapses the selection to the logical start/end of the
+            // selection". Collapsing *and* stepping would skip a character
+            // the user can see.
+            let moved = if guard.selection.is_extended() {
+                guard.selection = Selection::collapsed(guard.selection.range().start);
                 true
+            } else {
+                let caret = guard.selection.caret;
+                if caret == 0 {
+                    false
+                } else {
+                    let prev_boundary = guard.text[..caret]
+                        .char_indices()
+                        .next_back()
+                        .map_or(0, |(idx, _)| idx);
+                    guard.selection = Selection::collapsed(prev_boundary);
+                    true
+                }
             };
             // Always invoked (not short-circuited by `moved`): the flag must
             // clear even when the caret was already at the boundary — a
@@ -370,13 +559,19 @@ impl TextEditingController {
     pub fn move_caret_right(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let caret = guard.caret_byte_offset;
-            let moved = if caret == guard.text.len() {
-                false
-            } else {
-                let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
-                guard.caret_byte_offset = caret + char_width;
+            // The mirror of Left — see its comment for the reference.
+            let moved = if guard.selection.is_extended() {
+                guard.selection = Selection::collapsed(guard.selection.range().end);
                 true
+            } else {
+                let caret = guard.selection.caret;
+                if caret == guard.text.len() {
+                    false
+                } else {
+                    let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
+                    guard.selection = Selection::collapsed(caret + char_width);
+                    true
+                }
             };
             let unhid = clear_caret_hidden(&mut guard);
             moved || unhid
@@ -394,10 +589,10 @@ impl TextEditingController {
     pub fn move_caret_home(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let moved = if guard.caret_byte_offset == 0 {
+            let moved = if guard.selection == Selection::collapsed(0) {
                 false
             } else {
-                guard.caret_byte_offset = 0;
+                guard.selection = Selection::collapsed(0);
                 true
             };
             let unhid = clear_caret_hidden(&mut guard);
@@ -417,10 +612,10 @@ impl TextEditingController {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let end = guard.text.len();
-            let moved = if guard.caret_byte_offset == end {
+            let moved = if guard.selection == Selection::collapsed(end) {
                 false
             } else {
-                guard.caret_byte_offset = end;
+                guard.selection = Selection::collapsed(end);
                 true
             };
             let unhid = clear_caret_hidden(&mut guard);
@@ -528,11 +723,14 @@ impl TextEditingController {
     pub fn set_composing_text(&self, text: &str, cursor: Option<(usize, usize)>) {
         {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let region = guard
-                .composing
-                .as_ref()
-                .map(|state| state.range.clone())
-                .unwrap_or(guard.caret_byte_offset..guard.caret_byte_offset);
+            let region = match guard.composing.as_ref() {
+                Some(state) => state.range.clone(),
+                // No composition yet: the preedit replaces the SELECTION, so
+                // starting to compose over selected text behaves the way
+                // typing over it does. Collapsed, this is the caret, which is
+                // what it always was.
+                None => guard.selection.range(),
+            };
             // Defense in depth: every non-IME mutator already clears
             // `composing` on a text edit (see `Self::insert_str`'s doc), so
             // `region` should always already describe `guard.text` — this
@@ -545,9 +743,11 @@ impl TextEditingController {
                 // range)` marker behind.
                 guard.text.replace_range(region.clone(), "");
                 guard.composing = None;
-                if guard.caret_byte_offset > region.start {
-                    guard.caret_byte_offset = region.start;
-                }
+                // Collapse unconditionally — a selection cannot survive the
+                // text under it being removed — while keeping the original
+                // `min` so a caret already before the region does not jump
+                // forward.
+                guard.selection = Selection::collapsed(guard.selection.caret.min(region.start));
             } else {
                 guard.text.replace_range(region.clone(), text);
                 guard.composing = Some(ComposingState {
@@ -558,7 +758,7 @@ impl TextEditingController {
                     Some((_, end)) => clamp_to_char_boundary(text, end),
                     None => text.len(),
                 };
-                guard.caret_byte_offset = region.start + caret_in_preedit;
+                guard.selection = Selection::collapsed(region.start + caret_in_preedit);
             }
         }
         self.notifier.notify_listeners();
@@ -580,12 +780,14 @@ impl TextEditingController {
                 guard.text.replace_range(range.clone(), text);
                 range.start
             } else {
-                let caret = guard.caret_byte_offset;
-                guard.text.insert_str(caret, text);
-                caret
+                // A direct commit with no preedit is an insertion, and an
+                // insertion replaces a selection — same rule as `insert_str`.
+                let at = guard.delete_selected_range();
+                guard.text.insert_str(at, text);
+                at
             };
             guard.composing = None;
-            guard.caret_byte_offset = insert_at + text.len();
+            guard.selection = Selection::collapsed(insert_at + text.len());
         }
         self.notifier.notify_listeners();
     }
@@ -609,9 +811,10 @@ impl TextEditingController {
                     // Defense in depth — see `set_composing_text`'s matching comment.
                     let range = clamp_range_to_text(&state.range, &guard.text);
                     guard.text.replace_range(range.clone(), "");
-                    if guard.caret_byte_offset > range.start {
-                        guard.caret_byte_offset = range.start;
-                    }
+                    // Collapsed for the same reason the cancel path in
+                    // `set_composing_text` collapses: the text a selection
+                    // spanned is gone.
+                    guard.selection = Selection::collapsed(guard.selection.caret.min(range.start));
                     true
                 }
                 None => false,
@@ -714,6 +917,201 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------------------
+    // Selection
+    // ------------------------------------------------------------------
+
+    /// A backwards drag passes an anchor after the extent. The caret must stay
+    /// where the user's finger is, and the span must still read ascending.
+    #[test]
+    fn a_backwards_selection_keeps_its_caret_and_reads_ascending() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(9, 3);
+
+        assert_eq!(controller.selection(), 3..9, "the span reads ascending");
+        assert_eq!(
+            controller.caret_byte_offset(),
+            3,
+            "the caret is the extent -- where the drag ended, not the lower end"
+        );
+        assert!(controller.has_selection());
+    }
+
+    /// Both ends clamp, so an offset from a hit test cannot slice a codepoint.
+    #[test]
+    fn selection_offsets_clamp_to_char_boundaries_and_to_the_buffer() {
+        // "a€b": 'a' at 0, '€' at 1..4, 'b' at 4.
+        let controller = TextEditingController::with_text("a€b");
+        controller.set_selection(2, 99);
+
+        assert_eq!(
+            controller.selection(),
+            4..5,
+            "2 lands inside the euro sign and moves to the next boundary; 99 \
+             clamps to the end"
+        );
+    }
+
+    /// Typing over a selection replaces it — one notification, not a delete
+    /// followed by an insert.
+    #[test]
+    fn insert_replaces_a_selection() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(6, 11);
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&seen);
+        let _sub = controller
+            .listenable()
+            .add_listener(std::sync::Arc::new(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }));
+
+        controller.insert_str("there");
+
+        assert_eq!(controller.text(), "hello there");
+        assert_eq!(controller.caret_byte_offset(), 11);
+        assert!(!controller.has_selection(), "the replacement collapses it");
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "one edit, one notification"
+        );
+    }
+
+    /// Backspace with a selection removes the SELECTION, not the character
+    /// before it — the character before the span is not what the user asked
+    /// to delete.
+    #[test]
+    fn backspace_deletes_the_selection_rather_than_one_character() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(5, 11);
+
+        controller.backspace();
+
+        assert_eq!(controller.text(), "hello");
+        assert_eq!(controller.caret_byte_offset(), 5);
+        assert!(!controller.has_selection());
+    }
+
+    /// Delete-forward follows the same rule.
+    #[test]
+    fn delete_forward_deletes_the_selection_rather_than_one_character() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(0, 6);
+
+        controller.delete_forward();
+
+        assert_eq!(controller.text(), "world");
+        assert_eq!(controller.caret_byte_offset(), 0);
+    }
+
+    /// An arrow with a selection COLLAPSES to the span's logical end and does
+    /// not step further — `widgets/editable_text.dart:685`,
+    /// `ExtendSelectionByCharacterIntent(collapseSelection: true)`: "Collapses
+    /// the selection to the logical start/end of the selection". Collapsing
+    /// *and* stepping would skip a visible character.
+    ///
+    /// Asserted in both directions from the same backwards selection, so
+    /// neither arm can be satisfied by the caret happening to sit there.
+    #[test]
+    fn an_arrow_collapses_a_selection_to_its_edge_without_stepping() {
+        let left = TextEditingController::with_text("hello world");
+        left.set_selection(9, 3);
+        left.move_caret_left();
+        assert_eq!(
+            left.caret_byte_offset(),
+            3,
+            "Left collapses to the span's start, it does not also step to 2"
+        );
+        assert!(!left.has_selection());
+
+        let right = TextEditingController::with_text("hello world");
+        right.set_selection(9, 3);
+        right.move_caret_right();
+        assert_eq!(
+            right.caret_byte_offset(),
+            9,
+            "Right collapses to the span's end, it does not also step to 10"
+        );
+        assert!(!right.has_selection());
+    }
+
+    /// Home and End collapse even when the caret is already at the edge — the
+    /// selection behind it still has to go.
+    #[test]
+    fn home_and_end_collapse_a_selection_anchored_at_the_edge() {
+        let home = TextEditingController::with_text("hello");
+        home.set_selection(5, 0);
+        home.move_caret_home();
+        assert_eq!(home.caret_byte_offset(), 0);
+        assert!(
+            !home.has_selection(),
+            "the caret was already at 0; the SELECTION is what Home had to clear"
+        );
+
+        let end = TextEditingController::with_text("hello");
+        end.set_selection(0, 5);
+        end.move_caret_end();
+        assert_eq!(end.caret_byte_offset(), 5);
+        assert!(!end.has_selection());
+    }
+
+    /// A drag re-reports the same offset on nearly every pointer-move event.
+    /// Notifying on each would rebuild the field for no change.
+    #[test]
+    fn re_reporting_the_same_selection_does_not_notify() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(2, 7);
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&seen);
+        let _sub = controller
+            .listenable()
+            .add_listener(std::sync::Arc::new(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }));
+
+        controller.set_selection(2, 7);
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "no change, no notification"
+        );
+
+        controller.set_selection(2, 8);
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "control: a real change does notify"
+        );
+    }
+
+    /// An IME commit with no preedit is an insertion, and an insertion
+    /// replaces a selection.
+    #[test]
+    fn a_direct_commit_replaces_a_selection() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(6, 11);
+
+        controller.commit_text("there");
+
+        assert_eq!(controller.text(), "hello there");
+        assert_eq!(controller.caret_byte_offset(), 11);
+    }
+
+    /// Starting a composition over selected text replaces it, the way typing
+    /// over it does — the preedit's region is the selection when there is no
+    /// composition yet.
+    #[test]
+    fn a_composition_started_over_a_selection_replaces_it() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(6, 11);
+
+        controller.set_composing_text("にほん", None);
+
+        assert_eq!(controller.text(), "hello にほん");
+        assert_eq!(controller.composing_range(), Some(6..6 + "にほん".len()));
+    }
+
+    // ------------------------------------------------------------------
     // Basic buffer operations
     // ------------------------------------------------------------------
 
@@ -743,7 +1141,7 @@ mod tests {
     fn insert_str_inserts_in_the_middle() {
         let controller = TextEditingController::with_text("helo");
         // Manually place caret before 'o'.
-        controller.inner.lock().unwrap().caret_byte_offset = 3;
+        controller.inner.lock().unwrap().selection = Selection::collapsed(3);
         controller.insert_str("l");
         assert_eq!(controller.text(), "hello");
         assert_eq!(controller.caret_byte_offset(), 4);
@@ -1369,7 +1767,7 @@ mod tests {
             // mutator that forgets to clear `composing` could produce: a
             // region that described the text BEFORE it shrank.
             guard.text = "Hello niha".to_string(); // shrank by one byte
-            guard.caret_byte_offset = guard.text.len();
+            guard.selection.caret = guard.text.len();
             guard.composing = Some(ComposingState {
                 range: 6..11, // now out of bounds
                 caret_hidden: false,

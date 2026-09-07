@@ -78,6 +78,24 @@ fn obscure(text: &str, caret_byte_offset: usize, mask: char) -> (String, usize) 
     (masked, mapped_caret)
 }
 
+/// The masked byte offset a source byte offset maps to — [`obscure`]'s caret
+/// mapping, exposed for the other offsets that have to make the same trip.
+///
+/// One mask character per source `char`, so the answer is "how many source
+/// chars lie before this offset" times the mask's width. Sharing the rule with
+/// [`obscure`] rather than restating it is the point: a selection masked by a
+/// different count than the caret would paint a highlight that does not line
+/// up with the caret inside it, and nothing in a same-width fixture would
+/// show it — [`DEFAULT_OBSCURING_CHARACTER`] is three bytes and source text is
+/// usually one.
+fn mask_offset_of(source: &str, source_offset: usize, mask: char) -> usize {
+    source
+        .char_indices()
+        .take_while(|(byte_offset, _)| *byte_offset < source_offset)
+        .count()
+        * mask.len_utf8()
+}
+
 /// A single-line text field that accepts keyboard input when focused.
 ///
 /// Flutter parity: `widgets/editable_text.dart` `EditableText` — the low-level
@@ -135,8 +153,13 @@ fn obscure(text: &str, caret_byte_offset: usize, mask: char) -> (String, usize) 
 ///
 /// The following are absent in v1; do not use these features and expect them
 /// to work:
-/// - **Text selection by drag** — only a collapsed caret is tracked; drag
-///   selection, shift-click, and selection rendering are not implemented.
+/// - **Selection GESTURES** — the field tracks and renders a selection
+///   ([`TextEditingController::set_selection`], painted by `RenderEditable`),
+///   and every edit honours it: typing replaces it, Backspace and Delete
+///   remove it, an arrow collapses it. What is missing is anything that
+///   *produces* one from a pointer — tap-to-place, drag-to-select,
+///   shift-click and double-tap-word are not wired, so today the selection
+///   comes only from a caller driving the controller.
 /// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
 /// - **Multi-line** — newlines are inserted as literal characters but line
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
@@ -153,6 +176,7 @@ pub struct EditableText {
     pub(super) caret_height: f32,
     /// Color of the caret bar when the field is focused.
     pub(super) caret_color: Color,
+    pub(super) selection_color: Color,
     /// Whether this field accepts focus and input. `true` by default.
     ///
     /// **Named hoist, not a direct port**: the oracle has no
@@ -197,6 +221,10 @@ impl EditableText {
             focus_node,
             caret_height: 18.0,
             caret_color: Color::BLACK,
+            // Transparent by default, so the primitive paints no highlight
+            // until a caller (a decorated `TextField`, a theme) chooses one —
+            // the same arm Flutter reaches with a null `selectionColor`.
+            selection_color: Color::TRANSPARENT,
             enabled: true,
             text_style: None,
             obscure_text: false,
@@ -208,6 +236,18 @@ impl EditableText {
     #[must_use]
     pub fn caret_height(mut self, height: f32) -> Self {
         self.caret_height = height;
+        self
+    }
+
+    /// Fill for the selection highlight.
+    ///
+    /// Defaults to [`Color::TRANSPARENT`]: the primitive tracks a selection
+    /// whether or not it paints one, and a field with no chosen colour should
+    /// not invent a highlight. `TextField` and the Material/Cupertino themes
+    /// are where a real colour comes from.
+    #[must_use]
+    pub fn selection_color(mut self, color: Color) -> Self {
+        self.selection_color = color;
         self
     }
 
@@ -702,6 +742,7 @@ impl ViewState<EditableText> for EditableTextState {
         let appearance = FieldAppearance {
             caret_height: view.caret_height,
             caret_color: view.caret_color,
+            selection_color: view.selection_color,
             text_style: view.text_style.clone(),
             obscure_text: view.obscure_text,
             obscuring_character: view.obscuring_character,
@@ -1084,8 +1125,13 @@ struct EditableTextRenderView {
     /// its own focus gating), named rather than a direct port since no
     /// `readOnly` field exists (see [`EditableText::enabled`]'s doc).
     composing_range: Option<Range<usize>>,
+    /// The selected byte range, in the SAME space as `text` — masked when the
+    /// field is obscured, because [`build_field_view`] masks before this point
+    /// and the render object never sees the source characters.
+    selection: Option<Range<usize>>,
     caret_height: f32,
     caret_color: Color,
+    selection_color: Color,
     text_style: Option<TextStyle>,
 }
 
@@ -1101,6 +1147,8 @@ impl EditableTextRenderView {
             .with_caret_width(2.0)
             .with_caret_height(self.caret_height)
             .with_caret_color(self.caret_color)
+            .with_selection(self.selection.clone())
+            .with_selection_color(self.selection_color)
             .with_composing_range(self.composing_range.clone())
     }
 }
@@ -1130,6 +1178,8 @@ impl RenderView for EditableTextRenderView {
         impact |= render_object.set_show_caret(self.show_caret);
         impact |= render_object.set_caret_size(2.0, self.caret_height);
         impact |= render_object.set_caret_color(self.caret_color);
+        impact |= render_object.set_selection(self.selection.clone());
+        impact |= render_object.set_selection_color(self.selection_color);
         impact |= render_object.set_composing_range(self.composing_range.clone());
         impact
     }
@@ -1157,6 +1207,7 @@ impl_render_view!(EditableTextRenderView);
 struct FieldAppearance {
     caret_height: f32,
     caret_color: Color,
+    selection_color: Color,
     text_style: Option<TextStyle>,
     /// Paint each source character as [`Self::obscuring_character`].
     obscure_text: bool,
@@ -1176,15 +1227,24 @@ fn build_field_view(
     let focused = enabled && focus_node.has_primary_focus();
     // The masking happens HERE, at the one point the controller's text becomes
     // the render view's, so nothing below ever receives the real characters.
-    let (text, caret_byte_offset) = if appearance.obscure_text {
-        obscure(
-            &controller.text(),
-            controller.caret_byte_offset(),
-            appearance.obscuring_character,
-        )
+    // The masking happens HERE, so every offset below is in MASKED space and
+    // the render object never receives the real characters — the selection
+    // included. Mapping it here, beside the caret it has to stay consistent
+    // with, is what keeps the two from being masked in different places.
+    let source = controller.text();
+    let source_selection = controller.selection();
+    let (text, caret_byte_offset, selection) = if appearance.obscure_text {
+        let mask = appearance.obscuring_character;
+        let (masked, caret) = obscure(&source, controller.caret_byte_offset(), mask);
+        let start = mask_offset_of(&source, source_selection.start, mask);
+        let end = mask_offset_of(&source, source_selection.end, mask);
+        (masked, caret, start..end)
     } else {
-        (controller.text(), controller.caret_byte_offset())
+        (source, controller.caret_byte_offset(), source_selection)
     };
+    // A collapsed selection is the caret's business, and the render object
+    // skips it anyway — `None` says so at the seam rather than relying on it.
+    let selection = (!selection.is_empty()).then_some(selection);
     crate::navigator::AnchoredBox::new(
         inner_anchor,
         EditableTextRenderView {
@@ -1211,8 +1271,10 @@ fn build_field_view(
             } else {
                 None
             },
+            selection,
             caret_height: appearance.caret_height,
             caret_color: appearance.caret_color,
+            selection_color: appearance.selection_color,
             text_style: appearance.text_style.clone(),
         },
     )
@@ -1561,7 +1623,9 @@ mod tests {
             show_caret: false,
             composing_range: None,
             caret_height: 18.0,
+            selection: None,
             caret_color: Color::BLACK,
+            selection_color: Color::TRANSPARENT,
             text_style: Some(style.clone()),
         };
 
@@ -1585,7 +1649,9 @@ mod tests {
             show_caret: false,
             composing_range: None,
             caret_height: 18.0,
+            selection: None,
             caret_color: Color::BLACK,
+            selection_color: Color::TRANSPARENT,
             text_style: None,
         };
 
@@ -2549,6 +2615,80 @@ mod tests {
             !painted.contains("hunter") && !painted.contains('h') && !painted.contains('2'),
             "no fragment of the plaintext may reach the render object, got \
              {painted:?}"
+        );
+    }
+
+    /// The mounted field's selection, as the render object received it.
+    fn render_selection(harness: &crate::test_harness::Harness) -> Option<Range<usize>> {
+        with_render_editable(harness, |editable| editable.selection().cloned()).flatten()
+    }
+
+    /// The controller's selection reaches the render object.
+    ///
+    /// Without this the highlight `RenderEditable` can paint has no source —
+    /// correct, tested, unreachable code, which is this repository's most
+    /// common defect shape.
+    #[test]
+    fn the_controllers_selection_reaches_the_render_object() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(6, 11);
+        let focus_node = FocusNode::with_debug_label("selecting field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller,
+            Rc::clone(&focus_node),
+        ));
+
+        assert_eq!(render_selection(&harness), Some(6..11));
+    }
+
+    /// A collapsed selection arrives as `None`, not as an empty range: that
+    /// case belongs to the caret, and saying so at the seam is cheaper than
+    /// relying on the render object to skip it.
+    #[test]
+    fn a_collapsed_selection_reaches_the_render_object_as_none() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_caret_byte_offset(4);
+        let focus_node = FocusNode::with_debug_label("caret-only field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller,
+            Rc::clone(&focus_node),
+        ));
+
+        assert_eq!(render_selection(&harness), None);
+    }
+
+    /// On an obscured field the selection is mapped into MASKED byte space,
+    /// the same space the text itself is masked into.
+    ///
+    /// The fixture is chosen so that forwarding the source range **cannot**
+    /// accidentally produce the right answer. `RenderEditable` clamps
+    /// whatever it is given to a char boundary of the text it holds, and for
+    /// masked text those boundaries are multiples of the mask width — so on a
+    /// short fixture the clamp lands on the correct offsets by coincidence
+    /// and a mapping bug is invisible. That is what the first draft of this
+    /// test did, and the mutation run is what exposed it.
+    ///
+    /// `"aa€bb"` — `a a € b b`, five chars, seven bytes — with the two
+    /// trailing `b`s selected is source `5..7`. Masked it is the fourth and
+    /// fifth of five bullets: `9..15`. Forwarding `5..7` unmapped clamps to
+    /// `6..9`, the *third* bullet. The three answers are pairwise distinct.
+    ///
+    /// Red-check: pass `controller.selection()` straight through in
+    /// `build_field_view`.
+    #[test]
+    fn an_obscured_fields_selection_is_mapped_into_masked_space() {
+        let controller = TextEditingController::with_text("aa€bb");
+        controller.set_selection(5, 7);
+        let focus_node = FocusNode::with_debug_label("obscured selecting field");
+        let harness = crate::test_harness::mount_with_ime(
+            EditableText::new(controller, Rc::clone(&focus_node)).obscure_text(true),
+        );
+
+        assert_eq!(
+            render_selection(&harness),
+            Some(9..15),
+            "the last two bullets; forwarding the source range unmapped would \
+             clamp to 6..9, the third"
         );
     }
 
