@@ -9,7 +9,9 @@
 #![expect(dead_code)]
 
 use flui_foundation::RenderId;
-use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary};
+use flui_objects::{
+    RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
+};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
@@ -179,4 +181,72 @@ pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>,
         .expect("the first paint must succeed on a freshly composited tree");
     drop(owner.take_layer_tree());
     (owner, leaf_ids)
+}
+
+// ============================================================================
+// Opacity: what an alpha tick costs today vs. what grafting it would cost
+// ============================================================================
+
+/// Build a two-branch tree for measuring the prize an update-only commit
+/// (issue #536) competes for, and return `(owner, opacity_leaf, sibling_leaf)`.
+///
+/// ```text
+/// RenderFlex row
+///  ├─ RenderRepaintBoundary  ──  RenderOpacity(0.5)  ──  row of `subtree` leaves
+///  └─ RenderRepaintBoundary  ──  one leaf                       (the sibling)
+/// ```
+///
+/// `RenderOpacity` is not a repaint boundary today, so `mark_needs_paint` on
+/// anything inside it walks up to the enclosing `RenderRepaintBoundary`:
+/// dirtying `opacity_leaf` repaints all `subtree` nodes, which is exactly what
+/// an alpha tick costs now. Dirtying `sibling_leaf` instead leaves that
+/// boundary clean, so its whole subtree is grafted from the retained capture —
+/// the floor any update-only design could reach, since patching one layer on
+/// top of a graft is O(1).
+///
+/// The difference between those two frames is the entire prize. Measuring it
+/// needs no production change, which is the point: it says whether the arm is
+/// worth building before the arm exists.
+///
+/// Same warm-up-and-take discipline as [`build_boundary_tree_painted_once`].
+pub fn build_opacity_tree_painted_once(
+    subtree: usize,
+) -> (PipelineOwner<PaintPhase>, RenderId, RenderId) {
+    // Label the FIRST leaf of the fan: dirtying a leaf is what an app does,
+    // and it exercises the upward walk to the enclosing boundary that makes
+    // this measurement meaningful.
+    let content = box_node(RenderFlex::row()).children((0..subtree).map(|i| {
+        let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
+        if i == 0 {
+            leaf.label("opacity-leaf")
+        } else {
+            leaf
+        }
+    }));
+
+    let spec = box_node(RenderFlex::row()).children([
+        box_node(RenderRepaintBoundary::new())
+            .child(box_node(RenderOpacity::new(0.5)).child(content)),
+        box_node(RenderRepaintBoundary::new())
+            .child(box_node(RenderColoredBox::red(1.0, 1.0)).label("sibling-leaf")),
+    ]);
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(&mut owner, spec);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(root_constraints()));
+
+    let opacity_leaf = registry
+        .get("opacity-leaf")
+        .expect("the opacity subtree must label its first leaf");
+    let sibling_leaf = registry
+        .get("sibling-leaf")
+        .expect("the sibling branch must label its leaf");
+
+    let mut owner = advance_to_paint(owner.into_layout());
+    owner
+        .run_paint()
+        .expect("the first paint must succeed on a freshly composited tree");
+    drop(owner.take_layer_tree());
+    (owner, opacity_leaf, sibling_leaf)
 }

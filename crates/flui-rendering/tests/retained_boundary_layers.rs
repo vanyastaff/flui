@@ -579,3 +579,114 @@ fn a_boundary_nested_inside_a_reused_one_keeps_its_stamp() {
          boundary was grafted rather than repainted"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The control for `paint/opacity_tick` (issue #536)
+// ---------------------------------------------------------------------------
+
+/// Root flex row → [boundary → opacity → row of `subtree` leaves, boundary → leaf].
+///
+/// Mirrors `benches/helpers.rs::build_opacity_tree_painted_once`, so the
+/// benchmark's two arms have an equivalence oracle rather than only a pair of
+/// timings.
+fn opacity_spec(subtree: usize) -> TreeNode {
+    let content = {
+        let mut row = box_node(RenderFlex::row());
+        for i in 0..subtree {
+            let leaf = box_node(RenderColoredBox::red(10.0, 10.0));
+            row = row.child(if i == 0 {
+                leaf.label("opacity-leaf")
+            } else {
+                leaf
+            });
+        }
+        row
+    };
+    box_node(RenderFlex::row())
+        .child(
+            box_node(RenderRepaintBoundary::new())
+                .child(box_node(RenderOpacity::new(0.5)).child(content)),
+        )
+        .child(
+            box_node(RenderRepaintBoundary::new())
+                .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("sibling-leaf")),
+        )
+}
+
+fn mount_opacity(
+    subtree: usize,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+) {
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(&mut owner, opacity_spec(subtree));
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_leaf = registry.get("opacity-leaf").expect("labelled");
+    let sibling = registry.get("sibling-leaf").expect("labelled");
+    (owner, opacity_leaf, sibling)
+}
+
+/// Grafting an opacity's subtree produces the same layer tree that repainting
+/// it does, at every subtree size — and the grafted tree's node count does not
+/// grow with the subtree.
+///
+/// This is the control that makes `paint/opacity_tick` mean something. That
+/// benchmark reports a flat ~1.2 µs for the graft arm against a linear repaint
+/// arm, and a flat number is exactly what a graft that silently dropped the
+/// subtree would also report. The structural comparison rules that out.
+///
+/// The flatness is real and has a cause: the leaves are inline (non-boundary),
+/// so `run_paint` merges their draw runs into ONE `PictureLayer` sharing an
+/// `Arc<DisplayList>`. The capture is therefore a handful of nodes whatever
+/// `subtree` is, and grafting clones an `Arc` rather than re-recording every
+/// command. That is the structural-sharing substrate ADR-0061 named as
+/// retention's prerequisite, doing the work it was added for.
+#[test]
+fn a_grafted_opacity_subtree_matches_a_full_repaint_at_any_size() {
+    let mut grafted_counts = Vec::new();
+    for &subtree in &[1_usize, 10, 100] {
+        // Frame 1 warms the retention cache for both boundaries.
+        let (owner, _opacity_leaf, sibling) = mount_opacity(subtree);
+        let (mut owner, result) = owner.run_frame();
+        result.expect("first frame");
+
+        // Frame 2: only the SIBLING is dirty, so the opacity boundary grafts.
+        owner.mark_needs_paint(sibling);
+        let (owner, result) = owner.run_frame();
+        let grafted = result
+            .expect("second frame")
+            .expect("second frame produces a layer tree");
+        drop(owner);
+
+        // A fresh owner painting its first frame retains nothing, so its tree
+        // is what a full repaint produces.
+        let (fresh, _, _) = mount_opacity(subtree);
+        let (_, result) = fresh.run_frame();
+        let repainted = result
+            .expect("reference frame")
+            .expect("reference frame produces a layer tree");
+
+        assert_eq!(
+            fingerprint(&grafted),
+            fingerprint(&repainted),
+            "grafted and repainted layer trees must match at subtree = {subtree}",
+        );
+        assert!(
+            grafted.len() > 1,
+            "a graft that produced an empty tree would also look flat in the bench",
+        );
+        grafted_counts.push(grafted.len());
+    }
+
+    // The layer count must NOT grow with the subtree — that is what makes the
+    // graft arm O(1) and the whole update-only design worth building.
+    assert_eq!(
+        grafted_counts.first(),
+        grafted_counts.last(),
+        "inline leaves merge into one PictureLayer, so the layer count is \
+         independent of subtree size; got {grafted_counts:?}",
+    );
+}

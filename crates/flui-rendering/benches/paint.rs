@@ -162,6 +162,74 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
     group.finish();
 }
 
+/// The prize an update-only commit (issue #536) competes for, measured
+/// without building one.
+///
+/// `opacity_tick/repaint` is what an alpha change costs TODAY: `RenderOpacity`
+/// is not a repaint boundary, so the mark walks up to the enclosing
+/// `RenderRepaintBoundary` and the whole subtree under it repaints.
+/// `opacity_tick/graft` is the same tree on a frame where that boundary is
+/// clean and its capture is replayed instead — the floor any update-only
+/// design could reach, since patching one layer on top of a graft is O(1).
+///
+/// The ratio between them is the entire available win, as a function of how
+/// much content sits under the opacity. Two numbers close together mean
+/// neither design in #536 is worth building; a widening gap says how much is
+/// on the table and at what subtree size it starts to matter.
+///
+/// Both arms dirty exactly ONE leaf and run one `run_paint`, so the only
+/// difference between them is WHICH branch is dirty — the sibling exists so
+/// the clean-boundary arm still has paint work and cannot take `run_paint`'s
+/// nothing-is-dirty early return.
+fn bench_opacity_tick(c: &mut Criterion) {
+    for &subtree in &[1_usize, 10, 100, 1_000] {
+        let mut group = c.benchmark_group("paint/opacity_tick");
+        group.bench_with_input(
+            BenchmarkId::new("repaint", subtree),
+            &subtree,
+            |b, &subtree| {
+                b.iter_batched(
+                    || {
+                        let (mut owner, opacity_leaf, _sibling) =
+                            helpers::build_opacity_tree_painted_once(subtree);
+                        owner.mark_needs_paint(opacity_leaf);
+                        owner
+                    },
+                    |mut owner| {
+                        owner
+                            .run_paint()
+                            .expect("run_paint must succeed with the opacity subtree dirty");
+                        black_box(owner)
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("graft", subtree),
+            &subtree,
+            |b, &subtree| {
+                b.iter_batched(
+                    || {
+                        let (mut owner, _opacity_leaf, sibling) =
+                            helpers::build_opacity_tree_painted_once(subtree);
+                        owner.mark_needs_paint(sibling);
+                        owner
+                    },
+                    |mut owner| {
+                        owner
+                            .run_paint()
+                            .expect("run_paint must succeed with only the sibling dirty");
+                        black_box(owner)
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_flat_run_compositing,
@@ -169,5 +237,6 @@ criterion_group!(
     bench_deep_run_paint,
     bench_single_dirty_boundary,
     bench_eight_dirty_boundaries,
+    bench_opacity_tick,
 );
 criterion_main!(benches);
