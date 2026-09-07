@@ -80,7 +80,12 @@ impl PipelineOwner<PaintPhase> {
                 .map(|d| d.id)
                 .collect();
 
-            let mut composer = FragmentComposer::new(self.device_pixel_ratio);
+            let root_boundary = self
+                .render_tree
+                .get(root_id)
+                .is_some_and(crate::storage::RenderNode::is_repaint_boundary)
+                .then_some(root_id);
+            let mut composer = FragmentComposer::new(self.device_pixel_ratio, root_boundary);
             match self.paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids) {
                 Ok(()) => {
                     let (layer_tree, link_registry, follower_correlations, retained_captures) =
@@ -579,7 +584,15 @@ impl FragmentComposer {
     /// framework paints in LOGICAL pixels, the engine rasterizes in
     /// physical surface pixels — the root transform is the single
     /// place the two meet (Flutter's RenderView root transform).
-    fn new(device_pixel_ratio: f32) -> Self {
+    ///
+    /// `root_boundary` stamps the root layer when the root render object
+    /// declares itself a repaint boundary (`RenderView` does). It has to be
+    /// threaded in here rather than applied later, because the root is never
+    /// reached by `push_boundary_layer`: that fires from the PARENT's child
+    /// loop, and the root has no parent. Without it the tree carries a
+    /// boundary nothing can identify -- the worst shape for anything pairing
+    /// boundaries across frames, which is what `render_id` exists for.
+    fn new(device_pixel_ratio: f32, root_boundary: Option<RenderId>) -> Self {
         let mut tree = LayerTree::new();
         let root_layer = if (device_pixel_ratio - 1.0).abs() < f32::EPSILON {
             Layer::Offset(OffsetLayer::zero())
@@ -590,7 +603,10 @@ impl FragmentComposer {
                 1.0,
             )))
         };
-        let root = tree.insert(root_layer);
+        let root = match root_boundary {
+            Some(id) => tree.insert_node(LayerNode::new(root_layer).with_render_id(id)),
+            None => tree.insert(root_layer),
+        };
         tree.set_root(Some(root));
         Self {
             tree,
@@ -1082,7 +1098,7 @@ mod tests {
         let owner = owner.into_compositing();
         let owner = owner.into_paint();
 
-        let mut composer = FragmentComposer::new(1.0);
+        let mut composer = FragmentComposer::new(1.0, None);
         let dirty_ids = FxHashSet::default();
         owner
             .paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids)
