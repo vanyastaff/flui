@@ -296,28 +296,6 @@ jobs:
       # `WinitPlatform` directly. The dedicated step below supplies both and
       # runs flui-platform's Linux-runnable suite green; see that step's
       # comment for what remains excluded and why.
-      # An emoji font is a TEST FIXTURE here, not decoration. The only test
-      # that reproduces issue #927's actual symptom — an emoji face shaping the
-      # SPACE of a Latin run at ~1.24 em — has to build its fixture from a real
-      # emoji face, because no in-tree font carries U+0020 without letters.
-      # Without one installed the test takes its skip branch, and a Rust test
-      # that returns early is reported PASSED, so the coverage would silently
-      # leave the pass count unchanged. `FLUI_REQUIRE_EMOJI_FONT` turns that
-      # branch into a hard failure so a missing package is loud here while the
-      # test still degrades gracefully on a developer machine.
-      - name: Ensure an emoji font is available (font-fallback fixture)
-        if: runner.os == 'Linux'
-        # The env var is exported from THIS step, not set on the test step, so
-        # the hard requirement and the thing that guarantees it share one
-        # condition. Setting it unconditionally would fail the suite on any
-        # runner image this job later gains where the package install does not
-        # run — the Windows/macOS expansion the flui-platform step below
-        # anticipates.
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends fonts-noto-color-emoji
-          echo "FLUI_REQUIRE_EMOJI_FONT=1" >> "$GITHUB_ENV"
-
       - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run

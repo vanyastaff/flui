@@ -242,15 +242,15 @@ fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
 /// cosmic-text will discard is precisely the failure this function exists to
 /// prevent.
 ///
-/// # Not pinned here
+/// # What pins each arm
 ///
-/// The variable-axis arm has no test in this change, because every font
-/// fixture the crate carries is a single-weight, non-monospaced static face —
-/// `Roboto-Regular`, `Arial`, `MaterialIcons-Regular`, all `weight=400`,
-/// `monospaced=false`. Replacing `variable_weight_covers(..)` with `false`
-/// leaves the suite green. The fixture that discriminates lands with the
-/// synthetic-face generator in the next change of this series, which is where
-/// the generator exists; it cannot reach `main` without it.
+/// No shipped font asset discriminates either arm — `Roboto-Regular`,
+/// `Arial` and `MaterialIcons-Regular` are all single-weight,
+/// non-monospaced, static faces, so both arms could be deleted without
+/// turning the suite red. The generated fixtures exist for exactly this:
+/// `probe-mono-{100,600}.ttf` is one monospaced family at two weights, and
+/// `probe-variable-wght.ttf` carries an `fvar` `wght` axis over a
+/// `usWeightClass` of 400. See `tools/decoy-face/generate.py`.
 fn family_accepts_weight(db: &Database, family: &str, weight: u16) -> bool {
     db.faces()
         .filter(|face| face.families.iter().any(|(name, _)| name == family))
@@ -323,11 +323,10 @@ pub(crate) fn snap_weight(db: &Database, family: &Family<'_>, requested: u16) ->
     }
     carried.sort_unstable();
     carried.dedup();
-    // Not pinned by a test through this call: no fixture carries one family at
-    // two weights, so swapping this line back for `min_by_key(abs_diff)`
-    // leaves the suite green. [`css_nearest_weight`] itself is pinned, and the
-    // fixture that closes the gap lands with the synthetic-face generator in
-    // the next change of this series.
+    // Pinned through this call, not only on the rule:
+    // `the_snap_takes_the_css_answer_not_the_nearest_one` drives a family
+    // carrying 100 and 600 at a W500 request, which is a case where CSS order
+    // (100) and nearest-by-distance (600) disagree.
     css_nearest_weight(&carried, requested).unwrap_or(requested)
 }
 
@@ -649,6 +648,99 @@ mod tests {
         assert!(
             generics_need_rebinding(&db),
             "one generic naming an absent family must still ask for a rebind"
+        );
+    }
+
+    /// One family at two weights, monospaced, with Latin coverage. The three
+    /// probes below have no other fixture in the crate that can tell a correct
+    /// implementation from a broken one — every shipped font asset is a
+    /// single-weight, non-monospaced, static face.
+    const PROBE_MONO_100: &[u8] =
+        include_bytes!("../../../flui-engine/assets/fonts/probe-mono-100.ttf");
+    const PROBE_MONO_600: &[u8] =
+        include_bytes!("../../../flui-engine/assets/fonts/probe-mono-600.ttf");
+    /// `usWeightClass` 400 with an `fvar` `wght` axis spanning 100..900.
+    const PROBE_VARIABLE: &[u8] =
+        include_bytes!("../../../flui-engine/assets/fonts/probe-variable-wght.ttf");
+
+    /// A monospaced face must not be accepted at a weight its family does not
+    /// carry.
+    ///
+    /// This is the arm that read cosmic-text's `is_mono` as a property of the
+    /// FACE. It is a property of the request: `next_item`'s
+    /// `font_match_keys_iter(is_mono)` takes `is_mono` from
+    /// `default_families[i] == &Family::Monospace`, and the filter that
+    /// actually decides whether a family survives —
+    /// `default_font_match_key` — has no mono term at all.
+    ///
+    /// Red-check: restore `|| face.monospaced` in `family_accepts_weight`.
+    /// This fixture is the only one in the crate that reports `monospaced`.
+    #[test]
+    fn a_monospaced_face_is_not_accepted_at_a_weight_its_family_lacks() {
+        let db = database(&[PROBE_MONO_100, PROBE_MONO_600]);
+        assert!(
+            db.faces().all(|face| face.monospaced),
+            "precondition: the fixture is monospaced, or this test is vacuous"
+        );
+
+        assert!(
+            family_accepts_weight(&db, "FLUI Probe Mono", 100),
+            "control: a weight the family carries is accepted"
+        );
+        assert!(
+            !family_accepts_weight(&db, "FLUI Probe Mono", 500),
+            "monospace is not a licence to serve any weight"
+        );
+    }
+
+    /// The snap picks by CSS order, not by absolute distance — asserted
+    /// through `snap_weight` rather than through `css_nearest_weight`, so the
+    /// call site is pinned and not only the rule.
+    ///
+    /// 100 and 600 against a W500 request is the case where the two disagree:
+    /// CSS resolves 500 downward before it looks above 500, giving 100, while
+    /// the nearest carried weight is 600.
+    ///
+    /// Red-check: swap `css_nearest_weight(..)` for
+    /// `min_by_key(|c| c.abs_diff(requested))` — this returns 600.
+    #[test]
+    fn the_snap_takes_the_css_answer_not_the_nearest_one() {
+        let db = database(&[PROBE_MONO_100, PROBE_MONO_600]);
+
+        assert_eq!(
+            snap_weight(&db, &Family::Name("FLUI Probe Mono"), 500),
+            100,
+            "CSS resolves 500 down before it looks above 500; 600 is nearer"
+        );
+    }
+
+    /// A variable face whose `wght` axis covers the request is accepted, and
+    /// the family is therefore never snapped — cosmic-text would have kept it
+    /// too (`variable_weight_match`), and snapping would strip the instance
+    /// `FontSystem::get_font` is about to ask the axis for.
+    ///
+    /// Red-check: replace the `variable_weight_covers(..)` arm with `false`.
+    /// This fixture is the only one in the crate that carries an `fvar`.
+    #[test]
+    fn a_variable_axis_covering_the_request_keeps_the_family_unsnapped() {
+        let db = database(&[PROBE_VARIABLE]);
+        assert!(
+            db.faces().all(|face| face.weight.0 == 400),
+            "precondition: no face CARRIES 900, so only the axis can accept it"
+        );
+
+        assert!(
+            family_accepts_weight(&db, "FLUI Probe Variable", 900),
+            "the wght axis spans 100..900"
+        );
+        assert_eq!(
+            snap_weight(&db, &Family::Name("FLUI Probe Variable"), 900),
+            900,
+            "an accepted request is passed through, instance intact"
+        );
+        assert!(
+            !family_accepts_weight(&db, "FLUI Probe Variable", 950),
+            "control: past the axis maximum the family stops accepting"
         );
     }
 

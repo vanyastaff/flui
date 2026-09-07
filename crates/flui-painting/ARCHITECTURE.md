@@ -281,13 +281,23 @@ Replacement coverage, per rule #1, in two tests because no single fixture gives 
 `an_uninstalled_family_shapes_in_the_bound_generic_both_ways` pins which family a run shapes in,
 hermetically and in both fixture orders so that no load order satisfies it — but its fixture carries
 no emoji face, so it never observes the letters and the space landing apart.
-`oversized_space_from_an_emoji_face_is_closed` is the one that does: it builds its fixture from the
-host's emoji font and asserts the red state (space above 1 em, on a different face from the letters)
-before asserting the fix. Where no emoji font is installed it degrades instead of failing — but a
-Rust test that returns early is reported PASSED, so CI installs `fonts-noto-color-emoji` and sets
-`FLUI_REQUIRE_EMOJI_FONT`, which turns that branch into a hard failure. The graceful skip is a
-developer-machine convenience, not a hole in the gate. A fully hermetic version needs a committed fixture face
-carrying `' '` but no letters; neither in-tree icon font qualifies (both lack `' '` entirely).
+`oversized_space_from_an_emoji_face_is_closed` is the one that does: it asserts the red state
+(space above 1 em, on a different face from the letters) before asserting the fix. It is hermetic,
+because the face it needs — one carrying `' '` and no letters, with "Emoji" in the PostScript name
+so cosmic-text classifies it as one — is *generated*, not borrowed:
+`tools/decoy-face/generate.py` writes `decoy-wide-space.ttf`, whose space advance is fixed at 1.3 em
+by construction. It used to build the fixture from the host's emoji font, which made a
+merge-blocking assertion depend on a distro package's metrics and needed a `FLUI_REQUIRE_EMOJI_FONT`
+CI variable to keep the absent-font skip branch honest; both the package install and the variable
+are gone, because the skip branch is.
+
+The same generator supplies the fixtures for the weight probes, and for the same reason — every
+shipped font asset is a single-weight, non-monospaced, static face, so three arms of the resolution
+were untestable against it. `probe-mono-{100,600}.ttf` is one monospaced family at two weights (the
+`face.monospaced` arm, and the CSS-versus-nearest tie-break, where 100 and 600 disagree at a W500
+request); `probe-variable-wght.ttf` carries an `fvar` `wght` axis spanning 100..900 over a
+`usWeightClass` of 400 (the variable-weight arm). Each of the three fails when its production arm is
+reverted; that was verified, not assumed.
 
 ### Net unsafe delta: 0
 
