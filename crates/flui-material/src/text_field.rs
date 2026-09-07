@@ -109,8 +109,6 @@
 //! - **`on_changed`** — [`EditableText`] has no change callback yet (only a
 //!   [`Listenable`] seam); a caller observes edits via the
 //!   [`TextEditingController`] itself.
-//! - **`obscure_text`** — [`EditableText`] has no password-masking mode to
-//!   forward.
 //! - **Selection colors** — no collapsed-caret-only substrate has a
 //!   selection to color yet (see `TextEditingController`'s own deferral
 //!   list).
@@ -145,9 +143,30 @@ pub struct TextField {
     external_focus_node: Option<Rc<FocusNode>>,
     decoration: InputDecoration,
     enabled: Option<bool>,
+    /// Forwarded to [`EditableText::obscure_text`] — a password field.
+    obscure_text: bool,
 }
 
 impl TextField {
+    /// Paint every character as a bullet — a password field (default
+    /// `false`).
+    ///
+    /// Forwards to [`EditableText::obscure_text`], where the substitution
+    /// happens at the point the controller's text becomes the render view's,
+    /// so the real characters never reach the render object or anything below
+    /// it.
+    ///
+    /// Narrowed against the oracle, deliberately: Flutter's `TextField` also
+    /// exposes `obscuringCharacter`, and asserts `!obscureText || maxLines == 1`
+    /// — this field is single-line by construction, so the assertion has
+    /// nothing to check, and the character override is available one layer
+    /// down on `EditableText` until a caller needs it here.
+    #[must_use]
+    pub fn obscure_text(mut self, obscure: bool) -> Self {
+        self.obscure_text = obscure;
+        self
+    }
+
     /// Create a `TextField` driven by `controller`, with no decoration
     /// (label/hint/helper/error all unset — see [`InputDecoration::default`])
     /// and no `enabled` override (falls through to
@@ -160,6 +179,7 @@ impl TextField {
             external_focus_node: None,
             decoration: InputDecoration::default(),
             enabled: None,
+            obscure_text: false,
         }
     }
 
@@ -336,7 +356,8 @@ impl ViewState<TextField> for MaterialTextFieldState {
 
         let mut editable = EditableText::new(self.controller.clone(), Rc::clone(&self.focus_node))
             .enabled(effective_enabled)
-            .caret_color(caret_color);
+            .caret_color(caret_color)
+            .obscure_text(view.obscure_text);
         if let Some(text_style) = theme.text_theme.body_large.clone() {
             editable = editable.text_style(text_style);
         }
