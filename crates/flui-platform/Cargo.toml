@@ -165,7 +165,7 @@ optional = true
 # accesskit cohort. Uses objc2 internally; independent of the backend's
 # `cocoa`/`objc` stack.
 [target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
-version = "0.26"
+version = "0.27"
 optional = true
 
 [features]
