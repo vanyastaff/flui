@@ -16,8 +16,11 @@
 //! like the defect -- and applying the fix did not turn it green.
 
 use crate::common::{lay_out, tight};
+use flui_rendering::constraints::BoxConstraints;
+use flui_types::Axis;
+use flui_types::geometry::px;
 use flui_types::typography::TextDirection;
-use flui_widgets::{Column, CrossAxisAlignment, Directionality, SizedBox};
+use flui_widgets::{Column, CrossAxisAlignment, Directionality, ListBody, SizedBox};
 
 /// Dependents of the ambient `Directionality` for a `Column` with `cross`.
 fn directionality_dependents(cross: CrossAxisAlignment) -> usize {
@@ -55,5 +58,48 @@ fn a_centred_column_does_not_depend_on_directionality() {
         0,
         "a centred column cannot move under a direction change, so it must not \
          register as a Directionality dependent"
+    );
+}
+
+/// Dependents of the ambient `Directionality` for a `ListBody` on `axis`.
+fn list_body_dependents(axis: Axis) -> usize {
+    // `RenderListBody` requires UNBOUNDED space along its own main axis, so
+    // the constraints have to follow `axis` rather than be tight both ways.
+    let constraints = match axis {
+        Axis::Vertical => BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(f32::INFINITY)),
+        Axis::Horizontal => BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(200.0)),
+    };
+    let mut laid = lay_out(
+        Directionality::new(
+            TextDirection::Ltr,
+            ListBody::new((SizedBox::square(10.0),)).main_axis(axis),
+        ),
+        constraints,
+    );
+    laid.inherited_dependent_count::<Directionality>()
+}
+
+/// A horizontal `ListBody` resolves its axis direction from the reading
+/// direction, so it must depend on it. The control for its sibling.
+#[test]
+fn a_horizontal_list_body_depends_on_directionality() {
+    assert_eq!(
+        list_body_dependents(Axis::Horizontal),
+        1,
+        "a horizontal ListBody maps the reading direction onto its axis \
+         direction, so it must register as a dependent"
+    );
+}
+
+/// A vertical `ListBody` discards the direction outright -- `resolve_axis_direction`'s
+/// vertical arm never reads it -- so taking the dependency buys nothing but a
+/// rebuild on every direction change.
+#[test]
+fn a_vertical_list_body_does_not_depend_on_directionality() {
+    assert_eq!(
+        list_body_dependents(Axis::Vertical),
+        0,
+        "the vertical arm of resolve_axis_direction ignores the reading \
+         direction, so the lookup must not be made at all"
     );
 }
