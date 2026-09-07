@@ -96,6 +96,47 @@ wasm-check:
     cargo check -p flui --locked --target wasm32-unknown-unknown \
       --no-default-features --features hot-reload
 
+# Compiling for wasm32 is not running on wasm32. Until this recipe existed the
+# workspace only ever type-checked and linked for the target (`wasm-check` and
+# `wasm-link-check` above), so every "works on the web" claim rested on the
+# linker succeeding — see issue #985. Hosts the tests on node; no browser and no
+# wasm-pack involved.
+[group("test")]
+[doc("Actually EXECUTE the wasm32 tests (node, via wasm-bindgen-test-runner)")]
+wasm-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The runner's version must match the LOCKED wasm-bindgen exactly or it
+    # refuses to start. Read it out of Cargo.lock rather than hardcoding it, so
+    # a dependabot bump moves the tool with the lock instead of breaking this
+    # recipe with a message that reads like a toolchain fault.
+    want=$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")
+    have=$(wasm-bindgen --version 2>/dev/null | cut -d' ' -f2 || true)
+    if [ "$have" != "$want" ]; then
+        echo "wasm-bindgen-cli $want required (have: ${have:-none}); installing" >&2
+        cargo install wasm-bindgen-cli --version "$want" --locked
+    fi
+    # `out=$(cargo test ...)` under `set -e` exits AT THE ASSIGNMENT when cargo
+    # fails, so the panic message and the runner's own diagnostics -- the only
+    # things that say WHY -- are captured and then thrown away. Branch on the
+    # command so the output is printed either way. `--locked` matches CI and
+    # keeps a local run from quietly re-resolving Cargo.lock.
+    if ! out=$(cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32 2>&1); then
+        echo "$out"
+        exit 1
+    fi
+    echo "$out"
+    # A runner that finds no tests still exits 0 and prints "0 passed", which is
+    # indistinguishable from a passing suite. Assert a non-zero count so the
+    # harness cannot go quietly inert -- this issue exists because compile-only
+    # coverage read as real coverage for months.
+    passed=$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)
+    if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
+        echo "wasm-test: no wasm32 test executed -- the harness is inert" >&2
+        exit 1
+    fi
+    echo "wasm-test: $passed wasm32 assertions executed"
+
 # `cargo check` does not link, and on wasm32 even a link does not fail on an
 # undefined symbol (rust-lld turns it into an import) — hence the committed
 # import allowlist. Requires wasm-tools (cargo binstall wasm-tools).

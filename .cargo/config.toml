@@ -50,8 +50,19 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 # ═══════════════════════════════════════════════════════════════════════════════
 # Atomics/bulk-memory only needed for multi-threaded WASM (SharedArrayBuffer).
 # Uncomment when enabling Web Workers with shared memory.
-# [target.wasm32-unknown-unknown]
 # rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
+
+[target.wasm32-unknown-unknown]
+# Lets `cargo test --target wasm32-unknown-unknown` actually RUN the tests
+# instead of building a .wasm nobody executes (issue #985). The runner hosts
+# them on node -- no browser and no wasm-pack involved.
+#
+# `wasm-bindgen-test-runner` must be on PATH and its version must match the
+# LOCKED `wasm-bindgen` exactly, or it refuses with "must exactly match".
+# `just wasm-test` installs the right one by reading Cargo.lock; this line only
+# says which runner to use, so a plain `cargo build --target wasm32-...` is
+# unaffected.
+runner = "wasm-bindgen-test-runner"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Profile-specific rustflags

@@ -44,6 +44,21 @@ serde_json = { workspace = true }
 # shipped crate links no subscriber backend.
 tracing-subscriber = { workspace = true }
 
+# Executing wasm32 tests. Until this landed the workspace only ever COMPILED for
+# wasm32 (`just wasm-check` is `cargo check` + `cargo clippy`), so every "works on
+# the web" claim rested on the linker succeeding -- see issue #985.
+#
+# Pinned exactly, not `"0.3"`. 0.3.78 requires wasm-bindgen 0.2.128, so an
+# unpinned range would bump the workspace lockfile as a side effect of adding a
+# dev-dependency; 0.3.77 is the release that pairs with the locked 0.2.127. The
+# third version in the chain, `wasm-bindgen-cli`, must match the locked
+# wasm-bindgen EXACTLY or the runner refuses to start -- `just wasm-test` and the
+# CI step both read it out of Cargo.lock rather than hardcoding it, so a
+# dependabot bump moves all three together instead of breaking the runner with a
+# message that reads like a toolchain fault.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.77"
+
 [features]
 default = []
 serde = ["dep:serde", "dep:serde_json"]
