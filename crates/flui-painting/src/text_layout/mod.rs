@@ -30,7 +30,7 @@ pub(crate) mod measure;
 
 pub use detect::detect_text_direction;
 pub(crate) use layout::shared_font_system;
-pub use layout::{SharedFontSystem, TextLayout};
+pub use layout::{ResolvedFont, SharedFontSystem, TextLayout};
 // Test-support only: pinning the process-wide font system is irreversible, so
 // it stays off the shipped surface. See its docs.
 #[cfg(any(test, feature = "testing"))]

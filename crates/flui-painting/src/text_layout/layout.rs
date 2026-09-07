@@ -57,7 +57,7 @@ impl FontState {
     }
 
     /// The family `style` should be shaped with — see
-    /// [`SharedFontSystem::resolve_family`], which this backs.
+    /// [`SharedFontSystem::resolve_font`], which this backs.
     ///
     /// Lives here so the borrow of the database and of the index describing it
     /// are taken together: no call site can pair one with the other's
@@ -345,10 +345,17 @@ impl SharedFontSystem {
     /// ships only 400 and 700, dropping the run into an unfiltered, emoji-first
     /// tail. Naming a family the database carries forecloses both, because it
     /// puts the CSS-matched face ahead of the emoji entry in each.
-    /// The crate's `font_resolve` module carries the full mechanism. The requested
-    /// **weight** is passed through untouched:
-    /// adjusting it would strip the requested instance off every variable face
-    /// reached afterwards, because a face is instanced at the weight asked for.
+    /// The crate's `font_resolve` module carries the full mechanism.
+    ///
+    /// The requested **weight** is answered alongside the family, snapped to
+    /// one the resolved family can serve. It is one call and one value
+    /// ([`ResolvedFont`]) because the two decisions are not separable: the
+    /// same candidate filter that abandons a family also decides which weight
+    /// keeps it, so a caller holding the resolved family and the style's
+    /// original weight shapes against a family the resolution ruled out. The
+    /// snap runs only when no face in the family — static *or* variable —
+    /// can serve the request, so a variable face is still instanced at the
+    /// weight asked for.
     ///
     /// Call this *before* [`Self::with_mut`], never inside it: the lock is not
     /// reentrant.
@@ -356,34 +363,57 @@ impl SharedFontSystem {
     /// The returned `Family` borrows `style`, so this allocates nothing.
     ///
     /// Resolving several styles takes the lock once each — use
-    /// [`Self::resolve_families`] for a whole paragraph.
+    /// [`Self::resolve_fonts`] for a whole paragraph.
     #[must_use]
-    pub fn resolve_family<'a>(&self, style: Option<&'a TextStyle>) -> Family<'a> {
-        self.0.lock().resolve_family(style)
+    pub fn resolve_font<'a>(&self, style: Option<&'a TextStyle>) -> ResolvedFont<'a> {
+        let (family, weight) = self.0.lock().resolve_family_and_weight(style);
+        ResolvedFont { family, weight }
     }
 
     /// Resolves a whole run of styles under **one** lock acquisition.
     ///
-    /// A rich paragraph resolves one family per span and then shapes, so
-    /// calling [`Self::resolve_family`] per span takes this lock once per span
-    /// plus once more for the shape pass. The lock is shared with the render
-    /// engine's glyph pipeline (ADR-0016), so that is contention paid for
-    /// nothing: the answers do not depend on each other and the database does
-    /// not change in between.
+    /// A rich paragraph resolves one font per span and then shapes, so calling
+    /// [`Self::resolve_font`] per span takes this lock once per span plus once
+    /// more for the shape pass. The lock is shared with the render engine's
+    /// glyph pipeline (ADR-0016), so that is contention paid for nothing: the
+    /// answers do not depend on each other and the database does not change in
+    /// between.
     ///
     /// Each returned `Family` borrows its own style, so only the `Vec` is
     /// allocated.
     #[must_use]
-    pub fn resolve_families<'a>(
+    pub fn resolve_fonts<'a>(
         &self,
         styles: impl IntoIterator<Item = Option<&'a TextStyle>>,
-    ) -> Vec<Family<'a>> {
+    ) -> Vec<ResolvedFont<'a>> {
         let mut state = self.0.lock();
         styles
             .into_iter()
-            .map(|style| state.resolve_family(style))
+            .map(|style| {
+                let (family, weight) = state.resolve_family_and_weight(style);
+                ResolvedFont { family, weight }
+            })
             .collect()
     }
+}
+
+/// The family **and** the weight to shape a style with.
+///
+/// One value rather than two calls, because taking them apart is a defect with
+/// a name: the weight decision depends on the family (cosmic-text abandons a
+/// family carrying no face at the requested weight — issue #929), so a caller
+/// holding a resolved family and the style's *original* weight shapes against
+/// a family the resolution already ruled out. That is exactly what happened:
+/// measurement asked for the pair while the raster path asked only for the
+/// family and read the weight off the style, so one string measured in one
+/// font and painted in another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedFont<'a> {
+    /// The family cosmic-text should be handed.
+    pub family: Family<'a>,
+    /// The weight to request, snapped to one the family can serve. `None` when
+    /// the style named no weight, in which case cosmic-text's default stands.
+    pub weight: Option<u16>,
 }
 
 impl std::fmt::Debug for SharedFontSystem {
