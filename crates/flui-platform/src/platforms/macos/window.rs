@@ -55,13 +55,45 @@ pub struct MacOSWindow {
     accessibility: std::sync::OnceLock<Arc<super::accessibility::MacosAccessibility>>,
 }
 
-// SAFETY: the NSWindow pointer is only messaged from the main thread (AppKit
-// delivers all delegate/view callbacks there); the remaining fields are
-// `Arc`/`Mutex`-protected. Sharing the wrapper across threads is required by
-// the `PlatformWindow: Send + Sync` contract.
+// SAFETY: the remaining fields are `Arc`/`Mutex`-protected, and sharing the
+// wrapper across threads is required by the `PlatformWindow: Send + Sync`
+// contract.
+//
+// # The NSWindow pointer is NOT only messaged from the main thread
+//
+// This comment used to claim it was, and that claim was false on a reachable
+// production path (issue #949). It is restated here as what is actually
+// enforced, because an `unsafe impl` whose justification does not hold is a
+// defect on its own: it is what the next reader consults when deciding
+// whether their change is safe.
+//
+// Every delegate and view callback does arrive on the main thread, as AppKit
+// guarantees. What breaks the claim is [`PlatformWindow::request_redraw`],
+// which messages `contentView` and is called from whatever thread completed a
+// future: `AppRuntime::frame_wake_callback` is installed as the scheduler's
+// `on_frame_scheduled` hook and is deliberately `Send + Sync`, advertised for
+// "a spawned future's `Waker`", and pinned by
+// `frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler`.
+// So an ordinary async completion on an IO-lane worker reaches
+// `setNeedsDisplay:` off the main thread. No raster thread is needed for it.
+//
+// Whether `-[NSView setNeedsDisplay:]` misbehaves there is a separate
+// question this comment does not answer: AppKit's contract is main-thread-only
+// except where documented, and this method is not among the documented
+// exceptions, but "not documented safe" and "observably broken" are different
+// claims and only a macOS host settles the second. This backend is compiled by
+// `cross-typecheck` and never linked or executed in CI, so no test or lint
+// here can observe it either way.
+//
+// The fix is a wake relay: the hook posts, and the owner thread drains and
+// calls `request_redraw` (ADR-0045 decision 5). It needs an owner lane this
+// backend does not have — that is #551's slice-3 lane generalization — so
+// the honest state today is a stated hazard rather than an enforced
+// precondition. Issue #949 owns it.
 unsafe impl Send for MacOSWindow {}
-// SAFETY: see `Send` above — interior mutability is Mutex-guarded and the raw
-// pointer is main-thread-affine by AppKit convention.
+// SAFETY: see `Send` above, including its statement of what is NOT enforced.
+// Interior mutability is Mutex-guarded; the raw pointer's main-thread affinity
+// is an AppKit convention this type does not currently guarantee.
 unsafe impl Sync for MacOSWindow {}
 
 /// Mutable window state
@@ -293,9 +325,22 @@ impl PlatformWindow for MacOSWindow {
         state.scale_factor
     }
 
+    /// # Thread affinity — currently unenforced, and reachably violated
+    ///
+    /// This messages `contentView`, an AppKit call whose contract is
+    /// main-thread-only. It is nevertheless called from whatever thread
+    /// completed a future, through the scheduler's `on_frame_scheduled` hook
+    /// (issue #949, and the `unsafe impl Send` above states the full chain).
+    ///
+    /// Deliberately NOT given a `debug_assert_appkit_main_thread` guard: that
+    /// path is reachable in ordinary production use today, so the assert would
+    /// abort correct-by-current-design programs rather than catch a mistake.
+    /// The guard belongs here the moment the wake relay lands and makes the
+    /// off-thread call genuinely a bug.
     fn request_redraw(&self) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // content view is nil-checked before messaging.
+        // content view is nil-checked before messaging. NOT sound with respect
+        // to thread affinity — see this method's own doc and issue #949.
         unsafe {
             // Tell the window's content view to redraw
             let content_view: id = msg_send![self.ns_window, contentView];
