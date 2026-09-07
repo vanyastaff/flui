@@ -430,7 +430,19 @@ impl DirtyTracker {
             let Some(node) = tree.get(current) else {
                 return;
             };
-            if node.is_repaint_boundary_flag() && node.was_repaint_boundary() {
+            // `parent.is_some()` is part of the predicate, not an accident: the
+            // paint root is never grafted. `run_paint` enters through
+            // `paint_subtree(root)` rather than the child-boundary arm that
+            // creates and replays captures, so a root boundary — `RenderView`
+            // declares itself one — has no retained output an update could
+            // patch and would repaint anyway. Queuing it would mean carrying a
+            // request that can never be served and re-scanning every capture
+            // for it once a frame. Falling through to the parentless arm below
+            // degrades to a paint mark, which is what actually happens.
+            if node.is_repaint_boundary_flag()
+                && node.was_repaint_boundary()
+                && node.links().parent().is_some()
+            {
                 // Record WHICH node asked, not just that the boundary has work.
                 // A node whose effect layers did not exist when the boundary
                 // was captured has no slot to patch, and a patch pass that only
