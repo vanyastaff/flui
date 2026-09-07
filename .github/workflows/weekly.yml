@@ -132,6 +132,26 @@ jobs:
         if: '!cancelled()'
         run: bash scripts/probe-metal-acquire-main-thread.sh
 
+      # Two upstream facts that would move WITHOUT a panic, a compile error, or a
+      # red test (issue #983): winit calling `XInitThreads()` before
+      # `XOpenDisplay` (ADR-0045 decision 1 permits off-thread X11 surface work
+      # only because it does), and wgpu-hal requesting
+      # `min_image_count(maximum_frame_latency + 1)` (ADR-0058's deadline pacer
+      # was measured against the two images that yields).
+      #
+      # The issue's other three facts are NOT here because they already fail
+      # loudly: `pre_present_notify` and `Occluded` are both asserted by
+      # live-smoke, and winit's `Ime` enum is pinned by an exhaustive wildcard-free
+      # match against a type that is not `#[non_exhaustive]`, so the compiler
+      # catches it. Probing what a gate already covers is noise.
+      #
+      # Runs here, after `cargo update`, for the same reason the probe above does:
+      # the question is whether upstream has moved YET, which a check against the
+      # committed lock cannot answer. Advisory, never a gate.
+      - name: upstream silent-fact probe (advisory)
+        if: '!cancelled()'
+        run: bash scripts/probe-upstream-silent-facts.sh
+
   bench:
     name: bench (criterion numbers, trend artifact)
     runs-on: ubuntu-latest
