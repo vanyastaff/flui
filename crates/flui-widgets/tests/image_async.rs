@@ -382,11 +382,25 @@ fn async_image_provider_swap_under_gapless_playback_retains_the_previous_frame()
     });
 
     laid.pump_widget(Image::asset(reg, new_path).gapless_playback(true));
-    assert_eq!(
-        laid.size(laid.current_root()),
-        old_size(),
-        "gapless playback must keep showing the OLD decoded frame while the \
-         new provider's load is in flight, not reset to the placeholder",
+    // NOT `== old_size()`. The contract is "no placeholder between the two
+    // images", and a new image that is already decoded by the time the swap
+    // returns satisfies it by showing the NEW frame — demanding the old one
+    // here asserts that the load is still in flight, which is a property of
+    // the machine, not of gapless playback. It failed on CI exactly that way
+    // (left 7x2, the new image; right 5x3, the old), on a pull request that
+    // changed only a Markdown file.
+    //
+    // The loop below is what actually pins the promise, and it covers this
+    // frame too — this assertion is the first sample, held to the same rule.
+    let first = laid.size(laid.current_root());
+    assert_ne!(
+        first,
+        size(0.0, 0.0),
+        "gapless playback must not flash the placeholder on the swap frame",
+    );
+    assert!(
+        first == old_size() || first == new_size(),
+        "the swap frame must be one of the two images, got {first:?}",
     );
 
     // Gapless playback's actual promise is that there is NO placeholder frame
@@ -399,7 +413,7 @@ fn async_image_provider_swap_under_gapless_playback_retains_the_previous_frame()
     // same value". With both fixtures 5x3 it could not have detected either:
     // the new image lands well inside that window, and the assertion it made
     // was satisfied by the new image just as well as the old.
-    let mut seen = vec![laid.size(laid.current_root())];
+    let mut seen = vec![first];
     let deadline = Instant::now() + DECODE_BUDGET;
     loop {
         laid.tick();
