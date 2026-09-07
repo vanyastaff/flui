@@ -158,7 +158,7 @@ accesskit_unix = { version = "0.22", optional = true }
 # dependency (0.62) matches the backend's own, so no duplicate windows-rs
 # stack is linked.
 [target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
-version = "0.34"
+version = "0.35"
 optional = true
 
 # NSAccessibility bridge for macOS, same `a11y` feature and the same 0.24
