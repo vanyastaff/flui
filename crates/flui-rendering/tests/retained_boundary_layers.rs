@@ -386,18 +386,12 @@ fn every_boundary_root_layer_carries_its_own_id() {
 /// A frame that grafts seven boundaries still identifies all eight, so
 /// retention does not break the comparison the stamp exists for.
 ///
-/// **What makes this work is worth stating, because it is not what it looks
-/// like.** The stamp does not travel through the capture. A boundary's
-/// `OffsetLayer` is pushed by its PARENT, above the capture root, so the
-/// parent's own paint re-creates and re-stamps it every frame; everything the
-/// capture holds is unstamped by construction. An earlier revision propagated
-/// a `render_id` through `graft` for this, and mutation-testing showed
-/// removing that propagation changed no test — it was dead. It was deleted,
-/// with the reason recorded at `graft`.
-///
-/// So this test pins the OUTCOME (retention keeps every boundary
-/// identifiable), not a mechanism; the mechanism it would have pinned does not
-/// exist.
+/// These boundaries are all TOP-LEVEL, and that is why this test does not need
+/// `graft` to carry anything: each one's `OffsetLayer` is pushed by the root
+/// flex, which repaints every frame and re-stamps it. The capture's own carry
+/// matters only for a NESTED boundary — see
+/// [`a_boundary_nested_inside_a_reused_one_keeps_its_stamp`], which is the
+/// fixture this one cannot substitute for.
 ///
 /// The equality alone is a VACUOUS oracle and mutation-testing proved it:
 /// with the stamp removed both frames report an empty set, which compares
@@ -457,4 +451,72 @@ fn stamps_of(t: &flui_layer::LayerTree) -> Vec<flui_foundation::RenderId> {
     }
     out.sort_unstable();
     out
+}
+
+/// A boundary NESTED inside a reused boundary keeps its stamp.
+///
+/// This is the case the flat eight-boundary fixture above cannot see, and
+/// getting it wrong was caught by review rather than by that fixture. A
+/// top-level boundary's stamp sits on the `OffsetLayer` its parent pushes,
+/// which is *above* the capture root — the parent repaints every frame and
+/// re-stamps it, so the capture need carry nothing. A nested boundary's parent
+/// paints INSIDE the outer capture, so its stamped `OffsetLayer` is one of the
+/// captured nodes (`RetainedSubtree` flattens nested boundaries). Drop the
+/// carry in `graft` and every nested boundary becomes unidentifiable the
+/// moment its enclosing boundary is reused.
+///
+/// Red-check: remove the `render_id` propagation from `graft` — the second
+/// frame reports two stamps where the first reported three.
+#[test]
+fn a_boundary_nested_inside_a_reused_one_keeps_its_stamp() {
+    // Root flex → [dirty boundary, outer boundary → opacity → inner boundary].
+    // The first is marked so a second frame runs at all; the second is clean
+    // and therefore grafted, carrying the inner boundary's layers with it.
+    let mut root = box_node(RenderFlex::row());
+    root = root.child(
+        box_node(RenderRepaintBoundary::new())
+            .label("first")
+            .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+    );
+    root = root.child(
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderOpacity::new(0.5)).child(
+                box_node(RenderRepaintBoundary::new())
+                    .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+            ),
+        ),
+    );
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(&mut owner, root);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let first = registry.get("first").expect("first boundary is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    let before = stamps_of(
+        &result
+            .expect("first frame")
+            .expect("first frame produces a layer tree"),
+    );
+    assert_eq!(
+        before.len(),
+        3,
+        "precondition: two top-level boundaries and one nested inside the \
+         second, all identifiable — got {before:?}"
+    );
+
+    owner.mark_needs_paint(first);
+    let (_, result) = owner.run_frame();
+    let after = stamps_of(
+        &result
+            .expect("second frame")
+            .expect("second frame produces a layer tree"),
+    );
+
+    assert_eq!(
+        after, before,
+        "the nested boundary must still be identifiable after its enclosing \
+         boundary was grafted rather than repainted"
+    );
 }

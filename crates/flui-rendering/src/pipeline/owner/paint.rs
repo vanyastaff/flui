@@ -530,6 +530,9 @@ struct RetainedNode {
     layer: Layer,
     parent: Option<usize>,
     offset: Option<flui_types::Offset<flui_types::geometry::Pixels>>,
+    /// The stamp a captured node carried, so a nested boundary survives its
+    /// enclosing boundary's reuse — see `graft`.
+    render_id: Option<RenderId>,
 }
 
 /// Builds the frame's [`LayerTree`] from replayed paint fragments,
@@ -742,6 +745,7 @@ impl FragmentComposer {
                 layer: layer.clone(),
                 parent,
                 offset: node.offset(),
+                render_id: node.render_id(),
             });
             for &child in node.children().iter().rev() {
                 stack.push((child, Some(index)));
@@ -768,20 +772,23 @@ impl FragmentComposer {
         let mut minted: Vec<LayerId> = Vec::with_capacity(retained.nodes.len());
         for node in &retained.nodes {
             // Built as a whole `LayerNode` rather than inserted-then-mutated:
-            // `offset` is a construction-time field with no setter, which is
-            // also the shape that keeps a disposed node from being resurrected
-            // by a stray mutation.
+            // `offset` and `render_id` are construction-time fields with no
+            // setters, which is also the shape that keeps a disposed node from
+            // being resurrected by a stray mutation.
             //
-            // No `render_id` carried: a boundary's stamp lives on the
-            // `OffsetLayer` its PARENT pushes (`push_boundary_layer`), which
-            // is above the capture root and is therefore re-created by the
-            // parent's own paint every frame — a grafted boundary is
-            // identifiable without the capture carrying anything. An earlier
-            // revision propagated the field here; mutation-testing showed
-            // removing that propagation changed no test, because every node a
-            // capture holds is unstamped by construction. It comes back with
-            // a rule that stamps layers below a boundary root.
+            // The `render_id` carry is load-bearing for NESTED boundaries and
+            // for them only. A top-level boundary's stamp sits on the
+            // `OffsetLayer` its parent pushes, which is above the capture root
+            // and re-created by that parent's own paint every frame. A nested
+            // boundary's is not: its parent paints INSIDE the outer capture,
+            // so its stamped `OffsetLayer` is one of these very nodes
+            // (`RetainedSubtree` flattens nested boundaries — see its doc).
+            // Dropping the carry makes every nested boundary unidentifiable
+            // the moment its enclosing boundary is reused.
             let mut layer_node = flui_layer::LayerNode::new(node.layer.clone());
+            if let Some(render_id) = node.render_id {
+                layer_node = layer_node.with_render_id(render_id);
+            }
             if let Some(offset) = node.offset {
                 layer_node = layer_node.with_offset(offset);
             }
