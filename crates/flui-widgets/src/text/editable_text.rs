@@ -234,12 +234,13 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 ///
 /// The following are absent in v1; do not use these features and expect them
 /// to work:
-/// - **Multi-tap and modified selection gestures** — a tap places the caret
-///   and a drag extends the selection, both wired here. What is absent is
-///   anything needing a click count or a modifier: shift-click extension,
-///   double-tap word selection and triple-tap line selection. `Listener`
-///   delivers raw pointer events, and the arbitration that produces those
-///   lives in `flui-interaction`'s recognisers;
+/// - **Multi-tap and shift-click selection** — a tap places the caret, a drag
+///   extends the selection, and Shift with an arrow or Home/End extends it
+///   from the keyboard. What is absent is anything needing a click COUNT, or
+///   a modifier on the POINTER: shift-click extension, double-tap word
+///   selection and triple-tap line selection. `Listener` delivers raw pointer
+///   events, and the arbitration that produces those lives in
+///   `flui-interaction`'s recognisers;
 ///   [`RenderEditable::word_range_at_local_offset`] is already there for the
 ///   double-tap case when one is wired above this.
 /// - **Selection handles and the selection toolbar** — the draggable
@@ -1290,20 +1291,43 @@ fn build_key_handler(
                 controller.delete_forward();
                 KeyEventResult::Handled
             }
+            // Shift is the difference between MOVING the caret and EXTENDING
+            // the selection, and the two are not the same operation with a
+            // flag: unmodified, an arrow collapses a selection to its edge and
+            // stops there; modified, it steps the extent from wherever it is
+            // and leaves the anchor. Flutter draws the same line between
+            // `ExtendSelectionByCharacterIntent`'s two `collapseSelection`
+            // values (`widgets/editable_text.dart:685,697`).
             Key::Named(NamedKey::ArrowLeft) => {
-                controller.move_caret_left();
+                if event.modifiers.contains(Modifiers::SHIFT) {
+                    controller.extend_selection_left();
+                } else {
+                    controller.move_caret_left();
+                }
                 KeyEventResult::Handled
             }
             Key::Named(NamedKey::ArrowRight) => {
-                controller.move_caret_right();
+                if event.modifiers.contains(Modifiers::SHIFT) {
+                    controller.extend_selection_right();
+                } else {
+                    controller.move_caret_right();
+                }
                 KeyEventResult::Handled
             }
             Key::Named(NamedKey::Home) => {
-                controller.move_caret_home();
+                if event.modifiers.contains(Modifiers::SHIFT) {
+                    controller.extend_selection_home();
+                } else {
+                    controller.move_caret_home();
+                }
                 KeyEventResult::Handled
             }
             Key::Named(NamedKey::End) => {
-                controller.move_caret_end();
+                if event.modifiers.contains(Modifiers::SHIFT) {
+                    controller.extend_selection_end();
+                } else {
+                    controller.move_caret_end();
+                }
                 KeyEventResult::Handled
             }
             Key::Named(_) => KeyEventResult::Ignored,
@@ -1909,6 +1933,68 @@ mod tests {
             .with_key(Key::Character(ch.to_string()))
             .with_state(KeyState::Down)
             .build()
+    }
+
+    /// A named-key event with modifiers, for the Shift-modified arrows.
+    fn named_key_event(
+        named: NamedKey,
+        modifiers: flui_interaction::events::Modifiers,
+    ) -> flui_interaction::events::KeyEvent {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+        KeyEventBuilder::new(Code::ArrowRight)
+            .with_key(Key::Named(named))
+            .with_state(KeyState::Down)
+            .with_modifiers(modifiers)
+            .build()
+    }
+
+    /// Shift routes an arrow to the EXTEND operation, not the move one.
+    ///
+    /// The controller has both and they behave differently on the same input;
+    /// this asserts the key handler picks between them, which is the only
+    /// thing that makes the extend operations reachable at all.
+    ///
+    /// Red-check: drop the `modifiers.contains(Modifiers::SHIFT)` branch from
+    /// the `ArrowRight` arm — the caret moves and the selection stays
+    /// collapsed.
+    #[test]
+    fn shift_routes_an_arrow_to_the_extend_operation() {
+        use flui_interaction::events::Modifiers;
+
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_caret_byte_offset(0);
+        let focus_node = FocusNode::with_debug_label("shift-arrow field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+        focus_node.request_focus();
+
+        harness
+            .focus_manager()
+            .dispatch_key_event(&named_key_event(NamedKey::ArrowRight, Modifiers::SHIFT));
+
+        assert_eq!(
+            controller.selection(),
+            0..1,
+            "Shift+Right must extend, not move"
+        );
+
+        // Control: the same key WITHOUT Shift collapses instead.
+        harness
+            .focus_manager()
+            .dispatch_key_event(&named_key_event(NamedKey::ArrowRight, Modifiers::empty()));
+
+        assert!(
+            !controller.has_selection(),
+            "the unmodified arrow collapses the selection it just made"
+        );
+        assert_eq!(
+            controller.caret_byte_offset(),
+            1,
+            "and collapses to the span's end, without stepping past it"
+        );
     }
 
     /// A root that can drop its `EditableText`, so a still-focused field can

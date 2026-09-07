@@ -194,9 +194,10 @@ struct ComposingState {
 /// # DEFERRED (v1)
 ///
 /// The following behaviors are absent in v1 and must not be faked:
-/// - **Multi-tap and modified selection gestures**: a selection is tracked,
-///   rendered, honoured by every edit, and produced by a tap or a drag on the
-///   field. What is absent is anything needing a click count or a modifier —
+/// - **Multi-tap and shift-click selection**: a selection is tracked,
+///   rendered, honoured by every edit, produced by a tap or a drag on the
+///   field, and extended from the keyboard with Shift. What is absent is
+///   anything needing a click COUNT or a modifier on the POINTER —
 ///   shift-click extension, double-tap word selection, triple-tap line
 ///   selection — plus the selection handles and toolbar.
 /// - **Clipboard**: copy/paste/cut are not wired.
@@ -508,6 +509,78 @@ impl TextEditingController {
                     true
                 }
             }
+        };
+        if changed {
+            self.notifier.notify_listeners();
+        }
+    }
+
+    /// Move the selection's EXTENT one character left, leaving the anchor —
+    /// Shift+Left.
+    ///
+    /// Flutter's `ExtendSelectionByCharacterIntent(collapseSelection: false)`:
+    /// *"Moves the selection's [TextSelection.extent] past the user-perceived
+    /// character before/after it"* (`widgets/editable_text.dart:697`). The
+    /// contrast with [`Self::move_caret_left`] is the whole point of the pair:
+    /// unmodified, an arrow COLLAPSES a selection to its edge and stops;
+    /// modified, it steps the caret from wherever it is and grows or shrinks
+    /// the span. A selection dragged rightwards then shrunk with Shift+Left
+    /// therefore narrows rather than jumping.
+    ///
+    /// Also clears [`Self::caret_hidden_by_ime`], for the reason
+    /// [`Self::move_caret_left`] documents.
+    pub fn extend_selection_left(&self) {
+        self.extend_to(|guard| {
+            let caret = guard.selection.caret;
+            (caret != 0).then(|| {
+                guard.text[..caret]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(idx, _)| idx)
+            })
+        });
+    }
+
+    /// Move the selection's extent one character right — Shift+Right. The
+    /// mirror of [`Self::extend_selection_left`].
+    pub fn extend_selection_right(&self) {
+        self.extend_to(|guard| {
+            let caret = guard.selection.caret;
+            (caret != guard.text.len())
+                .then(|| caret + guard.text[caret..].chars().next().map_or(0, char::len_utf8))
+        });
+    }
+
+    /// Move the selection's extent to the start of the buffer —
+    /// Shift+Home.
+    pub fn extend_selection_home(&self) {
+        self.extend_to(|_| Some(0));
+    }
+
+    /// Move the selection's extent to the end of the buffer — Shift+End.
+    pub fn extend_selection_end(&self) {
+        self.extend_to(|guard| Some(guard.text.len()));
+    }
+
+    /// Shared body of the four extend operations: move the caret to whatever
+    /// `next` computes, leave the anchor, notify only on a real change.
+    ///
+    /// One function rather than four copies because "leave the anchor" is the
+    /// property that distinguishes these from the plain moves, and a copy that
+    /// forgot it would silently collapse — the failure this whole shape exists
+    /// to make impossible.
+    fn extend_to(&self, next: impl FnOnce(&ControllerInner) -> Option<usize>) {
+        let changed = {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let moved = match next(&guard) {
+                Some(caret) if caret != guard.selection.caret => {
+                    guard.selection.caret = caret;
+                    true
+                }
+                _ => false,
+            };
+            let unhid = clear_caret_hidden(&mut guard);
+            moved || unhid
         };
         if changed {
             self.notifier.notify_listeners();
@@ -1115,6 +1188,122 @@ mod tests {
 
         assert_eq!(controller.text(), "hello にほん");
         assert_eq!(controller.composing_range(), Some(6..6 + "にほん".len()));
+    }
+
+    /// Shift+Right grows the span from a collapsed caret, and Shift+Left then
+    /// SHRINKS it rather than jumping — the extent moves, the anchor does not.
+    ///
+    /// This is the contrast with the plain arrows, and it is the whole reason
+    /// the two are separate operations rather than one with a flag:
+    /// `move_caret_left` on the same selection would collapse to its start.
+    ///
+    /// Red-check: point `extend_selection_left` at `move_caret_left` — the
+    /// second assertion sees `0..0`.
+    #[test]
+    fn a_shifted_arrow_moves_the_extent_and_leaves_the_anchor() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_caret_byte_offset(4);
+
+        controller.extend_selection_right();
+        controller.extend_selection_right();
+        assert_eq!(controller.selection(), 4..6, "the span grew rightwards");
+        assert_eq!(controller.caret_byte_offset(), 6);
+
+        controller.extend_selection_left();
+        assert_eq!(
+            controller.selection(),
+            4..5,
+            "Shift+Left shrinks the same span; the unmodified arrow would \
+             collapse it to 4..4"
+        );
+    }
+
+    /// The extent can cross the anchor, at which point the span reads the
+    /// other way round — a selection dragged rightwards and then extended past
+    /// its own start.
+    #[test]
+    fn a_shifted_arrow_may_carry_the_extent_past_the_anchor() {
+        let controller = TextEditingController::with_text("hello");
+        controller.set_selection(2, 3);
+
+        controller.extend_selection_left();
+        controller.extend_selection_left();
+
+        assert_eq!(
+            controller.selection(),
+            1..2,
+            "the span flipped around the anchor"
+        );
+        assert_eq!(
+            controller.caret_byte_offset(),
+            1,
+            "the caret is still the extent, now below the anchor"
+        );
+    }
+
+    /// Shift+Home and Shift+End take the extent to the edges, anchor intact.
+    #[test]
+    fn shifted_home_and_end_extend_to_the_edges() {
+        let home = TextEditingController::with_text("hello");
+        home.set_caret_byte_offset(3);
+        home.extend_selection_home();
+        assert_eq!(home.selection(), 0..3);
+        assert_eq!(home.caret_byte_offset(), 0);
+
+        let end = TextEditingController::with_text("hello");
+        end.set_caret_byte_offset(3);
+        end.extend_selection_end();
+        assert_eq!(end.selection(), 3..5);
+        assert_eq!(end.caret_byte_offset(), 5);
+    }
+
+    /// Extending past an edge is a no-op that notifies nobody — key repeat
+    /// holds the arrow down and would otherwise rebuild the field per event.
+    #[test]
+    fn extending_past_an_edge_does_not_notify() {
+        let controller = TextEditingController::with_text("hello");
+        controller.set_selection(0, 5);
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&seen);
+        let _sub = controller
+            .listenable()
+            .add_listener(std::sync::Arc::new(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }));
+
+        controller.extend_selection_right();
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "the extent is already at the end"
+        );
+
+        // A different no-op, and the one that pins the equality check rather
+        // than the edge check: `extend_selection_home` always computes
+        // `Some(0)`, so at the start of the buffer it is the `caret !=
+        // selection.caret` comparison — not a `None` from the edge — that
+        // stops the notification.
+        controller.set_selection(5, 0);
+        controller.extend_selection_home();
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the extent is already at 0; only `set_selection` above notified"
+        );
+
+        controller.extend_selection_left();
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "and Left from 0 is the edge no-op"
+        );
+
+        controller.extend_selection_right();
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "control: a real move does notify"
+        );
     }
 
     // ------------------------------------------------------------------
