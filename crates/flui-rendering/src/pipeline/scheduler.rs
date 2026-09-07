@@ -355,7 +355,30 @@ impl DirtyTracker {
     /// in, which is what makes the whole ordering family a non-issue rather
     /// than a set of guards.
     fn enqueue_paint(&mut self, node_id: RenderId, depth: usize, kind: PaintKind) {
-        // Upgrade in place wherever the id already lives.
+        if self.debug_doing_paint {
+            // ALWAYS the side queue while a pass is running, even when the id
+            // is already in the main one. The running pass snapshotted its
+            // dispositions before the walk, so an upgrade written to the main
+            // queue cannot affect it — and `run_paint` ends with
+            // `clear_paint_queue`, which would then discard that upgrade before
+            // `exit_phase` drains the side queue. The mark would be lost
+            // outright: the boundary grafts this frame and is not queued the
+            // next.
+            //
+            // Routing here defers the join to `PaintQueue::append`, which
+            // upgrades on collision precisely so a repaint raised mid-paint
+            // survives being merged into whatever the main queue holds.
+            if self
+                .mid_layout_marks
+                .needs_paint
+                .enqueue(node_id, depth, kind)
+            {
+                self.notifier.read().fire_need_visual_update();
+            }
+            return;
+        }
+        // Outside a pass, raise the kind wherever the id already lives — the
+        // side queue can still hold entries a previous pass left for the drain.
         if self.dirty.needs_paint.contains(&node_id) {
             self.dirty.needs_paint.enqueue(node_id, depth, kind);
             return;
@@ -366,12 +389,7 @@ impl DirtyTracker {
                 .enqueue(node_id, depth, kind);
             return;
         }
-        let target = if self.debug_doing_paint {
-            &mut self.mid_layout_marks.needs_paint
-        } else {
-            &mut self.dirty.needs_paint
-        };
-        if !target.enqueue(node_id, depth, kind) {
+        if !self.dirty.needs_paint.enqueue(node_id, depth, kind) {
             return; // already queued — frame already scheduled
         }
         self.notifier.read().fire_need_visual_update();
@@ -897,6 +915,57 @@ impl DirtyTracker {
 
 #[cfg(test)]
 mod tests {
+
+    /// A repaint raised mid-paint for a boundary ALREADY queued as an update
+    /// must survive the pass.
+    ///
+    /// The trap is that the id is already in the MAIN queue, so an
+    /// "upgrade wherever it lives" rule raises it there — where the running
+    /// pass cannot see it (it snapshotted its dispositions before the walk) and
+    /// where `clear_paint_queue` then deletes it, before `exit_phase` drains
+    /// the side queue. The mark is lost outright: the boundary grafts this
+    /// frame and is not queued the next.
+    ///
+    /// No production path marks during paint today — `run_paint` takes
+    /// `&mut self` while the walk takes `&self` — so this drives the scheduler
+    /// directly. `exit_phase` documents the window all the same, and this is
+    /// what keeps the routing honest with that contract.
+    #[test]
+    fn a_repaint_raised_mid_paint_survives_a_boundary_already_queued_as_an_update() {
+        let mut tracker = DirtyTracker::new(std::sync::Arc::new(parking_lot::RwLock::new(
+            VisualUpdateNotifier::new(),
+        )));
+        let boundary = RenderId::new(7);
+
+        tracker.enqueue_paint(
+            boundary,
+            1,
+            PaintKind::LayerUpdate(smallvec![RenderId::new(8)]),
+        );
+        assert!(tracker.dirty.needs_paint.contains(&boundary));
+
+        // The pass starts, snapshots its dispositions, and a repaint arrives.
+        tracker.enter_phase(PhaseKind::Paint);
+        tracker.enqueue_paint(boundary, 1, PaintKind::Repaint);
+        assert!(
+            tracker.mid_layout_marks.needs_paint.contains(&boundary),
+            "a mark raised during the pass belongs in the side queue, whatever \
+             the main queue already holds for that id",
+        );
+
+        // The pass ends the way `run_paint` ends: clear, then drain.
+        tracker.clear_paint_queue();
+        let drained = tracker.exit_phase(PhaseKind::Paint);
+        assert_eq!(drained, 1, "the side queue's one entry must drain");
+
+        assert_eq!(
+            tracker.dirty.needs_paint.kind_for_test(boundary),
+            Some(PaintKind::Repaint),
+            "the repaint must reach the next frame's queue; upgrading the main \
+             entry instead loses it to `clear_paint_queue`",
+        );
+    }
+
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},

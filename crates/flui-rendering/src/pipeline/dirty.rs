@@ -374,6 +374,16 @@ impl PaintQueue {
         other.index.clear();
     }
 
+    /// The kind queued for `id`, cloned — a test-only read.
+    ///
+    /// Production code never asks: the paint pass reads the whole slice once
+    /// and derives its dispositions from it, so a per-id accessor would be a
+    /// second way to answer a question that already has one.
+    #[cfg(test)]
+    pub fn kind_for_test(&self, id: RenderId) -> Option<PaintKind> {
+        self.index.get(&id).map(|&i| self.entries[i].kind.clone())
+    }
+
     fn reindex(&mut self) {
         self.index.clear();
         for (position, entry) in self.entries.iter().enumerate() {
