@@ -72,17 +72,30 @@
 //! - `'Push and pop should trigger the observers'` (navigator_test.dart) — the
 //!   pop half's route/previous identity —
 //!   [`pop_observer_reports_the_popped_route_and_its_predecessor`].
+//! - `'arguments for named routes on NavigatorState'` (navigator_test.dart) —
+//!   one sequence through `pushNamed`, `popAndPushNamed`,
+//!   `pushNamedAndRemoveUntil` and `pushReplacementNamed`, asserting the
+//!   arguments payload each generator invocation received and the stack each
+//!   entry point left behind —
+//!   [`named_route_arguments_reach_the_generator_for_every_named_entry_point`].
+//!   **Adapted twice**, both recorded at the test: the generator registers on
+//!   `NavigatorHandle` rather than on a `MaterialApp` (ADR-0024 §3.1), and the
+//!   stack is asserted through `route_ids` rather than `find.text`, because
+//!   `opaque`/`maintainState` are deferred so a covered route stays built.
 //!
 //! ## Not ported
 //! - `popUntilWithResult` — FLUI's `pop_until` mirrors Flutter's `popUntil`
 //!   (no-result) shape only; the result-delivering variant, which requires
-//!   deciding *which* popped route receives the caller's value, is deferred
-//!   alongside named-route generation below.
-//! - `onGenerateRoute`, named-route generation, and `'arguments for named
-//!   routes on Navigator'` — there is no route-table / `onGenerateRoute`
-//!   mechanism to generate a route from a name; `RouteSettings.arguments`
-//!   itself is now ported (see *Ported cases*), but nothing yet consumes it
-//!   to build a route.
+//!   deciding *which* popped route receives the caller's value, is deferred.
+//! - `'arguments for named routes on Navigator'` — the same sequence driven
+//!   through the *static* `Navigator.pushNamed(context, …)` helpers instead of
+//!   a navigator handle. FLUI's static form is `Navigator::of(ctx)` returning a
+//!   `NavigatorHandle`, so the two would exercise the identical calls; the
+//!   `NavigatorState` variant is ported above.
+//! - `'Initial route can have gaps'` and the `initialRoute` family —
+//!   `Navigator.initialRoute` / `defaultGenerateInitialRoutes` hierarchy
+//!   synthesis is ADR-0024 U3, deferred by decision. FLUI seeds with
+//!   `NavigatorHandle::seed_initial`, one call per route.
 //! - `'Navigator.of rootNavigator finds root Navigator'` and nested-navigator
 //!   scoping generally — already ported in `navigator_public.rs`'s
 //!   `public_nested_navigator_lookup_nearest_and_root` and
@@ -106,8 +119,8 @@ use std::sync::Arc;
 use crate::common::{lay_out, loose};
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    NavigatorObserver, NavigatorRoute, PushCompletion, Route, RouteContentBuilder, RouteId,
-    RouteSettings,
+    GeneratedRoute, NavigatorObserver, NavigatorRoute, PushCompletion, Route, RouteContentBuilder,
+    RouteId, RouteRequest, RouteSettings,
 };
 use parking_lot::Mutex;
 
@@ -927,4 +940,138 @@ fn pop_until_makes_progress_through_a_route_that_refuses_its_first_pop() {
         "the refusing route eventually pops once its local entry is drained, \
          instead of pop_until spinning forever on the same candidate"
     );
+}
+
+/// Port of `'arguments for named routes on NavigatorState'`
+/// (navigator_test.dart) — one sequence driving `pushNamed`,
+/// `popAndPushNamed`, `pushNamedAndRemoveUntil` and `pushReplacementNamed`,
+/// asserting the arguments each generator invocation received and the stack
+/// each entry point left behind.
+///
+/// **Adapted, twice.** The oracle's `MaterialApp(onGenerateRoute:)` becomes
+/// `NavigatorHandle::on_generate_route` — FLUI registers the generator on the
+/// handle, not the widget (ADR-0024 §3.1). And the oracle proves *which* route
+/// is on top with `find.text('/A')`, which FLUI cannot mirror: `opaque` /
+/// `maintainState` are deferred (`ARCHITECTURE.md` §6), so a covered route
+/// stays built. The stack shape is asserted through `route_ids` instead, which
+/// is the same fact the oracle's finder is standing in for.
+///
+/// The oracle's first assertion — that the *initial* route also reaches the
+/// generator with null arguments — has no FLUI counterpart: `initial_route` /
+/// `defaultGenerateInitialRoutes` are ADR-0024 U3, deferred by decision, so a
+/// FLUI navigator is seeded with a concrete route. The seed's absence from the
+/// generator log is asserted rather than skipped.
+///
+/// Each leg asserts the whole stack by [`RouteId`], not just its depth, so a
+/// generator that answered with the wrong route — or an entry point that
+/// covered a route it was supposed to remove — fails here rather than passing
+/// on a matching count.
+///
+/// Red-check: drop the `settings` argument from any one entry point's
+/// resolution and its recorded payload becomes `None`.
+#[test]
+fn named_route_arguments_reach_the_generator_for_every_named_entry_point() {
+    /// Every argument payload the generator was handed, oldest first.
+    #[derive(Clone, Default)]
+    struct GeneratorLog(Arc<Mutex<Vec<Option<&'static str>>>>);
+
+    impl GeneratorLog {
+        /// The payloads seen since the last drain — the delta one named entry
+        /// point produced.
+        fn drain(&self) -> Vec<Option<&'static str>> {
+            std::mem::take(&mut *self.0.lock())
+        }
+    }
+
+    let generated = GeneratorLog::default();
+    let built = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    let handle = NavigatorHandle::new();
+    handle.on_generate_route({
+        let generated = generated.clone();
+        let built = Arc::clone(&built);
+        move |request: &RouteRequest<'_>| {
+            generated
+                .0
+                .lock()
+                .push(request.argument::<&'static str>().copied());
+            let name = request.name()?.to_owned();
+            let built = Arc::clone(&built);
+            let label = name.clone();
+            Some(GeneratedRoute::new(
+                SimpleRoute::<()>::new(move |_ctx| {
+                    built.lock().push(label.clone());
+                    SizedBox::new(10.0, 10.0).into_view().boxed()
+                })
+                .named(name),
+            ))
+        }
+    });
+
+    handle.seed_initial(SimpleRoute::<()>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("the seeded route is on the stack");
+    assert_eq!(
+        generated.drain(),
+        Vec::new(),
+        "seeding does not route through the generator — initial-route synthesis \
+         is ADR-0024 U3, deferred"
+    );
+
+    // pushNamed('/A', arguments: 'pushNamed')
+    let route_a = handle
+        .push_named(RouteSettings::named("/A").with_arguments("pushNamed"))
+        .expect("the generator answers '/A'");
+    laid.tick();
+    assert_eq!(generated.drain(), vec![Some("pushNamed")]);
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, route_a],
+        "'/A' sits above the root"
+    );
+    assert!(built.lock().contains(&"/A".to_owned()), "'/A' built");
+
+    // popAndPushNamed('/B', arguments: 'popAndPushNamed')
+    let route_b = handle
+        .pop_and_push_named(RouteSettings::named("/B").with_arguments("popAndPushNamed"))
+        .expect("the generator answers '/B'");
+    laid.tick();
+    assert_eq!(generated.drain(), vec![Some("popAndPushNamed")]);
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, route_b],
+        "'/A' left the stack and '/B' took its place — not merely covered it"
+    );
+    assert!(built.lock().contains(&"/B".to_owned()), "'/B' built");
+
+    // pushNamedAndRemoveUntil('/C', (route) => route.isFirst, arguments: …)
+    let route_c = handle
+        .push_named_and_remove_until(
+            RouteSettings::named("/C").with_arguments("pushNamedAndRemoveUntil"),
+            |candidate| candidate == root,
+        )
+        .expect("the generator answers '/C'");
+    laid.tick();
+    assert_eq!(generated.drain(), vec![Some("pushNamedAndRemoveUntil")]);
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, route_c],
+        "the route the predicate kept is still the bottom, and nothing sits between"
+    );
+    assert!(built.lock().contains(&"/C".to_owned()), "'/C' built");
+
+    // pushReplacementNamed('/D', arguments: 'pushReplacementNamed')
+    let route_d = handle
+        .push_replacement_named(RouteSettings::named("/D").with_arguments("pushReplacementNamed"))
+        .expect("the generator answers '/D'");
+    laid.tick();
+    assert_eq!(generated.drain(), vec![Some("pushReplacementNamed")]);
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, route_d],
+        "'/D' replaced '/C'"
+    );
+    assert!(built.lock().contains(&"/D".to_owned()), "'/D' built");
 }

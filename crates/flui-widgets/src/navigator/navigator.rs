@@ -30,12 +30,18 @@
 //!
 //! # Not implemented, and not claimed
 //!
-//! No Navigator 2.0/page-list API, restoration, named-route generation, `PopScope`,
+//! No Navigator 2.0/page-list API, restoration, `PopScope`,
 //! `LocalHistoryRoute`, `HeroControllerScope`, `NavigationNotification`,
 //! pointer-cancelling wrapper, or per-route focus scope that Flutter's `build` adds
 //! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay private implementation
 //! details behind public `PageRoute` / `PopupRoute`.
+//!
+//! Named-route generation *is* here — see the `Named routes` impl block below
+//! and `named_route.rs`. What that feature deliberately leaves out is
+//! `Navigator.initialRoute` / `defaultGenerateInitialRoutes` hierarchy
+//! synthesis; `navigator/mod.rs` records why.
 
+use std::any::{TypeId, type_name};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -62,10 +68,14 @@ use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
 use super::history::{DeferredEffect, FlushOutcome, RouteHistory};
 use super::modal_route::ModalHandle;
+use super::named_route::{
+    GeneratedRoute, KeyedRequest, NamedRouteError, PushMode, RouteKey, RouteRegistry, RouteRequest,
+    requested_name,
+};
 use super::observer::{NavigatorObserver, Notification, deliver};
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
-use super::route::{AnyResult, RouteId, RoutePopDisposition};
+use super::route::{AnyResult, Route, RouteId, RoutePopDisposition, RouteSettings};
 use super::subtree::RouteSubtree;
 use crate::animated::VsyncScope;
 use crate::overlay::{Overlay, OverlayEntry, OverlayHandle};
@@ -121,6 +131,12 @@ struct NavigatorShared {
     /// `Box<dyn ErasedRoute>` inside the history's mutex, so they publish here
     /// instead (ADR-0019).
     registries: RouteRegistries,
+
+    /// This navigator's name → route table and its two generator hooks — the
+    /// three sources Flutter's `WidgetsApp._onGenerateRoute` folds into the
+    /// single `Navigator.onGenerateRoute` hook (`app.dart`). Owned per
+    /// navigator, so two navigators resolve the same name independently.
+    named_routes: RouteRegistry,
 
     /// The clock this navigator's route transitions register with.
     /// Resolved from an ambient `VsyncScope` in `init_state`; `None` when there is
@@ -476,6 +492,13 @@ impl fmt::Debug for NavigatorCommandTarget {
 /// mutations that need no view/builder payload. Pushing a route remains a
 /// [`NavigatorHandle`] operation because a route owns owner-local view builders
 /// and cannot be made `Send` without changing the widget model.
+///
+/// `#[non_exhaustive]`: a route *name* is `Send`, so named-route generation is
+/// what first makes this vocabulary growable — a `PushNamed { target, name }`
+/// arm is now expressible where a `Push { route }` arm never was. Adding the
+/// attribute is a breaking change that is free today and is not free later
+/// (ADR-0024 §7.5).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavigatorCommand {
     /// Pop the target navigator's top route.
@@ -550,6 +573,10 @@ impl NavigatorCommand {
 }
 
 /// Result of applying a typed [`NavigatorCommand`].
+///
+/// `#[non_exhaustive]` for the same reason as [`NavigatorCommand`]: the two
+/// grow together, one outcome per command.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigatorCommandOutcome {
     /// Outcome of [`NavigatorHandle::pop`].
@@ -650,6 +677,7 @@ impl NavigatorHandle {
                 modals: Arc::new(Mutex::new(HashMap::new())),
                 pop_pacing: Arc::new(Mutex::new(HashMap::new())),
             },
+            named_routes: RouteRegistry::default(),
             post_frame: Mutex::new(None),
             render_tree: Mutex::new(None),
             observers: Mutex::new(Vec::new()),
@@ -665,6 +693,20 @@ impl NavigatorHandle {
             command_target,
             _owner_affine: PhantomData,
         }
+    }
+
+    /// Re-registrations that changed a name's `Output` type, and the conflict
+    /// warnings actually emitted. Test-facing: `warns_emitted` is incremented in
+    /// the same block that calls `tracing::warn!`, so asserting on it asserts on
+    /// the warn rather than on a parallel predicate.
+    #[cfg(test)]
+    pub(crate) fn route_conflicts_seen(&self) -> usize {
+        self.shared.named_routes.conflicts_seen()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn route_conflict_warns(&self) -> usize {
+        self.shared.named_routes.warns_emitted()
     }
 
     /// How many attached observers drive hero flights — the auto-default plus any
@@ -895,6 +937,20 @@ impl NavigatorHandle {
     /// same order, since `OverlayRoute.install` creates the entries and *then*
     /// calls `super.install()` (`routes.dart:69-71`).
     pub fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        self.push_reporting_id(route).1
+    }
+
+    /// [`push`](Self::push), also handing back the [`RouteId`] it minted.
+    ///
+    /// `pub(super)` because the named-route path returns that id to its caller
+    /// (`push_named` and friends answer `Result<RouteId, _>`), and the id is
+    /// minted inside `push_prepared` — reading it back off
+    /// [`current`](Self::current) afterwards would be inferring a fact the push
+    /// already knows.
+    pub(super) fn push_reporting_id<R: NavigatorRoute>(
+        &self,
+        route: R,
+    ) -> (RouteId, RouteResult<R::Output>) {
         self.push_prepared(route, |history, id, route| {
             history.push_with_id(id, route).1
         })
@@ -925,6 +981,21 @@ impl NavigatorHandle {
         route: R,
         result: Option<AnyResult>,
     ) -> RouteResult<R::Output> {
+        self.push_replacement_erased_reporting_id(route, result).1
+    }
+
+    /// [`push_replacement`](Self::push_replacement) with an already-erased
+    /// `result`, also handing back the new route's [`RouteId`].
+    ///
+    /// `pub(super)` for the named-route path, which needs both halves:
+    /// `PushMode::Replace` carries a result that was erased before the route
+    /// type was known, so it cannot go through the typed
+    /// [`push_replacement_with`](Self::push_replacement_with) front door.
+    pub(super) fn push_replacement_erased_reporting_id<R: NavigatorRoute>(
+        &self,
+        route: R,
+        result: Option<AnyResult>,
+    ) -> (RouteId, RouteResult<R::Output>) {
         self.push_prepared(route, |history, id, route| {
             history.push_replacement_with_id(id, route, result).1
         })
@@ -951,11 +1022,22 @@ impl NavigatorHandle {
     pub fn push_and_remove_until<R: NavigatorRoute>(
         &self,
         route: R,
-        mut keep: impl FnMut(RouteId) -> bool,
+        keep: impl FnMut(RouteId) -> bool,
     ) -> RouteResult<R::Output> {
-        let (result, below_top_to_bottom) = self.push_prepared(route, |history, id, route| {
-            history.push_for_remove_until_with_id(id, route)
-        });
+        self.push_and_remove_until_reporting_id(route, keep).1
+    }
+
+    /// [`push_and_remove_until`](Self::push_and_remove_until), also handing back
+    /// the new route's [`RouteId`]. `pub(super)` for the named-route path.
+    pub(super) fn push_and_remove_until_reporting_id<R: NavigatorRoute>(
+        &self,
+        route: R,
+        mut keep: impl FnMut(RouteId) -> bool,
+    ) -> (RouteId, RouteResult<R::Output>) {
+        let (id, (result, below_top_to_bottom)) = self
+            .push_prepared(route, |history, id, route| {
+                history.push_for_remove_until_with_id(id, route)
+            });
 
         let mut remove_ids = Vec::new();
         for candidate in below_top_to_bottom {
@@ -968,7 +1050,7 @@ impl NavigatorHandle {
         self.shared
             .mutate(|history| history.complete_removed_and_flush(&remove_ids));
 
-        result
+        (id, result)
     }
 
     /// The shared push shape: mint the id, fill the route's binding slot, insert
@@ -980,7 +1062,7 @@ impl NavigatorHandle {
         &self,
         route: R,
         commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
-    ) -> O {
+    ) -> (RouteId, O) {
         let id = RouteId::next();
         self.bind(&route, id);
 
@@ -1000,7 +1082,7 @@ impl NavigatorHandle {
         if let Some(outcome) = outcome {
             self.shared.apply(outcome);
         }
-        result
+        (id, result)
     }
 
     fn pop_erased(&self, result: Option<AnyResult>) -> bool {
@@ -1263,6 +1345,498 @@ impl NavigatorHandle {
     #[must_use]
     pub fn maybe_of_root(ctx: &dyn BuildContext) -> Option<Self> {
         ctx.find_root_state::<NavigatorState, _>(NavigatorState::handle)
+    }
+}
+
+/// Named routes: registration, and the six entry points that resolve a name
+/// into a push.
+///
+/// # Registration
+///
+/// Flutter spreads these over two widgets — `WidgetsApp` owns the
+/// `routes: Map<String, WidgetBuilder>` table and folds it, `home`, and the
+/// user's `onGenerateRoute` into the single `Navigator.onGenerateRoute` hook
+/// (`app.dart`, `WidgetsApp._onGenerateRoute`). FLUI's `Navigator` widget is a
+/// thin shell over this handle and every push already goes through it, so all
+/// three register here and `_routeNamed`'s resolution order becomes one
+/// function: [`route`](Self::route) table entry →
+/// [`on_generate_route`](Self::on_generate_route) →
+/// [`on_unknown_route`](Self::on_unknown_route). They are mutators, not
+/// constructor state, because Flutter lets a rebuilt `Navigator` swap its
+/// callbacks.
+///
+/// When a `WidgetsApp`-level route table lands (a later slice), the contract is
+/// that **the app builder replaces the table wholesale at mount and these
+/// mutators serve imperative or late registration** — recorded in
+/// `ARCHITECTURE.md`'s `## Mapping decisions` so two registration sites never
+/// arrive with no defined winner.
+///
+/// # The entry points
+///
+/// Six untyped, mirroring Flutter's `pushNamed`, `pushReplacementNamed`,
+/// `popAndPushNamed` and `pushNamedAndRemoveUntil` plus the `result:` variants
+/// of the middle two, and one typed
+/// [`push_named_typed`](Self::push_named_typed). Each takes an
+/// `impl Into<RouteSettings>`, so a bare name needs no `RouteSettings` at the
+/// call site and an argument-carrying request builds one:
+///
+/// ```
+/// use flui_widgets::prelude::*;
+/// use flui_widgets::{NavigatorHandle, RouteRequest, RouteSettings, Text};
+///
+/// let navigator = NavigatorHandle::new();
+/// navigator.route("/details", |_request: &RouteRequest<'_>| {
+///     Some(SimpleRoute::<i32>::new(|_ctx| Text::new("Details").into_view().boxed()))
+/// });
+/// navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
+///     Text::new("Home").into_view().boxed()
+/// }));
+///
+/// // A bare name. Note there is no `::<T>`: the untyped entry points never
+/// // name the route's result type, which is why a `SimpleRoute<i32>` is
+/// // reachable from a caller that has never heard of `i32`.
+/// let details = navigator.push_named("/details")?;
+///
+/// // An argument-carrying request.
+/// let with_id = navigator
+///     .push_named(RouteSettings::named("/details").with_arguments(7_u32))?;
+///
+/// // And the one call that does name a type, to keep the pop result.
+/// let result = navigator.push_named_typed::<i32>("/details")?;
+/// # assert_ne!(details, with_id);
+/// # let _ = result;
+/// # Ok::<(), flui_widgets::NamedRouteError>(())
+/// ```
+///
+/// `_with` on this handle means **"a result delivered to the departing route"**
+/// throughout ([`pop_with`](Self::pop_with),
+/// [`push_replacement_with`](Self::push_replacement_with),
+/// [`remove_route_with`](Self::remove_route_with),
+/// [`maybe_pop_with`](Self::maybe_pop_with)) and keeps that meaning here.
+/// Arguments ride in the request, never in a `_with`.
+impl NavigatorHandle {
+    /// Bind `name` to a route, replacing any previous binding — one entry of
+    /// Flutter's `WidgetsApp.routes` map.
+    ///
+    /// Typed sugar over [`on_generate_route`](Self::on_generate_route): one
+    /// name maps to one route type, so the factory returns a concrete
+    /// [`NavigatorRoute`] and the erasure is this method's business. `None`
+    /// declines the request and passes it to the generator, then to the
+    /// unknown-route fallback.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_widgets::prelude::*;
+    /// use flui_widgets::{NavigatorHandle, RouteRequest, Text};
+    ///
+    /// let navigator = NavigatorHandle::new();
+    /// navigator.route("/details", |request: &RouteRequest<'_>| {
+    ///     let title = request.argument::<String>().cloned().unwrap_or_default();
+    ///     Some(SimpleRoute::<()>::new(move |_ctx| {
+    ///         Text::new(title.clone()).into_view().boxed()
+    ///     }))
+    /// });
+    /// ```
+    ///
+    /// See [`route_keyed`](Self::route_keyed) for the variant that checks the
+    /// route's result type against the name at compile time.
+    pub fn route<R, F>(&self, name: impl Into<String>, factory: F)
+    where
+        R: NavigatorRoute,
+        F: Fn(&RouteRequest<'_>) -> Option<R> + 'static,
+    {
+        self.shared.named_routes.register_named(
+            name.into(),
+            Rc::new(move |request| Some(GeneratedRoute::new(factory(request)?))),
+            TypeId::of::<R::Output>(),
+            type_name::<R::Output>(),
+        );
+    }
+
+    /// Bind a [`RouteKey`] to a route whose `Output` the compiler checks against
+    /// the key.
+    ///
+    /// The typed counterpart to [`route`](Self::route). `R: Route<Output = T>`
+    /// is the whole point: registering a `SimpleRoute<String>` under a
+    /// `RouteKey<u32>` does not compile.
+    ///
+    /// That is a check on *this* registration, not a guarantee about the name.
+    /// See [`push_keyed`](Self::push_keyed) for the collision it cannot rule
+    /// out.
+    ///
+    /// Registration still lands in the same name-keyed table the untyped path
+    /// uses — see [`push_keyed`](Self::push_keyed) for what that means when the
+    /// two paths collide on one name.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_widgets::prelude::*;
+    /// use flui_widgets::{NavigatorHandle, RouteKey, RouteRequest, Text};
+    ///
+    /// const COUNT: RouteKey<i32> = RouteKey::new("/count");
+    ///
+    /// let navigator = NavigatorHandle::new();
+    /// navigator.route_keyed(COUNT, |_request: &RouteRequest<'_>| {
+    ///     Some(SimpleRoute::<i32>::new(|_ctx| Text::new("Count").into_view().boxed()))
+    /// });
+    /// ```
+    ///
+    /// The same registration with a route that delivers something else does not
+    /// compile — this is the guarantee the whole keyed path exists for, so it is
+    /// pinned here rather than described:
+    ///
+    /// ```compile_fail
+    /// use flui_widgets::prelude::*;
+    /// use flui_widgets::{NavigatorHandle, RouteKey, RouteRequest, Text};
+    ///
+    /// const COUNT: RouteKey<i32> = RouteKey::new("/count");
+    ///
+    /// let navigator = NavigatorHandle::new();
+    /// // `SimpleRoute<String>` does not deliver the key's `i32`.
+    /// navigator.route_keyed(COUNT, |_request: &RouteRequest<'_>| {
+    ///     Some(SimpleRoute::<String>::new(|_ctx| Text::new("Count").into_view().boxed()))
+    /// });
+    /// ```
+    ///
+    /// The two examples differ in exactly one token (`i32` → `String`), which is
+    /// what makes the `compile_fail` meaningful: a `compile_fail` block passes
+    /// when it fails for *any* reason, so it is only evidence when a
+    /// near-identical block above it compiles.
+    pub fn route_keyed<T, R, F>(&self, key: RouteKey<T>, factory: F)
+    where
+        R: NavigatorRoute + Route<Output = T>,
+        F: Fn(&RouteRequest<'_>) -> Option<R> + 'static,
+    {
+        self.route(key.name(), factory);
+    }
+
+    /// Install the catch-all route generator — Flutter's
+    /// `Navigator.onGenerateRoute`.
+    ///
+    /// Consulted for every name the [`route`](Self::route) table did not
+    /// answer. It cannot be generic over one route type the way `route` is —
+    /// one closure must be able to answer different names with differently
+    /// typed routes — so it returns an erased [`GeneratedRoute`] and the caller
+    /// writes `GeneratedRoute::new(..)`.
+    ///
+    /// # Do not capture a handle; one is handed to you
+    ///
+    /// [`RouteRequest::navigator`] carries the navigator resolving the request,
+    /// so a factory that navigates needs no captured [`NavigatorHandle`] — and a
+    /// route's *content* never did either, since a
+    /// [`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) gets a
+    /// `&dyn BuildContext` and [`maybe_of`](Self::maybe_of) resolves from it.
+    ///
+    /// Capturing one anyway closes an `Arc` cycle — the navigator owns the
+    /// registry, the registry owns the closure, the closure would own the
+    /// navigator — and the storage is then reclaimed only when the navigator
+    /// unmounts, since `NavigatorState::dispose` drops every registration. An
+    /// unmounted navigator therefore leaks nothing; one that never mounts, or
+    /// outlives its tree, holds its own stack until the last handle goes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_widgets::prelude::*;
+    /// use flui_widgets::{GeneratedRoute, NavigatorHandle, RouteRequest, Text};
+    ///
+    /// let navigator = NavigatorHandle::new();
+    /// navigator.on_generate_route(|request: &RouteRequest<'_>| match request.name()? {
+    ///     "/count" => Some(GeneratedRoute::new(SimpleRoute::<i32>::new(|_ctx| {
+    ///         Text::new("Count").into_view().boxed()
+    ///     }))),
+    ///     _ => None,
+    /// });
+    /// ```
+    pub fn on_generate_route(
+        &self,
+        factory: impl Fn(&RouteRequest<'_>) -> Option<GeneratedRoute> + 'static,
+    ) {
+        self.shared
+            .named_routes
+            .register_generator(Rc::new(factory));
+    }
+
+    /// Install the last-resort fallback — Flutter's `Navigator.onUnknownRoute`,
+    /// consulted only when neither the table nor the generator produced a
+    /// route. It receives the same [`RouteSettings`] they were offered.
+    ///
+    /// Returning `None` here is the end of the line: the entry point answers
+    /// [`NamedRouteError::Unresolved`]. The capture hazard
+    /// [`on_generate_route`](Self::on_generate_route) documents applies here too.
+    pub fn on_unknown_route(
+        &self,
+        factory: impl Fn(&RouteRequest<'_>) -> Option<GeneratedRoute> + 'static,
+    ) {
+        self.shared
+            .named_routes
+            .register_unknown_fallback(Rc::new(factory));
+    }
+
+    /// Resolve `request` into a route, or say why it could not be.
+    ///
+    /// # Errors
+    ///
+    /// [`NamedRouteError::Unresolved`] when neither the table, the generator,
+    /// nor the unknown-route fallback produced a route.
+    fn resolve_named(&self, settings: &RouteSettings) -> Result<GeneratedRoute, NamedRouteError> {
+        let request = RouteRequest::new(settings, self);
+        self.shared
+            .named_routes
+            .resolve(&request)
+            .ok_or_else(|| NamedRouteError::Unresolved {
+                name: requested_name(settings),
+            })
+    }
+
+    /// Resolve `request` and [`push`](Self::push) the route it names — Flutter's
+    /// `NavigatorState.pushNamed`.
+    ///
+    /// Returns the new route's [`RouteId`], which pairs with
+    /// [`current`](Self::current) and feeds [`remove_route`](Self::remove_route).
+    /// The route's own pop result is **dropped**: a caller navigating to a screen
+    /// has no reason to know what type that screen completes with, and Flutter's
+    /// `pushNamed<void>` behaves the same way. Reach for
+    /// [`push_named_typed`](Self::push_named_typed) when you want the result.
+    ///
+    /// Everything below the name layer is the unnamed path: this calls
+    /// [`push`](Self::push), so one history state machine and one observer
+    /// ordering serve both.
+    ///
+    /// # Errors
+    ///
+    /// [`NamedRouteError::Unresolved`] if no registration answered the name —
+    /// nothing is pushed. A stage that declines returns `None` before it
+    /// constructs anything, so this error never has a route to dispose.
+    pub fn push_named(
+        &self,
+        request: impl Into<RouteSettings>,
+    ) -> Result<RouteId, NamedRouteError> {
+        let request = request.into();
+        Ok(self.resolve_named(&request)?.push(self, PushMode::Push).0)
+    }
+
+    /// [`push_named`](Self::push_named), keeping the new route's typed
+    /// [`RouteResult`] instead of dropping it.
+    ///
+    /// This is the one named entry point that can fail on the result type, and
+    /// it fails **before** anything is pushed: the generated route is concrete
+    /// and carries its own `Output`, so `T` is checked against a `TypeId` the
+    /// carrier captured at construction and a mismatch leaves the stack
+    /// untouched. Flutter re-types through an unchecked `as Route<T?>?` and
+    /// never detects the mismatch.
+    ///
+    /// # Errors
+    ///
+    /// [`NamedRouteError::Unresolved`] if no registration answered the name, and
+    /// [`NamedRouteError::ResultType`] if the route generated for it delivers
+    /// something other than `T`. Neither mutates the stack. Only `ResultType`
+    /// has a route to dispose — `Unresolved` means nothing was constructed.
+    pub fn push_named_typed<T: Send + 'static>(
+        &self,
+        request: impl Into<RouteSettings>,
+    ) -> Result<RouteResult<T>, NamedRouteError> {
+        let request = request.into();
+        Ok(self
+            .resolve_named(&request)?
+            .checked::<T>(&request)?
+            .push(self, PushMode::Push)
+            .1)
+    }
+
+    /// Push the route a [`RouteKey`] names, keeping its typed [`RouteResult`].
+    ///
+    /// The keyed counterpart to
+    /// [`push_named_typed`](Self::push_named_typed), and the reason
+    /// [`RouteKey`] exists: `T` comes from the key rather than from a turbofish,
+    /// and [`route_keyed`](Self::route_keyed) already refused a mismatched route
+    /// at compile time. It does **not** make
+    /// [`NamedRouteError::ResultType`] unreachable — see below.
+    ///
+    /// A bare key is a request; [`RouteKey::request`] adds arguments:
+    ///
+    /// ```
+    /// use flui_widgets::prelude::*;
+    /// use flui_widgets::{NavigatorHandle, RouteKey, RouteRequest, Text};
+    ///
+    /// const ORDER: RouteKey<u32> = RouteKey::new("/order");
+    ///
+    /// let navigator = NavigatorHandle::new();
+    /// navigator.route_keyed(ORDER, |request: &RouteRequest<'_>| {
+    ///     let id = request.argument::<u32>().copied().unwrap_or(0);
+    ///     Some(SimpleRoute::<u32>::new(move |_ctx| {
+    ///         Text::new(format!("Order {id}")).into_view().boxed()
+    ///     }))
+    /// });
+    /// navigator.seed_initial(SimpleRoute::<u32>::new(|_ctx| {
+    ///     Text::new("Home").into_view().boxed()
+    /// }));
+    ///
+    /// let plain = navigator.push_keyed(ORDER)?;
+    /// let with_id = navigator.push_keyed(ORDER.request(1776_u32))?;
+    /// # let _ = (plain, with_id);
+    /// # Ok::<(), flui_widgets::NamedRouteError>(())
+    /// ```
+    ///
+    /// # What the key cannot promise: the registry is name-keyed
+    ///
+    /// A [`RouteKey`] type-checks one *registration site*. The table it
+    /// registers into is keyed by **name**, so any two sites that disagree about
+    /// one name still meet at run time, and the key's promise stops describing
+    /// what is registered. Three ways in, none of them a mistake the compiler
+    /// can see:
+    ///
+    /// - two [`RouteKey`]s spelling the same string with different `T`, each
+    ///   self-consistent — `RouteKey::<u32>::new("/order")` and
+    ///   `RouteKey::<String>::new("/order")` both compile, and the second
+    ///   registration replaces the first;
+    /// - the same name bound through the untyped [`route`](Self::route);
+    /// - [`on_generate_route`](Self::on_generate_route) answering the name when
+    ///   the table misses.
+    ///
+    /// The `TypeId` check is kept for all three. It guards against *two
+    /// registration sites disagreeing about one name* — which a keyed-only
+    /// codebase can absolutely do.
+    ///
+    /// # What the guard buys
+    ///
+    /// **A pre-mutation, non-panicking failure.** Not type safety: the
+    /// `RouteResult` downcast underneath is checked, so a silently wrong result
+    /// was never reachable. Without the guard the push lands *first* and the
+    /// downcast then fails a `BUG:` `expect` — a panic, mid-operation, with the
+    /// stack already mutated. With it you get [`NamedRouteError::ResultType`]
+    /// and an untouched stack.
+    ///
+    /// # Errors
+    ///
+    /// [`NamedRouteError::Unresolved`] if nothing answered the key's name;
+    /// [`NamedRouteError::ResultType`] in the collision cases above. Neither
+    /// mutates the stack.
+    pub fn push_keyed<T: Send + 'static>(
+        &self,
+        request: impl Into<KeyedRequest<T>>,
+    ) -> Result<RouteResult<T>, NamedRouteError> {
+        self.push_named_typed::<T>(request.into().into_settings())
+    }
+
+    /// Resolve `request` and [`push_replacement`](Self::push_replacement) —
+    /// Flutter's `NavigatorState.pushReplacementNamed`. The replaced route's
+    /// [`RouteResult`] resolves with `None`.
+    ///
+    /// # Errors
+    ///
+    /// As [`push_named`](Self::push_named); nothing is replaced.
+    pub fn push_replacement_named(
+        &self,
+        request: impl Into<RouteSettings>,
+    ) -> Result<RouteId, NamedRouteError> {
+        let request = request.into();
+        Ok(self
+            .resolve_named(&request)?
+            .push(self, PushMode::Replace { result: None })
+            .0)
+    }
+
+    /// [`push_replacement_named`](Self::push_replacement_named), delivering
+    /// `result` to whoever awaits the **replaced** route — Flutter's
+    /// `pushReplacementNamed(routeName, result: …)`.
+    ///
+    /// `result` carries the same delivery-time type contract as
+    /// [`pop_with`](Self::pop_with): the navigator cannot know the replaced
+    /// route's `Output`, so a mismatch logs and completes that route with
+    /// `None`.
+    ///
+    /// # Errors
+    ///
+    /// As [`push_named`](Self::push_named). On error nothing is replaced and
+    /// `result` is dropped undelivered.
+    pub fn push_replacement_named_with<TO: Send + 'static>(
+        &self,
+        request: impl Into<RouteSettings>,
+        result: TO,
+    ) -> Result<RouteId, NamedRouteError> {
+        let request = request.into();
+        Ok(self
+            .resolve_named(&request)?
+            .push(
+                self,
+                PushMode::Replace {
+                    result: Some(Box::new(result)),
+                },
+            )
+            .0)
+    }
+
+    /// [`pop`](Self::pop) the current route and push the one `request` names —
+    /// Flutter's `NavigatorState.popAndPushNamed`. Unlike
+    /// [`push_replacement_named`](Self::push_replacement_named) the departing
+    /// route runs its full exit transition.
+    ///
+    /// **Documented divergence: this resolves before it pops.** Flutter pops
+    /// first and then generates, so a name its generator declines leaves the
+    /// stack already mutated and throws from the middle. Ordering the two the
+    /// other way makes the failure total — the stack is exactly as it was. On
+    /// the success path the observer stream is identical, because the pop and
+    /// the push are the same two calls in the same order.
+    ///
+    /// # Errors
+    ///
+    /// As [`push_named`](Self::push_named); on error, nothing is popped.
+    pub fn pop_and_push_named(
+        &self,
+        request: impl Into<RouteSettings>,
+    ) -> Result<RouteId, NamedRouteError> {
+        let request = request.into();
+        let generated = self.resolve_named(&request)?;
+        self.pop();
+        Ok(generated.push(self, PushMode::Push).0)
+    }
+
+    /// [`pop_and_push_named`](Self::pop_and_push_named), delivering `result` to
+    /// whoever awaits the **popped** route — Flutter's
+    /// `popAndPushNamed(routeName, result: …)`. Same delivery-time contract for
+    /// `result` as [`pop_with`](Self::pop_with), and the same resolve-before-pop
+    /// divergence.
+    ///
+    /// # Errors
+    ///
+    /// As [`push_named`](Self::push_named). On error nothing is popped and
+    /// `result` is dropped undelivered.
+    pub fn pop_and_push_named_with<TO: Send + 'static>(
+        &self,
+        request: impl Into<RouteSettings>,
+        result: TO,
+    ) -> Result<RouteId, NamedRouteError> {
+        let request = request.into();
+        let generated = self.resolve_named(&request)?;
+        self.pop_with(result);
+        Ok(generated.push(self, PushMode::Push).0)
+    }
+
+    /// Resolve `request` and
+    /// [`push_and_remove_until`](Self::push_and_remove_until) — Flutter's
+    /// `NavigatorState.pushNamedAndRemoveUntil`.
+    ///
+    /// `keep` receives each candidate's [`RouteId`] and runs with the history
+    /// lock released, exactly as
+    /// [`push_and_remove_until`](Self::push_and_remove_until)'s does.
+    ///
+    /// # Errors
+    ///
+    /// As [`push_named`](Self::push_named); on error nothing is pushed and
+    /// nothing is removed — `keep` is never consulted.
+    pub fn push_named_and_remove_until(
+        &self,
+        request: impl Into<RouteSettings>,
+        mut keep: impl FnMut(RouteId) -> bool,
+    ) -> Result<RouteId, NamedRouteError> {
+        let request = request.into();
+        Ok(self
+            .resolve_named(&request)?
+            .push(self, PushMode::RemoveUntil { keep: &mut keep })
+            .0)
     }
 }
 
@@ -1677,6 +2251,14 @@ impl ViewState<Navigator> for NavigatorState {
     /// path notifies exactly once.
     fn dispose(&mut self) {
         self.shared.detach_observers();
+        // Terminal, so the route registry goes too — `activate` is the reattach
+        // hook and nothing reparents through here. Two reasons, both concrete:
+        // a factory is owner-local code with no purpose once the navigator it
+        // resolves for is gone, and a factory that captured a handle anyway
+        // holds an `Arc` back to this `NavigatorShared`. Dropping the
+        // registrations is the only place that cycle can be broken from, since
+        // the caller holding the offending closure has no handle on it.
+        self.shared.named_routes.clear();
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing.
         *self.shared.post_frame.lock() = None;

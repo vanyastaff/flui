@@ -109,9 +109,38 @@ impl RouteSettings {
     /// Builder: attach an arguments payload — Flutter's
     /// `RouteSettings(arguments:)`. Used when building the route, e.g. from
     /// `Navigator.onGenerateRoute`.
+    ///
+    /// This **allocates a fresh [`Arc`]**, so the payload it attaches is a new
+    /// object even when `value` was cloned out of another `RouteSettings`. Since
+    /// [`RouteSettings`] compares its payload by pointer identity (see the
+    /// `PartialEq` impl below, and Flutter's `same(arguments)` oracle
+    /// assertion), relaying a payload you already hold must go through
+    /// [`with_arguments_shared`](Self::with_arguments_shared) instead — this
+    /// method would silently change its identity.
     #[must_use]
     pub fn with_arguments<T: Any + Send + Sync + 'static>(mut self, value: T) -> Self {
         self.arguments = Some(Arc::new(value));
+        self
+    }
+
+    /// Builder: attach an arguments payload **the caller already holds**,
+    /// forwarding it without re-wrapping.
+    ///
+    /// The identity-preserving counterpart to
+    /// [`with_arguments`](Self::with_arguments), for the relay case: reading
+    /// [`arguments`](Self::arguments) off one settings object and putting it on
+    /// another. `with_arguments` would re-wrap — it takes the payload by value
+    /// and mints a new `Arc` — breaking the pointer identity that both this
+    /// type's `PartialEq` and Flutter's `same(arguments)` oracle define equality
+    /// by.
+    ///
+    /// It is not the *only* way to relay a payload: the `Arc` is reachable
+    /// through [`arguments`](Self::arguments) and can be carried by hand. What
+    /// this buys is that the identity-preserving form is a builder call like any
+    /// other, so the safe spelling is no longer than the unsafe one.
+    #[must_use]
+    pub fn with_arguments_shared(mut self, arguments: RouteArguments) -> Self {
+        self.arguments = Some(arguments);
         self
     }
 
@@ -137,6 +166,24 @@ impl RouteSettings {
     #[must_use]
     pub fn argument<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
         self.arguments.as_ref()?.downcast_ref::<T>() // PORT-CHECK-OK-DOWNCAST: RouteSettings.arguments erasure per ADR-0024 §4.1; Gate sign-off still outstanding, see ADR-0024 §6
+    }
+}
+
+// A bare name is the overwhelmingly common named-route request, so
+// `handle.push_named("/details")` should not make the caller name
+// `RouteSettings` at all — the argument-carrying form
+// (`RouteSettings::named("/details").with_arguments(id)`) is the exception, and
+// reads as one. This is what makes the `impl Into<RouteSettings>` request
+// object on every `*_named` entry point ergonomic.
+impl From<&str> for RouteSettings {
+    fn from(name: &str) -> Self {
+        Self::named(name)
+    }
+}
+
+impl From<String> for RouteSettings {
+    fn from(name: String) -> Self {
+        Self::named(name)
     }
 }
 

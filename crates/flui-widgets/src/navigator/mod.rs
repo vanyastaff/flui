@@ -29,10 +29,53 @@
 //!
 //! The public baseline now includes `Navigator`, `PageRoute` / `PopupRoute`,
 //! `Hero` / `HeroController` / `HeroControllerScope` / `HeroMode`, the Hero
-//! customization hooks, cross-navigator hero flights, and gesture-driven
-//! (`transitionOnUserGestures`) flights. Still deferred: Navigator 2.0,
-//! restoration, named-route generation, `PopScope`, `LocalHistoryRoute`, and
-//! per-route focus scope.
+//! customization hooks, cross-navigator hero flights, gesture-driven
+//! (`transitionOnUserGestures`) flights, and named-route generation
+//! (`GeneratedRoute`, `NavigatorHandle::route` / `on_generate_route` /
+//! `on_unknown_route`, six untyped `*_named` entry points answering
+//! `Result<RouteId, NamedRouteError>`, one typed `push_named_typed::<T>`, and
+//! the typed-key path — `RouteKey<T>` / `route_keyed` / `push_keyed`, where the
+//! route's result type is checked against its name by the compiler at the
+//! registration site. Factories receive a `RouteRequest`, which carries the
+//! navigator, so none of them needs to capture a handle.
+//! Still deferred: Navigator 2.0, restoration, `PopScope`,
+//! `LocalHistoryRoute`, and per-route focus scope.
+//!
+//! **Typed siblings of the other five entry points are deliberately not
+//! offered.** `push_named_typed` exists because a caller who wants a pushed
+//! screen's result has no other way to name its type; a
+//! `push_replacement_named_typed` or `push_named_and_remove_until_typed` has no
+//! consumer yet, and each is purely additive later. Going the other way — making
+//! all six typed — is what the original design did: under *that* surface every
+//! entry point took a `T`, so reaching a `PageRoute<i32>` screen from a caller
+//! who wrote `::<()>` was a refusal to navigate rather than a push, for a caller
+//! with no reason to know the route's result type at all. (No entry point takes
+//! a turbofish today; the shape is described here only because it is the
+//! rejected one.)
+//!
+//! Deferred **by decision**, inside the feature that just landed: Flutter's
+//! `Navigator.initialRoute` / `Navigator.defaultRouteName` /
+//! `Navigator.defaultGenerateInitialRoutes` — the initial-route back-stack
+//! synthesis. It is ADR-0024 U3, whose §7.1 gate reaffirmed the deferral.
+//!
+//! The reason U3 originally gave for itself — "no consumer until deep links
+//! exist" — is **false**, and is corrected in ADR-0024 §7.6. Read
+//! `Navigator.defaultGenerateInitialRoutes`: **any** initial name other than
+//! `/` takes the expansion branch, and that branch seeds `/` *first*. So
+//! `initialRoute: "/settings"` yields `["/", "/settings"]` — a two-deep stack
+//! whose back button returns home, not a one-deep stack that exits the app.
+//! The consumer is `MaterialApp(initialRoute:)`, not deep linking.
+//!
+//! What the gap owes when it is built: seed `/` first, build the prefix chain
+//! segment by segment, drop the segments the registry does not resolve, and
+//! treat an unmatched *final* segment as an error that disposes every route
+//! generated so far and seeds `/` alone. Its upstream oracles are
+//! `'Initial route can have gaps'` and `'The full initial route has to be
+//! matched'`. Until then FLUI bootstraps through
+//! `NavigatorHandle::seed_initial`, one call per route.
+//!
+//! `restorablePushNamed` (restoration is unbuilt) and `replaceNamed` (`replace`
+//! itself is private) are absent for their own reasons.
 
 mod back_gesture;
 mod binding;
@@ -44,6 +87,7 @@ mod history;
 mod lifecycle;
 mod local_history;
 mod modal_route;
+mod named_route;
 #[expect(clippy::module_inception)]
 mod navigator;
 mod observer;
@@ -59,6 +103,7 @@ pub use binding::RouteBindingSlot;
 pub use hero::{Hero, HeroMode};
 pub use hero_controller::{FlightDirection, HeroController};
 pub use hero_controller_scope::HeroControllerScope;
+pub use named_route::{GeneratedRoute, KeyedRequest, NamedRouteError, RouteKey, RouteRequest};
 pub use navigator::{
     Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
     NavigatorCommandTarget, NavigatorHandle, NavigatorState,

@@ -606,7 +606,7 @@ cases = [
 rust = "navigator_test"
 family = "navigation"
 oracles = ["widgets/navigator_test.dart"]
-tests = 15
+tests = 16
 
 [[targets.claims]]
 oracle = "widgets/navigator_test.dart"
@@ -618,6 +618,7 @@ cases = [
     "remove route below an other one whose value is awaited",
     "initial route trigger observer in the right order",
     "Push and pop should trigger the observers",
+    "arguments for named routes on NavigatorState",
 ]
 
 [[targets]]
@@ -1415,7 +1416,7 @@ cases = [
 "widgets/navigator_on_did_remove_page_test.dart" = { cases = 3, claimed = 0, status = "pending" }
 "widgets/navigator_replacement_test.dart" = { cases = 5, claimed = 0, status = "pending" }
 "widgets/navigator_restoration_test.dart" = { cases = 30, claimed = 0, status = "pending" }
-"widgets/navigator_test.dart" = { cases = 117, claimed = 7, status = "partial" }
+"widgets/navigator_test.dart" = { cases = 117, claimed = 8, status = "partial" }
 "widgets/nested_scroll_view_test.dart" = { cases = 61, claimed = 0, status = "pending" }
 "widgets/notification_test.dart" = { cases = 5, claimed = 0, status = "pending" }
 "widgets/obscured_animated_image_test.dart" = { cases = 1, claimed = 0, status = "pending" }

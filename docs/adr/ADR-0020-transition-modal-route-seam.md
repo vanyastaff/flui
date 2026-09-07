@@ -423,7 +423,7 @@ Each is red-checkable. `«»` names are real Flutter oracles.
 | **`_ModalScopeStatus` aspect granularity** (`InheritedModel` with seven aspects) | FLUI's `InheritedView` has no aspect model. | A plain `InheritedView` with coarse `update_should_notify` is correct, just less efficient. |
 | **`PageStorage`, `RestorationScope`, `PrimaryScrollController`, `traversalEdgeBehavior`, `_DismissModalAction`** | Each needs its own subsystem. | None is required to get a modal onscreen. |
 | **`allowSnapshotting`, `fullscreenDialog`** | No snapshotting layer. | Config fields with no consumer; omit rather than accept-and-ignore. |
-| **Navigator 2.0 `pages` / `Router`, restoration, named-route generation, `PopScope`, `LocalHistoryRoute`** | Unchanged from ADR-0019 §6. | Unchanged. |
+| **Navigator 2.0 `pages` / `Router`, restoration, `PopScope`, `LocalHistoryRoute`** | Unchanged from ADR-0019 §6. | Unchanged. Named-route generation is no longer among these — it landed 2026-09-07 ([ADR-0024](ADR-0024-named-routes-seam.md) §7). |
 | **`pushReplacement` / `pushAndRemoveUntil` public export** | Ported and tested; not exported (ADR-0019 U4). | Two of §5's oracles (`pushReplacement triggers secondaryAnimation`) need them **at the test layer only**; they are `#[cfg(test)]`-reachable. Exporting them is a separate sign-off. |
 
 ---

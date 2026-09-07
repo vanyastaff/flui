@@ -22,6 +22,7 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use super::binding::RouteBindingSlot;
+use super::named_route::RouteRequest;
 use super::navigator::{
     Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
     NavigatorCommandTarget, NavigatorHandle,
@@ -906,7 +907,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 35] = [
+    const INTERNAL: [&str; 40] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -959,6 +960,16 @@ fn public_no_internal_route_stack_exports() {
         "LocalHistoryScope",
         "LocalHistoryHandle",
         "LocalHistoryEntryHandle",
+        // Named-route generation (ADR-0024) exports exactly `GeneratedRoute`
+        // and `NamedRouteError`. Its registry, the erased-push seam, and the
+        // checked-push token are the implementation — and `RouteFactory` names
+        // the `Rc` shape the registry stores, which no public signature
+        // mentions (the three registration methods take the closure itself).
+        "RouteRegistry",
+        "RouteFactory",
+        "ErasedPush",
+        "TypedPush",
+        "PushMode",
     ];
 
     super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);
@@ -2041,4 +2052,83 @@ mod user_gesture {
         handle.did_stop_user_gesture(); // 1 -> 0: fires.
         assert_eq!(fires.load(Ordering::SeqCst), 2);
     }
+}
+
+/// A re-registration that changes a name's `Output` type is reported **at the
+/// registration site**, once per navigator.
+///
+/// This is what makes a `RouteKey`'s compile-time promise recoverable: the key
+/// checks its own registration, but the table is name-keyed, so two sites that
+/// disagree about one name defeat it. Catching that at registration reports the
+/// mistake where it was made, instead of at some later `push_keyed`.
+///
+/// Latched deliberately: an app that rebuilds its route table in a loop would
+/// otherwise emit one warning per pass. Conflicts are still *counted* in full,
+/// which is how this test can tell "warned once" from "stopped noticing".
+///
+/// Replacing a route with one of the **same** type is not a conflict at all —
+/// `ARCHITECTURE.md` §6's contract is that an app builder replaces the table
+/// wholesale at mount, so that path must stay silent.
+///
+/// Red-check: drop the `warns_emitted == 0` latch and the second assertion
+/// reads 3; drop the `previous.output != output` guard and the same-type
+/// re-registration warns.
+#[test]
+fn a_route_re_registered_with_a_different_output_type_warns_once_per_navigator() {
+    let handle = NavigatorHandle::new();
+
+    // Same type, three times: a legitimate wholesale replacement.
+    for _ in 0..3 {
+        handle.route("/same", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<i32>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+    }
+    assert_eq!(
+        handle.route_conflicts_seen(),
+        0,
+        "replacing a route with one of the same type is not a conflict"
+    );
+    assert_eq!(handle.route_conflict_warns(), 0);
+
+    // Now flip the type, three times.
+    for _ in 0..3 {
+        handle.route("/same", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<String>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+        handle.route("/same", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<i32>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+    }
+
+    assert_eq!(
+        handle.route_conflicts_seen(),
+        6,
+        "every conflicting re-registration is counted"
+    );
+    assert_eq!(
+        handle.route_conflict_warns(),
+        1,
+        "but only the first one warns — a registration loop reports once"
+    );
+
+    // A second navigator has its own latch: the warning is per registry, not a
+    // process-global static, so one navigator's conflict cannot silence another.
+    let other = NavigatorHandle::new();
+    other.route("/same", |_request: &RouteRequest<'_>| {
+        Some(SimpleRoute::<i32>::new(|_ctx| {
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }))
+    });
+    other.route("/same", |_request: &RouteRequest<'_>| {
+        Some(SimpleRoute::<String>::new(|_ctx| {
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }))
+    });
+    assert_eq!(other.route_conflict_warns(), 1, "and it warns for itself");
 }
