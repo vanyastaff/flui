@@ -8,7 +8,7 @@ only, verified against the tree 2026-09-07.
 
 The consumer side is **complete and unused**:
 
-- `DamageTracker` (`flui-layer/src/damage.rs`) has `mark_dirty(rect)`,
+- `DamageTracker` (`crates/flui-layer/src/damage.rs`) has `mark_dirty(rect)`,
   `damage_rects()`, `damage_rect()`, `has_damage()`, Slint-style multi-rect
   merging.
 - `WgpuRenderer` holds one and already **skips the whole frame** when it
@@ -19,7 +19,7 @@ The consumer side is **complete and unused**:
 - ADR-0061's measurement, at 1920×1080 with a 128×128 damage rect: 0.18× the
   cost at 4 layers, 0.06× at 16, 0.02× at 64.
 
-The producer side is one line: `raster_owner.rs`'s frame path calls
+The producer side is one line: `crates/flui-engine/src/raster_owner.rs`'s frame path calls
 `self.backend.mark_full_repaint()` unconditionally, and its own comment says
 to revisit that "once a `Partial` variant lands".
 
@@ -44,7 +44,7 @@ Decide before writing.
 ### 2b — bounds for a changed boundary
 
 A boundary's root is an `OffsetLayer`, which deliberately has **no** intrinsic
-bounds (`layer/bounds.rs`: container layers' extent depends on their
+bounds (`crates/flui-layer/src/layer/bounds.rs`: container layers' extent depends on their
 children). So a changed boundary's damage rect is the union of its
 descendants' `LayerBounds`, accumulated through the offsets and transforms
 between them and the root.
