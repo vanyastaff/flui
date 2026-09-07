@@ -481,6 +481,21 @@ file records the repo-consumer-visible summary.
 
 ### Removed
 
+- **Five dead stubs leave the public `Platform` trait** (#551, executing
+  ADR-0039 §2's recorded "deleted outright in slice 3, not moved" decision):
+  `hide`, `hide_other_apps`, `unhide_other_apps`, `should_auto_hide_scrollbars`,
+  and `window_stack`. The first four were default bodies with no backend
+  override and no caller anywhere in the workspace. `window_stack` had three
+  impls and still no caller: winit returned `None` ("not easily supported"),
+  macOS/Windows/Android inherited the default, and only the headless double and
+  the web backend returned toy values — a surface whose only implementations
+  were the ones that could not fail. ADR-0034's "no surface ahead of a real
+  implementation *and* consumer" says these die rather than ride along; each
+  returns, on `OwnerPlatform` if owner-affine, with its first real
+  implementation and consumer. This is the ungated half of slice 3: moving the
+  eight owner-affine methods off the trait stays blocked on the Android
+  on-device validation ADR-0039 makes its precondition.
+
 - **Singleton retirement, completed in six PRs (#586–#593).** `flui-app`'s
   process-global service host — `AppBinding`, plus its `WidgetsFlutterBinding`
   alias — is deleted outright, not deprecated, along with

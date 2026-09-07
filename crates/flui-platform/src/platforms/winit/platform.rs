@@ -2185,10 +2185,6 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.active_window)
     }
 
-    fn window_stack(&self) -> Option<Vec<WindowId>> {
-        None // Not easily supported by winit
-    }
-
     // Empty until `WinitApp::resumed` runs `init_displays` on first resume —
     // callers that need real display info must call this from `on_ready` (or
     // later), never before `Platform::run` starts the event loop.

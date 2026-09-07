@@ -258,10 +258,6 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.active_window)
     }
 
-    fn window_stack(&self) -> Option<Vec<WindowId>> {
-        Some(self.with_state(|state| state.windows.iter().map(|w| w.id).collect()))
-    }
-
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
         // Return one mock display
         vec![Arc::new(MockDisplay::primary())]

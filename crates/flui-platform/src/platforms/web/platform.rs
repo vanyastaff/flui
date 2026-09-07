@@ -216,10 +216,6 @@ impl Platform for WebPlatform {
         Some(WindowId(0))
     }
 
-    fn window_stack(&self) -> Option<Vec<WindowId>> {
-        Some(vec![WindowId(0)])
-    }
-
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
         vec![Arc::new(WebDisplay::from_browser())]
     }

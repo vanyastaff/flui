@@ -371,13 +371,6 @@ pub trait Platform: Send + Sync + 'static {
     /// Get the currently active (focused) window ID
     fn active_window(&self) -> Option<WindowId>;
 
-    /// Get all window IDs in z-order (front to back)
-    ///
-    /// Not all platforms support this (returns None).
-    fn window_stack(&self) -> Option<Vec<WindowId>> {
-        None
-    }
-
     // ==================== Display Management ====================
 
     /// Get all available displays (monitors)
@@ -413,25 +406,11 @@ pub trait Platform: Send + Sync + 'static {
         let _ = ignoring_other_apps;
     }
 
-    /// Hide the application
-    fn hide(&self) {}
-
-    /// Hide all other applications
-    fn hide_other_apps(&self) {}
-
-    /// Unhide all other applications
-    fn unhide_other_apps(&self) {}
-
     // ==================== Appearance (US3) ====================
 
     /// Get the system window appearance (light/dark theme)
     fn window_appearance(&self) -> WindowAppearance {
         WindowAppearance::default()
-    }
-
-    /// Whether scrollbars should auto-hide
-    fn should_auto_hide_scrollbars(&self) -> bool {
-        false
     }
 
     // ==================== Clipboard (US3 Enhanced) ====================
