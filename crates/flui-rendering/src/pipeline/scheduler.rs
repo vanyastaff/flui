@@ -443,6 +443,23 @@ impl DirtyTracker {
                 && node.was_repaint_boundary()
                 && node.links().parent().is_some()
             {
+                // A real repaint already owns this boundary, so do NOT add the
+                // weaker classification on top. The mirror of the removal in
+                // `mark_needs_paint`: that covers update-then-paint, this
+                // covers paint-then-update, and together they keep a boundary
+                // out of both records at once.
+                //
+                // Checked on the BOUNDARY, not on the requesting node — the
+                // early return at the top of this function only sees the
+                // requester, and a sibling of the repainting node is not on the
+                // path `mark_needs_paint` flagged.
+                //
+                // The requester keeps its flag: the repaint paints it and the
+                // frame's commit clears it, so the request is served by the
+                // stronger arm.
+                if node.needs_paint() {
+                    return;
+                }
                 // Record WHICH node asked, not just that the boundary has work.
                 // A node whose effect layers did not exist when the boundary
                 // was captured has no slot to patch, and a patch pass that only

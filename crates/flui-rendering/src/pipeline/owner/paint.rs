@@ -108,6 +108,22 @@ impl PipelineOwner<PaintPhase> {
             // boundary becomes graft-eligible only by appearing in this set —
             // the pre-existing retention path cannot change behaviour when
             // nothing requested an update.
+            // The two classifications are mutually exclusive by construction:
+            // `mark_needs_paint` withdraws the update record when it queues a
+            // boundary, and `mark_needs_composited_layer_update` refuses to add
+            // one to a boundary that already needs paint. The filter below
+            // would mask a third path that broke that, and masking is exactly
+            // what goes wrong after a failed pass clears the flag — so assert
+            // it rather than rely on the filter.
+            debug_assert!(
+                self.scheduler
+                    .layer_update_boundaries()
+                    .keys()
+                    .all(|id| self.render_tree.get(*id).is_none_or(|n| !n.needs_paint())),
+                "BUG: a boundary is classified for BOTH a repaint and a \
+                 composited-layer update; a pass that fails partway would \
+                 downgrade the retry to update-only and lose the repaint",
+            );
             let layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>> = self
                 .scheduler
                 .layer_update_boundaries()

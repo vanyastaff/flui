@@ -1703,6 +1703,113 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
     }
 }
 
+/// The mirror of the case above: the REPAINT is queued first.
+///
+/// Round-seven's fix withdraws the update classification when
+/// `mark_needs_paint` selects a boundary. That covers update-then-paint. This
+/// is paint-then-update, where the update mark arrives at a boundary that is
+/// already dirty and would add the weaker classification on top — with the same
+/// consequence after a failed pass: the retry sees `needs_paint` cleared by the
+/// walk, reclassifies the boundary as update-only, grafts the pre-error capture
+/// and patches just the effect layer, losing the content change.
+///
+/// The two requesters must be SIBLINGS. `mark_needs_paint` flags every node on
+/// its way up, so an update target on that path would refuse itself for the
+/// ordinary reason and the boundary would never gain the second record.
+#[test]
+fn a_repaint_queued_before_an_update_keeps_its_precedence_across_a_failure() {
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Debug)]
+    struct PoisonOnDemand(Arc<AtomicBool>);
+
+    impl flui_foundation::Diagnosticable for PoisonOnDemand {}
+
+    impl flui_rendering::traits::RenderBox for PoisonOnDemand {
+        type Arity = flui_tree::Leaf;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            ctx.constrain(Size::new(px(10.0), px(10.0)))
+        }
+
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+            assert!(
+                !self.0.load(Ordering::Relaxed),
+                "PoisonOnDemand: armed, poisoning this paint pass on purpose",
+            );
+        }
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+    }
+
+    let armed = Arc::new(AtomicBool::new(false));
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderFlex::row())
+                        .child(
+                            box_node(RenderOpacity::new(0.5))
+                                .label("opacity")
+                                .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                        )
+                        // Sibling of the opacity, not its descendant.
+                        .child(box_node(PaintCounter(Arc::clone(&painted))).label("content")),
+                ),
+            )
+            .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+    let content = registry.get("content").expect("content is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // REPAINT first, update second — the opposite order to the test above.
+    owner.mark_needs_paint(content);
+    set_opacity(&mut owner, opacity_id, 0.25);
+    armed.store(true, Ordering::Relaxed);
+    let (owner, result) = owner.run_frame();
+    assert!(
+        result.is_err(),
+        "precondition: the armed leaf poisons this pass"
+    );
+    let after_error = painted.load(Ordering::Relaxed);
+
+    armed.store(false, Ordering::Relaxed);
+    let (owner, result) = owner.run_frame();
+    result.expect("the retry paints cleanly");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > after_error,
+        "a repaint queued before an update must keep its precedence across a \
+         failed pass; downgrading the retry to update-only loses the content",
+    );
+}
+
 /// A boundary queued for an update that the frame never reaches loses its
 /// capture, so the next frame that reaches it repaints.
 ///
