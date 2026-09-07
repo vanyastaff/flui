@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_foundation::{Diagnosticable, ElementId, LayerId};
+use flui_foundation::{Diagnosticable, LayerId, RenderId};
 use flui_types::{Offset, geometry::Pixels};
 use slab::Slab;
 
@@ -51,8 +51,24 @@ pub struct LayerNode {
     /// Offset from parent (parent data)
     offset: Option<Offset<Pixels>>,
 
-    /// Associated ElementId (for cross-tree references)
-    element_id: Option<ElementId>,
+    /// The repaint boundary whose paint produced this layer, when one did.
+    ///
+    /// This is what lets two consecutive frames be compared: each frame builds
+    /// a fresh tree with fresh slab indices, so `LayerId` pairs nothing, and
+    /// damage has to come from comparing layer trees rather than from which
+    /// render objects repainted (ADR-0061 — the ones that always repaint cover
+    /// the screen). A stamp that survives the frame boundary is the missing
+    /// half; the other, constant-time content comparison, already exists via
+    /// `PictureLayer`'s `Arc<DisplayList>`.
+    ///
+    /// `None` on every layer no boundary originated — structural layers a
+    /// fragment pushed, the root — so a pairing pass cannot mistake one for a
+    /// boundary.
+    ///
+    /// A `RenderId` rather than an `ElementId` (ADR-0061 allows either): the
+    /// paint walk holds one already, so no lookup lands on a hot path, and the
+    /// thing whose repaint boundary produced the layer IS a render object.
+    render_id: Option<RenderId>,
 
     // ========== Lifecycle ==========
     /// Whether the node has been dropped. Set by [`Drop`]; once `true` the
@@ -69,14 +85,14 @@ pub struct LayerNode {
 
 impl Diagnosticable for LayerNode {
     /// Names the node by its layer kind and merges the layer's own
-    /// properties with node-level metadata (parent offset, element id).
+    /// properties with node-level metadata (parent offset, boundary id).
     fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
         let mut node = self.layer.to_diagnostics_node();
         if let Some(offset) = self.offset {
             node = node.property("node_offset", format!("{offset:?}"));
         }
-        if let Some(element_id) = self.element_id {
-            node = node.property("element_id", format!("{element_id:?}"));
+        if let Some(render_id) = self.render_id {
+            node = node.property("render_id", format!("{render_id:?}"));
         }
         node
     }
@@ -90,16 +106,18 @@ impl LayerNode {
             children: Vec::new(),
             layer,
             offset: None,
-            element_id: None,
+            render_id: None,
             disposed: AtomicBool::new(false),
             // Fresh node has not yet been pushed into the scene.
             needs_add_to_scene: AtomicBool::new(true),
         }
     }
 
-    /// Creates a LayerNode with an associated ElementId.
-    pub fn with_element_id(mut self, element_id: ElementId) -> Self {
-        self.element_id = Some(element_id);
+    /// Stamps this node with the repaint boundary that produced it — see
+    /// [`Self::render_id`].
+    #[must_use]
+    pub fn with_render_id(mut self, render_id: RenderId) -> Self {
+        self.render_id = Some(render_id);
         self
     }
 
@@ -246,10 +264,12 @@ impl LayerNode {
         self.offset
     }
 
-    /// Gets the associated ElementId (for cross-tree references).
+    /// The repaint boundary that produced this layer — see
+    /// [`Self::render_id`].
     #[inline]
-    pub fn element_id(&self) -> Option<ElementId> {
-        self.element_id
+    #[must_use]
+    pub fn render_id(&self) -> Option<RenderId> {
+        self.render_id
     }
 
     /// Returns whether this node has been disposed (its slab slot dropped).
@@ -309,7 +329,7 @@ impl Drop for LayerNode {
         // the Acquire-ordering in `assert_alive`.
         if !self.disposed.swap(true, Ordering::Release) {
             // Phase 3 (deferred): release engine-layer handle here.
-            tracing::trace!(?self.element_id, "LayerNode dropped");
+            tracing::trace!(?self.render_id, "LayerNode dropped");
         }
     }
 }
@@ -443,13 +463,6 @@ impl LayerTree {
     pub fn insert_node(&mut self, node: LayerNode) -> LayerId {
         let slab_index = self.nodes.insert(node);
         LayerId::new(slab_index + 1) // +1 offset
-    }
-
-    /// Inserts a Layer with an associated ElementId.
-    pub fn insert_with_element(&mut self, layer: Layer, element_id: ElementId) -> LayerId {
-        let node = LayerNode::new(layer).with_element_id(element_id);
-        let slab_index = self.nodes.insert(node);
-        LayerId::new(slab_index + 1)
     }
 
     /// Returns a reference to a LayerNode.
@@ -1091,7 +1104,7 @@ mod lifecycle_tests {
         // The use-after-disposal panic path is covered indirectly: the
         // `assert_alive` debug-assert ensures a stale-mut-borrow trips
         // CI rather than corrupting compositor state silently.
-        use flui_foundation::{ElementId, LayerId};
+        use flui_foundation::LayerId;
         let mut node = LayerNode::new(Layer::from(CanvasLayer::new()));
         node.set_parent(Some(LayerId::new(2)));
         node.add_child(LayerId::new(3));
@@ -1100,7 +1113,6 @@ mod lifecycle_tests {
         let _ = node.layer_mut();
         // Verify pre-built guards on with-builders ran without panic.
         assert_eq!(node.parent(), Some(LayerId::new(2)));
-        let _ = ElementId::new(1); // touch import.
     }
 }
 

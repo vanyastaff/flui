@@ -334,3 +334,189 @@ fn a_dirty_boundary_nested_in_a_clean_one_still_repaints() {
     );
     drop(owner);
 }
+
+/// Every boundary's root layer carries its own `RenderId`, and no
+/// other layer carries any.
+///
+/// This is the identity ADR-0061 says damage needs: a frame builds a fresh
+/// `LayerTree` with fresh slab indices, so `LayerId` pairs nothing across a
+/// frame boundary and the comparison has to key on something that survives.
+///
+/// The fixture uses EIGHT boundaries on purpose. A single-boundary tree pairs
+/// correctly under any stamping rule at all — including stamping every layer
+/// with the same id, or stamping the wrong one — so it would pass against a
+/// broken implementation. With eight, the set of stamps has to be exactly the
+/// set of boundary ids, and the count of stamped layers has to be eight.
+///
+/// Red-check: stamp in `push_layer` instead of `push_boundary_layer` — the
+/// opacity and picture layers pick up ids too and the count assertion fails.
+#[test]
+fn every_boundary_root_layer_carries_its_own_id() {
+    const N: usize = 8;
+
+    let (owner, _) = mount(N);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+
+    let stamps = stamps_of(&tree);
+    assert_eq!(
+        stamps.len(),
+        N,
+        "exactly one layer per boundary carries a stamp, got {stamps:?}"
+    );
+
+    let boundary_ids: std::collections::BTreeSet<flui_foundation::RenderId> = owner
+        .render_tree()
+        .iter()
+        .filter(|(_, node)| node.is_repaint_boundary())
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        stamps
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        boundary_ids,
+        "the stamps must be exactly the tree's repaint-boundary ids"
+    );
+}
+
+/// A frame that grafts seven boundaries still identifies all eight, so
+/// retention does not break the comparison the stamp exists for.
+///
+/// These boundaries are all TOP-LEVEL, and that is why this test does not need
+/// `graft` to carry anything: each one's `OffsetLayer` is pushed by the root
+/// flex, which repaints every frame and re-stamps it. The capture's own carry
+/// matters only for a NESTED boundary — see
+/// [`a_boundary_nested_inside_a_reused_one_keeps_its_stamp`], which is the
+/// fixture this one cannot substitute for.
+///
+/// The equality alone is a VACUOUS oracle and mutation-testing proved it:
+/// with the stamp removed both frames report an empty set, which compares
+/// equal. The count assertion below is what makes it discriminate — it was
+/// added after the mutation run, not before it.
+#[test]
+fn a_retained_frame_still_identifies_every_boundary() {
+    const N: usize = 8;
+
+    let (owner, ids) = mount(N);
+    let (mut owner, result) = owner.run_frame();
+    let first = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    let before = stamps_of(&first);
+
+    // One boundary repaints; the other seven are grafted.
+    owner.mark_needs_paint(ids.first);
+    let (_, result) = owner.run_frame();
+    let second = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+
+    assert_eq!(
+        before.len(),
+        N,
+        "precondition: the first frame identified every boundary — without \
+         this the equality below holds vacuously when nothing is stamped"
+    );
+    assert_eq!(
+        stamps_of(&second),
+        before,
+        "the same eight boundaries must be identifiable in both frames — \
+         seven of them reached through a graft"
+    );
+}
+
+/// Every stamp in `t`, in a deterministic walk order.
+fn stamps_of(t: &flui_layer::LayerTree) -> Vec<flui_foundation::RenderId> {
+    let mut out = Vec::new();
+    let Some(root) = t.root() else {
+        return out;
+    };
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if let Some(node) = t.get(id)
+            && let Some(render_id) = node.render_id()
+        {
+            out.push(render_id);
+        }
+        let children = t
+            .children(id)
+            .expect("every id in this walk came from the tree itself");
+        for &child in children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// A boundary NESTED inside a reused boundary keeps its stamp.
+///
+/// This is the case the flat eight-boundary fixture above cannot see, and
+/// getting it wrong was caught by review rather than by that fixture. A
+/// top-level boundary's stamp sits on the `OffsetLayer` its parent pushes,
+/// which is *above* the capture root — the parent repaints every frame and
+/// re-stamps it, so the capture need carry nothing. A nested boundary's parent
+/// paints INSIDE the outer capture, so its stamped `OffsetLayer` is one of the
+/// captured nodes (`RetainedSubtree` flattens nested boundaries). Drop the
+/// carry in `graft` and every nested boundary becomes unidentifiable the
+/// moment its enclosing boundary is reused.
+///
+/// Red-check: remove the `render_id` propagation from `graft` — the second
+/// frame reports two stamps where the first reported three.
+#[test]
+fn a_boundary_nested_inside_a_reused_one_keeps_its_stamp() {
+    // Root flex → [dirty boundary, outer boundary → opacity → inner boundary].
+    // The first is marked so a second frame runs at all; the second is clean
+    // and therefore grafted, carrying the inner boundary's layers with it.
+    let mut root = box_node(RenderFlex::row());
+    root = root.child(
+        box_node(RenderRepaintBoundary::new())
+            .label("first")
+            .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+    );
+    root = root.child(
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderOpacity::new(0.5)).child(
+                box_node(RenderRepaintBoundary::new())
+                    .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+            ),
+        ),
+    );
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(&mut owner, root);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let first = registry.get("first").expect("first boundary is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    let before = stamps_of(
+        &result
+            .expect("first frame")
+            .expect("first frame produces a layer tree"),
+    );
+    assert_eq!(
+        before.len(),
+        3,
+        "precondition: two top-level boundaries and one nested inside the \
+         second, all identifiable — got {before:?}"
+    );
+
+    owner.mark_needs_paint(first);
+    let (_, result) = owner.run_frame();
+    let after = stamps_of(
+        &result
+            .expect("second frame")
+            .expect("second frame produces a layer tree"),
+    );
+
+    assert_eq!(
+        after, before,
+        "the nested boundary must still be identifiable after its enclosing \
+         boundary was grafted rather than repainted"
+    );
+}
