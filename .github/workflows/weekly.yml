@@ -112,6 +112,21 @@ jobs:
       - name: cargo nextest run (lib + integration)
         run: cargo nextest run --workspace --exclude flui-platform --no-fail-fast
 
+      # Advisory. ADR-0045 pins macOS to the inline raster lane because
+      # wgpu-hal's Metal `acquire_texture` messages AppKit UI objects from the
+      # calling thread (issue #653). This asks whether the NEWEST published
+      # wgpu-hal still does — which is the question worth asking, and one a
+      # check against the committed lockfile cannot answer: that can only ever
+      # report that the lock moved, and only after it already has. Runs against
+      # the `cargo update --workspace` resolution above.
+      #
+      # Never gates. Every direction it can be wrong leaves macOS on the inline
+      # lane, which is slower than necessary and not unsound. Result goes to the
+      # job summary; the script explains the half of the condition it cannot see.
+      - name: macOS raster reopen probe (advisory)
+        if: '!cancelled()'
+        run: bash scripts/probe-metal-acquire-main-thread.sh
+
   bench:
     name: bench (criterion numbers, trend artifact)
     runs-on: ubuntu-latest
