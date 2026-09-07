@@ -141,7 +141,9 @@ impl PipelineOwner<PaintPhase> {
 
                     // Commit the walk's retention decisions now that its
                     // `&self` borrow has ended.
+                    let mut committed_captures: Vec<RenderId> = Vec::new();
                     for (id, captured) in retained_captures {
+                        committed_captures.push(id);
                         match captured {
                             Some(subtree) => {
                                 self.retained_boundaries.insert(id, subtree);
@@ -168,6 +170,8 @@ impl PipelineOwner<PaintPhase> {
                         }
                     }
 
+                    let mut served: FxHashSet<RenderId> =
+                        layer_patches.iter().map(|(id, _)| *id).collect();
                     for (boundary_id, patches) in layer_patches {
                         let Some(subtree) = self.retained_boundaries.get_mut(&boundary_id) else {
                             continue;
@@ -176,6 +180,25 @@ impl PipelineOwner<PaintPhase> {
                             if let Some(node) = subtree.nodes.get_mut(index) {
                                 node.layer = layer;
                             }
+                        }
+                    }
+                    served.extend(committed_captures);
+
+                    // A boundary queued for an update that the walk never
+                    // reached — unplaced by its parent's latest layout, or in a
+                    // detached subtree — keeps a capture the request never got
+                    // to touch, and the residue scan below cannot see it
+                    // because a layer update leaves no `needs_paint` to test.
+                    // Its own flag also survives, and a mark refuses itself
+                    // while that flag is set, so nothing would re-queue it.
+                    //
+                    // Evicting is the bounded answer, and the same one the
+                    // residue scan gives for the paint case: the next frame
+                    // that reaches this boundary repaints it, which serves any
+                    // request correctly whatever shape it changed.
+                    for boundary_id in layer_updates.keys() {
+                        if !served.contains(boundary_id) {
+                            self.retained_boundaries.remove(boundary_id);
                         }
                     }
 
@@ -439,13 +462,20 @@ impl PipelineOwner<PaintPhase> {
         // body that marks its own node dirty (paint-must-not-redirty).
         render_node.clear_needs_paint();
         // A repaint rebuilds this node's effect layers from current properties
-        // anyway, so it subsumes any pending layer-property update. Cleared
-        // here rather than only on the update arm because both arms have to
-        // leave the node clean — and this one runs even when the early returns
-        // below skip the paint itself, which is where Flutter puts it too
-        // (`_repaintCompositedChild` clears it outside `_paintWithContext`,
-        // whose `_needsLayout` early return would otherwise strand it).
-        render_node.clear_needs_composited_layer_update();
+        // anyway, so it subsumes any pending layer-property update. RECORDED
+        // rather than cleared, and cleared by `run_paint` only once the frame
+        // commits: a later sibling can still poison the pass, and that path
+        // keeps both the dirty queue and the recorded update targets for the
+        // retry. Clearing here would leave the retry with a boundary that no
+        // longer needs paint — reclassified as update-only — whose target is no
+        // longer flagged, so it would graft the pre-error capture unpatched.
+        //
+        // Recorded before the early returns below for the same reason Flutter
+        // clears it outside `_paintWithContext`: a node skipped for layout must
+        // not strand the request either.
+        if render_node.needs_composited_layer_update() {
+            composer.consumed_updates.push(node_id);
+        }
 
         // Fully transparent subtree: skip recording entirely. Children
         // keep whatever dirty flags they carry; the residue scan in
@@ -650,14 +680,18 @@ impl PipelineOwner<PaintPhase> {
                             }
                             composer.graft(subtree, &patches);
                             composer.consumed_updates.extend(consumed);
-                            if !patches.is_empty() {
-                                // The stored capture has to move too. Patching
-                                // only the emitted frame would leave the cache
-                                // at the old value, and a later frame that
-                                // grafts it for an unrelated reason would
-                                // silently revert the property for good.
-                                composer.layer_patches.push((child_id, patches));
-                            }
+                            // Pushed even when empty: this doubles as the
+                            // record that the frame SERVED this boundary, which
+                            // `run_paint` uses to tell a boundary it reused
+                            // from one the walk never reached. The write-back
+                            // loop treats an empty patch list as a no-op.
+                            //
+                            // The stored capture has to move with the frame.
+                            // Patching only the emitted tree would leave the
+                            // cache at the old value, and a later frame that
+                            // grafts it for an unrelated reason would silently
+                            // revert the property for good.
+                            composer.layer_patches.push((child_id, patches));
                         } else {
                             composer.open_capture();
                             // The result is held rather than propagated with

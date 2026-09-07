@@ -1225,6 +1225,17 @@ fn an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale() {
 /// So the flags are cleared only once the frame commits.
 #[test]
 fn a_paint_error_after_a_patch_leaves_the_update_pending_for_the_retry() {
+    for repaint_arm in [false, true] {
+        poisoned_frame_keeps_the_update(repaint_arm);
+    }
+}
+
+/// Body of the test above, run once per arm.
+///
+/// Both arms clear the pending flag, in different places — the graft arm in
+/// `layer_patches_for`, the repaint arm in the paint walk — and both must defer
+/// it to the frame's commit.
+fn poisoned_frame_keeps_the_update(repaint_arm: bool) {
     use std::sync::atomic::AtomicBool;
 
     /// A leaf that panics in `paint` while armed.
@@ -1292,6 +1303,13 @@ fn a_paint_error_after_a_patch_leaves_the_update_pending_for_the_retry() {
 
     // Second frame: request the update, and poison the pass after it lands.
     set_opacity(&mut owner, opacity_id, 0.25);
+    if repaint_arm {
+        // Force the REPAINT arm. Its flag clearing lives in the paint walk
+        // rather than the graft arm, and it has the same obligation: the retry
+        // sees a boundary that no longer needs paint, reclassifies it as
+        // update-only, and would graft the pre-error capture unpatched.
+        owner.mark_needs_paint(opacity_id);
+    }
     armed.store(true, Ordering::Relaxed);
     let (owner, result) = owner.run_frame();
     assert!(
@@ -1312,7 +1330,8 @@ fn a_paint_error_after_a_patch_leaves_the_update_pending_for_the_retry() {
         opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "the update must survive a failed frame; clearing its flag mid-walk \
-         loses it for good, because the retry sees nothing pending",
+         loses it for good, because the retry sees nothing pending \
+         (repaint_arm = {repaint_arm})",
     );
 }
 
@@ -1577,4 +1596,124 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
              frame must repaint and emit the new shape",
         );
     }
+}
+
+/// A boundary queued for an update that the frame never reaches loses its
+/// capture, so the next frame that reaches it repaints.
+///
+/// The residue scan cannot cover this: a layer update leaves the boundary
+/// WITHOUT `needs_paint`, so the scan's `if render_node.needs_paint()` guard
+/// skips it entirely. For a node that still owns a slot that is harmless —
+/// the next graft patches it from live properties — but a node whose effect
+/// layer only just APPEARED has no slot at all, so nothing can serve it and
+/// its flag blocks any further mark.
+///
+/// The fixture suppresses the boundary through an ancestor's `skip_paint`
+/// rather than through layout, because a boundary dropped by layout is marked
+/// for paint when it is laid out again and would repaint for that reason
+/// instead — hiding whether the eviction does anything.
+#[test]
+fn an_unreached_update_boundary_loses_its_capture() {
+    #[derive(Debug, Default)]
+    struct GainsATransform {
+        enabled: bool,
+    }
+
+    impl flui_foundation::Diagnosticable for GainsATransform {}
+
+    impl flui_rendering::traits::RenderBox for GainsATransform {
+        type Arity = flui_tree::Single;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            if ctx.child_count() > 0 {
+                ctx.layout_child(0, constraints)
+            } else {
+                constraints.smallest()
+            }
+        }
+
+        flui_rendering::forward_single_child_box_queries!();
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+
+        fn paint_transform(&self, _size: Size) -> Option<flui_types::Matrix4> {
+            self.enabled
+                .then(|| flui_types::Matrix4::translation(3.0, 5.0, 0.0))
+        }
+    }
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderOpacity::new(0.5)).label("gate").child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(GainsATransform::default())
+                        .label("fx")
+                        .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                ),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let gate = registry.get("gate").expect("gate is labelled");
+    let fx = registry.get("fx").expect("fx is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // Second frame: the gate goes fully transparent, so the walk never reaches
+    // the boundary — and the effect appears while it is out of sight.
+    set_opacity(&mut owner, gate, 0.0);
+    owner
+        .render_tree_mut()
+        .get_mut(fx)
+        .expect("fx node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<GainsATransform>()
+        .expect("GainsATransform")
+        .enabled = true;
+    owner.mark_needs_composited_layer_update(fx);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("second frame");
+
+    // Third frame: the gate becomes visible again. The boundary below it is
+    // clean and unqueued, so a surviving capture would be grafted verbatim —
+    // and that capture predates the effect entirely.
+    set_opacity(&mut owner, gate, 0.5);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("third frame")
+        .expect("third frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        transform_count(&tree),
+        1,
+        "the capture taken before the effect existed must not survive a frame \
+         that could not serve the update; nothing else can restore the layer, \
+         because the node owns no slot to patch and its flag blocks new marks",
+    );
 }
