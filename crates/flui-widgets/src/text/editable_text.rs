@@ -124,23 +124,29 @@ fn source_offset_at_global(
     obscuring: Option<char>,
 ) -> Option<usize> {
     let anchor_id = inner_anchor.get()?;
-    owner.with(|owner| {
-        let root_id = owner.root_id()?;
-        let tree = owner.render_tree();
-        let editable_id = *tree.children(anchor_id).first()?;
-        let editable = tree
-            .get(editable_id)?
-            .as_box()?
-            .render_object()
-            .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`; see docs/PORT.md FR-033/widgets.
-        let to_root = owner.transform_to(editable_id, root_id)?;
-        let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
-        let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
-        Some(match obscuring {
-            Some(mask) => source_offset_for_masked_offset(editable.plain_text(), masked, mask),
-            None => masked,
+    // `try_with`, not `with`: a pointer event can land in a callback a frame
+    // phase happens to drive, and `with` panics on a live `with_mut` checkout.
+    // "The tree is busy" is a real answer here — the gesture does nothing for
+    // that event — and `try_with`'s own doc names this exact case.
+    owner
+        .try_with(|owner| {
+            let root_id = owner.root_id()?;
+            let tree = owner.render_tree();
+            let editable_id = *tree.children(anchor_id).first()?;
+            let editable = tree
+                .get(editable_id)?
+                .as_box()?
+                .render_object()
+                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`; see docs/PORT.md FR-033/widgets.
+            let to_root = owner.transform_to(editable_id, root_id)?;
+            let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
+            let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
+            Some(match obscuring {
+                Some(mask) => source_offset_for_masked_offset(editable.plain_text(), masked, mask),
+                None => masked,
+            })
         })
-    })
+        .flatten()
 }
 
 /// The source byte offset a masked byte offset corresponds to — the inverse
@@ -624,7 +630,15 @@ impl EditableTextState {
             }
         };
 
-        let released = {
+        // Up and cancel do the same thing, and cancel is not optional: it is
+        // documented as "abandon any in-flight tracking", and a drag anchor
+        // left set after one makes the NEXT move — which may belong to another
+        // gesture entirely — extend a selection the user abandoned.
+        let release = {
+            let drag_anchor = Rc::clone(&drag_anchor);
+            move |_: PointerDispatch<'_>| drag_anchor.set(None)
+        };
+        let cancel = {
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_: PointerDispatch<'_>| drag_anchor.set(None)
         };
@@ -632,7 +646,8 @@ impl EditableTextState {
         field
             .on_pointer_down(down)
             .on_pointer_move(moved)
-            .on_pointer_up(released)
+            .on_pointer_up(release)
+            .on_pointer_cancel(cancel)
     }
 
     fn manager(&self) -> &Rc<FocusManager> {
@@ -2947,6 +2962,43 @@ mod tests {
         assert!(
             !after_release.is_empty(),
             "the fixture must have selected something"
+        );
+    }
+
+    /// A cancelled gesture abandons its drag, so the NEXT move — which may
+    /// belong to another gesture entirely — does not extend a selection the
+    /// user gave up on.
+    ///
+    /// `pointer_cancel` is documented as "abandon any in-flight tracking";
+    /// handling only `pointer_up` leaves the anchor set on the one path where
+    /// no up ever arrives.
+    ///
+    /// Red-check: drop the `on_pointer_cancel` handler — the trailing move
+    /// collapses the selection back to the drag's start.
+    #[test]
+    fn a_cancelled_gesture_abandons_its_drag() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("cancelled field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+        harness.dispatch_pointer_move(400.0, 5.0);
+        let at_cancel = controller.selection();
+        assert!(
+            !at_cancel.is_empty(),
+            "precondition: the drag selected something"
+        );
+
+        harness.dispatch_pointer_cancel();
+        harness.dispatch_pointer_move(1.0, 5.0);
+
+        assert_eq!(
+            controller.selection(),
+            at_cancel,
+            "a move after a cancel must change nothing"
         );
     }
 
