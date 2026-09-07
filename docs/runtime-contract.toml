@@ -423,24 +423,37 @@ and invoked OUTSIDE it (`WinitPlatform::lease_exit_policy_hook`, \
 state, whose destructors may call back into the SAME platform (a dispose \
 hook opening another window), which would deadlock on that non-reentrant \
 lock otherwise; this mirrors the pre-existing window-event-handler lease \
-pattern exactly (ADR-0039). Left open, stated rather than silently fixed: \
-calling a window's platform-level `close()` REENTRANTLY, from inside an \
-already-dispatched realm callback, makes the hook consult a registry that \
-has not actually emptied yet (`close_this_window`'s own same-realm \
+pattern exactly (ADR-0039). Previously left open and now CLOSED: calling a \
+window's platform-level `close()` REENTRANTLY, from inside an \
+already-dispatched realm callback, made the hook consult a registry that \
+had not actually emptied yet (`close_this_window`'s own same-realm \
 reentrant dispatch only enqueues; the uninstall applies at the OUTER \
-dispatch's own tail, after the hook already decided) -- an exit is missed, \
-not merely delayed, and nothing re-checks afterward. \
-`closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_ \
-exit_today` pins this AS a known gap (it asserts the CURRENT, imperfect \
-outcome, and says so in its own name and doc); the tracked fix is to \
-re-consult the hook once a deferred realm-map mutation actually applies, \
-e.g. at each dispatch's own tail, not attempted here. Since issue #919 this \
-gap is a HEADLESS-double shape only: the winit backend's `close()` never \
-runs its teardown synchronously (it is posted to the owner lane and run on \
-the owner's next turn, top-level, with no realm checked out), so a \
-programmatic close from inside a dispatched callback tears down un-nested \
-there and the hook sees the emptied registry. The headless `close()` stays \
-synchronous, which is what that test pins.
+dispatch's own tail, after the hook already decided) -- so an exit was \
+missed, not merely delayed, because nothing re-checked afterward. \
+The fix is the one this note previously named as tracked: \
+`dispatch_platform_realm`'s tail requests an exit-policy re-evaluation \
+whenever a deferred realm-map mutation actually removed something, through \
+`Platform::request_exit_policy_reevaluation` -- the same coalesced, \
+owner-thread seam a keep-alive service's completion already used. Armed \
+whenever the drain yields a slot, which is deliberately wider than the \
+shape that needs it and deliberately narrower than "every dispatch tail": a \
+successful install yields none, while the yielded set covers both an \
+applied uninstall and a REJECTED install (a window-id collision is routed \
+through the same bucket), so the latter arms spuriously on an \
+already-logged error path. That is cheaper than teaching the drain to \
+report which kind it applied, because the seam's own contract makes a \
+spurious request a no-op. \
+`closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits` \
+pins both halves: that the tail parks a request at all (the assertion the \
+fix adds -- without the tail change nothing is parked), and that driving it \
+produces the quit. Reverting either half turns it red. Backend note, \
+unchanged: since issue #919 this shape only ever arose on the HEADLESS \
+double, because the winit backend's `close()` never runs its teardown \
+synchronously (it is posted to the owner lane and run on the owner's next \
+turn, top-level, with no realm checked out), so a programmatic close from \
+inside a dispatched callback tore down un-nested there and the hook already \
+saw the emptied registry. The headless `close()` stays synchronous, which \
+is what that test drives.
 
 **A second product gap this required fixing: `open_secondary_window` \
 assumed `OwnerPlatform::open_window` always resolves `Ready`.** It does, \
@@ -650,7 +663,7 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_the_realm_alive" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_the_sole_presentation_dispatches_detached_before_uninstalling" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn separate_realms_secondary_window_input_reaches_its_own_realm_not_the_primarys" },
-    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_exit_today" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn lease_exit_policy_hook" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn spawn_pending_secondary_window_completion" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn finish_open_secondary_window" },
