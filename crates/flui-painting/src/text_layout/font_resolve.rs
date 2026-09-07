@@ -51,13 +51,17 @@
 //!   the Cupertino path, whose roles all name `CupertinoSystemText` — a family
 //!   Flutter's engine aliases to San Francisco and that exists nowhere else.
 //!
-//! Deliberately absent: any adjustment of the requested **weight**. Snapping it
-//! to one the family provides would make the match exact, but `FontSystem::get_font`
-//! instances a variable face at the requested weight, so a snap strips the
-//! requested instance off every variable face reached afterwards. It is also
-//! unnecessary: with the family resolved, `Database::query` applies the CSS
-//! font-matching algorithm itself and the front-inserted face is already the
-//! right one.
+//! * The requested **weight**, snapped to one the resolved family can serve
+//!   ([`snap_weight`]). Not snapping was tried first, on the reasoning that
+//!   `Database::query` already applies CSS font matching and that a snap
+//!   strips the requested instance off a variable face. The first half is
+//!   true and irrelevant — `query` picks the best face *within* a family,
+//!   while the abandonment happens a layer up, in
+//!   `FontFallbackIter::default_font_match_key`, whose filter drops every
+//!   face whose weight differs and is not a variable match, and whose empty
+//!   result makes `next_item` leave the family entirely. The second half is
+//!   why [`family_accepts_weight`] probes the variable axis first and only
+//!   snaps when no face — static or variable — can serve the request.
 
 use std::collections::HashSet;
 
@@ -202,6 +206,164 @@ fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
         let charmap = font.charmap();
         Some(charmap.map('A').is_some() && charmap.map(' ').is_some())
     }) == Some(Some(true))
+}
+
+/// Whether any face in `family` is one cosmic-text would accept at `weight`.
+///
+/// Mirrors the filter in `FontFallbackIter::default_font_match_key`
+/// (`font/fallback/mod.rs`) exactly:
+/// `font_weight_diff == 0 || variable_weight_match`. When that filter finds
+/// nothing, `next_item`'s `(false, None)` arm logs "No default font match"
+/// and `break`s out of the family loop — cosmic-text abandons the family and
+/// takes a `common_fallback()` family that happens to own the exact weight, so
+/// a `Roboto` run at W600 renders in Noto Sans SemiBold on a host with the
+/// full Noto weight set (issue #929).
+///
+/// # There is no monospace term here, and there was one
+///
+/// An earlier revision accepted any face with `face.monospaced == true`,
+/// citing this same function. That citation was wrong:
+/// `default_font_match_key`'s filter has no mono term at all. The `|| is_mono`
+/// that does exist lives in `next_item`'s `font_match_keys_iter`, and
+/// `is_mono` there is `default_families[i] == &Family::Monospace` — a property
+/// of the **request**, never of the face. The consequence was measured: a
+/// `Fira Code` request at W900 answered "acceptable", was not snapped, and
+/// then shaped in Noto Sans. [`snap_weight`] handles the real mono rule where
+/// it belongs, on the request.
+///
+/// # Uncertainty resolves the way cosmic-text resolves it
+///
+/// A face whose data will not parse is *not* a variable match — cosmic-text's
+/// `variable_weight_match` compares against `Some(Some(true))`, so every other
+/// outcome is `false`. This mirrors that. An earlier revision erred the other
+/// way, to avoid stripping a variable instance; that reasoning does not hold,
+/// because a face whose data will not parse cannot be instanced by
+/// `FontSystem::get_font` either. Predicting "the family is fine" for a face
+/// cosmic-text will discard is precisely the failure this function exists to
+/// prevent.
+///
+/// # Not pinned here
+///
+/// The variable-axis arm has no test in this change, because every font
+/// fixture the crate carries is a single-weight, non-monospaced static face —
+/// `Roboto-Regular`, `Arial`, `MaterialIcons-Regular`, all `weight=400`,
+/// `monospaced=false`. Replacing `variable_weight_covers(..)` with `false`
+/// leaves the suite green. The fixture that discriminates lands with the
+/// synthetic-face generator in the next change of this series, which is where
+/// the generator exists; it cannot reach `main` without it.
+fn family_accepts_weight(db: &Database, family: &str, weight: u16) -> bool {
+    db.faces()
+        .filter(|face| face.families.iter().any(|(name, _)| name == family))
+        .any(|face| face.weight.0 == weight || variable_weight_covers(db, face.id, weight))
+}
+
+/// Whether `id` is a variable face whose `wght` axis covers `weight`.
+///
+/// Uses the `skrifa` re-export cosmic-text already exposes, so no new
+/// dependency — the same route [`can_render_latin`] takes.
+///
+/// Every uncertain outcome answers `false`, because that is what cosmic-text
+/// answers: `FontMatchKey::new` computes `variable_weight_match` as
+/// `db.with_face_data(..) == Some(Some(true))`, so an unreadable face, an
+/// absent `wght` axis and a face missing from the database are all "not a
+/// variable match" there. See [`family_accepts_weight`] for why mirroring that
+/// direction — rather than erring toward "acceptable" — is the correct one.
+fn variable_weight_covers(db: &Database, id: fontdb::ID, weight: u16) -> bool {
+    use cosmic_text::skrifa::{self, MetadataProvider as _};
+
+    db.with_face_data(id, |data, index| {
+        let font = skrifa::FontRef::from_index(data, index).ok()?;
+        let wght = font.axes().get_by_tag(skrifa::Tag::new(b"wght"))?;
+        let weight = f32::from(weight);
+        Some(wght.min_value() <= weight && weight <= wght.max_value())
+    }) == Some(Some(true))
+}
+
+/// The weight to actually request for `family`, given the style asked for
+/// `requested`.
+///
+/// Unchanged whenever the family can serve the request. When it cannot, the
+/// weight the family DOES carry that CSS font matching would pick — which is
+/// what keeps cosmic-text from discarding the family altogether (issue #929).
+///
+/// # Generics are probed, not skipped
+///
+/// An earlier revision returned early for every non-`Name` family, on the
+/// reasoning that "a generic is resolved by cosmic-text against a family this
+/// layer did not choose". That was wrong twice over:
+/// [`bind_generic_families`] in this very module is what chose it, and
+/// `Database::family_name` reads it back — the same call cosmic-text itself
+/// makes at the top of `default_font_match_key`. The measured consequence was
+/// that the snap never ran on the busiest path there is: every Material
+/// `title_*` and `label_*` style is W500 with **no** family, so it resolves to
+/// `Family::SansSerif` and skipped the probe entirely.
+///
+/// `Family::Monospace` is the one family that genuinely needs no probe, and
+/// for a reason that is about the request rather than the binding:
+/// `next_item`'s `(true, None)` arm does not `break` the family loop, and its
+/// `font_match_keys_iter(is_mono)` accepts every face regardless of weight
+/// diff. A monospace request is never abandoned over weight, so snapping it
+/// would only strip a variable instance for nothing.
+pub(crate) fn snap_weight(db: &Database, family: &Family<'_>, requested: u16) -> u16 {
+    if matches!(family, Family::Monospace) {
+        return requested;
+    }
+    // Resolves `Family::Name(n)` to `n` and every generic to its bound name.
+    let name = db.family_name(family);
+    if family_accepts_weight(db, name, requested) {
+        return requested;
+    }
+    let mut carried: Vec<u16> = db
+        .faces()
+        .filter(|face| face.families.iter().any(|(fam, _)| fam == name))
+        .map(|face| face.weight.0)
+        .collect();
+    if carried.is_empty() {
+        return requested;
+    }
+    carried.sort_unstable();
+    carried.dedup();
+    // Not pinned by a test through this call: no fixture carries one family at
+    // two weights, so swapping this line back for `min_by_key(abs_diff)`
+    // leaves the suite green. [`css_nearest_weight`] itself is pinned, and the
+    // fixture that closes the gap lands with the synthetic-face generator in
+    // the next change of this series.
+    css_nearest_weight(&carried, requested).unwrap_or(requested)
+}
+
+/// The weight CSS font matching picks from `carried` for a `requested` the
+/// family does not have, per CSS Fonts 4 §"Matching font styles".
+///
+/// `carried` must be sorted ascending and deduplicated.
+///
+/// Ordering by absolute distance — the obvious implementation, and the one
+/// this replaces — is both non-deterministic and wrong. Non-deterministic
+/// because `min_by_key` keeps the first minimum in iteration order, so a
+/// family carrying 400 and 600 answers a W500 request differently depending on
+/// which face the database loaded first. Wrong because CSS does not resolve by
+/// distance: 500 resolves DOWN to 400 before it looks up, and 400 resolves UP
+/// to 500 before it looks down, so the two adjacent text weights prefer each
+/// other rather than tying.
+fn css_nearest_weight(carried: &[u16], requested: u16) -> Option<u16> {
+    let below = || carried.iter().rev().find(|w| **w < requested).copied();
+    let above = || carried.iter().find(|w| **w > requested).copied();
+
+    if requested < 400 {
+        // Below in descending order, then above in ascending order.
+        below().or_else(above)
+    } else if requested > 500 {
+        // Above in ascending order, then below in descending order.
+        above().or_else(below)
+    } else {
+        // 400..=500: weights at or above the target up to 500 first, then
+        // below in descending order, then everything above 500.
+        carried
+            .iter()
+            .find(|w| **w > requested && **w <= 500)
+            .copied()
+            .or_else(below)
+            .or_else(above)
+    }
 }
 
 /// The family a generic should point at: the first candidate `db` carries that
@@ -581,6 +743,178 @@ mod tests {
         let mut system = font_system(database(&[ARIAL]));
         let style = styled_with_fallback(Some("Absent Primary"), &["Also Absent", "Still Absent"]);
         assert_eq!(resolved(&mut system, &style), "SansSerif");
+    }
+
+    /// The probe answers cosmic-text's own question: is there a face here it
+    /// would accept at this weight?
+    ///
+    /// Tested directly rather than only through [`snap_weight`], because the
+    /// snap cannot distinguish them for a single-weight family — the nearest
+    /// carried weight IS the requested one when it is carried, so bypassing
+    /// the probe returns the same answer. This is the assertion that separates
+    /// "asked the family" from "snapped unconditionally".
+    #[test]
+    fn the_probe_separates_a_weight_the_family_carries_from_one_it_does_not() {
+        let db = database(&[ROBOTO]);
+        let carried = db
+            .faces()
+            .find(|face| face.families.iter().any(|(name, _)| name == "Roboto"))
+            .expect("the fixture carries Roboto")
+            .weight
+            .0;
+        assert!(
+            family_accepts_weight(&db, "Roboto", carried),
+            "the weight the fixture's face declares must be accepted"
+        );
+        assert!(
+            !family_accepts_weight(&db, "Roboto", 900),
+            "a static single-weight family does NOT accept a far weight — if \
+             this ever answers true the fixture gained a variable face, and \
+             the snap tests below stop meaning what they say"
+        );
+    }
+
+    /// A family that carries the requested weight is asked for it unchanged.
+    #[test]
+    fn a_family_that_carries_the_weight_is_asked_for_it_unchanged() {
+        let db = database(&[ROBOTO]);
+        let carried = db
+            .faces()
+            .find(|face| face.families.iter().any(|(name, _)| name == "Roboto"))
+            .expect("the fixture carries Roboto")
+            .weight
+            .0;
+        assert_eq!(
+            snap_weight(&db, &Family::Name("Roboto"), carried),
+            carried,
+            "no snap when the family can serve the request"
+        );
+    }
+
+    /// A family with no face at the requested weight is asked for the nearest
+    /// weight it DOES carry, rather than being abandoned.
+    ///
+    /// This is issue #929's mechanism: cosmic-text's candidate filter drops a
+    /// family whose faces all miss the requested weight, and the very next
+    /// thing it tries is a `common_fallback()` family that happens to own that
+    /// weight exactly — so a present family loses its run to a platform font.
+    /// Asking for a weight the family carries is what keeps it.
+    #[test]
+    fn a_family_without_the_weight_is_asked_for_the_nearest_it_carries() {
+        let db = database(&[ROBOTO]);
+        let carried = db
+            .faces()
+            .find(|face| face.families.iter().any(|(name, _)| name == "Roboto"))
+            .expect("the fixture carries Roboto")
+            .weight
+            .0;
+        // W900 is far from anything a single-weight fixture carries.
+        let snapped = snap_weight(&db, &Family::Name("Roboto"), 900);
+        assert_ne!(snapped, 900, "the fixture carries no 900 face");
+        assert_eq!(
+            snapped, carried,
+            "the nearest carried weight is what keeps the family"
+        );
+    }
+
+    /// A generic snaps exactly as its bound family does.
+    ///
+    /// This replaces a test that asserted the opposite — that a generic
+    /// "passes through untouched, there is no family here to probe". That was
+    /// the bug, written down as the contract, and it passed for a reason that
+    /// had nothing to do with generics: on an unbound database
+    /// `family_name(&SansSerif)` names a family the fixture does not carry, so
+    /// the candidate set was empty and the request came back unchanged either
+    /// way. Binding the generics first is what makes the assertion mean
+    /// anything.
+    ///
+    /// It matters far more than a named family does. Every Material
+    /// `title_medium` / `title_small` / `label_*` style is W500 with **no**
+    /// font family (`flui-material`'s typography), so it resolves to
+    /// `Family::SansSerif` — the skip made the snap a no-op on the busiest
+    /// text path in the workspace.
+    #[test]
+    fn a_bound_generic_snaps_like_the_family_it_names() {
+        let mut db = database(&[ROBOTO]);
+        bind_generic_families(&mut db);
+        assert_eq!(
+            db.family_name(&Family::SansSerif),
+            "Roboto",
+            "precondition: the generic is bound to the fixture's only family"
+        );
+
+        let named = snap_weight(&db, &Family::Name("Roboto"), 900);
+        assert_ne!(named, 900, "precondition: the fixture carries no 900 face");
+
+        assert_eq!(
+            snap_weight(&db, &Family::SansSerif, 900),
+            named,
+            "a generic must snap to the same weight its bound family does"
+        );
+    }
+
+    /// `Family::Monospace` is the one family that must NOT snap, and for a
+    /// reason about the request rather than the binding: `next_item`'s
+    /// `(true, None)` arm does not break the family loop, and
+    /// `font_match_keys_iter(is_mono)` accepts every face regardless of weight
+    /// diff. Snapping it would strip a variable instance for nothing.
+    ///
+    /// Discriminating because the generic IS bound here: without the
+    /// monospace arm this resolves to "Roboto" and snaps to 400.
+    #[test]
+    fn a_monospace_request_is_never_snapped() {
+        let mut db = database(&[ROBOTO]);
+        bind_generic_families(&mut db);
+        assert_eq!(
+            db.family_name(&Family::Monospace),
+            "Roboto",
+            "precondition: monospace is bound to the fixture's only family"
+        );
+
+        assert_eq!(snap_weight(&db, &Family::Monospace, 900), 900);
+    }
+
+    /// CSS resolves 400 and 500 toward each other before it looks further, and
+    /// resolves ties by direction rather than by distance. Both cases below
+    /// are ones a nearest-by-absolute-distance implementation gets wrong — the
+    /// first by tie-breaking on database iteration order, the second by
+    /// crossing the 500 boundary when CSS says to stay below it.
+    #[test]
+    fn weight_selection_follows_css_order_not_absolute_distance() {
+        assert_eq!(
+            css_nearest_weight(&[300, 500], 400),
+            Some(500),
+            "400 looks up to 500 first; by distance this is a tie broken by \
+             load order"
+        );
+        assert_eq!(
+            css_nearest_weight(&[100, 600], 500),
+            Some(100),
+            "500 takes nothing above it until it has exhausted below; by \
+             distance 600 wins"
+        );
+        assert_eq!(
+            css_nearest_weight(&[200, 900], 300),
+            Some(200),
+            "below 400: descending below first"
+        );
+        assert_eq!(
+            css_nearest_weight(&[200, 900], 700),
+            Some(900),
+            "above 500: ascending above first"
+        );
+        assert_eq!(css_nearest_weight(&[], 400), None, "nothing carried");
+    }
+
+    /// An unknown family name passes through untouched.
+    ///
+    /// The resolver never produces one — `resolve_family` only returns
+    /// `Family::Name` for a family the index carries — but `snap_weight` must
+    /// not invent a weight from an empty candidate set if it ever does.
+    #[test]
+    fn an_unknown_family_leaves_the_request_alone() {
+        let db = database(&[ROBOTO]);
+        assert_eq!(snap_weight(&db, &Family::Name("Nothing Here"), 600), 600);
     }
 
     #[test]

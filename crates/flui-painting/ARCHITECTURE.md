@@ -227,16 +227,33 @@ and the space diverge: the letters are absent from an emoji face and move on, th
 in it and stays. Two independent routes reach that face, and closing only one leaves the defect
 live — cosmic-text's unix `common_fallback()` list *ends* in `"Noto Color Emoji"`, so the walk
 reaches it at **any** weight (400 included, measured) when no earlier text family from that list is
-installed; and its candidate filter `font_weight_diff == 0 || variable_weight_match || is_mono`
-empties every list for a family shipping only 400 and 700, dropping the run into an unfiltered tail
-whose derived ordering puts emoji faces first. Naming a family the database carries forecloses both,
+installed; and `default_font_match_key`'s candidate filter
+`font_weight_diff == 0 || variable_weight_match` empties every list for a family shipping only 400
+and 700, dropping the run into an unfiltered tail whose derived ordering puts emoji faces first.
+(There is an `|| is_mono` term in cosmic-text, but it lives in `next_item`'s
+`font_match_keys_iter`, and `is_mono` there is `default_families[i] == &Family::Monospace` — a
+property of the *request*, not of any face. Reading it as a face property is what made an earlier
+revision of `family_accepts_weight` accept any monospaced face at any weight.) Naming a family the database carries forecloses both,
 because `Database::query`'s front-insert puts the CSS-matched face ahead of the emoji entry in each.
 
+The requested *weight* is resolved alongside the family, snapped to one the resolved family can
+serve (`snap_weight`), and the two travel as one value (`ResolvedFont`) so no caller can pair a
+resolved family with the style's original weight. Both halves of that sentence are corrections of
+earlier decisions recorded here, and both were wrong for reasons worth keeping:
+
+- Snapping was first *rejected* as "worse than doing nothing", on the grounds that
+  `Database::query` already applies CSS font matching and that a snap strips the requested instance
+  off a variable face. The first is true and irrelevant: `query` picks the best face *within* a
+  family, while the abandonment happens a layer up, in `default_font_match_key`, whose empty result
+  makes `next_item` leave the family altogether. The second is why `family_accepts_weight` probes
+  the variable `wght` axis before it snaps, and snaps only when no face — static or variable — can
+  serve the request.
+- The snap then ran on measurement only. `SharedFontSystem` exposed the family without its weight,
+  so the raster path read `style.font_weight` directly and shaped a string in a different font from
+  the one it was measured in. Making the pair the only obtainable value is the fix; a second
+  accessor returning just the family would let the same defect back in.
+
 **Alternatives:**
-- Snap the requested *weight* to one the family provides — rejected, and it is worse than doing
-  nothing. `FontSystem::get_font` instances a variable face at the requested weight, so a snap
-  strips the requested instance from every variable face reached afterwards. It is also
-  unnecessary: with the family resolved, `Database::query` applies CSS font matching itself.
 - A custom `Fallback` impl whose `forbidden_fallback()` excludes emoji families — a real option,
   and complementary rather than competing: it would suppress emoji in the unfiltered tail on paths
   where no family resolves at all. Not taken here; it needs a per-platform emoji family list and its

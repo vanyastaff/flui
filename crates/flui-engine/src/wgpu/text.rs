@@ -14,16 +14,16 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 
-use flui_painting::SharedFontSystem;
+use flui_painting::{ResolvedFont, SharedFontSystem};
 use flui_types::{
     geometry::{Pixels, Point},
     styling::Color,
-    typography::{FontStyle, FontWeight, InlineSpan, TextSpan, TextStyle},
+    typography::{FontStyle, InlineSpan, TextSpan, TextStyle},
 };
 use glyphon::{
-    Attrs, AttrsOwned, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics,
-    Resolution, Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds,
-    TextRenderer as GlyphonRenderer, Viewport, Weight,
+    Attrs, AttrsOwned, Buffer, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution,
+    Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer,
+    Viewport, Weight,
 };
 
 // ---------------------------------------------------------------------------
@@ -111,9 +111,9 @@ pub(super) fn collect_styled_spans(
 pub(super) fn style_to_attrs_owned(
     style: Option<&TextStyle>,
     base_color: Color,
-    family: Family<'_>,
+    resolved: ResolvedFont<'_>,
 ) -> AttrsOwned {
-    let mut attrs = Attrs::new().family(family);
+    let mut attrs = Attrs::new().family(resolved.family);
 
     // Resolve color: foreground > color > base_color
     let color = style
@@ -121,22 +121,17 @@ pub(super) fn style_to_attrs_owned(
         .unwrap_or(base_color);
     attrs = attrs.color(GlyphonColor::rgba(color.r, color.g, color.b, color.a));
 
-    if let Some(style) = style {
-        // Font weight
-        if let Some(weight) = style.font_weight {
-            attrs = attrs.weight(match weight {
-                FontWeight::W100 => Weight::THIN,
-                FontWeight::W200 => Weight::EXTRA_LIGHT,
-                FontWeight::W300 => Weight::LIGHT,
-                FontWeight::W400 => Weight::NORMAL,
-                FontWeight::W500 => Weight::MEDIUM,
-                FontWeight::W600 => Weight::SEMIBOLD,
-                FontWeight::W700 => Weight::BOLD,
-                FontWeight::W800 => Weight::EXTRA_BOLD,
-                FontWeight::W900 => Weight::BLACK,
-            });
-        }
+    // The weight comes from the RESOLUTION, not from the style: it has been
+    // snapped to one the resolved family can serve, and a family that carries
+    // no face at the style's own weight is abandoned by cosmic-text mid-shape
+    // (issue #929). Reading `style.font_weight` here is what made a string
+    // measure in one font and paint in another — `ResolvedFont` exists so the
+    // two cannot be taken apart again.
+    if let Some(weight) = resolved.weight {
+        attrs = attrs.weight(Weight(weight));
+    }
 
+    if let Some(style) = style {
         // Font style (normal / italic)
         if let Some(font_style) = style.font_style {
             attrs = attrs.style(match font_style {
@@ -215,13 +210,15 @@ impl RichTextCacheKey {
     /// controls line-breaking, so two identical runs at different wrap widths
     /// must produce distinct shaped buffers).
     ///
-    /// The family recorded here is the one the STYLE names, not the one
-    /// `SharedFontSystem::resolve_family` picks for it. The two differ only
-    /// while the font database grows between two otherwise identical
-    /// requests, and this cache is already stale in that case for the reason
-    /// it always was: nothing invalidates it when a face is registered
+    /// The family and weight recorded here are the ones the STYLE names, not
+    /// the ones `SharedFontSystem::resolve_font` picks for it. Each pair
+    /// differs only while the font database grows between two otherwise
+    /// identical requests — the resolved weight is a function of the style's
+    /// weight and the resolved family, so it changes exactly when that family
+    /// does — and this cache is already stale in that case for the reason it
+    /// always was: nothing invalidates it when a face is registered
     /// (`PaintingBinding::register_font` notifies `SystemFontsNotifier`, which
-    /// has no listeners). Recording the resolved family would not close that
+    /// has no listeners). Recording the resolved pair would not close that
     /// gap — it needs an invalidation hook.
     fn new(
         runs: &[(String, Option<TextStyle>)],
@@ -637,7 +634,7 @@ impl TextRenderer {
                 //
                 // Taken BEFORE `with_mut` below, never inside it: resolution
                 // acquires the same non-reentrant lock.
-                let family = self.font_system.resolve_family(None);
+                let resolved = self.font_system.resolve_font(None);
 
                 // Shape against the shared FontSystem; the closure holds the
                 // lock only for the shaping calls and captures no `self`
@@ -646,7 +643,7 @@ impl TextRenderer {
                     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
                     // Unbounded width — wrap-width matching is a follow-up (paint seam).
                     buffer.set_size(Some(f32::MAX), None);
-                    let attrs = Attrs::new().family(family);
+                    let attrs = Attrs::new().family(resolved.family);
                     buffer.set_text(&key.text, &attrs, Shaping::Advanced, None);
                     buffer.shape_until_scroll(font_system, false);
                     buffer
@@ -750,19 +747,19 @@ impl TextRenderer {
             // Resolved BEFORE `with_mut` below, never inside it: resolution
             // takes the same lock and `parking_lot::Mutex` is not reentrant.
             // A family this host does not carry must not reach the shaper —
-            // see `flui_painting::SharedFontSystem::resolve_family`.
+            // see `flui_painting::SharedFontSystem::resolve_font`.
             //
             // One acquisition for the whole paragraph, not one per span: this
             // lock is shared with the glyph pipeline, and a span's family does
             // not depend on its neighbours' answers.
-            let families = self
+            let resolved = self
                 .font_system
-                .resolve_families(runs.iter().map(|(_, style)| style.as_ref()));
+                .resolve_fonts(runs.iter().map(|(_, style)| style.as_ref()));
             let owned_attrs: Vec<AttrsOwned> = runs
                 .iter()
-                .zip(families)
-                .map(|((_, style), family)| {
-                    style_to_attrs_owned(style.as_ref(), base_color, family)
+                .zip(resolved)
+                .map(|((_, style), resolved)| {
+                    style_to_attrs_owned(style.as_ref(), base_color, resolved)
                 })
                 .collect();
 
@@ -1091,8 +1088,58 @@ fn clip_bounds(clip: Option<(u32, u32, u32, u32)>, viewport: TextBounds) -> Text
 mod tests {
     use glyphon::fontdb;
 
-    use super::{FontSystem, TextRenderer, collect_styled_spans};
+    use super::{FontSystem, TextRenderer, collect_styled_spans, style_to_attrs_owned};
+    use flui_painting::{Family, ResolvedFont};
+    use flui_types::styling::Color;
     use flui_types::typography::{FontWeight, InlineSpan, TextSpan, TextStyle};
+
+    /// The raster path must shape at the weight RESOLUTION chose, not at the
+    /// weight the style asked for.
+    ///
+    /// The two differ exactly when the resolved family carries no face at the
+    /// requested weight: `SharedFontSystem::resolve_font` snaps to one the
+    /// family can serve, because cosmic-text otherwise abandons the family
+    /// mid-shape and takes a platform fallback that owns the weight exactly
+    /// (issue #929). Measurement asked for the pair; this path used to ask for
+    /// the family and then read the weight straight off the style, so one
+    /// string measured in one font and painted in another.
+    ///
+    /// Red-check: restore the `style.font_weight` match in
+    /// `style_to_attrs_owned` — the weight comes back as 900 and this fails.
+    #[test]
+    fn the_raster_path_shapes_at_the_resolved_weight_not_the_requested_one() {
+        let style = TextStyle {
+            font_weight: Some(FontWeight::W900),
+            ..Default::default()
+        };
+        let resolved = ResolvedFont {
+            family: Family::SansSerif,
+            // What a single-weight family snaps a W900 request to.
+            weight: Some(400),
+        };
+
+        let attrs = style_to_attrs_owned(Some(&style), Color::BLACK, resolved);
+
+        assert_eq!(
+            attrs.weight,
+            glyphon::Weight(400),
+            "the resolved weight must reach the shaper, not the style's own"
+        );
+    }
+
+    /// A style that names no weight leaves cosmic-text's default standing —
+    /// the resolution has nothing to snap and must not invent a weight.
+    #[test]
+    fn a_style_with_no_weight_leaves_the_shaper_default_alone() {
+        let resolved = ResolvedFont {
+            family: Family::SansSerif,
+            weight: None,
+        };
+
+        let attrs = style_to_attrs_owned(None, Color::BLACK, resolved);
+
+        assert_eq!(attrs.weight, glyphon::Weight::NORMAL);
+    }
 
     /// A bold child of a sized parent must carry both bold weight and the
     /// inherited size after flattening.
