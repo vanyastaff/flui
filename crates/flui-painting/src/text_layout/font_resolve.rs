@@ -88,6 +88,38 @@ fn database_carries(db: &Database, family: &str) -> bool {
         .any(|face| face.families.iter().any(|(name, _)| name == family))
 }
 
+/// Whether any generic family currently names a family the database does not
+/// carry — the read-only precondition for [`bind_generic_families`].
+///
+/// Exists because `bind_generic_families` needs `&mut Database` to do its
+/// writes, and `FontSystem::db_mut()` is not a plain borrow: it **clears
+/// cosmic-text's `font_matches_cache`** (`font/system.rs`), so the next
+/// shaping pass rebuilds a `FontMatchKey` for every installed face. Measured
+/// on a 466-face host: a shape with a warm match cache takes 26 µs, and the
+/// same shape immediately after one `db_mut()` takes 3.46 ms — 133×. The
+/// database-mutation generation is bumped by every `SharedFontSystem::with_mut`,
+/// including the shaping call the renderer makes each frame, so taking
+/// `db_mut()` on every generation change put that 3.46 ms on the frame path.
+///
+/// On a database with no Latin-capable face this stays `true` forever, since
+/// `bind_generic_families` binds nothing there and the generics keep naming
+/// families that are absent. That is harmless: an empty or letterless database
+/// has no match cache worth preserving.
+///
+/// Average and worst case O(faces), the same scan `bind_generic_families`
+/// would do anyway — the saving is the cache, not the scan.
+fn generics_need_rebinding(db: &Database) -> bool {
+    [
+        Family::SansSerif,
+        Family::Serif,
+        Family::Cursive,
+        Family::Fantasy,
+        Family::Monospace,
+    ]
+    .iter()
+    .any(|generic| !database_carries(db, db.family_name(generic)))
+}
+
 /// Points every generic family name at a family this database carries.
 ///
 /// Called on a freshly built [`Database`] and again, through
@@ -292,7 +324,12 @@ impl InstalledFamilies {
             return;
         }
 
-        bind_generic_families(font_system.db_mut());
+        // Probed through `db()` first: `db_mut()` clears cosmic-text's
+        // font-match cache, and this runs on a generation the renderer's own
+        // per-frame `with_mut` bumps. See `generics_need_rebinding`.
+        if generics_need_rebinding(font_system.db()) {
+            bind_generic_families(font_system.db_mut());
+        }
 
         let db = font_system.db();
         self.names.clear();
@@ -381,6 +418,47 @@ mod tests {
 
     fn font_system(db: Database) -> FontSystem {
         FontSystem::new_with_locale_and_db("en-US".to_owned(), db)
+    }
+
+    /// The read-only probe that keeps `sync` off `db_mut()` must actually
+    /// answer "no" once the generics are bound — otherwise the gate is inert
+    /// and every generation change still wipes cosmic-text's match cache
+    /// (measured 26 µs → 3.46 ms on a 466-face host).
+    ///
+    /// Both arms matter: the `true` arm alone would pass for a predicate that
+    /// is always `true`, which is exactly the bug this replaces.
+    #[test]
+    fn the_rebinding_probe_answers_no_once_the_generics_are_bound() {
+        let mut db = database(&[ROBOTO]);
+        assert!(
+            generics_need_rebinding(&db),
+            "precondition: a fresh database names cosmic-text's hard-coded \
+             generics, which it does not carry"
+        );
+
+        bind_generic_families(&mut db);
+
+        assert!(
+            !generics_need_rebinding(&db),
+            "once bound, the probe must report nothing to do -- this is what \
+             keeps `sync` from taking `db_mut()` on every frame"
+        );
+    }
+
+    /// Unbinding one generic is enough to ask for a rebind: the probe is an
+    /// "any", not an "all", so a single stale generic still gets repaired.
+    #[test]
+    fn the_rebinding_probe_answers_yes_for_a_single_stale_generic() {
+        let mut db = database(&[ROBOTO]);
+        bind_generic_families(&mut db);
+        assert!(!generics_need_rebinding(&db), "precondition: all bound");
+
+        db.set_cursive_family("A Family Nothing Carries");
+
+        assert!(
+            generics_need_rebinding(&db),
+            "one generic naming an absent family must still ask for a rebind"
+        );
     }
 
     fn styled(family: Option<&str>) -> TextStyle {
