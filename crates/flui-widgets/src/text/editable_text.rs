@@ -10,6 +10,8 @@ use std::{
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
+use flui_interaction::PointerDispatch;
+use flui_interaction::events::PointerEventExt;
 use flui_interaction::events::{Key, KeyState, Modifiers, NamedKey};
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
@@ -17,10 +19,11 @@ use flui_interaction::routing::{
 };
 use flui_interaction::{ClientToken, TextInputHandle};
 use flui_objects::RenderEditable;
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
-    Color, ImeEvent, Point, Rect,
+    Color, ImeEvent, Offset, Point, Rect,
     geometry::{Bounds, Pixels},
     typography::{TextDirection, TextSpan, TextStyle},
 };
@@ -94,6 +97,86 @@ fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
     masked
 }
 
+/// The SOURCE byte offset a point in the root's coordinate space falls on,
+/// or `None` when the field is not mounted, not laid out, or the point misses
+/// it.
+///
+/// # Why the global point and not the listener's local one
+///
+/// `Listener` hands its callbacks the position in its own box as well as the
+/// root's. The listener's box is not the editable's: `AnchoredBox` sits
+/// between them, and relying on proxies being zero-offset is an unstated
+/// coupling that a later wrapper would break silently. Mapping the root's
+/// point through `transform_to` is what `EditableTextState::global_caret_rect`
+/// already does in the other direction, and it stays correct whatever the
+/// subtree grows.
+///
+/// # Why the answer is in SOURCE space
+///
+/// The render object holds masked text on an obscured field, so the offset it
+/// returns is a masked one while [`TextEditingController`] holds source bytes.
+/// The conversion happens here, at the same seam
+/// [`build_field_view`] masks at, so the two directions cannot drift apart.
+fn source_offset_at_global(
+    owner: &PipelineCell,
+    inner_anchor: &flui_objects::SubtreeAnchor,
+    global: Offset<Pixels>,
+    obscuring: Option<char>,
+) -> Option<usize> {
+    let anchor_id = inner_anchor.get()?;
+    // `try_with`, not `with`: a pointer event can land in a callback a frame
+    // phase happens to drive, and `with` panics on a live `with_mut` checkout.
+    // "The tree is busy" is a real answer here — the gesture does nothing for
+    // that event — and `try_with`'s own doc names this exact case.
+    owner
+        .try_with(|owner| {
+            let root_id = owner.root_id()?;
+            let tree = owner.render_tree();
+            let editable_id = *tree.children(anchor_id).first()?;
+            let editable = tree
+                .get(editable_id)?
+                .as_box()?
+                .render_object()
+                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`; see docs/PORT.md FR-033/widgets.
+            let to_root = owner.transform_to(editable_id, root_id)?;
+            let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
+            let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
+            Some(match obscuring {
+                Some(mask) => source_offset_for_masked_offset(editable.plain_text(), masked, mask),
+                None => masked,
+            })
+        })
+        .flatten()
+}
+
+/// The source byte offset a masked byte offset corresponds to — the inverse
+/// of [`obscure`]'s mapping.
+///
+/// Needed because [`build_field_view`] masks the text *before* it reaches the
+/// render object, so every offset a pointer query returns is in MASKED byte
+/// space while [`TextEditingController`] holds SOURCE bytes. Writing one into
+/// the other is a silent corruption on any obscured field:
+/// [`DEFAULT_OBSCURING_CHARACTER`] is `U+2022`, three bytes, so the two spaces
+/// diverge at the very first character.
+///
+/// The correspondence is the one [`obscure`] establishes — exactly one mask
+/// character per source `char` — read backwards: the masked offset divided by
+/// the mask's width is a char index, and that char's byte offset is the
+/// answer.
+///
+/// A masked offset past the end clamps to the source's end, and one that is
+/// not a multiple of the mask width rounds down to the mask character it falls
+/// inside. Neither should occur — the render object clamps to its own char
+/// boundaries, which for masked text are multiples of the mask width — but
+/// clamping rather than asserting keeps a wrong offset from panicking a field.
+fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: char) -> usize {
+    let char_index = masked_offset / mask.len_utf8();
+    source
+        .char_indices()
+        .nth(char_index)
+        .map_or(source.len(), |(byte_offset, _)| byte_offset)
+}
+
 /// A single-line text field that accepts keyboard input when focused.
 ///
 /// Flutter parity: `widgets/editable_text.dart` `EditableText` — the low-level
@@ -151,13 +234,16 @@ fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
 ///
 /// The following are absent in v1; do not use these features and expect them
 /// to work:
-/// - **Selection GESTURES** — the field tracks and renders a selection
-///   ([`TextEditingController::set_selection`], painted by `RenderEditable`),
-///   and every edit honours it: typing replaces it, Backspace and Delete
-///   remove it, an arrow collapses it. What is missing is anything that
-///   *produces* one from a pointer — tap-to-place, drag-to-select,
-///   shift-click and double-tap-word are not wired, so today the selection
-///   comes only from a caller driving the controller.
+/// - **Multi-tap and modified selection gestures** — a tap places the caret
+///   and a drag extends the selection, both wired here. What is absent is
+///   anything needing a click count or a modifier: shift-click extension,
+///   double-tap word selection and triple-tap line selection. `Listener`
+///   delivers raw pointer events, and the arbitration that produces those
+///   lives in `flui-interaction`'s recognisers;
+///   [`RenderEditable::word_range_at_local_offset`] is already there for the
+///   double-tap case when one is wired above this.
+/// - **Selection handles and the selection toolbar** — the draggable
+///   endpoints and the copy/paste menu Flutter shows on touch platforms.
 /// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
 /// - **Multi-line** — newlines are inserted as literal characters but line
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
@@ -349,6 +435,11 @@ pub struct EditableTextState {
     /// starts right at the editable instead of walking through `anchor`'s
     /// wider subtree (which also covers the `AnimatedBuilder` in between).
     inner_anchor: flui_objects::SubtreeAnchor,
+    /// Acquired in `init_state`, never in `build` — the pointer handlers need
+    /// it to reach the anchored `RenderEditable` and to map a global point
+    /// into that object's local space, and a frame phase is not where a
+    /// presentation capability may be taken (port-check trigger 22).
+    pipeline_owner: Option<PipelineCell>,
     /// The node this field's node hangs under — the nearest enclosing focus
     /// parent at mount, or the root scope's backing node. Detached from in
     /// `dispose`.
@@ -443,6 +534,7 @@ impl StatefulView for EditableText {
             key_handler_registration: None,
             anchor: flui_objects::SubtreeAnchor::new(),
             inner_anchor: flui_objects::SubtreeAnchor::new(),
+            pipeline_owner: None,
             parent: None,
             controller: Rc::new(RefCell::new(self.controller.clone())),
             controller_listener_id: None,
@@ -459,6 +551,105 @@ impl StatefulView for EditableText {
 }
 
 impl EditableTextState {
+    /// Attach the pointer handlers that turn a tap into a caret and a drag
+    /// into a selection.
+    ///
+    /// Split out of `build` only for size; it runs on every rebuild and holds
+    /// no state of its own beyond the drag anchor, which lives in an `Rc` the
+    /// three closures share.
+    ///
+    /// # What is deliberately absent
+    ///
+    /// Shift-click extension, double-tap word selection and triple-tap line
+    /// selection. Each needs a click-count or a modifier this level does not
+    /// see — `Listener` delivers raw pointer events, and the tap/multi-tap
+    /// arbitration that produces those lives in `flui-interaction`'s
+    /// recognisers. `RenderEditable::word_range_at_local_offset` is already
+    /// there for the double-tap case when a recogniser is wired above this.
+    fn install_pointer_handlers(
+        &self,
+        field: crate::interaction::Listener,
+        view: &EditableText,
+    ) -> impl IntoView {
+        let enabled = view.enabled;
+        let obscuring = view.obscure_text.then_some(view.obscuring_character);
+        let owner = self.pipeline_owner.clone();
+        let anchor = self.inner_anchor.clone();
+        let controller = Rc::clone(&self.controller);
+        let focus_node = Rc::clone(&self.focus_node);
+        // Where the current drag began, in SOURCE byte space. `None` means no
+        // drag of ours is in flight, which is what makes a move that started
+        // outside this field — or one that arrived after a cancel — a no-op
+        // rather than a selection anchored at whatever was last there.
+        let drag_anchor: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+
+        let resolve = {
+            let owner = owner.clone();
+            let anchor = anchor.clone();
+            move |global: Offset<Pixels>| -> Option<usize> {
+                source_offset_at_global(owner.as_ref()?, &anchor, global, obscuring)
+            }
+        };
+
+        let down = {
+            let resolve = resolve.clone();
+            let controller = Rc::clone(&controller);
+            let focus_node = Rc::clone(&focus_node);
+            let drag_anchor = Rc::clone(&drag_anchor);
+            move |dispatch: PointerDispatch<'_>| {
+                if !enabled {
+                    return;
+                }
+                // Focus first: a tap on an unfocused field must both focus it
+                // and place the caret, and the caret would otherwise be set on
+                // a field that then rebuilds without it.
+                focus_node.request_focus();
+                let Some(offset) = resolve(dispatch.global.position()) else {
+                    return;
+                };
+                controller.borrow().set_caret_byte_offset(offset);
+                drag_anchor.set(Some(offset));
+            }
+        };
+
+        let moved = {
+            let resolve = resolve.clone();
+            let controller = Rc::clone(&controller);
+            let drag_anchor = Rc::clone(&drag_anchor);
+            move |dispatch: PointerDispatch<'_>| {
+                let Some(from) = drag_anchor.get() else {
+                    return;
+                };
+                let Some(to) = resolve(dispatch.global.position()) else {
+                    return;
+                };
+                // The anchor stays where the drag began; the caret follows the
+                // pointer, including backwards. `set_selection` is a no-op
+                // when neither moved, which a move stream reports constantly.
+                controller.borrow().set_selection(from, to);
+            }
+        };
+
+        // Up and cancel do the same thing, and cancel is not optional: it is
+        // documented as "abandon any in-flight tracking", and a drag anchor
+        // left set after one makes the NEXT move — which may belong to another
+        // gesture entirely — extend a selection the user abandoned.
+        let release = {
+            let drag_anchor = Rc::clone(&drag_anchor);
+            move |_: PointerDispatch<'_>| drag_anchor.set(None)
+        };
+        let cancel = {
+            let drag_anchor = Rc::clone(&drag_anchor);
+            move |_: PointerDispatch<'_>| drag_anchor.set(None)
+        };
+
+        field
+            .on_pointer_down(down)
+            .on_pointer_move(moved)
+            .on_pointer_up(release)
+            .on_pointer_cancel(cancel)
+    }
+
     fn manager(&self) -> &Rc<FocusManager> {
         self.focus_manager.as_ref().expect(
             "BUG: EditableText lifecycle used before init_state installed its focus manager",
@@ -533,6 +724,7 @@ impl ViewState<EditableText> for EditableTextState {
         let ime_handle_for_focus = self.ime_handle.clone();
         let post_frame_handle_for_focus = self.local_post_frame_handle.clone();
         let pipeline_owner_for_focus = ctx.pipeline_owner();
+        self.pipeline_owner.clone_from(&pipeline_owner_for_focus);
         let inner_anchor_for_focus = self.inner_anchor.clone();
         let controller_for_ime = Rc::clone(&self.controller);
         let ime_token_for_focus = Rc::clone(&self.ime_token);
@@ -747,18 +939,25 @@ impl ViewState<EditableText> for EditableTextState {
         };
         let inner_anchor = self.inner_anchor.clone();
 
-        crate::navigator::AnchoredBox::new(
-            self.anchor.clone(),
-            AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
-                build_field_view(
-                    &controller.borrow(),
-                    &focus_node,
-                    enabled,
-                    &appearance,
-                    inner_anchor.clone(),
-                )
-            }),
-        )
+        // OUTSIDE the inner `AnchoredBox`, not inside it: the IME cursor-area
+        // loop reaches the editable by taking `inner_anchor`'s FIRST child,
+        // so anything inserted between the two would break that walk.
+        let field = crate::interaction::Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .child(crate::navigator::AnchoredBox::new(
+                self.anchor.clone(),
+                AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
+                    build_field_view(
+                        &controller.borrow(),
+                        &focus_node,
+                        enabled,
+                        &appearance,
+                        inner_anchor.clone(),
+                    )
+                }),
+            ));
+
+        self.install_pointer_handlers(field, view)
     }
 
     fn dispose(&mut self) {
@@ -2632,6 +2831,194 @@ mod tests {
     /// The mounted field's selection, as the render object received it.
     fn render_selection(harness: &crate::test_harness::Harness) -> Option<Range<usize>> {
         with_render_editable(harness, |editable| editable.selection().cloned()).flatten()
+    }
+
+    /// A tap places the caret where it landed.
+    ///
+    /// The x is chosen from the field's own geometry rather than guessed: the
+    /// caret rect after the tap is compared against the caret rect the same
+    /// offset produces when set programmatically, so the assertion does not
+    /// depend on this host's font metrics.
+    ///
+    /// Red-check: drop `controller.set_caret_byte_offset(offset)` from the
+    /// pointer-down handler — the caret stays at the end, where
+    /// `with_text` left it.
+    #[test]
+    fn a_tap_places_the_caret_where_it_landed() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("tapped field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+        assert_eq!(
+            controller.caret_byte_offset(),
+            11,
+            "precondition: the caret starts at the end"
+        );
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+
+        assert_eq!(
+            controller.caret_byte_offset(),
+            0,
+            "a tap at the left edge belongs before the first character"
+        );
+        assert!(!controller.has_selection(), "a tap collapses");
+    }
+
+    /// A tap on an unfocused field focuses it, so one gesture both focuses and
+    /// places the caret — the caret would otherwise be set on a field that
+    /// then rebuilds without it.
+    #[test]
+    fn a_tap_focuses_the_field() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("unfocused field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller,
+            Rc::clone(&focus_node),
+        ));
+        assert!(
+            !focus_node.has_primary_focus(),
+            "precondition: the field starts unfocused"
+        );
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+
+        assert!(focus_node.has_primary_focus());
+    }
+
+    /// A drag selects from where it started to where the pointer is, and the
+    /// caret follows the pointer rather than the lower end.
+    ///
+    /// Red-check: drop the `set_selection(from, to)` in the pointer-move
+    /// handler — the selection stays collapsed at the down position.
+    #[test]
+    fn a_drag_selects_from_its_start_to_the_pointer() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("dragged field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+        let from = controller.caret_byte_offset();
+        harness.dispatch_pointer_move(400.0, 5.0);
+
+        let selection = controller.selection();
+        assert_eq!(
+            selection.start, from,
+            "the anchor stays where the drag began"
+        );
+        assert!(
+            selection.end > from,
+            "dragging right must extend the selection, got {selection:?}"
+        );
+        assert_eq!(
+            controller.caret_byte_offset(),
+            selection.end,
+            "the caret follows the pointer, not the lower end"
+        );
+    }
+
+    /// A move with no drag in flight must not anchor a selection at whatever
+    /// offset was last there. The pointer-up clears the anchor, so a move
+    /// after it is somebody else's.
+    ///
+    /// Red-check: drop `drag_anchor.set(None)` from the pointer-up handler —
+    /// the trailing move extends a selection the user is no longer making.
+    #[test]
+    fn a_move_after_the_pointer_is_up_selects_nothing() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("released field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+        harness.dispatch_pointer_move(400.0, 5.0);
+        assert!(
+            controller.has_selection(),
+            "precondition: the drag made a selection"
+        );
+        harness.dispatch_pointer_up(400.0, 5.0);
+        let after_release = controller.selection();
+
+        // BACK to where the drag began, not to another point past the text:
+        // the first draft moved to x=200, which clamps to the same end offset
+        // as x=400, so the assertion held whether or not the anchor was
+        // cleared. Returning to the down position is the one move whose
+        // effect — collapsing the selection — is unmistakable.
+        harness.dispatch_pointer_move(1.0, 5.0);
+
+        assert_eq!(
+            controller.selection(),
+            after_release,
+            "a move after release must change nothing; leaving the drag anchor \
+             set would collapse this selection back to its start"
+        );
+        assert!(
+            !after_release.is_empty(),
+            "the fixture must have selected something"
+        );
+    }
+
+    /// A cancelled gesture abandons its drag, so the NEXT move — which may
+    /// belong to another gesture entirely — does not extend a selection the
+    /// user gave up on.
+    ///
+    /// `pointer_cancel` is documented as "abandon any in-flight tracking";
+    /// handling only `pointer_up` leaves the anchor set on the one path where
+    /// no up ever arrives.
+    ///
+    /// Red-check: drop the `on_pointer_cancel` handler — the trailing move
+    /// collapses the selection back to the drag's start.
+    #[test]
+    fn a_cancelled_gesture_abandons_its_drag() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("cancelled field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+        harness.dispatch_pointer_move(400.0, 5.0);
+        let at_cancel = controller.selection();
+        assert!(
+            !at_cancel.is_empty(),
+            "precondition: the drag selected something"
+        );
+
+        harness.dispatch_pointer_cancel();
+        harness.dispatch_pointer_move(1.0, 5.0);
+
+        assert_eq!(
+            controller.selection(),
+            at_cancel,
+            "a move after a cancel must change nothing"
+        );
+    }
+
+    /// A disabled field ignores the pointer entirely — no caret, no focus.
+    #[test]
+    fn a_disabled_field_ignores_a_tap() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("disabled field");
+        let harness = crate::test_harness::mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
+        );
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+
+        assert_eq!(
+            controller.caret_byte_offset(),
+            11,
+            "the caret must not move on a disabled field"
+        );
+        assert!(!focus_node.has_primary_focus());
     }
 
     /// The controller's selection reaches the render object.

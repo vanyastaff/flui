@@ -19,7 +19,8 @@ use std::time::Duration;
 use flui_foundation::ElementId;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
-    PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    make_up_event_for_id,
 };
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
@@ -254,6 +255,15 @@ impl Harness {
             Offset::new(px(x), px(y)),
             PointerType::Mouse,
         );
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+    }
+
+    /// Cancel the in-flight contact — the platform withdrawing a gesture
+    /// (a system gesture taking over, a window losing the pointer). Carries no
+    /// position, matching `make_cancel_event_for_id`.
+    pub(crate) fn dispatch_pointer_cancel(&self) {
+        let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
