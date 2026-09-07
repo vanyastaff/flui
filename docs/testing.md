@@ -57,8 +57,8 @@ It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
 `time not implemented on this platform` the moment it runs. That was the state of the workspace
 until issue #985.
 
-`just wasm-test` (CI: the last steps of the `wasm-check` job) hosts `crates/flui-foundation/tests/wasm32.rs`
-on node through `wasm-bindgen-test-runner`. Two things about it are deliberate:
+`just wasm-test` (CI: the last steps of the `wasm-check` job) discovers every `crates/*/tests/wasm32.rs`
+— one today, flui-foundation's — and hosts them on node through `wasm-bindgen-test-runner`. Two things about it are deliberate:
 
 - **What belongs in that file** is behaviour that *differs* on wasm32, or a native-target
   substitution whose whole purpose is keeping wasm32 working. A test that would pass identically on
@@ -77,11 +77,13 @@ because a list is how the next suite gets silently never run — the same defect
 guards it asserts exist for that reason: a glob matching nothing never runs the loop body, and a
 runner finding no tests still exits 0.
 
-Still compile-only, and narrowed rather than dropped: `ExecutionServices`' own
-`#[cfg(target_arch = "wasm32")]` branches are `pub(crate)`, so only a unit test reaches them, and
-`flui-app`'s **lib-test** target does not build for wasm32 (14 errors, all test code reaching
-`cfg(not(wasm32))`-gated APIs). Its *integration* test target does build, which is why
-`crates/flui-app/tests/wasm32.rs` covers the public execution seam an embedder actually touches.
+Still compile-only, with the reason rather than just the fact. `ExecutionServices`'
+`#[cfg(target_arch = "wasm32")]` branches (`Backend::Sequential`: compute inline, IO through
+`spawn_local`) sit behind a `pub(crate)` type, so only a **unit** test reaches them — and
+`flui-app`'s lib-test target does not build for wasm32 (14 errors across 5 modules, all of it test
+code reaching `cfg(not(wasm32))`-gated APIs). An *integration* test there does build, but the only
+execution API it can reach is `DeterministicExecutors`, whose FIFO behaviour is target-independent
+— it would pass identically on native and prove nothing, which is the admission rule above.
 `flui-platform`'s web backend remains entirely compile-only. See #985.
 
 ## Quality Gates

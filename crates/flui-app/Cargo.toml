@@ -11,14 +11,6 @@ description = "Application framework for FLUI - Flutter-inspired UI"
 [lib]
 crate-type = ["rlib"]
 
-# Executing wasm32 tests — see crates/flui-app/tests/wasm32.rs and issue #985.
-# Pinned to the release that pairs with the locked wasm-bindgen: the unpinned
-# "0.3" resolves to one requiring a newer wasm-bindgen and would bump the
-# workspace lock as a side effect of adding a dev-dependency. flui-foundation
-# carries the same pin and the same reason.
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "=0.3.77"
-
 [features]
 default = ["desktop"]
 

@@ -142,7 +142,15 @@ wasm-test:
         fi
         echo "$out"
         passed=$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)
-        total=$((total + ${passed:-0}))
+        # Per suite, not only in aggregate. A NEW tests/wasm32.rs that compiles
+        # to zero tests contributes 0, and a healthy sibling keeps the total
+        # non-zero -- so exactly the suite someone just added is the one that
+        # can be silently inert. Reject it where it happens.
+        if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
+            echo "wasm-test: $name/tests/wasm32.rs executed no assertions -- inert" >&2
+            exit 1
+        fi
+        total=$((total + passed))
     done
     # Two ways this goes quietly inert, and both look like success: a runner
     # that finds no tests still exits 0 printing "0 passed", and a `for` over a
