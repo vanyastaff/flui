@@ -139,6 +139,44 @@ pub struct TextEditingController {
     notifier: ChangeNotifier,
 }
 
+impl TextEditingController {
+    /// Whether `self` and `other` are clones of the SAME controller.
+    ///
+    /// Identity, not value: two controllers holding the same text are
+    /// different controllers, and a caller swapping one for another expects
+    /// the swap to be noticed even when the text happens to match. Clones
+    /// share the buffer, so `Clone` preserves identity — which is what makes
+    /// this the right question for "did the parent hand me a different
+    /// controller?".
+    ///
+    /// Deliberately a named method rather than `PartialEq`: `==` on a value
+    /// type reads as value equality, and answering `false` for two controllers
+    /// with identical text under that spelling would be a trap. The reference
+    /// compares Dart object identity for the same purpose
+    /// (`text_field.dart`'s `didUpdateWidget`).
+    #[must_use]
+    pub fn is_same_controller(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    /// How many change listeners are registered.
+    ///
+    /// Crate-internal, and it exists for one reason: a test that claims a
+    /// mounted field registers its listener exactly once, and moves it rather
+    /// than duplicating it on a controller swap, has to be able to SEE that.
+    /// Asserting the visible text instead would pass just as well against a
+    /// field that had accumulated a listener per rebuild.
+    ///
+    /// `cfg(test)`, because that is the whole of its purpose: a shipped build
+    /// has no caller, and leaving it compiled would be a public-ish accessor
+    /// existing for a reason the code does not show.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn listener_count(&self) -> usize {
+        self.notifier.len()
+    }
+}
+
 impl std::fmt::Debug for TextEditingController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);

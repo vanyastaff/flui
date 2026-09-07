@@ -53,21 +53,22 @@
 //!   because both are computed from the one resolved value, never read
 //!   from two different fields independently.
 //!
-//! # Controller identity — swapping the controller on a live field is unsupported
+//! # Controller identity — a swap retargets BOTH halves, or neither
 //!
-//! `MaterialTextFieldState` (this widget) and `EditableTextState` (the interior)
-//! each pin their *own* clone of the controller at `create_state` time and
-//! read `self.controller` in `build`, never `view.controller`. A parent that
+//! `MaterialTextFieldState` (this widget) and `EditableTextState` (the
+//! interior) each hold their own view of the controller, and a parent that
 //! swaps in a different [`TextEditingController`] on an already-mounted
-//! `TextField` (passing a new one through [`TextField::new`] on rebuild)
-//! does **not** retarget either half — both keep driving the ORIGINAL
-//! controller. Reading `view.controller` in just one of the two halves
-//! would be worse: it would silently split-brain the composite (this
-//! widget's own `is_empty`/`focused` tracking the new controller while
-//! `EditableText` keeps typing into the old one) instead of consistently
-//! ignoring the swap. Full re-registration on controller swap (the oracle's
-//! `didUpdateWidget`, `text_field.dart:1303-1311`) is a named deferral at
-//! both layers — see [`EditableText`]'s own module docs.
+//! `TextField` retargets both in the same `did_update_view` pass.
+//!
+//! Both, deliberately: retargeting one alone split-brains the composite —
+//! this widget's `is_empty` tracking the new controller while `EditableText`
+//! keeps typing into the old one — which is worse than ignoring the swap.
+//! That is why it WAS ignored at both layers, and why the fix had to land at
+//! both. The interior retargets everything that reaches a controller by
+//! writing one shared cell (`EditableTextState::controller`); this layer only
+//! tracks `is_empty` for the decoration's floating label, so its half is the
+//! listener plus its own clone. Mirrors the oracle's `didUpdateWidget`
+//! (`text_field.dart:1303-1311`).
 //!
 //! # Caret color and text style
 //!
@@ -292,6 +293,29 @@ impl ViewState<TextField> for MaterialTextFieldState {
     }
 
     fn did_update_view(&mut self, old_view: &TextField, new_view: &TextField) {
+        // The controller half, mirroring `EditableTextState`'s: drop the
+        // listener from the old, adopt the replacement, add it to the new.
+        // This layer only tracks `is_empty` for the decoration's floating
+        // label, so retargeting is the listener plus the pinned clone —
+        // the interior does the rest, and does it through a shared cell.
+        if !self.controller.is_same_controller(&new_view.controller) {
+            if let Some(id) = self.controller_listener_id.take() {
+                self.controller.remove_listener(id);
+            }
+            self.controller = new_view.controller.clone();
+            if let Some(rebuild) = self.rebuild.clone() {
+                let rebuild_on_edit = rebuild.clone();
+                self.controller_listener_id =
+                    Some(self.controller.add_listener(Arc::new(move || {
+                        rebuild_on_edit.schedule(flui_view::RebuildReason::StateChange);
+                    })));
+                // `is_empty` feeds the decoration's floating label and is
+                // recomputed in `build`; the replacement has not changed since
+                // it was handed over, so nothing else would ask for that pass.
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
+            }
+        }
+
         let focus_node_changed = match (
             old_view.external_focus_node.as_ref(),
             new_view.external_focus_node.as_ref(),
@@ -335,13 +359,12 @@ impl ViewState<TextField> for MaterialTextFieldState {
             colors.primary
         };
 
-        // `self.controller`, not `view.controller`: `EditableTextState`
-        // pins its own clone at `create_state` and never re-reads `view` for
-        // it (see the module docs' "Controller identity" section) — reading
-        // `view.controller` here instead would let a parent-driven swap
-        // split-brain the two halves of this composite (this field's own
-        // `is_empty`/`focused` tracking the NEW controller while the actual
-        // `EditableText` interior keeps typing into the OLD one).
+        // `self.controller`, which `did_update_view` keeps pointed at the
+        // current one. Reading `view.controller` directly here would be
+        // correct too, now that both halves retarget — but it would take the
+        // listener registration out of step with the value this reads, and
+        // one place deciding "which controller is mine" is what keeps the
+        // two halves from disagreeing (see the module docs).
         let is_empty = self.controller.text().is_empty();
         let focused = self.focus_node.has_focus();
 
