@@ -145,11 +145,29 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 
 **Read the reference for *what* and *why*, then design in Rust from that understanding — do not transcribe.** What is owed to the reference is its observable behavior (output, edge cases, ordering) as a floor; nothing is owed to Dart's structure, naming, file layout, or 2015-era design constraints (single isolate, nullable references, exceptions, string-keyed aspects). Confirm the match — or the documented improvement — before reporting done; see [Definition of Done](#definition-of-done-anti-cheating).
 
-**Both references are gitignored local clones, so either can be absent — check before citing one.** `ls .flutter` costs nothing and a missing reference has already produced hollow "verified against Flutter" claims here. Restore `.flutter/` with a sparse shallow clone (~62 MB):
+**Both references are gitignored local clones, so either can be absent — check before citing one.** `ls .flutter` costs nothing and a missing reference has already produced hollow "verified against Flutter" claims here.
+
+**And a present reference is not automatically the right one.** It has to sit at the pinned tag `3.44.0`, which is what every citation in this repository is written against. A clone of the default branch reads as present, answers every `grep`, and gives the *default-branch tip* — a different framework by hundreds of commits, and one that keeps moving. It also silently disarms a gate: `parity_inventory`'s reference-gated checks (case counts, claimed-name resolution, new-upstream-file detection) skip themselves unless `git describe --tags` inside `.flutter` prints exactly the manifest's tag. Verify before citing:
 
 ```bash
-git clone --depth 1 --filter=blob:none --sparse https://github.com/flutter/flutter.git .flutter
+git -C .flutter describe --tags   # must print 3.44.0
+```
+
+This is not hypothetical: the clone here sat on the default branch until 2026-09-07, so those checks had never run, and reading `align_test.dart` from it gave 7 cases where the pinned tag has 6 — which produced a confident and wrong "the manifest is stale" claim.
+
+Restore `.flutter/` with a sparse shallow clone **at the tag** (~62 MB):
+
+```bash
+git clone --depth 1 --branch 3.44.0 --filter=blob:none --sparse \
+    https://github.com/flutter/flutter.git .flutter
 cd .flutter && git sparse-checkout set packages/flutter/lib packages/flutter/test
+```
+
+An existing default-branch clone is repaired in place, without re-downloading:
+
+```bash
+git -C .flutter fetch --depth 1 origin tag 3.44.0
+git -C .flutter checkout --detach 3.44.0
 ```
 
 `.gpui/` is the same kind of local clone (from the Zed repository) and is consulted far less often; restore it only when a task actually calls for it.
