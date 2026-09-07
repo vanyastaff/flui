@@ -182,7 +182,11 @@ pub struct EditableText {
     /// [`TextSpan::with_style`]. `None` renders with the span's own default.
     pub(super) text_style: Option<TextStyle>,
     /// Replace every character with [`obscuring_character`](Self::obscuring_character)
-    /// when painting — a password field.
+    /// before the render view is built — a password field.
+    ///
+    /// "Before the render view", not "when painting": the substitution is
+    /// upstream of the render object, so it governs semantics and diagnostics
+    /// as much as pixels. That scope IS the feature — see below.
     ///
     /// The substitution happens where the controller's text becomes the
     /// render view's, so nothing below this widget ever receives the real
@@ -226,8 +230,13 @@ impl EditableText {
         self
     }
 
-    /// Paint every character as [`obscuring_character`](Self::obscuring_character)
-    /// — a password field (default `false`).
+    /// Replace every character with
+    /// [`obscuring_character`](Self::obscuring_character) before the render
+    /// view is built — a password field (default `false`).
+    ///
+    /// Not only paint: the render object never receives the real characters,
+    /// so its diagnostics and anything derived from its text carry the mask
+    /// too. See the [`obscure_text`](Self::obscure_text) field's doc.
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;

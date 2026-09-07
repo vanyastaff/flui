@@ -148,8 +148,9 @@ pub struct TextField {
 }
 
 impl TextField {
-    /// Paint every character as a bullet — a password field (default
-    /// `false`).
+    /// Show every character as a bullet — a password field (default
+    /// `false`). Not only pixels: the substitution is upstream of the render
+    /// object, so its diagnostics carry the mask too.
     ///
     /// Forwards to [`EditableText::obscure_text`], where the substitution
     /// happens at the point the controller's text becomes the render view's,

@@ -101,9 +101,10 @@ impl TextField {
         self
     }
 
-    /// Paint every character as a bullet — a password field (default
+    /// Show every character as a bullet — a password field (default
     /// `false`). Forwards to [`EditableText::obscure_text`], where the
-    /// substitution happens before the render object sees the text.
+    /// substitution happens before the render object sees the text, so it
+    /// covers diagnostics as well as pixels.
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
