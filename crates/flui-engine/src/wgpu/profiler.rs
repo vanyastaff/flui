@@ -479,9 +479,9 @@ mod gpu_live_tests {
             // measured nothing. `acquire_profiler_test_device` answers `None`
             // only for adapter/device acquisition — the capability question is
             // `has_inside_encoders` below, and stays a soft skip.
-            super::test_support::resolve_unavailable_gpu(
+            crate::wgpu::test_support::resolve_unavailable_gpu(
                 "profiler test device acquisition returned None",
-                super::test_support::require_gpu(),
+                crate::wgpu::test_support::require_gpu(),
             );
             return;
         };
