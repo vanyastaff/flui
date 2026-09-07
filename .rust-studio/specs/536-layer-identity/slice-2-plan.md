@@ -48,10 +48,13 @@ pointer-identical*. **It is wrong, and it fails on this issue's own acceptance
 criterion #1** ("animated opacity ticks update alpha without repainting the
 child subtree").
 
-`RenderOpacity` wrapping a repaint-boundary child: changing the alpha marks
-the opacity node needs-paint, but the child is a boundary and is GRAFTED, so
-its picture comes back as the same `Arc`. Only the `OpacityLayer`'s own alpha
-differs. Probed on a real two-frame run:
+Take `RenderOpacity` with a repaint-boundary child. Changing the alpha calls
+`mark_needs_paint` on the opacity node, so that node repaints — but the child
+is its own boundary, so it is not repainted at all: `graft` replays its
+captured layers, and the `DisplayList` inside the replayed `PictureLayer` is
+the same allocation, so `Arc::ptr_eq` holds. The only field that differs
+anywhere in the two trees is the `OpacityLayer`'s alpha. Probed on a real
+two-frame run:
 
 ```text
 picture Arc  frame 1 = 137511296843184
@@ -74,8 +77,9 @@ whatever animates through it, and that failure is invisible to any test that
 does not animate that specific property.
 
 This also settles a question 2b would otherwise have to revisit: the same
-per-layer payload comparison is what tells a MOVED boundary from an unchanged
-one, since an `OffsetLayer`'s offset is exactly the field that differs.
+per-layer payload comparison is what distinguishes a boundary that has moved
+from one that has not, since an `OffsetLayer`'s offset is exactly the field
+that differs there.
 
 ### 2b — bounds for a changed boundary
 
