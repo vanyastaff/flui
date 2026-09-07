@@ -72,20 +72,35 @@ def main() -> int:
             if len(hits) > 1:
                 counts["ambiguous"] += 1
                 continue
+            # A BARE filename ("runner.rs") that happens to match exactly one
+            # file is not a confident resolution: the file the author meant may
+            # simply be gone, leaving an unrelated same-named file as the only
+            # survivor. That is not hypothetical -- ADR-0039's `runner.rs:2290`
+            # means flui-app's runner, which was split into a `runner/`
+            # directory; the only remaining `runner.rs` belongs to flui-cli, so
+            # the line check runs against a file the record never referred to.
+            # The verdict lands stale either way, but for the wrong reason, and
+            # a reader deserves to know which.
+            bare = "/" not in path
             n = len(( ROOT / hits[0]).read_text(encoding="utf-8", errors="replace").splitlines())
+            note = " (bare name -- may not be the file meant)" if bare else ""
             if max_line(spec) > n:
                 counts["out_of_range"] += 1
+                counts["out_of_range_bare"] += 1 if bare else 0
                 per_adr[adr.name] += 1
-                stale.append(f"{adr.name}: `{path}:{spec}` -- file has {n} lines")
+                stale.append(f"{adr.name}: `{path}:{spec}` -- file has {n} lines{note}")
             else:
                 counts["in_range"] += 1
+                counts["in_range_bare"] += 1 if bare else 0
 
     total = counts["total"]
     broken = counts["path_gone"] + counts["out_of_range"]
     print(f"adr-citations: {total} line-number citations across docs/adr/")
     print(f"  provably stale : {broken}"
-          f"  ({counts['path_gone']} path gone, {counts['out_of_range']} line past EOF)")
-    print(f"  not disproved  : {counts['in_range']}  (in range -- NOT the same as correct)")
+          f"  ({counts['path_gone']} path gone, {counts['out_of_range']} line past EOF"
+          f" -- {counts['out_of_range_bare']} of those from a bare filename)")
+    print(f"  not disproved  : {counts['in_range']}  (in range -- NOT the same as correct;"
+          f" {counts['in_range_bare']} resolved from a bare filename)")
     print(f"  unresolvable   : {counts['ambiguous']}  (path suffix matches several files)")
     if total:
         print(f"  lower-bound rot: {100 * broken / total:.1f}%")
