@@ -1213,11 +1213,43 @@ pub(super) fn dispatch_platform_realm(
         // installing a second realm) — deferred above precisely because
         // `dispatched_realm_id` was `Some` for the whole task, and safe to
         // apply now that it is cleared.
-        state.drain_pending_realm_mutations()
+        let removed = state.drain_pending_realm_mutations();
+        // A realm that leaves the map HERE left it after the exit-policy hook
+        // had already been consulted and answered "don't exit".
+        //
+        // That is reachable, and was a tracked gap: a window closed
+        // REENTRANTLY from inside a dispatched callback requests its own
+        // realm's uninstall, which — being a same-realm dispatch — only
+        // enqueues. `window.close()`'s `notify_closed` then consults the hook
+        // while the registry is still non-empty, gets a veto, and returns;
+        // the uninstall applies moments later, right above, with nothing left
+        // to re-ask. The exit was missed, not merely delayed.
+        //
+        // So re-ask, through the platform's own coalesced owner-thread
+        // request rather than any new machinery. Its contract already states
+        // that a spurious fire is a no-op — windows still open, or a hook
+        // still vetoing, decide nothing — which is what makes it safe to arm
+        // on every applied mutation instead of trying to detect the one shape
+        // that needs it. Cloned out here and fired below, outside this
+        // borrow: the hook borrows `APP_RUNTIME` itself.
+        #[cfg(not(target_arch = "wasm32"))]
+        let reevaluate_exit = (!removed.is_empty())
+            .then(|| state.exit_policy_reevaluation_notifier())
+            .flatten();
+        #[cfg(target_arch = "wasm32")]
+        let reevaluate_exit: Option<std::sync::Arc<dyn Fn() + Send + Sync>> = None;
+        (removed, reevaluate_exit)
     });
+    let (removed, reevaluate_exit) = removed;
     // Destructors may re-enter platform/framework code — drop only after the
     // TLS borrow above has released.
     drop(removed);
+    // Fired after the borrow AND after those destructors: the hook this wakes
+    // borrows `APP_RUNTIME`, and a realm dropped by `removed` must be gone
+    // before the policy is asked whether anything is left.
+    if let Some(reevaluate) = reevaluate_exit {
+        reevaluate();
+    }
     // Applies any `open_secondary_window` Pending-arm completion this
     // realm's own task resolved (see `drain_pending_secondary_window_
     // completions`'s own doc for why this must run only now, after the
@@ -1824,6 +1856,23 @@ mod realm_dispatch_tests {
             quit_calls.load(std::sync::atomic::Ordering::SeqCst),
             0,
             "a running keep-alive service must veto exit at the last window's close"
+        );
+
+        // Consume the request the last window's close already parked. Closing
+        // it removed the realm, and `dispatch_platform_realm`'s tail asks the
+        // platform to re-consult whenever a deferred realm-map mutation
+        // applies — correctly, and the answer here is the veto just asserted.
+        // Draining it now is what lets the wait below observe the SERVICE's
+        // own request rather than this one: `requested()` is a boolean and
+        // cannot tell two requests apart.
+        assert!(
+            !reevaluation.drive(),
+            "the close's own re-ask must still be vetoed: the keep-alive \
+             service is running"
+        );
+        assert!(
+            !reevaluation.requested(),
+            "and it must be consumed, so the wait below cannot pass on it"
         );
 
         // The service completes on its worker thread; its completion must
@@ -3507,6 +3556,27 @@ mod realm_dispatch_tests {
         Arc<std::sync::atomic::AtomicUsize>,
         OwnerHostClearGuard,
     ) {
+        let (dispatcher, window, quit_calls, guard, _reevaluation) =
+            install_realm_a_with_exit_policy_quit_counter_and_reevaluation();
+        (dispatcher, window, quit_calls, guard)
+    }
+
+    /// [`install_realm_a_with_exit_policy_and_quit_counter`] plus the parked
+    /// re-evaluation handle.
+    ///
+    /// The headless mock has no event loop, so a
+    /// `Platform::request_exit_policy_reevaluation` is PARKED and its
+    /// owner-thread half runs only when a test calls
+    /// `HeadlessExitReevaluation::drive`. A test asserting on an exit that a
+    /// re-evaluation produces therefore needs the handle; the nine tests that
+    /// do not keep the shorter tuple.
+    fn install_realm_a_with_exit_policy_quit_counter_and_reevaluation() -> (
+        RealmDispatcher,
+        std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+        Arc<std::sync::atomic::AtomicUsize>,
+        OwnerHostClearGuard,
+        flui_platform::HeadlessExitReevaluation,
+    ) {
         use std::{cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 
         type Installed = (
@@ -3515,7 +3585,9 @@ mod realm_dispatch_tests {
         );
 
         let clear_guard = OwnerHostClearGuard::arm();
-        let platform = flui_platform::headless_platform();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let reevaluation = platform.exit_reevaluation();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
         let quit_calls = Arc::new(AtomicUsize::new(0));
         let quit_calls_for_on_ready = Arc::clone(&quit_calls);
         let installed_slot: Rc<RefCell<Option<Installed>>> = Rc::new(RefCell::new(None));
@@ -3553,7 +3625,13 @@ mod realm_dispatch_tests {
             .borrow_mut()
             .take()
             .expect("set inside on_ready above");
-        (dispatcher_a, window_a, quit_calls, clear_guard)
+        (
+            dispatcher_a,
+            window_a,
+            quit_calls,
+            clear_guard,
+            reevaluation,
+        )
     }
 
     /// `open_secondary_window`'s own `on_close` wiring, not a test manually
@@ -4258,31 +4336,35 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
-    /// KNOWN, TRACKED GAP — not fixed by this slice (see
-    /// `app-runtime-composition-host`'s own residual note in
-    /// `docs/runtime-contract.toml`). Calling the platform-level
-    /// `window.close()` REENTRANTLY, from INSIDE a dispatched realm callback
-    /// (as opposed to the ordinary path — a close arriving from OUTSIDE any
-    /// active dispatch), makes the exit-policy hook consult a registry that
-    /// has not actually emptied yet: `close_this_window`'s own
-    /// `RealmTask::ClosePresentation` request (fired by `window_a`'s own
-    /// registered `on_close`) is a SAME-REALM reentrant dispatch, which only
-    /// enqueues onto the already-checked-out realm's queue rather than
-    /// running synchronously — the actual uninstall only applies at the
-    /// OUTER dispatch's own tail, strictly AFTER `window.close()`'s own
-    /// `notify_closed` (and the hook it consulted) has already returned
-    /// "don't exit". Nothing re-checks once the deferred uninstall finally
-    /// applies, so the exit is missed, not merely delivered late. This test
-    /// PINS the CURRENT (gap) behavior — it needs rewriting, not deleting,
-    /// the day this is fixed (tracked follow-up: re-consult the hook once a
-    /// deferred realm-map mutation actually applies, e.g. at each
-    /// dispatch's own tail).
+    /// A window closed REENTRANTLY, from inside a dispatched realm callback,
+    /// still exits the app.
+    ///
+    /// This was a tracked gap and this test pinned it. `close_this_window`'s
+    /// `RealmTask::ClosePresentation` is a SAME-REALM reentrant dispatch, so
+    /// it only enqueues onto the already-checked-out realm's queue; the
+    /// uninstall applies at the OUTER dispatch's tail, strictly after
+    /// `window.close()`'s own `notify_closed` — and the exit-policy hook it
+    /// consulted — has already returned "don't exit". Nothing re-checked
+    /// afterwards, so the exit was missed rather than delayed.
+    ///
+    /// The fix re-asks: `dispatch_platform_realm`'s tail requests a
+    /// re-evaluation whenever a deferred realm-map mutation actually removed
+    /// something, through the platform's own coalesced owner-thread seam
+    /// (the same one a keep-alive service's completion uses). A spurious
+    /// request is a no-op by that seam's contract, so it is armed on every
+    /// applied mutation rather than on a detected shape.
+    ///
+    /// The headless mock has no event loop, so the request is PARKED and its
+    /// owner-thread half runs on `drive()`. This asserts both halves: that a
+    /// request was made at all, and that driving it produces the quit. The
+    /// first is what actually pins the fix — without the tail change nothing
+    /// is parked, and `drive()` returns `false` with nothing to run.
     #[test]
-    fn closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_exit_today() {
+    fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
         use std::sync::atomic::Ordering;
 
-        let (dispatcher, window_a, quit_calls, _clear_guard) =
-            install_realm_a_with_exit_policy_and_quit_counter();
+        let (dispatcher, window_a, quit_calls, _clear_guard, reevaluation) =
+            install_realm_a_with_exit_policy_quit_counter_and_reevaluation();
 
         dispatch_platform_realm(
             dispatcher,
@@ -4306,12 +4388,24 @@ mod realm_dispatch_tests {
         assert_eq!(
             quit_calls.load(Ordering::SeqCst),
             0,
-            "KNOWN GAP: the exit-policy hook, consulted from inside window.close()'s own \
-             notify_closed (itself called from a nested, same-realm dispatch), still sees the \
-             registry as non-empty -- the uninstall it requested is only queued, applied at the \
-             OUTER dispatch's own tail -- so it vetoes an exit that is, moments later, actually \
-             correct. Nothing re-checks afterward. Fix tracked, not silently accepted as \
-             intended behavior."
+            "the hook consulted mid-dispatch still saw a non-empty registry and vetoed, which \
+             is correct at that moment -- the exit cannot have happened yet"
+        );
+        assert!(
+            reevaluation.requested(),
+            "the tail must have asked the platform to consult the exit policy again once the \
+             deferred uninstall actually applied -- this is the assertion the fix adds, and \
+             without it nothing is parked to drive"
+        );
+
+        assert!(
+            reevaluation.drive(),
+            "driving the parked request must reach the hook: no windows remain"
+        );
+        assert_eq!(
+            quit_calls.load(Ordering::SeqCst),
+            1,
+            "and the hook, asked against the now-empty registry, must exit"
         );
 
         teardown_platform_realm();

@@ -1086,6 +1086,17 @@ impl ServiceRegistry {
         *self.exit_notifier.lock() = Some(notifier);
     }
 
+    /// A clone of the installed notifier, for a caller that has its own
+    /// reason to ask the platform to re-consult the exit policy.
+    ///
+    /// Cloned out rather than invoked here, because every caller must fire it
+    /// with no lock and no `APP_RUNTIME` borrow held: the hook it triggers
+    /// borrows `APP_RUNTIME` itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn exit_notifier(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.exit_notifier.lock().clone()
+    }
+
     /// Start `definition`'s future on the IO lane and take ownership of
     /// its lifetime. The service's completion travels on its own dedicated
     /// capacity-one channel — never a shared queue — so the staged

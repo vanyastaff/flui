@@ -912,6 +912,19 @@ impl AppRuntime {
         self.service_registry.set_exit_notifier(notifier);
     }
 
+    /// The installed exit-policy re-evaluation notifier, if any.
+    ///
+    /// Installed for the keep-alive-service case, but the mechanism is not
+    /// specific to it: it is the platform's coalesced, owner-thread request
+    /// to consult the exit-policy hook again, and by its own contract a
+    /// spurious fire is a no-op. Any caller that changes the realm map at a
+    /// moment the hook cannot observe needs it — see
+    /// `dispatch_platform_realm`'s tail.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn exit_policy_reevaluation_notifier(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.service_registry.exit_notifier()
+    }
+
     /// Reopen service admission for a loop that is (re)installing a realm
     /// — the registry counterpart of the `execution` slot's second-loop
     /// reset. Running services are untouched: a mid-loop reinstall
