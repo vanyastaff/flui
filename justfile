@@ -121,49 +121,68 @@ wasm-test:
     # things that say WHY -- are captured and then thrown away. Branch on the
     # command so the output is printed either way. `--locked` matches CI and
     # keeps a local run from quietly re-resolving Cargo.lock.
-    # DISCOVER the suites rather than list them. Naming crates here means the
-    # next one to grow a tests/wasm32.rs is silently never run -- which is the
-    # defect this whole recipe exists to fix, reintroduced one level up.
+    # DISCOVER the participating crates rather than list them. Naming them
+    # here means the next crate to add wasm tests is silently never run --
+    # the defect this whole recipe exists to fix, one level up.
+    #
+    # The opt-in signal is the crate's own manifest: a wasm32 dev-dependency on
+    # wasm-bindgen-test. That is greppable, it is where a contributor already
+    # has to declare intent, and it cannot drift from the code the way a list
+    # here would.
+    #
+    # Both target kinds run, because which one is possible depends on
+    # visibility: an integration test (tests/wasm32.rs) sees only the public
+    # API, while a `pub(crate)` seam -- flui-app's `Backend::Sequential`, for
+    # instance -- is reachable ONLY from a lib test.
     total=0
-    suites=0
+    crates=0
     for manifest in crates/*/Cargo.toml; do
-        crate=$(dirname "$manifest")
-        [ -f "$crate/tests/wasm32.rs" ] || continue
-        name=$(basename "$crate")
-        suites=$((suites + 1))
-        # `out=$(cargo test ...)` under `set -e` exits AT THE ASSIGNMENT when
-        # cargo fails, so the panic message and the runner's own diagnostics --
-        # the only things that say WHY -- are captured and then thrown away.
-        # Branch on the command so the output is printed either way. `--locked`
-        # matches CI and keeps a local run from re-resolving Cargo.lock.
-        if ! out=$(cargo test -p "$name" --locked --target wasm32-unknown-unknown --test wasm32 2>&1); then
+        grep -q 'wasm-bindgen-test' "$manifest" || continue
+        dir=$(dirname "$manifest")
+        name=$(basename "$dir")
+        crates=$((crates + 1))
+        crate_total=0
+        # Modes, not raw argv: a flat array of "--lib --test wasm32" iterates as
+        # three items and needs guards to reassemble, which is how a bug hides.
+        modes=(lib)
+        [ -f "$dir/tests/wasm32.rs" ] && modes+=(integration)
+        for mode in "${modes[@]}"; do
+            if [ "$mode" = "lib" ]; then
+                args=(--lib)
+            else
+                args=(--test wasm32)
+            fi
+            # `out=$(cargo test ...)` under `set -e` exits AT THE ASSIGNMENT
+            # when cargo fails, so the panic and the runner's own diagnostics --
+            # the only things that say WHY -- are captured and thrown away.
+            # Branch on the command so the output is printed either way.
+            if ! out=$(cargo test -p "$name" --locked --target wasm32-unknown-unknown "${args[@]}" 2>&1); then
+                echo "$out"
+                exit 1
+            fi
             echo "$out"
+            passed=$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)
+            crate_total=$((crate_total + ${passed:-0}))
+        done
+        # Per crate, not only in aggregate: a newly opted-in crate with no
+        # executing test contributes 0 while a healthy sibling keeps the total
+        # non-zero, so exactly the crate someone just added is the one that can
+        # be silently inert. Not per TARGET -- a crate legitimately has only one
+        # kind (flui-foundation has no wasm lib tests, flui-app no integration
+        # ones), and a zero there is expected rather than a defect.
+        if [ "$crate_total" -eq 0 ]; then
+            echo "wasm-test: $name opted in but executed no wasm32 assertions -- inert" >&2
             exit 1
         fi
-        echo "$out"
-        passed=$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)
-        # Per suite, not only in aggregate. A NEW tests/wasm32.rs that compiles
-        # to zero tests contributes 0, and a healthy sibling keeps the total
-        # non-zero -- so exactly the suite someone just added is the one that
-        # can be silently inert. Reject it where it happens.
-        if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
-            echo "wasm-test: $name/tests/wasm32.rs executed no assertions -- inert" >&2
-            exit 1
-        fi
-        total=$((total + passed))
+        total=$((total + crate_total))
     done
-    # Two ways this goes quietly inert, and both look like success: a runner
-    # that finds no tests still exits 0 printing "0 passed", and a `for` over a
-    # glob that matches nothing never runs its body at all. Assert both.
-    if [ "$suites" -eq 0 ]; then
-        echo "wasm-test: found no crates/*/tests/wasm32.rs -- nothing was run" >&2
+    # A `for` over a glob that matches nothing never runs its body and exits 0,
+    # which looks exactly like success.
+    if [ "$crates" -eq 0 ]; then
+        echo "wasm-test: no crate declares a wasm32 wasm-bindgen-test dev-dependency" >&2
         exit 1
     fi
-    if [ "$total" -eq 0 ]; then
-        echo "wasm-test: $suites suite(s) but 0 assertions executed -- inert" >&2
-        exit 1
-    fi
-    echo "wasm-test: $total wasm32 assertions executed across $suites suite(s)"
+    echo "wasm-test: $total wasm32 assertions executed across $crates crate(s)"
 
 # `cargo check` does not link, and on wasm32 even a link does not fail on an
 # undefined symbol (rust-lld turns it into an import) — hence the committed

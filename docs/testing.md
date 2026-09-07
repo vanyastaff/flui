@@ -57,8 +57,11 @@ It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
 `time not implemented on this platform` the moment it runs. That was the state of the workspace
 until issue #985.
 
-`just wasm-test` (CI: the last steps of the `wasm-check` job) discovers every `crates/*/tests/wasm32.rs`
-— one today, flui-foundation's — and hosts them on node through `wasm-bindgen-test-runner`. Two things about it are deliberate:
+`just wasm-test` (CI: the last steps of the `wasm-check` job) discovers the participating crates —
+those declaring a wasm32 `wasm-bindgen-test` dev-dependency — and hosts their tests on node through
+`wasm-bindgen-test-runner`. It runs **both** target kinds, because which one is possible depends on
+visibility: an integration test (`tests/wasm32.rs`) sees only the public API, while a `pub(crate)`
+seam is reachable *only* from a lib test. Two things about it are deliberate:
 
 - **What belongs in that file** is behaviour that *differs* on wasm32, or a native-target
   substitution whose whole purpose is keeping wasm32 working. A test that would pass identically on
@@ -72,19 +75,27 @@ Three versions must agree or the runner refuses to start: the locked `wasm-bindg
 and would bump the workspace lock as a side effect of adding a dev-dependency), and
 `wasm-bindgen-cli`, whose version the recipe and the CI step both read out of `Cargo.lock`.
 
-`just wasm-test` **discovers** its suites (`crates/*/tests/wasm32.rs`) rather than naming crates,
-because a list is how the next suite gets silently never run — the same defect one level up. Both
-guards it asserts exist for that reason: a glob matching nothing never runs the loop body, and a
-runner finding no tests still exits 0.
+Discovery rather than a crate list is deliberate: a list is how the next crate to add wasm tests
+gets silently never run — the same defect one level up. Its guards exist for that reason and each
+covers a distinct way this goes inert while looking like success: a glob matching nothing never runs
+the loop body; a runner finding no tests still exits 0 printing `0 passed`; and an aggregate-only
+count lets *exactly the crate someone just added* be the silent one, so the non-zero check is **per
+crate**. (Per crate, not per target — a crate legitimately has only one kind, and a zero there is
+expected.)
 
-Still compile-only, with the reason rather than just the fact. `ExecutionServices`'
-`#[cfg(target_arch = "wasm32")]` branches (`Backend::Sequential`: compute inline, IO through
-`spawn_local`) sit behind a `pub(crate)` type, so only a **unit** test reaches them — and
-`flui-app`'s lib-test target does not build for wasm32 (14 errors across 5 modules, all of it test
-code reaching `cfg(not(wasm32))`-gated APIs). An *integration* test there does build, but the only
-execution API it can reach is `DeterministicExecutors`, whose FIFO behaviour is target-independent
-— it would pass identically on native and prove nothing, which is the admission rule above.
-`flui-platform`'s web backend remains entirely compile-only. See #985.
+**A `#[test]` function does not run on wasm32.** It compiles, and `wasm-bindgen-test-runner` reports
+`no tests to run!`, because only `#[wasm_bindgen_test]` registers with the harness. That attribute is
+therefore the opt-in: adding a wasm dev-dependency to a crate does not drag its whole native suite
+onto wasm.
+
+`ExecutionServices`' `Backend::Sequential` branch — compute inline at the spawn site, IO through
+`spawn_local` — is now executed, from `crates/flui-app/src/app/execution.rs`'s
+`wasm_sequential_backend_tests`. It had to be a **lib** test: `ExecutionServices` is `pub(crate)`,
+so no integration test can reach it, and the only execution API one *can* reach there
+(`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
+
+Still compile-only: `flui-platform`'s web backend, which is wasm32-only and has no executing
+coverage at all. See #985.
 
 ## Quality Gates
 

@@ -265,9 +265,11 @@ mod tests {
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
     use super::host::APP_RUNTIME;
-    use super::realm_dispatch::{
-        RealmDispatcher, dispatch_platform_realm, install_platform_realm, teardown_platform_realm,
-    };
+    use super::realm_dispatch::{RealmDispatcher, dispatch_platform_realm, install_platform_realm};
+    // `teardown_platform_realm` is `cfg(all(not(ios), not(wasm32)))` -- neither
+    // platform runs the desktop teardown path it exercises.
+    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+    use super::realm_dispatch::teardown_platform_realm;
     use super::*;
 
     /// Trivial leaf fixture: an empty view used as the terminal node under
@@ -679,6 +681,10 @@ mod tests {
     /// not strand the loop's capability, because the loop may host a fresh
     /// realm next without ever calling `Platform::run` again (hot-restart
     /// does exactly this today, `install_platform_realm`).
+    // Exercises `teardown_platform_realm`, which is
+    // `cfg(all(not(ios), not(wasm32)))` -- neither platform runs the
+    // desktop teardown path this pins.
+    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
     #[test]
     fn owner_platform_survives_realm_teardown() {
         use flui_platform::headless_platform;

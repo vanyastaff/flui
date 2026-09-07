@@ -1068,51 +1068,63 @@ jobs:
       - name: Execute the wasm32 tests
         run: |
           set -euo pipefail
-          # DISCOVER the suites rather than list them: naming crates here means
-          # the next one to grow a tests/wasm32.rs is silently never run, which
-          # is the defect these steps exist to fix, reintroduced one level up.
+          # DISCOVER the participating crates rather than list them: naming
+          # them here means the next crate to add wasm tests is silently never
+          # run, which is the defect these steps exist to fix, one level up.
+          # The opt-in signal is the crate's own wasm32 dev-dependency on
+          # wasm-bindgen-test -- greppable, and where intent is already declared.
+          #
+          # Both target kinds run, because which is possible depends on
+          # visibility: an integration test sees only the public API, while a
+          # `pub(crate)` seam (flui-app's `Backend::Sequential`) is reachable
+          # ONLY from a lib test.
           #
           # Branch on each command rather than assigning its output directly:
-          # under `set -e` a failing `cargo test` exits AT THE ASSIGNMENT, and
-          # the captured panic and runner diagnostics -- the only things that
-          # say why -- never reach the log. A wasm failure has to arrive with
-          # its message or it is not actionable from a CI run.
+          # under `set -e` a failing `cargo test` exits AT THE ASSIGNMENT and
+          # the panic never reaches the log.
           total=0
-          suites=0
+          crates=0
           for manifest in crates/*/Cargo.toml; do
-            crate="$(dirname "$manifest")"
-            [ -f "$crate/tests/wasm32.rs" ] || continue
-            name="$(basename "$crate")"
-            suites=$((suites + 1))
-            if ! out="$(cargo test -p "$name" --locked --target wasm32-unknown-unknown --test wasm32 2>&1)"; then
+            grep -q 'wasm-bindgen-test' "$manifest" || continue
+            dir="$(dirname "$manifest")"
+            name="$(basename "$dir")"
+            crates=$((crates + 1))
+            crate_total=0
+            modes=(lib)
+            [ -f "$dir/tests/wasm32.rs" ] && modes+=(integration)
+            for mode in "${modes[@]}"; do
+              if [ "$mode" = "lib" ]; then
+                args=(--lib)
+              else
+                args=(--test wasm32)
+              fi
+              if ! out="$(cargo test -p "$name" --locked --target wasm32-unknown-unknown "${args[@]}" 2>&1)"; then
+                echo "$out"
+                echo "::error::wasm32 test run failed for $name ($mode)" >&2
+                exit 1
+              fi
               echo "$out"
-              echo "::error::wasm32 test run failed for $name" >&2
+              passed="$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)"
+              crate_total=$((crate_total + ${passed:-0}))
+            done
+            # Per crate, not only in aggregate: a newly opted-in crate with no
+            # executing test contributes 0 while a healthy sibling keeps the
+            # total non-zero, so exactly the crate someone just added is the one
+            # that can be silently inert. Not per target -- a crate legitimately
+            # has only one kind, and a zero there is expected.
+            if [ "$crate_total" -eq 0 ]; then
+              echo "::error::$name opted in but executed no wasm32 assertions -- inert" >&2
               exit 1
             fi
-            echo "$out"
-            passed="$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)"
-            # Per suite, not only in aggregate. A NEW tests/wasm32.rs compiling
-            # to zero tests contributes 0, and a healthy sibling keeps the total
-            # non-zero -- so exactly the suite someone just added is the one
-            # that can be silently inert. Reject it where it happens.
-            if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
-              echo "::error::$name/tests/wasm32.rs executed no assertions -- inert" >&2
-              exit 1
-            fi
-            total=$((total + passed))
+            total=$((total + crate_total))
           done
-          # Two ways this goes quietly inert, and both look like success: a
-          # runner that finds no tests exits 0 printing "0 passed", and a `for`
-          # over a glob matching nothing never runs its body. Assert both.
-          if [ "$suites" -eq 0 ]; then
-            echo "::error::found no crates/*/tests/wasm32.rs -- nothing was run" >&2
+          # A `for` over a glob matching nothing never runs its body and exits 0,
+          # which looks exactly like success.
+          if [ "$crates" -eq 0 ]; then
+            echo "::error::no crate declares a wasm32 wasm-bindgen-test dev-dependency" >&2
             exit 1
           fi
-          if [ "$total" -eq 0 ]; then
-            echo "::error::$suites suite(s) but 0 assertions executed -- the harness is inert" >&2
-            exit 1
-          fi
-          echo "$total wasm32 assertions executed across $suites suite(s)"
+          echo "$total wasm32 assertions executed across $crates crate(s)"
 
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.

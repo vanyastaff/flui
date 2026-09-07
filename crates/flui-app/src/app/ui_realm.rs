@@ -10178,7 +10178,14 @@ mod tests {
         /// presentation is primary.
         #[test]
         fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm() {
-            use std::time::{Duration, Instant};
+            // `web_time::Instant`, not std's: on wasm32 they are DIFFERENT
+            // types (std's panics there, so the deadline machinery uses
+            // web-time's `performance.now()`-backed one), and comparing a
+            // std instant against what `next_wake`/`next_deadline` return
+            // does not compile for that target. Identical on native, which
+            // is why this only surfaced once the lib-test target was built
+            // for wasm32.
+            use web_time::{Duration, Instant};
 
             use flui_interaction::{
                 GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
@@ -10247,7 +10254,14 @@ mod tests {
         /// aggregate must reflect the near one.
         #[test]
         fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena() {
-            use std::time::{Duration, Instant};
+            // `web_time::Instant`, not std's: on wasm32 they are DIFFERENT
+            // types (std's panics there, so the deadline machinery uses
+            // web-time's `performance.now()`-backed one), and comparing a
+            // std instant against what `next_wake`/`next_deadline` return
+            // does not compile for that target. Identical on native, which
+            // is why this only surfaced once the lib-test target was built
+            // for wasm32.
+            use web_time::{Duration, Instant};
 
             use flui_interaction::{
                 DoubleTapGestureRecognizer, GestureRecognizer, GestureSettings,
