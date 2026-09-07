@@ -13563,6 +13563,112 @@ fn harness_flex_row_rtl_lays_children_out_from_the_right() {
     );
 }
 
+/// A right-to-left horizontal `Wrap` fills each run from the right.
+///
+/// `RenderWrap` documented "no axis flipping" until this landed, so nothing in
+/// the crate set a direction on it and the whole suite passed with the flip
+/// hard-coded off. This pins the main-axis half where it is implemented.
+#[test]
+fn harness_wrap_horizontal_rtl_fills_each_run_from_the_right() {
+    let wrap = |direction| {
+        RenderTester::mount(
+            box_node(
+                RenderWrap::new()
+                    .with_direction(Axis::Horizontal)
+                    .with_text_direction(direction),
+            )
+            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("first"))
+            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("second")),
+        )
+        .with_size(Size::new(px(200.0), px(100.0)))
+        .run_layout()
+    };
+
+    let ltr = wrap(TextDirection::Ltr);
+    assert_eq!(
+        (
+            ltr.offset(ltr.id("first")).dx.get(),
+            ltr.offset(ltr.id("second")).dx.get()
+        ),
+        (0.0, 40.0),
+        "premise: left-to-right fills the run from the left in declaration order"
+    );
+
+    let rtl = wrap(TextDirection::Rtl);
+    let (first, second) = (
+        rtl.offset(rtl.id("first")).dx.get(),
+        rtl.offset(rtl.id("second")).dx.get(),
+    );
+    assert_eq!(
+        (first, second),
+        (40.0, 0.0),
+        "right-to-left fills the run from the right, so the FIRST child sits \
+         rightmost -- declaration order unchanged, the axis reversed"
+    );
+    assert!(
+        first > second,
+        "and not merely translated together: the first child must end up \
+         further right than the second"
+    );
+}
+
+/// A right-to-left VERTICAL `Wrap` flips its CROSS axis, not its main one.
+///
+/// This is the case that catches getting the axis swap backwards.
+/// `_areAxesFlipped` returns `(flip_horizontal, flip_vertical)` for a
+/// horizontal wrap and `(flip_vertical, flip_horizontal)` for a vertical one,
+/// so `Rtl` moves a vertical wrap's RUNS right-to-left while leaving its
+/// children top-to-bottom. An implementation that applied the reading
+/// direction to the main axis regardless of `direction` passes the horizontal
+/// test above and fails here.
+#[test]
+fn harness_wrap_vertical_rtl_lays_runs_out_right_to_left_not_its_children() {
+    let wrap = |direction| {
+        RenderTester::mount(
+            box_node(
+                RenderWrap::new()
+                    .with_direction(Axis::Vertical)
+                    .with_text_direction(direction),
+            )
+            // Two children of 60px in a 100px-tall wrap: the second cannot fit
+            // in the first run, so this produces TWO runs side by side --
+            // which is what makes the cross-axis order observable at all.
+            .child(box_node(RenderColoredBox::red(30.0, 60.0)).label("first"))
+            .child(box_node(RenderColoredBox::red(30.0, 60.0)).label("second")),
+        )
+        .with_size(Size::new(px(200.0), px(100.0)))
+        .run_layout()
+    };
+
+    let ltr = wrap(TextDirection::Ltr);
+    let (ltr_first, ltr_second) = (ltr.offset(ltr.id("first")), ltr.offset(ltr.id("second")));
+    assert_eq!(
+        (ltr_first.dx.get(), ltr_second.dx.get()),
+        (0.0, 30.0),
+        "premise: two runs, laid out left-to-right"
+    );
+    assert_eq!(
+        (ltr_first.dy.get(), ltr_second.dy.get()),
+        (0.0, 0.0),
+        "premise: each run starts at the top -- the MAIN axis is vertical here"
+    );
+
+    let rtl = wrap(TextDirection::Rtl);
+    let (first, second) = (rtl.offset(rtl.id("first")), rtl.offset(rtl.id("second")));
+    assert_eq!(
+        (first.dx.get(), second.dx.get()),
+        (30.0, 0.0),
+        "Rtl reverses the RUN order of a vertical wrap: the first run sits to \
+         the right of the second"
+    );
+    assert_eq!(
+        (first.dy.get(), second.dy.get()),
+        (0.0, 0.0),
+        "and leaves the main axis alone -- both runs still start at the top. \
+         An implementation that flipped the main axis instead would move these"
+    );
+}
+
 /// A right-to-left `Column` swaps which edge `CrossAxisAlignment::Start` means.
 ///
 /// The cross-axis flip is a separate predicate from the main-axis one and only

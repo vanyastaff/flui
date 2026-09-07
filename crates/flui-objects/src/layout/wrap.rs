@@ -12,14 +12,21 @@
 //! `crossAxisAlignment` places each child within its run's cross extent) — is
 //! ported 1:1 from Flutter.
 //!
-//! # RTL / vertical-direction caveat
+//! # Axis flipping
 //!
-//! FLUI has not yet plumbed `TextDirection` into layout, so
-//! `WrapAlignment::Start` / `End` and `WrapCrossAlignment::Start` / `End` are
-//! always interpreted as LTR and TTB respectively. No axis flipping.
+//! `text_direction` flips the HORIZONTAL axis and `vertical_direction` the
+//! VERTICAL one; which of those is the main axis depends on `direction`
+//! (`rendering/wrap.dart`'s `_areAxesFlipped`). So a horizontal wrap under
+//! `Rtl` fills each run from the right, while a VERTICAL wrap under `Rtl`
+//! keeps its top-to-bottom main axis and instead lays its runs out
+//! right-to-left. Both default to unflipped (`Ltr`, `Down`), which is the
+//! behaviour every caller predating this had.
 
 use flui_tree::Variable;
-use flui_types::{Axis, Offset, Pixels, Point, Rect, Size, geometry::px, painting::Clip};
+use flui_types::{
+    Axis, Offset, Pixels, Point, Rect, Size, geometry::px, layout::VerticalDirection,
+    painting::Clip, typography::TextDirection,
+};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -147,6 +154,15 @@ pub struct RenderWrap {
     run_spacing: f32,
     /// Alignment of each child within its run on the cross axis.
     cross_axis_alignment: WrapCrossAlignment,
+    /// Reading direction, which decides whether the HORIZONTAL axis is
+    /// flipped. `None` means "not provided"; the reference treats that as
+    /// `Ltr` for layout and only asserts on it when the alignment actually
+    /// depends on a direction (`wrap.dart`'s `debugCheckHasDirectionality`
+    /// path), so an absent value is a defaulted `Ltr` here rather than a
+    /// panic.
+    text_direction: Option<TextDirection>,
+    /// Whether the VERTICAL axis is flipped. `Down` is the reference default.
+    vertical_direction: VerticalDirection,
     /// Cached child count from the most recent `perform_layout` call; used by
     /// `hit_test` which executes after layout.
     child_count: usize,
@@ -173,6 +189,10 @@ impl Default for RenderWrap {
             child_count: 0,
             clip_behavior: Clip::None,
             has_visual_overflow: false,
+            // Unflipped by default, which is what every caller predating the
+            // axis-flip port observed.
+            text_direction: None,
+            vertical_direction: VerticalDirection::Down,
         }
     }
 }
@@ -254,6 +274,38 @@ impl RenderWrap {
     pub fn with_cross_axis_alignment(mut self, alignment: WrapCrossAlignment) -> Self {
         self.cross_axis_alignment = alignment;
         self
+    }
+
+    /// Builder: sets the reading direction that flips the horizontal axis.
+    #[must_use]
+    pub fn with_text_direction(mut self, text_direction: TextDirection) -> Self {
+        self.text_direction = Some(text_direction);
+        self
+    }
+
+    /// Builder: sets the vertical direction that flips the vertical axis.
+    #[must_use]
+    pub fn with_vertical_direction(mut self, vertical_direction: VerticalDirection) -> Self {
+        self.vertical_direction = vertical_direction;
+        self
+    }
+
+    /// `(flip_main, flip_cross)` for this wrap's own axes.
+    ///
+    /// Ported from `rendering/wrap.dart`'s `_areAxesFlipped`: the reading
+    /// direction decides the HORIZONTAL flip and `vertical_direction` the
+    /// VERTICAL one, and which of those lands on the main axis depends on
+    /// `direction` — so a vertical wrap's MAIN axis is flipped by
+    /// `VerticalDirection::Up` and its CROSS axis by `TextDirection::Rtl`,
+    /// the reverse of a horizontal one. Getting that swap wrong is invisible
+    /// on a horizontal wrap, which is why the tests cover both directions.
+    fn axes_flipped(&self) -> (bool, bool) {
+        let flip_horizontal = matches!(self.text_direction.unwrap_or_default(), TextDirection::Rtl);
+        let flip_vertical = matches!(self.vertical_direction, VerticalDirection::Up);
+        match self.direction {
+            Axis::Horizontal => (flip_horizontal, flip_vertical),
+            Axis::Vertical => (flip_vertical, flip_horizontal),
+        }
     }
 
     // ── Axis helpers ─────────────────────────────────────────────────────────
@@ -603,7 +655,31 @@ impl RenderBox for RenderWrap {
         let (mut cross_cursor, run_gap) =
             distribute_space(self.run_alignment, free_cross, self.run_spacing, num_runs);
 
-        for run in &runs {
+        // Flipping is purely a POSITIONING concern here. The reference also
+        // threads `flipMainAxis` through run assembly, but only to remember
+        // which child leads a run for its linked-list traversal; run
+        // MEMBERSHIP is identical either way, and this port addresses children
+        // by index, so `compute_runs` needs no flip.
+        let (flip_main, flip_cross) = self.axes_flipped();
+        let effective_cross_alignment = if flip_cross {
+            match self.cross_axis_alignment {
+                WrapCrossAlignment::Start => WrapCrossAlignment::End,
+                WrapCrossAlignment::End => WrapCrossAlignment::Start,
+                WrapCrossAlignment::Center => WrapCrossAlignment::Center,
+            }
+        } else {
+            self.cross_axis_alignment
+        };
+
+        // `flip_cross` reverses the ORDER runs are visited in, so the first run
+        // ends up at the far edge; the cursor arithmetic below is unchanged.
+        let ordered_runs: Vec<&RunMetrics> = if flip_cross {
+            runs.iter().rev().collect()
+        } else {
+            runs.iter().collect()
+        };
+
+        for run in ordered_runs {
             let free_main = (container_main - run.main_axis_extent).max(0.0);
             let (mut main_cursor, child_gap) =
                 distribute_space(self.alignment, free_main, self.spacing, run.child_count);
@@ -613,12 +689,20 @@ impl RenderBox for RenderWrap {
                 .iter()
                 .enumerate()
             {
-                let child_index = run.first_child_index + position_in_run;
+                // `flip_main` walks the run's children from the far end while
+                // the cursor still advances forward, which places the LAST
+                // child at the leading edge -- the reference's
+                // `nextChild = flipMainAxis ? childBefore : childAfter`.
+                let child_index = if flip_main {
+                    run_end - 1 - position_in_run
+                } else {
+                    run.first_child_index + position_in_run
+                };
                 let child_main = self.main_extent(child_size);
                 let child_cross = self.cross_extent(child_size);
 
                 let child_cross_offset = cross_axis_child_offset(
-                    self.cross_axis_alignment,
+                    effective_cross_alignment,
                     run.cross_axis_extent,
                     child_cross,
                 );
