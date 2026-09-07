@@ -410,10 +410,23 @@ impl RenderSliver for RenderSliverPadding {
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
     ) -> f32 {
-        // TODO(Wave 3.3+): resolve cross-axis start from `TextDirection` /
-        // `cross_axis_direction` when FLUI lands RTL sliver layout. Flutter's
-        // `RenderSliverPadding.childCrossAxisPosition` uses text direction;
-        // this LTR assumption matches today's cross-axis posture.
+        // This MATCHES the reference; there is no LTR assumption to remove.
+        //
+        // An earlier TODO here claimed `RenderSliverPadding.childCrossAxisPosition`
+        // resolves the cross-axis start from `TextDirection`. It does not:
+        // `rendering/sliver_padding.dart` returns `resolvedPadding.top` for a
+        // horizontal axis and `resolvedPadding.left` for a vertical one -- the
+        // same two expressions as below. The reference's direction handling
+        // lives entirely in `_resolvedPadding = padding.resolve(textDirection)`,
+        // which converts an `EdgeInsetsDirectional` (start/end) into an
+        // `EdgeInsets` (left/right).
+        //
+        // FLUI has no directional inset type at all -- `EdgeInsets` is
+        // `Edges<Pixels>` with `top`/`right`/`bottom`/`left`, already resolved
+        // -- so there is nothing to resolve and nothing to flip. Adding a
+        // direction branch here would INTRODUCE a divergence, not remove one.
+        // If a directional inset type ever lands, the resolution belongs at its
+        // construction site, not in this method.
         match constraints.axis() {
             Axis::Vertical => self.padding.left.get(),
             Axis::Horizontal => self.padding.top.get(),

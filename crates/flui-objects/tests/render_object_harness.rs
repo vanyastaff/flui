@@ -10987,6 +10987,82 @@ fn harness_table_border_interior_lines_sit_exactly_on_the_column_and_row_boundar
     );
 }
 
+/// A right-to-left `RenderTable` puts column 0 at the RIGHT edge, and moves
+/// its interior divider with it.
+///
+/// Two assertions, and the second is the one worth having. Cell offsets are the
+/// obvious half; the DIVIDER is where a port goes silently wrong, because the
+/// entry to drop when computing interior boundaries is the table's own left
+/// edge -- index 0 under `Ltr` and the LAST index under `Rtl`. Slicing `[1..]`
+/// unconditionally keeps drawing a line, just at x=0 (the table's edge) instead
+/// of the real boundary, and nothing about that picture looks wrong enough to
+/// notice without an assertion.
+#[test]
+fn harness_table_rtl_places_column_zero_at_the_right_and_moves_its_divider() {
+    let border = TableBorder::all(BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid));
+    let table = |direction| {
+        RenderTester::mount(
+            // Fixed(50) + Flex under a tight 200 -> widths [50, 150], which
+            // are UNEQUAL so the divider lands somewhere different in each
+            // direction (x=50 vs x=150) rather than at the midpoint either way.
+            box_node(
+                RenderTable::new(2)
+                    .with_column_widths(HashMap::from([(0, TableColumnWidth::Fixed(50.0))]))
+                    .with_border(Some(border))
+                    .with_text_direction(direction),
+            )
+            .child(box_node(RenderColoredBox::red(50.0, 10.0)).label("col0"))
+            .child(box_node(RenderColoredBox::green(150.0, 10.0)).label("col1")),
+        )
+        .with_constraints(table_tight_width_loose_height(200.0, 800.0))
+        .run_frame()
+    };
+
+    let ltr = table(TextDirection::Ltr);
+    assert_eq!(
+        (
+            ltr.offset(ltr.id("col0")).dx.get(),
+            ltr.offset(ltr.id("col1")).dx.get()
+        ),
+        (0.0, 50.0),
+        "premise: left-to-right puts column 0 at the left edge"
+    );
+    let ltr_divider = ltr
+        .display_commands()
+        .into_iter()
+        .find(|c| c.kind == DrawKind::Path)
+        .expect("an interior vertical line must be drawn");
+    assert!(
+        ltr_divider.line.contains("bounds=(50.00,"),
+        "premise: the interior divider sits at the column boundary x=50; got: {}",
+        ltr_divider.line,
+    );
+
+    let rtl = table(TextDirection::Rtl);
+    assert_eq!(
+        (
+            rtl.offset(rtl.id("col0")).dx.get(),
+            rtl.offset(rtl.id("col1")).dx.get()
+        ),
+        (150.0, 0.0),
+        "right-to-left puts column 0 at the RIGHT: it takes the rightmost 50px \
+         at x=150, and column 1's 150px fills the rest from x=0"
+    );
+    let rtl_divider = rtl
+        .display_commands()
+        .into_iter()
+        .find(|c| c.kind == DrawKind::Path)
+        .expect("an interior vertical line must be drawn");
+    assert!(
+        rtl_divider.line.contains("bounds=(150.00,"),
+        "the divider must MOVE with the columns to x=150. Slicing the column \
+         positions as `[1..]` regardless of direction draws it at x=0 -- the \
+         table's own left edge, which is not an interior boundary at all; \
+         got: {}",
+        rtl_divider.line,
+    );
+}
+
 #[test]
 fn harness_table_hit_test_per_cell_and_miss_outside_bounds() {
     let run = RenderTester::mount(
@@ -13560,6 +13636,127 @@ fn harness_flex_row_rtl_lays_children_out_from_the_right() {
         rtl_first > rtl_second,
         "and the two must not merely be translated together: the first child \
          has to end up further right than the second"
+    );
+}
+
+/// A right-to-left horizontal `Wrap` packs its run against the RIGHT edge.
+///
+/// `RenderWrap` documented "no axis flipping" until this landed, so nothing in
+/// the crate set a direction on it.
+///
+/// The children are deliberately UNEQUAL (40 then 80) and the container leaves
+/// free space. Both matter, and an earlier version of this test had neither:
+///
+/// * equal children hide a size/index mismatch — positioning child *i* while
+///   advancing the cursor by child *j*'s extent overlaps them, and two same-size
+///   children make that invisible;
+/// * with no free space, `Start` lands on the same coordinate whether or not
+///   the alignment itself is flipped, so the test cannot see that half at all.
+#[test]
+fn harness_wrap_horizontal_rtl_packs_its_run_against_the_right_edge() {
+    let wrap = |direction| {
+        RenderTester::mount(
+            box_node(
+                RenderWrap::new()
+                    .with_direction(Axis::Horizontal)
+                    .with_text_direction(direction),
+            )
+            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("narrow"))
+            .child(box_node(RenderColoredBox::red(80.0, 20.0)).label("wide")),
+        )
+        .with_size(Size::new(px(200.0), px(100.0)))
+        .run_layout()
+    };
+
+    let ltr = wrap(TextDirection::Ltr);
+    assert_eq!(
+        (
+            ltr.offset(ltr.id("narrow")).dx.get(),
+            ltr.offset(ltr.id("wide")).dx.get()
+        ),
+        (0.0, 40.0),
+        "premise: left-to-right packs against the LEFT edge in declaration \
+         order, so the 40px child sits at 0 and the 80px one directly after it"
+    );
+
+    let rtl = wrap(TextDirection::Rtl);
+    let (narrow, wide) = (
+        rtl.offset(rtl.id("narrow")).dx.get(),
+        rtl.offset(rtl.id("wide")).dx.get(),
+    );
+    assert_eq!(
+        (narrow, wide),
+        (160.0, 80.0),
+        "right-to-left packs against the RIGHT edge: the run's 120px of content \
+         starts at x=80, the FIRST child takes the rightmost 40px at x=160, and \
+         the second sits immediately left of it"
+    );
+    // The two children must ABUT, not overlap. `narrow` spans [160,200) and
+    // `wide` spans [80,160). Advancing the cursor by the wrong child's extent
+    // is exactly what produces an overlap here.
+    assert_eq!(
+        wide + 80.0,
+        narrow,
+        "the wide child's right edge must meet the narrow child's left edge -- \
+         a cursor advanced by the other child's extent overlaps them instead"
+    );
+}
+
+/// A right-to-left VERTICAL `Wrap` flips its CROSS axis, not its main one.
+///
+/// This is the case that catches getting the axis swap backwards.
+/// `_areAxesFlipped` returns `(flip_horizontal, flip_vertical)` for a
+/// horizontal wrap and `(flip_vertical, flip_horizontal)` for a vertical one,
+/// so `Rtl` moves a vertical wrap's RUNS right-to-left while leaving its
+/// children top-to-bottom. An implementation that applied the reading
+/// direction to the main axis regardless of `direction` passes the horizontal
+/// test above and fails only here.
+#[test]
+fn harness_wrap_vertical_rtl_lays_runs_out_right_to_left_not_its_children() {
+    let wrap = |direction| {
+        RenderTester::mount(
+            box_node(
+                RenderWrap::new()
+                    .with_direction(Axis::Vertical)
+                    .with_text_direction(direction),
+            )
+            // 60px tall each in a 100px-tall wrap, so the second cannot join
+            // the first's run -- that is what makes run ORDER observable. The
+            // widths differ so the run positions cannot coincide by accident.
+            .child(box_node(RenderColoredBox::red(30.0, 60.0)).label("thin"))
+            .child(box_node(RenderColoredBox::red(50.0, 60.0)).label("thick")),
+        )
+        .with_size(Size::new(px(200.0), px(100.0)))
+        .run_layout()
+    };
+
+    let ltr = wrap(TextDirection::Ltr);
+    let (ltr_thin, ltr_thick) = (ltr.offset(ltr.id("thin")), ltr.offset(ltr.id("thick")));
+    assert_eq!(
+        (ltr_thin.dx.get(), ltr_thick.dx.get()),
+        (0.0, 30.0),
+        "premise: two runs packed against the left edge, in declaration order"
+    );
+    assert_eq!(
+        (ltr_thin.dy.get(), ltr_thick.dy.get()),
+        (0.0, 0.0),
+        "premise: each run starts at the top -- the MAIN axis is vertical here"
+    );
+
+    let rtl = wrap(TextDirection::Rtl);
+    let (thin, thick) = (rtl.offset(rtl.id("thin")), rtl.offset(rtl.id("thick")));
+    assert_eq!(
+        (thin.dx.get(), thick.dx.get()),
+        (170.0, 120.0),
+        "Rtl packs the RUNS against the right edge and reverses their order: \
+         the 80px of runs starts at x=120, the FIRST run takes the rightmost \
+         30px at x=170"
+    );
+    assert_eq!(
+        (thin.dy.get(), thick.dy.get()),
+        (0.0, 0.0),
+        "and leaves the MAIN axis alone -- both runs still start at the top. \
+         An implementation that flipped the main axis instead would move these"
     );
 }
 

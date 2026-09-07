@@ -15,9 +15,9 @@
 //!   Flutter's `RenderBox?` sparse-cell support is out of scope for this
 //!   slice; the widget layer (`Table`/`TableRow`) is responsible for keeping
 //!   every row exactly `column_count` cells long.
-//! - **LTR column ordering only.** Mirrors `RenderWrap`'s and `RenderFlex`'s
-//!   documented precedent — FLUI has not yet plumbed `TextDirection` into
-//!   layout.
+//! - **Column ordering follows `text_direction`.** `Rtl` places column 0 at the
+//!   RIGHT edge, mirroring `table.dart`'s two-branch position fill. `Ltr` is
+//!   the default, so callers predating this see no change.
 //! - **`TableColumnWidth::Fraction` clamps to `0.0..=1.0`.** The oracle's
 //!   `FractionColumnWidth` does NOT clamp (`table.dart`'s
 //!   `FractionColumnWidth.minIntrinsicWidth`/`maxIntrinsicWidth` multiply the
@@ -54,6 +54,7 @@ use flui_types::{
     Offset, Pixels, Rect, Size,
     layout::{TableCellVerticalAlignment, TableColumnWidth},
     styling::{BoxDecoration, TableBorder},
+    typography::TextDirection,
 };
 
 use flui_rendering::{
@@ -118,8 +119,24 @@ pub struct RenderTable {
     /// Row top offsets, length `row_count + 1` (the last entry is the
     /// table's total content height).
     row_tops: Vec<Pixels>,
-    /// Column left offsets, length `column_count`.
+    /// Column left offsets, indexed BY COLUMN, length `column_count`.
+    ///
+    /// Ascending under `Ltr` and descending under `Rtl`, because column 0 is
+    /// the rightmost column there. Cell offsets index this directly, as the
+    /// reference's `positions` does.
     column_lefts: Vec<Pixels>,
+    /// The x of each INTERIOR vertical divider, length `column_count - 1`.
+    ///
+    /// Kept separately rather than sliced off `column_lefts` at paint time: the
+    /// entry to drop is the table's own left edge, which is index 0 under `Ltr`
+    /// and the LAST index under `Rtl`. Slicing `[1..]` unconditionally drops a
+    /// real divider and adds the table edge as a fake one under `Rtl` -- and
+    /// nothing about the resulting picture looks wrong enough to notice. The
+    /// reference solves the same problem with a separate ascending
+    /// `_columnLefts = positions.reversed` (`table.dart:1348`).
+    interior_column_lefts: Vec<Pixels>,
+    /// Reading direction; decides which edge column 0 sits against.
+    text_direction: TextDirection,
     /// Total table width (sum of resolved column widths).
     table_width: Pixels,
     /// The first row's baseline distance, if any cell in it resolved to
@@ -145,6 +162,8 @@ impl RenderTable {
             row_decorations: Vec::new(),
             row_tops: vec![Pixels::ZERO],
             column_lefts: Vec::new(),
+            interior_column_lefts: Vec::new(),
+            text_direction: TextDirection::Ltr,
             table_width: Pixels::ZERO,
             baseline_distance: None,
             irregular_grid_warned: false,
@@ -281,6 +300,25 @@ impl RenderTable {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.text_baseline = baseline;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Builder: sets the reading direction that decides column ordering.
+    #[must_use]
+    pub fn with_text_direction(mut self, text_direction: TextDirection) -> Self {
+        self.text_direction = text_direction;
+        self
+    }
+
+    /// Updates the reading direction, relaying out when it changes.
+    pub fn set_text_direction(
+        &mut self,
+        text_direction: TextDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.text_direction == text_direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.text_direction = text_direction;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
@@ -620,6 +658,7 @@ impl RenderBox for RenderTable {
         if column_count == 0 || child_count == 0 {
             self.row_tops = vec![Pixels::ZERO];
             self.column_lefts = Vec::new();
+            self.interior_column_lefts = Vec::new();
             self.table_width = Pixels::ZERO;
             self.baseline_distance = None;
             return constraints.constrain(Size::ZERO);
@@ -656,12 +695,31 @@ impl RenderBox for RenderTable {
             },
         );
 
-        // Column positions (LTR only — see module doc).
+        // Column positions, indexed BY COLUMN. Ported from `table.dart`'s two
+        // branches: `Ltr` fills forward from the left edge, `Rtl` fills
+        // BACKWARD from the right, so column 0 ends up rightmost.
         let mut column_lefts = vec![Pixels::ZERO; column_count];
-        for x in 1..column_count {
-            column_lefts[x] = column_lefts[x - 1] + widths[x - 1];
-        }
-        let table_width = column_lefts[column_count - 1] + widths[column_count - 1];
+        let table_width = match self.text_direction {
+            TextDirection::Ltr => {
+                for x in 1..column_count {
+                    column_lefts[x] = column_lefts[x - 1] + widths[x - 1];
+                }
+                column_lefts[column_count - 1] + widths[column_count - 1]
+            }
+            TextDirection::Rtl => {
+                for x in (0..column_count - 1).rev() {
+                    column_lefts[x] = column_lefts[x + 1] + widths[x + 1];
+                }
+                column_lefts[0] + widths[0]
+            }
+        };
+
+        // Interior dividers: every column edge EXCEPT the table's own left
+        // edge, which is index 0 under `Ltr` and the last index under `Rtl`.
+        let interior_column_lefts: Vec<Pixels> = match self.text_direction {
+            TextDirection::Ltr => column_lefts[1..].to_vec(),
+            TextDirection::Rtl => column_lefts[..column_count - 1].to_vec(),
+        };
 
         let mut row_tops = Vec::with_capacity(row_count + 1);
         self.baseline_distance = None;
@@ -786,6 +844,7 @@ impl RenderBox for RenderTable {
 
         self.row_tops = row_tops;
         self.column_lefts = column_lefts;
+        self.interior_column_lefts = interior_column_lefts;
         self.table_width = table_width;
 
         constraints.constrain(Size::new(table_width, row_top))
@@ -1051,11 +1110,10 @@ impl RenderBox for RenderTable {
             } else {
                 &[]
             };
-            let interior_columns: &[Pixels] = if self.column_lefts.len() > 1 {
-                &self.column_lefts[1..]
-            } else {
-                &[]
-            };
+            // Precomputed at layout time: which entry is the table's own edge
+            // depends on the reading direction, so slicing here would be wrong
+            // under `Rtl` (see `interior_column_lefts`).
+            let interior_columns: &[Pixels] = &self.interior_column_lefts;
             paint_table_border(ctx.canvas(), rect, interior_rows, interior_columns, border);
         }
     }
