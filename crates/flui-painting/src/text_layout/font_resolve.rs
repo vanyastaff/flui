@@ -390,10 +390,30 @@ pub(crate) fn resolve_family<'a>(
         return Family::Name(requested);
     }
 
+    // The declared chain, before giving up on it. `TextStyle::font_family_fallback`
+    // was read by nothing until here — `flui-cupertino`'s default text theme
+    // fills it on every style and `Icon` propagates it from `IconData`, and both
+    // reached a generic instead of the family they asked for whenever the
+    // primary was absent (issue #928).
+    //
+    // A generic name in the chain resolves as that generic and therefore ends
+    // it, which is what makes Cupertino's own chain work end to end: it
+    // terminates in "sans-serif", so the walk always has a defined stop before
+    // the degrade below.
+    for candidate in style.map_or(&[][..], |style| style.font_family_fallback.as_slice()) {
+        if let Some(generic) = generic_family(candidate) {
+            return generic;
+        }
+        if installed.carries(candidate) {
+            return Family::Name(candidate);
+        }
+    }
+
     if installed.reported_absent.insert(requested.into()) {
         tracing::debug!(
             family = requested,
-            "font family not installed; shaping through the sans-serif generic instead"
+            "font family not installed, and no declared fallback is either; \
+             shaping through the sans-serif generic instead"
         );
     }
     Family::SansSerif
@@ -478,6 +498,89 @@ mod tests {
             "{:?}",
             resolve_family(Some(style), system, &mut installed, 0)
         )
+    }
+
+    fn styled_with_fallback(family: Option<&str>, fallback: &[&str]) -> TextStyle {
+        TextStyle {
+            font_family: family.map(str::to_owned),
+            font_family_fallback: fallback.iter().map(|f| (*f).to_owned()).collect(),
+            ..TextStyle::default()
+        }
+    }
+
+    /// An absent primary falls through to the first INSTALLED family in the
+    /// declared chain, rather than jumping to the generic.
+    ///
+    /// This is what a Cupertino run hits on any host without
+    /// `CupertinoSystemText`: the theme declares
+    /// `["-apple-system", "system-ui", "Segoe UI", "Helvetica Neue", "Arial", "sans-serif"]`
+    /// and, before this, every one of them was skipped in favour of the
+    /// sans-serif generic even when the host carried one.
+    #[test]
+    fn an_absent_primary_falls_through_to_an_installed_fallback() {
+        let mut system = font_system(database(&[ARIAL]));
+        let style = styled_with_fallback(Some("CupertinoSystemText"), &["Helvetica Neue", "Arial"]);
+        assert_eq!(
+            resolved(&mut system, &style),
+            "Name(\"Arial\")",
+            "the primary is absent and so is the first fallback, but Arial is \
+             installed — before #928 this resolved to SansSerif with Arial \
+             sitting right there in the database"
+        );
+    }
+
+    /// The chain is ordered: an earlier installed entry beats a later one.
+    ///
+    /// Without this, a walk that happened to return the LAST match, or that
+    /// searched the database rather than the chain, would pass the test above.
+    #[test]
+    fn the_chain_is_walked_in_declared_order() {
+        let mut system = font_system(database(&[ARIAL, ROBOTO]));
+        let earlier_first = styled_with_fallback(Some("Absent Primary"), &["Roboto", "Arial"]);
+        assert_eq!(
+            resolved(&mut system, &earlier_first),
+            "Name(\"Roboto\")",
+            "both are installed, so the DECLARED order decides"
+        );
+
+        let mut system = font_system(database(&[ARIAL, ROBOTO]));
+        let reversed = styled_with_fallback(Some("Absent Primary"), &["Arial", "Roboto"]);
+        assert_eq!(
+            resolved(&mut system, &reversed),
+            "Name(\"Arial\")",
+            "reversing the chain reverses the answer — a resolver ignoring \
+             order would return the same family for both"
+        );
+    }
+
+    /// An installed primary still wins: the chain is a fallback, not a
+    /// preference list that overrides.
+    #[test]
+    fn an_installed_primary_is_not_displaced_by_the_chain() {
+        let mut system = font_system(database(&[ARIAL, ROBOTO]));
+        let style = styled_with_fallback(Some("Arial"), &["Roboto"]);
+        assert_eq!(resolved(&mut system, &style), "Name(\"Arial\")");
+    }
+
+    /// A generic in the chain resolves as that generic and ends the walk.
+    ///
+    /// That is what gives every real chain a defined stop — Cupertino's own
+    /// ends in "sans-serif" — rather than relying on the degrade below it.
+    #[test]
+    fn a_generic_in_the_chain_resolves_and_terminates_it() {
+        let mut system = font_system(database(&[ARIAL]));
+        // "Arial" is installed and sits AFTER the generic, so reaching it
+        // would prove the walk did not stop.
+        let style = styled_with_fallback(Some("Absent"), &["monospace", "Arial"]);
+        assert_eq!(resolved(&mut system, &style), "Monospace");
+    }
+
+    /// A chain of entirely absent names still degrades to the generic.
+    #[test]
+    fn an_all_absent_chain_still_degrades_to_the_generic() {
+        let mut system = font_system(database(&[ARIAL]));
+        let style = styled_with_fallback(Some("Absent Primary"), &["Also Absent", "Still Absent"]);
+        assert_eq!(resolved(&mut system, &style), "SansSerif");
     }
 
     #[test]
