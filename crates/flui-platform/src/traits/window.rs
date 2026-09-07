@@ -91,6 +91,34 @@ use winit::window::Window;
 /// Callback storage locks are released before user code is invoked. Nested
 /// notifications share one causal FIFO across event kinds; see
 /// [`crate::WindowCallbacks`] for nested input return semantics.
+///
+/// # Thread affinity
+///
+/// `Send + Sync` on this trait is what lets a backend store a window and a
+/// wake path carry one across threads. It is not permission to drive a window
+/// from any thread. **The default for every method that drives a window —
+/// anything reaching a native windowing API — is: call it on the thread that
+/// owns the platform event loop.** A method callable from elsewhere says so on
+/// itself; silence on the rest is this rule applying, not an omission.
+///
+/// *Registering* a callback is not driving one: registration writes a `Send`
+/// callback into mutex-held storage, and it is **delivery** that is
+/// owner-thread-bound — a callback runs on the thread that registered it, so a
+/// backend marshals first or rejects the dispatch rather than running user code
+/// on a worker. That is the same split ADR-0039 §2 records for `Platform`'s own
+/// `on_*` methods.
+///
+/// A worker that needs the owner to act reaches it through
+/// [`PlatformProxy`](crate::PlatformProxy), the recorded cross-thread-to-owner
+/// lane (ADR-0039 §3). Each backend is *to* supply that lane's wake primitive;
+/// today only winit does. The rest return `ClosedTransport`, so every request
+/// answers [`ProxySendError::Unsupported`](crate::ProxySendError::Unsupported)
+/// — which is why the rule below is stated but not yet enforceable everywhere.
+///
+/// [`close`](Self::close) is the one method that documents itself out of this
+/// default: it is callable from any thread the native API permits, and states
+/// per backend what the cross-thread route costs (AppKit excepted).
+///
 pub trait PlatformWindow: Send + Sync {
     /// This window's platform-internal identity.
     ///
@@ -111,7 +139,50 @@ pub trait PlatformWindow: Send + Sync {
     /// Get the scale factor (DPI scaling)
     fn scale_factor(&self) -> f64;
 
-    /// Request a redraw
+    /// Request that this window produce a frame.
+    ///
+    /// **Owner thread only**, per this trait's [Thread
+    /// affinity](#thread-affinity) default. A worker that wants a frame posts
+    /// to [`PlatformProxy`](crate::PlatformProxy) and lets the owner make this
+    /// call; it never makes the call itself. ADR-0045 decision 5 settles the
+    /// direction — "the raster side never calls
+    /// `PlatformWindow::request_redraw`, on any backend" — and lists the
+    /// alternative, calling it directly on backends where it appears to work,
+    /// as rejected.
+    ///
+    /// The rule is spelled out here rather than left to the default because
+    /// `Send + Sync` makes the wrong call compile from anywhere, and because
+    /// what the wrong call costs differs per backend in a way that hides it:
+    ///
+    /// - **winit** posts and the loop delivers later; **Win32**'s
+    ///   `InvalidateRect` leaves `WM_PAINT` for the owning thread's pump;
+    ///   **android** sets an atomic. All three tolerate a cross-thread call, so
+    ///   exercising one there proves nothing about the rule.
+    /// - **headless** and **web** dispatch the registered `on_request_frame`
+    ///   callback *synchronously on the calling thread*, so a cross-thread call
+    ///   runs user code on a worker — the delivery half of the rule above,
+    ///   broken. These are the backends CI actually executes.
+    /// - **macOS** messages `-[NSView setNeedsDisplay:]` inside an `unsafe`
+    ///   block whose `unsafe impl Send` justification IS main-thread affinity.
+    ///   It is the only backend where the wrong call is *unsound* rather than
+    ///   merely tolerated, and it is type-checked by `cross-typecheck` (with
+    ///   Win32 and android) but never linked or executed anywhere.
+    ///
+    /// # Violated on two paths (issue #949)
+    ///
+    /// Stating the rule does not enforce it. Neither of these can be fixed by
+    /// its own caller: both need the proxy's redraw verb, which needs
+    /// transports the lane-less backends do not have yet (tracked by #949,
+    /// scoped with #559 and #551).
+    ///
+    /// - `flui_app`'s frame wake handle — **unconditional**. It is installed as
+    ///   the scheduler's `on_frame_scheduled` hook and handed to async wakers,
+    ///   so it fires on whatever thread completed the future. Pinned by
+    ///   `the_frame_wake_pokes_the_window_from_the_thread_that_fired_it`.
+    /// - `flui_app`'s AccessKit activation listener — **conditional**, and so
+    ///   not reachable in a default build: it exists only under the non-default
+    ///   `a11y` feature, and fires only once an assistive technology attaches to
+    ///   the adapter's own thread. No test pins this one.
     fn request_redraw(&self);
 
     /// Tell the backend a frame is about to be presented for this window —

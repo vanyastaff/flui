@@ -34,6 +34,18 @@ pub(crate) struct TestWindow {
     /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
     /// [`Self::redraw_calls_handle`] to the asserting side.
     redraw_calls: Arc<AtomicU32>,
+    /// The thread each [`PlatformWindow::request_redraw`] ran on, in call
+    /// order. `request_redraw` is owner-thread-only (see that method's
+    /// contract), and a counter alone cannot tell a conforming call from a
+    /// violating one — only the thread can. See
+    /// [`Self::redraw_threads_handle`].
+    ///
+    /// This duplicates [`Self::redraw_calls`]'s count — `len()` would give it.
+    /// Both are kept because the counter is the handle existing callers already
+    /// hold (an `Arc<AtomicU32>` readable without a lock), and narrowing it to
+    /// serve one new test is not this change's business. They cannot drift:
+    /// both are written in the single `request_redraw` body below.
+    redraw_threads: Arc<parking_lot::Mutex<Vec<std::thread::ThreadId>>>,
     /// How many times `pre_present_notify` ran — see
     /// [`TestWindow::pre_present_notifies_handle`].
     pre_present_notifies: Arc<AtomicU32>,
@@ -62,6 +74,7 @@ impl TestWindow {
             logical_size: Size::default(),
             focused: false,
             redraw_calls: Arc::new(AtomicU32::new(0)),
+            redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
             pre_present_notifies: Arc::new(AtomicU32::new(0)),
             text_input: None,
             accessibility: None,
@@ -123,6 +136,14 @@ impl TestWindow {
         Arc::clone(&self.redraw_calls)
     }
 
+    /// The threads [`PlatformWindow::request_redraw`] was called on, in call
+    /// order — the oracle for that method's owner-thread rule.
+    pub(crate) fn redraw_threads_handle(
+        &self,
+    ) -> Arc<parking_lot::Mutex<Vec<std::thread::ThreadId>>> {
+        Arc::clone(&self.redraw_threads)
+    }
+
     /// The last cursor recorded by [`PlatformWindow::set_cursor`].
     pub(crate) fn cursor(&self) -> flui_platform::CursorIcon {
         *self.cursor.lock()
@@ -152,6 +173,7 @@ impl PlatformWindow for TestWindow {
 
     fn request_redraw(&self) {
         self.redraw_calls.fetch_add(1, Ordering::Relaxed);
+        self.redraw_threads.lock().push(std::thread::current().id());
     }
 
     fn is_focused(&self) -> bool {
