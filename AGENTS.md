@@ -147,7 +147,7 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 
 **Both references are gitignored local clones, so either can be absent — check before citing one.** `ls .flutter` costs nothing and a missing reference has already produced hollow "verified against Flutter" claims here.
 
-**And a present reference is not automatically the right one.** It has to sit at the pinned tag `3.44.0`, which is what every citation in this repository is written against. A clone of the default branch reads as present, answers every `grep`, and gives *master's* Flutter — a different framework by hundreds of commits. It also silently disarms a gate: `parity_inventory`'s reference-gated checks (case counts, claimed-name resolution, new-upstream-file detection) skip themselves unless `git describe --tags` inside `.flutter` prints exactly the manifest's tag. Verify before citing:
+**And a present reference is not automatically the right one.** It has to sit at the pinned tag `3.44.0`, which is what every citation in this repository is written against. A clone of the default branch reads as present, answers every `grep`, and gives the *default-branch tip* — a different framework by hundreds of commits, and one that keeps moving. It also silently disarms a gate: `parity_inventory`'s reference-gated checks (case counts, claimed-name resolution, new-upstream-file detection) skip themselves unless `git describe --tags` inside `.flutter` prints exactly the manifest's tag. Verify before citing:
 
 ```bash
 git -C .flutter describe --tags   # must print 3.44.0
