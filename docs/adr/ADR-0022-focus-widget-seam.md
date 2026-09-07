@@ -11,7 +11,7 @@
 
 Everything below the widget layer already exists and is public in `flui-interaction`:
 
-- **`FocusManager`** (`routing/focus.rs:126-507`): a process-global `OnceLock` singleton (`FocusManager::global()`) holding `root_scope`, `primary_focus`, focus-change listeners, per-node and global key handlers, and `active_scope` (the modal override). `AppBinding::handle_input` already routes every `PlatformInput::Keyboard` event into `FocusManager::global().dispatch_key_event` (`flui-app/src/app/binding.rs:937-940`).
+- **`FocusManager`** (`routing/focus.rs:126-507`): a process-global `OnceLock` singleton (`FocusManager::global()`) holding `root_scope`, `primary_focus`, focus-change listeners, per-node and global key handlers, and `active_scope` (the modal override). `AppBinding::handle_input` already routes every `PlatformInput::Keyboard` event into `FocusManager::global().dispatch_key_event` (`app/ui_realm.rs`'s `dispatch_key_event`).
 - **`FocusNode`** (`routing/focus_scope.rs:139-521`): `Arc`-shared, with `can_request_focus` / `skip_traversal` / `descendants_are_focusable` flags, `on_key_event`, `request_focus`/`unfocus`, and ancestor/descendant walks. Parenting is deliberately internal — only `FocusScopeNode::attach_node`/`detach_node` mutate the tree.
 - **`FocusScopeNode`** (`:623-791`): focused-child history, `autofocus`, `traps_focus`, and a pluggable `FocusTraversalPolicy` (reading-order with wraparound).
 

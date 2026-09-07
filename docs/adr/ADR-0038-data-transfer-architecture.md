@@ -520,7 +520,7 @@ Why this channel and not a new one: per-window input already flows
 `WindowCallbacks::dispatch_input(PlatformInput)` (`crates/flui-platform/src/shared/handlers.rs:401-408`)
 — including the reentrancy-deferral queue (`handlers.rs:330-392`) — and `flui-app` already
 forwards every `PlatformInput` into the realm as `RealmEvent::Input`
-(`crates/flui-app/src/app/runner.rs:1931-1934`). A `DragDrop` variant needs **no new
+(`runner/realm_dispatch.rs`'s `PlatformToUi`, which replaced `RealmEvent`). A `DragDrop` variant needs **no new
 transport plumbing** across backends, the dispatch queue, and realm routing — though it does
 require one new match arm everywhere `PlatformInput` is matched exhaustively, including
 `flui-app`'s realm input dispatcher (`binding.rs:1417`), which is therefore in slice-1 scope.
@@ -826,7 +826,7 @@ nothing in the frozen trait assumes threads exist.
 2. **DnD as new variants on the platform-level `WindowEvent` enum** (`platform.rs:368`).
    That channel feeds `PlatformHandlers::invoke_window_event` — window lifecycle, not realm
    input; it would need a parallel realm entry path duplicating what
-   `RealmEvent::Input` (`runner.rs:1931-1934`) already provides, and it bypasses the
+   `RealmEvent::Input` (`runner/realm_dispatch.rs`'s `PlatformToUi::Input`, which replaced `RealmEvent::Input`) already provides, and it bypasses the
    per-window reentrancy-deferral queue (`handlers.rs:330-408`) that input correctness
    depends on.
 3. **Synthesizing pointer events for drags.** During an external drag the OS owns the
@@ -952,7 +952,7 @@ change).** The smallest unit that is honestly verifiable *at the CI gate*:
    convention, documented as an approximation. Lock discipline per §5.
 6. `flui-app`: the exhaustive `PlatformInput` match in the realm input dispatcher
    (`binding.rs:1417`) gains a `DragDrop` arm that logs-and-drops (stated, not hidden);
-   routing itself needs no new plumbing (`runner.rs:1931-1934` forwards all
+   routing itself needs no new plumbing (`runner/realm_dispatch.rs`'s `PlatformToUi::Input`, which replaced `RealmEvent::Input` forwards all
    `PlatformInput`).
 7. **Tests — placed where CI actually runs them.** `flui-platform`'s own tests are
    excluded from CI (AGENTS.md: STATUS_HEAP_CORRUPTION investigation), so any test living
