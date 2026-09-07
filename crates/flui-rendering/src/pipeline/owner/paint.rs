@@ -205,10 +205,31 @@ impl PipelineOwner<PaintPhase> {
                     // residue scan gives for the paint case: the next frame
                     // that reaches this boundary repaints it, which serves any
                     // request correctly whatever shape it changed.
-                    for boundary_id in layer_updates.keys() {
-                        if !served.contains(boundary_id) {
-                            self.retained_boundaries.remove(boundary_id);
-                        }
+                    let unserved: SmallVec<[RenderId; 2]> = layer_updates
+                        .keys()
+                        .copied()
+                        .filter(|id| !served.contains(id))
+                        .collect();
+                    if !unserved.is_empty() {
+                        // …and every capture that EMBEDS one of them. An
+                        // enclosing boundary's capture flattens the inner
+                        // one's layers, so evicting only the inner leaves the
+                        // outer replaying the same stale output — and once the
+                        // queue clears, the graft-time `nested_boundaries`
+                        // check no longer sees the inner as dirty, so nothing
+                        // stops it. Reachable when the enclosing boundary was
+                        // ALSO out of reach that frame (both under a
+                        // suppressed ancestor), which is why evicting the
+                        // inner alone is not enough.
+                        //
+                        // Exactly what the residue scan below does for the
+                        // paint case, for the same reason.
+                        self.retained_boundaries.retain(|id, subtree| {
+                            !unserved.contains(id)
+                                && !unserved
+                                    .iter()
+                                    .any(|inner| subtree.nested_boundaries.contains(inner))
+                        });
                     }
 
                     // ADR-0015: resolve each paint-phase-correlated

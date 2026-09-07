@@ -1614,6 +1614,21 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
 /// instead — hiding whether the eviction does anything.
 #[test]
 fn an_unreached_update_boundary_loses_its_capture() {
+    for nested in [false, true] {
+        unreached_update_boundary_loses_its_capture(nested);
+    }
+}
+
+/// Body of the test above.
+///
+/// `nested` wraps the skipped boundary in ANOTHER retained boundary, which is
+/// the case a flat fixture cannot see: the enclosing capture flattens the inner
+/// boundary's layers, so evicting only the inner leaves the outer replaying the
+/// same stale output — and once the queue clears, the graft-time
+/// `nested_boundaries` check no longer sees the inner as dirty and nothing
+/// stops it. Both boundaries are out of reach that frame, so neither is
+/// re-captured.
+fn unreached_update_boundary_loses_its_capture(nested: bool) {
     #[derive(Debug, Default)]
     struct GainsATransform {
         enabled: bool,
@@ -1660,17 +1675,25 @@ fn an_unreached_update_boundary_loses_its_capture() {
         }
     }
 
+    // The gate sits ABOVE every boundary, so a fully transparent frame leaves
+    // them all unreached and none of them re-captures.
+    let inner = box_node(RenderRepaintBoundary::new()).child(
+        box_node(GainsATransform::default())
+            .label("fx")
+            .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+    );
+    let under_gate = if nested {
+        box_node(RenderRepaintBoundary::new()).child(inner)
+    } else {
+        inner
+    };
     let mut owner = PipelineOwner::new();
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row()).child(
-            box_node(RenderOpacity::new(0.5)).label("gate").child(
-                box_node(RenderRepaintBoundary::new()).child(
-                    box_node(GainsATransform::default())
-                        .label("fx")
-                        .child(box_node(RenderColoredBox::red(20.0, 20.0))),
-                ),
-            ),
+            box_node(RenderOpacity::new(0.5))
+                .label("gate")
+                .child(under_gate),
         ),
     );
     owner.set_root_id(Some(root_id));
@@ -1714,7 +1737,8 @@ fn an_unreached_update_boundary_loses_its_capture() {
         1,
         "the capture taken before the effect existed must not survive a frame \
          that could not serve the update; nothing else can restore the layer, \
-         because the node owns no slot to patch and its flag blocks new marks",
+         because the node owns no slot to patch and its flag blocks new marks \
+         (nested = {nested})",
     );
 }
 
