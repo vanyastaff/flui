@@ -30,11 +30,12 @@
 
 use flui_foundation::RenderId;
 use rustc_hash::FxHashSet;
+use smallvec::smallvec;
 
 use crate::storage::RenderTree;
 
 use super::{
-    dirty::{DirtyNode, DirtySets},
+    dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind},
     notifier::VisualUpdateNotifier,
 };
 
@@ -289,6 +290,12 @@ impl DirtyTracker {
                 node.is_repaint_boundary_flag() && node.was_repaint_boundary();
 
             if owns_retained_layer || parent.is_none() {
+                // Upgrades any composited-layer update already queued for this
+                // boundary, in place, rather than withdrawing a separate
+                // record — see `PaintQueue::enqueue`. A repaint subsumes an
+                // update, and expressing that as a join on one entry is what
+                // makes it hold no matter which mark arrived first or whether a
+                // pass failed in between.
                 self.schedule_paint_boundary(current, node.depth() as usize);
                 return;
             }
@@ -331,15 +338,162 @@ impl DirtyTracker {
     /// retained layer, and by scheduler-level tests. Runtime invalidation goes
     /// through [`Self::mark_needs_paint`].
     pub(super) fn schedule_paint_boundary(&mut self, node_id: RenderId, depth: usize) {
-        let target = if self.debug_doing_paint {
-            &mut self.mid_layout_marks.needs_paint
-        } else {
-            &mut self.dirty.needs_paint
-        };
-        if !target.push(DirtyNode::new(node_id, depth)) {
-            return; // already in set — frame already scheduled
+        self.enqueue_paint(node_id, depth, PaintKind::Repaint);
+    }
+
+    /// The ONE place a paint-queue entry is written.
+    ///
+    /// Routing comes FIRST, and the cross-queue join is deferred to
+    /// [`PaintQueue::append`](super::dirty::PaintQueue::append). While a pass
+    /// is running every mark goes to the
+    /// side queue, even for a boundary already in the main one.
+    ///
+    /// The obvious-looking alternative — find the id in either queue and
+    /// upgrade it in place — is the one that loses work, which is why it is
+    /// named here rather than left to be rediscovered: an upgrade written to
+    /// the main queue during a pass is invisible to that pass, and
+    /// `clear_paint_queue` then deletes it before `exit_phase` drains the side
+    /// queue.
+    ///
+    /// `PaintQueue::enqueue` never downgrades, so callers do not need to check
+    /// what is already there — a repaint wins whatever order the marks arrive
+    /// in, which is what makes the whole ordering family a non-issue rather
+    /// than a set of guards.
+    fn enqueue_paint(&mut self, node_id: RenderId, depth: usize, kind: PaintKind) {
+        if self.debug_doing_paint {
+            // ALWAYS the side queue while a pass is running, even when the id
+            // is already in the main one. The running pass snapshotted its
+            // dispositions before the walk, so an upgrade written to the main
+            // queue cannot affect it — and `run_paint` ends with
+            // `clear_paint_queue`, which would then discard that upgrade before
+            // `exit_phase` drains the side queue. The mark would be lost
+            // outright: the boundary grafts this frame and is not queued the
+            // next.
+            //
+            // Routing here defers the join to `PaintQueue::append`, which
+            // upgrades on collision precisely so a repaint raised mid-paint
+            // survives being merged into whatever the main queue holds.
+            if self
+                .mid_layout_marks
+                .needs_paint
+                .enqueue(node_id, depth, kind)
+            {
+                self.notifier.read().fire_need_visual_update();
+            }
+            return;
+        }
+        // Outside a pass, raise the kind wherever the id already lives — the
+        // side queue can still hold entries a previous pass left for the drain.
+        if self.dirty.needs_paint.contains(&node_id) {
+            self.dirty.needs_paint.enqueue(node_id, depth, kind);
+            return;
+        }
+        if self.mid_layout_marks.needs_paint.contains(&node_id) {
+            self.mid_layout_marks
+                .needs_paint
+                .enqueue(node_id, depth, kind);
+            return;
+        }
+        if !self.dirty.needs_paint.enqueue(node_id, depth, kind) {
+            return; // already queued — frame already scheduled
         }
         self.notifier.read().fire_need_visual_update();
+    }
+
+    /// Marks a node's own composited-layer properties dirty without dirtying
+    /// anything for paint.
+    ///
+    /// This is the cheap arm of the paint phase: the node's alpha or transform
+    /// changed, but nothing it or its children painted did, so the enclosing
+    /// repaint boundary can replay its retained output and have just this
+    /// node's effect layers rebuilt on the way through.
+    ///
+    /// Ports `RenderObject.markNeedsCompositedLayerUpdate` (`object.dart`),
+    /// including its two refusals:
+    ///
+    /// - **Paint wins.** A node already needing paint, or already carrying this
+    ///   flag, returns immediately. Flutter:
+    ///   `if (_needsCompositedLayerUpdate || _needsPaint) return;`. A repaint
+    ///   rebuilds the layer from current properties anyway, so an update on top
+    ///   of it would be redundant work; and letting the update mark run would
+    ///   enqueue a second, weaker entry for a node the walk is going to repaint.
+    ///   Parity and efficiency rather than correctness: `run_paint` filters a
+    ///   boundary that needs paint out of the update set regardless, so a
+    ///   mutation removing this line changes no output — it only lets pointless
+    ///   marks through.
+    /// - **No retained output, no shortcut.** If no ancestor boundary owns
+    ///   output to patch, this degrades to [`Self::mark_needs_paint`], which is
+    ///   what Flutter's `else { markNeedsPaint(); }` branch does. The flag is
+    ///   still left set, as Flutter leaves it, so a boundary that gains
+    ///   retained output later can serve the node without a fresh mark.
+    ///
+    /// Unlike `mark_needs_paint` this does **not** flag the nodes it walks
+    /// past: the whole point is that they are not dirty. It only finds the
+    /// boundary that owns the retained output and enqueues THAT, unflagged, so
+    /// `run_paint` reaches it and can tell an update-only entry from a repaint
+    /// by asking each queued node whether it needs paint.
+    pub(super) fn mark_needs_composited_layer_update(&mut self, tree: &RenderTree, id: RenderId) {
+        let Some(node) = tree.get(id) else {
+            return;
+        };
+        if node.needs_paint() || node.needs_composited_layer_update() {
+            return;
+        }
+        node.mark_composited_layer_update_flag();
+
+        // Find the boundary whose retained output contains this node. Same
+        // `owns_retained_layer` predicate `mark_needs_paint` stops at, for the
+        // same reason: a boundary that has not painted as one yet has nothing
+        // to patch.
+        //
+        // `was_repaint_boundary` is parity and efficiency here rather than
+        // correctness — a boundary queued without retained output finds no
+        // capture and repaints, which is the same outcome by a longer route, so
+        // a mutation dropping it changes no output. It stays because stopping
+        // the walk at a boundary that cannot serve the request is the rule the
+        // sibling `mark_needs_paint` already follows.
+        let mut current = id;
+        loop {
+            let Some(node) = tree.get(current) else {
+                return;
+            };
+            // `parent.is_some()` is part of the predicate, not an accident: the
+            // paint root is never grafted. `run_paint` enters through
+            // `paint_subtree(root)` rather than the child-boundary arm that
+            // creates and replays captures, so a root boundary — `RenderView`
+            // declares itself one — has no retained output an update could
+            // patch and would repaint anyway. Queuing it would mean carrying a
+            // request that can never be served and re-scanning every capture
+            // for it once a frame. Falling through to the parentless arm below
+            // degrades to a paint mark, which is what actually happens.
+            if node.is_repaint_boundary_flag()
+                && node.was_repaint_boundary()
+                && node.links().parent().is_some()
+            {
+                // The requester is recorded in the entry, not just the fact
+                // that the boundary has work. A node whose effect layers did
+                // not exist when the boundary was captured has no slot to
+                // patch, and a patch pass walking only existing slots cannot
+                // see it — it would graft the old output and silently drop the
+                // request. Knowing the targets lets the graft refuse instead.
+                //
+                // No "is a repaint already queued" guard is needed: the queue
+                // never downgrades, so an entry that is already `Repaint` stays
+                // one whatever order the marks arrive in — including a mark
+                // that arrives AFTER a pass failed partway, which is where
+                // every flag-based version of this guard went blind.
+                let depth = node.depth() as usize;
+                self.enqueue_paint(current, depth, PaintKind::LayerUpdate(smallvec![id]));
+                return;
+            }
+            let Some(parent) = node.links().parent() else {
+                // The paint root itself. There is no enclosing boundary to
+                // patch, so this can only be served by repainting.
+                self.mark_needs_paint(tree, id);
+                return;
+            };
+            current = parent;
+        }
     }
 
     /// Marks compositing bits dirty and schedules the node responsible for the
@@ -506,7 +660,7 @@ impl DirtyTracker {
         for queues in [&mut self.dirty, &mut self.mid_layout_marks] {
             queues.needs_layout.push(DirtyNode::new(id, 0));
             queues.needs_compositing.push(DirtyNode::new(id, 0));
-            queues.needs_paint.push(DirtyNode::new(id, 0));
+            queues.needs_paint.enqueue(id, 0, PaintKind::Repaint);
             queues.needs_semantics.push(DirtyNode::new(id, 0));
         }
     }
@@ -516,14 +670,14 @@ impl DirtyTracker {
         [&self.dirty, &self.mid_layout_marks]
             .into_iter()
             .all(|queues| {
-                [
-                    &queues.needs_layout,
-                    &queues.needs_compositing,
-                    &queues.needs_paint,
-                    &queues.needs_semantics,
-                ]
-                .into_iter()
-                .all(|queue| queue.contains(&id))
+                queues.needs_paint.contains(&id)
+                    && [
+                        &queues.needs_layout,
+                        &queues.needs_compositing,
+                        &queues.needs_semantics,
+                    ]
+                    .into_iter()
+                    .all(|queue| queue.contains(&id))
             })
     }
 
@@ -645,15 +799,21 @@ impl DirtyTracker {
         self.dirty.needs_compositing.as_slice()
     }
 
-    /// Removes entries from the paint queue whose id is in `remove_ids`.
+    /// Removes entries from the paint queue whose id is in `remove_ids`, and
+    /// withdraws any composited-layer-update classification they carried.
     ///
     /// Used by the compositing walk's lost-boundary branch: a node that
     /// was a repaint boundary is removed from the paint queue (the old
     /// boundary-targeted entry) and re-enqueued at its new depth.
+    ///
+    /// The update record has to go with it. It addresses retained output the
+    /// node no longer owns, and the re-enqueue that follows walks PAST the node
+    /// to an ancestor boundary — so `mark_needs_paint`'s own withdrawal clears
+    /// the ancestor's record, never this one. Leaving it behind puts the node
+    /// in both classifications at once, which is the state `run_paint` asserts
+    /// against and, worse, the one a failed pass turns into a lost repaint.
     pub(super) fn retain_paint_queue(&mut self, remove_ids: &rustc_hash::FxHashSet<RenderId>) {
-        self.dirty
-            .needs_paint
-            .retain(|d| !remove_ids.contains(&d.id));
+        self.dirty.needs_paint.retain_not_in(remove_ids);
     }
 
     /// Clears the compositing queue without processing it.
@@ -709,7 +869,7 @@ impl DirtyTracker {
 
     /// Returns the nodes needing paint.
     #[inline]
-    pub(super) fn nodes_needing_paint(&self) -> &[DirtyNode] {
+    pub(super) fn nodes_needing_paint(&self) -> &[PaintEntry] {
         self.dirty.needs_paint.as_slice()
     }
 
@@ -760,6 +920,57 @@ impl DirtyTracker {
 
 #[cfg(test)]
 mod tests {
+
+    /// A repaint raised mid-paint for a boundary ALREADY queued as an update
+    /// must survive the pass.
+    ///
+    /// The trap is that the id is already in the MAIN queue, so an
+    /// "upgrade wherever it lives" rule raises it there — where the running
+    /// pass cannot see it (it snapshotted its dispositions before the walk) and
+    /// where `clear_paint_queue` then deletes it, before `exit_phase` drains
+    /// the side queue. The mark is lost outright: the boundary grafts this
+    /// frame and is not queued the next.
+    ///
+    /// No production path marks during paint today — `run_paint` takes
+    /// `&mut self` while the walk takes `&self` — so this drives the scheduler
+    /// directly. `exit_phase` documents the window all the same, and this is
+    /// what keeps the routing honest with that contract.
+    #[test]
+    fn a_repaint_raised_mid_paint_survives_a_boundary_already_queued_as_an_update() {
+        let mut tracker = DirtyTracker::new(std::sync::Arc::new(parking_lot::RwLock::new(
+            VisualUpdateNotifier::new(),
+        )));
+        let boundary = RenderId::new(7);
+
+        tracker.enqueue_paint(
+            boundary,
+            1,
+            PaintKind::LayerUpdate(smallvec![RenderId::new(8)]),
+        );
+        assert!(tracker.dirty.needs_paint.contains(&boundary));
+
+        // The pass starts, snapshots its dispositions, and a repaint arrives.
+        tracker.enter_phase(PhaseKind::Paint);
+        tracker.enqueue_paint(boundary, 1, PaintKind::Repaint);
+        assert!(
+            tracker.mid_layout_marks.needs_paint.contains(&boundary),
+            "a mark raised during the pass belongs in the side queue, whatever \
+             the main queue already holds for that id",
+        );
+
+        // The pass ends the way `run_paint` ends: clear, then drain.
+        tracker.clear_paint_queue();
+        let drained = tracker.exit_phase(PhaseKind::Paint);
+        assert_eq!(drained, 1, "the side queue's one entry must drain");
+
+        assert_eq!(
+            tracker.dirty.needs_paint.kind_for_test(boundary),
+            Some(PaintKind::Repaint),
+            "the repaint must reach the next frame's queue; upgrading the main \
+             entry instead loses it to `clear_paint_queue`",
+        );
+    }
+
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1248,7 +1459,11 @@ mod tests {
         );
         assert_eq!(
             owner.nodes_needing_paint(),
-            &[DirtyNode::new(boundary_id, 1)],
+            &[PaintEntry {
+                id: boundary_id,
+                depth: 1,
+                kind: PaintKind::Repaint
+            }],
             "only the retained-layer owner belongs in the paint queue",
         );
 
@@ -1286,7 +1501,11 @@ mod tests {
         }
         assert_eq!(
             owner.nodes_needing_paint(),
-            &[DirtyNode::new(root_id, 0)],
+            &[PaintEntry {
+                id: root_id,
+                depth: 0,
+                kind: PaintKind::Repaint
+            }],
             "the existing ancestor must install the new boundary layer",
         );
     }
@@ -1487,7 +1706,7 @@ mod tests {
             for id in [removed_id, retained_id] {
                 queues.needs_layout.push(DirtyNode::new(id, 0));
                 queues.needs_compositing.push(DirtyNode::new(id, 0));
-                queues.needs_paint.push(DirtyNode::new(id, 0));
+                queues.needs_paint.enqueue(id, 0, PaintKind::Repaint);
                 queues.needs_semantics.push(DirtyNode::new(id, 0));
             }
         }
@@ -1506,12 +1725,14 @@ mod tests {
             for queue in [
                 &queues.needs_layout,
                 &queues.needs_compositing,
-                &queues.needs_paint,
                 &queues.needs_semantics,
             ] {
                 assert_eq!(queue.len(), 1);
                 assert_eq!(queue.as_slice()[0].id, retained_id);
             }
+            // The paint queue is its own type — same property, own accessor.
+            assert_eq!(queues.needs_paint.len(), 1);
+            assert_eq!(queues.needs_paint.as_slice()[0].id, retained_id);
         }
     }
 

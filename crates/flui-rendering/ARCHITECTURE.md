@@ -204,6 +204,91 @@ reverted. Both need **two frames**: a child never laid out at all has size zero
 and paints nothing regardless, so a single-frame version passes with the gate removed — which the
 first draft did. `FrameRun::run_frame_again` is added for it.
 
+### A composited-layer update patches the enclosing capture; no node is promoted to a boundary
+
+**Rule:** Prime Directive rule 1 (behavior is the floor, design is ours) — this
+is a deliberate improvement over the reference and owes its accounting here.
+
+**Choice:** Flutter serves `markNeedsCompositedLayerUpdate` by giving the render
+object its own layer to mutate in place, which requires the object to BE a
+repaint boundary (`proxy_box.dart`: `RenderOpacity.isRepaintBoundary =>
+alwaysNeedsCompositing`) and requires `LayerHandle` ref-counting plus
+`Layer.dispose` to manage that layer's lifetime.
+
+FLUI does neither. `RetainedSubtree` is a flat `Vec<RetainedNode>`, so a node's
+own effect layers are addressable by index inside the ENCLOSING boundary's
+capture (`effect_slots`). An alpha change rebuilds those entries through the
+same `own_effect_layers` constructor the paint walk uses, patches them into the
+grafted output, and writes them back into the stored capture — with the node
+still an ordinary non-boundary.
+
+**Alternatives:** port Flutter's promotion — rejected on two grounds, both
+measured or verified rather than argued. (a) It buys nothing: the enclosing
+boundary's capture is already what gets grafted, so promotion adds an
+`OffsetLayer` and a whole retained capture per node to reach a position already
+reached; and since a graft is O(retained layers), promoting nodes is what makes
+reuse *slower* (`paint/opacity_alpha_change`: 163x on inline content, 1.4x once
+every leaf is its own boundary). (b) It needs `is_repaint_boundary()` to vary at
+runtime, which the storage flag does not support — see the `IS_REPAINT_BOUNDARY`
+note below.
+
+**Accepted trade-off:** three of them, all narrowing WHEN the fast path applies,
+never whether the frame is correct.
+
+1. An effect expressed through some mechanism OTHER than the `paint_alpha()` /
+   `paint_transform()` node hooks has no update-only path. Clips and physical
+   models are recorded as fragment scopes rather than node hooks, so they are
+   not covered and would need their own design. Unchanged from before, so no
+   regression — stated rather than assumed.
+2. **A boundary declines to graft while any boundary nested inside it has
+   pending work of any kind, including a layer update.** Serving a nested
+   boundary's update from an enclosing capture is possible — the layers are
+   flattened into it — but it patches only that capture and clears the flag,
+   leaving the nested boundary's own capture at the old value for the next
+   frame that grafts it to replay. Declining costs the outer boundary's reuse
+   on those frames and keeps both captures consistent, because the outer
+   re-captures the patched result on its way back out.
+   (`an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale`
+   is red without this, restoring the old alpha on the third frame.)
+3. **The root boundary is never retained, so an effect whose only enclosing
+   boundary is the root gets no fast path.** `run_paint` enters through
+   `paint_subtree(root)` directly rather than the boundary-child arm that
+   creates captures, so `RenderView` — which declares itself a boundary — has
+   none. The mark still degrades correctly (the frame repaints), it is simply
+   not accelerated. A tree with any `RepaintBoundary` above the effect, which
+   includes every per-item boundary in a list, is unaffected.
+
+**Replacement tests:** `an_alpha_change_updates_the_layer_without_repainting_the_subtree`,
+`a_layer_update_is_written_back_into_the_retained_capture` (three frames — a
+two-frame version cannot see a missing write-back),
+`a_structural_alpha_change_falls_back_to_a_repaint`,
+`a_repaint_in_the_same_frame_wins_over_a_layer_update`
+(`tests/retained_boundary_layers.rs`), plus pixel equivalence against a forced
+repaint in the facade's `tests/composited_layer_update_readback.rs`.
+
+### A retained capture holds no GPU resource, so device loss cannot strand one
+
+**Rule:** #536 asks that "detach, reattach, and device-loss paths reject stale
+handles". The detach and reattach halves apply; the device-loss half does not,
+and the reason is worth recording so it is not re-litigated.
+
+**Choice:** nothing to do. The criterion is written against Flutter's model,
+where `Layer` owns an `EngineLayer` that IS a GPU resource — which is exactly
+why `LayerHandle`, ref-counting and `Layer.dispose` exist there. FLUI's `Layer`
+is a pure value: `TextureLayer` and `PlatformViewLayer` hold plain ids into the
+engine's own registries, and `PictureLayer` holds an `Arc<DisplayList>` whose
+image commands hold `Arc<Vec<u8>>` RGBA bytes. A retained capture is therefore
+CPU data end to end.
+
+A device loss destroys GPU state inside `flui-engine`, which rebuilds it from
+the layer tree the pipeline hands it every frame — and the tree a graft produces
+is the tree a repaint would have produced. There is no handle to reject.
+
+**Accepted trade-off:** if a layer variant ever comes to own a GPU resource
+directly, this stops holding and captures would need invalidating on device
+loss. The property is not enforced by anything today beyond the layer types
+themselves.
+
 ### Layout marks semantics once per walk, at the dirty root
 
 **Rule:** Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in *both* of

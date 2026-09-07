@@ -6,6 +6,7 @@ const LAYOUT_BIT: u8 = 1 << 0;
 const PAINT_BIT: u8 = 1 << 1;
 const COMPOSITING_BITS_BIT: u8 = 1 << 2;
 const SEMANTICS_BIT: u8 = 1 << 3;
+const COMPOSITED_LAYER_UPDATE_BIT: u8 = 1 << 4;
 
 /// The pipeline work required after a render object's configuration changes.
 ///
@@ -35,6 +36,16 @@ impl RenderUpdateImpact {
     pub const COMPOSITING_BITS: Self = Self(COMPOSITING_BITS_BIT | PAINT_BIT);
     /// Rebuild semantics for the render object.
     pub const SEMANTICS: Self = Self(SEMANTICS_BIT);
+    /// Rebuild only the layers this render object pushes, reusing the
+    /// enclosing repaint boundary's retained output for everything else.
+    ///
+    /// Deliberately does **not** include `PAINT_BIT`, unlike
+    /// [`Self::COMPOSITING_BITS`]: the point of this impact is that nothing
+    /// painted. A setter that changes a layer property *and* something it
+    /// paints must report `PAINT` as well, and paint then wins — see
+    /// `PipelineOwner::apply_render_update_impact`, which applies the paint
+    /// mark first so the weaker mark refuses itself.
+    pub const COMPOSITED_LAYER_UPDATE: Self = Self(COMPOSITED_LAYER_UPDATE_BIT);
 
     /// Returns whether no pipeline work is required.
     #[inline]
@@ -58,6 +69,12 @@ impl RenderUpdateImpact {
     #[inline]
     pub const fn needs_compositing_bits_update(self) -> bool {
         self.0 & COMPOSITING_BITS_BIT != 0
+    }
+
+    /// Returns whether only this node's own composited layers must be rebuilt.
+    #[inline]
+    pub const fn needs_composited_layer_update(self) -> bool {
+        self.0 & COMPOSITED_LAYER_UPDATE_BIT != 0
     }
 
     /// Returns whether semantics must be rebuilt.
@@ -99,6 +116,23 @@ mod tests {
         assert_eq!(RenderUpdateImpact::PAINT.0, 1 << 1);
         assert_eq!(RenderUpdateImpact::COMPOSITING_BITS.0, (1 << 2) | (1 << 1));
         assert_eq!(RenderUpdateImpact::SEMANTICS.0, 1 << 3);
+        assert_eq!(RenderUpdateImpact::COMPOSITED_LAYER_UPDATE.0, 1 << 4);
+        // Stated as a LITERAL property, not as a comparison against the
+        // constant: every other assertion on this bit in the workspace has the
+        // shape `assert_eq!(actual, ... | COMPOSITED_LAYER_UPDATE)`, which is
+        // self-referential — redefining the constant to include `PAINT_BIT`,
+        // the exact regression its own doc warns against, leaves all of them
+        // green. The two directions below are what actually pin the contract.
+        assert!(
+            !RenderUpdateImpact::COMPOSITED_LAYER_UPDATE.needs_paint(),
+            "a composited-layer update must NOT imply a repaint: the whole \
+             point is that nothing painted, and `apply_render_update_impact` \
+             relies on it to let paint win when a setter reports both",
+        );
+        assert!(
+            !RenderUpdateImpact::PAINT.needs_composited_layer_update(),
+            "and a repaint must not claim to be one",
+        );
         let cases = [
             (RenderUpdateImpact::NONE, [false, false, false, false]),
             (RenderUpdateImpact::PAINT, [false, true, false, false]),
@@ -108,6 +142,10 @@ mod tests {
                 [false, true, true, false],
             ),
             (RenderUpdateImpact::SEMANTICS, [false, false, false, true]),
+            (
+                RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+                [false, false, false, false],
+            ),
         ];
 
         for (impact, expected) in cases {
@@ -135,6 +173,9 @@ mod tests {
             RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
             RenderUpdateImpact::LAYOUT | RenderUpdateImpact::SEMANTICS,
             RenderUpdateImpact::COMPOSITING_BITS | RenderUpdateImpact::SEMANTICS,
+            RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            RenderUpdateImpact::COMPOSITED_LAYER_UPDATE | RenderUpdateImpact::SEMANTICS,
+            RenderUpdateImpact::COMPOSITING_BITS | RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
             RenderUpdateImpact::LAYOUT | RenderUpdateImpact::COMPOSITING_BITS,
             RenderUpdateImpact::LAYOUT
                 | RenderUpdateImpact::COMPOSITING_BITS

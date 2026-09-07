@@ -535,6 +535,16 @@ cupertino = ["dep:flui-cupertino"]
 # other catalog accidentally.
 localizations = ["dep:flui-localizations"]
 
+# === GPU readback tests ===
+# Opt-in, and OFF by default on purpose. `tests/composited_layer_update_readback.rs`
+# needs a real wgpu adapter; the workspace `test` job has none — only `live-smoke`
+# installs a Vulkan driver, and `gpu-test` runs WARP on Windows. Ungated, that test
+# fails there with `AdapterRequest(NotFound { active_backends: Backends(0x0) })`, an
+# ENVIRONMENT failure that looks nothing like the pixel mismatch it appears to be.
+# It is not skipped when no adapter is found: a test that quietly passes on a machine
+# that cannot run it inflates the count and proves nothing. CI runs it in `gpu-test`.
+gpu-readback-tests = []
+
 # Development-only reload machinery, off in an ordinary production graph. This
 # forwards to `flui-app`'s own feature, which is what actually makes the
 # `flui-hot-reload` edge appear; `cargo tree -p flui-app` shows no
@@ -600,6 +610,11 @@ required-features = ["cupertino"]
 # named directly rather than through an alias feature, so the target's
 # requirements are readable at the target. CI's "facade non-default catalogs"
 # step (`--features cupertino,localizations`, Material being default) runs it.
+[[test]]
+name = "composited_layer_update_readback"
+path = "tests/composited_layer_update_readback.rs"
+required-features = ["gpu-readback-tests"]
+
 [[test]]
 name = "demo_layer_snapshots"
 path = "tests/demo_layer_snapshots.rs"

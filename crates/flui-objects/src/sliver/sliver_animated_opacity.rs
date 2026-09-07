@@ -152,13 +152,45 @@ impl RenderSliverAnimatedOpacity {
             return false;
         }
 
-        if let Err(error) = handle.mark_needs_paint() {
+        // See `RenderAnimatedOpacity::recompute_alpha` for why this is the
+        // composited-layer-update mark rather than a paint mark: an alpha-only
+        // tick rebuilds just this node's `OpacityLayer` and replays the
+        // enclosing boundary's retained output, and degrades to a paint mark
+        // on its own when there is nothing retained to patch.
+        // Crossing alpha 0 starts or stops suppressing the subtree's paint
+        // entirely, and that is invisible to the layer-update path: at both
+        // alpha 0 and alpha 255 no `OpacityLayer` is emitted, so there is no
+        // effect-layer slot to patch. Only a repaint can add or remove that
+        // content.
+        //
+        // Belt and braces, and knowingly so: the paint phase refuses to graft
+        // when a node that requested an update owns no slot, which covers this
+        // case as well — a mutation run removes this branch and the end-to-end
+        // test still passes. It stays because reporting the truth here saves a
+        // queue-then-refuse round trip, and because this class has already
+        // produced visible corruption once.
+        if (old_alpha == 0) != (new_alpha == 0) {
+            if let Err(error) = handle.mark_needs_paint() {
+                tracing::warn!(
+                    %error,
+                    old_alpha,
+                    new_alpha,
+                    "RenderSliverAnimatedOpacity: paint mark send failed on a visibility change; \
+                     alpha cache left at the old value so the next tick retries"
+                );
+                return false;
+            }
+            alpha.store(new_alpha, Ordering::Relaxed);
+            return true;
+        }
+
+        if let Err(error) = handle.mark_needs_composited_layer_update() {
             tracing::warn!(
                 %error,
                 old_alpha,
                 new_alpha,
-                "RenderSliverAnimatedOpacity: paint mark send failed; alpha \
-                 cache left at the old value so the next tick retries"
+                "RenderSliverAnimatedOpacity: composited-layer-update mark send \
+                 failed; alpha cache left at the old value so the next tick retries"
             );
             return false;
         }

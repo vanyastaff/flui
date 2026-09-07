@@ -48,6 +48,8 @@ pub(super) enum DirtyKind {
     Paint,
     /// Mark for next-frame semantics update.
     Semantics,
+    /// Mark for a next-frame rebuild of only the layers this node pushes.
+    CompositedLayerUpdate,
 }
 
 /// A request to mark a render object dirty for one phase.
@@ -281,6 +283,38 @@ impl RenderInvalidationHandle {
     pub fn mark_needs_compositing_bits_update(&self) -> Result<(), SendError> {
         self.sender
             .request_mark_dirty(self.id, self.attachment_epoch, DirtyKind::Compositing)
+    }
+
+    /// Requests a rebuild of only the layers the bound node pushes, reusing
+    /// the enclosing repaint boundary's retained output for everything else.
+    /// Callable from any thread.
+    ///
+    /// This is the verb for a property that lands ONLY on a layer — an
+    /// opacity's alpha, a transform's matrix — changing out of band, e.g. from
+    /// an owned animation's tick. It is cheaper than [`Self::mark_needs_paint`]
+    /// and degrades to it when there is no retained output to patch.
+    ///
+    /// It is NOT a drop-in replacement. A change that alters WHICH layers the
+    /// node emits — an alpha crossing 0 or 255, a transform appearing — still
+    /// needs a paint mark, because a node with no effect layer has no slot for
+    /// a patch to address. Both shipped callers carry that guard explicitly
+    /// (`RenderAnimatedOpacity` and its sliver twin); the paint phase refuses
+    /// such a graft as well, but reporting the truth here saves the frame a
+    /// queue-then-refuse round trip.
+    ///
+    /// Ports `RenderObject.markNeedsCompositedLayerUpdate`.
+    ///
+    /// # Errors
+    ///
+    /// [`SendError::ChannelFull`] under backpressure (back off and
+    /// retry), [`SendError::OwnerGone`] once the pipeline owner is
+    /// dropped.
+    pub fn mark_needs_composited_layer_update(&self) -> Result<(), SendError> {
+        self.sender.request_mark_dirty(
+            self.id,
+            self.attachment_epoch,
+            DirtyKind::CompositedLayerUpdate,
+        )
     }
 
     /// Requests a semantics update of the bound node on the next frame.

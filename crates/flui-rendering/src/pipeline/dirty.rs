@@ -19,7 +19,8 @@
 //! Section 6 for the broader rationale.
 
 use flui_foundation::RenderId;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 // ============================================================================
 // DirtyNode
@@ -176,6 +177,222 @@ impl<'a> IntoIterator for &'a DirtySet {
 }
 
 // ============================================================================
+// PaintQueue — the paint queue carries its own reason
+// ============================================================================
+
+/// Why a repaint boundary is queued for the paint phase.
+///
+/// The paint queue is the record that survives a pass: `run_paint`'s error arm
+/// returns before `clear_paint_queue`, so a frame that fails partway leaves the
+/// queue naming the work while the walk has already cleared the node flags it
+/// touched. Anything that must outlive a pass therefore lives HERE, in the
+/// entry, rather than in a node flag or a side map that has to be kept in step
+/// with one.
+///
+/// The two variants are ordered: a repaint subsumes an update, so
+/// `PaintQueue::enqueue` upgrades and never downgrades. That makes the
+/// "update then paint" / "paint then update" / "mark after a failed pass"
+/// orderings all reduce to the same entry, instead of each needing its own
+/// guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaintKind {
+    /// Repaint the boundary's subtree.
+    Repaint,
+    /// Reuse the boundary's retained output and rebuild only the effect layers
+    /// of the listed nodes, which are the ones that asked.
+    LayerUpdate(SmallVec<[RenderId; 2]>),
+}
+
+/// One entry in the paint queue.
+///
+/// Deliberately NOT `DirtyNode` with an extra field: that type serves the
+/// layout, compositing and semantics queues too, where `PaintKind` would be
+/// meaningless — and it is held to two words by `dirty_node_is_two_usize`,
+/// which a `SmallVec` payload would break.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaintEntry {
+    /// The queued render object.
+    pub id: RenderId,
+    /// Its depth, for the deepest-first flush order.
+    pub depth: usize,
+    /// Why it is queued.
+    pub kind: PaintKind,
+}
+
+/// The paint phase's dirty queue: ordered entries plus an id → position index.
+///
+/// The index is what lets `enqueue` UPGRADE an existing entry in place rather
+/// than push a second one for the same boundary, which is the whole reason this
+/// is not a `DirtySet`.
+#[derive(Debug, Default)]
+pub struct PaintQueue {
+    entries: Vec<PaintEntry>,
+    index: FxHashMap<RenderId, usize>,
+}
+
+impl PaintQueue {
+    /// Creates an empty queue.
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Queues `id`, or raises an existing entry's kind. Returns `true` when a
+    /// NEW entry was pushed.
+    ///
+    /// The return value is the caller's cue to fire a frame request, and an
+    /// UPGRADE deliberately returns `false`: the boundary was already queued,
+    /// so a frame is already scheduled and a second wake would be spurious.
+    /// This is not a "nothing happened" signal — the entry may have changed
+    /// kind. Read it as "did the queue gain an entry", nothing more.
+    ///
+    /// Never downgrades: an entry already queued for a repaint stays one, and a
+    /// `LayerUpdate` arriving for it is dropped rather than weakening it. An
+    /// update arriving for an existing `LayerUpdate` appends its requester.
+    pub fn enqueue(&mut self, id: RenderId, depth: usize, kind: PaintKind) -> bool {
+        if let Some(&position) = self.index.get(&id) {
+            let existing = &mut self.entries[position].kind;
+            match (&mut *existing, kind) {
+                // A repaint subsumes any update, in either arrival order, and
+                // discards the requesters with it: repainting rebuilds every
+                // layer from live properties anyway.
+                (PaintKind::Repaint, _) => {}
+                (PaintKind::LayerUpdate(_), PaintKind::Repaint) => {
+                    *existing = PaintKind::Repaint;
+                }
+                (PaintKind::LayerUpdate(targets), PaintKind::LayerUpdate(more)) => {
+                    for target in more {
+                        if !targets.contains(&target) {
+                            targets.push(target);
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        self.index.insert(id, self.entries.len());
+        self.entries.push(PaintEntry { id, depth, kind });
+        true
+    }
+
+    /// Why `id` is queued, or `None` when it is not.
+    ///
+    /// The `debug_assert` is the one check this shape still needs and can
+    /// falsify. Collapsing the classification into the entry made "a boundary
+    /// is queued for exactly one reason" true by construction — there is no
+    /// second record left to disagree with — but it moved the risk to the
+    /// position index, which every reorder and removal invalidates. A stale
+    /// index does not fail loudly: it hands back a NEIGHBOUR's kind, so a
+    /// repaint reads as an update and grafts stale output. Checking the id
+    /// round-trips is what makes that observable.
+    #[inline]
+    pub fn kind_of(&self, id: RenderId) -> Option<&PaintKind> {
+        self.index.get(&id).map(|&i| {
+            let entry = &self.entries[i];
+            debug_assert_eq!(
+                entry.id, id,
+                "BUG: paint-queue index is stale — it points at another \
+                 entry, so this boundary's reason for being queued is being \
+                 read off the wrong one",
+            );
+            &entry.kind
+        })
+    }
+
+    /// Whether `id` is queued at all.
+    #[inline]
+    pub fn contains(&self, id: &RenderId) -> bool {
+        self.index.contains_key(id)
+    }
+
+    /// Number of queued entries.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the queue is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The entries, in queue order.
+    #[inline]
+    pub fn as_slice(&self) -> &[PaintEntry] {
+        &self.entries
+    }
+
+    /// Sorts deepest-first and rebuilds the index.
+    ///
+    /// Every reordering or removal invalidates the positions the index holds,
+    /// so each one rebuilds it. Both are already at least O(n), so it costs
+    /// nothing asymptotically.
+    ///
+    /// Defensive, and measured to be so: removing either `reindex` call leaves
+    /// the whole suite green, because today nothing reads the index between a
+    /// reorder or removal and the next `clear` — `run_paint` sorts, walks under
+    /// `&self`, then clears. They stay because the type's contract is that the
+    /// index tracks positions, and the first caller to enqueue after a retain
+    /// would otherwise corrupt an unrelated entry in silence. The
+    /// `debug_assert` in [`Self::enqueue`] is what would catch that.
+    pub fn sort_deep_first(&mut self) {
+        self.entries
+            .sort_unstable_by_key(|e| std::cmp::Reverse(e.depth));
+        self.reindex();
+    }
+
+    /// Drops entries whose id is in `removed`.
+    pub fn evict(&mut self, removed: &FxHashSet<RenderId>) {
+        self.entries.retain(|e| !removed.contains(&e.id));
+        self.reindex();
+    }
+
+    /// Drops entries matching `remove_ids`.
+    pub fn retain_not_in(&mut self, remove_ids: &FxHashSet<RenderId>) {
+        self.entries.retain(|e| !remove_ids.contains(&e.id));
+        self.reindex();
+    }
+
+    /// Clears the queue, retaining capacity.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.index.clear();
+    }
+
+    /// Moves every entry of `other` into `self`, clearing `other`.
+    ///
+    /// Collisions UPGRADE rather than being skipped, unlike `DirtySet::append`:
+    /// the mid-phase queue and the main queue can each hold an entry for the
+    /// same boundary with different kinds, and dropping the incoming one would
+    /// lose a repaint that arrived mid-paint.
+    pub fn append(&mut self, other: &mut Self) {
+        for entry in other.entries.drain(..) {
+            self.enqueue(entry.id, entry.depth, entry.kind);
+        }
+        other.index.clear();
+    }
+
+    /// The kind queued for `id`, cloned — a test-only read.
+    ///
+    /// Production code never asks: the paint pass reads the whole slice once
+    /// and derives its dispositions from it, so a per-id accessor would be a
+    /// second way to answer a question that already has one.
+    #[cfg(test)]
+    pub fn kind_for_test(&self, id: RenderId) -> Option<PaintKind> {
+        self.index.get(&id).map(|&i| self.entries[i].kind.clone())
+    }
+
+    fn reindex(&mut self) {
+        self.index.clear();
+        for (position, entry) in self.entries.iter().enumerate() {
+            self.index.insert(entry.id, position);
+        }
+    }
+}
+
+// ============================================================================
 // DirtySets
 // ============================================================================
 
@@ -193,8 +410,9 @@ pub struct DirtySets {
     /// Nodes needing compositing-bits update (sorted shallow-first during flush).
     pub needs_compositing: DirtySet,
 
-    /// Nodes needing paint (sorted deep-first during flush).
-    pub needs_paint: DirtySet,
+    /// Nodes needing paint (sorted deep-first during flush), each carrying
+    /// why it is queued — see [`PaintKind`].
+    pub needs_paint: PaintQueue,
 
     /// Nodes needing semantics update (sorted shallow-first during flush).
     pub needs_semantics: DirtySet,
@@ -306,7 +524,7 @@ mod tests {
         let mut sets = DirtySets::new();
         let id = RenderId::new(1);
         sets.needs_layout.push(DirtyNode::new(id, 0));
-        sets.needs_paint.push(DirtyNode::new(id, 0));
+        sets.needs_paint.enqueue(id, 0, PaintKind::Repaint);
         let mut removed = FxHashSet::default();
         removed.insert(id);
         sets.evict(&removed);

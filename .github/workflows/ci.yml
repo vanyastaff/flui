@@ -574,6 +574,28 @@ jobs:
           --no-fail-fast
           --test-threads 1
 
+      # The composited-layer update path's PIXEL oracle (issue #536). It lives
+      # in the facade, not flui-engine, because it needs BOTH the render
+      # pipeline (to produce the two layer trees) and
+      # `flui_engine::wgpu::HeadlessRenderer` (to rasterize them) — siblings in
+      # layer 4 that only the facade already depends on. The step above runs
+      # `-p flui-engine --lib`, so it cannot reach a facade integration test
+      # however correct that test is; this is the second invocation that does.
+      #
+      # `--no-default-features` keeps Material out: the test uses the render and
+      # engine crates directly and needs no catalog, so the Windows build stays
+      # as small as the assertion allows.
+      - name: cargo nextest run (composited-layer update readback, WARP)
+        run: >
+          cargo nextest run
+          -p flui
+          --no-default-features
+          --features gpu-readback-tests
+          --test composited_layer_update_readback
+          --locked
+          --no-fail-fast
+          --test-threads 1
+
       # On oracle mismatch the harness writes `<test>.png` to
       # $FLUI_READBACK_DUMP_DIR — upload it for post-mortem inspection.
       - name: Upload readback PNG dumps on failure

@@ -13,7 +13,7 @@
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
 use flui_objects::RenderColoredBox;
-use flui_rendering::pipeline::{DirtyNode, PipelineOwner};
+use flui_rendering::pipeline::{DirtyNode, PaintEntry, PipelineOwner};
 
 fn fresh_owner_with_one_node() -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new();
@@ -60,7 +60,7 @@ fn repeated_add_paint_dedups_to_single_entry() {
     owner.mark_needs_paint(id);
     owner.mark_needs_paint(id);
 
-    let paint_entries: Vec<DirtyNode> = owner.nodes_needing_paint().to_vec();
+    let paint_entries: Vec<PaintEntry> = owner.nodes_needing_paint().to_vec();
     assert_eq!(
         paint_entries.len(),
         1,

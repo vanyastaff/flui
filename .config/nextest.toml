@@ -24,3 +24,23 @@ leak-timeout = "1s"
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | test(/^cli_create::generated_.*_project_compiles$/)'
 slow-timeout = { period = "300s", terminate-after = 4 }
+
+# GPU readback tests share one software rasterizer (lavapipe locally, WARP on
+# the CI GPU job), and each builds its own `wgpu::Device`. Submitting from
+# several processes at once can saturate that single driver and make an
+# oracle mismatch out of contention rather than out of a real pixel
+# difference — three `coverage_blend_readback_tests` cases failed exactly that
+# way locally once the facade gained a readback test of its own, and all nine
+# passed immediately when re-run serially.
+#
+# CI's dedicated `gpu-test` job already passes `--test-threads 1` for this
+# reason. That flag does not help the `test` job, where these same tests run
+# (they are gated on `cfg(test)` alone, not on `enable-wgpu-tests`) alongside
+# thousands of others that SHOULD stay parallel. A test group is the targeted
+# form of the same rule: these run one at a time, everything else is untouched.
+[test-groups]
+gpu-readback = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & test(/_readback_tests::/))'
+test-group = 'gpu-readback'

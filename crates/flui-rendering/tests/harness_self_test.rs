@@ -298,7 +298,8 @@ fn advance_paint_opacity_tracks_layer_alpha() {
     let report = run.advance_paint::<RenderOpacity>(fade, |opacity| {
         assert_eq!(
             opacity.set_opacity(0.5),
-            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
         );
     });
     assert!(report.painted, "opacity change must repaint: {report}");

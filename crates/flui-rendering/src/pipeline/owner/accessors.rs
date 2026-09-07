@@ -123,6 +123,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 DirtyKind::Compositing => self.mark_needs_compositing_bits_update(req.id),
                 DirtyKind::Paint => self.mark_needs_paint(req.id),
                 DirtyKind::Semantics => self.mark_needs_semantics(req.id),
+                DirtyKind::CompositedLayerUpdate => {
+                    self.mark_needs_composited_layer_update(req.id);
+                }
             }
         }
         drained
@@ -1371,7 +1374,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// These are repaint boundaries that need to be painted in the next
     /// paint phase.
     #[inline]
-    pub fn nodes_needing_paint(&self) -> &[DirtyNode] {
+    pub fn nodes_needing_paint(&self) -> &[crate::pipeline::PaintEntry] {
         self.scheduler.nodes_needing_paint()
     }
 
@@ -1442,6 +1445,20 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .schedule_paint_boundary(id, node.depth() as usize);
     }
 
+    /// Marks a node's own composited-layer properties dirty without dirtying
+    /// anything for paint.
+    ///
+    /// Ports `RenderObject.markNeedsCompositedLayerUpdate`. Degrades to
+    /// [`Self::mark_needs_paint`] when no ancestor boundary owns retained
+    /// output to patch, and refuses itself when the node already needs paint —
+    /// see `Scheduler::mark_needs_composited_layer_update` for both rules.
+    ///
+    /// A stale ID is a no-op.
+    pub fn mark_needs_composited_layer_update(&mut self, id: RenderId) {
+        self.scheduler
+            .mark_needs_composited_layer_update(&self.render_tree, id);
+    }
+
     /// Marks compositing bits dirty using Flutter's repaint-boundary walk.
     ///
     /// A stale ID is a no-op. The walk marks the necessary ancestor chain and
@@ -1482,6 +1499,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
         if impact.needs_paint() && !impact.needs_layout() {
             self.mark_needs_paint(node_id);
+        }
+        // "Paint wins" is expressed as a CONDITION, not as ordering. Relying on
+        // the marks above having run first is wrong for `LAYOUT`, which
+        // contains `PAINT_BIT` but is deliberately not marked here (layout owns
+        // its own eventual paint) — so a setter reporting `LAYOUT |
+        // COMPOSITED_LAYER_UPDATE` would reach this line with nothing marked
+        // and classify its boundary as update-only. It happens to be rescued
+        // today by `run_layout` marking every boundary it lays out, but that
+        // does not hold for a node whose parent stops laying it out.
+        if impact.needs_composited_layer_update() && !impact.needs_paint() {
+            self.mark_needs_composited_layer_update(node_id);
         }
         if impact.needs_semantics_update() {
             self.mark_needs_semantics(node_id);

@@ -162,6 +162,81 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
     group.finish();
 }
 
+/// What an alpha change costs on the update arm versus the repaint arm.
+///
+/// Both arms mutate the SAME tree by the SAME property through the same seam a
+/// widget rebuild uses; the only difference is that `repaint` additionally
+/// marks the opacity node needing paint, which makes the frame take the old
+/// path. Nothing else is dirtied in either arm, so the two are directly
+/// comparable — an earlier version of this benchmark dirtied a sibling in one
+/// arm only, which quietly folded a whole extra boundary's repaint and
+/// recapture into one side of the comparison.
+///
+/// Read the two `layered` groups together, not separately:
+///
+/// - **inline** — the leaves merge into one `PictureLayer`, so the retained
+///   capture is a handful of nodes at any `subtree` and the update arm is
+///   flat. This is the best case, and the one a background or a text run hits.
+/// - **layered** — every leaf is its own repaint boundary, so the capture's
+///   layer count grows with `subtree` and the update arm grows with it too: a
+///   graft clones every captured node. The win narrows to the ratio of
+///   "clone N layers" against "re-record N layers plus repaint their content".
+///
+/// Quoting only the inline number would overstate the general case.
+fn bench_opacity_alpha_change(c: &mut Criterion) {
+    for (layered, name) in [(false, "inline"), (true, "layered")] {
+        let mut group = c.benchmark_group(format!("paint/opacity_alpha_change/{name}"));
+        for &subtree in &[1_usize, 10, 100, 1_000] {
+            group.bench_with_input(
+                BenchmarkId::new("update", subtree),
+                &subtree,
+                |b, &subtree| {
+                    b.iter_batched(
+                        || {
+                            let (mut owner, opacity) =
+                                helpers::build_opacity_tree(layered, subtree);
+                            helpers::set_opacity(&mut owner, opacity, 0.25);
+                            owner
+                        },
+                        |mut owner| {
+                            owner
+                                .run_paint()
+                                .expect("run_paint must succeed after an alpha change");
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new("repaint", subtree),
+                &subtree,
+                |b, &subtree| {
+                    b.iter_batched(
+                        || {
+                            let (mut owner, opacity) =
+                                helpers::build_opacity_tree(layered, subtree);
+                            helpers::set_opacity(&mut owner, opacity, 0.25);
+                            // Force the old path: an explicit paint mark wins
+                            // over the layer-update mark the setter reported.
+                            owner.mark_needs_paint(opacity);
+                            owner
+                        },
+                        |mut owner| {
+                            owner
+                                .run_paint()
+                                .expect("run_paint must succeed after an alpha change");
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_flat_run_compositing,
@@ -169,5 +244,6 @@ criterion_group!(
     bench_deep_run_paint,
     bench_single_dirty_boundary,
     bench_eight_dirty_boundaries,
+    bench_opacity_alpha_change,
 );
 criterion_main!(benches);
