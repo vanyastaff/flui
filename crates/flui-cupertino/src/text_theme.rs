@@ -15,13 +15,19 @@
 //! oracle's tables exactly, but off Apple platforms the glyphs come from
 //! whatever the host provides.
 //!
-//! What resolves that name off Apple platforms is
-//! `flui_painting`'s family resolution, which degrades a family the host does
-//! not carry to the sans-serif generic. The `font_family_fallback` chain set
-//! on each style below is **not** consulted: nothing in the workspace reads
-//! `TextStyle::font_family_fallback`. It is carried for fidelity to the
-//! oracle's own style data and does not affect rendering. Wiring it is tracked
-//! in issue #928.
+//! What resolves that name off Apple platforms is `flui_painting`'s family
+//! resolution: it walks the style's own family, then each entry of
+//! `font_family_fallback` in order, and degrades to the sans-serif generic
+//! only when the host carries none of them.
+//!
+//! The chain's two leading entries — `"-apple-system"` and `"system-ui"` —
+//! are deliberately *not* mapped to a generic, and fall through as ordinary
+//! names the host does not carry. Mapping them would be worse than the gap it
+//! closes: a generic terminates the walk, so `"-apple-system"` would resolve
+//! to sans-serif on every non-Apple host and `"Segoe UI"` would never be
+//! reached — on Windows that means losing the actual platform UI font to
+//! whatever `common_fallback()` happens to name first. Falling through is
+//! what makes the rest of the chain do its job.
 
 use flui_types::Color;
 use flui_types::typography::{FontWeight, TextStyle};
