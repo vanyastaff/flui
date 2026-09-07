@@ -114,11 +114,16 @@ jobs:
 
       # Advisory. ADR-0045 pins macOS to the inline raster lane because
       # wgpu-hal's Metal `acquire_texture` messages AppKit UI objects from the
-      # calling thread (issue #653). This asks whether the NEWEST published
-      # wgpu-hal still does — which is the question worth asking, and one a
-      # check against the committed lockfile cannot answer: that can only ever
-      # report that the lock moved, and only after it already has. Runs against
-      # the `cargo update --workspace` resolution above.
+      # calling thread (issue #653). It asks that against the
+      # `cargo update --workspace` resolution above rather than the committed
+      # lockfile, because a lockfile comparison can only report that the lock
+      # moved, and only after it already has.
+      #
+      # That reaches the newest COMPATIBLE wgpu-hal, not the newest published
+      # one: `cargo update` does not cross a semver major and the workspace
+      # pins `wgpu = "30.0"`. The script asks crates.io for the newest release
+      # and says so loudly when it is out of reach, so a quiet run is never
+      # read as "nothing changed upstream".
       #
       # Never gates. Every direction it can be wrong leaves macOS on the inline
       # lane, which is slower than necessary and not unsound. Result goes to the
