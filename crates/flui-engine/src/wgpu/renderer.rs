@@ -424,11 +424,11 @@ struct RawHandles {
 //   to dereference off the main thread today.** raw-window-handle 0.6.2
 //   documents this directly -- "NSView can only be accessed from the main
 //   thread of the application. This struct is `!Send` and `!Sync` to help
-//   with ensuring that" (src/appkit.rs:48-49) -- and wgpu-hal 29.0.4's
+//   with ensuring that" (src/appkit.rs) -- and wgpu-hal 30.0.1's
 //   Metal backend enforces it in code: `Instance::create_surface`
-//   (src/metal/mod.rs:161) calls `raw_window_metal::Layer::from_ns_view`,
+//   (src/metal/mod.rs) calls `raw_window_metal::Layer::from_ns_view`,
 //   which panics via `MainThreadMarker::new().expect(..)` off the main
-//   thread (raw-window-metal 1.1.0 src/lib.rs:402-403).
+//   thread (raw-window-metal 1.1.0 src/lib.rs).
 //   `AppKitDisplayHandle` is itself a zero-field marker, so the display
 //   half is inert; the window half is the hazard. **This means
 //   `Renderer::recover()` -- which ADR-0045 decision 1 designates

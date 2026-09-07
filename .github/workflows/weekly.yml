@@ -112,6 +112,26 @@ jobs:
       - name: cargo nextest run (lib + integration)
         run: cargo nextest run --workspace --exclude flui-platform --no-fail-fast
 
+      # Advisory. ADR-0045 pins macOS to the inline raster lane because
+      # wgpu-hal's Metal `acquire_texture` messages AppKit UI objects from the
+      # calling thread (issue #653). It asks that against the
+      # `cargo update --workspace` resolution above rather than the committed
+      # lockfile, because a lockfile comparison can only report that the lock
+      # moved, and only after it already has.
+      #
+      # That reaches the newest COMPATIBLE wgpu-hal, not the newest published
+      # one: `cargo update` does not cross a semver major and the workspace
+      # pins `wgpu = "30.0"`. The script asks crates.io for the newest release
+      # and says so loudly when it is out of reach, so a quiet run is never
+      # read as "nothing changed upstream".
+      #
+      # Never gates. Every direction it can be wrong leaves macOS on the inline
+      # lane, which is slower than necessary and not unsound. Result goes to the
+      # job summary; the script explains the half of the condition it cannot see.
+      - name: macOS raster reopen probe (advisory)
+        if: '!cancelled()'
+        run: bash scripts/probe-metal-acquire-main-thread.sh
+
   bench:
     name: bench (criterion numbers, trend artifact)
     runs-on: ubuntu-latest
@@ -215,8 +235,13 @@ jobs:
       - name: Clone the pinned Flutter reference
         run: |
           set -euo pipefail
-          tag="$(sed -n 's/^tag = "\(.*\)"$/\1/p' \
-            crates/flui-widgets/tests/parity/manifest.toml | head -1)"
+          # Parse the TOML rather than pattern-match a line. The line-shaped
+          # version needed `tag = "X"` and nothing else on the line, so an
+          # inline comment or trailing space failed the job against a perfectly
+          # valid manifest -- and its `^tag = ` + `head -1` would have picked a
+          # `tag` key from any earlier table without saying so.
+          tag="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["source"]["tag"])' \
+            crates/flui-widgets/tests/parity/manifest.toml)"
           if [ -z "$tag" ]; then
             echo "could not read source.tag from the parity manifest" >&2
             exit 1
