@@ -67,7 +67,7 @@ We adopt the following, in two **orthogonal, separately-shippable phases**. They
 |---|---|---|---|
 | `flui-foundation` — `BindingBase`, singleton storage | **Control** | **`!Send`** — drop `Send + Sync` supertrait; replace `OnceLock<&'static Self>` with `thread_local!`/UI-owned storage; mark `PhantomData<*const ()>` | root cause `binding.rs:106`; storage `binding.rs:187-188` |
 | `flui-foundation` — callback aliases | Control | **`!Send`** — drop `+ Send + Sync` from `VoidCallback`/`ValueChanged`/etc. | `callbacks.rs:70,92,108,134,151,165,187` |
-| `flui-view` — `WidgetsBinding`, `BuildOwner`, `ElementTree`, build/reconcile | **Control** | **`!Send`** — `RwLock<WidgetsBindingInner>` → plain owned fields; element tree stays parent-owned `Box<dyn ElementBase>` (single-owner, UI thread) | `flui-view/src/binding.rs:511-534`; element storage `element/child_storage.rs:32` |
+| `flui-view` — `WidgetsBinding`, `BuildOwner`, `ElementTree`, build/reconcile | **Control** | **`!Send`** — `RwLock<WidgetsBindingInner>` → plain owned fields; element tree stays parent-owned `Box<dyn ElementBase>` (single-owner, UI thread) | `flui-view/src/binding.rs:511-534`; element storage `element/child_storage.rs`, since removed |
 | `flui-interaction` — `GestureBinding`, arena, recognisers | **Control** | **`!Send`** — `DashMap` → `RefCell<FxHashMap>`; `Arc<Mutex<State>>` → `Rc<RefCell>`/plain; per-entry `parking_lot::Mutex` → `RefCell` | binding `binding.rs:149-182`; arena `arena/mod.rs:576-578` |
 | `flui-scheduler` — frame orchestrator + tickers | **Control** | **`!Send`** — `Mutex`/`DashMap` state → owned; **but** `create_ticker` vends `Arc<Scheduler>` for cancellation → needs an explicit owned-handle/channel design; **migrate LAST** | scheduler `scheduler.rs:306-380`; ticker vend `scheduler.rs:1537-1541` |
 | `flui-rendering` — `PipelineOwner`, layout/compositing/paint walk | **Data (orchestrated from control)** | **Keep `Send`** on `RenderObject`/`RenderTree`/`NodePtr`; the *orchestration* (`run_frame`, dirty-queue) is driven by the `!Send` control thread; `Arc<RwLock<PipelineOwner>>` → owned handle/channel | `RenderObject` `traits/render_object.rs:142`; disjoint primitive `storage/tree.rs:351`, `owner.rs:1459-1583` |
@@ -195,11 +195,11 @@ This is **high-ROI, always-on, low-risk.** It captures essentially all the real 
 
 ## References
 
-- Root cause: `crates/flui-foundation/src/binding.rs:106` (`BindingBase` supertrait), `:187-188` (`OnceLock` storage)
-- Data-plane enablers: `crates/flui-rendering/src/traits/render_object.rs:142`; `crates/flui-rendering/src/storage/tree.rs:351`; `crates/flui-rendering/src/pipeline/owner.rs:1459-1583`
+- Root cause: `crates/flui-foundation`'s `binding.rs`, since deleted with the binding retirement — its `BindingBase` supertrait and `OnceLock` storage
+- Data-plane enablers: `crates/flui-rendering/src/traits/render_object.rs:142`; `crates/flui-rendering/src/storage/tree.rs:351`; `crates/flui-rendering/src/pipeline/owner/` (split from the cited `owner.rs`)
 - Throughput ceiling: `crates/flui-painting/src/text_layout/layout.rs:48` (FONT_SYSTEM)
 - Oracle deferral: `crates/flui-rendering/src/protocol/box_protocol.rs:122-123`
-- User-owned fork point: `crates/flui-rendering/src/pipeline/owner.rs:1796`
+- User-owned fork point: `crates/flui-rendering/src/pipeline/owner/` (split from the cited `owner.rs`)
 - C3 mitigation: `crates/flui-interaction/src/arena/mod.rs:381-392`
 - Superseded: `crates/flui-interaction/docs/ADR-001-gesture-binding-threading-model.md`; research `docs/research/2026-06-09-adr-001-gesture-binding-threading.md`
 - External: Servo parallel layout (arXiv 2002.03850; Layout Engines Report; pcwalton 2014); Meyerovich WWW2010 (~15% pipeline, ~80x microbench ceiling); GPUI ownership (zed.dev/blog/gpui-ownership, zed-decoded-async-rust); Bevy pipelined rendering + issue #17517; WebRender PR #2362/#2998 + Bugzilla #1595767; gendignoux-2024 Rayon profiling; rust-lang/rust#95985 (`PhantomData<*const ()>`)
