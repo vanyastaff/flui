@@ -34,6 +34,8 @@ mod custom_paint;
 mod custom_single_child_layout;
 #[path = "decorated_box.rs"]
 mod decorated_box;
+#[path = "directionality_dependency.rs"]
+mod directionality_dependency;
 #[path = "exclude_focus.rs"]
 mod exclude_focus;
 #[path = "fade_transition.rs"]

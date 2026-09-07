@@ -3366,6 +3366,35 @@ markers = [
 # are retired identifiers that must not reappear even in prose). `allow_files`
 # lists exact files permitted to contain the pattern.
 
+[[surface]]
+path = "flui_view::element::InheritedElementAccess::dependent_count"
+crate = "flui-view"
+kind = "trait-method"
+declared_in = "crates/flui-view/src/element/inherited_access.rs"
+contains = "fn dependent_count(&self) -> usize;"
+classification = "experimental"
+thread_affinity = "owner thread; read during a test's inspection of a mounted element tree, never from a frame phase"
+owner = "flui-view element protocol"
+failure_semantics = "infallible read of an in-memory count"
+consumers = ["flui_widgets::testing::LaidOut::inherited_dependent_count"]
+notes = """
+DIAGNOSTICS, deliberately not stable, and recorded here rather than left to \
+grow unnoticed -- review flagged that adding a required method to a public \
+trait for test instrumentation is exactly the kind of expansion that should be \
+a decision rather than a side effect. `#[doc(hidden)]` on the method carries \
+the same statement in the API. Adding it is not a practical break: \
+`InheritedBehavior` is the only implementor, an out-of-crate impl cannot be \
+wired in (`as_inherited()` is produced by flui-view's own element types), and \
+the method observes state the `record_dependent`/`remove_dependent` pair \
+already owns rather than introducing new state. It exists because whether a \
+widget took an inherited dependency has NO other observer: rebuild counting \
+cannot see it, since changing an inherited value rebuilds the whole subtree \
+regardless of who depends on what -- an oracle built that way was written \
+first, went red exactly like the defect, and stayed red after the fix. If a \
+genuine diagnostics API for the element protocol ever lands, this moves into \
+it.\
+"""
+
 [[forbidden_pattern]]
 pattern = "hide_other_apps"
 why = """

@@ -44,7 +44,9 @@ use flui_types::geometry::px;
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
 use flui_types::{Offset, Pixels, Rect, Size};
+use flui_view::InheritedView;
 use flui_view::View;
+use flui_view::element::InheritedElementAccess;
 
 use crate::{FocusRoot, GestureArenaScope};
 
@@ -345,6 +347,55 @@ impl LaidOut {
             .iter_nodes()
             .filter(|(_id, node)| node.element().view_type_id() == expected)
             .count()
+    }
+
+    /// How many elements depend on the mounted inherited view of type `V`.
+    ///
+    /// Answers a question no other seam can: whether a widget took an
+    /// inherited dependency. Rebuild counting cannot substitute — changing an
+    /// inherited value means rebuilding the widget that provides it, which
+    /// rebuilds the whole subtree regardless of who depends on what, so a
+    /// rebuild-counting oracle reports the same thing for a dependent and a
+    /// non-dependent child.
+    ///
+    /// # Panics
+    ///
+    /// If the tree holds no `V`, or more than one. A zero from an absent
+    /// provider is indistinguishable from the real "nothing depends on it"
+    /// such a test is usually establishing; and with two providers mounted
+    /// (nested or sibling `Directionality` subtrees are ordinary) picking
+    /// whichever occupies the first slab slot would let a dependency on the
+    /// OTHER one read as zero — a broken test passing quietly. Both are
+    /// refused rather than guessed.
+    pub fn inherited_dependent_count<V: InheritedView>(&mut self) -> usize {
+        let expected = TypeId::of::<V>();
+        let counts: Vec<usize> = self
+            .binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_id, node)| node.element().view_type_id() == expected)
+            .filter_map(|(_id, node)| {
+                node.element()
+                    .as_inherited()
+                    .map(InheritedElementAccess::dependent_count)
+            })
+            .collect();
+        match counts.as_slice() {
+            [only] => *only,
+            [] => panic!(
+                "no mounted inherited element of type {} — a zero here would \
+                 be indistinguishable from a real 'nothing depends on it'",
+                std::any::type_name::<V>()
+            ),
+            many => panic!(
+                "{} mounted inherited elements of type {} — this oracle cannot \
+                 say which one a dependency was registered against, and \
+                 picking the first would let a dependency on another read as \
+                 zero",
+                many.len(),
+                std::any::type_name::<V>()
+            ),
+        }
     }
 
     /// The `i`-th render-tree child of `id`.

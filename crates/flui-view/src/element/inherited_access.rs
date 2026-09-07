@@ -40,6 +40,27 @@ pub trait InheritedElementAccess {
     /// returns to the dependent's `BuildContext`.
     fn view_as_any(&self) -> &dyn std::any::Any;
 
+    /// How many elements currently depend on this inherited element.
+    ///
+    /// **Diagnostics only, and deliberately not part of the stable surface** —
+    /// `#[doc(hidden)]`, and classified as such in `docs/runtime-contract.toml`
+    /// rather than left to grow unnoticed. It exists because whether a widget
+    /// took an inherited dependency is a real behavioural property with no
+    /// other observer: a widget depending on a `Directionality` it cannot use
+    /// rebuilds on every direction change, and rebuild counting CANNOT see the
+    /// difference, because changing an inherited value rebuilds the whole
+    /// subtree regardless of who depends on what.
+    ///
+    /// It is the read half of the
+    /// [`record_dependent`](Self::record_dependent) /
+    /// [`remove_dependent`](Self::remove_dependent) pair this trait already
+    /// carries, so it observes state the protocol already owns rather than
+    /// adding new state. Adding it is not a practical break: `InheritedBehavior`
+    /// is the only implementor, and an out-of-crate impl cannot be wired in —
+    /// `as_inherited()` is produced by this crate's own element types.
+    #[doc(hidden)]
+    fn dependent_count(&self) -> usize;
+
     /// Register a dependent element with this `InheritedElement`.
     ///
     /// `depth` is the dependent's depth in the element tree, threaded

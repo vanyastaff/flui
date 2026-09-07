@@ -108,7 +108,18 @@ where
     C: ViewSeq + Clone + 'static,
 {
     fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        // Only a HORIZONTAL list body can use a reading direction; the
+        // vertical arm of `resolve_axis_direction` discards it. Looking it up
+        // regardless would register an inherited dependency the widget cannot
+        // act on, so every vertical `ListBody` would rebuild on a direction
+        // change that cannot move it. The reference keeps the lookup inside
+        // the horizontal case for the same reason
+        // (`getAxisDirectionFromAxisReverseAndDirectionality`,
+        // `widgets/basic.dart:4513-4527`).
+        let text_direction = match self.main_axis {
+            Axis::Horizontal => Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr),
+            Axis::Vertical => TextDirection::Ltr,
+        };
         ListBodyRenderView {
             axis_direction: self.resolve_axis_direction(text_direction),
             children: self.children.clone(),

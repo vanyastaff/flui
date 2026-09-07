@@ -177,7 +177,12 @@ where
     C: ViewSeq + Clone + 'static,
 {
     fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        let text_direction =
+            if needs_text_direction(self.direction, self.style.cross_axis_alignment) {
+                Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)
+            } else {
+                TextDirection::Ltr
+            };
         FlexRenderView {
             direction: self.direction,
             style: self.style,
@@ -281,12 +286,39 @@ where
     C: ViewSeq + Clone + 'static,
 {
     fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        let text_direction =
+            if needs_text_direction(FlexDirection::Vertical, self.style.cross_axis_alignment) {
+                Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)
+            } else {
+                TextDirection::Ltr
+            };
         FlexRenderView {
             direction: FlexDirection::Vertical,
             style: self.style,
             text_direction,
             children: self.children.clone(),
+        }
+    }
+}
+
+/// Whether this flex needs the ambient [`Directionality`] at all.
+///
+/// Ported from `widgets/basic.dart`'s `Flex._needTextDirection`: a HORIZONTAL
+/// flex always needs it, "because it affects the layout order"; a VERTICAL one
+/// needs it only when its cross-axis alignment is direction-sensitive
+/// (`Start`/`End`), because those name a reading edge rather than a physical
+/// one.
+///
+/// This gates the LOOKUP, not just its result. `Directionality::maybe_of`
+/// registers an inherited dependency, so calling it unconditionally makes every
+/// `Column` rebuild whenever the ambient direction changes -- even a centred one
+/// whose layout cannot move. The reference skips the call for the same reason
+/// (`getEffectiveTextDirection`, `basic.dart:5571`).
+fn needs_text_direction(direction: FlexDirection, cross: CrossAxisAlignment) -> bool {
+    match direction {
+        FlexDirection::Horizontal => true,
+        FlexDirection::Vertical => {
+            matches!(cross, CrossAxisAlignment::Start | CrossAxisAlignment::End)
         }
     }
 }
