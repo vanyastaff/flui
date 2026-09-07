@@ -32,7 +32,6 @@ updates:
       # bumps still surface as individual PRs for review.
       patch-and-minor:
         update-types: ["minor", "patch"]
-    ignore: []
 
   # GitHub Actions used in .github/workflows/.
   - package-ecosystem: "github-actions"
