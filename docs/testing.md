@@ -43,6 +43,39 @@ Two structural rules hold across the stack:
   `SliverAppBar` delegate child unbuilt, and none ran the lazy-sliver service
   pass. All eight now go through `mount_root`.
 
+### wasm32: compiled everywhere, executed in one place
+
+Three of the commands above target wasm32 and only the last one runs anything. That distinction is
+the whole content of the tier: `cargo check` and `cargo clippy` prove the code type-checks, and
+`wasm-link-check` proves rust-lld resolves the cdylibs (with a committed import allowlist, because
+on wasm32 an undefined symbol becomes an *import* rather than a link error). None of them execute a
+single instruction.
+
+It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
+`crates/flui-foundation/src/clock.rs` — the substitution that module's own comment justifies as
+*"the std one panics there"* — and every compile-only step stays green while the code panics
+`time not implemented on this platform` the moment it runs. That was the state of the workspace
+until issue #985.
+
+`just wasm-test` (CI: the last steps of the `wasm-check` job) hosts `crates/flui-foundation/tests/wasm32.rs`
+on node through `wasm-bindgen-test-runner`. Two things about it are deliberate:
+
+- **What belongs in that file** is behaviour that *differs* on wasm32, or a native-target
+  substitution whose whole purpose is keeping wasm32 working. A test that would pass identically on
+  native costs a wasm build and proves nothing extra.
+- **The assertion count is checked, not trusted.** A runner that finds no tests exits 0 and prints
+  `0 passed`, which is indistinguishable from a passing suite, so both the recipe and the CI step
+  fail when the count is zero.
+
+Three versions must agree or the runner refuses to start: the locked `wasm-bindgen`,
+`wasm-bindgen-test` (pinned `=0.3.77` in flui-foundation — the unpinned `"0.3"` resolves to 0.3.78
+and would bump the workspace lock as a side effect of adding a dev-dependency), and
+`wasm-bindgen-cli`, whose version the recipe and the CI step both read out of `Cargo.lock`.
+
+Still compile-only, and named rather than implied: `flui-app`'s wasm32 execution path
+(`ExecutionServices`' sequential branches) and `flui-platform`'s web backend. `flui-app`'s test
+targets do not build for wasm32 yet — see #985 for the four reasons.
+
 ## Quality Gates
 
 The local pre-review gate is:
@@ -500,6 +533,7 @@ cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-goi
 just facade-combos                                            # isolated per-combination facade builds (same job)
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — just wasm-check
 cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — just wasm-check
+cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — just wasm-test
 cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — just cross-typecheck
 cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
 cargo deny check                                              # advisories / bans / licenses / sources

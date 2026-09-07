@@ -1039,6 +1039,44 @@ jobs:
           target/wasm32-unknown-unknown/debug/flui_web_demo.wasm
           target/wasm32-unknown-unknown/debug/flui_painting_demo.wasm
 
+      # Everything above this line COMPILES for wasm32; none of it runs. That
+      # gap is not academic: swap `web_time::Instant` for `std::time::Instant`
+      # in flui-foundation's clock and every step above stays green while the
+      # code panics "time not implemented on this platform" the moment it
+      # executes. These last steps close it (issue #985).
+      #
+      # The runner's version must equal the LOCKED wasm-bindgen exactly or it
+      # refuses to start, so read it from Cargo.lock instead of hardcoding a
+      # version here that a dependabot bump would silently invalidate.
+      - name: Resolve the locked wasm-bindgen version
+        id: wasm_bindgen_version
+        run: |
+          set -euo pipefail
+          version="$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "locked wasm-bindgen: $version"
+
+      - name: Install wasm-bindgen-cli (matching the lockfile)
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
+
+      # Hosted on node (already on the runner) via the runner configured in
+      # .cargo/config.toml. A runner that finds no tests still exits 0 and
+      # prints "0 passed", which is indistinguishable from a passing suite, so
+      # the count is asserted rather than trusted.
+      - name: Execute the wasm32 tests
+        run: |
+          set -euo pipefail
+          out="$(cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32 2>&1)"
+          echo "$out"
+          passed="$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)"
+          if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
+            echo "::error::no wasm32 test executed -- the harness is inert" >&2
+            exit 1
+          fi
+          echo "$passed wasm32 assertions executed"
+
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.
   # `cargo clippy` does not link, so the Win32, AppKit, and Android backends
