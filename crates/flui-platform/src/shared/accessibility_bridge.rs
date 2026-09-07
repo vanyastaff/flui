@@ -117,7 +117,7 @@ impl std::fmt::Debug for BridgeShared {
 mod tests {
     use std::sync::Arc;
 
-    use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
+    use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 
     use super::*;
 
@@ -127,7 +127,7 @@ mod tests {
         node.set_label(label.to_string());
         TreeUpdate {
             nodes: vec![(root, node)],
-            tree: Some(Tree::new(root)),
+            tree: Some(TreeInfo::new(root)),
             tree_id: TreeId::ROOT,
             focus: root,
         }

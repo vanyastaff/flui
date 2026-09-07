@@ -156,7 +156,7 @@ impl PlatformAccessibility for UnixAccessibility {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use accesskit::{Node, NodeId, Role, Tree, TreeId};
+    use accesskit::{Node, NodeId, Role, TreeId, TreeInfo};
 
     use super::*;
 
@@ -166,7 +166,7 @@ mod tests {
         node.set_label(label.to_string());
         TreeUpdate {
             nodes: vec![(root, node)],
-            tree: Some(Tree::new(root)),
+            tree: Some(TreeInfo::new(root)),
             tree_id: TreeId::ROOT,
             focus: root,
         }

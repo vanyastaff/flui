@@ -376,7 +376,7 @@ pub enum A11yQueryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use accesskit::{Tree, TreeId};
+    use accesskit::{TreeId, TreeInfo};
 
     fn node(role: Role, label: &str, children: &[NodeId]) -> Node {
         let mut n = Node::new(role);
@@ -395,7 +395,7 @@ mod tests {
                 (a, node(Role::Button, "a", &[])),
                 (root, node(Role::GenericContainer, "root", &[a, b])),
             ],
-            tree: Some(Tree::new(root)),
+            tree: Some(TreeInfo::new(root)),
             tree_id: TreeId::ROOT,
             focus: a,
         }
@@ -457,7 +457,7 @@ mod tests {
                 // `a` points back at the root.
                 (a, node(Role::Button, "a", &[root])),
             ],
-            tree: Some(Tree::new(root)),
+            tree: Some(TreeInfo::new(root)),
             tree_id: TreeId::ROOT,
             focus: root,
         };
