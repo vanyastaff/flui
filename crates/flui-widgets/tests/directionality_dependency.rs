@@ -20,7 +20,9 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_types::Axis;
 use flui_types::geometry::px;
 use flui_types::typography::TextDirection;
-use flui_widgets::{Column, CrossAxisAlignment, Directionality, ListBody, SizedBox};
+use flui_widgets::{
+    Column, CrossAxisAlignment, Directionality, DismissDirection, Dismissible, ListBody, SizedBox,
+};
 
 /// Dependents of the ambient `Directionality` for a `Column` with `cross`.
 fn directionality_dependents(cross: CrossAxisAlignment) -> usize {
@@ -101,5 +103,42 @@ fn a_vertical_list_body_does_not_depend_on_directionality() {
         0,
         "the vertical arm of resolve_axis_direction ignores the reading \
          direction, so the lookup must not be made at all"
+    );
+}
+
+/// Dependents of the ambient `Directionality` for a `Dismissible` configured
+/// with `direction`.
+fn dismissible_dependents(direction: DismissDirection) -> usize {
+    let mut laid = lay_out(
+        Directionality::new(
+            TextDirection::Ltr,
+            Dismissible::new(SizedBox::square(10.0)).direction(direction),
+        ),
+        tight(200.0, 200.0),
+    );
+    laid.inherited_dependent_count::<Directionality>()
+}
+
+/// A horizontal dismiss resolves `StartToEnd`/`EndToStart` against the reading
+/// direction, so it must depend on it. Control for its sibling.
+#[test]
+fn a_horizontal_dismissible_depends_on_directionality() {
+    assert_eq!(
+        dismissible_dependents(DismissDirection::Horizontal),
+        1,
+        "an X-axis dismiss maps drag sign onto a reading-relative direction"
+    );
+}
+
+/// A vertical dismiss never consults the reading direction --
+/// `extent_to_direction` only reads it when `direction_is_x_axis` -- so the
+/// lookup must not be made.
+#[test]
+fn a_vertical_dismissible_does_not_depend_on_directionality() {
+    assert_eq!(
+        dismissible_dependents(DismissDirection::Vertical),
+        0,
+        "extent_to_direction ignores the reading direction off the X axis, so \
+         no dependency should be registered"
     );
 }

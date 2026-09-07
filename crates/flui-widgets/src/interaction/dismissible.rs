@@ -626,7 +626,19 @@ impl ViewState<Dismissible> for DismissibleState {
         // so defaulting instead of requiring an ancestor here avoids an
         // unnecessary hard panic for callers who never wrap a purely-vertical
         // `Dismissible` in one.
-        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        // ...and for the same reason the lookup itself is GATED, not merely
+        // defaulted. `Directionality::maybe_of` registers an inherited
+        // dependency, so calling it for a purely-vertical `Dismissible` would
+        // rebuild it on every ambient direction change while
+        // `extent_to_direction` -- the only consumer -- ignores the value on
+        // that path. The reference draws the same line with
+        // `assert(!_directionIsXAxis || debugCheckHasDirectionality(context))`
+        // (`dismissible.dart:611`).
+        let text_direction = if direction_is_x_axis(view.direction) {
+            Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)
+        } else {
+            TextDirection::Ltr
+        };
         let resolved = Rc::new(ResolvedConfig {
             direction: view.direction,
             text_direction,
