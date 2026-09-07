@@ -29,6 +29,19 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # number and quietly shrinks the denominator, which is the same unverified-count
 # failure #993 exists to stop (it cost 11 citations on the first pass here).
 CITE = re.compile(r"`([A-Za-z_][A-Za-z_/0-9.-]*\.rs):([0-9][0-9,+/ -]*?)`")
+# The form a converted citation takes: `path.rs`'s `Symbol`. This MUST be
+# matched too. Without it, converting a citation removes it from the corpus and
+# "provably stale" falls by shrinking the denominator rather than by fixing
+# anything -- measured at 77 -> 60 matchable in ADR-0039 across one such commit.
+# The predicate here is the project's settled one, from
+# scripts/check-runtime-conformance.sh's `check_citation`: the file exists AND
+# contains the cited string. That survives a line move, and catches a rename.
+SYMBOL_CITE = re.compile(r"`([A-Za-z_][A-Za-z_/0-9.-]*\.rs)`'s `([A-Za-z_][A-Za-z_0-9:!]*)`")
+# A relative `:NNN` ref inherits whatever path precedes it. Nothing here can
+# resolve that, so they are counted and reported as UNANCHORED rather than
+# silently omitted -- there are more of them than absolute citations, and a
+# conversion that deletes their anchor orphans them invisibly.
+RELATIVE = re.compile(r"`:[0-9][0-9,+/ -]*`")
 
 def rust_files() -> dict[str, list[pathlib.Path]]:
     """Every .rs file, indexed by each of its path suffixes, so a partial
@@ -60,7 +73,23 @@ def main() -> int:
     per_adr: dict[str, int] = defaultdict(int)
 
     for adr in sorted((ROOT / "docs" / "adr").glob("*.md")):
-        for m in CITE.finditer(adr.read_text(encoding="utf-8")):
+        text = adr.read_text(encoding="utf-8")
+        counts["relative"] += len(RELATIVE.findall(text))
+        for m in SYMBOL_CITE.finditer(text):
+            path, sym = m.group(1), m.group(2)
+            counts["symbol_total"] += 1
+            hits = index.get(path, [])
+            if len(hits) != 1:
+                counts["symbol_unresolvable"] += 1
+                continue
+            body = (ROOT / hits[0]).read_text(encoding="utf-8", errors="replace")
+            if sym.split("::")[-1].rstrip("!") in body:
+                counts["symbol_ok"] += 1
+            else:
+                counts["symbol_broken"] += 1
+                per_adr[adr.name] += 1
+                stale.append(f"{adr.name}: `{path}`'s `{sym}` -- symbol not in file")
+        for m in CITE.finditer(text):
             path, spec = m.group(1), m.group(2)
             counts["total"] += 1
             hits = index.get(path, [])
@@ -94,7 +123,7 @@ def main() -> int:
                 counts["in_range_bare"] += 1 if bare else 0
 
     total = counts["total"]
-    broken = counts["path_gone"] + counts["out_of_range"]
+    broken = counts["path_gone"] + counts["out_of_range"] + counts["symbol_broken"]
     print(f"adr-citations: {total} line-number citations across docs/adr/")
     print(f"  provably stale : {broken}"
           f"  ({counts['path_gone']} path gone, {counts['out_of_range']} line past EOF"
@@ -107,6 +136,11 @@ def main() -> int:
     if per_adr:
         worst = sorted(per_adr.items(), key=lambda kv: -kv[1])[:5]
         print("  worst files    : " + ", ".join(f"{k} ({v})" for k, v in worst))
+    print(f"  symbol-cited   : {counts['symbol_total']}"
+          f"  ({counts['symbol_ok']} verified present, {counts['symbol_broken']} missing,"
+          f" {counts['symbol_unresolvable']} path unresolvable)")
+    print(f"  UNANCHORED     : {counts['relative']}  (bare `:NNN` inheriting a nearby path --"
+          f" nothing here can resolve them, and deleting their anchor orphans them silently)")
     if args.list:
         for line in stale:
             print("    " + line)
