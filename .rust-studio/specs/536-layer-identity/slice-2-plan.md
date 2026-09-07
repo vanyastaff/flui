@@ -25,7 +25,55 @@ to revisit that "once a `Partial` variant lands".
 
 ## Sub-slices, in dependency order
 
-### 2a — "nothing changed" (no bounds math, safe failure mode)
+### 2a — WITHDRAWN: the frames it would catch do not exist
+
+**Do not build this.** The premise was tested before implementing and does not
+hold.
+
+`PipelineOwner::run_paint` returns early when nothing is dirty
+(`if !self.scheduler.has_paint_work() { return Ok(()) }`), so a clean frame
+produces **no new `LayerTree`** — and there is nothing retained to compare it
+against either: the owner's `last_layer_tree` field holds a tree only between
+paint and the `take_layer_tree()` that `run_frame` performs to hand it to the
+compositor, so by the time a frame ends it is `None`. Above it,
+`flui-app` calls that outcome `FramePaintOutcome::Idle`, "nothing was dirty
+this frame; no new content to composite", and its own doc records that such a
+frame "never reaches `render_scene`" — established there by a probe rather
+than assumed. The skip this sub-slice proposed to add already exists, upstream
+and cheaper than a tree walk.
+
+The remaining shape — a frame where something WAS dirty but the tree came out
+identical — is not reachable either: the dirty node re-records, which yields a
+fresh `DisplayList` allocation, so a comparison keyed on picture identity
+correctly reports "changed". Conservative and right, and worth nothing.
+
+This was found by writing the baseline test first — two frames over an
+untouched tree, asserting the second renders the same content as the first.
+It failed before reaching any comparison: the second frame's `run_frame`
+returned `Ok(None)`, which is the whole answer. That test was reverted with
+the rest of the 2a implementation, so it is described here rather than cited;
+`FramePaintOutcome`'s own doc in `crates/flui-app/src/app/ui_realm.rs` is the
+committed record of the same fact.
+
+**A note 2b needs.** Because `run_frame` *takes* the tree, 2b has to retain
+the previous frame's tree itself — the pipeline does not keep one to diff
+against. Whoever holds it (the raster lane is the natural place: it is
+per-presentation and outlives the frame) also pays for keeping every
+`DisplayList` in it alive, which is an `Arc` clone per picture rather than a
+copy.
+
+**What this does not invalidate.** A per-boundary comparison is still needed —
+by 2b, to decide WHICH boundaries changed. Its shape differs from what 2a
+would have built: per boundary, not whole-tree. The
+[opacity trap](#the-trap-that-would-freeze-an-opacity-animation--measured-not-predicted)
+recorded below applies to it unchanged, and is the reason it cannot key on
+picture identity alone.
+
+**So the first sub-slice is 2b.** Damage's value is entirely in narrowing the
+scissor for a frame that DID change, which is where ADR-0061's 0.18× / 0.06× /
+0.02× measurements come from.
+
+### 2a (withdrawn, kept for the reasoning) — "nothing changed"
 
 Retain the previous frame's `LayerTree` per presentation. Pair the two by
 `render_id`; if every boundary pairs AND every `PictureLayer`'s `DisplayList`
