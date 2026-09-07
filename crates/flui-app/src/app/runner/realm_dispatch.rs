@@ -1226,12 +1226,21 @@ pub(super) fn dispatch_platform_realm(
         // to re-ask. The exit was missed, not merely delayed.
         //
         // So re-ask, through the platform's own coalesced owner-thread
-        // request rather than any new machinery. Its contract already states
-        // that a spurious fire is a no-op — windows still open, or a hook
-        // still vetoing, decide nothing — which is what makes it safe to arm
-        // on every applied mutation instead of trying to detect the one shape
-        // that needs it. Cloned out here and fired below, outside this
-        // borrow: the hook borrows `APP_RUNTIME` itself.
+        // request rather than any new machinery.
+        //
+        // Armed whenever the drain yielded a slot, which is NOT the same as
+        // "every mutation": a successful `Install` yields none and arms
+        // nothing, while `removed` carries both an applied `Uninstall`'s slot
+        // AND a REJECTED install's — `drain_pending_realm_mutations` routes a
+        // window-id collision through the same bucket. Only the first
+        // actually shrinks the realm map; the second is a spurious arm on an
+        // already-logged error path. Left that way deliberately: the seam's
+        // own contract makes a spurious request a no-op — windows still open,
+        // or a hook still vetoing, decide nothing — so paying for it is
+        // cheaper than teaching the drain to report which kind it applied.
+        //
+        // Cloned out here and fired below, outside this borrow: the hook
+        // borrows `APP_RUNTIME` itself.
         #[cfg(not(target_arch = "wasm32"))]
         let reevaluate_exit = (!removed.is_empty())
             .then(|| state.exit_policy_reevaluation_notifier())

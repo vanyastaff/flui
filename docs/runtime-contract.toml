@@ -434,9 +434,15 @@ The fix is the one this note previously named as tracked: \
 `dispatch_platform_realm`'s tail requests an exit-policy re-evaluation \
 whenever a deferred realm-map mutation actually removed something, through \
 `Platform::request_exit_policy_reevaluation` -- the same coalesced, \
-owner-thread seam a keep-alive service's completion already used, whose own \
-contract makes a spurious request a no-op, which is why it is armed on \
-every applied mutation rather than on a detected shape. \
+owner-thread seam a keep-alive service's completion already used. Armed \
+whenever the drain yields a slot, which is deliberately wider than the \
+shape that needs it and deliberately narrower than "every dispatch tail": a \
+successful install yields none, while the yielded set covers both an \
+applied uninstall and a REJECTED install (a window-id collision is routed \
+through the same bucket), so the latter arms spuriously on an \
+already-logged error path. That is cheaper than teaching the drain to \
+report which kind it applied, because the seam's own contract makes a \
+spurious request a no-op. \
 `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits` \
 pins both halves: that the tail parks a request at all (the assertion the \
 fix adds -- without the tail change nothing is parked), and that driving it \
