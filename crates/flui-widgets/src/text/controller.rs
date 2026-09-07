@@ -139,6 +139,27 @@ pub struct TextEditingController {
     notifier: ChangeNotifier,
 }
 
+impl TextEditingController {
+    /// Whether `self` and `other` are clones of the SAME controller.
+    ///
+    /// Identity, not value: two controllers holding the same text are
+    /// different controllers, and a caller swapping one for another expects
+    /// the swap to be noticed even when the text happens to match. Clones
+    /// share the buffer, so `Clone` preserves identity — which is what makes
+    /// this the right question for "did the parent hand me a different
+    /// controller?".
+    ///
+    /// Deliberately a named method rather than `PartialEq`: `==` on a value
+    /// type reads as value equality, and answering `false` for two controllers
+    /// with identical text under that spelling would be a trap. The reference
+    /// compares Dart object identity for the same purpose
+    /// (`text_field.dart`'s `didUpdateWidget`).
+    #[must_use]
+    pub fn is_same_controller(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
 impl std::fmt::Debug for TextEditingController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);

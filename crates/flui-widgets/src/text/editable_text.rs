@@ -142,18 +142,6 @@ fn obscure(text: &str, caret_byte_offset: usize, mask: char) -> (String, usize) 
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
 /// - **Scroll when text overflows** — the rendered text clips without scrolling.
-/// - **Swapping the controller on a live field** — `EditableTextState` pins
-///   its own clone of `EditableText::controller` at `create_state` and reads
-///   `self.controller` in `build`/`init_state`, never `view.controller`
-///   again after mount. A parent rebuilding this widget with a *different*
-///   `TextEditingController` value does not retarget the mounted field's
-///   focus-node registration or key handler — both keep driving the
-///   ORIGINAL controller. Full re-registration on controller swap (the
-///   oracle's `didUpdateWidget`, `text_field.dart:1303-1311`, tag `3.44.0`)
-///   is a named deferral; an enclosing decorated field
-///   (`flui_material::TextField`) pins its own clone the same way for the
-///   same reason — see that type's module docs' "Controller identity"
-///   section.
 #[derive(Clone, Debug, StatefulView)]
 pub struct EditableText {
     /// Controller that owns the text buffer and caret.
@@ -327,9 +315,18 @@ pub struct EditableTextState {
     /// parent at mount, or the root scope's backing node. Detached from in
     /// `dispose`.
     parent: Option<Rc<FocusNode>>,
-    /// Clone of the controller captured in `create_state`; used to register
-    /// listeners in `init_state` without needing the `view` reference.
-    controller: TextEditingController,
+    /// The controller this mounted field drives, behind a shared cell so it
+    /// can be RETARGETED.
+    ///
+    /// A plain clone would be captured by value into the key handler and the
+    /// IME attach callback at mount, and a parent rebuilding with a different
+    /// controller would then leave those closures driving the original — the
+    /// swap silently ignored. The cell is what lets `did_update_view` point
+    /// every one of them at the replacement by writing once.
+    ///
+    /// `Rc<RefCell<_>>` rather than a lock: this is presentation-local state
+    /// touched only on the owner thread, like every other `Rc` field here.
+    controller: Rc<RefCell<TextEditingController>>,
     /// ID for the listener we added to `controller` so we can remove it on
     /// dispose — avoids a `remove_all_listeners` that would disrupt other
     /// subscribers.
@@ -409,7 +406,7 @@ impl StatefulView for EditableText {
             anchor: flui_objects::SubtreeAnchor::new(),
             inner_anchor: flui_objects::SubtreeAnchor::new(),
             parent: None,
-            controller: self.controller.clone(),
+            controller: Rc::new(RefCell::new(self.controller.clone())),
             controller_listener_id: None,
             rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
             focus_listener_id: None,
@@ -452,13 +449,13 @@ impl ViewState<EditableText> for EditableTextState {
         //    `did_update_view`) so a stray dispatch to an already-focused
         //    field that has since been disabled is a no-op.
         self.key_handler_registration = Some(self.focus_node.register_on_key_event(
-            build_key_handler(self.controller.clone(), Rc::clone(&self.focus_node)),
+            build_key_handler(Rc::clone(&self.controller), Rc::clone(&self.focus_node)),
         ));
 
         // 3. Forward controller change events into the rebuild notifier so the
         //    inner AnimatedBuilder rebuilds on every keystroke.
         let rebuild_notifier_for_text = self.rebuild_notifier.clone();
-        let controller_listener_id = self.controller.add_listener(Arc::new(move || {
+        let controller_listener_id = self.controller.borrow().add_listener(Arc::new(move || {
             rebuild_notifier_for_text.notify_listeners();
         }));
         self.controller_listener_id = Some(controller_listener_id);
@@ -499,7 +496,7 @@ impl ViewState<EditableText> for EditableTextState {
         let post_frame_handle_for_focus = self.local_post_frame_handle.clone();
         let pipeline_owner_for_focus = ctx.pipeline_owner();
         let inner_anchor_for_focus = self.inner_anchor.clone();
-        let controller_for_ime = self.controller.clone();
+        let controller_for_ime = Rc::clone(&self.controller);
         let ime_token_for_focus = Rc::clone(&self.ime_token);
         let cursor_area_alive_for_focus = Rc::clone(&self.cursor_area_alive);
         let ime_focus_transition: ImeFocusTransition = Rc::new(move |now_focused| {
@@ -517,10 +514,10 @@ impl ViewState<EditableText> for EditableTextState {
                 let alive = Rc::new(Cell::new(true));
                 *cursor_area_alive_for_focus.borrow_mut() = Some(Rc::clone(&alive));
 
-                let controller_for_callback = controller_for_ime.clone();
+                let controller_for_callback = Rc::clone(&controller_for_ime);
                 let last_sent_for_ime_event = Rc::clone(&last_sent);
                 let token = match handle.attach(Rc::new(move |event: &ImeEvent| {
-                    apply_ime_event(&controller_for_callback, event);
+                    apply_ime_event(&controller_for_callback.borrow(), event);
                     // The backend may have restarted the IME session
                     // (`Enabled` re-fires on that restart) — clearing
                     // `last_sent` guarantees the new session gets a
@@ -601,6 +598,37 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
+        // A parent rebuilding with a DIFFERENT controller retargets the
+        // mounted field onto it, rather than the field silently going on
+        // driving the one it was born with. The reference does the same in
+        // `didUpdateWidget`: drop the listener from the old, add it to the
+        // new, and resynchronise.
+        //
+        // Everything that reaches the controller — the key handler, the IME
+        // attach callback, `build` — reads through `self.controller`'s cell at
+        // use time, so writing the cell retargets all of them at once. Only
+        // the change LISTENER has to move by hand, because it is registered on
+        // the controller rather than read from it.
+        if !self
+            .controller
+            .borrow()
+            .is_same_controller(&new_view.controller)
+        {
+            if let Some(id) = self.controller_listener_id.take() {
+                self.controller.borrow().remove_listener(id);
+            }
+            *self.controller.borrow_mut() = new_view.controller.clone();
+            let rebuild_notifier_for_text = self.rebuild_notifier.clone();
+            self.controller_listener_id =
+                Some(self.controller.borrow().add_listener(Arc::new(move || {
+                    rebuild_notifier_for_text.notify_listeners();
+                })));
+            // The visible text is the replacement's now, and nothing else
+            // will say so: the old controller's notifications are gone and the
+            // new one has not changed since it was handed over.
+            self.rebuild_notifier.notify_listeners();
+        }
+
         if !Rc::ptr_eq(&self.focus_node, &new_view.focus_node) {
             let replacement = Rc::clone(&new_view.focus_node);
             replacement.set_can_request_focus(new_view.enabled);
@@ -668,7 +696,7 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
-        let controller = self.controller.clone();
+        let controller = Rc::clone(&self.controller);
         let focus_node = Rc::clone(&self.focus_node);
         let enabled = view.enabled;
         let appearance = FieldAppearance {
@@ -684,7 +712,7 @@ impl ViewState<EditableText> for EditableTextState {
             self.anchor.clone(),
             AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
                 build_field_view(
-                    &controller,
+                    &controller.borrow(),
                     &focus_node,
                     enabled,
                     &appearance,
@@ -754,7 +782,7 @@ impl ViewState<EditableText> for EditableTextState {
 
         // Remove the controller listener we registered in init_state.
         if let Some(id) = self.controller_listener_id.take() {
-            self.controller.remove_listener(id);
+            self.controller.borrow().remove_listener(id);
         }
         self.focus_manager = None;
 
@@ -968,11 +996,19 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
 /// only while `focus_node` still allows focus — kept in sync with
 /// `EditableText::enabled` by `did_update_view` — so input is ignored on a
 /// field disabled after it was focused.
+/// The key handler reads its controller through the shared cell at DISPATCH
+/// time, not at registration time.
+///
+/// That is what makes a controller swap take effect on a mounted field: the
+/// registration installed at `init_state` outlives the swap, so a handler
+/// holding a clone would keep typing into the controller the field was born
+/// with.
 fn build_key_handler(
-    controller: TextEditingController,
+    controller: Rc<RefCell<TextEditingController>>,
     focus_node: Rc<FocusNode>,
 ) -> KeyEventHandler {
     Rc::new(move |event| {
+        let controller = controller.borrow();
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }
@@ -1374,7 +1410,10 @@ mod tests {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("test");
         focus_node.set_can_request_focus(false);
-        let handler = build_key_handler(controller.clone(), Rc::clone(&focus_node));
+        let handler = build_key_handler(
+            Rc::new(RefCell::new(controller.clone())),
+            Rc::clone(&focus_node),
+        );
 
         let event = KeyEventBuilder::new(Code::KeyA)
             .with_key(Key::Character("a".to_string()))
@@ -1414,7 +1453,10 @@ mod tests {
         let chord = |code, key: &str, modifiers| {
             let controller = TextEditingController::new();
             let focus_node = FocusNode::with_debug_label("test");
-            let handler = build_key_handler(controller.clone(), Rc::clone(&focus_node));
+            let handler = build_key_handler(
+                Rc::new(RefCell::new(controller.clone())),
+                Rc::clone(&focus_node),
+            );
             let event = KeyEventBuilder::new(code)
                 .with_key(Key::Character(key.to_string()))
                 .with_state(KeyState::Down)
@@ -1487,7 +1529,10 @@ mod tests {
 
         let controller = TextEditingController::with_text("hello");
         let focus_node = FocusNode::with_debug_label("test");
-        let handler = build_key_handler(controller.clone(), Rc::clone(&focus_node));
+        let handler = build_key_handler(
+            Rc::new(RefCell::new(controller.clone())),
+            Rc::clone(&focus_node),
+        );
         controller.move_caret_end();
 
         let event = KeyEventBuilder::new(Code::Backspace)
@@ -1677,6 +1722,119 @@ mod tests {
         );
         dispatch_ime(&harness, &flui_types::ImeEvent::Commit("z".to_owned()));
         assert_eq!(controller.text(), "z");
+    }
+
+    /// Swapping the controller on a live field retargets everything that
+    /// reaches one — the painted text, IME input, and key input.
+    ///
+    /// The focus node is deliberately UNCHANGED, so the only difference
+    /// between the two views is the controller; swapping both would let a
+    /// node-driven re-registration pass for a controller-driven one.
+    ///
+    /// Each assertion has its negative half: the replacement receiving the
+    /// input is not enough, because a field forwarding to BOTH would satisfy
+    /// it. The original must also stop.
+    #[test]
+    fn swapping_the_controller_retargets_paint_ime_and_keys_to_the_replacement() {
+        let original = TextEditingController::with_text("original");
+        let replacement = TextEditingController::with_text("replacement");
+        let focus_node = FocusNode::with_debug_label("controller swap");
+        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+            original.clone(),
+            Rc::clone(&focus_node),
+        ));
+        harness.enter_owner_scope(|| {
+            focus_node.request_focus();
+        });
+        harness.tick();
+
+        let painted_before =
+            with_render_editable(&harness, |editable| editable.plain_text().to_string())
+                .expect("a mounted EditableText always has a RenderEditable");
+        assert_eq!(
+            painted_before, "original",
+            "premise: the field starts on the original"
+        );
+
+        harness.swap_root(EditableText::new(
+            replacement.clone(),
+            Rc::clone(&focus_node),
+        ));
+        harness.tick();
+
+        let painted_after =
+            with_render_editable(&harness, |editable| editable.plain_text().to_string())
+                .expect("a mounted EditableText always has a RenderEditable");
+        assert_eq!(
+            painted_after, "replacement",
+            "the swap must reach the render object; before this the field kept \
+             painting the controller it was born with"
+        );
+
+        // IME input follows the swap.
+        dispatch_ime(&harness, &flui_types::ImeEvent::Commit("z".to_owned()));
+        assert_eq!(
+            replacement.text(),
+            "replacementz",
+            "IME commits must reach the replacement"
+        );
+        assert_eq!(
+            original.text(),
+            "original",
+            "and must NOT reach the original — a field forwarding to both \
+             would pass the assertion above"
+        );
+
+        // Key input follows the swap.
+        let handled = harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('!'));
+        assert!(handled, "the focused field must still consume the key");
+        assert_eq!(
+            replacement.text(),
+            "replacementz!",
+            "the key handler registered at mount must read the replacement"
+        );
+        assert_eq!(
+            original.text(),
+            "original",
+            "and must not reach the original"
+        );
+    }
+
+    /// Rebuilding with the SAME controller changes nothing.
+    ///
+    /// The control for the test above: a `did_update_view` that retargeted
+    /// unconditionally would re-register the listener on every rebuild, and
+    /// nothing in the positive test could tell that apart from a correct swap.
+    #[test]
+    fn rebuilding_with_the_same_controller_keeps_one_listener() {
+        let controller = TextEditingController::with_text("stable");
+        let focus_node = FocusNode::with_debug_label("same controller rebuild");
+        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+        harness.tick();
+
+        for _ in 0..3 {
+            harness.swap_root(EditableText::new(
+                controller.clone(),
+                Rc::clone(&focus_node),
+            ));
+            harness.tick();
+        }
+
+        // One notification per change, not one per rebuild-registered
+        // listener: a duplicated listener would multiply the rebuilds a
+        // single keystroke causes.
+        let painted = with_render_editable(&harness, |editable| editable.plain_text().to_string())
+            .expect("a mounted EditableText always has a RenderEditable");
+        assert_eq!(painted, "stable");
+        assert!(
+            controller.is_same_controller(&controller.clone()),
+            "a clone is the same controller — the identity this rebuild relies on"
+        );
     }
 
     /// A normal post-mount focus edge attaches one IME client and routes
