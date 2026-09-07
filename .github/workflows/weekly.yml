@@ -230,8 +230,13 @@ jobs:
       - name: Clone the pinned Flutter reference
         run: |
           set -euo pipefail
-          tag="$(sed -n 's/^tag = "\(.*\)"$/\1/p' \
-            crates/flui-widgets/tests/parity/manifest.toml | head -1)"
+          # Parse the TOML rather than pattern-match a line. The line-shaped
+          # version needed `tag = "X"` and nothing else on the line, so an
+          # inline comment or trailing space failed the job against a perfectly
+          # valid manifest -- and its `^tag = ` + `head -1` would have picked a
+          # `tag` key from any earlier table without saying so.
+          tag="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["source"]["tag"])' \
+            crates/flui-widgets/tests/parity/manifest.toml)"
           if [ -z "$tag" ]; then
             echo "could not read source.tag from the parity manifest" >&2
             exit 1
