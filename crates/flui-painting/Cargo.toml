@@ -33,7 +33,7 @@ cosmic-text = { version = "0.19" }
 # cosmic-text 0.19 already resolves, so no second copy is compiled: this is a
 # direct edge onto a crate the tree was building anyway, not a new dependency.
 # Needed by `EmojiForbiddenFallback` (issue #930).
-unicode-script = { version = "0.5.8" }
+unicode-script = { version = "=0.5.8" }
 
 [dev-dependencies]
 # Self dev-dependency that turns the off-by-default `testing` feature on for

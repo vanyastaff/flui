@@ -234,8 +234,35 @@ fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
 /// `font/fallback/mod.rs:469` — verified by grep across the crate: the other
 /// three sites are the trait declaration and `Fallbacks`' own list
 /// construction. Nothing on the `common_fallback` or `script_fallback` path
-/// reads it. Genuine emoji resolve through `script_fallback`, so forbidding
-/// these families suppresses them in the junk tail and nowhere else.
+/// reads it, and `next_item` walks both of those loops to exhaustion *before*
+/// it reaches the tail.
+///
+/// The route genuine emoji actually take is `common_fallback()`, whose unix
+/// list **ends** in `"Noto Color Emoji"` (`font/fallback/unix.rs`) — not
+/// `script_fallback()`, which an earlier revision of this doc claimed. Emoji
+/// codepoints are `Script::Common`, and the unix script table has no entry for
+/// it: that lookup falls to `_ => &[]`. Naming the wrong route mattered
+/// because the two differ exactly where this type has to be careful — see
+/// [`EmojiForbiddenFallback::new`] on the targets where `common_fallback()` is
+/// empty and the tail is the only route there is.
+///
+/// # Known gap: the list is a construction-time snapshot
+///
+/// cosmic-text reads `forbidden_fallback()` once, inside `Fallbacks::new`,
+/// which runs in the `FontSystem` constructor, and exposes no setter —
+/// `Fallbacks::extend` refreshes only the per-script lists. So an emoji face
+/// registered *after* construction, through
+/// `PaintingBinding::register_font` or any `SharedFontSystem::with_mut`, is
+/// never forbidden.
+///
+/// That is the same growth [`InstalledFamilies::sync`] exists to track, and it
+/// is not hypothetical: on a host where `FontSystem::new()` finds no faces at
+/// all — headless, CI, a minimal container — this scan sees an empty database
+/// and forbids nothing for the life of the process. The asymmetry is stated
+/// rather than fixed because closing it means rebuilding the font system, and
+/// a rebuild discards every shaping cache it holds. What is lost is a
+/// mitigation, not a correctness guarantee: without it the tail behaves as it
+/// did before this type existed.
 ///
 /// # Why the list is scanned rather than hard-coded
 ///
@@ -254,30 +281,76 @@ pub(crate) struct EmojiForbiddenFallback {
 }
 
 impl EmojiForbiddenFallback {
-    /// Scan `db` for the families cosmic-text would classify as emoji.
+    /// Scan `db` for the families cosmic-text would classify as emoji, and add
+    /// them to the platform's own forbidden list.
+    ///
+    /// # Why the platform list is EXTENDED, never replaced
+    ///
+    /// `PlatformFallback::forbidden_fallback()` is not empty everywhere:
+    /// on macOS it is `[".LastResort"]`, the system's tofu face, which exists
+    /// precisely so it never wins a fallback. Returning only the scanned names
+    /// would drop that entry and let `.LastResort` serve a run — and no CI job
+    /// would catch it, since macOS is lint-only here.
+    ///
+    /// # Why this can be a no-op
+    ///
+    /// On any target that is neither unix-not-Android, Windows nor macOS —
+    /// **Android and wasm** — `common_fallback()` is empty
+    /// (`font/fallback/other.rs`), and the unfiltered tail is therefore the
+    /// *only* route to any fallback face at all. Forbidding emoji families
+    /// there does not redirect a Latin run to a text face; it makes genuine
+    /// emoji unrenderable, because nothing else can reach them. So the scan is
+    /// skipped wherever the platform offers no curated list to carry emoji
+    /// instead. Expressed as a runtime check on that list rather than as a
+    /// `cfg`, because the property that matters is "is there another route",
+    /// and a new target answers it correctly without being enumerated here.
     pub(crate) fn new(db: &Database) -> Self {
-        let mut forbidden: Vec<&'static str> = Vec::new();
-        for face in db.faces() {
-            if !face.post_script_name.contains("Emoji") {
+        let inner = cosmic_text::PlatformFallback;
+        let forbidden = forbidden_list(
+            inner.forbidden_fallback(),
+            !inner.common_fallback().is_empty(),
+            db,
+        );
+        Self { inner, forbidden }
+    }
+}
+
+/// The forbidden list [`EmojiForbiddenFallback::new`] installs, as a function
+/// of the platform's own list and whether the platform offers a curated
+/// `common_fallback()`.
+///
+/// Extracted so both properties are testable on any host: on Linux the
+/// platform's forbidden list is empty and its common list is not, so a test
+/// written against `PlatformFallback` directly could only ever exercise one
+/// corner of this — and it is the OTHER corners (macOS's `.LastResort`,
+/// Android's empty common list) that carry the risk, on the two platforms CI
+/// never executes.
+fn forbidden_list(
+    platform_forbidden: &[&'static str],
+    platform_has_common_fallback: bool,
+    db: &Database,
+) -> Vec<&'static str> {
+    let mut forbidden: Vec<&'static str> = platform_forbidden.to_vec();
+    if !platform_has_common_fallback {
+        return forbidden;
+    }
+    for face in db.faces() {
+        if !face.post_script_name.contains("Emoji") {
+            continue;
+        }
+        for (family, _) in &face.families {
+            if forbidden.contains(&family.as_str()) {
                 continue;
             }
-            for (family, _) in &face.families {
-                if forbidden.contains(&family.as_str()) {
-                    continue;
-                }
-                // Leaked deliberately: `Fallback` hands out `&'static str`
-                // and the names are only known after a runtime scan, so there
-                // is no borrow that satisfies it. Bounded by the host's emoji
-                // family count — single digits — and paid once per font
-                // system, which production constructs once per process.
-                forbidden.push(Box::leak(family.clone().into_boxed_str()));
-            }
-        }
-        Self {
-            inner: cosmic_text::PlatformFallback,
-            forbidden,
+            // Leaked deliberately: `Fallback` hands out `&'static str` and the
+            // names are only known after a runtime scan, so there is no borrow
+            // that satisfies it. Bounded by the host's emoji family count —
+            // single digits — and paid once per font system, which production
+            // constructs once per process.
+            forbidden.push(Box::leak(family.clone().into_boxed_str()));
         }
     }
+    forbidden
 }
 
 impl cosmic_text::Fallback for EmojiForbiddenFallback {
@@ -827,6 +900,53 @@ mod tests {
         assert!(
             !family_accepts_weight(&db, "FLUI Probe Variable", 950),
             "control: past the axis maximum the family stops accepting"
+        );
+    }
+
+    /// The platform's own forbidden entries survive the scan.
+    ///
+    /// macOS forbids `".LastResort"` — the system tofu face, forbidden
+    /// precisely so it never wins a fallback. Returning only the scanned emoji
+    /// names would drop it, and no CI job here would notice: macOS is
+    /// lint-only. Linux's platform list is empty, so this is asserted through
+    /// [`forbidden_list`] with an explicit list rather than through
+    /// `PlatformFallback`, which on this host could not tell the two
+    /// implementations apart.
+    #[test]
+    fn the_platform_forbidden_list_is_extended_not_replaced() {
+        let db = database(&[DECOY_WIDE_SPACE]);
+
+        let forbidden = forbidden_list(&[".LastResort"], true, &db);
+
+        assert!(
+            forbidden.contains(&".LastResort"),
+            "the platform's own entry must survive; got {forbidden:?}"
+        );
+        assert!(
+            forbidden.contains(&"FLUI Decoy Emoji"),
+            "control: the scan still adds the host's emoji families; got {forbidden:?}"
+        );
+    }
+
+    /// Where the platform has no curated `common_fallback()` — Android and
+    /// wasm, per `font/fallback/other.rs` — the unfiltered tail is the ONLY
+    /// route to any fallback face. Forbidding emoji families there would not
+    /// redirect a Latin run to a text face; it would make genuine emoji
+    /// unrenderable, since nothing else can reach them.
+    ///
+    /// Red-check: drop the `platform_has_common_fallback` early return — the
+    /// decoy's family appears and this fails.
+    #[test]
+    fn nothing_is_forbidden_where_the_tail_is_the_only_route() {
+        let db = database(&[DECOY_WIDE_SPACE]);
+
+        let forbidden = forbidden_list(&[".LastResort"], false, &db);
+
+        assert_eq!(
+            forbidden,
+            vec![".LastResort"],
+            "with no common list to carry emoji, only the platform's own \
+             entries may be forbidden"
         );
     }
 
