@@ -62,8 +62,19 @@ pub struct LayerNode {
     /// `PictureLayer`'s `Arc<DisplayList>`.
     ///
     /// `None` on every layer no boundary originated — structural layers a
-    /// fragment pushed, the root — so a pairing pass cannot mistake one for a
-    /// boundary.
+    /// fragment pushed — so a pairing pass cannot mistake one for a boundary.
+    ///
+    /// **The tree root is not automatically one of those.** It carries a stamp
+    /// when the ROOT RENDER OBJECT declares itself a repaint boundary, which
+    /// `RenderView` does; it is `None` only when the root is an ordinary node
+    /// (a plain `RenderFlex` root, as most test fixtures mount). The
+    /// distinction matters to exactly the consumer this field exists for: a
+    /// pairing pass that skips the root on the assumption it is always
+    /// structural would drop a real boundary — the top-level one — and the
+    /// resulting gap looks like "the root never changed" rather than like a
+    /// bug. The root is also the one boundary `push_boundary_layer` cannot
+    /// stamp, because that fires from a parent's child loop and the root has
+    /// no parent; `FragmentComposer::new` takes it as an argument instead.
     ///
     /// A `RenderId` rather than an `ElementId` (ADR-0061 allows either): the
     /// paint walk holds one already, so no lookup lands on a hot path, and the

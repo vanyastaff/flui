@@ -383,6 +383,65 @@ fn every_boundary_root_layer_carries_its_own_id() {
     );
 }
 
+/// A ROOT that declares itself a repaint boundary is stamped too.
+///
+/// The sibling test above cannot see this case, and passes without it: its
+/// `mount()` root is a `RenderFlex`, which is not a boundary, so the root never
+/// appears on either side of its comparison. Stamping is driven by
+/// `push_boundary_layer` from the PARENT's child loop, and the root has no
+/// parent -- so a boundary root produced a layer tree containing a boundary
+/// nothing could identify, which is precisely the shape `render_id` exists to
+/// prevent.
+///
+/// Red-check: remove the `root_boundary` argument threaded into
+/// `FragmentComposer::new` and the count is N, not N+1.
+#[test]
+fn a_root_that_is_itself_a_boundary_carries_a_stamp() {
+    const N: usize = 3;
+
+    // Same tree as `mount`, but wrapped so the ROOT is a repaint boundary.
+    let mut owner = PipelineOwner::new();
+    let (root_id, _registry) = tree::mount(
+        &mut owner,
+        box_node(RenderRepaintBoundary::new()).child(spec(N)),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+
+    let stamps = stamps_of(&tree);
+    let boundary_ids: std::collections::BTreeSet<flui_foundation::RenderId> = owner
+        .render_tree()
+        .iter()
+        .filter(|(_, node)| node.is_repaint_boundary())
+        .map(|(id, _)| id)
+        .collect();
+
+    assert!(
+        boundary_ids.contains(&root_id),
+        "premise: the wrapped root must actually BE a repaint boundary, or \
+         this test proves nothing"
+    );
+    assert_eq!(
+        stamps.len(),
+        N + 1,
+        "N child boundaries plus the root itself must each carry a stamp, \
+         got {stamps:?}"
+    );
+    assert_eq!(
+        stamps
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        boundary_ids,
+        "the stamps must be exactly the tree's repaint-boundary ids, root included"
+    );
+}
+
 /// A frame that grafts seven boundaries still identifies all eight, so
 /// retention does not break the comparison the stamp exists for.
 ///
