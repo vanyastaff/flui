@@ -474,7 +474,15 @@ mod gpu_live_tests {
     fn profiler_captures_real_non_empty_timings_on_capable_adapter() {
         let Some((adapter, device, queue, has_inside_encoders)) = acquire_profiler_test_device()
         else {
-            eprintln!("SKIP: no GPU adapter available in this environment");
+            // Same hazard as the readback suites: an early return is reported
+            // PASSED, so a host with no usable GPU turns this green having
+            // measured nothing. `acquire_profiler_test_device` answers `None`
+            // only for adapter/device acquisition — the capability question is
+            // `has_inside_encoders` below, and stays a soft skip.
+            super::test_support::resolve_unavailable_gpu(
+                "profiler test device acquisition returned None",
+                super::test_support::require_gpu(),
+            );
             return;
         };
 

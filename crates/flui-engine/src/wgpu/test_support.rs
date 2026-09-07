@@ -286,31 +286,38 @@ fn demanded_by(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some()
 }
 
-/// What an absent adapter means, given whether this run demands one.
+/// What an unavailable GPU means, given whether this run demands one.
+///
+/// "Unavailable", not "no adapter": `HeadlessRenderer::new`'s own `# Errors`
+/// says it fails "when no GPU adapter **or device** is available", so device
+/// creation failing on a host that has an adapter reaches here too. The
+/// carried `reason` is the underlying error, and naming only the adapter would
+/// send a reader looking at enumeration for a device-request failure.
 ///
 /// Split out from [`renderer_or_skip`] so the demanding branch has a test that
 /// does not need a GPU-less host to reach it: the test and the production path
 /// call this same function, rather than the test restating the rule.
-fn resolve_absent_adapter(reason: &str, require: bool) {
+pub(crate) fn resolve_unavailable_gpu(reason: &str, require: bool) {
     assert!(
         !require,
-        "FLUI_REQUIRE_GPU is set, so a missing GPU adapter is a failure rather \
+        "FLUI_REQUIRE_GPU is set, so an unavailable GPU is a failure rather \
          than a skip: {reason}. A readback test that returns early is reported \
          PASSED, so without this the whole merge-blocking GPU suite goes green \
-         having rendered nothing."
+         having rendered nothing. The cause is whichever of adapter \
+         enumeration or device creation the message above names."
     );
-    eprintln!("skipping: no GPU adapter available ({reason})");
+    eprintln!("skipping: no usable GPU ({reason})");
 }
 
-/// The headless renderer, or `None` when this host has no usable adapter.
+/// The headless renderer, or `None` when this host has no usable GPU.
 ///
 /// Every readback suite opens with this. The skip it performs is the reason it
 /// exists: a Rust test that returns early is reported **PASSED**, so a host
-/// where adapter enumeration fails turns the entire GPU suite green while
-/// rendering nothing, and the pass count moves too little for anyone to notice.
-/// `FLUI_REQUIRE_GPU` converts that into a loud failure.
+/// where adapter enumeration or device creation fails turns the entire GPU
+/// suite green while rendering nothing, and the pass count moves too little for
+/// anyone to notice. `FLUI_REQUIRE_GPU` converts that into a loud failure.
 ///
-/// This covers the adapter being ABSENT. A test that skips because the adapter
+/// This covers the GPU being unusable at all. A test that skips because the adapter
 /// lacks a specific capability — `DUAL_SOURCE_BLENDING`, in the blend suites —
 /// is a narrower and legitimate skip, and is deliberately left soft: WARP's
 /// capability set is not this crate's to require, and forcing it would make CI
@@ -319,7 +326,7 @@ pub(crate) fn renderer_or_skip() -> Option<super::headless::HeadlessRenderer> {
     match super::headless::HeadlessRenderer::new() {
         Ok(renderer) => Some(renderer),
         Err(error) => {
-            resolve_absent_adapter(&error.to_string(), require_gpu());
+            resolve_unavailable_gpu(&error.to_string(), require_gpu());
             None
         }
     }
@@ -327,12 +334,12 @@ pub(crate) fn renderer_or_skip() -> Option<super::headless::HeadlessRenderer> {
 
 #[cfg(test)]
 mod adapter_gate_tests {
-    use super::{demanded_by, resolve_absent_adapter};
+    use super::{demanded_by, resolve_unavailable_gpu};
 
-    /// Without the demand, an absent adapter is a skip.
+    /// Without the demand, an unavailable GPU is a skip.
     #[test]
-    fn an_absent_adapter_is_a_skip_when_nothing_demands_one() {
-        resolve_absent_adapter("no adapter, for the test", false);
+    fn an_unavailable_gpu_is_a_skip_when_nothing_demands_one() {
+        resolve_unavailable_gpu("device request failed, for the test", false);
     }
 
     /// With it, the same absence is a failure — the whole point of the knob.
@@ -341,8 +348,8 @@ mod adapter_gate_tests {
     /// future panic added for an unrelated reason cannot make this pass.
     #[test]
     #[should_panic(expected = "FLUI_REQUIRE_GPU is set")]
-    fn an_absent_adapter_is_a_failure_when_the_run_demands_one() {
-        resolve_absent_adapter("no adapter, for the test", true);
+    fn an_unavailable_gpu_is_a_failure_when_the_run_demands_one() {
+        resolve_unavailable_gpu("device request failed, for the test", true);
     }
 
     /// The knob reads the variable by PRESENCE, not truthiness.
