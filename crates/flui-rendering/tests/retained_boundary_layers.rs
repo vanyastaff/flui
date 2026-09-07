@@ -1960,3 +1960,81 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
          it at the wrong origin moves the layer silently",
     );
 }
+
+/// Two opacities under ONE boundary both update in the same frame.
+///
+/// `layer_patches_for` walks the capture's slots and serves every flagged node
+/// it finds, so a second requester in the same boundary must not displace the
+/// first — and neither may repaint the subtree. A single-requester fixture
+/// cannot see a patch loop that stops after one entry, or one that serves the
+/// wrong node's properties into a shared index.
+#[test]
+fn two_opacities_under_one_boundary_both_update_without_repainting() {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderOpacity::new(0.5)).label("outer").child(
+                    box_node(RenderFlex::row())
+                        .child(
+                            box_node(RenderOpacity::new(0.25))
+                                .label("inner")
+                                .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                        )
+                        .child(box_node(PaintCounter(Arc::clone(&painted)))),
+                ),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let outer = registry.get("outer").expect("outer is labelled");
+    let inner = registry.get("inner").expect("inner is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the subtree paints on the first frame"
+    );
+
+    set_opacity(&mut owner, outer, 0.75);
+    set_opacity(&mut owner, inner, 0.125);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "neither update may repaint the shared subtree",
+    );
+    // Compared as the u8 the pipeline actually stores: an opacity round-trips
+    // through `opacity_to_alpha`, so 0.75 comes back as 191/255 = 0.7490…, and
+    // an oracle written in floats would be asserting about the rounding rather
+    // than about the update.
+    let mut alphas: Vec<u8> = Vec::new();
+    let mut stack = vec![tree.root().expect("root")];
+    while let Some(id) = stack.pop() {
+        if let Some(node) = tree.get(id) {
+            if let flui_layer::Layer::Opacity(o) = node.layer() {
+                alphas.push((o.alpha() * 255.0).round() as u8);
+            }
+            stack.extend(node.children().iter().copied());
+        }
+    }
+    alphas.sort_unstable();
+    assert_eq!(
+        alphas,
+        vec![
+            (0.125_f32 * 255.0).round() as u8,
+            (0.75_f32 * 255.0).round() as u8
+        ],
+        "both opacity layers must carry their new alpha",
+    );
+}
