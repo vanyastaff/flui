@@ -254,10 +254,23 @@ earlier decisions recorded here, and both were wrong for reasons worth keeping:
   accessor returning just the family would let the same defect back in.
 
 **Alternatives:**
-- A custom `Fallback` impl whose `forbidden_fallback()` excludes emoji families — a real option,
-  and complementary rather than competing: it would suppress emoji in the unfiltered tail on paths
-  where no family resolves at all. Not taken here; it needs a per-platform emoji family list and its
-  own red test.
+A custom `Fallback` impl whose `forbidden_fallback()` excludes emoji families is complementary
+rather than competing, and now ships (`EmojiForbiddenFallback`): it suppresses emoji faces in the
+unfiltered tail, the path reached when neither the resolved family nor the script list can serve a
+word. It was first deferred here for wanting "a per-platform emoji family list and its own red
+test". Neither obstacle survived contact: the trait returns `&[&'static str]` borrowed from `&self`,
+so the list is *scanned* from the host database using cosmic-text's own emoji predicate
+(`post_script_name.contains("Emoji")`, the same one that produces its `not_emoji` sort key) rather
+than guessed per platform; and the red test is hermetic on the generated decoy face.
+
+Two properties of that impl are load-bearing and easy to get wrong. It **extends** the platform's
+forbidden list rather than replacing it — macOS's is `[".LastResort"]`, and dropping that entry
+would let the system tofu face win a fallback on the one platform CI never executes. And it
+**declines to forbid anything** where `common_fallback()` is empty — Android and wasm, per
+`font/fallback/other.rs` — because there the unfiltered tail is the only route to any fallback face,
+so forbidding emoji families would not redirect a Latin run, it would make emoji unrenderable. That
+is a runtime check on the platform list, not a `cfg`: the question is "is there another route", and
+a future target answers it without being enumerated.
 
 **Accepted trade-off — this is where the divergence lies.** Flutter's `fontFamilyFallback`
 (`packages/flutter/lib/src/painting/text_style.dart`) is searched **per glyph**: each family in the

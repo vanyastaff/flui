@@ -146,11 +146,20 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
         // Bound after construction rather than before: the constructor derives
         // its monospace and per-script tables from each face's `monospaced`
         // flag and its GPOS/GSUB scripts, never from the generic names, so
-        // binding afterwards changes nothing it froze — and building the
-        // database twice would repeat a full system-font scan plus a skrifa
-        // parse of every monospace face.
-        let mut system = FontSystem::new();
-        font_resolve::bind_generic_families(system.db_mut());
+        // binding afterwards changes nothing it froze.
+        let mut discovered = FontSystem::new();
+        font_resolve::bind_generic_families(discovered.db_mut());
+        // Then rebuild once around the host's own emoji faces. Binding the
+        // generics closes the fall-through for styles that name *no* family;
+        // this closes the remaining one, for a style that names a family the
+        // host does not have. cosmic-text snapshots `forbidden_fallback()`
+        // into its `Fallbacks` inside the constructor and exposes no setter,
+        // so installing it means constructing a second time — cheap, because
+        // `into_locale_and_db` moves the populated database across and the
+        // second pass never rescans the host.
+        let (locale, db) = discovered.into_locale_and_db();
+        let forbidden = font_resolve::EmojiForbiddenFallback::new(&db);
+        let system = FontSystem::new_with_locale_and_db_and_fallback(locale, db, forbidden);
         Arc::new(Mutex::new(FontState::new(system)))
     })
 }
@@ -224,7 +233,12 @@ pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale
     db.set_cursive_family(default_family);
     db.set_fantasy_family(default_family);
 
-    let font_system = FontSystem::new_with_locale_and_db(locale.to_owned(), db);
+    // Same emoji suppression the host-discovery path installs, so a pinned
+    // database and a discovered one do not disagree about where an unmatched
+    // family lands.
+    let forbidden = font_resolve::EmojiForbiddenFallback::new(&db);
+    let font_system =
+        FontSystem::new_with_locale_and_db_and_fallback(locale.to_owned(), db, forbidden);
     FONT_SYSTEM
         .set(Arc::new(Mutex::new(FontState::new(font_system))))
         .is_ok()
