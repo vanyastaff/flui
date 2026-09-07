@@ -294,6 +294,24 @@ bitflags! {
         /// cleared the first time the node completes a pass in which nothing
         /// below it degraded.
         const GEOMETRY_DEGRADED = 1 << 12;
+
+        /// This node's own composited-layer properties changed, but nothing it
+        /// painted did.
+        ///
+        /// Set when a property that lands ONLY on a layer this node pushes
+        /// changes — an opacity's alpha, a transform's matrix — so the frame
+        /// can rebuild that layer and replay the rest of the enclosing
+        /// boundary's retained output instead of repainting the subtree.
+        ///
+        /// Distinct from [`Self::NEEDS_PAINT`] and deliberately weaker: a node
+        /// carrying this flag is NOT dirty for paint, and the enclosing
+        /// boundary it enqueues is not either. Paint always wins — see
+        /// `Scheduler::mark_needs_composited_layer_update`, which refuses to
+        /// set this on a node already needing paint.
+        ///
+        /// Flutter equivalent: `_needsCompositedLayerUpdate = true`
+        /// (`object.dart`, `markNeedsCompositedLayerUpdate`).
+        const NEEDS_COMPOSITED_LAYER_UPDATE = 1 << 13;
     }
 }
 
@@ -361,6 +379,9 @@ impl fmt::Display for RenderFlags {
         let mut flags = Vec::new();
         if self.contains(Self::NEEDS_LAYOUT) {
             flags.push("NEEDS_LAYOUT");
+        }
+        if self.contains(Self::NEEDS_COMPOSITED_LAYER_UPDATE) {
+            flags.push("NEEDS_COMPOSITED_LAYER_UPDATE");
         }
         if self.contains(Self::NEEDS_PAINT) {
             flags.push("NEEDS_PAINT");
@@ -739,6 +760,33 @@ impl AtomicRenderFlags {
     #[inline]
     pub fn needs_paint(&self) -> bool {
         self.contains(RenderFlags::NEEDS_PAINT)
+    }
+
+    /// Marks the render object as needing a composited-layer update.
+    ///
+    /// Flutter equivalent: the `_needsCompositedLayerUpdate = true` half of
+    /// `markNeedsCompositedLayerUpdate()`. The eligibility decision and the
+    /// enqueue live in `Scheduler::mark_needs_composited_layer_update`.
+    #[inline]
+    pub fn mark_needs_composited_layer_update(&self) {
+        self.set(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
+    }
+
+    /// Clears the needs-composited-layer-update flag.
+    ///
+    /// Called wherever [`Self::clear_needs_paint`] is, because a repaint
+    /// subsumes a layer-property update.
+    #[inline]
+    pub fn clear_needs_composited_layer_update(&self) {
+        self.remove(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
+    }
+
+    /// Checks if the render object needs a composited-layer update.
+    ///
+    /// Flutter equivalent: `_needsCompositedLayerUpdate` (private field)
+    #[inline]
+    pub fn needs_composited_layer_update(&self) -> bool {
+        self.contains(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE)
     }
 
     /// Marks the render object as needing compositing update.

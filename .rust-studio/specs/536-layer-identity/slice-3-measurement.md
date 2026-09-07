@@ -1,97 +1,91 @@
-# 536 slice 3 — measurement before building either arm
+# 536 slice 3 — measurement, and what it changed
 
-The slice-3 plan (`slice-3-plan.md`) did not survive its adversarial review.
-Rather than pick between the two surviving designs on argument, this measures
-the prize both compete for. Measured 2026-09-07 on this machine
-(32 cores; benchmark noise floor in this area is ±5%).
+The first slice-3 plan (`slice-3-plan.md`) did not survive its adversarial
+review, so the prize both surviving designs competed for was measured before
+either was built. The measurement then picked the design, and PR review
+corrected the measurement twice. All numbers below are from this machine
+(32 cores); the noise floor in this area is ±5%.
 
-## What was measured
+## The benchmark
 
-`paint/opacity_tick` (`crates/flui-rendering/benches/paint.rs`) over the tree
+`paint/opacity_alpha_change` (`crates/flui-rendering/benches/paint.rs`) over
 
 ```text
 RenderFlex row
  ├─ RenderRepaintBoundary ── RenderOpacity(0.5) ── row of `subtree` leaves
- └─ RenderRepaintBoundary ── one leaf                     (the sibling)
+ └─ RenderRepaintBoundary ── one leaf
 ```
 
-- **`repaint`** dirties a leaf inside the opacity. `RenderOpacity` is not a
-  repaint boundary today, so `mark_needs_paint` walks up to the enclosing
-  `RenderRepaintBoundary` and the whole subtree repaints. **This is what an
-  alpha tick costs now.**
-- **`graft`** dirties the sibling instead, so that boundary stays clean and its
-  capture is replayed. **This is the floor any update-only design can reach**,
-  since patching one layer on top of a graft is O(1).
+Both arms mutate the SAME tree by the SAME property through the seam a widget
+rebuild uses (`set_opacity` → `RenderUpdateImpact` → `apply_render_update_impact`).
+The only difference is that `repaint` additionally marks the opacity node
+needing paint, which forces the old path.
 
-The sibling exists so the clean arm still has paint work and cannot take
-`run_paint`'s nothing-is-dirty early return — the trap that made sub-slice 2a
-unbuildable.
+`RenderOpacity` is deliberately **not** a repaint boundary — its own effect
+layer is addressable inside the ENCLOSING boundary's capture, which is what
+lets an alpha change be served without promoting anything.
 
 ## Result
 
-| subtree nodes | repaint | graft | ratio |
-|---|---|---|---|
-| 1 | 1.11 µs | 1.24 µs | 1.12 (graft *slower*) |
-| 10 | 3.27 µs | 1.25 µs | 0.38 |
-| 100 | 23.97 µs | 1.13 µs | 0.047 |
-| 1000 | 233.5 µs | 1.18 µs | 0.005 |
+| shape | subtree | update | repaint | ratio |
+|---|---|---|---|---|
+| inline | 1 | 1.18 µs | 1.83 µs | 0.65 |
+| inline | 10 | 1.40 µs | 7.67 µs | 0.18 |
+| inline | 100 | 1.61 µs | 29.25 µs | 0.055 |
+| inline | 1000 | 1.43 µs | 233.7 µs | **0.006** |
+| layered | 1 | 0.82 µs | 1.06 µs | 0.77 |
+| layered | 10 | 1.91 µs | 5.10 µs | 0.37 |
+| layered | 100 | 14.2 µs | 32.2 µs | 0.44 |
+| layered | 1000 | 253.6 µs | 346.9 µs | **0.73** |
 
-**The prize is real and large, and it is not slice 2 again.** Repaint scales
-linearly with content under the opacity; graft is flat. At 1000 nodes an
-update-only commit is ~198× cheaper. Below ~10 nodes there is nothing to win
-(and a hair to lose), which is the expected shape, not a defect.
+**The two shapes must be read together.** `inline` leaves merge into ONE
+`PictureLayer` sharing an `Arc<DisplayList>`, so the retained capture is a
+handful of nodes at any size and the update arm is flat — up to 163× cheaper.
+`layered` gives every leaf its own repaint boundary, so the capture's layer
+count grows with `subtree` and the update arm grows with it: a graft clones
+every captured node. The win there narrows to ~1.4×.
 
-## Why graft is flat — and why this decides the design
+So the win is governed by **how many retained layers the boundary holds**, not
+by how many render nodes sit under it. Quoting only the inline number would
+overstate the general case.
 
-A flat number is also what a graft that silently dropped the subtree would
-report, so it was verified rather than assumed:
-`a_grafted_opacity_subtree_matches_a_full_repaint_at_any_size`
-(`crates/flui-rendering/tests/retained_boundary_layers.rs`) asserts the grafted
-layer tree is structurally identical to a full repaint's, is non-empty, and
-holds **exactly 6 layers at subtree = 1, 10, and 100**. (Confirmed live: the
-assertion was temporarily pointed at a wrong value and reported `[6, 6, 6]`.)
+## Two corrections the PR review forced
 
-The cause: the leaves are inline (non-boundary), so `run_paint` merges their
-draw runs into ONE `PictureLayer` sharing an `Arc<DisplayList>`. Grafting
-clones an `Arc` instead of re-recording every command. That is the
-structural-sharing substrate ADR-0061 named as retention's prerequisite,
-doing exactly the work it was added for.
+Both came from Codex on PR #994 and both changed conclusions, not just wording.
 
-**This favours patching inside the enclosing capture over promoting opacity to
-its own repaint boundary.** The `graft` arm above never made the opacity a
-boundary — it grafted the *enclosing* `RenderRepaintBoundary`, whose capture is
-already 6 layers and already O(1) to replay. Everything the promotion design
-would buy is therefore already on the table; all that is missing is patching
-one of those 6 nodes with the current alpha. Promoting each `Opacity` to a
-boundary would add an `OffsetLayer` and a whole retained capture per node to
-reach a position the enclosing boundary's capture already reaches.
+1. **The first benchmark was asymmetric.** Its cheap arm dirtied a *sibling*
+   boundary to force a paint pass, so that arm's timing included repainting and
+   recapturing a whole extra branch while the expensive arm grafted it. That
+   asymmetry produced a reported "1.12× slower at subtree = 1" and the
+   conclusion that nothing under ~10 nodes was worth serving. With the
+   symmetric fixture the update arm is **faster even at subtree = 1** (0.65×),
+   and that conclusion is withdrawn.
+2. **`graft` is not O(1) in general.** The original fixture varied only inline
+   leaves, which merge into one picture, so `subtree` never increased the graft
+   workload and the flat curve was an artifact of the shape rather than a
+   property of the mechanism. The `layered` series above exists to characterise
+   the real asymptotics.
 
-It also sidesteps, rather than solves, the review's ship-stopper: promotion
-requires `is_repaint_boundary()` to become dynamic, and that flag is
-insert-time configuration (`set_repaint_boundary_flag` has one production
-caller, `bootstrap_repaint_boundary_flag`, reached only from the four insert
-paths; the paint walk reads the live trait answer while the scheduler, the
-compositing walk, and `subtree_arena`'s `laid_out` recording read the flag).
-Patching inside the enclosing capture never makes it dynamic, so the
-flag-coherence work is not a prerequisite — it is only needed if the promotion
-design is ever revived, and no production render object has a non-constant
-`is_repaint_boundary()` today, so the split is latent rather than a live bug.
+A third review finding tightened the control test rather than the numbers: its
+structural `fingerprint` compared only per-node child counts, so a graft that
+preserved topology while emitting the wrong layer variant would have passed.
+It now compares layer kind as well. Layer *properties* are still asserted
+directly by the tests that care, and pixel equivalence remains the GPU
+readback suite's job.
 
-## What the next slice has to solve
+## Why this picked the design
 
-Carried forward from the review, still true under the patch-in-capture design:
+The cheap arm never makes the opacity a repaint boundary — it grafts the
+**enclosing** one and rebuilds just the opacity's own layer inside it. So the
+alternative design (promote every `Opacity` to a repaint boundary, as Flutter
+does) would add an `OffsetLayer` and a whole retained capture per node to reach
+a position the enclosing capture already reaches — and, per the `layered`
+column, promoting nodes is precisely what makes a graft more expensive.
 
-- **The stored capture must be written back.** `graft` takes
-  `&RetainedSubtree` and clones; `retained_captures.push` happens only on the
-  repaint branch. Patching only the emitted frame leaves the stored capture at
-  the old alpha, and a later frame that grafts it for an unrelated reason
-  reverts the opacity permanently. Needs a **three**-frame test — tick, tick,
-  dirty-a-sibling — because a two-frame test cannot see it.
-- **A node's layers can be flattened into several captures.** Nested
-  boundaries are flattened into each enclosing capture, so a patch must reach
-  every capture holding that render id, not just the nearest one.
-- **The count guard is not Flutter's identity assert.** Comparing how many
-  effect layers were rebuilt passes when alpha→`None` and transform→`Some` in
-  the same frame. Compare the discriminant per position.
-- `RetainedNode` carries `offset` and `render_id` besides `layer`; a patch has
-  to say what happens to those.
+It also sidesteps rather than solves the review's ship-stopper: promotion needs
+`is_repaint_boundary()` to become dynamic, and that flag is insert-time
+configuration (`set_repaint_boundary_flag` has one production caller,
+`bootstrap_repaint_boundary_flag`, reached only from the four insert paths,
+while the paint walk reads the live trait answer). No production render object
+has a non-constant `is_repaint_boundary()` today, so the split is latent rather
+than a live bug — tracked separately.

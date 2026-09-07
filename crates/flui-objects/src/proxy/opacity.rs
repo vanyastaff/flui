@@ -88,8 +88,19 @@ impl RenderOpacity {
         let old_is_visible = self.alpha > 0;
         self.opacity = clamped;
         self.alpha = Self::opacity_to_alpha(clamped);
-        let mut impact = flui_rendering::RenderUpdateImpact::PAINT;
+        // A pure alpha change lands ONLY on the `OpacityLayer` this node
+        // pushes, so the frame can rebuild that layer and replay the enclosing
+        // repaint boundary's retained output rather than repainting the
+        // subtree. Flutter's own setter does exactly this
+        // (`proxy_box.dart`, `RenderOpacity.opacity`: `markNeedsCompositedLayerUpdate()`,
+        // not `markNeedsPaint()`).
+        let mut impact = flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE;
         if old_needs_compositing != self.needs_compositing() {
+            // Crossing the layered threshold changes which layers exist, not
+            // just their properties. `COMPOSITING_BITS` implies `PAINT`, and
+            // `apply_render_update_impact` marks paint before the layer
+            // update, so the weaker mark refuses itself and the frame repaints
+            // — which is the only way to serve a structural change.
             impact |= flui_rendering::RenderUpdateImpact::COMPOSITING_BITS;
         }
         if old_is_visible != (self.alpha > 0) {
@@ -253,7 +264,11 @@ mod tests {
         let mut opacity = RenderOpacity::new(1.0);
         assert_eq!(
             opacity.set_opacity(0.25),
-            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "entering the composited range is structural (COMPOSITING_BITS, which \
+             implies PAINT) and the layer-update bit rides along; the owner applies \
+             paint first, so the weaker mark refuses itself",
         );
         assert!((opacity.opacity() - 0.25).abs() < f32::EPSILON);
         assert_eq!(opacity.alpha(), 64); // 0.25 * 255 ≈ 64
@@ -266,13 +281,15 @@ mod tests {
 
         assert_eq!(
             opacity.set_opacity(0.5),
-            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
         );
         assert!(opacity.needs_compositing());
 
         assert_eq!(
             opacity.set_opacity(1.0),
-            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
         );
         assert_eq!(
             opacity.set_always_needs_compositing(true),
@@ -286,8 +303,10 @@ mod tests {
         let mut opacity = RenderOpacity::new(0.25);
         assert_eq!(
             opacity.set_opacity(0.5),
-            flui_rendering::RenderUpdateImpact::PAINT,
-            "a visible change within the composited range only repaints",
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "a visible change within the composited range lands only on the \
+             OpacityLayer, so it updates that layer instead of repainting — \
+             Flutter's `RenderOpacity.opacity` calls markNeedsCompositedLayerUpdate",
         );
         assert_eq!(
             opacity.set_opacity(0.5),
@@ -296,14 +315,18 @@ mod tests {
         );
         assert_eq!(
             opacity.set_opacity(1.0),
-            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
-            "leaving the composited range updates compositing and paints",
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "leaving the composited range is structural: COMPOSITING_BITS implies \
+             PAINT and wins over the layer-update bit riding with it",
         );
         assert_eq!(
             opacity.set_opacity(0.0),
-            flui_rendering::RenderUpdateImpact::PAINT
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
-            "becoming invisible changes paint and semantics without changing compositing",
+            "becoming invisible changes semantics; the layer change itself is still \
+             just this node's own layer, and `paint_alpha()` dropping to None is \
+             caught by the paint phase's structure guard",
         );
         assert_eq!(
             opacity.set_opacity(0.0),
@@ -312,8 +335,10 @@ mod tests {
         assert_eq!(
             opacity.set_opacity(0.5),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
-            "becoming visible and composited affects both independent phases",
+            "becoming visible and composited affects both independent phases, and \
+             the layer-update bit rides along with every value change",
         );
     }
 

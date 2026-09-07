@@ -424,6 +424,24 @@ impl RenderNode {
         with_entry!(self, entry => entry.state().flags().mark_needs_paint());
     }
 
+    /// Sets the `NEEDS_COMPOSITED_LAYER_UPDATE` flag on this node's state —
+    /// flag-only, no propagation and no paint mark.
+    ///
+    /// The enclosing repaint boundary is enqueued separately by
+    /// `Scheduler::mark_needs_composited_layer_update`, which is the only
+    /// caller: the whole point of this flag is that the node is NOT dirty for
+    /// paint, so nothing here may touch `NEEDS_PAINT`.
+    #[inline]
+    pub fn mark_composited_layer_update_flag(&self) {
+        with_entry!(self, entry => entry.state().flags().mark_needs_composited_layer_update());
+    }
+
+    /// Reads the `NEEDS_COMPOSITED_LAYER_UPDATE` flag.
+    #[inline]
+    pub fn needs_composited_layer_update(&self) -> bool {
+        with_entry!(self, entry => entry.state().needs_composited_layer_update())
+    }
+
     /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
     /// flag-only, no propagation. Additive
     /// helper; not used by the queue-scan dedup path (see
@@ -859,6 +877,12 @@ impl RenderNode {
     #[inline]
     pub fn clear_needs_paint(&self) {
         with_entry!(self, entry => entry.state().clear_needs_paint());
+    }
+
+    /// Clears the composited-layer-update flag.
+    #[inline]
+    pub fn clear_needs_composited_layer_update(&self) {
+        with_entry!(self, entry => entry.state().clear_needs_composited_layer_update());
     }
 
     /// Clears the needs_layout flag.

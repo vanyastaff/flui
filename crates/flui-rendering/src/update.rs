@@ -6,6 +6,7 @@ const LAYOUT_BIT: u8 = 1 << 0;
 const PAINT_BIT: u8 = 1 << 1;
 const COMPOSITING_BITS_BIT: u8 = 1 << 2;
 const SEMANTICS_BIT: u8 = 1 << 3;
+const COMPOSITED_LAYER_UPDATE_BIT: u8 = 1 << 4;
 
 /// The pipeline work required after a render object's configuration changes.
 ///
@@ -35,6 +36,16 @@ impl RenderUpdateImpact {
     pub const COMPOSITING_BITS: Self = Self(COMPOSITING_BITS_BIT | PAINT_BIT);
     /// Rebuild semantics for the render object.
     pub const SEMANTICS: Self = Self(SEMANTICS_BIT);
+    /// Rebuild only the layers this render object pushes, reusing the
+    /// enclosing repaint boundary's retained output for everything else.
+    ///
+    /// Deliberately does **not** include `PAINT_BIT`, unlike
+    /// [`Self::COMPOSITING_BITS`]: the point of this impact is that nothing
+    /// painted. A setter that changes a layer property *and* something it
+    /// paints must report `PAINT` as well, and paint then wins — see
+    /// `PipelineOwner::apply_render_update_impact`, which applies the paint
+    /// mark first so the weaker mark refuses itself.
+    pub const COMPOSITED_LAYER_UPDATE: Self = Self(COMPOSITED_LAYER_UPDATE_BIT);
 
     /// Returns whether no pipeline work is required.
     #[inline]
@@ -58,6 +69,13 @@ impl RenderUpdateImpact {
     #[inline]
     pub const fn needs_compositing_bits_update(self) -> bool {
         self.0 & COMPOSITING_BITS_BIT != 0
+    }
+
+    /// Returns whether only this node's own composited layers must be rebuilt.
+    #[inline]
+    #[must_use]
+    pub const fn needs_composited_layer_update(self) -> bool {
+        self.0 & COMPOSITED_LAYER_UPDATE_BIT != 0
     }
 
     /// Returns whether semantics must be rebuilt.

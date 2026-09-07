@@ -73,6 +73,20 @@ pub(super) enum PhaseKind {
 pub(super) struct DirtyTracker {
     /// Active dirty work for the next pipeline frame.
     dirty: DirtySets,
+    /// Repaint boundaries enqueued for a composited-layer update rather than a
+    /// repaint.
+    ///
+    /// A separate set rather than a flag on the boundary, because the boundary
+    /// itself is not what changed — some node INSIDE it is, and the boundary is
+    /// only the address of the retained output that node's layers live in. It
+    /// is also what keeps this feature from altering the pre-existing graft
+    /// path: `run_paint`'s dirty set stays the full queue, and a boundary
+    /// becomes graft-eligible only by appearing here.
+    ///
+    /// Paint precedence needs no bookkeeping here: `run_paint` intersects this
+    /// with "does not need paint", so a boundary later marked for a real
+    /// repaint drops out on its own.
+    layer_update_boundaries: FxHashSet<RenderId>,
 
     /// Side queue for marks made WHILE a phase is running.
     ///
@@ -111,6 +125,7 @@ impl DirtyTracker {
     pub(super) fn new(notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>) -> Self {
         Self {
             dirty: DirtySets::new(),
+            layer_update_boundaries: FxHashSet::default(),
             mid_layout_marks: DirtySets::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
@@ -340,6 +355,67 @@ impl DirtyTracker {
             return; // already in set — frame already scheduled
         }
         self.notifier.read().fire_need_visual_update();
+    }
+
+    /// Marks a node's own composited-layer properties dirty without dirtying
+    /// anything for paint.
+    ///
+    /// This is the cheap arm of the paint phase: the node's alpha or transform
+    /// changed, but nothing it or its children painted did, so the enclosing
+    /// repaint boundary can replay its retained output and have just this
+    /// node's effect layers rebuilt on the way through.
+    ///
+    /// Ports `RenderObject.markNeedsCompositedLayerUpdate` (`object.dart`),
+    /// including its two refusals:
+    ///
+    /// - **Paint wins.** A node already needing paint, or already carrying this
+    ///   flag, returns immediately. Flutter:
+    ///   `if (_needsCompositedLayerUpdate || _needsPaint) return;`. A repaint
+    ///   rebuilds the layer from current properties anyway, so an update on top
+    ///   of it would be redundant work; and letting the update mark run would
+    ///   enqueue a second, weaker entry for a node the walk is going to repaint.
+    /// - **No retained output, no shortcut.** If no ancestor boundary owns
+    ///   output to patch, this degrades to [`Self::mark_needs_paint`], which is
+    ///   what Flutter's `else { markNeedsPaint(); }` branch does. The flag is
+    ///   still left set, as Flutter leaves it, so a boundary that gains
+    ///   retained output later can serve the node without a fresh mark.
+    ///
+    /// Unlike `mark_needs_paint` this does **not** flag the nodes it walks
+    /// past: the whole point is that they are not dirty. It only finds the
+    /// boundary that owns the retained output and enqueues THAT, unflagged, so
+    /// `run_paint` reaches it and can tell an update-only entry from a repaint
+    /// by asking each queued node whether it needs paint.
+    pub(super) fn mark_needs_composited_layer_update(&mut self, tree: &RenderTree, id: RenderId) {
+        let Some(node) = tree.get(id) else {
+            return;
+        };
+        if node.needs_paint() || node.needs_composited_layer_update() {
+            return;
+        }
+        node.mark_composited_layer_update_flag();
+
+        // Find the boundary whose retained output contains this node. Same
+        // `owns_retained_layer` predicate `mark_needs_paint` stops at, for the
+        // same reason: a boundary that has not painted as one yet has nothing
+        // to patch.
+        let mut current = id;
+        loop {
+            let Some(node) = tree.get(current) else {
+                return;
+            };
+            if node.is_repaint_boundary_flag() && node.was_repaint_boundary() {
+                self.layer_update_boundaries.insert(current);
+                self.schedule_paint_boundary(current, node.depth() as usize);
+                return;
+            }
+            let Some(parent) = node.links().parent() else {
+                // The paint root itself. There is no enclosing boundary to
+                // patch, so this can only be served by repainting.
+                self.mark_needs_paint(tree, id);
+                return;
+            };
+            current = parent;
+        }
     }
 
     /// Marks compositing bits dirty and schedules the node responsible for the
@@ -679,6 +755,16 @@ impl DirtyTracker {
     #[inline]
     pub(super) fn clear_paint_queue(&mut self) {
         self.dirty.needs_paint.clear();
+        self.layer_update_boundaries.clear();
+    }
+
+    /// Repaint boundaries enqueued for a composited-layer update this frame.
+    ///
+    /// Membership alone does not mean the boundary may be reused —
+    /// `run_paint` still requires the node not to need paint, which is where
+    /// "paint wins" is enforced.
+    pub(super) fn layer_update_boundaries(&self) -> &FxHashSet<RenderId> {
+        &self.layer_update_boundaries
     }
 
     /// Sorts the semantics queue shallow-first.

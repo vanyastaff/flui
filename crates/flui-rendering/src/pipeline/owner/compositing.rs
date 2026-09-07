@@ -172,6 +172,12 @@ impl PipelineOwner<Compositing> {
         // boundary owner.
         if !is_boundary && was_boundary {
             node.clear_needs_paint();
+            // Flutter clears `_needsCompositedLayerUpdate` alongside
+            // `_needsPaint` here (`object.dart`, the lost-boundary branch):
+            // the node is about to be re-marked for a real repaint, which
+            // rebuilds its layers from current properties, so a pending
+            // update on top of that is stale bookkeeping.
+            node.clear_needs_composited_layer_update();
             actions.remove_from_paint_queue.insert(id);
             node.clear_needs_compositing_bits_update();
             actions.mark_needs_paint.push(id);

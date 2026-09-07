@@ -28,8 +28,8 @@ arm). The pieces the issue asks for that are already here:
 | eligibility predicate | `Scheduler::mark_needs_paint`'s `owns_retained_layer` = `is_repaint_boundary_flag() && was_repaint_boundary()` — Flutter's exact `isRepaintBoundary && _wasRepaintBoundary` |
 
 **`run_paint`'s doc comment is stale** and says the opposite ("cross-frame
-retention … is deliberately out of scope"). It predates #755. Fixed in this
-slice.
+retention … is deliberately out of scope"). It predates #755, and this slice
+corrects it.
 
 ## The one structural fact this slice turns on
 

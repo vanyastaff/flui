@@ -51,6 +51,14 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::NEEDS_PAINT)
     }
 
+    /// Checks if this node's own composited-layer properties changed while
+    /// nothing it painted did (lock-free, O(1)).
+    #[inline]
+    pub fn needs_composited_layer_update(&self) -> bool {
+        self.flags
+            .contains(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE)
+    }
+
     /// Checks if compositing is needed (lock-free, O(1)).
     #[inline]
     pub fn needs_compositing(&self) -> bool {
@@ -106,6 +114,16 @@ impl<P: Protocol> RenderState<P> {
     #[inline]
     pub fn clear_needs_paint(&self) {
         self.flags.remove(RenderFlags::NEEDS_PAINT);
+    }
+
+    /// Clears the composited-layer-update flag.
+    ///
+    /// Cleared wherever [`Self::clear_needs_paint`] is: a repaint rebuilds the
+    /// layer from current properties anyway, so it subsumes the update.
+    #[inline]
+    pub fn clear_needs_composited_layer_update(&self) {
+        self.flags
+            .remove(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
     }
 
     /// Clears the compositing dirty flag.

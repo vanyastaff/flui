@@ -123,6 +123,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 DirtyKind::Compositing => self.mark_needs_compositing_bits_update(req.id),
                 DirtyKind::Paint => self.mark_needs_paint(req.id),
                 DirtyKind::Semantics => self.mark_needs_semantics(req.id),
+                DirtyKind::CompositedLayerUpdate => {
+                    self.mark_needs_composited_layer_update(req.id);
+                }
             }
         }
         drained
@@ -1442,6 +1445,20 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .schedule_paint_boundary(id, node.depth() as usize);
     }
 
+    /// Marks a node's own composited-layer properties dirty without dirtying
+    /// anything for paint.
+    ///
+    /// Ports `RenderObject.markNeedsCompositedLayerUpdate`. Degrades to
+    /// [`Self::mark_needs_paint`] when no ancestor boundary owns retained
+    /// output to patch, and refuses itself when the node already needs paint —
+    /// see `Scheduler::mark_needs_composited_layer_update` for both rules.
+    ///
+    /// A stale ID is a no-op.
+    pub fn mark_needs_composited_layer_update(&mut self, id: RenderId) {
+        self.scheduler
+            .mark_needs_composited_layer_update(&self.render_tree, id);
+    }
+
     /// Marks compositing bits dirty using Flutter's repaint-boundary walk.
     ///
     /// A stale ID is a no-op. The walk marks the necessary ancestor chain and
@@ -1482,6 +1499,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
         if impact.needs_paint() && !impact.needs_layout() {
             self.mark_needs_paint(node_id);
+        }
+        // Strictly after the paint marks above, and that ordering is the
+        // whole "paint wins" rule: a setter reporting BOTH (a compositing-bits
+        // flip implies `PAINT`) leaves the node already needing paint, so this
+        // mark refuses itself rather than enqueueing a weaker second entry.
+        if impact.needs_composited_layer_update() {
+            self.mark_needs_composited_layer_update(node_id);
         }
         if impact.needs_semantics_update() {
             self.mark_needs_semantics(node_id);

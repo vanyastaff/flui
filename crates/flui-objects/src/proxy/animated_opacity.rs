@@ -214,12 +214,23 @@ impl RenderAnimatedOpacity {
             return false;
         }
 
-        if let Err(error) = handle.mark_needs_paint() {
+        // A tick that only moved the alpha lands ONLY on the `OpacityLayer`
+        // this node pushes, so the frame rebuilds that layer and replays the
+        // enclosing repaint boundary's retained output instead of repainting
+        // the subtree — the whole point of an animated opacity. Degrades to a
+        // paint mark on its own when there is no retained output to patch, so
+        // this is never weaker than the `mark_needs_paint` it replaces.
+        //
+        // A tick that CROSSED the layered threshold already sent a
+        // compositing-bits mark above; that walk marks paint, which wins over
+        // this by the `!needs_paint()` filter in `run_paint`. Flutter's
+        // `_updateOpacity` has exactly this shape.
+        if let Err(error) = handle.mark_needs_composited_layer_update() {
             tracing::warn!(
                 %error,
                 old_alpha,
                 new_alpha,
-                "RenderAnimatedOpacity: paint mark send failed; alpha cache \
+                "RenderAnimatedOpacity: composited-layer-update mark send failed; alpha cache \
                  left at the old value so the next tick retries"
             );
             return false;

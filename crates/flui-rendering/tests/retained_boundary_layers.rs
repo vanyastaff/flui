@@ -55,13 +55,18 @@ struct TreeIds {
     first: flui_foundation::RenderId,
 }
 
-/// Structural fingerprint of a layer tree: the count and the per-node child
-/// counts in a deterministic walk.
+/// Fingerprint of a layer tree: each node's layer KIND and child count, in a
+/// deterministic walk.
 ///
 /// Layer ids differ between frames (each frame builds a fresh slab), so the
-/// comparison has to be structural. This is enough to catch a graft that
-/// dropped a node, duplicated one, or reparented it.
-fn fingerprint(t: &flui_layer::LayerTree) -> Vec<usize> {
+/// comparison has to be structural. Child counts alone catch a graft that
+/// dropped, duplicated or reparented a node — but they are blind to one that
+/// preserves the shape while emitting the wrong layer variant, so the kind is
+/// part of the fingerprint too. What it still does NOT cover is layer
+/// PROPERTIES (an alpha, an offset) or picture contents; tests that care about
+/// those assert them directly, and pixel equivalence belongs to the GPU
+/// readback suite.
+fn fingerprint(t: &flui_layer::LayerTree) -> Vec<(&'static str, usize)> {
     let mut out = Vec::new();
     let Some(root) = t.root() else {
         return out;
@@ -74,12 +79,44 @@ fn fingerprint(t: &flui_layer::LayerTree) -> Vec<usize> {
         let children = t
             .children(id)
             .expect("every id in this walk came from the tree itself");
-        out.push(children.len());
+        let kind = t
+            .get(id)
+            .map_or("<missing>", |node| layer_kind(node.layer()));
+        out.push((kind, children.len()));
         for &child in children.iter().rev() {
             stack.push(child);
         }
     }
     out
+}
+
+/// The variant name of a layer, for structural comparison.
+fn layer_kind(layer: &flui_layer::Layer) -> &'static str {
+    use flui_layer::Layer as L;
+    // Exhaustive on purpose: a new layer variant should make this fail to
+    // compile rather than silently fold into a catch-all and weaken every
+    // structural comparison in this file.
+    match layer {
+        L::Canvas(_) => "Canvas",
+        L::Picture(_) => "Picture",
+        L::Texture(_) => "Texture",
+        L::PlatformView(_) => "PlatformView",
+        L::PerformanceOverlay(_) => "PerformanceOverlay",
+        L::ClipRect(_) => "ClipRect",
+        L::ClipRRect(_) => "ClipRRect",
+        L::ClipPath(_) => "ClipPath",
+        L::ClipSuperellipse(_) => "ClipSuperellipse",
+        L::Offset(_) => "Offset",
+        L::Transform(_) => "Transform",
+        L::Opacity(_) => "Opacity",
+        L::ColorFilter(_) => "ColorFilter",
+        L::ImageFilter(_) => "ImageFilter",
+        L::ShaderMask(_) => "ShaderMask",
+        L::BackdropFilter(_) => "BackdropFilter",
+        L::Leader(_) => "Leader",
+        L::Follower(_) => "Follower",
+        L::AnnotatedRegion(_) => "AnnotatedRegion",
+    }
 }
 
 /// A second frame with one dirty boundary produces the same layer tree a
@@ -682,11 +719,269 @@ fn a_grafted_opacity_subtree_matches_a_full_repaint_at_any_size() {
     }
 
     // The layer count must NOT grow with the subtree — that is what makes the
-    // graft arm O(1) and the whole update-only design worth building.
+    // graft arm O(1) for this shape. Every measurement is compared, not just
+    // the ends: `[6, 7, 6]` is a real regression that a first-vs-last check
+    // would wave through.
+    assert!(
+        grafted_counts.windows(2).all(|w| w[0] == w[1]),
+        "inline leaves merge into one PictureLayer, so the layer count must be \
+         identical at every subtree size; got {grafted_counts:?}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Composited-layer updates: rebuild a node's own layers, replay the rest
+// ---------------------------------------------------------------------------
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+/// A leaf that records how many times it was painted.
+///
+/// `RenderRepaintBoundary::paint_count` looks made for this, but nothing in
+/// the pipeline calls `increment_paint_count` — it is a dead diagnostic, and a
+/// test reading it always sees zero.
+#[derive(Debug)]
+struct PaintCounter(Arc<AtomicUsize>);
+
+impl flui_foundation::Diagnosticable for PaintCounter {}
+
+impl flui_rendering::traits::RenderBox for PaintCounter {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> Size {
+        ctx.constrain(Size::new(px(10.0), px(10.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// Root row → [boundary → opacity → counting leaf, boundary → counting leaf].
+///
+/// The opacity sits INSIDE a repaint boundary rather than being one: that is
+/// the whole design under test — a node's own effect layers are addressable
+/// within the enclosing boundary's retained capture, so nothing has to be
+/// promoted to a boundary to get an update-only commit.
+///
+/// The second branch exists so a later frame can be forced to paint without
+/// touching the first, which is the only way to observe what the STORED
+/// capture holds.
+fn mount_opacity_under_boundary(
+    opacity: f32,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+    Arc<AtomicUsize>,
+) {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderOpacity::new(opacity))
+                        .label("opacity")
+                        .child(box_node(PaintCounter(Arc::clone(&painted)))),
+                ),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("sibling")
+                    .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+            ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+    let sibling = registry.get("sibling").expect("sibling is labelled");
+    (owner, opacity_id, sibling, painted)
+}
+
+/// Applies a new opacity through the same seam a widget rebuild uses:
+/// the setter reports an impact, the owner applies it.
+fn set_opacity(
+    owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
+    id: flui_foundation::RenderId,
+    value: f32,
+) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("opacity node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderOpacity>()
+        .expect("RenderOpacity")
+        .set_opacity(value);
+    owner.apply_render_update_impact(id, impact);
+}
+
+/// The alpha of the only `OpacityLayer` in a tree, or `None` when there is none.
+fn opacity_alpha(tree: &flui_layer::LayerTree) -> Option<f32> {
+    fn find(tree: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> Option<f32> {
+        let node = tree.get(id)?;
+        if let flui_layer::Layer::Opacity(o) = node.layer() {
+            return Some(o.alpha());
+        }
+        node.children().iter().find_map(|&c| find(tree, c))
+    }
+    find(tree, tree.root()?)
+}
+
+/// An alpha change updates the emitted layer without repainting the subtree.
+///
+/// Both halves are asserted and neither alone is evidence: the paint count
+/// alone passes if nothing painted at all, and the alpha alone passes on a
+/// full repaint.
+#[test]
+fn an_alpha_change_updates_the_layer_without_repainting_the_subtree() {
+    let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+
+    set_opacity(&mut owner, opacity_id, 0.25);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
     assert_eq!(
-        grafted_counts.first(),
-        grafted_counts.last(),
-        "inline leaves merge into one PictureLayer, so the layer count is \
-         independent of subtree size; got {grafted_counts:?}",
+        painted.load(Ordering::Relaxed),
+        before,
+        "the subtree under the opacity must NOT repaint for an alpha-only change",
+    );
+    assert_eq!(
+        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "and the emitted OpacityLayer must carry the new alpha",
+    );
+}
+
+/// The update reaches the STORED capture, not just the emitted frame.
+///
+/// Three frames, because two cannot see this: change, observe, then dirty
+/// something else so the boundary is grafted for an unrelated reason. If the
+/// patch only touched the emitted tree, the capture still holds the alpha it
+/// was captured with, and this third frame reverts it — permanently, because
+/// nothing marks it again.
+#[test]
+fn a_layer_update_is_written_back_into_the_retained_capture() {
+    let (owner, opacity_id, sibling, _painted) = mount_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    set_opacity(&mut owner, opacity_id, 0.25);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("second frame");
+
+    // Third frame: the opacity is clean; the sibling boundary forces the pass.
+    owner.mark_needs_paint(sibling);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("third frame")
+        .expect("third frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "a later frame that grafts the capture for an unrelated reason must \
+         replay the UPDATED alpha, not the one it was captured with",
+    );
+}
+
+/// A repaint requested in the same frame wins over a layer update.
+///
+/// Flutter: `markNeedsCompositedLayerUpdate` returns early when `_needsPaint`,
+/// and `flushPaint` dispatches on `_needsPaint` first. A repaint is always a
+/// valid way to serve an update, so the alpha must be right either way — the
+/// observable difference is that the subtree repaints.
+#[test]
+fn a_repaint_in_the_same_frame_wins_over_a_layer_update() {
+    let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+
+    set_opacity(&mut owner, opacity_id, 0.25);
+    owner.mark_needs_paint(opacity_id);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > before,
+        "an explicit paint mark must repaint the subtree, not take the cheap arm",
+    );
+    assert_eq!(
+        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "and the repaint must still produce the new alpha",
+    );
+}
+
+/// An alpha leaving the layered range drops the layer entirely, which a patch
+/// cannot express — so paint is the fallback.
+///
+/// This is the structure guard. `paint_alpha()` returns `None` at alpha 255, so
+/// the captured shape no longer applies and replaying it would keep a layer the
+/// node no longer emits.
+#[test]
+fn a_structural_alpha_change_falls_back_to_a_repaint() {
+    let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+
+    set_opacity(&mut owner, opacity_id, 1.0);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert!(
+        painted.load(Ordering::Relaxed) > before,
+        "losing the opacity layer is a structural change and must repaint",
+    );
+    assert_eq!(
+        opacity_alpha(&tree),
+        None,
+        "a fully opaque node emits no OpacityLayer",
     );
 }

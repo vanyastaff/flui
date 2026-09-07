@@ -184,69 +184,80 @@ pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>,
 }
 
 // ============================================================================
-// Opacity: what an alpha tick costs today vs. what grafting it would cost
+// Opacity: what an alpha change costs on the update arm vs. the repaint arm
 // ============================================================================
 
-/// Build a two-branch tree for measuring the prize an update-only commit
-/// (issue #536) competes for, and return `(owner, opacity_leaf, sibling_leaf)`.
+/// Build a tree whose opacity wraps `subtree` leaves, and return it with the
+/// opacity node's id.
 ///
 /// ```text
 /// RenderFlex row
-///  ├─ RenderRepaintBoundary  ──  RenderOpacity(0.5)  ──  row of `subtree` leaves
-///  └─ RenderRepaintBoundary  ──  one leaf                       (the sibling)
+///  ├─ RenderRepaintBoundary ── RenderOpacity(0.5) ── row of `subtree` leaves
+///  └─ RenderRepaintBoundary ── one leaf
 /// ```
 ///
-/// `RenderOpacity` is not a repaint boundary today, so `mark_needs_paint` on
-/// anything inside it walks up to the enclosing `RenderRepaintBoundary`:
-/// dirtying `opacity_leaf` repaints all `subtree` nodes, which is exactly what
-/// an alpha tick costs now. Dirtying `sibling_leaf` instead leaves that
-/// boundary clean, so its whole subtree is grafted from the retained capture —
-/// the floor any update-only design could reach, since patching one layer on
-/// top of a graft is O(1).
+/// `layered` decides what those leaves are, and it is the difference between
+/// two very different cost curves:
 ///
-/// The difference between those two frames is the entire prize. Measuring it
-/// needs no production change, which is the point: it says whether the arm is
-/// worth building before the arm exists.
+/// - `false` — plain inline leaves. They merge into ONE `PictureLayer` sharing
+///   an `Arc<DisplayList>`, so the retained capture is a handful of nodes
+///   whatever `subtree` is, and grafting is O(1).
+/// - `true` — each leaf under its own `RenderRepaintBoundary`, so the capture's
+///   layer count grows with `subtree` and grafting is O(retained layers): a
+///   graft still clones every captured node. This is the shape that shows the
+///   update arm's real asymptotics rather than the best case.
+///
+/// `RenderOpacity` is deliberately NOT a repaint boundary: its own effect layer
+/// is addressable inside the ENCLOSING boundary's capture, which is what lets
+/// an alpha change be served without promoting anything.
 ///
 /// Same warm-up-and-take discipline as [`build_boundary_tree_painted_once`].
-pub fn build_opacity_tree_painted_once(
-    subtree: usize,
-) -> (PipelineOwner<PaintPhase>, RenderId, RenderId) {
-    // Label the FIRST leaf of the fan: dirtying a leaf is what an app does,
-    // and it exercises the upward walk to the enclosing boundary that makes
-    // this measurement meaningful.
-    let content = box_node(RenderFlex::row()).children((0..subtree).map(|i| {
+pub fn build_opacity_tree(layered: bool, subtree: usize) -> (PipelineOwner<PaintPhase>, RenderId) {
+    let content = box_node(RenderFlex::row()).children((0..subtree).map(|_| {
         let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
-        if i == 0 {
-            leaf.label("opacity-leaf")
+        if layered {
+            box_node(RenderRepaintBoundary::new()).child(leaf)
         } else {
             leaf
         }
     }));
 
     let spec = box_node(RenderFlex::row()).children([
-        box_node(RenderRepaintBoundary::new())
-            .child(box_node(RenderOpacity::new(0.5)).child(content)),
-        box_node(RenderRepaintBoundary::new())
-            .child(box_node(RenderColoredBox::red(1.0, 1.0)).label("sibling-leaf")),
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderOpacity::new(0.5))
+                .label("opacity")
+                .child(content),
+        ),
+        box_node(RenderRepaintBoundary::new()).child(box_node(RenderColoredBox::red(1.0, 1.0))),
     ]);
 
     let mut owner = PipelineOwner::new();
     let (root_id, registry) = tree::mount(&mut owner, spec);
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(root_constraints()));
-
-    let opacity_leaf = registry
-        .get("opacity-leaf")
-        .expect("the opacity subtree must label its first leaf");
-    let sibling_leaf = registry
-        .get("sibling-leaf")
-        .expect("the sibling branch must label its leaf");
+    let opacity = registry.get("opacity").expect("opacity is labelled");
 
     let mut owner = advance_to_paint(owner.into_layout());
     owner
         .run_paint()
         .expect("the first paint must succeed on a freshly composited tree");
     drop(owner.take_layer_tree());
-    (owner, opacity_leaf, sibling_leaf)
+    (owner, opacity)
+}
+
+/// Applies a new opacity through the seam a widget rebuild uses: the setter
+/// reports an impact, the owner applies it.
+pub fn set_opacity(owner: &mut PipelineOwner<PaintPhase>, id: RenderId, value: f32) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("opacity node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderOpacity>()
+        .expect("RenderOpacity")
+        .set_opacity(value);
+    owner.apply_render_update_impact(id, impact);
 }

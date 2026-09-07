@@ -152,13 +152,18 @@ impl RenderSliverAnimatedOpacity {
             return false;
         }
 
-        if let Err(error) = handle.mark_needs_paint() {
+        // See `RenderAnimatedOpacity::recompute_alpha` for why this is the
+        // composited-layer-update mark rather than a paint mark: an alpha-only
+        // tick rebuilds just this node's `OpacityLayer` and replays the
+        // enclosing boundary's retained output, and degrades to a paint mark
+        // on its own when there is nothing retained to patch.
+        if let Err(error) = handle.mark_needs_composited_layer_update() {
             tracing::warn!(
                 %error,
                 old_alpha,
                 new_alpha,
-                "RenderSliverAnimatedOpacity: paint mark send failed; alpha \
-                 cache left at the old value so the next tick retries"
+                "RenderSliverAnimatedOpacity: composited-layer-update mark send \
+                 failed; alpha cache left at the old value so the next tick retries"
             );
             return false;
         }
