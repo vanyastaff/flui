@@ -245,11 +245,14 @@ because `Database::query`'s front-insert puts the CSS-matched face ahead of the 
 **Accepted trade-off — this is where the divergence lies.** Flutter's `fontFamilyFallback`
 (`packages/flutter/lib/src/painting/text_style.dart`) is searched **per glyph**: each family in the
 chain is consulted when a glyph is missing from a higher-priority one. `Attrs::family` holds exactly
-one family, so an ordered per-style chain cannot be expressed, and
-`TextStyle::font_family_fallback` is consequently **not read at all** — resolution goes from the
-style's own family straight to the sans-serif generic. A style naming a present-but-narrow family
-therefore stops there where Flutter would fall through: `font_family: "CupertinoIcons",
-font_family_fallback: ["Noto Sans"]` on Latin text renders tofu here and text in Flutter.
+one family, so a per-*glyph* chain cannot be expressed. What is expressed is the per-*style* chain:
+resolution walks `TextStyle::font_family_fallback` in order and takes the first entry the host
+carries, degrading to the sans-serif generic only when none of them is present. The residual
+divergence is therefore narrower than it was, and precisely locatable — a family that is present
+but lacks the glyph still stops the walk, where Flutter would fall through: `font_family:
+"CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu here and text in
+Flutter, because `CupertinoIcons` IS installed. Closing that needs per-run family splitting above
+`Attrs`, which is tracked separately.
 Replacement coverage, per rule #1, in two tests because no single fixture gives both properties.
 `an_uninstalled_family_shapes_in_the_bound_generic_both_ways` pins which family a run shapes in,
 hermetically and in both fixture orders so that no load order satisfies it — but its fixture carries
