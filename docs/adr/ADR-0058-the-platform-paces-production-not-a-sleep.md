@@ -42,7 +42,8 @@ than by inference:
 1. **Wayland's compositor pacing was never switched on.** winit withholds
    `RedrawRequested` while a frame callback is outstanding, and arms that
    callback *only* in `Window::pre_present_notify()`
-   (`platform_impl/linux/wayland/window/mod.rs:301`). FLUI never called it —
+   (`platform_impl/linux/wayland/window/mod.rs`'s `pre_present_notify`).
+   FLUI never called it —
    zero matches in the whole tree — so on this workspace's own reference
    desktop every redraw request was delivered immediately, exactly as on X11.
    ADR-0044 §4's Wayland row ("Yes — per-surface frame callbacks…") described
