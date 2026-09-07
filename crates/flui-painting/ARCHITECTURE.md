@@ -270,6 +270,13 @@ but lacks the glyph still stops the walk, where Flutter would fall through: `fon
 "CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu here and text in
 Flutter, because `CupertinoIcons` IS installed. Closing that needs per-run family splitting above
 `Attrs`, which is tracked separately.
+
+Pinned, per rule #1, by `a_present_but_narrow_family_stops_the_chain_where_flutter_would_not`, which
+guards the divergence in both directions: it fails if the walk is "fixed" to skip a present family
+(that would be a different guess, not per-glyph fallback), and it fails again if per-glyph fallback
+ever lands — which is the signal to retire this record rather than let it go stale. Its control
+asserts that an ABSENT primary still reaches the chain, so the stop is about presence and not about
+the chain being unread.
 Replacement coverage, per rule #1, in two tests because no single fixture gives both properties.
 `an_uninstalled_family_shapes_in_the_bound_generic_both_ways` pins which family a run shapes in,
 hermetically and in both fixture orders so that no load order satisfies it — but its fixture carries
