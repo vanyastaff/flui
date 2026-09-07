@@ -32,7 +32,10 @@ hold.
 
 `PipelineOwner::run_paint` returns early when nothing is dirty
 (`if !self.scheduler.has_paint_work() { return Ok(()) }`), so a clean frame
-produces **no `LayerTree` at all** — there is nothing to compare. Above it,
+produces **no new `LayerTree`** — and there is nothing retained to compare it
+against either: the owner's `last_layer_tree` field holds a tree only between
+paint and the `take_layer_tree()` that `run_frame` performs to hand it to the
+compositor, so by the time a frame ends it is `None`. Above it,
 `flui-app` calls that outcome `FramePaintOutcome::Idle`, "nothing was dirty
 this frame; no new content to composite", and its own doc records that such a
 frame "never reaches `render_scene`" — established there by a probe rather
@@ -44,9 +47,20 @@ identical — is not reachable either: the dirty node re-records, which yields a
 fresh `DisplayList` allocation, so a comparison keyed on picture identity
 correctly reports "changed". Conservative and right, and worth nothing.
 
-This was found by writing the baseline test first
-(`an_untouched_tree_renders_the_same_frame_twice`): the second frame returned
-no tree, which is the whole answer.
+This was found by writing the baseline test first — two frames over an
+untouched tree, asserting the second renders the same content as the first.
+It failed before reaching any comparison: the second frame's `run_frame`
+returned `Ok(None)`, which is the whole answer. That test was reverted with
+the rest of the 2a implementation, so it is described here rather than cited;
+`FramePaintOutcome`'s own doc in `crates/flui-app/src/app/ui_realm.rs` is the
+committed record of the same fact.
+
+**A note 2b needs.** Because `run_frame` *takes* the tree, 2b has to retain
+the previous frame's tree itself — the pipeline does not keep one to diff
+against. Whoever holds it (the raster lane is the natural place: it is
+per-presentation and outlives the frame) also pays for keeping every
+`DisplayList` in it alive, which is an `Arc` clone per picture rather than a
+copy.
 
 **What this does not invalidate.** A per-boundary comparison is still needed —
 by 2b, to decide WHICH boundaries changed. Its shape differs from what 2a
