@@ -1068,7 +1068,16 @@ jobs:
       - name: Execute the wasm32 tests
         run: |
           set -euo pipefail
-          out="$(cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32 2>&1)"
+          # Branch on the command rather than assigning its output directly:
+          # under `set -e` a failing `cargo test` exits AT THE ASSIGNMENT, and
+          # the captured panic and runner diagnostics -- the only things that
+          # say why -- never reach the log. A wasm failure has to arrive with
+          # its message or it is not actionable from a CI run.
+          if ! out="$(cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32 2>&1)"; then
+            echo "$out"
+            echo "::error::wasm32 test run failed" >&2
+            exit 1
+          fi
           echo "$out"
           passed="$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)"
           if [ -z "$passed" ] || [ "$passed" -eq 0 ]; then

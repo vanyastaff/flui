@@ -116,7 +116,15 @@ wasm-test:
         echo "wasm-bindgen-cli $want required (have: ${have:-none}); installing" >&2
         cargo install wasm-bindgen-cli --version "$want" --locked
     fi
-    out=$(cargo test -p flui-foundation --target wasm32-unknown-unknown --test wasm32 2>&1)
+    # `out=$(cargo test ...)` under `set -e` exits AT THE ASSIGNMENT when cargo
+    # fails, so the panic message and the runner's own diagnostics -- the only
+    # things that say WHY -- are captured and then thrown away. Branch on the
+    # command so the output is printed either way. `--locked` matches CI and
+    # keeps a local run from quietly re-resolving Cargo.lock.
+    if ! out=$(cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32 2>&1); then
+        echo "$out"
+        exit 1
+    fi
     echo "$out"
     # A runner that finds no tests still exits 0 and prints "0 passed", which is
     # indistinguishable from a passing suite. Assert a non-zero count so the
