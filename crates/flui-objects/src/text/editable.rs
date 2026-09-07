@@ -418,6 +418,15 @@ impl RenderEditable {
         )
     }
 
+    /// The selected byte range, if any.
+    ///
+    /// In the same space as [`Self::plain_text`], which for an obscured field
+    /// is masked space — this object never sees the source characters.
+    #[must_use]
+    pub fn selection(&self) -> Option<&Range<usize>> {
+        self.selection.as_ref()
+    }
+
     /// Read access to the underlying painter for selection geometry work.
     #[must_use]
     pub fn painter(&self) -> &TextPainter {
