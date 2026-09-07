@@ -1104,10 +1104,11 @@ jobs:
           # the panic never reaches the log.
           total=0
           crates=0
-          for manifest in crates/*/Cargo.toml; do
-            grep -q 'wasm-bindgen-test' "$manifest" || continue
-            dir="$(dirname "$manifest")"
-            name="$(basename "$dir")"
+          # Parsed, not grepped: a substring search also matches a comment, a
+          # normal dependency, or a non-wasm32 target table, so the check would
+          # not match the contract it documents -- silently.
+          for name in $(python3 scripts/wasm-test-crates.py); do
+            dir="crates/$name"
             crates=$((crates + 1))
             crate_total=0
             modes=(lib)

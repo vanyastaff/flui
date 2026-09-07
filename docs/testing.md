@@ -58,7 +58,8 @@ It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
 until issue #985.
 
 `just wasm-test` (CI: the last steps of the `wasm-check` job) discovers the participating crates —
-those declaring a wasm32 `wasm-bindgen-test` dev-dependency — and hosts their tests on node through
+those declaring a wasm32 `wasm-bindgen-test` dev-dependency, resolved by
+`scripts/wasm-test-crates.py` parsing the manifests rather than grepping them — and hosts their tests on node through
 `wasm-bindgen-test-runner`. It runs **both** target kinds, because which one is possible depends on
 visibility: an integration test (`tests/wasm32.rs`) sees only the public API, while a `pub(crate)`
 seam is reachable *only* from a lib test. Two things about it are deliberate:

@@ -142,10 +142,12 @@ wasm-test:
     export CARGO_BUILD_WARNINGS=warn
     total=0
     crates=0
-    for manifest in crates/*/Cargo.toml; do
-        grep -q 'wasm-bindgen-test' "$manifest" || continue
-        dir=$(dirname "$manifest")
-        name=$(basename "$dir")
+    # Parsed, not grepped. A substring search over the manifest also matches a
+    # comment, a normal dependency, or a non-wasm32 target table -- none of
+    # which mean "this crate has wasm tests" -- so the check would not match the
+    # contract it documents, silently.
+    for name in $(python3 scripts/wasm-test-crates.py); do
+        dir="crates/$name"
         crates=$((crates + 1))
         crate_total=0
         # Modes, not raw argv: a flat array of "--lib --test wasm32" iterates as
@@ -164,6 +166,7 @@ wasm-test:
             # Branch on the command so the output is printed either way.
             if ! out=$(cargo test -p "$name" --locked --target wasm32-unknown-unknown "${args[@]}" 2>&1); then
                 echo "$out"
+                echo "wasm-test: $name ($mode target) failed -- see the output above" >&2
                 exit 1
             fi
             echo "$out"
