@@ -662,6 +662,13 @@ jobs:
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The workflow default is `contents: read` only. The wgpu-bump probe below
+    # reads this PR's changed files, and GitHub documents `pull-requests: read`
+    # for that endpoint — without it both `gh api` calls 403 and the probe
+    # silently reports "nothing changed" on exactly the PRs it exists for.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -676,6 +683,72 @@ jobs:
       # design); passing it exits 2 with "unexpected argument".
       - name: cargo deny check
         run: cargo deny check
+
+      # ADR-0045 decision 1 pins macOS to the inline raster lane on an UPSTREAM
+      # fact: wgpu-hal's Metal `acquire_texture` messages AppKit UI objects from
+      # the calling thread. Issue #653 asks for that reopen condition to be
+      # re-read "on each wgpu bump rather than on a schedule -- a dependabot PR
+      # touching wgpu/wgpu-hal is the natural trigger". weekly.yml runs the same
+      # probe on a schedule, which cannot see the bump PR itself; this is the
+      # per-bump trigger, and it lives here because a lockfile move is a
+      # dependency event and this is the dependency job.
+      #
+      # ADVISORY, and it must stay that way. Every direction it can be wrong is
+      # safe: a stale "still there" leaves macOS on the inline lane, which is
+      # slower than necessary and not unsound. Blocking would hand dependabot a
+      # red check it cannot act on -- the probe's own header says the same, and
+      # the second half of the reopen condition (an upstream statement that the
+      # off-thread access is safe) is prose no source predicate can see.
+      #
+      # It runs only when this PR's Cargo.lock actually moves wgpu, so an
+      # ordinary PR pays nothing. When the API cannot show the patch (GitHub
+      # omits it for very large diffs) it RUNS rather than skips: a false run
+      # costs a minute, a false skip is the trigger silently not firing on the
+      # one PR it exists for.
+      - name: wgpu bump — re-read ADR-0045's macOS reopen condition (advisory)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # Ask once, and keep the API's own success/failure separate from the
+          # answer. Conflating them is how the previous shape turned a 403 into
+          # a confident "nothing changed" and skipped the very PRs this exists
+          # for -- the failure it was written to avoid.
+          if ! files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename'); then
+            echo "Could not list this PR's files (see the error above) -- probing anyway"
+            echo "rather than reporting a skip we cannot justify."
+          elif ! grep -qx 'Cargo.lock' <<<"$files"; then
+            echo "Cargo.lock untouched by this PR; nothing for the macOS reopen probe to re-read."
+            exit 0
+          elif patch=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+                         --jq '.[] | select(.filename=="Cargo.lock") | .patch'); then
+            if [ -z "$patch" ]; then
+              echo "Cargo.lock changed but GitHub returned no patch (diff too large) -- probing anyway."
+            elif ! grep -qi 'wgpu' <<<"$patch"; then
+              echo "Cargo.lock moved but no wgpu entry changed; skipping the macOS reopen probe."
+              exit 0
+            fi
+          else
+            echo "Could not read the Cargo.lock patch -- probing anyway."
+          fi
+
+          # Run with the summary suppressed, then surface only news. A run that
+          # reports the status quo on every wgpu bump would train readers to
+          # ignore the one that does not.
+          out=$(env -u GITHUB_STEP_SUMMARY bash scripts/probe-metal-acquire-main-thread.sh 2>&1) || true
+          printf '%s\n' "$out"
+          if grep -qE 'CHANGED|INCONCLUSIVE|Out of this probe.s reach|Could not reach crates.io' <<<"$out"; then
+            {
+              echo "### wgpu moved — ADR-0045's macOS reopen condition needs a human read"
+              echo
+              printf '%s\n' "$out"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Reopen condition still NOT met on every resolved wgpu-hal; nothing to surface."
+          fi
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
