@@ -248,6 +248,34 @@ impl PipelineOwner<PaintPhase> {
 
         let is_repaint_boundary = render_node.is_repaint_boundary();
 
+        // Boundary status has TWO readers and they must not disagree. Paint (here)
+        // asks the trait live; the scheduler's `owns_retained_layer`, the
+        // compositing-bits walk, and `laid_out`'s paint marking all read the
+        // cached FLAG, which is bootstrapped once at insert and never re-synced.
+        //
+        // While every production `is_repaint_boundary()` returns a literal
+        // constant they agree trivially. A dynamic one — the obvious port of
+        // Flutter's `RenderOpacity.isRepaintBoundary => alwaysNeedsCompositing` —
+        // desyncs them, and fails in two directions at once: inert on the fast
+        // path (a fade mounting at an endpoint bootstraps `false` and stays
+        // there), and CORRUPTING on relayout (paint pushes a boundary layer and
+        // stores a capture, but flag-gated `laid_out` never marks it needs-paint,
+        // so the next frame grafts a stale capture over new geometry).
+        //
+        // Flutter avoids this by caching `_currentlyIsRepaintBoundary` at the
+        // same moment `markNeedsCompositingBitsUpdate` fires (`proxy_box.dart`).
+        // Porting the predicate without the cache is the trap; this assert is
+        // what makes walking into it loud instead of silent. Issue #995.
+        debug_assert_eq!(
+            is_repaint_boundary,
+            render_node.is_repaint_boundary_flag(),
+            "BUG: repaint-boundary flag and trait answer disagree for {node_id:?} -- \
+             the flag is insert-time configuration and is not re-synced, so a \
+             render object whose is_repaint_boundary() varies at runtime silently \
+             corrupts retained layers (issue #995). Re-sync the flag where the \
+             status changes, beside mark_needs_compositing_bits_update."
+        );
+
         let alpha = render_node.paint_alpha();
         let layer_blend = render_node.paint_layer_blend();
         let transform = render_node.paint_transform();
@@ -1194,6 +1222,81 @@ mod tests {
             owner.last_hidden_follower_ids.is_empty(),
             "a visible, resolved follower must not also be marked hidden"
         );
+    }
+
+    /// A render object whose `is_repaint_boundary()` varies after insert is the
+    /// trap issue #995 names: the FLAG is bootstrapped once at insert and never
+    /// re-synced, while paint asks the trait live. The two then disagree, and the
+    /// failure is silent — paint pushes a boundary layer and stores a capture,
+    /// but flag-gated `laid_out` never marks the node needs-paint, so the next
+    /// frame grafts a stale capture over new geometry.
+    ///
+    /// This pins the guard that makes it loud. Without the `debug_assert_eq!` in
+    /// `paint_subtree_impl` the run below completes silently and this test fails
+    /// for want of a panic — which is the point: the assert is the only thing
+    /// standing between a future dynamic boundary and permanent corruption.
+    // The guard is a `debug_assert_eq!`, so `just test-release` compiles it out
+    // and this `#[should_panic]` would fail there for want of a panic. Gated
+    // rather than weakened: a release build genuinely has no guard, and saying
+    // so is more honest than asserting something that does not run.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "repaint-boundary flag and trait answer disagree")]
+    fn a_boundary_that_changes_after_insert_trips_the_source_of_truth_guard() {
+        #[derive(Debug)]
+        struct DynamicBoundaryStub {
+            size: Size,
+            boundary: std::cell::Cell<bool>,
+        }
+
+        impl flui_foundation::Diagnosticable for DynamicBoundaryStub {}
+
+        impl RenderBox for DynamicBoundaryStub {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+
+            fn perform_layout(
+                &mut self,
+                ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> Size {
+                ctx.constraints().constrain(self.size)
+            }
+
+            fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+
+            fn is_repaint_boundary(&self) -> bool {
+                self.boundary.get()
+            }
+        }
+
+        let size = Size::new(px(10.0), px(10.0));
+        let mut owner = PipelineOwner::new();
+        // Mounts as a NON-boundary, exactly as a fade starting at an endpoint
+        // would, so the flag bootstraps `false`.
+        let id = owner.insert(Box::new(DynamicBoundaryStub {
+            size,
+            boundary: std::cell::Cell::new(false),
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(size)));
+
+        // The alpha moves off its endpoint; the trait answer flips and the flag
+        // does not follow, because nothing re-syncs it.
+        owner
+            .render_tree()
+            .get(id)
+            .expect("the node was just inserted")
+            .box_render_object()
+            .downcast_ref::<DynamicBoundaryStub>()
+            .expect("the stub is what was inserted")
+            .boundary
+            .set(true);
+
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("layout should succeed");
+        let owner = owner.into_compositing();
+        let mut owner = owner.into_paint();
+        let _ = owner.run_paint();
     }
 
     /// An unlinked follower with `show_when_unlinked == false`
