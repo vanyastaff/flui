@@ -334,3 +334,127 @@ fn a_dirty_boundary_nested_in_a_clean_one_still_repaints() {
     );
     drop(owner);
 }
+
+/// Every boundary's root layer carries its own `RenderId`, and no
+/// other layer carries any.
+///
+/// This is the identity ADR-0061 says damage needs: a frame builds a fresh
+/// `LayerTree` with fresh slab indices, so `LayerId` pairs nothing across a
+/// frame boundary and the comparison has to key on something that survives.
+///
+/// The fixture uses EIGHT boundaries on purpose. A single-boundary tree pairs
+/// correctly under any stamping rule at all — including stamping every layer
+/// with the same id, or stamping the wrong one — so it would pass against a
+/// broken implementation. With eight, the set of stamps has to be exactly the
+/// set of boundary ids, and the count of stamped layers has to be eight.
+///
+/// Red-check: stamp in `push_layer` instead of `push_boundary_layer` — the
+/// opacity and picture layers pick up ids too and the count assertion fails.
+#[test]
+fn every_boundary_root_layer_carries_its_own_id() {
+    const N: usize = 8;
+
+    let (owner, _) = mount(N);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+
+    let stamps = stamps_of(&tree);
+    assert_eq!(
+        stamps.len(),
+        N,
+        "exactly one layer per boundary carries a stamp, got {stamps:?}"
+    );
+
+    let boundary_ids: std::collections::BTreeSet<flui_foundation::RenderId> = owner
+        .render_tree()
+        .iter()
+        .filter(|(_, node)| node.is_repaint_boundary())
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        stamps
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        boundary_ids,
+        "the stamps must be exactly the tree's repaint-boundary ids"
+    );
+}
+
+/// A frame that grafts seven boundaries still identifies all eight, so
+/// retention does not break the comparison the stamp exists for.
+///
+/// **What makes this work is worth stating, because it is not what it looks
+/// like.** The stamp does not travel through the capture. A boundary's
+/// `OffsetLayer` is pushed by its PARENT, above the capture root, so the
+/// parent's own paint re-creates and re-stamps it every frame; everything the
+/// capture holds is unstamped by construction. An earlier revision propagated
+/// a `render_id` through `graft` for this, and mutation-testing showed
+/// removing that propagation changed no test — it was dead. It was deleted,
+/// with the reason recorded at `graft`.
+///
+/// So this test pins the OUTCOME (retention keeps every boundary
+/// identifiable), not a mechanism; the mechanism it would have pinned does not
+/// exist.
+///
+/// The equality alone is a VACUOUS oracle and mutation-testing proved it:
+/// with the stamp removed both frames report an empty set, which compares
+/// equal. The count assertion below is what makes it discriminate — it was
+/// added after the mutation run, not before it.
+#[test]
+fn a_retained_frame_still_identifies_every_boundary() {
+    const N: usize = 8;
+
+    let (owner, ids) = mount(N);
+    let (mut owner, result) = owner.run_frame();
+    let first = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    let before = stamps_of(&first);
+
+    // One boundary repaints; the other seven are grafted.
+    owner.mark_needs_paint(ids.first);
+    let (_, result) = owner.run_frame();
+    let second = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+
+    assert_eq!(
+        before.len(),
+        N,
+        "precondition: the first frame identified every boundary — without \
+         this the equality below holds vacuously when nothing is stamped"
+    );
+    assert_eq!(
+        stamps_of(&second),
+        before,
+        "the same eight boundaries must be identifiable in both frames — \
+         seven of them reached through a graft"
+    );
+}
+
+/// Every stamp in `t`, in a deterministic walk order.
+fn stamps_of(t: &flui_layer::LayerTree) -> Vec<flui_foundation::RenderId> {
+    let mut out = Vec::new();
+    let Some(root) = t.root() else {
+        return out;
+    };
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if let Some(node) = t.get(id)
+            && let Some(render_id) = node.render_id()
+        {
+            out.push(render_id);
+        }
+        let children = t
+            .children(id)
+            .expect("every id in this walk came from the tree itself");
+        for &child in children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    out.sort_unstable();
+    out
+}

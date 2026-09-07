@@ -3,8 +3,8 @@
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
-    LayerTree, LeaderLayer, LinkRegistry, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer,
-    TransformLayer,
+    LayerNode, LayerTree, LeaderLayer, LinkRegistry, OffsetLayer, OpacityLayer, PictureLayer,
+    ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use flui_types::Offset;
@@ -414,8 +414,10 @@ impl PipelineOwner<PaintPhase> {
                         // Boundary children rebase to ZERO under their
                         // own OffsetLayer so a future offset-only move
                         // is a layer-property update, not a repaint.
-                        let boundary_root = composer
-                            .push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
+                        let boundary_root = composer.push_boundary_layer(
+                            Layer::Offset(OffsetLayer::new(origin + child_offset)),
+                            child_id,
+                        );
 
                         // Reuse the previous frame's output when this boundary
                         // is clean. Sound only because the queue is exact:
@@ -528,7 +530,6 @@ struct RetainedNode {
     layer: Layer,
     parent: Option<usize>,
     offset: Option<flui_types::Offset<flui_types::geometry::Pixels>>,
-    element_id: Option<flui_foundation::ElementId>,
 }
 
 /// Builds the frame's [`LayerTree`] from replayed paint fragments,
@@ -632,7 +633,33 @@ impl FragmentComposer {
     /// replay loop) uses this to record the `RenderId -> LayerId`
     /// correlation for `Layer::Follower` pushes (ADR-0015).
     fn push_layer(&mut self, layer: Layer) -> LayerId {
+        self.push_layer_node(LayerNode::new(layer))
+    }
+
+    /// Push the layer a repaint boundary hangs under, stamped with that
+    /// boundary's id.
+    ///
+    /// The stamp is what lets two consecutive frames be compared: every frame
+    /// builds a fresh `LayerTree` with fresh slab indices, so `LayerId` pairs
+    /// nothing, and damage has to come from comparing layer trees rather than
+    /// from which render objects repainted (ADR-0061 — the ones that always
+    /// repaint cover the screen). The other half of that comparison —
+    /// constant-time "is this content unchanged" — already exists, since
+    /// `PictureLayer` shares its `DisplayList` behind an `Arc`.
+    ///
+    /// **Exactly one layer per boundary carries the stamp**, and it is this
+    /// one: the `OffsetLayer` a boundary child rebases under, which is also
+    /// the node a retained subtree is grafted beneath. Stamping a node's
+    /// effect layers or a fragment's structural pushes as well would put
+    /// several layers under one id and make pairing ambiguous — so those go
+    /// through [`Self::push_layer`] and stay unstamped.
+    fn push_boundary_layer(&mut self, layer: Layer, boundary_id: RenderId) -> LayerId {
+        self.push_layer_node(LayerNode::new(layer).with_render_id(boundary_id))
+    }
+
+    fn push_layer_node(&mut self, node: LayerNode) -> LayerId {
         self.seal_picture();
+        let layer = node.layer();
         // Extract the link-registry-relevant fields BEFORE `layer` moves
         // into the tree — `Leader`/`Follower` are `Copy`-field-bearing, so
         // this is a cheap read, not a clone of the layer itself.
@@ -641,7 +668,7 @@ impl FragmentComposer {
             .map(|leader| (leader.link(), leader.get_offset(), leader.size()));
         let follower_link = layer.as_follower().map(FollowerLayer::link);
 
-        let id = self.tree.insert(layer);
+        let id = self.tree.insert_node(node);
         if let Some((link, offset, size)) = leader_registration {
             self.link_registry.register_leader(link, id, offset, size);
         }
@@ -715,7 +742,6 @@ impl FragmentComposer {
                 layer: layer.clone(),
                 parent,
                 offset: node.offset(),
-                element_id: node.element_id(),
             });
             for &child in node.children().iter().rev() {
                 stack.push((child, Some(index)));
@@ -742,13 +768,20 @@ impl FragmentComposer {
         let mut minted: Vec<LayerId> = Vec::with_capacity(retained.nodes.len());
         for node in &retained.nodes {
             // Built as a whole `LayerNode` rather than inserted-then-mutated:
-            // `offset` and `element_id` are construction-time fields with no
-            // setters, which is also the shape that keeps a disposed node from
-            // being resurrected by a stray mutation.
+            // `offset` is a construction-time field with no setter, which is
+            // also the shape that keeps a disposed node from being resurrected
+            // by a stray mutation.
+            //
+            // No `render_id` carried: a boundary's stamp lives on the
+            // `OffsetLayer` its PARENT pushes (`push_boundary_layer`), which
+            // is above the capture root and is therefore re-created by the
+            // parent's own paint every frame — a grafted boundary is
+            // identifiable without the capture carrying anything. An earlier
+            // revision propagated the field here; mutation-testing showed
+            // removing that propagation changed no test, because every node a
+            // capture holds is unstamped by construction. It comes back with
+            // a rule that stamps layers below a boundary root.
             let mut layer_node = flui_layer::LayerNode::new(node.layer.clone());
-            if let Some(element_id) = node.element_id {
-                layer_node = layer_node.with_element_id(element_id);
-            }
             if let Some(offset) = node.offset {
                 layer_node = layer_node.with_offset(offset);
             }

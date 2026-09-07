@@ -5,7 +5,7 @@
 //! preserved verbatim; the `use super::*; use crate::layer::CanvasLayer;`
 //! pair becomes `use flui_layer::*;` for integration access.
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_layer::{CanvasLayer, Layer, LayerNode, LayerTree};
 // `tree.remove(id)` resolves through the unified `TreeWrite` trait
 // rather than an inherent method.
@@ -145,11 +145,20 @@ fn test_layer_tree_iter() {
 }
 
 #[test]
-fn test_layer_node_with_element_id() {
-    let element_id = ElementId::new(42);
-    let node = LayerNode::new(Layer::from(CanvasLayer::new())).with_element_id(element_id);
+fn a_stamped_node_reports_the_boundary_that_produced_it() {
+    let render_id = RenderId::new(42);
+    let node = LayerNode::new(Layer::from(CanvasLayer::new())).with_render_id(render_id);
 
-    assert_eq!(node.element_id(), Some(element_id));
+    assert_eq!(node.render_id(), Some(render_id));
+}
+
+/// A layer no boundary originated carries no stamp, so a pairing pass cannot
+/// mistake a structural layer for a boundary.
+#[test]
+fn an_unstamped_node_reports_no_boundary() {
+    let node = LayerNode::new(Layer::from(CanvasLayer::new()));
+
+    assert_eq!(node.render_id(), None);
 }
 
 #[test]
