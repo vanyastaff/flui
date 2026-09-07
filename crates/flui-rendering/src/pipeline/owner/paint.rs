@@ -385,6 +385,15 @@ impl PipelineOwner<PaintPhase> {
                     debug_assert!(false, "BUG: effect slot index outside its own capture");
                     return None;
                 };
+                // Defence in depth, and deliberately not claimed as more than
+                // that: `own_effect_layers` emits a FIXED order (alpha, then
+                // transform), so a same-count shape change maps positionally
+                // onto the same kinds and patching it happens to produce what a
+                // repaint would. A mutation run confirms no test distinguishes
+                // this branch today. It earns its place by making that
+                // coincidence explicit rather than load-bearing: adding a third
+                // effect type, or making the order conditional, would otherwise
+                // silently turn a positional patch into a wrong layer.
                 if std::mem::discriminant(&layer) != std::mem::discriminant(&captured.layer) {
                     return None;
                 }

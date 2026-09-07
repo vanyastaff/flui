@@ -81,42 +81,13 @@ fn fingerprint(t: &flui_layer::LayerTree) -> Vec<(&'static str, usize)> {
             .expect("every id in this walk came from the tree itself");
         let kind = t
             .get(id)
-            .map_or("<missing>", |node| layer_kind(node.layer()));
+            .map_or("<missing>", |node| node.layer().kind_name());
         out.push((kind, children.len()));
         for &child in children.iter().rev() {
             stack.push(child);
         }
     }
     out
-}
-
-/// The variant name of a layer, for structural comparison.
-fn layer_kind(layer: &flui_layer::Layer) -> &'static str {
-    use flui_layer::Layer as L;
-    // Exhaustive on purpose: a new layer variant should make this fail to
-    // compile rather than silently fold into a catch-all and weaken every
-    // structural comparison in this file.
-    match layer {
-        L::Canvas(_) => "Canvas",
-        L::Picture(_) => "Picture",
-        L::Texture(_) => "Texture",
-        L::PlatformView(_) => "PlatformView",
-        L::PerformanceOverlay(_) => "PerformanceOverlay",
-        L::ClipRect(_) => "ClipRect",
-        L::ClipRRect(_) => "ClipRRect",
-        L::ClipPath(_) => "ClipPath",
-        L::ClipSuperellipse(_) => "ClipSuperellipse",
-        L::Offset(_) => "Offset",
-        L::Transform(_) => "Transform",
-        L::Opacity(_) => "Opacity",
-        L::ColorFilter(_) => "ColorFilter",
-        L::ImageFilter(_) => "ImageFilter",
-        L::ShaderMask(_) => "ShaderMask",
-        L::BackdropFilter(_) => "BackdropFilter",
-        L::Leader(_) => "Leader",
-        L::Follower(_) => "Follower",
-        L::AnnotatedRegion(_) => "AnnotatedRegion",
-    }
 }
 
 /// A second frame with one dirty boundary produces the same layer tree a
@@ -1471,4 +1442,139 @@ fn transform_count(t: &flui_layer::LayerTree) -> usize {
             + node.children().iter().map(|&c| walk(t, c)).sum::<usize>()
     }
     t.root().map_or(0, |root| walk(t, root))
+}
+
+/// A node whose effect layers change SHAPE cannot be patched, and the frame
+/// must notice by itself.
+///
+/// Neither case is reachable through a shipped opacity, which reports a repaint
+/// itself whenever its layer appears or disappears — so the frame's own guards
+/// never fired and a mutation run found them inert. These drive the path
+/// directly, through a proxy that reports the WRONG impact on purpose.
+///
+/// - **count** (captured with one layer, now emitting two) pins the length
+///   guard: disabling it turns this red.
+/// - **kind** (captured with one layer, now emitting one of a different type)
+///   pins the OUTPUT but not the mechanism. `own_effect_layers` emits a fixed
+///   order, so a same-count swap patches positionally to the same tree a
+///   repaint gives, and disabling the discriminant guard leaves this green.
+///   That guard is defence in depth against a future third effect type, and
+///   the comment at it says so rather than claiming a pin it does not have.
+#[test]
+fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
+    /// Emits an opacity layer, a transform layer, or both.
+    #[derive(Debug, Default)]
+    struct ShapeShifter {
+        alpha: bool,
+        transform: bool,
+    }
+
+    impl flui_foundation::Diagnosticable for ShapeShifter {}
+
+    impl flui_rendering::traits::RenderBox for ShapeShifter {
+        type Arity = flui_tree::Single;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            if ctx.child_count() > 0 {
+                ctx.layout_child(0, constraints)
+            } else {
+                constraints.smallest()
+            }
+        }
+
+        flui_rendering::forward_single_child_box_queries!();
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+
+        fn paint_alpha(&self) -> Option<u8> {
+            self.alpha.then_some(128)
+        }
+
+        fn paint_transform(&self, _size: Size) -> Option<flui_types::Matrix4> {
+            self.transform
+                .then(|| flui_types::Matrix4::translation(3.0, 5.0, 0.0))
+        }
+    }
+
+    // `gains` says what the second frame switches on; `expect_transform` is
+    // what a correct repaint must then emit.
+    for (label, gains_transform, keeps_alpha) in [
+        ("count: 1 -> 2 layers", true, true),
+        ("kind: opacity -> transform", true, false),
+    ] {
+        let mut owner = PipelineOwner::new();
+        let (root_id, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderFlex::row()).child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(ShapeShifter {
+                        alpha: true,
+                        transform: false,
+                    })
+                    .label("fx")
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                ),
+            ),
+        );
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        let fx = registry.get("fx").expect("fx is labelled");
+
+        let (mut owner, result) = owner.run_frame();
+        let first = result
+            .expect("first frame")
+            .expect("first frame produces a layer tree");
+        assert_eq!(
+            (opacity_alpha(&first).is_some(), transform_count(&first)),
+            (true, 0),
+            "{label}: precondition — captured with exactly one opacity layer",
+        );
+
+        {
+            let object = owner
+                .render_tree_mut()
+                .get_mut(fx)
+                .expect("fx node")
+                .as_box_mut()
+                .expect("box entry")
+                .render_object_mut()
+                .as_any_mut()
+                .downcast_mut::<ShapeShifter>()
+                .expect("ShapeShifter");
+            object.transform = gains_transform;
+            object.alpha = keeps_alpha;
+        }
+        owner.mark_needs_composited_layer_update(fx);
+
+        let (owner, result) = owner.run_frame();
+        let second = result
+            .expect("second frame")
+            .expect("second frame produces a layer tree");
+        drop(owner);
+
+        assert_eq!(
+            (opacity_alpha(&second).is_some(), transform_count(&second)),
+            (keeps_alpha, usize::from(gains_transform)),
+            "{label}: a shape change cannot be patched into the capture, so the \
+             frame must repaint and emit the new shape",
+        );
+    }
 }
