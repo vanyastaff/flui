@@ -143,7 +143,7 @@ pub use flui_types::platform::Brightness;
 pub use localization::{
     BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
     DefaultWidgetsLocalizationsDelegate, Directionality, Localizations, LocalizationsDelegate,
-    WidgetsLocalizations, basic_locale_list_resolution,
+    WidgetsLocalizations, basic_locale_list_resolution, resolve_alignment,
 };
 
 pub use animated::{
