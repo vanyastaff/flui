@@ -88,6 +88,9 @@ mod modifiers;
 mod mouse_region;
 #[path = "navigator_public.rs"]
 mod navigator_public;
+/// Issue #536: an `Opacity` rebuild reaches the composited layer.
+#[path = "opacity_layer_update.rs"]
+mod opacity_layer_update;
 #[path = "overflow_box.rs"]
 mod overflow_box;
 #[path = "post_frame_handle.rs"]
