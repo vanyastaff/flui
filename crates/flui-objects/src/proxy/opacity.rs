@@ -114,9 +114,17 @@ impl RenderOpacity {
         // what the frame CONTAINS, not to a layer property, and it is invisible
         // to the layer-update path: at both alpha 255 and alpha 0 this node
         // emits no `OpacityLayer` at all, so it has no effect-layer slot for an
-        // update to patch and a graft would replay the old content — leaving a
-        // fully transparent subtree on screen, or a restored one missing.
-        // Only a repaint can add or remove that content.
+        // update to patch. Only a repaint can add or remove that content.
+        //
+        // This is the honest impact rather than the last line of defence. The
+        // paint phase refuses to graft when a node that requested an update
+        // owns no slot in the capture, so it catches this case too — verified
+        // by mutation: removing the line below leaves every behavioural test
+        // green and trips only the impact assertion in this file. Reporting it
+        // here still earns its place, because a caller that reports the truth
+        // saves the frame a queue-then-refuse round trip, and because the two
+        // guards protect a class that has already produced visible corruption
+        // once.
         if old_skips_paint != <Self as RenderBox>::skip_paint(self) {
             impact |= flui_rendering::RenderUpdateImpact::PAINT;
         }

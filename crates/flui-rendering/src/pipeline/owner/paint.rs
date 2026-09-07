@@ -164,6 +164,15 @@ impl PipelineOwner<PaintPhase> {
                     // patches serve are satisfied. An error above returned
                     // before this point, leaving the flags set so the retry
                     // re-derives them.
+                    //
+                    // Hygiene rather than correctness for the OUTPUT: patches
+                    // are idempotent over live properties, so a flag left set
+                    // is re-applied harmlessly by the next graft (a mutation
+                    // removing this loop leaves every test green). It matters
+                    // because a mark refuses itself while the flag is set, so
+                    // never clearing would stop the boundary being re-queued —
+                    // and the queued targets are what let the graft detect a
+                    // node whose effect layers appeared and refuse.
                     for render_id in consumed_updates {
                         if let Some(node) = self.render_tree.get(render_id) {
                             node.clear_needs_composited_layer_update();

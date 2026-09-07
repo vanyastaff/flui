@@ -1717,3 +1717,80 @@ fn an_unreached_update_boundary_loses_its_capture() {
          because the node owns no slot to patch and its flag blocks new marks",
     );
 }
+
+/// An animated opacity crossing alpha 0 adds and removes its subtree's content.
+///
+/// The static setter and the animation tick are separate seams — the setter
+/// reports an impact, the tick sends through `RenderInvalidationHandle` — and
+/// the tick's guard was untested: a mutation run removed it and every test
+/// stayed green. That is the same defect the static path had, on the path an
+/// `AnimatedOpacity` widget actually uses, so it is the one that would have
+/// reached users.
+///
+/// At both alpha 255 and alpha 0 no `OpacityLayer` is emitted and the layered
+/// predicate does not change, so the tick looks like a pure property change.
+/// Only `skip_paint()` moves, and no patch can express it.
+#[test]
+fn an_animated_opacity_crossing_zero_adds_and_removes_its_content() {
+    use flui_animation::{Animation, AnimationController, ProxyAnimation};
+    use flui_objects::RenderAnimatedOpacity;
+    use flui_scheduler::UpdateScheduler;
+    use std::time::Duration;
+
+    let controller = AnimationController::new(Duration::from_millis(100), &UpdateScheduler::new());
+    controller.set_value(1.0);
+    let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let proxy = ProxyAnimation::new(parent);
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, _registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderAnimatedOpacity::new(proxy, false))
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+
+    let (mut owner, result) = owner.run_frame();
+    let opaque = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    let opaque_pictures = picture_count(&opaque);
+    assert!(
+        opaque_pictures > 0,
+        "precondition: the subtree is visible while fully opaque",
+    );
+
+    // Tick to fully transparent. The listener fires on the render object, so
+    // this is the widget-driven path end to end.
+    controller.set_value(0.0);
+    owner.drain_pending_dirty();
+    let (mut owner, result) = owner.run_frame();
+    let transparent = result
+        .expect("transparent frame")
+        .expect("transparent frame produces a layer tree");
+    assert!(
+        picture_count(&transparent) < opaque_pictures,
+        "a tick to alpha 0 must drop the subtree's content from the frame; got \
+         {} pictures vs {opaque_pictures} while opaque",
+        picture_count(&transparent),
+    );
+
+    // …and back, which replays the capture taken while nothing was painted.
+    controller.set_value(1.0);
+    owner.drain_pending_dirty();
+    let (owner, result) = owner.run_frame();
+    let restored = result
+        .expect("restored frame")
+        .expect("restored frame produces a layer tree");
+    drop(owner);
+    assert_eq!(
+        picture_count(&restored),
+        opaque_pictures,
+        "and a tick back must bring it in again",
+    );
+}
