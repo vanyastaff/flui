@@ -67,7 +67,12 @@ impl PipelineOwner<PaintPhase> {
             // layers rebuilt. A frame whose two counts are equal repainted
             // nothing — which is what distinguishes a layer-only frame from a
             // paint in a trace.
-            layer_updates = self.scheduler.layer_update_boundaries().len(),
+            layer_updates = self
+                .scheduler
+                .nodes_needing_paint()
+                .iter()
+                .filter(|e| matches!(e.kind, crate::pipeline::PaintKind::LayerUpdate(_)))
+                .count(),
         )
         .entered();
 
@@ -112,28 +117,26 @@ impl PipelineOwner<PaintPhase> {
             // boundary becomes graft-eligible only by appearing in this set —
             // the pre-existing retention path cannot change behaviour when
             // nothing requested an update.
-            // Membership in this map IS the classification, and it is the only
-            // one consulted. It is deliberately not cross-checked against
-            // `needs_paint()`: the paint walk clears that flag while
-            // `run_paint`'s error arm returns before `clear_paint_queue`, so
-            // after a pass that failed partway a boundary sits in the queue with
-            // the flag already false. A filter reading it would then let a
-            // pending REPAINT through as an update, graft the pre-error capture
-            // and patch only the effect layer — which is the bug this map exists
-            // to make unrepresentable.
-            //
-            // The invariant is enforced where the records are written, not read:
-            // `mark_needs_paint` withdraws the entry where it queues a boundary,
-            // `mark_needs_composited_layer_update` refuses to add one to a
-            // boundary already queued for a repaint, and `retain_paint_queue`
-            // drops it with the queue entry when a boundary is lost. All three
-            // test surviving records rather than a walk-mutated flag.
+            // The queue carries its own reason, so there is no second record
+            // to reconcile and nothing here reads a node flag. That matters
+            // because `run_paint`'s error arm returns before
+            // `clear_paint_queue`: after a pass that failed partway the queue
+            // is what the retry runs on, while every flag the walk touched is
+            // already clear. A classification kept anywhere else has to be
+            // proven consistent with this one at four write sites — and the
+            // orderings that broke it (update-then-paint, paint-then-update,
+            // and a mark arriving after the failure) are all just joins on one
+            // entry now.
             let layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>> = self
                 .scheduler
-                .layer_update_boundaries()
+                .nodes_needing_paint()
                 .iter()
-                .filter(|(id, _)| self.render_tree.get(**id).is_some())
-                .map(|(&id, targets)| (id, targets.clone()))
+                .filter_map(|e| match &e.kind {
+                    crate::pipeline::PaintKind::LayerUpdate(targets) => {
+                        Some((e.id, targets.clone()))
+                    }
+                    crate::pipeline::PaintKind::Repaint => None,
+                })
                 .collect();
 
             let mut composer = FragmentComposer::new(self.device_pixel_ratio, root_boundary);
@@ -687,12 +690,15 @@ impl PipelineOwner<PaintPhase> {
                         // above it, so each learns what is nested beneath.
                         composer.note_boundary(child_id);
 
-                        // Graft-eligible when clean, and ALSO when the only
-                        // thing queued for this boundary is a composited-layer
-                        // update: that is a request to rebuild some node's own
-                        // effect layers, not to repaint anything.
-                        let layer_update = layer_updates.contains_key(&child_id);
-                        let retained = (!dirty_set.contains(&child_id) || layer_update)
+                        // Three dispositions, read straight off the queue:
+                        // queued for a repaint, queued only for a
+                        // composited-layer update, or not queued at all. The
+                        // last two both reuse the retained output; only the
+                        // first descends.
+                        let update_targets = layer_updates.get(&child_id);
+                        let queued_for_repaint =
+                            update_targets.is_none() && dirty_set.contains(&child_id);
+                        let retained = (!queued_for_repaint)
                             .then(|| self.retained_boundaries.get(&child_id))
                             .flatten()
                             // A cached subtree replays its nested boundaries'
@@ -726,7 +732,7 @@ impl PipelineOwner<PaintPhase> {
                         let patch = retained.and_then(|subtree| {
                             self.layer_patches_for(
                                 subtree,
-                                layer_updates.get(&child_id).map_or(&[][..], |t| t),
+                                update_targets.map_or(&[][..], |targets| targets),
                             )
                         });
                         if let (Some(subtree), Some(patch)) = (retained, patch) {

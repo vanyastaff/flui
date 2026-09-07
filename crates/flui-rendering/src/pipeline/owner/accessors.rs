@@ -1374,7 +1374,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// These are repaint boundaries that need to be painted in the next
     /// paint phase.
     #[inline]
-    pub fn nodes_needing_paint(&self) -> &[DirtyNode] {
+    pub fn nodes_needing_paint(&self) -> &[crate::pipeline::PaintEntry] {
         self.scheduler.nodes_needing_paint()
     }
 
