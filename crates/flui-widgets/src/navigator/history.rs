@@ -332,13 +332,19 @@ impl RouteEntry {
             return (false, undelivered);
         }
 
-        // Order matters. Flutter reaches `dispose` *inside* `didPop` —
-        // `OverlayRoute.didPop` calls `navigator.finalizeRoute(this)`
-        // (`routes.dart:90-92`) → `entry.finalize()` → `currentState = dispose` —
-        // and only then does `handlePop` call `onPopInvokedWithResult(true, …)`
-        // (`navigator.dart:3372`). So the route is already finalized when its
-        // callback runs. Found by a parity re-check; matters once `PopScope`
-        // callbacks can inspect navigator state.
+        // Order matters. Flutter can reach `dispose` *inside* `didPop`:
+        // `OverlayRoute.didPop` calls `navigator.finalizeRoute(this)` →
+        // `entry.finalize()` → `currentState = dispose`, and only then does
+        // `_RouteEntry.handlePop` call `onPopInvokedWithResult(true, …)`. So the
+        // route is already finalized when its callback runs. Found by a parity
+        // re-check; matters once `PopScope` callbacks can inspect navigator state.
+        //
+        // **Conditionally**, and the condition is the one this crate's deferred-exit
+        // fixtures set: `OverlayRoute.didPop` finalizes only `if
+        // (finishedWhenPopped)`. A route whose exit transition is still in flight
+        // reaches its callback *un*-finalized and stays present for the whole
+        // window — which is why `route_ids()` and `current()` diverge there.
+        // Cited by symbol: the line numbers this comment used to carry had drifted.
         if self.route.finished_when_popped() {
             self.state = RouteLifecycle::Dispose;
         }
@@ -445,8 +451,10 @@ pub(crate) struct FlushOutcome {
 /// released, in the order it was produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeferredEffect {
-    /// `onPopInvokedWithResult(did_pop, …)` for this route's `PopScope`s
-    /// (`navigator.dart:3372`; `:5612` for a refusal).
+    /// `onPopInvokedWithResult(did_pop, …)` for this route's `PopScope`s —
+    /// `_RouteEntry.handlePop` for the `true` case, `NavigatorState.maybePop`'s
+    /// `doNotPop` arm for a refusal. By symbol: both line numbers this doc used to
+    /// carry pointed at neighbouring statements after an upstream shift.
     PopInvoked(RouteId, bool),
     /// A `did_pop` that refused — it may have consumed a local-history entry
     /// (`routes.dart:950-965`), whose `on_remove` is owed on the route's
