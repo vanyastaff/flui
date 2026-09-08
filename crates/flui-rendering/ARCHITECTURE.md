@@ -266,6 +266,56 @@ two-frame version cannot see a missing write-back),
 (`tests/retained_boundary_layers.rs`), plus pixel equivalence against a forced
 repaint in the facade's `tests/composited_layer_update_readback.rs`.
 
+**Where this diverges observably: the STATIC sliver opacity.** Upstream serves an
+alpha change with `markNeedsCompositedLayerUpdate()` exactly where the node is a
+repaint boundary, and it is one in two places: `RenderOpacity`
+(`isRepaintBoundary => alwaysNeedsCompositing`) and `RenderAnimatedOpacityMixin`
+(`isRepaintBoundary => child != null && _currentlyIsRepaintBoundary!`), which is
+generic over `RenderObject` and so covers the animated case on BOTH protocols —
+matching FLUI's `animated_opacity.rs` and `sliver_animated_opacity.rs`, which
+already mark layer updates.
+
+The one node it leaves out is the static `RenderSliverOpacity`: it declares
+`alwaysNeedsCompositing` but never `isRepaintBoundary` (`isRepaintBoundary` does
+not appear in `proxy_sliver.dart` at all), so the mechanism has no path to it and
+its setter calls `markNeedsPaint()` — a full subtree repaint on every alpha tick.
+Re-derive with `grep -rn "updateCompositedLayer\|isRepaintBoundary"
+packages/flutter/lib/src/rendering/` inside `.flutter` at the pinned tag.
+
+`RenderSliverOpacity::set_opacity` reports `COMPOSITED_LAYER_UPDATE` instead.
+The promotion the reference needs is exactly what this design removed: a flat
+capture makes any node's effect layers addressable inside the ENCLOSING
+boundary, so the sliver needs no `isRepaintBoundary` of its own to be served.
+The same argument that justifies not promoting the box case is what gives the
+sliver case a path the reference does not have.
+
+Behaviour is unchanged in every other respect, and the structural transitions
+still repaint (`skip_paint` crossings and compositing-threshold crossings), so
+the edge cases upstream handles by repainting unconditionally are handled here
+by repainting deliberately. **Oracles:**
+`a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree` and
+`a_sliver_layer_update_is_written_back_into_the_retained_capture`
+(`tests/retained_boundary_layers.rs`). Net-new, not replacements: upstream has no
+test that drives `RenderSliverOpacity.opacity` as a setter, so no Flutter
+coverage was dropped here.
+
+They are the first coverage of the update-only path over the Sliver protocol at
+all. What that buys is narrower than "the machinery is protocol-agnostic" and
+worth stating exactly: `RenderNode::paint_alpha` dispatches through the uniform
+`with_entry!` macro, so the alpha hook itself has no protocol split to test. What
+these two do pin is that a sliver's `RenderSliver::is_repaint_boundary` is
+honoured by the layer-update walk — without it the walk reaches the viewport
+paint root and degrades to a plain repaint, which is exactly how both tests fail
+when the setter is reverted. The one place the protocols genuinely diverge is the
+`size` argument `RenderNode::paint_transform` reads (`geometry()` for a box,
+`absolute_paint_size()` for a sliver); `RenderSliverOpacity` does not override
+`paint_transform`, so neither test reaches that branch and it stays unexercised
+for slivers.
+
+**Known gap, pre-existing and not introduced here:** upstream gates the
+semantics mark on `alwaysIncludeSemantics`, a field neither FLUI opacity render
+object has. Both report semantics unconditionally on a visibility flip.
+
 ### A retained capture holds no GPU resource, so device loss cannot strand one
 
 **Rule:** #536 asks that "detach, reattach, and device-loss paths reject stale

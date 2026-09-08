@@ -107,7 +107,19 @@ impl RenderSliverOpacity {
     /// Returns `true` only when `always_needs_compositing` is set OR the alpha
     /// is non-trivially blended (`0 < alpha < 255`). Fully-transparent
     /// (`alpha == 0`) does not need compositing because the subtree is skipped
-    /// entirely — Flutter parity: `alwaysNeedsCompositing => alpha > 0`.
+    /// entirely.
+    ///
+    /// **Recorded divergence, not parity.** Upstream's predicate is
+    /// `child != null && _alpha > 0`, which is TRUE at alpha 255 — its own
+    /// `proxy_sliver_test.dart` case "RenderSliverOpacity does composite if it
+    /// is opaque" asserts exactly that, and this predicate does not satisfy it.
+    /// The `alpha != 255` term is deliberate and is the same `is_layered`
+    /// threshold `paint_alpha` and `skip_paint` already use: at alpha 255 no
+    /// layer is ever allocated (`paint_alpha` returns `None`), so demanding
+    /// compositing there is pure overhead with no visual effect. The full
+    /// rationale is recorded once, on the sibling that first made the call —
+    /// see `proxy::animated_opacity`'s `is_repaint_boundary` comment. Oracle
+    /// for the divergent value: `opaque_and_transparent_constructors` below.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
@@ -130,16 +142,67 @@ impl RenderSliverOpacity {
         if (self.opacity - clamped).abs() <= f32::EPSILON {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let needed_compositing = self.needs_compositing();
-        let was_visible = self.alpha != 0;
+        let old_needs_compositing = self.needs_compositing();
+        let old_is_visible = self.alpha > 0;
+        // Whether this node suppresses its subtree's paint entirely. Read
+        // through the trait method rather than re-deriving `alpha == 0`, so
+        // this stays correct if that predicate changes.
+        let old_skips_paint = <Self as RenderSliver>::skip_paint(self);
         self.opacity = clamped;
         self.alpha = Self::opacity_to_alpha(clamped);
-        let mut impact = flui_rendering::RenderUpdateImpact::PAINT;
-        if needed_compositing != self.needs_compositing() {
+        // A pure alpha change lands ONLY on the `OpacityLayer` this node
+        // pushes, so the frame can rebuild that layer and replay the enclosing
+        // repaint boundary's retained output rather than repainting the
+        // subtree.
+        //
+        // DIVERGENCE FROM THE REFERENCE, and a deliberate improvement — see
+        // `flui-rendering/ARCHITECTURE.md`, "A composited-layer update patches
+        // the enclosing capture". Flutter's `RenderSliverOpacity.opacity`
+        // setter calls `markNeedsPaint()` (`proxy_sliver.dart`), NOT
+        // `markNeedsCompositedLayerUpdate()` — and it has no choice: that
+        // mechanism requires the node to BE a repaint boundary, and
+        // `RenderSliverOpacity` never overrides `isRepaintBoundary` — the word
+        // does not appear in `proxy_sliver.dart` at all. Upstream declares it
+        // in exactly two places: `RenderOpacity` (`proxy_box.dart`,
+        // `isRepaintBoundary => alwaysNeedsCompositing`) and
+        // `RenderAnimatedOpacityMixin`, which is generic over `RenderObject`
+        // and so covers the animated case on BOTH protocols. The STATIC sliver
+        // opacity is the one node the mechanism cannot reach upstream — not
+        // "the sliver protocol", which `RenderSliverAnimatedOpacity` is served
+        // on through that mixin.
+        //
+        // FLUI has the path here because a retained capture is a flat list and
+        // a node's own effect layers are addressable INSIDE the enclosing
+        // boundary's capture, so nothing is promoted. Oracles (net-new — no
+        // upstream test drives this setter, so nothing was replaced):
+        // `a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree`
+        // and `a_sliver_layer_update_is_written_back_into_the_retained_capture`
+        // (`flui-rendering/tests/retained_boundary_layers.rs`).
+        let mut impact = flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE;
+        if old_needs_compositing != self.needs_compositing() {
+            // Crossing the layered threshold changes which layers exist, not
+            // just their properties. `COMPOSITING_BITS` implies `PAINT`, and
+            // `apply_render_update_impact` marks paint before the layer
+            // update, so the weaker mark refuses itself and the frame repaints
+            // — which is the only way to serve a structural change.
             impact |= flui_rendering::RenderUpdateImpact::COMPOSITING_BITS;
         }
-        if was_visible != (self.alpha != 0) {
+        if old_is_visible != (self.alpha > 0) {
             impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
+        }
+        // Starting or stopping suppressing the subtree's paint is a change to
+        // what the frame CONTAINS, not to a layer property, and it is invisible
+        // to the layer-update path: at both alpha 255 and alpha 0 this node
+        // emits no `OpacityLayer` at all, so it has no effect-layer slot for an
+        // update to patch. Only a repaint can add or remove that content.
+        //
+        // This is the honest impact rather than the last line of defence. The
+        // paint phase refuses to graft when a node that requested an update
+        // owns no slot in the capture, so it catches this case too — see
+        // `RenderOpacity::set_opacity` (the box counterpart this mirrors) for
+        // the mutation evidence that line earns its place.
+        if old_skips_paint != <Self as RenderSliver>::skip_paint(self) {
+            impact |= flui_rendering::RenderUpdateImpact::PAINT;
         }
         impact
     }
@@ -211,19 +274,20 @@ impl RenderSliver for RenderSliverOpacity {
     }
 
     // Compositing-layer requirement: the pipeline's compositing-bits walk
-    // (`PipelineOwner::update_subtree_compositing_bits`, owner/mod.rs:2355)
-    // reads `always_needs_compositing` through `dyn RenderObject<SliverProtocol>`.
-    // Without this override the blanket impl returns the default `false`,
-    // silently skipping the dedicated compositing layer that the opacity
-    // effect requires.
+    // (`PipelineOwner::update_subtree_compositing_bits`, in
+    // `pipeline/owner/compositing.rs`) reads `always_needs_compositing`
+    // through `dyn RenderObject<SliverProtocol>`. Without this override the
+    // blanket impl returns the default `false`, silently skipping the
+    // dedicated compositing layer that the opacity effect requires.
     //
-    // Flutter parity: `RenderSliverOpacity.alwaysNeedsCompositing`
-    // (proxy_sliver.dart:128) = `child != null && _alpha > 0`.  FLUI
-    // absorbs the child-presence gate into the paint phase; here we mirror
-    // the alpha-driven part.  The additional `always_needs_compositing`
-    // opt-in field is a FLUI extension (stable-layer animation support) that
-    // Flutter's `RenderSliverOpacity` does not have — it is OR-ed in so the
-    // flag never weakens Flutter's contract.
+    // Upstream's `RenderSliverOpacity.alwaysNeedsCompositing` is
+    // `child != null && _alpha > 0`. Two differences, both deliberate:
+    // the child-presence gate is absorbed into the paint phase here, and the
+    // alpha threshold diverges at 255 — see [`needs_compositing`]'s doc for
+    // that one, which is a recorded divergence rather than parity. The
+    // `always_needs_compositing` opt-in field is a FLUI extension
+    // (stable-layer animation support) with no upstream counterpart; it is
+    // OR-ed in, so it only ever widens when a layer is demanded.
     fn always_needs_compositing(&self) -> bool {
         self.needs_compositing()
     }
@@ -275,12 +339,16 @@ mod tests {
     fn opaque_and_transparent_constructors() {
         let opaque = RenderSliverOpacity::opaque();
         assert_eq!(opaque.alpha(), 255);
+        // The DIVERGENT value, and the reason this assertion is worth its
+        // line: upstream answers `true` here (`child != null && _alpha > 0`)
+        // and has a test saying so. FLUI answers `false` because alpha 255
+        // allocates no layer — see `needs_compositing`'s doc.
         assert!(!opaque.needs_compositing());
 
         let transparent = RenderSliverOpacity::transparent();
         assert_eq!(transparent.alpha(), 0);
-        // Flutter: alwaysNeedsCompositing => alpha > 0, so alpha=0 must NOT
-        // need compositing (the subtree is skipped entirely).
+        // This half IS parity: upstream's `_alpha > 0` is false at 0 too, and
+        // the subtree is skipped entirely.
         assert!(!transparent.needs_compositing());
     }
 
@@ -298,18 +366,99 @@ mod tests {
         assert_eq!(
             o.set_opacity(0.25),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "entering the composited range is structural (COMPOSITING_BITS, which \
+             implies PAINT) and the layer-update bit rides along; the owner applies \
+             paint first, so the weaker mark refuses itself",
         );
         // 0.25 * 255 = 63.75 → round → 64.
         assert_eq!(o.alpha(), 64);
         assert_eq!(
             o.set_opacity(0.5),
-            flui_rendering::RenderUpdateImpact::PAINT
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "a visible change within the composited range lands only on the \
+             OpacityLayer, so it updates that layer instead of repainting. \
+             This is where FLUI improves on the reference rather than matching \
+             it: upstream repaints here, because its update-only mechanism \
+             needs the node to be a repaint boundary and the sliver opacity \
+             is not one — see the setter's own comment",
+        );
+        assert_eq!(
+            o.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "an identical non-zero opacity is a no-op",
+        );
+        assert_eq!(
+            o.set_opacity(1.0),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "leaving the composited range is structural: COMPOSITING_BITS implies \
+             PAINT and wins over the layer-update bit riding with it",
+        );
+        assert_eq!(
+            o.set_opacity(0.0),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+                | flui_rendering::RenderUpdateImpact::PAINT,
+            "becoming invisible must REPAINT, not just update a layer: at both \
+             alpha 255 and alpha 0 this node emits no OpacityLayer, so there is \
+             no effect-layer slot for an update to patch and a graft would \
+             replay the old, visible content",
+        );
+        assert_eq!(o.set_opacity(0.0), flui_rendering::RenderUpdateImpact::NONE,);
+        assert_eq!(
+            o.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            "becoming visible and composited affects both independent phases, and \
+             the layer-update bit rides along with every value change",
         );
         assert_eq!(
             o.set_opacity(0.0),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
-                | flui_rendering::RenderUpdateImpact::SEMANTICS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            "composited straight to invisible: leaving the composited range and \
+             starting to skip paint are both structural, so this repaints — the \
+             transition the earlier sequence used to end on, kept because it is \
+             the one an opacity animation actually finishes with",
         );
+    }
+
+    /// With `always_needs_compositing` set, alpha 0 keeps its `OpacityLayer`,
+    /// so becoming invisible IS a pure layer property change.
+    ///
+    /// This is the one configuration where the new base impact changes an
+    /// alpha-0 crossing: `paint_alpha` still returns `Some(0)` and
+    /// `skip_paint` stays false, so a slot exists for the patch to land in and
+    /// nothing structural moved. Without the flag the same transition must
+    /// repaint (asserted above), which is what makes this a discriminating
+    /// case rather than a restatement.
+    #[test]
+    fn an_always_compositing_sliver_updates_its_layer_even_when_going_invisible() {
+        let mut o = RenderSliverOpacity::new(0.5);
+        assert_eq!(
+            o.set_always_needs_compositing(true),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
+        assert_eq!(o.paint_alpha(), Some(128));
+
+        assert_eq!(
+            o.set_opacity(0.0),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            "the flag holds needs_compositing true and skip_paint false across \
+             the crossing, so neither structural bit fires and the alpha change \
+             is served by patching the layer that still exists",
+        );
+        assert_eq!(
+            o.paint_alpha(),
+            Some(0),
+            "precondition for the impact above: the layer really does survive \
+             at alpha 0, so there is a slot for the patch to address",
+        );
+        assert!(!o.skip_paint(), "and the subtree is still painted");
     }
 
     #[test]

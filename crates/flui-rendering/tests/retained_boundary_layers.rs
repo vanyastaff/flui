@@ -2516,3 +2516,295 @@ fn a_grandchild_boundary_is_still_named_after_its_parent_was_grafted() {
          grandchild's stale output is replayed and nothing ever repaints it",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Composited-layer updates over the Sliver protocol
+// ---------------------------------------------------------------------------
+//
+// Everything above drives the update-only path through `RenderBox`. These two
+// are the first to drive it through a sliver at all.
+//
+// What that is worth, stated exactly rather than as "the machinery is
+// protocol-agnostic": `RenderNode::paint_alpha` dispatches through the uniform
+// `with_entry!` macro (`crates/flui-rendering/src/storage/node.rs`), so the
+// alpha hook itself has no protocol split for a test to find. What these DO
+// pin is that a sliver's `RenderSliver::is_repaint_boundary` is honoured by the
+// layer-update walk — without it `mark_needs_composited_layer_update` reaches
+// the viewport (the paint root, whose parent is `None`) and degrades to a plain
+// repaint, which is precisely how both tests fail against a setter that still
+// reports `PAINT`.
+//
+// The one genuine protocol divergence is the `size` argument
+// `RenderNode::paint_transform` reads — `geometry()` for a box,
+// `absolute_paint_size()` for a sliver. `RenderSliverOpacity` does not override
+// `paint_transform`, so neither test below reaches that branch; it stays
+// unexercised for slivers and is not what these cover.
+//
+// NAMED GAP — the one hazard the Sliver protocol adds that these do not cover:
+// a sliver whose `geometry.visible` is false is cut off by the paint walk's
+// visibility gate BEFORE `own_effect_layers` runs, so it records no effect
+// slot. An alpha change on such a node reports a layer update with no slot to
+// land in, and correctness then rests entirely on `layer_patches_for`'s
+// target-has-no-slot guard, which is pinned only by the Box-protocol test
+// `an_effect_layer_shape_change_falls_back_to_a_repaint`. Reading both call
+// sites says the behaviour is right today; it has no oracle of its own, and a
+// fixture would need a sliver scrolled out of the viewport.
+//
+// These two mirror `an_alpha_change_updates_the_layer_without_repainting_the_subtree`
+// and `a_layer_update_is_written_back_into_the_retained_capture` above, with a
+// `RenderViewport` hosting a minimal sliver repaint boundary in place of
+// `RenderRepaintBoundary` — flui-objects ships no dedicated sliver
+// repaint-boundary render object, only the `RenderSliver::is_repaint_boundary`
+// override point the pipeline reads.
+
+use flui_objects::{RenderSliverOpacity, RenderViewport};
+use flui_rendering::testing::sliver_node;
+use flui_types::layout::AxisDirection;
+
+/// The Sliver-protocol counterpart of `RenderRepaintBoundary`: declares
+/// itself a repaint boundary and passes its single child through untouched.
+#[derive(Debug, Default)]
+struct SliverBoundary;
+
+impl flui_foundation::Diagnosticable for SliverBoundary {}
+
+impl flui_rendering::traits::RenderSliver for SliverBoundary {
+    type Arity = flui_tree::Single;
+    type ParentData = flui_rendering::parent_data::SliverParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::SliverLayoutContext<
+            '_,
+            flui_tree::Single,
+            flui_rendering::parent_data::SliverParentData,
+        >,
+    ) -> flui_rendering::constraints::SliverGeometry {
+        let constraints = *ctx.constraints();
+        if ctx.child_count() > 0 {
+            ctx.layout_child(0, constraints)
+        } else {
+            flui_rendering::constraints::SliverGeometry::ZERO
+        }
+    }
+
+    fn hit_test(
+        &self,
+        ctx: &mut flui_rendering::context::SliverHitTestContext<
+            '_,
+            flui_tree::Single,
+            flui_rendering::parent_data::SliverParentData,
+        >,
+    ) -> bool {
+        ctx.hit_test_child_at_layout_offset(0)
+    }
+
+    fn is_repaint_boundary(&self) -> bool {
+        true
+    }
+}
+
+/// A sliver leaf that records how many times it was painted AND draws a
+/// filled rect.
+///
+/// Deliberately not the box `PaintCounter` above, which records a call but
+/// emits no draw commands — that shape made `mount_drawing_opacity` necessary
+/// earlier in this file, because a leaf that draws nothing produces no
+/// `PictureLayer` and leaves a picture-count oracle unable to tell a visible
+/// subtree from a hidden one. This leaf draws so any future oracle over these
+/// fixtures inherits that ability rather than the blind shape.
+#[derive(Debug)]
+struct SliverPaintCounter(Arc<AtomicUsize>);
+
+impl flui_foundation::Diagnosticable for SliverPaintCounter {}
+
+impl flui_rendering::traits::RenderSliver for SliverPaintCounter {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::SliverParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::SliverLayoutContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::SliverParentData,
+        >,
+    ) -> flui_rendering::constraints::SliverGeometry {
+        let extent = 10.0_f32.min(ctx.constraints().remaining_paint_extent);
+        flui_rendering::constraints::SliverGeometry::new(extent, extent, 0.0)
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
+        let color = flui_types::Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0]);
+        ctx.canvas()
+            .draw_rect(rect, &flui_painting::Paint::fill(color));
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::SliverHitTestContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::SliverParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// Root box → viewport → [boundary → sliver opacity → drawing counting leaf,
+/// boundary → drawing counting leaf].
+///
+/// Mirrors `mount_opacity_under_boundary` exactly, over the Sliver protocol:
+/// the `RenderSliverOpacity` sits INSIDE a sliver repaint boundary, not as
+/// one, and a second sibling boundary exists so a later frame can be forced
+/// to paint without touching the first — the only way to observe what the
+/// STORED capture holds.
+fn mount_sliver_opacity_under_boundary(
+    opacity: f32,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+    Arc<AtomicUsize>,
+) {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderViewport::new(AxisDirection::TopToBottom))
+            .child(
+                sliver_node(SliverBoundary).child(
+                    sliver_node(RenderSliverOpacity::new(opacity))
+                        .label("sliver-opacity")
+                        .child(sliver_node(SliverPaintCounter(Arc::clone(&painted)))),
+                ),
+            )
+            .child(
+                sliver_node(SliverBoundary)
+                    .label("sliver-sibling")
+                    .child(sliver_node(SliverPaintCounter(Arc::new(AtomicUsize::new(
+                        0,
+                    ))))),
+            ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let opacity_id = registry
+        .get("sliver-opacity")
+        .expect("sliver-opacity is labelled");
+    let sibling = registry
+        .get("sliver-sibling")
+        .expect("sliver-sibling is labelled");
+    (owner, opacity_id, sibling, painted)
+}
+
+/// Applies a new opacity through the setter-then-apply seam, same as
+/// `set_opacity` above but against `RenderSliverOpacity`.
+fn set_sliver_opacity(
+    owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
+    id: flui_foundation::RenderId,
+    value: f32,
+) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("sliver opacity node")
+        .as_sliver_mut()
+        .expect("sliver entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderSliverOpacity>()
+        .expect("RenderSliverOpacity")
+        .set_opacity(value);
+    owner.apply_render_update_impact(id, impact);
+}
+
+/// Same oracle as `an_alpha_change_updates_the_layer_without_repainting_the_subtree`,
+/// driven through the Sliver protocol.
+#[test]
+fn a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree() {
+    let (owner, opacity_id, _sibling, painted) = mount_sliver_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+
+    set_sliver_opacity(&mut owner, opacity_id, 0.25);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the subtree under the sliver opacity must NOT repaint for an \
+         alpha-only change",
+    );
+    assert_eq!(
+        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "and the emitted OpacityLayer must carry the new alpha",
+    );
+}
+
+/// Same oracle as `a_layer_update_is_written_back_into_the_retained_capture`,
+/// driven through the Sliver protocol — three frames, because two cannot see
+/// a missing write-back (see that test's doc comment for why), PLUS a paint
+/// count check the box version does not need.
+///
+/// A pure value check on frame 3 cannot by itself distinguish a correct
+/// update-only patch from a correct-but-unnecessary full repaint: either way
+/// `retained_boundaries` ends up holding the fresh alpha, because a normal
+/// repaint also stores whatever it just painted. So this also asserts the
+/// leaf never repaints across frames 2-3 — the property that actually
+/// depends on `set_opacity` reporting `COMPOSITED_LAYER_UPDATE` rather than
+/// `PAINT` — otherwise the value assertion alone would pass unmodified
+/// against the pre-fix setter, same as the box test would if `RenderOpacity`
+/// still reported `PAINT` for an in-range change.
+#[test]
+fn a_sliver_layer_update_is_written_back_into_the_retained_capture() {
+    let (owner, opacity_id, sibling, painted) = mount_sliver_opacity_under_boundary(0.5);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+
+    set_sliver_opacity(&mut owner, opacity_id, 0.25);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("second frame");
+
+    // Third frame: the sliver opacity is clean; the sibling boundary forces
+    // the pass.
+    owner.mark_needs_paint(sibling);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("third frame")
+        .expect("third frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the leaf under the sliver opacity must NOT repaint across the alpha \
+         change (frame 2) or the unrelated sibling-forced pass (frame 3) — an \
+         update-only patch touches only the enclosing capture's own effect \
+         layers",
+    );
+    assert_eq!(
+        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        Some(25.0),
+        "a later frame that grafts the capture for an unrelated reason must \
+         replay the UPDATED alpha, not the one it was captured with",
+    );
+}

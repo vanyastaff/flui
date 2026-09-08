@@ -7549,6 +7549,10 @@ fn harness_sliver_opacity_repaints_on_paint_mutation() {
         assert_eq!(
             o.set_opacity(0.5),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "crossing into the composited range is structural (COMPOSITING_BITS, \
+             which implies PAINT) and the layer-update bit rides along with it — \
+             see RenderSliverOpacity::set_opacity",
         );
     });
     assert!(

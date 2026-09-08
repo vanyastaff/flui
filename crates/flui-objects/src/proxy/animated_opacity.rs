@@ -14,20 +14,21 @@
 //! needs-compositing-bits whenever the recompute crosses the
 //! `_alpha > 0` repaint-boundary threshold (`isRepaintBoundary` flips).
 //!
-//! # Documented divergence — no composited-layer update
+//! # Composited-layer updates — how this port reaches Flutter's efficiency path
 //!
-//! Flutter's mixin is a `isRepaintBoundary` node: on a tick it calls
-//! `updateCompositedLayer`, which mutates the *retained* `OpacityLayer`'s
-//! alpha in place, so a tick never repaints the child subtree — only the
-//! compositor re-blends the cached layer. FLUI has no composited-layer-update
-//! machinery (no `updateCompositedLayer`/`markNeedsCompositedLayerUpdate`
-//! equivalent anywhere in `flui-rendering`/`flui-objects`), so this port
-//! instead marks the node dirty for a real repaint whenever the effective
-//! alpha changes, exactly like `layout::animated_size` documents its own
-//! divergence at `layout/animated_size.rs:452-457`. The
-//! retained-layer alpha update is Flutter's efficiency path, not yet built
-//! here; a tick costs a full repaint of the subtree instead of a blend-only
-//! update.
+//! Flutter's mixin is an `isRepaintBoundary` node: on a tick it calls
+//! `updateCompositedLayer`, which mutates the *retained* `OpacityLayer`'s alpha
+//! in place, so a tick never repaints the child subtree — only the compositor
+//! re-blends the cached layer.
+//!
+//! FLUI reaches the same outcome by a different route, and without the
+//! promotion. A tick reports `RenderUpdateImpact::COMPOSITED_LAYER_UPDATE`
+//! (see `mark_needs_composited_layer_update` below), and the frame rebuilds
+//! just this node's own effect layers inside the ENCLOSING repaint boundary's
+//! retained capture — the node stays an ordinary non-boundary. The design and
+//! its accepted trade-offs are recorded in `flui-rendering/ARCHITECTURE.md`,
+//! "A composited-layer update patches the enclosing capture; no node is
+//! promoted to a boundary".
 //!
 //! # Retargeting — the proxy absorbs `didUpdateAnimation`
 //!
