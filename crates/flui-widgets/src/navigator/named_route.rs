@@ -174,6 +174,9 @@ pub(super) enum PushMode<'a> {
     /// [`NavigatorHandle::push_replacement`], delivering `result` to the
     /// replaced route when present.
     Replace {
+        /// The route to replace, captured **before** the factory ran. `None`
+        /// means the current top — see `RouteHistory::push_replacement_with_id`.
+        target: Option<RouteId>,
         /// What the replaced route's [`RouteResult`] resolves with.
         result: Option<AnyResult>,
     },
@@ -217,8 +220,8 @@ impl<R: NavigatorRoute> ErasedPush for R {
     ) -> (RouteId, Box<dyn Any>) {
         let (id, result): (RouteId, RouteResult<R::Output>) = match mode {
             PushMode::Push => handle.push_reporting_id(*self),
-            PushMode::Replace { result } => {
-                handle.push_replacement_erased_reporting_id(*self, result)
+            PushMode::Replace { target, result } => {
+                handle.push_replacement_erased_reporting_id(*self, target, result)
             }
             PushMode::RemoveUntil { keep } => {
                 handle.push_and_remove_until_reporting_id(*self, keep)
@@ -644,8 +647,14 @@ struct Registrations {
     /// only the first is warned about.
     conflicts_seen: usize,
     /// The latch itself. Set under the lock in the same step that decides
-    /// whether to warn, so the decision and the latch cannot drift and a
-    /// re-entrant subscriber cannot observe a stale `false`.
+    /// whether to warn, so the two cannot drift.
+    ///
+    /// It guards the **counter**, not the warning: a re-entrant registration
+    /// could never deliver a second event (`tracing` drops re-entrant dispatch
+    /// on one thread), but latching after the emit would let it count itself
+    /// first, and `warns_emitted` is the oracle the warn-once test rests on.
+    /// Measured both ways in
+    /// `a_subscriber_that_re_registers_while_handling_the_warning_cannot_skew_the_latch`.
     warn_latched: bool,
     /// Warnings emitted — incremented in the same locked step that commits the
     /// latch, so this counts exactly the emissions the latch authorised.
@@ -712,7 +721,11 @@ impl RouteRegistry {
                     // Decide and latch in one step, under this guard. Setting
                     // the flag after the emit — outside the lock — would let a
                     // `tracing` subscriber that re-enters registration during
-                    // the warn observe a stale value and count itself first.
+                    // the warn observe a stale value and count itself first:
+                    // `warns_emitted` reads 2 for one delivered event. It could
+                    // not produce a second *warning* — that is unreachable — so
+                    // this guards the counter, and the counter is what the
+                    // warn-once test asserts on. Not dead code.
                     let first = !registrations.warn_latched;
                     registrations.warn_latched = true;
                     if first {
@@ -728,8 +741,13 @@ impl RouteRegistry {
         drop(previous);
 
         // Emitted with the registry lock released, like every other call out of
-        // this module: a `tracing` subscriber is user code too. The latch above
-        // already committed, so re-entry here cannot double-warn.
+        // this module: a `tracing` subscriber is user code too, and may register
+        // routes from inside this call.
+        //
+        // A second *event* is not what the latch prevents — `tracing` drops
+        // re-entrant dispatch on the same thread, so a re-entrant registration
+        // cannot deliver one whatever this code does. What the latch prevents is
+        // that re-entrant call counting itself as first.
         if let Some(previous_output) = displaced {
             tracing::warn!(
                 route = %name,

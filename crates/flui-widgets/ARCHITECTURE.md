@@ -198,8 +198,19 @@ name is a null dereference and a *wrong* `T` is never detected at all.
   door — expressed in the type system as `GeneratedRoute::checked` yielding a
   `TypedPush<T>` token that is the only thing with a `push` method.
 
-Both failures are total: **nothing is pushed, popped, replaced, or removed, no
-observer is notified, and the generated route is disposed** (see §7 below).
+Both failures are total **for the operation itself**: it pushes, pops, replaces
+and removes nothing, and the generated route is disposed (§7).
+
+That qualifier is load-bearing, and the earlier revision of this entry lacked it.
+Resolution runs a user factory, and §9 makes navigating from a factory a
+supported shape, so a factory that navigates and *then* declines has already
+changed the stack and notified observers by the time the name comes back
+unresolved — measured: `push_named` returns `Err(Unresolved)` with the stack one
+deeper and `["push", "changeTop"]` observed. Those are the factory's own
+mutations, deliberate on its part, and they are not rolled back for the same
+reason §5 does not undo a factory's nested push: it is not this operation's to
+undo. What the guarantee covers is that **the failing operation adds nothing of
+its own**.
 
 **Why not type every entry point.** That was the first design, and it was worse
 than the bug it fixed. `push_named::<()>("/settings")` against a
@@ -246,42 +257,73 @@ them a pair rather than a duplication: deleting the `TypeId` comparison in
 green, while routing `push_named` through `checked::<()>` fails the untyped ones
 and leaves the typed one green.
 
-### 5. `pop_and_push_named` resolves before it pops
+### 5. Named operations capture their target, then resolve, then act on the captured route
 
 **Rule:** as §4 above; same ADR.
 
-**Oracle:** `NavigatorState.popAndPushNamed`, which is literally
-`pop<TO>(result); return pushNamed<T>(routeName, arguments: arguments);` — the
-pop is committed before `_routeNamed` is called.
+**Oracle:** `NavigatorState.popAndPushNamed` is literally
+`pop<TO>(result); return pushNamed<T>(routeName, arguments: arguments);` — the pop
+is committed before `_routeNamed` is called. `pushReplacementNamed` instead
+evaluates `_routeNamed(..)` in *argument* position and then replaces whatever is
+on top.
 
-**Choice:** resolve the name first, then pop, then push. The two mutations are
-the same two calls in the same order, so on the success path the observer stream
-is identical to the oracle's.
+**Choice:** read the target route's id **first**, then resolve the name, then act
+on that captured id. Resolution happens before any mutation, so an unresolvable
+name changes nothing; and the operation acts on the route the caller meant, not
+on whatever happens to be on top after resolution.
 
-**Why:** Flutter's order makes a failed generation leave the stack already
-mutated — the app is one route shallower and the exception surfaces from the
-middle of a two-step operation, with no route to show for it. Reversing the two
-makes the failure total, which is what lets §4's "nothing was pushed" guarantee
-cover this entry point too. Nothing is lost: the generator cannot observe the
-stack it is about to be pushed onto in either ordering, because Flutter calls it
-after a pop that has not flushed.
+**Why the capture is needed, and what it cost to learn.** Resolving runs a user
+factory, and a factory can navigate — `RouteRequest::navigator()` advertises
+exactly that. So "resolve, then act on the current top" is a
+time-of-check/time-of-use bug: a factory that pushes during resolution makes the
+following `pop()` remove the *nested* route while the caller's target survives
+uncompleted, and `pop_and_push_named_with` then delivers the caller's result
+value to a route it has never heard of. Three entry points shared the shape.
+`push_named_and_remove_until` did not, for a structural reason worth preserving:
+its removal is defined by a **predicate**, not by a captured top, so a nested
+push is swept along with everything else — do not harmonise it into the captured
+shape.
 
-**Replacement tests:** `pop_and_push_named_with_an_unresolvable_name_pops_nothing`
-and `pop_and_push_named_with_an_unresolvable_name_delivers_its_result_to_nobody`
-(`tests/navigator_public.rs`). Those two are the *only* tests that cover this
-divergence, and the distinction matters: the success path cannot see it, because
-both orderings pop and then push. Moving `self.pop()` back above
-`self.resolve_named(..)` leaves the parity leg of
-`named_route_arguments_reach_the_generator_for_every_named_entry_point` and
-`pop_and_push_named_with_delivers_its_result_to_the_popped_route` green and
-fails only these two.
+**Two divergences from the oracle, both real, both only for a re-entrant factory:**
 
-A separate oracle, `pop_and_push_named_observes_a_pop_where_push_replacement_named_does_not`,
-pins that this really *is* a pop-then-push and not a replacement wearing its
-name. Stack shape and result delivery cannot tell those apart — a
-`PushMode::Replace` body keeps every other named-route test green, the parity
-leg included — so the discriminator is the observer stream: a pop-and-push emits
-`didPop` + `didPush`, a replacement emits `didReplace` and neither.
+1. **Ordering.** The nested `didPush` precedes the dismissal of the caller's
+   route. Flutter's `popAndPushNamed` pops *first* and cannot produce this, so
+   **this exposure is created by the divergence, not inherited.** An earlier
+   revision of this entry claimed the success-path stream was "identical to the
+   oracle's" and that "nothing is lost". Both were false; a divergence's cost is
+   not visible until something else changes, and `RouteRequest::navigator()` is
+   what changed.
+2. **Kind.** Once a factory has pushed on top, the caller's route is no longer
+   the top, and a route that is not on top cannot be popped. `dismiss_captured`
+   therefore has three cases, all documented on it and all asserted: still on top
+   → an ordinary `pop` (`didPop`, and `Route::did_pop` may still refuse); buried
+   → removed by id (`didRemove`); already gone → a no-op, and the operation still
+   returns `Ok` with its new route pushed.
+
+Non-re-entrant calls — every ordinary one — are unaffected and still emit
+`["pop", "changeTop", "push", "changeTop"]`.
+
+**Where this beats the reference.** `pushReplacementNamed` has the identical
+defect in Flutter: the generator runs in argument position, and a Dart factory
+can navigate through `Navigator.of(context)` just as ours can, after which the
+replacement targets the wrong route. FLUI's capture removes it.
+
+**Replacement tests** (`tests/navigator_public.rs`), each with the mutation it
+detects:
+
+- `pop_and_push_named_with_an_unresolvable_name_pops_nothing` and
+  `…_delivers_its_result_to_nobody` — move `self.pop()` back above
+  `resolve_named` and only these two fail; the success path cannot see the
+  ordering, because both orderings pop and then push.
+- The three re-entrant-factory cases — drop the capture and act on the current
+  top, and they fail with `left: [1,2,4] right: [1,4]` and the misdelivered
+  result value.
+- `pop_and_push_named_observes_a_pop_where_push_replacement_named_does_not` pins
+  that this is a pop-and-push rather than a replacement wearing its name. Stack
+  shape and result delivery cannot tell those apart — a `PushMode::Replace` body
+  keeps every other named-route test green, the parity leg included — so the
+  discriminator is the observer stream: a pop-and-push emits `didPop` + `didPush`,
+  a replacement emits `didReplace` and neither.
 
 ### 6. Named-route registration lives on the handle, and the app builder will replace the table wholesale
 
@@ -438,14 +480,28 @@ Note the route's *content* never needed a captured handle: a
 resolves from it, exactly as `Navigator.of(context)` does. So after this change
 there is no remaining case where capturing is the right answer.
 
-**Consequence, named rather than left to be discovered:** this is a breaking
-change to every registration call site, and deliberately so — it is a compile
-error at each one, which is the cheapest it will ever be.
+**Consequences, named rather than left to be discovered.** Two, and the second
+is the one that cost a review round:
+
+- It is a breaking change to every registration call site, deliberately so — a
+  compile error at each, which is the cheapest it will ever be.
+- **It is what makes re-entrant navigation reachable, and therefore what
+  activates §5's divergence.** Handing the factory a navigator turns "a factory
+  could conceivably navigate" into a documented, ergonomic shape with a passing
+  test. That converted a latent time-of-check/time-of-use hazard in every named
+  operation into a live one: §5's captured-target fix, its two observable
+  divergences from the oracle, and §4's qualifier about a declining factory's own
+  mutations all exist because of this entry. Recorded here because a reader
+  arriving at §9 alone would otherwise see a fix with no cost.
 
 **Replacement tests:** `a_factory_is_handed_its_own_navigator_and_the_callers_request`
-asserts the handle is *this* navigator (`is_same`) and not merely some navigator,
-against a second handle registering the same name — returning a fresh
-`NavigatorHandle` from `RouteRequest::navigator` fails it.
+asserts the factory was handed *this* navigator by comparing
+`request.navigator().command_target()` with the handle's own — returning a fresh
+`NavigatorHandle` from `RouteRequest::navigator` fails it. It compares targets
+rather than cloning a handle into the probe on purpose: a captured clone would
+close the very `Arc` cycle this entry removes, and a test that demonstrates a fix
+by reintroducing the bug is worse than no test. `NavigatorCommandTarget` is
+`Copy`, holds no strong reference, and is unique per navigator.
 `a_factory_that_pushes_re_entrantly_does_not_deadlock` now pushes through
 `request.navigator()` with no cell, and still pins that the registry guard is
 released before the factory runs — holding it deadlocks the owner thread.

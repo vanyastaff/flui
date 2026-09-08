@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::{lay_out, loose};
+use crate::common::{LaidOut, lay_out, loose};
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path.
@@ -1924,5 +1924,233 @@ fn two_route_keys_sharing_a_name_collide_even_though_both_registrations_compile(
         handle.route_ids(),
         before,
         "and nothing was pushed on the way to finding out"
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Re-entrant factories: an operation acts on the route that was current when it
+// was CALLED, not on whatever a factory left on top.
+// ----------------------------------------------------------------------------
+
+/// Mounts a navigator with `/nested` registered, and `/next` registered to a
+/// factory that pushes `/nested` **during resolution** before answering.
+///
+/// This is the collision between two things this slice added: resolve-before-pop
+/// (so the factory runs before the departing route is dealt with) and
+/// `RouteRequest::navigator`, which makes navigating from inside a factory a
+/// supported shape rather than an obscure one.
+fn navigator_with_a_re_entrant_factory() -> (NavigatorHandle, Built, LaidOut, NestedId) {
+    let built = Built::default();
+    let nested: NestedId = Arc::new(Mutex::new(None));
+    let handle = NavigatorHandle::new();
+    handle.route("/nested", {
+        let built = built.clone();
+        move |_request: &RouteRequest<'_>| Some(page(&built, "nested"))
+    });
+    handle.route("/next", {
+        let built = built.clone();
+        let nested = Arc::clone(&nested);
+        move |request: &RouteRequest<'_>| {
+            *nested.lock() = Some(
+                request
+                    .navigator()
+                    .push_named("/nested")
+                    .expect("'/nested' is registered"),
+            );
+            Some(page(&built, "next"))
+        }
+    });
+    handle.seed_initial(page(&built, "/"));
+    let laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    (handle, built, laid, nested)
+}
+
+/// The id of the route a re-entrant factory pushed, recorded as it happens.
+type NestedId = Arc<Mutex<Option<RouteId>>>;
+
+/// `pop_and_push_named` pops the route that was current **when it was called**,
+/// not whatever a re-entrant factory left on top.
+///
+/// Resolving before popping is what makes an unresolvable name atomic, and it
+/// stays. What must not follow from it is acting on a stale notion of "the
+/// top": a factory that navigates during resolution changes the top between the
+/// resolve and the pop, and the caller's intent is fixed at the call.
+///
+/// Red-check: read `current()` *after* resolving instead of before, and the
+/// nested route is popped while the caller's route survives — the stack ends
+/// `[root, departing, arrived]` instead of `[root, arrived]`.
+#[test]
+fn pop_and_push_named_pops_the_route_that_was_current_when_it_was_called() {
+    let (handle, built, mut laid, nested) = navigator_with_a_re_entrant_factory();
+    let root = handle.current().expect("seeded");
+    let departing = handle.push(page(&built, "departing"));
+    laid.tick();
+    let departing_id = handle.current().expect("departing is on top");
+
+    let arrived = handle.pop_and_push_named("/next").expect("registered");
+    laid.tick();
+    let nested_id = nested.lock().expect("the factory navigated");
+
+    assert!(
+        !handle.route_ids().contains(&departing_id),
+        "the route that was current at the call is gone; stack is {:?}",
+        handle.route_ids()
+    );
+    assert!(
+        departing.is_completed(),
+        "and it completed, so its awaiter is not left hanging"
+    );
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, nested_id, arrived],
+        "the factory's own navigation SURVIVES: it pushed that route deliberately, \
+         and an operation acting on the route the CALLER named has no business \
+         undoing it"
+    );
+}
+
+/// The `_with` variant delivers its result to the route that was current when it
+/// was called.
+///
+/// The sharpest form of the same defect: the caller's value reaching a route it
+/// has never heard of is a silent misdelivery, not a stack-shape surprise.
+///
+/// Red-check: as above — resolve first and pop the *current* top, and `99` is
+/// delivered to the factory's nested route while the caller's route completes
+/// with nothing.
+#[test]
+fn pop_and_push_named_with_delivers_its_result_to_the_route_that_was_current() {
+    let (handle, built, mut laid, _nested) = navigator_with_a_re_entrant_factory();
+    let departing = handle.push(page(&built, "departing"));
+    laid.tick();
+
+    handle
+        .pop_and_push_named_with("/next", 99_i32)
+        .expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        departing.try_take(),
+        Some(Some(99)),
+        "the result reached the route the caller meant to dismiss"
+    );
+}
+
+/// `push_replacement_named` replaces the route that was current when it was
+/// called.
+///
+/// **Better than the reference here, deliberately.** Flutter's
+/// `pushReplacementNamed` evaluates `_routeNamed(..)` in argument position, so
+/// its generator also runs before `pushReplacement`, and a Dart factory reaching
+/// `Navigator.of(context)` can move the top exactly the same way. Flutter has
+/// this defect; after capturing the target first, FLUI does not.
+///
+/// Red-check: replace whatever is on top after resolving and the nested route is
+/// replaced while the caller's route survives.
+#[test]
+fn push_replacement_named_replaces_the_route_that_was_current_when_it_was_called() {
+    let (handle, built, mut laid, nested) = navigator_with_a_re_entrant_factory();
+    let root = handle.current().expect("seeded");
+    let replaced = handle.push(page(&built, "replaced"));
+    laid.tick();
+    let replaced_id = handle.current().expect("on top");
+
+    let arrived = handle.push_replacement_named("/next").expect("registered");
+    laid.tick();
+    let nested_id = nested.lock().expect("the factory navigated");
+
+    assert!(
+        !handle.route_ids().contains(&replaced_id),
+        "the route that was current at the call was replaced; stack is {:?}",
+        handle.route_ids()
+    );
+    assert!(replaced.is_completed(), "and it completed");
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, nested_id, arrived],
+        "the factory's own route survives, as in the pop-and-push case"
+    );
+}
+
+/// A factory that **pops** during resolution leaves the captured route already
+/// gone. The push still happens and the removal is a no-op.
+///
+/// A caller asking to dismiss something that no longer exists gets the route it
+/// asked for and no spurious failure — the alternative, an error, would make a
+/// factory's unrelated navigation able to fail an operation that otherwise
+/// succeeded.
+///
+/// Red-check: make the removal an error when the captured route is absent, and
+/// this returns `Err` instead of the new route.
+#[test]
+fn a_factory_that_pops_during_resolution_leaves_the_removal_a_no_op() {
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.route("/next", {
+        let built = built.clone();
+        move |request: &RouteRequest<'_>| {
+            // Dismiss the route the outer operation was about to act on.
+            request.navigator().pop();
+            Some(page(&built, "next"))
+        }
+    });
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("seeded");
+    let departing = handle.push(page(&built, "departing"));
+    laid.tick();
+
+    let arrived = handle
+        .pop_and_push_named("/next")
+        .expect("an already-dismissed route is not a failure");
+    laid.tick();
+
+    assert!(
+        departing.is_completed(),
+        "the factory's own pop completed it"
+    );
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, arrived],
+        "and the new route landed exactly once"
+    );
+}
+
+/// The observer ordering for a re-entrant factory, pinned rather than assumed.
+///
+/// This is the half of CodeRabbit's finding that survives the fix: because the
+/// factory runs before the departing route is dealt with, the nested `didPush`
+/// is observed **before** the outer `didPop`. Flutter's `popAndPushNamed` pops
+/// first and cannot produce that order, so `ARCHITECTURE.md` §5's "identical
+/// observer stream" holds only when no factory navigates.
+///
+/// Red-check: revert to pop-then-resolve and the sequence starts with `pop`.
+#[test]
+fn a_re_entrant_factory_is_observed_before_the_pop_it_precedes() {
+    let (handle, built, mut laid, _nested) = navigator_with_a_re_entrant_factory();
+    handle.push(page(&built, "departing"));
+    laid.tick();
+
+    let spy = Arc::new(Spy::default());
+    handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+    handle.pop_and_push_named("/next").expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        spy.kinds(),
+        vec![
+            "push",
+            "changeTop", // the factory's nested route, during resolution
+            "remove",    // then the departing route the CALLER named — see below
+            "push",
+            "changeTop", // then the route the factory produced
+        ],
+        "two facts, both deliberate. Resolve-before-pop puts the factory's own \
+         navigation ahead of the departing route, which Flutter's pop-first \
+         `popAndPushNamed` cannot produce. And the departing route is now BURIED \
+         under what the factory pushed, so `didRemove` is the honest event: a \
+         route that is not on top cannot be popped. The ordinary, non-re-entrant \
+         call is unaffected and still observes `didPop` — pinned by \
+         `pop_and_push_named_observes_a_pop_where_push_replacement_named_does_not`"
     );
 }

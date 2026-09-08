@@ -57,6 +57,14 @@ The generator must return heterogeneous routes; the caller of `push_named` canno
 
 ### 3.3 The named surface (dependency-ordered units)
 
+> **These are the names this ADR *proposed* in 2026-07-10, not the ones that shipped.** Kept
+> as the record of the proposal; **do not copy them** — `set_on_generate_route` /
+> `set_on_unknown_route` / `push_named::<T>` / `push_named_with_arguments` do not exist. The
+> shipped surface is `route` / `route_keyed` / `on_generate_route` / `on_unknown_route`, the six
+> untyped operations returning `Result<RouteId, NamedRouteError>`, `push_named_typed::<T>`,
+> `push_keyed`, and arguments carried in `RouteSettings` (`with_arguments` /
+> `with_arguments_shared`) or `RouteKey::request` / `request_shared`. See §7.3 and §7.9.
+
 - **U1**: `RouteSettings.arguments` (§4.1), `set_on_generate_route`/`set_on_unknown_route`, `GeneratedRoute`, and `push_named::<T>(request) -> Result<RouteResult<T>, NamedRouteError>` (**amended by §7.3**; originally `Option<RouteResult<T>>`).
 - **U2**: `push_named_with_arguments`, `push_replacement_named`, `push_named_and_remove_until` — each a one-line composition of U1 with the ADR-0019 §7d front doors.
 - **U3 (deferred, but see §7.6 — this sentence was wrong)**: `defaultRouteName` + initial-route hierarchy synthesis (`Navigator.defaultGenerateInitialRoutes`) — originally justified as having "no consumer until deep links exist". It is still deferred; that justification is false.
@@ -162,8 +170,23 @@ additive later.
 This is better than the reference, not merely different: Flutter re-types through an unchecked
 `as Route<T?>?` cast, so a wrong type is undetected there. It is also better than this ADR's own
 original answer, which deferred the failure to delivery and reported it as an indistinguishable
-`None`. `NamedRouteError` is `#[non_exhaustive]` from birth. A `## Mapping decisions` entry in
-`crates/flui-widgets/ARCHITECTURE.md` records the divergence with its replacement test.
+`None`. `NamedRouteError` is `#[non_exhaustive]` from birth.
+
+**Replacement tests** (Prime Directive #1(b) — named here, not only cross-referenced, and each
+with the mutation it detects):
+
+- `tests/navigator_public.rs::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing`
+  — deleting the `TypeId` comparison in `GeneratedRoute::checked` makes the push land before the
+  downcast and panic in `TypedPush::push`'s `BUG:` expect, with the stack already mutated.
+- `tests/navigator_public.rs::pop_and_push_named_with_an_unresolvable_name_pops_nothing` and
+  `…_delivers_its_result_to_nobody` — moving the pop back ahead of the resolve (Flutter's order)
+  fails both: the stack reads `[RouteId(1), RouteId(2)]` where it must read `[RouteId(1)]`.
+- `tests/navigator_public.rs::a_route_whose_output_the_caller_never_names_is_still_navigable_by_name`
+  — type-checking `push_named` against `()` makes it refuse to navigate, which is the regression
+  the two-entry-point split exists to prevent.
+
+`crates/flui-widgets/ARCHITECTURE.md` §4 carries the same divergence as a `## Mapping decisions`
+entry, with the reasoning behind the split surface.
 
 A panic was rejected: a route name is caller input, not an internal invariant, so
 `docs/PANIC-POLICY.md` puts it on the `Result` side.
@@ -295,8 +318,21 @@ a wrong value. What the `TypeId` comparison actually buys is a **pre-mutation, n
 failure — a stronger and more honest claim than the one it replaced.
 
 Closing the collision properly needs a registry key that carries its type, which a string table
-cannot express; whether to reject a conflicting re-registration at `route_keyed` time instead of
-at `push_keyed` time is open.
+cannot express.
+
+**The shipped policy, decided 2026-09-07 (§7.5 of this record), is not open:** the last
+registration wins; a re-registration that changes a name's `Output` emits a **latched,
+per-navigator** `tracing::warn!` naming the route and both types, at the registration site; and
+`push_keyed` on the stale key returns `NamedRouteError::ResultType`. Pinned by
+`a_route_re_registered_with_a_different_output_type_warns_once_per_navigator` and
+`two_route_keys_sharing_a_name_collide_even_though_both_registrations_compile`.
+
+Rejecting the conflicting registration outright — returning a `Result` from `route_keyed` —
+was considered and **declined**: it is invasive at every call site for what is programmer error
+at startup, and it contradicts `ARCHITECTURE.md` §6's contract that an app builder replaces the
+table wholesale at mount, which makes a deliberate `Output` change between rebuilds legitimate.
+The house rule is repair-and-warn. Revisiting that is a future decision, not an open question
+in this one.
 
 The string path stays, and is not deprecated: deep links and server-supplied names are genuinely
 not known until run time. It simply stops being the only option.

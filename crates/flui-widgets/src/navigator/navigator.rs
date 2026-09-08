@@ -981,7 +981,10 @@ impl NavigatorHandle {
         route: R,
         result: Option<AnyResult>,
     ) -> RouteResult<R::Output> {
-        self.push_replacement_erased_reporting_id(route, result).1
+        // `None` target: nothing can run between this call and the flush, so
+        // "the current top" is still the caller's route.
+        self.push_replacement_erased_reporting_id(route, None, result)
+            .1
     }
 
     /// [`push_replacement`](Self::push_replacement) with an already-erased
@@ -994,10 +997,13 @@ impl NavigatorHandle {
     pub(super) fn push_replacement_erased_reporting_id<R: NavigatorRoute>(
         &self,
         route: R,
+        replaced: Option<RouteId>,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
         self.push_prepared(route, |history, id, route| {
-            history.push_replacement_with_id(id, route, result).1
+            history
+                .push_replacement_with_id(id, replaced, route, result)
+                .1
         })
     }
 
@@ -1595,6 +1601,38 @@ impl NavigatorHandle {
         self.shared.named_routes.clear();
     }
 
+    /// Dismiss `route` on behalf of an operation that captured it **before**
+    /// resolving a name.
+    ///
+    /// Named operations resolve first, so an unresolvable name adds nothing of
+    /// the operation's own —
+    /// but resolving runs a user factory, and [`RouteRequest::navigator`] makes
+    /// navigating from one a supported shape. By the time the departing route is
+    /// dealt with it may no longer be on top, or may be gone. Acting on "the
+    /// current top" would then dismiss the *factory's* route and leave the
+    /// caller's in place, which is the bug this exists to prevent.
+    ///
+    /// Three cases, all deliberate:
+    ///
+    /// - still on top — the ordinary [`pop`](Self::pop) path, so the observer
+    ///   sees `didPop` and the route's own `did_pop` may refuse. This is what
+    ///   every non-re-entrant call takes, unchanged;
+    /// - present but buried under something the factory pushed — removed by id,
+    ///   which is the honest operation for a route that is no longer the top;
+    /// - already gone (the factory popped it) — nothing to do, and **not** an
+    ///   error: a factory's unrelated navigation must not fail an operation that
+    ///   otherwise succeeded.
+    fn dismiss_captured(&self, route: Option<RouteId>, result: Option<AnyResult>) {
+        let Some(route) = route else {
+            return;
+        };
+        if self.current() == Some(route) {
+            self.pop_erased(result);
+        } else {
+            self.remove_route_erased(route, result);
+        }
+    }
+
     /// Resolve `request` into a route, or say why it could not be.
     ///
     /// # Errors
@@ -1627,9 +1665,15 @@ impl NavigatorHandle {
     ///
     /// # Errors
     ///
-    /// [`NamedRouteError::Unresolved`] if no registration answered the name —
-    /// nothing is pushed. A stage that declines returns `None` before it
-    /// constructs anything, so this error never has a route to dispose.
+    /// [`NamedRouteError::Unresolved`] if no registration answered the name.
+    /// This operation pushes nothing, and a stage that declines returns `None`
+    /// before constructing anything, so the error never has a route to dispose.
+    ///
+    /// It does **not** promise the stack is unchanged: a factory that navigates
+    /// (via [`RouteRequest::navigator`]) and then declines has already made its
+    /// own changes, and those are not rolled back — they were deliberate, and
+    /// undoing them is no more this operation's business than undoing a nested
+    /// push is (see [`pop_and_push_named`](Self::pop_and_push_named)).
     pub fn push_named(
         &self,
         request: impl Into<RouteSettings>,
@@ -1652,8 +1696,10 @@ impl NavigatorHandle {
     ///
     /// [`NamedRouteError::Unresolved`] if no registration answered the name, and
     /// [`NamedRouteError::ResultType`] if the route generated for it delivers
-    /// something other than `T`. Neither mutates the stack. Only `ResultType`
-    /// has a route to dispose — `Unresolved` means nothing was constructed.
+    /// something other than `T`. Neither pushes anything; on `ResultType` the
+    /// generated route is disposed, while `Unresolved` never constructed one.
+    /// Neither undoes navigation a factory performed before declining — see
+    /// [`push_named`](Self::push_named).
     pub fn push_named_typed<T: Send + 'static>(
         &self,
         request: impl Into<RouteSettings>,
@@ -1745,6 +1791,17 @@ impl NavigatorHandle {
     /// Flutter's `NavigatorState.pushReplacementNamed`. The replaced route's
     /// [`RouteResult`] resolves with `None`.
     ///
+    /// **Better than the reference, and the accounting for it.** Flutter's
+    /// `pushReplacementNamed` is
+    /// `pushReplacement<T?, TO>(_routeNamed<T>(..)!, result: result)`: the
+    /// generator runs in argument position, before `pushReplacement`, and a Dart
+    /// factory reaching `Navigator.of(context)` can move the top in between
+    /// exactly as ours can. Flutter then replaces whatever is on top *now*,
+    /// which is the factory's route rather than the caller's. FLUI captures the
+    /// route to replace **before** resolving, so it replaces the one the caller
+    /// meant. Pinned by
+    /// `push_replacement_named_replaces_the_route_that_was_current_when_it_was_called`.
+    ///
     /// # Errors
     ///
     /// As [`push_named`](Self::push_named); nothing is replaced.
@@ -1753,9 +1810,16 @@ impl NavigatorHandle {
         request: impl Into<RouteSettings>,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
+        let replaced = self.current();
         Ok(self
             .resolve_named(&request)?
-            .push(self, PushMode::Replace { result: None })
+            .push(
+                self,
+                PushMode::Replace {
+                    target: replaced,
+                    result: None,
+                },
+            )
             .0)
     }
 
@@ -1778,11 +1842,13 @@ impl NavigatorHandle {
         result: TO,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
+        let replaced = self.current();
         Ok(self
             .resolve_named(&request)?
             .push(
                 self,
                 PushMode::Replace {
+                    target: replaced,
                     result: Some(Box::new(result)),
                 },
             )
@@ -1794,12 +1860,31 @@ impl NavigatorHandle {
     /// [`push_replacement_named`](Self::push_replacement_named) the departing
     /// route runs its full exit transition.
     ///
-    /// **Documented divergence: this resolves before it pops.** Flutter pops
-    /// first and then generates, so a name its generator declines leaves the
-    /// stack already mutated and throws from the middle. Ordering the two the
-    /// other way makes the failure total — the stack is exactly as it was. On
-    /// the success path the observer stream is identical, because the pop and
-    /// the push are the same two calls in the same order.
+    /// **Documented divergence: this resolves before it pops.** Flutter's
+    /// `popAndPushNamed` is `pop<TO>(result); return pushNamed<T>(..)` — it pops
+    /// first, so a name its generator declines leaves the stack already mutated
+    /// and throws from the middle. Ordering the two the other way makes the
+    /// failure total: this operation pops nothing and pushes nothing. (A factory
+    /// that navigated before declining keeps its own changes — see
+    /// [`push_named`](Self::push_named).)
+    ///
+    /// **What that divergence costs, stated rather than claimed as pure gain.**
+    /// Resolving first means a factory runs before the departing route is dealt
+    /// with, and [`RouteRequest::navigator`] makes navigating from a factory a
+    /// supported shape. So when a factory navigates, its `didPush` is observed
+    /// **before** this operation's own dismissal — an ordering Flutter cannot
+    /// produce here, because it has already popped. The departing route is then
+    /// buried, and is removed by id rather than popped (`didRemove`, not
+    /// `didPop`). Pinned by
+    /// `a_re_entrant_factory_is_observed_before_the_pop_it_precedes`.
+    ///
+    /// When no factory navigates — every ordinary call — the pop and the push
+    /// are the same two calls in the same order and the stream is identical.
+    ///
+    /// The route dismissed is the one that was current **when this was called**,
+    /// captured before resolving — not whatever a factory left on top. A route
+    /// the factory already popped is simply not there to dismiss, and that is a
+    /// success, not an error.
     ///
     /// # Errors
     ///
@@ -1809,8 +1894,9 @@ impl NavigatorHandle {
         request: impl Into<RouteSettings>,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
+        let departing = self.current();
         let generated = self.resolve_named(&request)?;
-        self.pop();
+        self.dismiss_captured(departing, None);
         Ok(generated.push(self, PushMode::Push).0)
     }
 
@@ -1830,8 +1916,9 @@ impl NavigatorHandle {
         result: TO,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
+        let departing = self.current();
         let generated = self.resolve_named(&request)?;
-        self.pop_with(result);
+        self.dismiss_captured(departing, Some(Box::new(result)));
         Ok(generated.push(self, PushMode::Push).0)
     }
 
@@ -1842,6 +1929,14 @@ impl NavigatorHandle {
     /// `keep` receives each candidate's [`RouteId`] and runs with the history
     /// lock released, exactly as
     /// [`push_and_remove_until`](Self::push_and_remove_until)'s does.
+    ///
+    /// **This one needs no captured target, and that is structural — do not
+    /// "harmonise" it with its siblings.** Its removal is defined by the
+    /// *predicate*, not by a route captured before resolving: the sweep runs
+    /// downward from the newly pushed route until `keep` accepts, so anything a
+    /// re-entrant factory pushed is swept along with everything else above the
+    /// kept route. Its siblings capture a target precisely because they name
+    /// "the current top", which a factory can change underneath them.
     ///
     /// # Errors
     ///

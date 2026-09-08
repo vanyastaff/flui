@@ -727,20 +727,35 @@ impl RouteHistory {
         route: R,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_replacement_with_id(RouteId::next(), route, result)
+        self.push_replacement_with_id(RouteId::next(), None, route, result)
     }
 
     /// `push_replacement`, under an id the caller minted —
     /// the [`push_with_id`](Self::push_with_id) split, so `NavigatorHandle` can bind
     /// the route and insert its overlay entry before the flush.
+    /// `replaced` names the entry to complete **as replaced**. `None` means the
+    /// current top, which is what the unnamed `push_replacement` front doors
+    /// want: nothing can run between their call and this flush.
+    ///
+    /// A named push *can* have something run in between — its factory may
+    /// navigate (`RouteRequest::navigator`) — so those front doors capture their
+    /// target before resolving and name it here. Replacing "whatever is on top
+    /// now" would otherwise replace the factory's own route rather than the
+    /// caller's. A named target that is no longer present completes nothing and
+    /// the push still happens.
     pub(crate) fn push_replacement_with_id<R: Route>(
         &mut self,
         id: RouteId,
+        replaced: Option<RouteId>,
         route: R,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
-        if let Some(top) = self.last_present_index() {
-            self.entries[top].arm_complete(result, true);
+        let target = match replaced {
+            Some(replaced) => self.entries.iter().position(|entry| entry.id() == replaced),
+            None => self.last_present_index(),
+        };
+        if let Some(target) = target {
+            self.entries[target].arm_complete(result, true);
         }
         let (erased, route_result) = RouteRecord::erase_with_id(id, route);
         self.entries
