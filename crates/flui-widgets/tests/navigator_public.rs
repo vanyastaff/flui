@@ -2894,3 +2894,101 @@ fn an_unresolvable_name_after_a_navigating_factory_adds_nothing_of_its_own() {
 
     *cell.borrow_mut() = None;
 }
+
+/// Every named and unnamed operation that cannot deliver a caller's result
+/// **reports** it — including the five paths that used to drop it silently.
+///
+/// Four of the five ran **under the history guard**, so the value's `Drop` — user
+/// code — could have deadlocked, not merely vanished. And one of them,
+/// `maybe_pop`'s `Bubble` arm, is not an edge case at all: `popDisposition` is
+/// `isFirst ? bubble : pop`, so a lone route bubbles *by design* and
+/// `maybe_pop_with` on a one-route navigator took it every time.
+///
+/// Asserted on the **captured log**, not a counter: a counter would pin a parallel
+/// predicate rather than the emission, which is the trap this module already
+/// documents for the registration-conflict warning.
+///
+/// Red-check: restore any one early return to dropping `result` inline and that
+/// row's expected count falls to zero.
+#[test]
+fn every_operation_that_cannot_deliver_a_result_reports_it() {
+    /// Drive one scenario and report how many "no route" warnings it emitted.
+    fn warnings_from(drive: impl FnOnce(&NavigatorHandle)) -> usize {
+        let ((), log) = flui_testing::log_capture::capture(|| {
+            let handle = NavigatorHandle::new();
+            handle.route("/next", |_request: &RouteRequest<'_>| {
+                Some(DeferredExitRoute::new("/next", 1))
+            });
+            drive(&handle);
+        });
+        log.count_containing("reached no route and was discarded")
+    }
+
+    // 1. `pop_and_push_named_with` with nothing captured — Codex's report.
+    assert_eq!(
+        warnings_from(|handle| {
+            let _ = handle.pop_and_push_named_with("/next", 7_i32);
+        }),
+        1,
+        "an empty capture reports the result it could not deliver"
+    );
+
+    // 2. `maybe_pop_with` while unmounted.
+    assert_eq!(
+        warnings_from(|handle| {
+            assert!(
+                handle.maybe_pop_with(7_i32),
+                "an unmounted navigator swallows the pop"
+            );
+        }),
+        1,
+        "the unmounted early return reports too"
+    );
+
+    // 3. `pop_with` on an empty stack — reachable with no factory at all.
+    assert_eq!(
+        warnings_from(|handle| {
+            assert!(!handle.pop_with(7_i32), "nothing to pop");
+        }),
+        1,
+        "the plainest case of all"
+    );
+
+    // 4. `remove_route_with` for an id that is not there. The id comes from a
+    //    *different* navigator, since `RouteId::next` is crate-private — which
+    //    also makes it a genuinely absent id rather than a fabricated one.
+    let stranger = NavigatorHandle::new();
+    stranger.seed_initial(DeferredExitRoute::new("/elsewhere", 0));
+    let absent = stranger.route_ids()[0];
+    assert_eq!(
+        warnings_from(move |handle| {
+            assert!(
+                !handle.remove_route_with(absent, 7_i32),
+                "that route belongs to another navigator"
+            );
+        }),
+        1,
+        "a missing removal target reports too"
+    );
+
+    // 5. `maybe_pop_with` on a lone route, which bubbles BY DESIGN — the one that
+    //    is not an edge case.
+    let bubbled = flui_testing::log_capture::capture(|| {
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let _laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+        assert!(
+            !handle.maybe_pop_with(7_i32),
+            "a lone route bubbles: popDisposition is `isFirst ? bubble : pop`"
+        );
+    })
+    .1;
+    assert_eq!(
+        bubbled.count_containing("reached no route and was discarded"),
+        1,
+        "the Bubble arm reports, and it used to drop under the history guard; \
+         captured:\n{}",
+        bubbled.render_at_least(tracing::Level::WARN)
+    );
+}

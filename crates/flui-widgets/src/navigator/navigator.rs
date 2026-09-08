@@ -1294,6 +1294,9 @@ impl NavigatorHandle {
     fn maybe_pop_erased(&self, result: Option<AnyResult>) -> bool {
         if !self.is_mounted() {
             // "Forget about this pop, we were disposed in the meantime." (`:5595`)
+            // The caller's result has nowhere to go. Reported and dropped here —
+            // no guard is held yet, but the reporting is owed either way.
+            report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
             return true;
         }
 
@@ -1302,18 +1305,32 @@ impl NavigatorHandle {
         // separated by a racing `entry_handle.remove()` or `remove_route`
         // retargeting the answer (ADR-0025). Flutter is immune only by
         // being single-threaded.
+        // Three of the four arms below consume nothing, and all three run **under
+        // the history guard**, so the result cannot be dropped inline: its `Drop`
+        // is user code. They record into the history's own undelivered channel,
+        // which `mutate` drains once the guard releases — the same path every
+        // other undeliverable result takes.
+        //
+        // `Bubble` is not an edge case: `popDisposition` is `isFirst ? bubble :
+        // pop`, so a lone route bubbles *by design*, and `maybe_pop_with` on a
+        // one-route navigator took this arm every time.
         self.shared.mutate(|history| {
             let Some(disposition) = history.pop_disposition_of_top() else {
+                history.record_undelivered(result);
                 return false;
             };
             match disposition {
-                RoutePopDisposition::Bubble => false,
+                RoutePopDisposition::Bubble => {
+                    history.record_undelivered(result);
+                    false
+                }
                 RoutePopDisposition::Pop => {
                     history.pop(result);
                     true
                 }
                 RoutePopDisposition::DoNotPop => {
                     history.notify_pop_refused();
+                    history.record_undelivered(result);
                     true
                 }
             }
@@ -1702,6 +1719,12 @@ impl NavigatorHandle {
     ///   otherwise succeeded.
     fn dismiss_captured(&self, route: Option<RouteId>, result: Option<AnyResult>) {
         let Some(route) = route else {
+            // Nothing was captured — an empty stack, or a top mid-exit-transition,
+            // which is a reachable and documented state. The result must **not**
+            // go to whatever a factory left on top; that is what the capture is
+            // for. So it is reported and dropped, through the same path as every
+            // other undeliverable result.
+            report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
             return;
         };
         if self.current() == Some(route) {

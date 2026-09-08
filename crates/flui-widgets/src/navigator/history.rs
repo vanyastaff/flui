@@ -603,7 +603,13 @@ impl RouteHistory {
 
     /// Record a result nothing consumed. `None` is the overwhelmingly common case
     /// and costs nothing.
-    fn record_undelivered(&mut self, result: Option<AnyResult>) {
+    ///
+    /// `pub(crate)` so a caller already **holding this history's guard** can route
+    /// a result it could not deliver into the same channel, rather than dropping
+    /// it inline — `NavigatorHandle::maybe_pop_erased` decides inside
+    /// `NavigatorShared::mutate`'s closure and cannot drop safely there. One
+    /// channel, one reporting path.
+    pub(crate) fn record_undelivered(&mut self, result: Option<AnyResult>) {
         self.undelivered
             .extend(result.map(UndeliveredResult::NoTarget));
     }

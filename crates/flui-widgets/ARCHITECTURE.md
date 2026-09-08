@@ -357,13 +357,30 @@ The two surprises:
   factory mutation.
 
 **Undelivered results.** A caller-supplied result that reaches no route is
-carried out of the locked section, **logged, and then dropped** — never dropped
-under the history guard, because its `Drop` is user code and this crate has
-already been bitten by running user code under a non-reentrant lock. `warn` when
-there was no route to deliver to (empty stack, a top mid-exit-transition, a
-target already completed, or a result displaced from an entry that already
-carried one); `error` when a route received it and the type did not match its
-`Output`.
+**reported and dropped outside any guard**. The location is the load-bearing
+half, not the log: its `Drop` is user code, and this crate has already been bitten
+by running user code under a non-reentrant mutex — the failure there is a hang,
+not a test failure. `warn` when there was no route to deliver to; `error` when a
+route received it and the type did not match its `Output`. One wording per
+condition, on one path, so this sentence is true in exactly one way.
+
+Nine sites can reach it, and the list is worth reading because only two of them
+are the edge cases a reader expects: an empty stack, a top mid-exit-transition, a
+target already completed, a result displaced from an entry that already carried
+one, an id belonging to another navigator, an unmounted handle, a named capture
+that came back empty — and **`maybe_pop` on a lone route**.
+
+That last one is not an edge case at all. `Route::pop_disposition` is Flutter's
+`isFirst ? bubble : pop`, so the bottom-most route **bubbles by design**; before
+this was fixed, `maybe_pop_with(v)` on a one-route navigator discarded the
+caller's value on *every* call, under the guard. The commonest possible stack
+shape was the undelivered-result path.
+
+They were found by enumerating every function taking `Option<AnyResult>`, not by
+reading the file where the state machine consumes it. The distinction matters and
+is the reason four of the nine were missed once: the *machinery* that consumes a
+result lives in `history.rs`, but the *decisions* that discard one live on the
+handle. A sweep scoped to where the type is used does not cross that boundary.
 
 **Where the target is resolved.** The unnamed front doors resolve theirs at
 flush time, because nothing can run between their call and the flush. The named
