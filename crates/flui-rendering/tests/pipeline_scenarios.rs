@@ -154,11 +154,17 @@ fn mixed_flex_padding_transform_clip_frame() {
     // feed it in rather than reading a cached object field.
     //
     // Read through `apply_paint_transform` rather than `paint_transform`:
-    // `RenderTransform` emits its layer from `paint` (so a pure translation can
-    // skip the layer entirely), which requires `paint_transform` to stay
-    // `None`. `apply_paint_transform` with a zero child offset yields exactly
-    // the same effective matrix — the one this test then expects to find
-    // conjugated in the composited layer.
+    // `paint_transform` is `None` for a pure translation, which `paint` applies
+    // as a plain child offset instead of a layer, so it is not a total accessor
+    // for the effective matrix. `apply_paint_transform` is unconditional and,
+    // with a zero child offset, yields exactly that matrix — the one this test
+    // then expects to find conjugated in the composited layer.
+    //
+    // Note this test's `structure()` assertion above is the workspace's only
+    // oracle for `RenderTransform` emitting exactly ONE transform layer. Its
+    // `paint` must not re-open a `with_transform` scope around the layer the
+    // pipeline already pushes from `paint_transform`; nothing in
+    // `flui-objects`' own unit tests would catch that, but this list would.
     let scaler_size = scaler_node.size().unwrap_or(flui_types::Size::ZERO);
     let local = {
         let mut m = Matrix4::IDENTITY;

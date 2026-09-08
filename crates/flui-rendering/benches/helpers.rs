@@ -11,13 +11,14 @@
 use flui_foundation::RenderId;
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
+    RenderTransform,
 };
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
     testing::{TreeNode, box_node, tree},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::{Matrix4, Size, geometry::px};
 
 /// Tight 200×200 root constraint used across all bench tree shapes.
 pub fn root_constraints() -> BoxConstraints {
@@ -259,5 +260,72 @@ pub fn set_opacity(owner: &mut PipelineOwner<PaintPhase>, id: RenderId, value: f
         .downcast_mut::<RenderOpacity>()
         .expect("RenderOpacity")
         .set_opacity(value);
+    owner.apply_render_update_impact(id, impact);
+}
+
+// ============================================================================
+// Transform: what a matrix change costs on the update arm vs. the repaint arm
+// ============================================================================
+
+/// Build a tree whose transform wraps `subtree` leaves, and return it with
+/// the transform node's id.
+///
+/// Mirrors [`build_opacity_tree`] exactly, substituting `RenderTransform` for
+/// `RenderOpacity` — same shape, same `layered` cost-curve split, same
+/// warm-up-and-take discipline. The seeded matrix is a SCALE, never a
+/// translation: a translation owns no `TransformLayer` at all (painted as a
+/// plain offset — see `RenderTransform::paint_transform`), which would make
+/// every `update` iteration a structural (`PAINT`) change instead of the
+/// `COMPOSITED_LAYER_UPDATE` this benchmark exists to measure.
+pub fn build_transform_tree(
+    layered: bool,
+    subtree: usize,
+) -> (PipelineOwner<PaintPhase>, RenderId) {
+    let content = box_node(RenderFlex::row()).children((0..subtree).map(|_| {
+        let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
+        if layered {
+            box_node(RenderRepaintBoundary::new()).child(leaf)
+        } else {
+            leaf
+        }
+    }));
+
+    let spec = box_node(RenderFlex::row()).children([
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderTransform::new(Matrix4::scaling(2.0, 2.0, 1.0)))
+                .label("transform")
+                .child(content),
+        ),
+        box_node(RenderRepaintBoundary::new()).child(box_node(RenderColoredBox::red(1.0, 1.0))),
+    ]);
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(&mut owner, spec);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(root_constraints()));
+    let transform = registry.get("transform").expect("transform is labelled");
+
+    let mut owner = advance_to_paint(owner.into_layout());
+    owner
+        .run_paint()
+        .expect("the first paint must succeed on a freshly composited tree");
+    drop(owner.take_layer_tree());
+    (owner, transform)
+}
+
+/// Applies a new matrix through the seam a widget rebuild uses: the setter
+/// reports an impact, the owner applies it.
+pub fn set_transform(owner: &mut PipelineOwner<PaintPhase>, id: RenderId, matrix: Matrix4) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("transform node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderTransform>()
+        .expect("RenderTransform")
+        .set_transform(matrix);
     owner.apply_render_update_impact(id, impact);
 }
