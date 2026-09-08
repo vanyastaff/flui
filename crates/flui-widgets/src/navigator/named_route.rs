@@ -73,7 +73,7 @@ use parking_lot::Mutex;
 use super::navigator::NavigatorHandle;
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
-use super::route::{AnyResult, Route, RouteId, RouteSettings};
+use super::route::{AnyResult, Route, RouteArguments, RouteId, RouteSettings};
 
 /// Builds the route a [`RouteRequest`] resolves to, or `None` to pass the
 /// request on to the next resolution stage.
@@ -518,6 +518,26 @@ impl<T> RouteKey<T> {
             output: PhantomData,
         }
     }
+
+    /// Attach an arguments payload **the caller already holds**, forwarding it
+    /// without re-wrapping.
+    ///
+    /// The keyed counterpart to [`RouteSettings::with_arguments_shared`], and it
+    /// exists for the same reason plus a sharper one: [`request`](Self::request)
+    /// takes its payload by value, so handing it an existing [`RouteArguments`]
+    /// would wrap an `Arc` *in another `Arc`*. The stored concrete type would
+    /// become `RouteArguments` itself, and the factory's
+    /// `request.argument::<OriginalType>()` would answer `None` — a silent
+    /// failure, not a type error.
+    ///
+    /// [`RouteArguments`]: super::route::RouteArguments
+    #[must_use]
+    pub fn request_shared(self, arguments: RouteArguments) -> KeyedRequest<T> {
+        KeyedRequest {
+            settings: RouteSettings::named(self.name).with_arguments_shared(arguments),
+            output: PhantomData,
+        }
+    }
 }
 
 /// A [`RouteKey`] request, with arguments if it has any.
@@ -623,8 +643,12 @@ struct Registrations {
     /// Re-registrations that changed a name's `Output` type. Counted in full;
     /// only the first is warned about.
     conflicts_seen: usize,
-    /// Warnings actually emitted. The latch: `register_named` warns only while
-    /// this is zero, so a registration loop reports once rather than per call.
+    /// The latch itself. Set under the lock in the same step that decides
+    /// whether to warn, so the decision and the latch cannot drift and a
+    /// re-entrant subscriber cannot observe a stale `false`.
+    warn_latched: bool,
+    /// Warnings emitted — incremented in the same locked step that commits the
+    /// latch, so this counts exactly the emissions the latch authorised.
     warns_emitted: usize,
 }
 
@@ -661,9 +685,20 @@ impl RouteRegistry {
         output: TypeId,
         output_name: &'static str,
     ) {
+        // `previous` is carried OUT of the locked block deliberately: dropping it
+        // drops the displaced `Rc<dyn Fn …>`, and that closure is user code
+        // whose captured state may run arbitrary `Drop` — including a call back
+        // into this registry, which `parking_lot::Mutex` would deadlock on.
+        // There is no compile-time oracle for that: dropping it under the guard
+        // compiles clean and hangs. Every path here that displaces or discards a
+        // registration follows the same rule (`register_generator`,
+        // `register_unknown_fallback`, `clear`), pinned by
+        // `a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry`.
+        // Nothing inside the guard below touches `self.registrations` again.
+        let previous;
         let displaced = {
             let mut registrations = self.registrations.lock();
-            let previous = registrations.table.insert(
+            previous = registrations.table.insert(
                 name.clone(),
                 RegisteredRoute {
                     factory,
@@ -671,18 +706,30 @@ impl RouteRegistry {
                     output_name,
                 },
             );
-            match previous {
+            match &previous {
                 Some(previous) if previous.output != output => {
                     registrations.conflicts_seen += 1;
-                    let first = registrations.warns_emitted == 0;
+                    // Decide and latch in one step, under this guard. Setting
+                    // the flag after the emit — outside the lock — would let a
+                    // `tracing` subscriber that re-enters registration during
+                    // the warn observe a stale value and count itself first.
+                    let first = !registrations.warn_latched;
+                    registrations.warn_latched = true;
+                    if first {
+                        registrations.warns_emitted += 1;
+                    }
                     first.then_some(previous.output_name)
                 }
                 _ => None,
             }
         };
+        // Guard released, so the displaced closure's `Drop` may re-enter this
+        // registry safely — and so may the subscriber the warn below reaches.
+        drop(previous);
 
         // Emitted with the registry lock released, like every other call out of
-        // this module: a `tracing` subscriber is user code too.
+        // this module: a `tracing` subscriber is user code too. The latch above
+        // already committed, so re-entry here cannot double-warn.
         if let Some(previous_output) = displaced {
             tracing::warn!(
                 route = %name,
@@ -693,23 +740,35 @@ impl RouteRegistry {
                  registration wins and a keyed push of this name will report NamedRouteError::\
                  ResultType. Later conflicts on this navigator are counted but not warned."
             );
-            self.registrations.lock().warns_emitted += 1;
         }
     }
 
-    /// Drop every registration. Called from `NavigatorState::dispose`.
+    /// Drop every registration.
     ///
-    /// Terminal, not a detach: `activate` is the reattach hook and nothing
-    /// reparents through `dispose`. This is what makes the hazard note on
-    /// [`NavigatorHandle::on_generate_route`] performable — a factory that
-    /// captured a handle anyway has its cycle broken when the navigator it was
-    /// registered on unmounts, rather than the caller being told to break a
-    /// cycle the surface gave them no way to reach.
+    /// Reached only through [`NavigatorHandle::clear_routes`] — **not** from
+    /// `NavigatorState::dispose`, which deliberately leaves registrations alone
+    /// so they survive an unmount and remount over a retained handle
+    /// (`ARCHITECTURE.md` §6). It is the escape for a factory that captured a
+    /// handle despite [`RouteRequest::navigator`] handing it one, and dropping
+    /// registrations is a caller decision because only the caller knows whether
+    /// it intends to register again.
+    ///
+    /// The registrations are moved out and dropped with the guard released: each
+    /// is a user closure whose captured state may run arbitrary `Drop`, and a
+    /// `Drop` that reached back into this registry would deadlock a
+    /// non-reentrant `parking_lot::Mutex`. The cycle-breaking case makes that
+    /// concrete — the closure being dropped here is precisely the one holding a
+    /// `NavigatorHandle`.
     pub(super) fn clear(&self) {
-        let mut registrations = self.registrations.lock();
-        registrations.table.clear();
-        registrations.generate = None;
-        registrations.unknown = None;
+        let dropped = {
+            let mut registrations = self.registrations.lock();
+            (
+                std::mem::take(&mut registrations.table),
+                registrations.generate.take(),
+                registrations.unknown.take(),
+            )
+        };
+        drop(dropped);
     }
 
     /// Re-registrations that changed a name's `Output`. Test-facing.
@@ -718,9 +777,14 @@ impl RouteRegistry {
         self.registrations.lock().conflicts_seen
     }
 
-    /// Conflict warnings actually emitted — the latch's own count, incremented
-    /// in the same block that calls `tracing::warn!`, so a test asserting on it
-    /// is asserting on the warn rather than on a parallel predicate.
+    /// Conflict warnings emitted. Committed **atomically with the decision to
+    /// warn**, under the registry lock — not alongside the `tracing::warn!`,
+    /// which is deliberately emitted after the guard drops. So this cannot
+    /// over-report, but it is a record of the decision rather than proof of the
+    /// emission: what pins the warn itself is the capture-based test
+    /// (`the_conflict_warning_is_emitted_once_and_names_both_result_types`),
+    /// which fails when the `tracing::warn!` is deleted while every assertion
+    /// on this counter still passes.
     #[cfg(test)]
     pub(super) fn warns_emitted(&self) -> usize {
         self.registrations.lock().warns_emitted
@@ -728,12 +792,19 @@ impl RouteRegistry {
 
     /// Install the catch-all generator — Flutter's `Navigator.onGenerateRoute`.
     pub(super) fn register_generator(&self, factory: RouteFactory) {
-        self.registrations.lock().generate = Some(factory);
+        // The displaced hook is released *outside* the guard — see
+        // [`register_named`](Self::register_named) for why a user closure must
+        // never be dropped under this lock. `= Some(..)` would have dropped it
+        // while the statement's temporary guard was still alive.
+        let displaced = { self.registrations.lock().generate.replace(factory) };
+        drop(displaced);
     }
 
     /// Install the last-resort fallback — Flutter's `Navigator.onUnknownRoute`.
     pub(super) fn register_unknown_fallback(&self, factory: RouteFactory) {
-        self.registrations.lock().unknown = Some(factory);
+        // Same guard discipline as [`register_generator`](Self::register_generator).
+        let displaced = { self.registrations.lock().unknown.replace(factory) };
+        drop(displaced);
     }
 
     /// Resolve `request`: table entry → generator → unknown-route fallback,

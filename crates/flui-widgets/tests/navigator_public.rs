@@ -1514,6 +1514,69 @@ fn a_route_key_carries_its_result_type_from_registration_to_delivery() {
     );
 }
 
+/// The keyed path can relay a payload the caller already holds without changing
+/// its identity — and without the double-wrap that `request` would produce.
+///
+/// The asymmetry this closes was ours: `with_arguments_shared` was added to the
+/// string path only, and `RouteKey::request` takes its payload **by value**, so
+/// handing it an existing `RouteArguments` wraps an `Arc` in another `Arc`. The
+/// stored concrete type becomes `RouteArguments` itself, and the factory's
+/// `argument::<OriginalType>()` then answers `None` — silently, since the
+/// double-wrap is perfectly well-typed.
+///
+/// Red-check: implement `request_shared` as `self.request(arguments)` and both
+/// halves fail — `ptr_eq` because a fresh `Arc` was minted, and the factory's
+/// downcast because the payload is now `Arc<Arc<dyn Any …>>`.
+#[test]
+fn route_key_request_shared_relays_a_payload_without_changing_its_identity() {
+    const ORDER: RouteKey<u32> = RouteKey::new("/order");
+
+    /// What the factory saw: the payload it was handed, and whether that payload
+    /// still downcasts to the caller's original concrete type.
+    struct RelayedPayload {
+        arguments: RouteArguments,
+        downcast: Option<u32>,
+    }
+
+    let built = Built::default();
+    let seen: Arc<Mutex<Option<RelayedPayload>>> = Arc::new(Mutex::new(None));
+
+    let handle = NavigatorHandle::new();
+    handle.route_keyed(ORDER, {
+        let seen = Arc::clone(&seen);
+        move |request: &RouteRequest<'_>| {
+            *seen.lock() = Some(RelayedPayload {
+                arguments: request.settings().arguments().cloned()?,
+                // The half a double-wrap breaks: the ORIGINAL concrete type.
+                downcast: request.argument::<u32>().copied(),
+            });
+            Some(SimpleRoute::<u32>::new(leaf))
+        }
+    });
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+
+    // A payload the caller already holds as a `RouteArguments`, exactly as a
+    // relay site would.
+    let payload: RouteArguments = Arc::new(1776_u32);
+    handle
+        .push_keyed(ORDER.request_shared(Arc::clone(&payload)))
+        .expect("registered");
+    laid.tick();
+
+    let relayed = seen.lock().take().expect("the factory ran");
+    assert!(
+        Arc::ptr_eq(&relayed.arguments, &payload),
+        "the factory got the caller's own payload object, not a rebuilt one"
+    );
+    assert_eq!(
+        relayed.downcast,
+        Some(1776),
+        "and it still downcasts to the ORIGINAL concrete type — a double-wrap \
+         would make this None while every other assertion still passed"
+    );
+}
+
 /// `RouteKey` is a name plus a compile-time promise, so its identity is its
 /// name — and `T` costs it no trait bounds.
 ///

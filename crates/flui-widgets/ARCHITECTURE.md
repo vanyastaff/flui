@@ -308,14 +308,30 @@ mutators serve imperative or late registration.** A `WidgetsApp` rebuild whose
 does *not* clear a generator or a table entry registered directly on the handle
 after mount.
 
+**Registrations are not mount-scoped, and that asymmetry with observers is
+deliberate.** `NavigatorState::dispose` detaches observers, because an observer
+holds a handle exactly while the navigator is mounted. It does **not** clear the
+registry: an app that registers once against a handle it retains — the flow
+`widgets_app.rs`'s
+`unmount_and_remount_over_a_retained_handle_does_not_duplicate_observers`
+exercises — would otherwise get `Unresolved` from every `push_named` after its
+first unmount. Clearing on dispose was tried in this slice and reverted for
+exactly that reason; `route_registrations_survive_an_unmount_and_remount_over_a_retained_handle`
+is the pin.
+
 **Consequence, named rather than left to be discovered:** a factory that clones
-its own `NavigatorHandle` in — the natural way to navigate from inside one —
-closes an `Arc` cycle through the registry, and the navigator's storage is never
-reclaimed. Observers escape this by attaching only while mounted; registrations
-have no such lifecycle. Documented on `on_generate_route`; a `Weak` handle would
-fix it and is not in this slice.
+its own `NavigatorHandle` in still closes an `Arc` cycle through the registry,
+and nothing reclaims it implicitly. §9 removed the *reason* to capture one —
+`RouteRequest` hands the factory its navigator — so this is no longer what the
+natural code does, and `NavigatorHandle::clear_routes` is the explicit escape for
+a caller who captured anyway. Caller-controlled by necessity: only the caller
+knows whether it intends to register again.
 
 **Replacement tests:**
+`route_registrations_survive_an_unmount_and_remount_over_a_retained_handle` and
+`clear_routes_drops_every_registration_including_the_generator_hooks`
+(`navigator_tests.rs`) for the lifecycle contract above — restoring the dispose
+clear fails the first;
 `a_table_entry_wins_and_the_generate_hook_is_never_consulted`,
 `on_unknown_route_runs_only_after_the_generator_declined_and_sees_the_callers_payload`,
 `two_handles_resolve_the_same_name_through_their_own_registries`, and
@@ -380,6 +396,11 @@ so the safe form is as short as the unsafe one — rather than a fact about
 modest gain, and it is stated here as such.
 
 **Replacement tests:**
+`route_key_request_shared_relays_a_payload_without_changing_its_identity` covers
+the keyed counterpart `RouteKey::request_shared`, which exists because
+`RouteKey::request` takes its payload by value and would wrap an `Arc` in
+another `Arc` — making the factory's `argument::<OriginalType>()` answer `None`
+silently. And
 `with_arguments_shared_relays_a_payload_without_changing_its_identity` (which
 also asserts the contrast: `with_arguments` on an identical value is *not*
 `ptr_eq`), and the identity half of
@@ -567,6 +588,18 @@ which is what lets a test distinguish "warned once" from "stopped noticing". The
 latch is per **registry**, not a process-global `static`, so one navigator's
 conflict cannot silence another's.
 
+**The decision and the latch commit together, under the lock.** A review raised
+that latching *after* the emit would let a `tracing` subscriber re-entering
+registration during the warn see a stale flag and emit a second warning. Measured:
+that half is not reachable — `tracing` suppresses re-entrant event dispatch on the
+same thread, so the inner `warn!` never reaches a subscriber and the event count
+is 1 either way. What *is* reachable is the counter drifting from the emission
+(`warns_emitted` reads 2 for one event), and since that counter is the oracle the
+warn-once test asserts on, a counter that can over-report is a counter that cannot
+pin anything. Committing both in one locked step is what keeps it honest. Recorded
+so the guard is not later removed as dead: it is not protecting the warn, it is
+protecting the counter.
+
 **What this does not close.** The erased fall-through: a table entry that
 declines and an `on_generate_route` / `on_unknown_route` that answers with a
 differently-typed route. Nothing at those hooks' registration sites knows what
@@ -574,11 +607,31 @@ differently-typed route. Nothing at those hooks' registration sites knows what
 stays — with its documented remit shrunk to exactly that one shape for keyed
 callers, instead of implying it is the general guard.
 
+**A registration is user code, and displacing one drops it.** Every path that
+replaces or discards a registration — `register_named`, `register_generator`,
+`register_unknown_fallback`, `clear` — moves the displaced closure out of the
+locked block and drops it with the guard released. Its captured state may run
+arbitrary `Drop`, and a `Drop` that reaches back into the registry deadlocks a
+non-reentrant `parking_lot::Mutex`. This is not hypothetical for `clear`: the
+closure it drops is, by design, the one that captured a `NavigatorHandle`. There
+is no compile-time oracle — dropping under the guard compiles clean and hangs —
+so it is pinned by a test rather than by review, and the pin was written after
+all four paths had shipped with the defect.
+
 **Replacement tests:**
+`a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry`
+covers all four displacement paths; reverting any one of them to drop under the
+guard makes it **hang** rather than fail, which is why it asserts progress
+counters as it goes rather than only at the end.
 `a_route_re_registered_with_a_different_output_type_warns_once_per_navigator`
 (`navigator_tests.rs`) asserts six conflicts produce one warning, that a
 same-type replacement produces neither, and that a second navigator warns for
 itself — dropping the latch reads 6 instead of 1, dropping the type guard makes
 the same-type replacement warn.
+`the_conflict_warning_is_emitted_once_and_names_both_result_types` captures the
+real `tracing` events through `flui_testing::log_capture` and asserts on them, so
+deleting the `tracing::warn!` fails it while every counter assertion still passes.
+`a_subscriber_that_re_registers_while_handling_the_warning_cannot_skew_the_latch`
+pins the re-entrancy above.
 `a_keyed_entry_that_declines_falls_through_to_a_generator_whose_type_is_still_checked`
 (`navigator_public.rs`) pins the shape the warning cannot reach.

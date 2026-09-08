@@ -1531,10 +1531,10 @@ impl NavigatorHandle {
     ///
     /// Capturing one anyway closes an `Arc` cycle — the navigator owns the
     /// registry, the registry owns the closure, the closure would own the
-    /// navigator — and the storage is then reclaimed only when the navigator
-    /// unmounts, since `NavigatorState::dispose` drops every registration. An
-    /// unmounted navigator therefore leaks nothing; one that never mounts, or
-    /// outlives its tree, holds its own stack until the last handle goes.
+    /// navigator — and nothing reclaims it implicitly, because registrations are
+    /// deliberately **not** mount-scoped (see
+    /// [`clear_routes`](Self::clear_routes)). [`clear_routes`](Self::clear_routes)
+    /// is how you break it, and it is the only thing that does.
     ///
     /// # Example
     ///
@@ -1573,6 +1573,26 @@ impl NavigatorHandle {
         self.shared
             .named_routes
             .register_unknown_fallback(Rc::new(factory));
+    }
+
+    /// Drop every route registration — the table, the generator, and the
+    /// unknown-route fallback.
+    ///
+    /// Registrations are **not** mount-scoped: they survive an unmount and
+    /// remount over a retained handle, because an app that registers once
+    /// against a handle it keeps must not silently lose its routes
+    /// (`ARCHITECTURE.md` §6 draws the contrast with observers, which *are*
+    /// mount-scoped because an observer holds a handle only while mounted).
+    /// Dropping them is therefore a caller decision — only the caller knows
+    /// whether it intends to register again — and this is how the caller makes
+    /// it.
+    ///
+    /// It is also the escape for the one cycle this surface can still create:
+    /// a factory that captures a [`NavigatorHandle`] despite
+    /// [`RouteRequest::navigator`] handing it one. See
+    /// [`on_generate_route`](Self::on_generate_route).
+    pub fn clear_routes(&self) {
+        self.shared.named_routes.clear();
     }
 
     /// Resolve `request` into a route, or say why it could not be.
@@ -2251,14 +2271,6 @@ impl ViewState<Navigator> for NavigatorState {
     /// path notifies exactly once.
     fn dispose(&mut self) {
         self.shared.detach_observers();
-        // Terminal, so the route registry goes too — `activate` is the reattach
-        // hook and nothing reparents through here. Two reasons, both concrete:
-        // a factory is owner-local code with no purpose once the navigator it
-        // resolves for is gone, and a factory that captured a handle anyway
-        // holds an `Arc` back to this `NavigatorShared`. Dropping the
-        // registrations is the only place that cycle can be broken from, since
-        // the caller holding the offending closure has no handle on it.
-        self.shared.named_routes.clear();
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing.
         *self.shared.post_frame.lock() = None;
