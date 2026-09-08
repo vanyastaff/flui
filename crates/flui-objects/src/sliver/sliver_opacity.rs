@@ -192,9 +192,19 @@ impl RenderSliverOpacity {
         }
         // Starting or stopping suppressing the subtree's paint is a change to
         // what the frame CONTAINS, not to a layer property, and it is invisible
-        // to the layer-update path: at both alpha 255 and alpha 0 this node
-        // emits no `OpacityLayer` at all, so it has no effect-layer slot for an
-        // update to patch. Only a repaint can add or remove that content.
+        // to the layer-update path: WITHOUT the always-compositing flag this
+        // node emits no `OpacityLayer` at either alpha 255 or alpha 0, so it
+        // has no effect-layer slot for an update to patch, and only a repaint
+        // can add or remove that content.
+        //
+        // The flag is exactly the case this clause must NOT fire for, and it
+        // does not: `skip_paint` is `alpha == 0 && !always_needs_compositing`,
+        // so with the flag set it is false on both sides of the crossing and
+        // nothing is added here — while `paint_alpha` keeps returning
+        // `Some(0)`, so the layer survives and the patch has a slot after all.
+        // That is the acceleration
+        // `an_always_compositing_sliver_updates_its_layer_even_when_going_invisible`
+        // pins.
         //
         // This is the honest impact rather than the last line of defence. The
         // paint phase refuses to graft when a node that requested an update
