@@ -865,3 +865,51 @@ deleting the `tracing::warn!` fails it while every counter assertion still passe
 pins the re-entrancy above.
 `a_keyed_entry_that_declines_falls_through_to_a_generator_whose_type_is_still_checked`
 (`navigator_public.rs`) pins the shape the warning cannot reach.
+
+### 13. We keep the oracle's callback-before-observers order and drop its refusal, so an effect can be observed before its cause
+
+**Rule:** as §4 above; same ADR.
+
+**Oracle:** `Route.onPopInvokedWithResult` is called from `_RouteEntry.handlePop`,
+inside `_flushHistoryUpdates`; the pop observation is only *queued* there, and
+observers are notified afterwards by `NavigatorState._flushObserverNotifications`.
+So a `PopScope` callback runs **before** `NavigatorObserver.didPop` in the
+reference too.
+
+**Choice:** keep that order. `apply` runs step 0 — everything the flush owes user
+code, including deferred `PopScope` effects — before step 1 delivers to observers.
+This is parity, and reordering would *create* a divergence rather than remove one.
+
+**Where we diverge, and it is not the ordering.** `handlePop` runs under
+`assert(navigator._debugLocked)`, and every imperative entry point on
+`NavigatorState` asserts `!_debugLocked` — 13 of them. So in the reference a
+synchronous navigation from `onPopInvokedWithResult` **aborts a debug build**.
+Flutter's answer to "an effect observed before its cause" is not an ordering rule:
+it is that you cannot get there.
+
+FLUI permits it, deliberately — `pop_scope_callbacks_may_call_back_into_the_navigator`
+guarantees it, and the permission exists because refusing re-entrancy is what
+produced a fan-out deadlock here. **So we kept the reference's ordering and removed
+its refusal, and the inversion is the price of that.** A `PopScope` callback that
+navigates is observed before the pop that invoked it:
+
+```
+["push(RouteId(3), prev=Some(RouteId(1)))",
+ "pop(RouteId(2),  prev=Some(RouteId(1)))"]
+```
+
+**Why not restore the refusal.** A `_debugLocked` equivalent would revert a
+recorded improvement to buy back a restriction removed on purpose. Flutter can
+afford the refusal because it never had to order the interleaving — refusing
+re-entrancy means never having to sequence it. Having solved the harder problem,
+adopting the easier prohibition would be a regression wearing a parity badge.
+
+**What was missing until now** is exactly this entry: the *permission* was recorded
+as an improvement and its *ordering consequence* was not. An improvement's cost is
+not visible until something else changes, and the something else was already in the
+tree.
+
+**Replacement test:**
+`a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`
+(`navigator_tests.rs`), red-checked by swapping step 0 and step 1 — which yields
+`[pop, push]`, i.e. **the divergence, not the fix**.

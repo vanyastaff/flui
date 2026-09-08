@@ -226,9 +226,21 @@ impl NavigatorShared {
         // 0. Everything the flush owed to user code, **in the order it was
         //    produced** — a multi-pass flush must not deliver a later pass's
         //    refusal ahead of an earlier pass's pop — and before the observers
-        //    hear `didPop`, which is Flutter's relative order
-        //    (`onPopInvokedWithResult` fires inside `handlePop`,
-        //    `navigator.dart:3372`, before the observation at `:4527`).
+        //    hear `didPop`, which is Flutter's relative order:
+        //    `onPopInvokedWithResult` fires inside `_RouteEntry.handlePop`, i.e.
+        //    during `_flushHistoryUpdates`, while the pop observation is only
+        //    queued there and delivered afterwards by
+        //    `NavigatorState._flushObserverNotifications`. Cited by symbol: the
+        //    line numbers this comment used to carry had both drifted.
+        //
+        //    Note what this order does NOT inherit. `handlePop` runs under
+        //    `assert(navigator._debugLocked)` and every imperative entry point
+        //    asserts `!_debugLocked`, so the reference aborts a debug build
+        //    rather than let a callback navigate from here. FLUI permits it
+        //    deliberately (see `pop_scope_callbacks_may_call_back_into_the_navigator`),
+        //    which makes the resulting "effect observed before its cause"
+        //    sequence reachable here and unreachable there — pinned by
+        //    `a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`.
         //
         //    With **no lock held**: these are user callbacks, they may call
         //    straight back into this navigator, and even a `can_pop()` read
@@ -2063,6 +2075,14 @@ impl NavigatorHandle {
         // would drop the caller's `TO` on the spot — while it is still a bare
         // generic, so no `Option<AnyResult>` audit can see it. Erasing first makes
         // the failure path able to report it.
+        //
+        // Resolving before the *dismissal* pays a second time, which was not the
+        // reason for the order and is worth knowing before anyone reverses it: a
+        // route factory is user code and may panic, and resolution happening first
+        // means such a panic strands nothing. Dismiss first and a panicking factory
+        // leaves the navigator with an empty stack — pinned by
+        // `a_factory_that_panics_after_the_result_is_erased_loses_only_the_report`,
+        // whose red-check is exactly that swap.
         let result: Option<AnyResult> = Some(AnyResult::new(result));
         match self.resolve_named(&request) {
             Ok(generated) => Ok(generated.push(self, PushMode::Replace { target, result }).0),
@@ -2145,7 +2165,8 @@ impl NavigatorHandle {
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
         let departing = self.current();
-        // Erased before resolving — see `push_replacement_named_with`.
+        // Erased before resolving — see `push_replacement_named_with`, including
+        // why resolving must also precede the dismissal below.
         let result: Option<AnyResult> = Some(AnyResult::new(result));
         let generated = match self.resolve_named(&request) {
             Ok(generated) => generated,

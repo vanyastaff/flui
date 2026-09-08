@@ -1177,8 +1177,10 @@ fn pop_and_push_named_with_an_unresolvable_name_delivers_its_result_to_nobody() 
 /// `'Navigator.onGenerateRoute returned null'` assertion, as a `Result`
 /// (`PANIC-POLICY`: a route name is caller input, not a framework invariant).
 ///
-/// Red-check: make `resolve_named` fall back to pushing a placeholder route and
-/// the stack assertion fails.
+/// Red-check: make `resolve_named` fall back to pushing a placeholder route.
+/// What a maintainer then sees is `expect_err("no registration answers
+/// '/nowhere'")` panicking on an `Ok` — the operation succeeds, so the error
+/// assertion is reached first and the stack assertion below it never runs.
 #[test]
 fn an_unresolvable_name_errors_without_touching_the_stack_or_the_observers() {
     let built = Built::default();
@@ -1440,8 +1442,12 @@ fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
 /// record, the probe just records the two values.
 ///
 /// Red-check: build the `RouteSettings` from the name alone in
-/// `NavigatorHandle::push_named`, dropping the caller's payload, and the argument
-/// assertion fails.
+/// `NavigatorHandle::push_named`, dropping the caller's payload. The failure is
+/// **not** the argument assertion: `request.argument::<u32>()` returns `None`, the
+/// factory's `?` makes it decline, resolution fails, and `.expect("registered")`
+/// panics. `seen` is written only after both `?`s succeed, so even without that
+/// `expect` the next line — `expect("the factory ran")` — would go first. The
+/// argument assertion is unreachable under this mutation.
 #[test]
 fn a_factory_is_handed_the_callers_name_and_arguments() {
     let built = Built::default();
@@ -3631,6 +3637,104 @@ fn a_refused_pop_hands_the_callers_result_back_instead_of_dropping_it() {
         vec!["pop_and_push_named_with"],
         "the refusal arm reported under the composed operation's own name; \
          captured:\n{}",
+        log.render_at_least(tracing::Level::WARN)
+    );
+}
+
+/// A route factory that **panics** after the caller's result has been erased.
+///
+/// The `_with` methods erase to `AnyResult` *before* resolving, deliberately: the
+/// alternative loses the value in a `?` on the unresolved path. That opens a
+/// window where the erased value is a local held across user code that may unwind,
+/// and this test establishes what actually happens in it. Measured, in this order:
+///
+/// 1. **No hang.** `RouteRegistry::resolve` invokes the factory with its own lock
+///    released (`pick` clones the factory out from under the guard), and nothing
+///    else is held. Worth stating precisely, because the obvious reason is the
+///    wrong one: even *with* the factory called under the guard there is no hang,
+///    since a `parking_lot::MutexGuard` releases as its frame unwinds. What `pick`
+///    actually buys is safety against a factory that **re-enters** the registry,
+///    which is a different scenario from one that panics.
+/// 2. **No leak.** The value's `Drop` runs during the unwind.
+/// 3. **No report**, deliberately. A `warn!` here would run a `tracing`
+///    subscriber during an **unwind**, where a subscriber that panics turns a
+///    recoverable panic into a process **abort**. And the log line it would buy is
+///    redundant: the panic is already propagating in the caller's own frame, so
+///    nobody is left guessing where their value went. Trading a redundant log line
+///    for an abort risk is the wrong direction. (This is a sharper argument than
+///    the general "user code must not run under a lock" one that governs the other
+///    undelivered paths — no lock is involved here at all.)
+/// 4. **The navigator survives.** `parking_lot` does not poison, the stack is
+///    untouched (resolution panicked before the pop was issued), and the next
+///    operation succeeds.
+///
+/// Red-check: swap the order in `pop_and_push_named_with` so `dismiss_captured`
+/// runs *before* `resolve_named`. Assertion (3) then fails with `left: []` against
+/// `right: [RouteId(1)]` — the pop went through, the factory panicked, and the
+/// navigator is stranded with an empty stack. That is the fact this ordering
+/// protects, and it is the reason resolve-before-dismiss is not merely tidier.
+///
+/// (Moving the factory invocation inside the registry guard, which this line first
+/// claimed would hang, does **not** go red: the guard releases as the frame
+/// unwinds. Measured under an external timeout, not assumed.)
+#[test]
+fn a_factory_that_panics_after_the_result_is_erased_loses_only_the_report() {
+    let built = Built::default();
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let payload_counter = Arc::clone(&dropped);
+
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        let handle = NavigatorHandle::new();
+        handle.route(
+            "/boom",
+            |_request: &RouteRequest<'_>| -> Option<SimpleRoute<i32>> {
+                panic!("a route factory is user code and may unwind");
+            },
+        );
+        handle.seed_initial(page(&built, "/"));
+        let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+        let before = handle.route_ids();
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle.pop_and_push_named_with("/boom", DropCounter::new(&payload_counter))
+        }));
+
+        assert!(
+            outcome.is_err(),
+            "the panic reaches the caller rather than being swallowed"
+        );
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            1,
+            "and the erased value was dropped exactly once on the unwind path"
+        );
+
+        laid.tick();
+        assert_eq!(
+            handle.route_ids(),
+            before,
+            "the stack is untouched — resolution panicked before the pop was issued"
+        );
+
+        // The load-bearing half: this line HANGS if the factory ran under a lock.
+        handle.route("/after", {
+            let built = built.clone();
+            move |_request: &RouteRequest<'_>| Some(page(&built, "/after"))
+        });
+        let arrived = handle
+            .push_named("/after")
+            .expect("registered after a panic");
+        laid.tick();
+        assert_eq!(
+            handle.current(),
+            Some(arrived),
+            "and the navigator is fully usable afterwards"
+        );
+    });
+
+    assert!(
+        undelivered_operations(&log).is_empty(),
+        "nothing is reported, by design — see this test's doc; captured:\n{}",
         log.render_at_least(tracing::Level::WARN)
     );
 }

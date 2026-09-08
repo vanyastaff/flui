@@ -1301,8 +1301,9 @@ fn a_disposed_pop_scope_stops_vetoing() {
 /// deadlocked same-thread. Delivery now defers through
 /// `FlushOutcome::pop_invoked` and `apply` fires it with no lock held, still
 /// synchronously within the `pop`/`maybe_pop` call (the outcomes-ordering
-/// tests above pin that), and before observers hear `didPop`
-/// (`navigator.dart:3372` before `:4527`).
+/// tests above pin that), and before observers hear `didPop` —
+/// `onPopInvokedWithResult` fires inside `_RouteEntry.handlePop`, the observation
+/// is delivered later by `NavigatorState._flushObserverNotifications`.
 ///
 /// Red-check (the shipped bug): fan out from `ModalRoute::on_pop_invoked`
 /// again — both phases hang and the watchdog fails the test.
@@ -2650,4 +2651,118 @@ fn a_panicking_route_hook_leaves_the_navigator_usable() {
          by the guard on the way out"
     );
     assert!(built.contains("after"), "and its content built");
+}
+
+/// A `PopScope` callback that **navigates** — and where its navigation lands in
+/// the observer stream.
+///
+/// Its sibling above proves such a callback may *read* the navigator without
+/// deadlocking. This one proves it may *mutate* it, and pins the consequence: the
+/// push issued from the callback is observed **before** the pop that caused it.
+///
+/// That order is **parity, not a defect.** In the reference the callback fires
+/// from `_RouteEntry.handlePop` — inside `_flushHistoryUpdates` — while observers
+/// are notified afterwards by `NavigatorState._flushObserverNotifications`, which
+/// drains `_observedRouteDeletions` once the history walk is done. So
+/// `onPopInvokedWithResult` before `NavigatorObserver.didPop` is the reference's
+/// own relative order, and `apply`'s step 0 / step 1 split reproduces it.
+///
+/// What **is** a divergence, recorded here because nothing else records it: the
+/// reference would never let this sequence be observed at all. `handlePop` runs
+/// under `assert(navigator._debugLocked)`, and every imperative entry point on
+/// `NavigatorState` (`push`, `pop`, `pushNamed`, `removeRoute`, … thirteen of
+/// them) opens with `assert(!_debugLocked)` — so a synchronous navigation from
+/// `onPopInvokedWithResult` aborts a debug build before any ordering is visible.
+/// FLUI deliberately permits it (that is what its sibling test exists to
+/// guarantee, after the fan-out deadlock), which means FLUI can reach a state the
+/// reference defines away. The permission was recorded; this ordering consequence
+/// of the permission was not.
+///
+/// Red-check: swap `apply`'s step 0 and step 1 and the sequence inverts to
+/// `[pop, push]` — which would be the *divergence*, not the fix.
+#[test]
+fn a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it() {
+    use std::time::Duration;
+
+    use crate::PopScope;
+    use crate::navigator::{NavigatorObserver, PageRoute, RouteId};
+
+    const BUDGET: Duration = Duration::from_secs(10);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+
+        #[derive(Default)]
+        struct SeqSpy(Mutex<Vec<String>>);
+        impl NavigatorObserver for SeqSpy {
+            fn did_push(&self, route: RouteId, previous: Option<RouteId>) {
+                self.0
+                    .lock()
+                    .push(format!("push({route:?},prev={previous:?})"));
+            }
+            fn did_pop(&self, route: RouteId, previous: Option<RouteId>) {
+                self.0
+                    .lock()
+                    .push(format!("pop({route:?},prev={previous:?})"));
+            }
+        }
+
+        let spy = Arc::new(SeqSpy::default());
+        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+        let navigated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let navigated_for_scope = Arc::clone(&navigated);
+        let handle_for_scope = handle.clone();
+        let built_for_scope = built.clone();
+        let _guarded = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            let log = Arc::clone(&navigated_for_scope);
+            let navigator = handle_for_scope.clone();
+            let b = built_for_scope.clone();
+            PopScope::new(SizedBox::new(10.0, 10.0))
+                .on_pop_invoked(move |did_pop| {
+                    // The re-entrant NAVIGATION, not just a read.
+                    let pushed = navigator.push(page(&b, "/from-callback"));
+                    log.lock().push(format!(
+                        "callback(did_pop={did_pop}) pushed, completed={}",
+                        pushed.is_completed()
+                    ));
+                })
+                .into_view()
+                .boxed()
+        }));
+        harness.tick();
+        spy.0.lock().clear();
+
+        let popped = handle.pop();
+        harness.tick();
+
+        assert!(popped, "the pop went through");
+        assert_eq!(
+            navigated.lock().len(),
+            1,
+            "the callback ran, and navigating from it neither hung nor panicked"
+        );
+        let sequence = spy.0.lock().clone();
+        assert_eq!(
+            sequence.len(),
+            2,
+            "one push from the callback, one pop from the operation: {sequence:?}"
+        );
+        assert!(
+            sequence[0].starts_with("push("),
+            "the callback's push is observed FIRST — the reference's own relative \
+             order, reproduced: {sequence:?}"
+        );
+        assert!(
+            sequence[1].starts_with("pop("),
+            "and the pop that caused it second: {sequence:?}"
+        );
+        let _ = done.send(());
+    });
+    assert!(
+        finished.recv_timeout(BUDGET).is_ok(),
+        "a PopScope callback that navigates deadlocked — the deferred fan-out \
+         ran with the history lock held"
+    );
 }
