@@ -364,8 +364,10 @@ not a test failure. `warn` when there was no route to deliver to; `error` when a
 route received it and the type did not match its `Output`. One wording per
 condition, on one path, so this sentence is true in exactly one way.
 
-Nine sites can reach it, and the list is worth reading because only two of them
-are the edge cases a reader expects: an empty stack, a top mid-exit-transition, a
+**The invariant is what to rely on, not a count: every caller-supplied result is
+either delivered to a route or reported exactly once, and dropped outside any
+guard.** The list below is illustrative — it is here because most of these are not
+the edge cases a reader expects, not as an inventory to keep in step: an empty stack, a top mid-exit-transition, a
 target already completed, an id belonging to another navigator, an unmounted
 handle, a named capture that came back empty, a user `Route::did_pop` returning
 `false` (a public trait whose default is `true`, and ADR-0024 §7.4 sanctions user
@@ -410,8 +412,9 @@ read `history.rs`, where the state machine *consumes* a result — and missed th
 sites where a *decision* discards one, which live on the handle. The second
 enumerated `Option<AnyResult>` — the **erased** type — and missed the two sites
 that drop the caller's value *before* erasure, on a `?` that returns while it is
-still `TO`. Those two sweeps have **zero overlap**: five post-erasure sites and
-two pre-erasure ones, disjoint. The correct axis is the caller-supplied generic,
+still `TO`. Those two sweeps have **zero overlap** — not "the first one missed
+some", but two disjoint sets, which is what proves the axis was wrong rather than
+the search sloppy. The correct axis is the caller-supplied generic,
 traced from the parameter to a delivery or a report, accounting for every early
 return in between.
 
