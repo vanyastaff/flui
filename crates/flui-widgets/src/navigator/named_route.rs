@@ -70,6 +70,7 @@ use std::rc::Rc;
 
 use parking_lot::Mutex;
 
+use super::history::ReplaceTarget;
 use super::navigator::NavigatorHandle;
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
@@ -86,37 +87,56 @@ use super::route::{AnyResult, Route, RouteArguments, RouteId, RouteSettings};
 /// factory exists to build.
 pub(crate) type RouteFactory = Rc<dyn Fn(&RouteRequest<'_>) -> Option<GeneratedRoute>>;
 
-/// What a route factory is asked: the [`RouteSettings`] of the request, and the
-/// [`NavigatorHandle`] that is asking.
+/// What a route factory is asked: the name and arguments of the request.
 ///
-/// # Why the navigator is here rather than captured
+/// A factory's job is to **build a route**, and everything it needs for that is
+/// here. It is not given a [`NavigatorHandle`], and that is the point.
 ///
-/// Flutter's `RouteFactory` takes only settings, and a Dart factory that needs
-/// to navigate closes over `Navigator.of(context)` freely — the cycle that
-/// creates is collected. Rust does not collect cycles, and the registry is owned
-/// by the navigator, so a factory that captured a [`NavigatorHandle`] would
-/// close `Arc<NavigatorShared>` → registry → `Rc<dyn Fn>` → handle → back on
-/// itself, and the navigator's storage would never be reclaimed — not even after
-/// it unmounted. Passing the handle in removes the reason to capture one.
+/// # A redirect is a different route, not a navigation
 ///
-/// The route's *content* never needed a captured handle either:
-/// [`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) receives a
-/// `&dyn BuildContext`, and `NavigatorHandle::maybe_of(ctx)` resolves the
-/// navigator from it exactly as Flutter's `Navigator.of(context)` does. So after
-/// this, capturing a handle in a factory has no remaining justification. If you
-/// capture one anyway the cycle is still yours to break — nothing here can do it
-/// for you.
+/// The question a reader arrives with: *how do I send the user somewhere else
+/// from inside a factory?* By returning the route for somewhere else. A factory
+/// that inspects [`name`](Self::name) / [`argument`](Self::argument) and answers
+/// with a login route instead of the requested one has redirected, without
+/// touching the stack. Answering `None` declines and passes the request to the
+/// next resolution stage.
 ///
-/// # Re-entrancy is supported, not merely survivable
+/// # Re-entrancy is *survivable*, not supported
 ///
-/// [`navigator`](Self::navigator) may be used to push, register, or query while
-/// the factory runs: every factory is invoked with the registry lock released,
-/// since `parking_lot::Mutex` is not reentrant. Pinned by
+/// **Superseded, and kept visible with its correction.** An earlier revision of
+/// this type carried a section headed "Re-entrancy is supported, not merely
+/// survivable", on the strength of a `navigator()` accessor that handed the
+/// factory its own handle. Both the accessor and the claim are withdrawn:
+///
+/// - The accessor's justification was circular. It was introduced to remove the
+///   *reason* to capture a handle — a captured handle closes an `Arc` cycle
+///   through the registry — but a route's content never needed one either:
+///   [`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) receives
+///   a `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)` resolves from it,
+///   exactly as Flutter's `Navigator.of(context)` does. With no need to capture,
+///   there was no cycle to avoid, and the accessor's only remaining use was
+///   navigating *during resolution*.
+/// - It had zero production call sites, and every test call site existed to
+///   exercise that window.
+///
+/// What survives is the honest weaker claim. A factory that captures a handle
+/// anyway — nothing prevents it, closures capture freely — will not deadlock:
+/// every factory is invoked with the registry lock released, since
+/// `parking_lot::Mutex` is not reentrant. That is **survivable**, not supported,
+/// and two consequences are documented rather than prevented
+/// (`ARCHITECTURE.md` §5): a nested `didPush` is observed before the triggering
+/// operation's own dismissal, and a buried route is removed rather than popped.
+/// The named operations stay correct across it — they capture their target before
+/// resolving — but that is them defending an invariant, not this type offering a
+/// capability. Pinned by
 /// `a_factory_that_pushes_re_entrantly_does_not_deadlock`.
+///
+/// A captured handle also keeps the navigator alive until
+/// [`NavigatorHandle::clear_routes`] drops the registration; that cycle is still
+/// yours to break.
 #[derive(Debug, Clone, Copy)]
 pub struct RouteRequest<'a> {
     settings: &'a RouteSettings,
-    navigator: &'a NavigatorHandle,
 }
 
 impl<'a> RouteRequest<'a> {
@@ -147,19 +167,17 @@ impl<'a> RouteRequest<'a> {
         self.settings.argument::<T>()
     }
 
-    /// The navigator resolving this request. Usable re-entrantly; see the type
-    /// docs.
-    #[must_use]
-    pub fn navigator(&self) -> &'a NavigatorHandle {
-        self.navigator
-    }
-
     /// Assemble a request. `pub(super)` — only the resolving handle makes one.
-    pub(super) fn new(settings: &'a RouteSettings, navigator: &'a NavigatorHandle) -> Self {
-        Self {
-            settings,
-            navigator,
-        }
+    ///
+    /// A wrapper around one reference, deliberately: it keeps the factory
+    /// signature stable and gives read-only accessors somewhere to live. **None
+    /// are offered yet** — no test and no documented use has motivated
+    /// `current_route_id()` / `route_ids()` / `can_pop()`, and a factory deciding
+    /// what to build from the stack it is about to be pushed onto is a shape
+    /// nothing has asked for. Adding one later is additive; guessing now would be
+    /// the same mistake `navigator()` was.
+    pub(super) fn new(settings: &'a RouteSettings) -> Self {
+        Self { settings }
     }
 }
 
@@ -172,11 +190,13 @@ pub(super) enum PushMode<'a> {
     /// [`NavigatorHandle::push`].
     Push,
     /// [`NavigatorHandle::push_replacement`], delivering `result` to the
-    /// replaced route when present.
+    /// replaced route when there is one.
     Replace {
-        /// The route to replace, captured **before** the factory ran. `None`
-        /// means the current top — see `RouteHistory::push_replacement_with_id`.
-        target: Option<RouteId>,
+        /// The route to replace, captured **before** the factory ran. `None` means
+        /// the capture came back empty — there is nothing to replace, and this is
+        /// deliberately *not* expressible as a target, so it cannot be confused
+        /// with `ReplaceTarget::CurrentTop`.
+        target: Option<ReplaceTarget>,
         /// What the replaced route's [`RouteResult`] resolves with.
         result: Option<AnyResult>,
     },
@@ -515,8 +535,8 @@ impl<T> RouteKey<T> {
     /// [`maybe_pop_with`](NavigatorHandle::maybe_pop_with)), and spending that
     /// suffix on arguments would make one word mean two things.
     #[must_use]
-    pub fn request<A: Any + Send + Sync + 'static>(self, arguments: A) -> KeyedRequest<T> {
-        KeyedRequest {
+    pub fn with_arguments<A: Any + Send + Sync + 'static>(self, arguments: A) -> KeyedSettings<T> {
+        KeyedSettings {
             settings: RouteSettings::named(self.name).with_arguments(arguments),
             output: PhantomData,
         }
@@ -526,7 +546,7 @@ impl<T> RouteKey<T> {
     /// without re-wrapping.
     ///
     /// The keyed counterpart to [`RouteSettings::with_arguments_shared`], and it
-    /// exists for the same reason plus a sharper one: [`request`](Self::request)
+    /// exists for the same reason plus a sharper one: [`with_arguments`](Self::with_arguments)
     /// takes its payload by value, so handing it an existing [`RouteArguments`]
     /// would wrap an `Arc` *in another `Arc`*. The stored concrete type would
     /// become `RouteArguments` itself, and the factory's
@@ -535,8 +555,8 @@ impl<T> RouteKey<T> {
     ///
     /// [`RouteArguments`]: super::route::RouteArguments
     #[must_use]
-    pub fn request_shared(self, arguments: RouteArguments) -> KeyedRequest<T> {
-        KeyedRequest {
+    pub fn with_arguments_shared(self, arguments: RouteArguments) -> KeyedSettings<T> {
+        KeyedSettings {
             settings: RouteSettings::named(self.name).with_arguments_shared(arguments),
             output: PhantomData,
         }
@@ -547,40 +567,84 @@ impl<T> RouteKey<T> {
 ///
 /// The keyed counterpart to the string path's `impl Into<RouteSettings>`: a bare
 /// key converts into one, so `push_keyed(DETAILS)` and
-/// `push_keyed(DETAILS.request(id))` are the same call.
-pub struct KeyedRequest<T> {
+/// `push_keyed(DETAILS.with_arguments(id))` are the same call.
+pub struct KeyedSettings<T> {
     settings: RouteSettings,
     output: PhantomData<fn() -> T>,
 }
 
 // Hand-written for the same reason as [`RouteKey`]'s: `#[derive(Debug)]` would
-// generate `impl<T: Debug> Debug`, so a `KeyedRequest<T>` whose route `Output`
+// generate `impl<T: Debug> Debug`, so a `KeyedSettings<T>` whose route `Output`
 // is merely `Send + 'static` would not be `Debug` and could not sit in a
 // caller's own derived `Debug` struct. `T` has no runtime representation here to
 // format.
-impl<T> fmt::Debug for KeyedRequest<T> {
+impl<T> fmt::Debug for KeyedSettings<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("KeyedRequest")
+        f.debug_struct("KeyedSettings")
             .field("settings", &self.settings)
             .field("output", &type_name::<T>())
             .finish()
     }
 }
 
-impl<T> KeyedRequest<T> {
+impl<T> KeyedSettings<T> {
     /// The settings this request resolves with.
     #[must_use]
     pub fn settings(&self) -> &RouteSettings {
         &self.settings
     }
 
-    /// Consume into the settings the string path resolves with.
+    /// Discard the key's result type, giving the [`RouteSettings`] the **untyped**
+    /// operations take.
+    ///
+    /// A `KeyedSettings<T>` otherwise composes with exactly one of the eight named
+    /// operations — [`push_keyed`](NavigatorHandle::push_keyed) — so a caller who
+    /// wanted `push_replacement_named` with a key's arguments had nowhere to go.
+    ///
+    /// **This is not a downgrade, and the discard is not new.** Dropping `T` on an
+    /// untyped operation *is* their documented semantics (`ARCHITECTURE.md` §4):
+    /// they never name a route's result type, which is why a `PageRoute<i32>`
+    /// screen is reachable from a caller that has never heard of `i32`. The same
+    /// discard was already reachable as
+    /// `push_replacement_named(MY_KEY.name())` — it simply had **no visible verb**,
+    /// so it read as a gap rather than a choice. This is that verb.
+    ///
+    /// Use [`push_keyed`](NavigatorHandle::push_keyed) to keep the result type.
+    ///
+    /// ```
+    /// use flui_widgets::prelude::*;
+    /// use flui_widgets::{NavigatorHandle, RouteKey, RouteRequest, Text};
+    ///
+    /// const ORDER: RouteKey<u32> = RouteKey::new("/order");
+    ///
+    /// let navigator = NavigatorHandle::new();
+    /// navigator.route_keyed(ORDER, |_request: &RouteRequest<'_>| {
+    ///     Some(SimpleRoute::<u32>::new(|_ctx| Text::new("Order").into_view().boxed()))
+    /// });
+    /// navigator.seed_initial(SimpleRoute::<u32>::new(|_ctx| {
+    ///     Text::new("Home").into_view().boxed()
+    /// }));
+    ///
+    /// // The key's arguments, on an operation that has no `T`.
+    /// let replaced = navigator
+    ///     .push_replacement_named(ORDER.with_arguments(1776_u32).untyped())?;
+    /// # let _ = replaced;
+    /// # Ok::<(), flui_widgets::NamedRouteError>(())
+    /// ```
+    #[must_use]
+    pub fn untyped(self) -> RouteSettings {
+        self.settings
+    }
+
+    /// Consume into the settings the string path resolves with. The `pub(super)`
+    /// twin of [`untyped`](Self::untyped), kept separate so the public verb reads
+    /// as the caller's decision rather than as internal plumbing.
     pub(super) fn into_settings(self) -> RouteSettings {
         self.settings
     }
 }
 
-impl<T> From<RouteKey<T>> for KeyedRequest<T> {
+impl<T> From<RouteKey<T>> for KeyedSettings<T> {
     fn from(key: RouteKey<T>) -> Self {
         Self {
             settings: RouteSettings::named(key.name()),
@@ -767,7 +831,7 @@ impl RouteRegistry {
     /// `NavigatorState::dispose`, which deliberately leaves registrations alone
     /// so they survive an unmount and remount over a retained handle
     /// (`ARCHITECTURE.md` §6). It is the escape for a factory that captured a
-    /// handle despite [`RouteRequest::navigator`] handing it one, and dropping
+    /// handle despite this crate offering no way to obtain one, and dropping
     /// registrations is a caller decision because only the caller knows whether
     /// it intends to register again.
     ///

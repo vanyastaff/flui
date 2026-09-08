@@ -171,7 +171,7 @@ pointer input across a tree where the draggable and the targets are at
 different offsets, so a local-position implementation enters targets the
 pointer was never over.
 
-### 4. Named routes split into six untyped entry points and one typed one, and a request that cannot be served is a typed error
+### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 
 **Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — behavior is the
 floor, and a divergence names what is better, replaces the oracle's test, and
@@ -202,11 +202,13 @@ Both failures are total **for the operation itself**: it pushes, pops, replaces
 and removes nothing, and the generated route is disposed (§7).
 
 That qualifier is load-bearing, and the earlier revision of this entry lacked it.
-Resolution runs a user factory, and §9 makes navigating from a factory a
-supported shape, so a factory that navigates and *then* declines has already
-changed the stack and notified observers by the time the name comes back
-unresolved — measured: `push_named` returns `Err(Unresolved)` with the stack one
-deeper and `["push", "changeTop"]` observed. Those are the factory's own
+Resolution runs a user factory, and although §9 no longer *offers* a way to
+navigate from one, a factory that captures a handle can still do it — so a
+factory that navigates and *then* declines has already changed the stack and
+notified observers by the time the name comes back unresolved: `push_named`
+returns `Err(Unresolved)` with the stack one deeper and `["push", "changeTop"]`
+observed, pinned by
+`an_unresolvable_name_after_a_navigating_factory_adds_nothing_of_its_own`. Those are the factory's own
 mutations, deliberate on its part, and they are not rolled back for the same
 reason §5 does not undo a factory's nested push: it is not this operation's to
 undo. What the guarantee covers is that **the failing operation adds nothing of
@@ -278,21 +280,32 @@ exactly that. So "resolve, then act on the current top" is a
 time-of-check/time-of-use bug: a factory that pushes during resolution makes the
 following `pop()` remove the *nested* route while the caller's target survives
 uncompleted, and `pop_and_push_named_with` then delivers the caller's result
-value to a route it has never heard of. Three entry points shared the shape.
+value to a route it has never heard of. Four entry points shared the shape.
 `push_named_and_remove_until` did not, for a structural reason worth preserving:
 its removal is defined by a **predicate**, not by a captured top, so a nested
 push is swept along with everything else — do not harmonise it into the captured
 shape.
 
-**Two divergences from the oracle, both real, both only for a re-entrant factory:**
+**Three divergences from the oracle, all real, all only for a re-entrant factory:**
 
 1. **Ordering.** The nested `didPush` precedes the dismissal of the caller's
    route. Flutter's `popAndPushNamed` pops *first* and cannot produce this, so
    **this exposure is created by the divergence, not inherited.** An earlier
    revision of this entry claimed the success-path stream was "identical to the
    oracle's" and that "nothing is lost". Both were false; a divergence's cost is
-   not visible until something else changes, and `RouteRequest::navigator()` is
+   not visible until something else changes, and `RouteRequest::navigator()` was
    what changed.
+
+   **That accessor is now withdrawn (§9), and these two divergences change
+   meaning rather than disappearing.** They were the price of a capability the
+   crate offered. They are now what still happens if a factory mutates the stack
+   — which the crate no longer offers a way to do, and cannot prevent, because a
+   factory is an `Rc<dyn Fn>` and closures capture freely. Measured, not assumed:
+   a factory that captures a handle reproduces the window exactly, and reverting
+   the capture-then-resolve fix reproduces the original defect through it
+   (`stack=[root, victim, arrived]`, the caller's route surviving uncompleted).
+   So the defences below are not overhead left behind by a retired feature; they
+   are the operations being correct unconditionally.
 2. **Kind, on the dismissal path.** Once a factory has pushed on top, the
    caller's route is no longer the top, and a route that is not on top cannot be
    popped. `dismiss_captured` therefore has three cases, all documented on it and
@@ -319,6 +332,43 @@ shape.
 
 Non-re-entrant calls — every ordinary one — are unaffected and still emit
 `["pop", "changeTop", "push", "changeTop"]`.
+
+**Every case, measured rather than described.** Two of these are not what a
+reader would guess, which is why the table is here and not a summary:
+
+| operation | factory | stream | `didReplace(new, old)` |
+|---|---|---|---|
+| `pop_and_push_named` | none | `pop, changeTop, push, changeTop` | never emits it |
+| `pop_and_push_named` | pushes (target buried) | `push, changeTop, **remove**, push, changeTop` | — |
+| `pop_and_push_named` | pops (target gone) | `pop, changeTop, push, changeTop` | — |
+| `push_replacement_named` | none | `replace, changeTop` | `(new, target)` |
+| `push_replacement_named` | pushes (target buried) | `push, changeTop, replace, changeTop` | `(new, target)` |
+| `push_replacement_named` | pops (target gone) | `pop, changeTop, replace, changeTop` | `(new, None)` |
+| `push_replacement_named` | target not present (mid-exit) | `replace, changeTop` | `(new, None)` |
+
+The two surprises:
+
+- **A buried replacement still reports the captured target**, not `None`. Only
+  *gone* and *not present* report `None`. The buried case is the one that used to
+  be wrong, so it is the one worth stating.
+- **The "gone" pop-and-push case is indistinguishable from the no-factory case.**
+  The factory's own `pop` produces the `pop`, and the operation's dismissal is
+  then a no-op — so divergence 2 shows only in the *buried* case, not in every
+  factory mutation.
+
+**Undelivered results.** A caller-supplied result that reaches no route is
+carried out of the locked section, **logged, and then dropped** — never dropped
+under the history guard, because its `Drop` is user code and this crate has
+already been bitten by running user code under a non-reentrant lock. `warn` when
+there was no route to deliver to (empty stack, a top mid-exit-transition, a
+target already completed, or a result displaced from an entry that already
+carried one); `error` when a route received it and the type did not match its
+`Output`.
+
+**Where the target is resolved.** The unnamed front doors resolve theirs at
+flush time, because nothing can run between their call and the flush. The named
+ones capture it *before* resolving, because a factory can. That difference is
+the whole of this entry.
 
 **Where this beats the reference.** `pushReplacementNamed` has the identical
 defect in Flutter: the generator runs in argument position, and a Dart factory
@@ -462,9 +512,9 @@ so the safe form is as short as the unsafe one — rather than a fact about
 modest gain, and it is stated here as such.
 
 **Replacement tests:**
-`route_key_request_shared_relays_a_payload_without_changing_its_identity` covers
-the keyed counterpart `RouteKey::request_shared`, which exists because
-`RouteKey::request` takes its payload by value and would wrap an `Arc` in
+`route_key_with_arguments_shared_relays_a_payload_without_changing_its_identity` covers
+the keyed counterpart `RouteKey::with_arguments_shared`, which exists because
+`RouteKey::with_arguments` takes its payload by value and would wrap an `Arc` in
 another `Arc` — making the factory's `argument::<OriginalType>()` answer `None`
 silently. And
 `with_arguments_shared_relays_a_payload_without_changing_its_identity` (which
@@ -474,7 +524,7 @@ also asserts the contrast: `with_arguments` on an identical value is *not*
 which compares against an `Arc` the caller constructed rather than against the
 settings object it was handed.
 
-### 9. A route factory is handed its navigator, so it never needs to capture one
+### 9. A route factory is handed the request only — the navigator accessor is withdrawn
 
 **Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — the reference's
 observable behavior is the floor; where a contract can be improved, improve it
@@ -485,9 +535,34 @@ and record what is better.
 closes over `Navigator.of(context)` and the resulting reference cycle is
 collected.
 
-**Choice:** the factory takes a `RouteRequest<'_>` — the settings *and* the
-`&NavigatorHandle` resolving them — with `settings()`, `name()`, `argument::<T>()`
-and `navigator()` on it.
+**Choice:** the factory takes a `RouteRequest<'_>` carrying the request only —
+`settings()`, `name()`, `argument::<T>()`. A redirect is expressed by *returning a
+different route*, which is what a factory is for.
+
+**Superseded, kept visible with its correction.** This entry originally added a
+`navigator()` accessor handing the factory its own handle, on the argument below.
+Both are withdrawn, for two reasons:
+
+- **The argument was circular.** It existed to remove the *reason* to capture a
+  handle. But a route's content never needed one either — a `RouteContentBuilder`
+  receives `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)` resolves from
+  it, exactly as `Navigator.of(context)` does. With no need to capture there was
+  no cycle to avoid, and the accessor's only remaining use was navigating
+  *during resolution*.
+- **It had zero production call sites.** All four were tests, every one
+  exercising that window.
+
+What it did **not** do is close the window, and this was measured before the
+removal rather than assumed: a factory that captures a handle mutates during
+resolution identically, and with the capture-then-resolve defence reverted it
+reproduces the original defect through that path. So removing the accessor
+withdraws the *advertised* path and not the possible one. §5's defences stay, and
+`RouteRequest`'s own docs now say **survivable**, not supported.
+
+A runtime guard was considered and rejected: to earn deleting the defences it
+would have to refuse mutation from `pop()` and `remove_route()` too, which return
+`bool` — leaving silent failure, a `docs/PANIC-POLICY.md` violation, or a partial
+guard that does not close the window anyway.
 
 **Why the oracle's shape does not transcribe.** Rust does not collect cycles, and
 the registry is owned by the navigator. A factory that captured a
@@ -509,23 +584,20 @@ is the one that cost a review round:
 
 - It is a breaking change to every registration call site, deliberately so — a
   compile error at each, which is the cheapest it will ever be.
-- **It is what makes re-entrant navigation reachable, and therefore what
-  activates §5's divergence.** Handing the factory a navigator turns "a factory
-  could conceivably navigate" into a documented, ergonomic shape with a passing
-  test. That converted a latent time-of-check/time-of-use hazard in every named
-  operation into a live one: §5's captured-target fix, its two observable
-  divergences from the oracle, and §4's qualifier about a declining factory's own
-  mutations all exist because of this entry. Recorded here because a reader
-  arriving at §9 alone would otherwise see a fix with no cost.
+- **It made re-entrant navigation *advertised*, which is what surfaced §5's
+  hazard.** Handing the factory a navigator turned "a factory could conceivably
+  navigate" into a documented, ergonomic shape with a passing test. §5's
+  captured-target fix, its three observable divergences, and §4's qualifier about a
+  declining factory's own mutations were all written because of that. Withdrawing
+  the accessor un-advertises the shape; it does not un-reach it, so all three
+  survive the withdrawal — see the measurement above. What the accessor really
+  cost, then, was not the defences (those defend an invariant that was always
+  worth defending) but the six rounds it took to notice they were needed.
 
-**Replacement tests:** `a_factory_is_handed_its_own_navigator_and_the_callers_request`
-asserts the factory was handed *this* navigator by comparing
-`request.navigator().command_target()` with the handle's own — returning a fresh
-`NavigatorHandle` from `RouteRequest::navigator` fails it. It compares targets
-rather than cloning a handle into the probe on purpose: a captured clone would
-close the very `Arc` cycle this entry removes, and a test that demonstrates a fix
-by reintroducing the bug is worse than no test. `NavigatorCommandTarget` is
-`Copy`, holds no strong reference, and is unique per navigator.
+**Replacement tests:** `a_factory_is_handed_the_callers_name_and_arguments` pins
+what the request delivers. Its predecessor also asserted that `navigator()`
+returned *this* navigator rather than any navigator; that claim's subject no
+longer exists, so nothing pins it and nothing needs to.
 `a_factory_that_pushes_re_entrantly_does_not_deadlock` now pushes through
 `request.navigator()` with no cell, and still pins that the registry guard is
 released before the factory runs — holding it deadlocks the owner thread.
@@ -549,14 +621,36 @@ bounds, and a key's identity is its *name* — the `T` is a compile-time promise
 with no runtime representation. That is what lets keys live in a `HashMap` for an
 `Output` that is neither `Hash` nor `Eq`.
 
-Arguments ride on `RouteKey::request(args)`, producing a `KeyedRequest<T>` that
+Arguments ride on `RouteKey::with_arguments(args)`, producing a `KeyedSettings<T>` that
 `push_keyed` takes via `impl Into<_>` — mirroring the string path's
 `impl Into<RouteSettings>`, so `push_keyed(ORDER)` and
-`push_keyed(ORDER.request(id))` are one method. Deliberately **not**
+`push_keyed(ORDER.with_arguments(id))` are one method. Deliberately **not**
 `push_keyed_with(key, args)`: on this handle `_with` means "a result delivered to
 the departing route" (`pop_with`, `push_replacement_with`, `remove_route_with`,
 `maybe_pop_with`), and spending that suffix on arguments would make one word mean
 two things.
+
+**Why `KeyedSettings<T>` and not a bare `RouteSettings`** — the question
+`untyped()` provokes, since it converts between them. The type parameter is what
+makes `push_keyed` *inferrable*: `push_keyed(ORDER.with_arguments(id))` needs `T`
+to arrive from the value rather than from a turbofish, and that is the whole
+ergonomic difference from `push_named_typed::<T>(..)`. A bare `RouteSettings`
+would erase `T` at the builder and force the turbofish back, collapsing the keyed
+path into the string path with extra syntax. So `KeyedSettings<T>` carries the
+key's promise from `RouteKey` all the way to the push.
+
+**`KeyedSettings::untyped`** is the explicit, one-way exit from that promise: it
+discards the key's result type so a key's *arguments* can ride an untyped
+operation — the one of eight `push_keyed` did not serve. It is a named verb
+rather than a `From` impl on purpose. Dropping `T` on an untyped operation is not
+a downgrade — it is §4's documented semantics, and it was already reachable as
+`push_replacement_named(ORDER.name())` — but as a `From` the discard would be an
+invisible coercion inside `impl Into<RouteSettings>`. The verb makes it the
+caller's decision, visible at the call site.
+
+**Replacement test:** `keyed_settings_untyped_carries_a_keys_arguments_onto_an_untyped_operation`
+— returning `RouteSettings::named(name)` without the payload fails it
+(`left: [Some(1776), None]`).
 
 **The hole, stated rather than hidden.** A `RouteKey` type-checks one
 *registration site*; the table it registers into is keyed by **name**. So any two

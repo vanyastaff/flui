@@ -2563,3 +2563,83 @@ fn a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry(
         "and so is a replaced on_unknown_route hook"
     );
 }
+
+/// A panic in a route lifecycle hook must not brick the navigator.
+///
+/// `parking_lot` does not poison, so the mutex survives an unwind — but the
+/// `flushing` flag used to be cleared by the statement *after* the walk, which an
+/// unwind skips. Every later flush then tripped `assert!(!self.flushing)`, so one
+/// panicking `did_pop` disabled the navigator permanently.
+///
+/// A hook that panics violates [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md);
+/// forbidding it is not preventing it, and the cost of not surviving it is total.
+///
+/// **What this does not claim.** The same unwind drops a partially built
+/// `FlushOutcome`, so a route already moved into its `dying` list loses its
+/// `Route::dispose`. That is left alone on purpose — see `flush_once`'s doc — so
+/// this test asserts the navigator is *usable*, not that the panicking flush was
+/// clean.
+///
+/// Red-check: replace the `FlushingGuard` in `RouteHistory::flush_once` with a
+/// bare `self.flushing.set(false)` after the call, and the second push panics on
+/// the flush assertion instead of succeeding.
+#[test]
+fn a_panicking_route_hook_leaves_the_navigator_usable() {
+    /// Panics from `did_pop`, once.
+    struct PanicsOnPop {
+        settings: RouteSettings,
+        builder: RouteContentBuilder,
+    }
+
+    impl Route for PanicsOnPop {
+        type Output = i32;
+
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+
+        fn did_pop(&mut self) -> bool {
+            panic!("BUG: a deliberately panicking lifecycle hook");
+        }
+    }
+
+    impl NavigatorRoute for PanicsOnPop {
+        fn content_builder(&self) -> RouteContentBuilder {
+            Rc::clone(&self.builder)
+        }
+    }
+
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    let mut harness = mount(Host {
+        show: true,
+        handle: handle.clone(),
+    });
+
+    handle.push(PanicsOnPop {
+        settings: RouteSettings::named("panics"),
+        builder: Rc::new(|_ctx| SizedBox::new(1.0, 1.0).into_view().boxed()),
+    });
+    harness.tick();
+    let depth_before = handle.route_ids().len();
+
+    // The panic crosses the flush. Caught here so the test can go on to prove the
+    // navigator survived it — which is the whole point.
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle.pop();
+    }));
+    assert!(panicked.is_err(), "precondition: the hook really did panic");
+
+    // The claim: the navigator still works. Under the defect this push panics on
+    // `assert!(!self.flushing)` instead.
+    handle.push(page(&built, "after"));
+    harness.tick();
+    assert_eq!(
+        handle.route_ids().len(),
+        depth_before + 1,
+        "a push after the panicking pop still lands — the flush flag was cleared \
+         by the guard on the way out"
+    );
+    assert!(built.contains("after"), "and its content built");
+}

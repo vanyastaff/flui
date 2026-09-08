@@ -255,7 +255,7 @@ captures owner-local state (an `Rc` of app state, a cloned `RouteContentBuilder`
 Every peer closure alias on this surface is already `Rc`: `RouteContentBuilder`,
 `RoutePageBuilder`, `RouteTransitionsBuilder`.
 
-### 7.8 The generator receives the navigator, so a factory never has to capture one
+### 7.8 The generator receives the navigator — **REVERSED, see §7.10**
 
 §3.1's factory signature is `Fn(&RouteSettings) -> Option<GeneratedRoute>` — Flutter's
 `RouteFactory` shape, transcribed. In Rust that shape has a cost Dart does not pay: a factory that
@@ -336,3 +336,56 @@ in this one.
 
 The string path stays, and is not deprecated: deep links and server-supplied names are genuinely
 not known until run time. It simply stops being the only option.
+
+### 7.10 Reversal of §7.8 (2026-09-08) — the window was paying for a problem it created
+
+§7.8 gave a factory a live `NavigatorHandle` to remove an `Arc` cycle. A four-lens review of the
+shipped code found the justification **circular**, and the decision is reversed.
+
+**Why it was circular.** §7.8 itself establishes that a route's content builder never needed a
+captured handle: it receives `&dyn BuildContext` and reaches the navigator through
+`NavigatorHandle::maybe_of(ctx)`, exactly as `Navigator.of(context)` does in the reference. So a
+factory never needed to capture one either — there was no cycle to avoid. `RouteRequest::navigator()`
+therefore had exactly one consumer: a factory navigating **during resolution**. Confirmed
+mechanically — the method had **zero production call sites**; all four were tests of the window
+itself.
+
+**What the window cost.** Everything expensive in this feature existed to serve it: the
+capture-then-resolve rewrite (§7.2's successor in `ARCHITECTURE.md` §5), `dismiss_captured`'s
+three-case fan-out, `RouteEntry::replacing`, **both** documented observer divergences from the
+reference, and three of the correctness defects review found — a caller's result silently
+discarded, `didReplace` naming a route nothing completed, and an `Option<RouteId>` overload that
+made a factory's own new route the replacement target.
+
+**What replaced it.** The factory receives settings, name and arguments — not a handle. A redirect
+is expressed by returning a different route, which is what a factory is for; Flutter's
+`RouteFactory` is a builder too.
+
+**Correction, made before this section shipped:** an earlier draft of this paragraph claimed
+mutation from inside a factory becomes "unexpressible". That is **false**, and it was measured
+false rather than argued: a factory is an `Rc<dyn Fn>` and captures freely, so removing the
+accessor removes the *advertised* path and not the *possible* one. Reverting the capture-then-
+resolve defences on the strength of that claim reproduced the original round-2 defect exactly —
+`[root, victim, arrived]` with the caller's route surviving uncompleted.
+
+So the defences **stay**, and their meaning changes rather than their code: the capture is not
+overhead left from a capability, it is the invariant *an operation acts on the route the caller
+named*, holding whatever ran in between — including code this crate does not advertise. The two
+observer divergences `ARCHITECTURE.md` §5 records are likewise re-framed: they are no longer the
+price of a chosen capability, they are what still happens if a factory mutates the stack. The
+honest word for re-entrancy here is **survivable**, not *supported*.
+
+A runtime guard (`resolving` flag + a `Reentrant` error) was considered as the way to make the
+deletion sound, and rejected: a captured handle can call `pop()` / `remove_route()`, which return
+`bool` rather than `Result`, so refusing there means a silent no-op, a panic that
+`docs/PANIC-POLICY.md` puts on the `Result` side, or a guard covering only the named operations —
+which would not close the window and so would not earn the deletion anyway.
+
+**Two lessons, recorded because they outlive this ADR.** First: a capability whose only
+justification is to avoid a hazard that the capability itself creates should be examined before it
+is built — ask what uses it *besides* the thing it was introduced to fix; here the answer was
+"nothing", discoverable by grep on the day it landed. Second, and the one that nearly shipped a
+regression: **withdrawing a capability is not the same as making its effect impossible.** Removing
+an accessor removes a supported path; a closure that can capture keeps the path reachable. Defences
+built for a capability may be defending an invariant, and deleting them with the capability is how
+a fixed defect becomes reachable again with its own tests removed.

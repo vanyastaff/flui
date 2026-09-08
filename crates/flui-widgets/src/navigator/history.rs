@@ -37,12 +37,16 @@
 use std::fmt;
 use std::sync::Arc;
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use super::binding::{RouteCommand, RouteCommandQueue};
 use super::lifecycle::RouteLifecycle;
 use super::observer::{Notification, Observation, ObservationQueues};
 use super::result::RouteResult;
 use super::route::{
     AnyResult, ErasedRoute, PushCompletion, Route, RouteId, RoutePopDisposition, RouteRecord,
+    UndeliveredResult,
 };
 
 /// What was last announced to a route's `did_change_next` / `did_change_previous`.
@@ -110,6 +114,40 @@ pub(crate) struct RouteEntry {
     replacing: Option<RouteId>,
 }
 
+/// Which route a replacement completes.
+///
+/// Replaces an `Option<RouteId>` whose `None` meant **two** things — "the current
+/// top" for the unnamed front doors, and "there was nothing to replace" for a
+/// named capture that came back empty — and landed both on
+/// `last_present_index()`. A named replacement whose factory pushed then
+/// completed the factory's own route and handed it the caller's result. Neither
+/// variant here can mean the other, and "nothing to replace" is expressed by
+/// passing no target at all.
+pub(crate) enum ReplaceTarget {
+    /// Whatever is present on top when the flush runs. The unnamed
+    /// `push_replacement` front doors: nothing can run between their call and
+    /// that flush, so "now" and "at the call" are the same route.
+    CurrentTop,
+    /// One specific route, captured before anything could run. The named front
+    /// doors, whose resolution invokes a user factory.
+    Route(RouteId),
+}
+
+/// What an arming call did, and anything it could not deliver.
+#[must_use]
+struct Armed {
+    /// Whether the entry was armed. `false` when it had already passed `Remove`.
+    armed: bool,
+    /// A caller-supplied result this call could not deliver: the one it refused,
+    /// or the one it displaced.
+    ///
+    /// Returned rather than dropped. `AnyResult` wraps a value **the caller
+    /// supplied**, so dropping it runs user `Drop` — which may reach back into
+    /// this navigator, and the history mutex is not reentrant. Same hazard as
+    /// dropping a registry closure under its guard, one layer up.
+    undelivered: Option<AnyResult>,
+}
+
 impl RouteEntry {
     fn new(route: Box<dyn ErasedRoute>, initial_state: RouteLifecycle) -> Self {
         debug_assert!(
@@ -158,10 +196,14 @@ impl RouteEntry {
 
     /// Flutter's `_RouteEntry.pop` (`navigator.dart:3420-3425`): records the
     /// result and arms the state. It does **not** call `didPop`; the flush does.
-    fn arm_pop(&mut self, result: Option<AnyResult>) {
+    fn arm_pop(&mut self, result: Option<AnyResult>) -> Armed {
         debug_assert!(self.state.is_present());
-        self.pending_result = result;
+        let displaced = core::mem::replace(&mut self.pending_result, result);
         self.state = RouteLifecycle::Pop;
+        Armed {
+            armed: true,
+            undelivered: displaced,
+        }
     }
 
     /// Flutter's `_RouteEntry.complete` (`:3430-3439`).
@@ -169,14 +211,26 @@ impl RouteEntry {
     /// The `>= remove` early-return is the guard that makes double completion
     /// impossible: once the entry has passed `Remove`, `did_complete` has already
     /// run and a second `remove_route` cannot re-arm it.
-    fn arm_complete(&mut self, result: Option<AnyResult>, is_replaced: bool) {
+    fn arm_complete(&mut self, result: Option<AnyResult>, is_replaced: bool) -> Armed {
         if self.state >= RouteLifecycle::Remove {
-            return;
+            // Refused. The caller's result goes back out unconsumed — and the
+            // caller must learn this entry was NOT armed, because reporting it as
+            // replaced when nothing touched it is a separate defect from
+            // completing it twice. This guard prevents the second; the return
+            // value is what prevents the first.
+            return Armed {
+                armed: false,
+                undelivered: result,
+            };
         }
         debug_assert!(self.state.is_present());
         self.report_removal_to_observer = !is_replaced;
-        self.pending_result = result;
+        let displaced = core::mem::replace(&mut self.pending_result, result);
         self.state = RouteLifecycle::Complete;
+        Armed {
+            armed: true,
+            undelivered: displaced,
+        }
     }
 
     /// Flutter's `_RouteEntry.handleAdd` (`:3245-3250`).
@@ -259,18 +313,23 @@ impl RouteEntry {
     /// `OverlayRoute.didPop` → `navigator.finalizeRoute` (`routes.dart:87-94`),
     /// which is exactly the "pop finished synchronously" case the flush's `Pop`
     /// arm anticipates (`navigator.dart:4533`).
-    fn handle_pop(&mut self) -> bool {
+    fn handle_pop(&mut self) -> (bool, Option<UndeliveredResult>) {
         self.state = RouteLifecycle::Popping;
 
         if self.route.is_completed() {
-            // Already completed elsewhere; nothing further to do.
-            return true;
+            // Already completed elsewhere; nothing further to do — but a pending
+            // result now has nowhere to go, and it is the caller's value.
+            return (
+                true,
+                self.pending_result.take().map(UndeliveredResult::NoTarget),
+            );
         }
 
         let result = self.pending_result.take();
-        if !self.route.did_pop(result) {
+        let (popped, undelivered) = self.route.did_pop(result);
+        if !popped {
             self.state = RouteLifecycle::Idle;
-            return false;
+            return (false, undelivered);
         }
 
         // Order matters. Flutter reaches `dispose` *inside* `didPop` —
@@ -284,15 +343,16 @@ impl RouteEntry {
             self.state = RouteLifecycle::Dispose;
         }
         self.route.on_pop_invoked(true);
-        true
+        (true, undelivered)
     }
 
     /// Flutter's `_RouteEntry.handleComplete` (`:3381-3386`).
-    fn handle_complete(&mut self) {
+    fn handle_complete(&mut self) -> Option<UndeliveredResult> {
         let result = self.pending_result.take();
-        self.route.did_complete(result);
+        let undelivered = self.route.did_complete(result);
         debug_assert!(self.route.is_completed());
         self.state = RouteLifecycle::Remove;
+        undelivered
     }
 
     /// Flutter's `_RouteEntry.handleRemoval` (`:3388-3404`).
@@ -436,10 +496,13 @@ pub(crate) struct RouteHistory {
     queues: ObservationQueues,
     last_topmost: Option<RouteId>,
     /// Flutter's `_flushingHistory` + `_debugLocked` (`:4453`).
-    flushing: bool,
+    flushing: Rc<Cell<bool>>,
     /// What the most recent flush left for the caller to apply. Flutter performs
     /// the overlay work inline; this module is pure data, so it hands it out instead.
     last_outcome: Option<FlushOutcome>,
+    /// Caller-supplied results nothing consumed, awaiting a drop with the guard
+    /// released — see [`take_undelivered`](Self::take_undelivered).
+    undelivered: Vec<UndeliveredResult>,
     /// Lifecycle transitions raised by routes through a `RouteBinding`.
     /// Drained at the head of every flush, and again after each
     /// pass, so a command raised *during* the walk settles before `flush` returns.
@@ -482,7 +545,7 @@ impl RouteHistory {
     /// `finalizeRoute`'s history lookup.
     fn apply_pending_commands(&mut self) -> bool {
         debug_assert!(
-            !self.flushing,
+            !self.flushing.get(),
             "BUG: route commands must be applied between flush passes, never during one"
         );
 
@@ -521,6 +584,28 @@ impl RouteHistory {
     /// Take what the most recent flush left to apply. `None` if already taken.
     pub(crate) fn take_outcome(&mut self) -> Option<FlushOutcome> {
         self.last_outcome.take()
+    }
+
+    /// Caller-supplied results this history could not deliver, moved out.
+    ///
+    /// The same shape as [`take_outcome`](Self::take_outcome) and
+    /// `FlushOutcome::dying`, and for the same reason: an `AnyResult` wraps a
+    /// value **the caller supplied**, so dropping one runs user `Drop`, which may
+    /// reach back into this navigator — and the history mutex is not reentrant.
+    /// The history records; the caller drains once the guard is released.
+    ///
+    /// Recorded here rather than returned from each operation because the
+    /// early-return paths (`pop` on an empty stack, `remove_route` on a missing
+    /// id) run **no flush at all**, so there is no `FlushOutcome` to ride.
+    pub(crate) fn take_undelivered(&mut self) -> Vec<UndeliveredResult> {
+        core::mem::take(&mut self.undelivered)
+    }
+
+    /// Record a result nothing consumed. `None` is the overwhelmingly common case
+    /// and costs nothing.
+    fn record_undelivered(&mut self, result: Option<AnyResult>) {
+        self.undelivered
+            .extend(result.map(UndeliveredResult::NoTarget));
     }
 
     /// Flutter's `NavigatorState.canPop` (`navigator.dart:5551-5566`), which walks
@@ -756,7 +841,12 @@ impl RouteHistory {
         route: R,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_replacement_with_id(RouteId::next(), None, route, result)
+        self.push_replacement_with_id(
+            RouteId::next(),
+            Some(ReplaceTarget::CurrentTop),
+            route,
+            result,
+        )
     }
 
     /// `push_replacement`, under an id the caller minted —
@@ -767,7 +857,7 @@ impl RouteHistory {
     /// want: nothing can run between their call and this flush.
     ///
     /// A named push *can* have something run in between — its factory may
-    /// navigate (`RouteRequest::navigator`) — so those front doors capture their
+    /// navigate through a captured handle — so those front doors capture their
     /// target before resolving and name it here. Replacing "whatever is on top
     /// now" would otherwise replace the factory's own route rather than the
     /// caller's. A named target that is no longer present completes nothing and
@@ -775,20 +865,40 @@ impl RouteHistory {
     pub(crate) fn push_replacement_with_id<R: Route>(
         &mut self,
         id: RouteId,
-        replaced: Option<RouteId>,
+        target: Option<ReplaceTarget>,
         route: R,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
-        let target = match replaced {
-            Some(replaced) => self.entries.iter().position(|entry| entry.id() == replaced),
-            None => self.last_present_index(),
+        // Both arms filter by presence, and they must agree. `is_present()` is
+        // `Add..=Remove`, and `Popping`/`Removing` sort after it — a route mid
+        // exit transition has *already* completed and is only awaiting
+        // finalisation, so replacing it again would report a second replacement
+        // of a route nothing touched. Only a present route is a valid target.
+        // Previously `Route(id)` used an unfiltered `position()` while
+        // `CurrentTop` filtered, so the two disagreed about what counts as live.
+        let target_index = match target {
+            None => None,
+            Some(ReplaceTarget::CurrentTop) => self.last_present_index(),
+            Some(ReplaceTarget::Route(id)) => self
+                .entries
+                .iter()
+                .position(|entry| entry.id() == id && entry.state.is_present()),
         };
-        // Resolve once. The completion and the observation both read this, so
-        // they cannot disagree.
-        let replaced_id = target.map(|target| self.entries[target].id());
-        if let Some(target) = target {
-            self.entries[target].arm_complete(result, true);
-        }
+        // The reported id comes from whether the completion *happened*, not from
+        // the lookup: `arm_complete` can still refuse a `Remove`-state entry that
+        // passed the presence filter, and reporting that as replaced would name a
+        // route nothing touched — and name it twice, since
+        // `report_removal_to_observer` is only cleared inside the arming.
+        let replaced_id = if let Some(index) = target_index {
+            let armed = self.entries[index].arm_complete(result, true);
+            self.record_undelivered(armed.undelivered);
+            armed.armed.then(|| self.entries[index].id())
+        } else {
+            // No target: nothing was completed, so nothing is reported as replaced
+            // and the caller's result reached no route.
+            self.record_undelivered(result);
+            None
+        };
         let (erased, route_result) = RouteRecord::erase_with_id(id, route);
         let mut entry = RouteEntry::new(erased, RouteLifecycle::PushReplace);
         entry.replacing(replaced_id);
@@ -837,13 +947,18 @@ impl RouteHistory {
         self.entries
             .push(RouteEntry::new(erased, RouteLifecycle::Push));
 
+        let mut displaced = Vec::new();
         while index >= 0 && !keep(self.entries[index as usize].id()) {
             let entry = &mut self.entries[index as usize];
             if entry.state.is_present() {
                 // Removed routes complete with `None` (`navigator.dart:5360`).
-                entry.arm_complete(None, false);
+                let armed = entry.arm_complete(None, false);
+                displaced.extend(armed.undelivered);
             }
             index -= 1;
+        }
+        for result in displaced {
+            self.record_undelivered(Some(result));
         }
 
         self.flush(true);
@@ -885,13 +1000,18 @@ impl RouteHistory {
     /// on land in a single flush (`navigator.dart:5347-5371`), exactly as
     /// `push_and_remove_until_with_id`'s single-locked-section version did.
     pub(crate) fn complete_removed_and_flush(&mut self, remove_ids: &[RouteId]) {
+        let mut displaced = Vec::new();
         for &target in remove_ids {
             if let Some(entry) = self.entry_mut(target)
                 && entry.state.is_present()
             {
                 // Removed routes complete with `None` (`navigator.dart:5360`).
-                entry.arm_complete(None, false);
+                let armed = entry.arm_complete(None, false);
+                displaced.extend(armed.undelivered);
             }
+        }
+        for result in displaced {
+            self.record_undelivered(Some(result));
         }
         self.flush(true);
     }
@@ -903,9 +1023,13 @@ impl RouteHistory {
     /// previously claimed `false` on refusal; the code was right.)
     pub(crate) fn pop(&mut self, result: Option<AnyResult>) -> bool {
         let Some(index) = self.last_present_index() else {
+            // No route to deliver to. Recorded, not dropped here — see
+            // [`Self::take_undelivered`].
+            self.record_undelivered(result);
             return false;
         };
-        self.entries[index].arm_pop(result);
+        let armed = self.entries[index].arm_pop(result);
+        self.record_undelivered(armed.undelivered);
         if self.entries[index].state == RouteLifecycle::Pop {
             self.flush(false);
         }
@@ -917,11 +1041,18 @@ impl RouteHistory {
     /// **The removed route still completes its future.** `arm_complete` →
     /// `handle_complete` → `did_complete` (`:3381-3386`). A port that completed
     /// only on `pop` would hang every `await` in an app that uses this.
+    /// The `bool` reports "an entry with this id was found", not "it was armed":
+    /// an entry already past `Remove` is found, refuses the arming, and has always
+    /// reported `true`. Narrowing that would change this method's public contract,
+    /// which is not this fix's business — but the refused result is recorded, so it
+    /// no longer vanishes.
     pub(crate) fn remove_route(&mut self, id: RouteId, result: Option<AnyResult>) -> bool {
         let Some(index) = self.entries.iter().position(|entry| entry.id() == id) else {
+            self.record_undelivered(result);
             return false;
         };
-        self.entries[index].arm_complete(result, false);
+        let armed = self.entries[index].arm_complete(result, false);
+        self.record_undelivered(armed.undelivered);
         self.flush(false);
         true
     }
@@ -973,7 +1104,7 @@ impl RouteHistory {
         // (see `binding.rs` Correction 1), so this assert now guards
         // only genuine framework misuse.
         assert!(
-            !self.flushing,
+            !self.flushing.get(),
             "BUG: flush_history_updates re-entered — a route lifecycle callback \
              mutated the history while it was being flushed"
         );
@@ -1017,11 +1148,41 @@ impl RouteHistory {
     }
 
     /// One walk of the history, with `flushing` held for its duration.
+    ///
+    /// The flag is cleared by a **guard**, not by the statement after the call. A
+    /// `Route` lifecycle hook is user code and may panic;
+    /// [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md) forbids it, but
+    /// forbidding is not preventing. `parking_lot` does not poison, so an unwind
+    /// past a bare `self.flushing = false` left the flag set and every later flush
+    /// tripped `assert!(!self.flushing)` — one panicking `did_pop` bricked the
+    /// navigator permanently, with no way back.
+    ///
+    /// The flag is an `Rc<Cell<bool>>` so the guard can own a handle to it without
+    /// borrowing `self`, which `flush_inner(&mut self)` needs. One allocation per
+    /// navigator.
+    ///
+    /// **What this does not fix, stated rather than implied.** The same unwind
+    /// drops a partially built `FlushOutcome`, and any `RouteEntry` already moved
+    /// into its `dying` list is dropped without `Route::dispose` having run. That
+    /// is deliberately left alone: a `Drop` impl on `FlushOutcome` would run
+    /// `dispose` — user code — during an unwind, *under this lock*, trading a
+    /// missed `dispose` for a possible deadlock while already panicking. So a
+    /// panicking hook still leaks those routes' own cleanup. What the guard buys is
+    /// that the navigator survives the panic in a usable state, which is the half
+    /// that is recoverable.
     fn flush_once(&mut self, rearrange_overlay: bool) -> FlushOutcome {
-        self.flushing = true;
-        let outcome = self.flush_inner(rearrange_overlay);
-        self.flushing = false;
-        outcome
+        /// Clears `flushing` on the way out, unwinding included.
+        struct FlushingGuard(Rc<Cell<bool>>);
+
+        impl Drop for FlushingGuard {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+
+        self.flushing.set(true);
+        let _guard = FlushingGuard(Rc::clone(&self.flushing));
+        self.flush_inner(rearrange_overlay)
     }
 
     #[expect(clippy::too_many_lines)] // A 1:1 transcription; splitting it would scramble the mapping.
@@ -1097,7 +1258,9 @@ impl RouteHistory {
                 }
 
                 RouteLifecycle::Pop => {
-                    if self.entries[position].handle_pop() {
+                    let (popped_ok, undelivered) = self.entries[position].handle_pop();
+                    self.undelivered.extend(undelivered);
+                    if popped_ok {
                         // The user-facing `PopScope` fan-out is owed but NOT
                         // fired here — deferred through the outcome so it runs
                         // outside the history lock (see `FlushOutcome::pop_invoked`).
@@ -1140,7 +1303,8 @@ impl RouteHistory {
                 RouteLifecycle::Popping => {}
 
                 RouteLifecycle::Complete => {
-                    self.entries[position].handle_complete();
+                    let undelivered = self.entries[position].handle_complete();
+                    self.undelivered.extend(undelivered);
                     debug_assert_eq!(self.entries[position].state, RouteLifecycle::Remove);
                     advance = false;
                 }
@@ -1283,6 +1447,6 @@ impl RouteHistory {
     /// mid-flush. Testing it directly rather than shipping it untested
     /// follows established precedent.
     pub(crate) fn force_flushing_for_test(&mut self) {
-        self.flushing = true;
+        self.flushing.set(true);
     }
 }

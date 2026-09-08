@@ -103,7 +103,7 @@ pub use binding::RouteBindingSlot;
 pub use hero::{Hero, HeroMode};
 pub use hero_controller::{FlightDirection, HeroController};
 pub use hero_controller_scope::HeroControllerScope;
-pub use named_route::{GeneratedRoute, KeyedRequest, NamedRouteError, RouteKey, RouteRequest};
+pub use named_route::{GeneratedRoute, KeyedSettings, NamedRouteError, RouteKey, RouteRequest};
 pub use navigator::{
     Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
     NavigatorCommandTarget, NavigatorHandle, NavigatorState,

@@ -18,6 +18,7 @@
 // tests are separate crates, so repeat it here.
 #![expect(clippy::arc_with_non_send_sync)]
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,9 +29,9 @@ use parking_lot::Mutex;
 // Exercise the public prelude import path.
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    GeneratedRoute, KeyedRequest, NamedRouteError, NavigatorCommandTarget, NavigatorObserver,
-    NavigatorRoute, PushCompletion, Route, RouteArguments, RouteContentBuilder, RouteId, RouteKey,
-    RouteRequest, RouteSettings,
+    GeneratedRoute, KeyedSettings, NamedRouteError, NavigatorCommand, NavigatorCommandTarget,
+    NavigatorObserver, NavigatorRoute, PushCompletion, Route, RouteArguments, RouteContentBuilder,
+    RouteId, RouteKey, RouteRequest, RouteSettings,
 };
 
 // ============================================================================
@@ -1355,22 +1356,32 @@ fn a_table_entry_wins_and_the_generate_hook_is_never_consulted() {
     );
 }
 
-/// A factory navigates re-entrantly through the handle it is **given**, not one
-/// it captured, and does not deadlock.
+/// A factory that captures a handle and navigates re-entrantly does not
+/// deadlock.
 ///
-/// Two things at once. The lock half: every factory is invoked with the registry
-/// guard released — `parking_lot::Mutex` is not reentrant, the same hazard this
-/// module documents for `Route` lifecycle hooks and for
-/// `push_and_remove_until`'s predicate. The ownership half: the navigator
-/// arrives on the `RouteRequest`, so this test needs no cell to break an `Arc`
-/// cycle, because the natural code no longer makes one. That is the whole point
-/// of passing the handle in.
+/// **The claim this pins changed, and it is weaker now: *survivable*, not
+/// supported.** It used to reach the navigator through `RouteRequest::navigator`,
+/// which advertised re-entrant navigation as a capability. That accessor is gone
+/// (its justification was circular and it had zero production callers), so the
+/// factory here obtains a handle the only way left — ordinary capture, which
+/// nothing prevents and which this crate does not endorse.
+///
+/// What is still load-bearing is the lock discipline: every factory is invoked
+/// with the registry guard released, because `parking_lot::Mutex` is not
+/// reentrant. A caller who captures a handle anyway gets a navigator that
+/// behaves, not one that hangs.
+///
+/// The cell is how the test breaks the `Arc` cycle the capture creates —
+/// registry → closure → handle → `NavigatorShared` → registry — which is exactly
+/// the cost the withdrawn accessor was introduced to avoid, and exactly why
+/// capturing is not the recommended shape.
 ///
 /// Red-check for the lock: hold the registry guard across the factory call in
 /// `RouteRegistry::resolve` and this test deadlocks the owner thread.
 #[test]
 fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
     let built = Built::default();
+    let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
     let handle = NavigatorHandle::new();
     handle.route("/inner", {
         let built = built.clone();
@@ -1378,16 +1389,17 @@ fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
     });
     handle.route("/outer", {
         let built = built.clone();
-        move |request: &RouteRequest<'_>| {
-            // No captured handle, and so no reference cycle to clean up: the
-            // navigator resolving this request hands itself over.
-            request
-                .navigator()
+        let cell = Rc::clone(&cell);
+        move |_request: &RouteRequest<'_>| {
+            cell.borrow()
+                .clone()
+                .expect("the test filled the cell before mounting")
                 .push_named("/inner")
                 .expect("'/inner' is in the table");
             Some(page(&built, "outer"))
         }
     });
+    *cell.borrow_mut() = Some(handle.clone());
     handle.seed_initial(page(&built, "/"));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
 
@@ -1405,37 +1417,35 @@ fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
         "the outer route landed above the one its own factory pushed"
     );
     assert!(built.contains("inner") && built.contains("outer"));
+
+    *cell.borrow_mut() = None;
 }
 
-/// The navigator a factory is handed is *its own* navigator, and the request
-/// carries the caller's name and arguments.
+/// A factory is handed the caller's own name and arguments.
 ///
-/// Without this, `RouteRequest::navigator` could hand back any handle and every
-/// other test would still pass — the re-entrancy test only proves *a* navigator
-/// was reachable, not that it was the right one.
+/// **What this test used to pin, and what became of it.** It asserted two
+/// claims: that `RouteRequest::navigator()` returned *this* navigator rather than
+/// any navigator, and that the request carried the caller's name and arguments.
+/// The first claim's subject no longer exists — `navigator()` is withdrawn — so
+/// it is not pinned by anything, and nothing needs to pin it. The second claim
+/// stands and is what remains here.
 ///
-/// The probe records `command_target()`, not a cloned `NavigatorHandle`. A clone
-/// would be captured by the factory closure and close the very `Arc` cycle this
-/// delta removes — registry → closure → handle → `NavigatorShared` → registry —
-/// so a test demonstrating the fix would have reintroduced the bug.
-/// `NavigatorCommandTarget` is `Copy`, holds no strong reference, and is unique
-/// per navigator, which is exactly the identity this needs.
+/// It is also no longer a `Mutex`-in-a-closure exercise: with no handle to
+/// record, the probe just records the two values.
 ///
-/// Red-check (performed): make `RouteRequest::navigator` return
-/// `Box::leak(Box::new(NavigatorHandle::new()))` — same signature, different
-/// navigator — and this fails.
+/// Red-check: build the `RouteSettings` from the name alone in
+/// `NavigatorHandle::push_named`, dropping the caller's payload, and the argument
+/// assertion fails.
 #[test]
-fn a_factory_is_handed_its_own_navigator_and_the_callers_request() {
+fn a_factory_is_handed_the_callers_name_and_arguments() {
     let built = Built::default();
-    let observed: Arc<Mutex<Option<(NavigatorCommandTarget, String, u32)>>> =
-        Arc::new(Mutex::new(None));
+    let seen: Arc<Mutex<Option<(String, u32)>>> = Arc::new(Mutex::new(None));
 
     let handle = NavigatorHandle::new();
     handle.route("/probe", {
-        let observed = Arc::clone(&observed);
+        let seen = Arc::clone(&seen);
         move |request: &RouteRequest<'_>| {
-            *observed.lock() = Some((
-                request.navigator().command_target(),
+            *seen.lock() = Some((
                 request.name()?.to_owned(),
                 request.argument::<u32>().copied()?,
             ));
@@ -1450,12 +1460,7 @@ fn a_factory_is_handed_its_own_navigator_and_the_callers_request() {
         .expect("registered");
     laid.tick();
 
-    let (target, name, argument) = observed.lock().take().expect("the factory ran");
-    assert_eq!(
-        target,
-        handle.command_target(),
-        "the factory was handed the navigator resolving the request"
-    );
+    let (name, argument) = seen.lock().take().expect("the factory ran");
     assert_eq!(name, "/probe");
     assert_eq!(argument, 1776);
 }
@@ -1502,7 +1507,7 @@ fn a_route_key_carries_its_result_type_from_registration_to_delivery() {
 
     // Arguments ride on the key's own request builder, never on a `_with`.
     let order = handle
-        .push_keyed(ORDER.request(1776_u32))
+        .push_keyed(ORDER.with_arguments(1776_u32))
         .expect("registered");
     laid.tick();
     assert!(handle.pop());
@@ -1518,17 +1523,17 @@ fn a_route_key_carries_its_result_type_from_registration_to_delivery() {
 /// its identity — and without the double-wrap that `request` would produce.
 ///
 /// The asymmetry this closes was ours: `with_arguments_shared` was added to the
-/// string path only, and `RouteKey::request` takes its payload **by value**, so
+/// string path only, and `RouteKey::with_arguments` takes its payload **by value**, so
 /// handing it an existing `RouteArguments` wraps an `Arc` in another `Arc`. The
 /// stored concrete type becomes `RouteArguments` itself, and the factory's
 /// `argument::<OriginalType>()` then answers `None` — silently, since the
 /// double-wrap is perfectly well-typed.
 ///
-/// Red-check: implement `request_shared` as `self.request(arguments)` and both
+/// Red-check: implement `with_arguments_shared` as `self.with_arguments(arguments)` and both
 /// halves fail — `ptr_eq` because a fresh `Arc` was minted, and the factory's
 /// downcast because the payload is now `Arc<Arc<dyn Any …>>`.
 #[test]
-fn route_key_request_shared_relays_a_payload_without_changing_its_identity() {
+fn route_key_with_arguments_shared_relays_a_payload_without_changing_its_identity() {
     const ORDER: RouteKey<u32> = RouteKey::new("/order");
 
     /// What the factory saw: the payload it was handed, and whether that payload
@@ -1560,7 +1565,7 @@ fn route_key_request_shared_relays_a_payload_without_changing_its_identity() {
     // relay site would.
     let payload: RouteArguments = Arc::new(1776_u32);
     handle
-        .push_keyed(ORDER.request_shared(Arc::clone(&payload)))
+        .push_keyed(ORDER.with_arguments_shared(Arc::clone(&payload)))
         .expect("registered");
     laid.tick();
 
@@ -1631,15 +1636,15 @@ fn route_key_identity_is_its_name_and_costs_its_output_type_no_bounds() {
 
     // The same must hold for the key's request type, which a `#[derive(Debug)]`
     // would have broken by generating `impl<T: Debug> Debug`: a caller could
-    // then not put a `KeyedRequest<T>` inside their own derived-`Debug` struct
+    // then not put a `KeyedSettings<T>` inside their own derived-`Debug` struct
     // unless the route's `Output` happened to be `Debug`.
     #[derive(Debug)]
     struct CallerHeldRequest {
-        pending: KeyedRequest<NotHashable>,
+        pending: KeyedSettings<NotHashable>,
     }
 
     let held = CallerHeldRequest {
-        pending: KeyedRequest::from(A),
+        pending: KeyedSettings::from(A),
     };
     let described = format!("{held:?}");
     assert!(
@@ -1947,19 +1952,26 @@ fn navigator_with_a_re_entrant_factory() -> (NavigatorHandle, Built, LaidOut, Ne
         let built = built.clone();
         move |_request: &RouteRequest<'_>| Some(page(&built, "nested"))
     });
+    // The factory captures a handle, which is the only way left to navigate from
+    // one now that `RouteRequest::navigator` is withdrawn — and is unsupported
+    // rather than impossible, which is precisely the claim these tests pin.
+    let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
     handle.route("/next", {
         let built = built.clone();
         let nested = Arc::clone(&nested);
-        move |request: &RouteRequest<'_>| {
+        let cell = Rc::clone(&cell);
+        move |_request: &RouteRequest<'_>| {
             *nested.lock() = Some(
-                request
-                    .navigator()
+                cell.borrow()
+                    .clone()
+                    .expect("the fixture filled the cell")
                     .push_named("/nested")
                     .expect("'/nested' is registered"),
             );
             Some(page(&built, "next"))
         }
     });
+    *cell.borrow_mut() = Some(handle.clone());
     handle.seed_initial(page(&built, "/"));
     let laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
     (handle, built, laid, nested)
@@ -2086,14 +2098,18 @@ fn push_replacement_named_replaces_the_route_that_was_current_when_it_was_called
 fn a_factory_that_pops_during_resolution_leaves_the_removal_a_no_op() {
     let built = Built::default();
     let handle = NavigatorHandle::new();
+    let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
     handle.route("/next", {
         let built = built.clone();
-        move |request: &RouteRequest<'_>| {
-            // Dismiss the route the outer operation was about to act on.
-            request.navigator().pop();
+        let cell = Rc::clone(&cell);
+        move |_request: &RouteRequest<'_>| {
+            // Dismiss the route the outer operation was about to act on, through
+            // a captured handle — unsupported, and survivable.
+            cell.borrow().clone().expect("filled").pop();
             Some(page(&built, "next"))
         }
     });
+    *cell.borrow_mut() = Some(handle.clone());
     handle.seed_initial(page(&built, "/"));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
     let root = handle.current().expect("seeded");
@@ -2241,4 +2257,640 @@ fn a_re_entrant_replacements_observer_stream_is_pinned() {
         ],
         "the factory's push precedes the replacement it triggered"
     );
+}
+
+// ----------------------------------------------------------------------------
+// A route whose pop does NOT finalise it — the state every production
+// PageRoute/PopupRoute occupies for the length of its exit transition.
+// ----------------------------------------------------------------------------
+
+/// A route that answers `finished_when_popped() == false`, like every
+/// `TransitionRoute` descendant.
+///
+/// Every other named-route fixture in this file is a `SimpleRoute`, which takes
+/// the `Route` default `true` and is finalised inside the same flush as its pop.
+/// That made the `Popping`/`Removing` window — where a real `PageRoute` lives for
+/// the whole of its exit transition — unreachable from this suite, and it is
+/// where three of the defects this PR fixed were hiding.
+///
+/// It carries no `RouteBindingSlot`, so nothing finalises it: once popped it
+/// stays in `Popping` indefinitely. That is deliberate — it is the *widest*
+/// version of the window, so anything that reads the stack while a pop is in
+/// flight has to be correct against it.
+struct DeferredExitRoute {
+    settings: RouteSettings,
+    builder: RouteContentBuilder,
+    current_result: i32,
+}
+
+impl DeferredExitRoute {
+    fn new(name: &'static str, current_result: i32) -> Self {
+        Self {
+            settings: RouteSettings::named(name),
+            builder: Rc::new(leaf),
+            current_result,
+        }
+    }
+}
+
+impl Route for DeferredExitRoute {
+    type Output = i32;
+
+    fn settings(&self) -> &RouteSettings {
+        &self.settings
+    }
+
+    fn current_result(&mut self) -> Option<i32> {
+        Some(self.current_result)
+    }
+
+    /// The whole point of this fixture.
+    fn finished_when_popped(&self) -> bool {
+        false
+    }
+}
+
+impl NavigatorRoute for DeferredExitRoute {
+    fn content_builder(&self) -> RouteContentBuilder {
+        Rc::clone(&self.builder)
+    }
+}
+
+/// Mount a navigator whose named routes all defer their exit.
+fn navigator_with_deferred_exits() -> (NavigatorHandle, LaidOut) {
+    let handle = NavigatorHandle::new();
+    handle.route("/next", |_request: &RouteRequest<'_>| {
+        Some(DeferredExitRoute::new("/next", 1))
+    });
+    handle.seed_initial(DeferredExitRoute::new("/", 0));
+    let laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    (handle, laid)
+}
+
+/// `pop_and_push_named` against a route whose exit is still in flight.
+///
+/// The contract this pins is **not** the one every other named-route test in
+/// this file pins, and the difference is the point. `route_ids()` returns every
+/// entry, including one whose exit transition has not finished; `current()`
+/// returns the topmost *present* one. With a `SimpleRoute` those two agree,
+/// because the pop finalises inside the same flush and the entry is gone before
+/// anyone looks. With a deferred exit they diverge for the whole transition — so
+/// asserting `route_ids()` equality, as the rest of the suite does, is asserting
+/// a fact about the fixture as much as about the operation.
+#[test]
+fn deferred_exit_pop_and_push_named() {
+    let (handle, mut laid) = navigator_with_deferred_exits();
+    let root = handle.current().expect("seeded");
+    let departing = handle.push(DeferredExitRoute::new("departing", 7));
+    laid.tick();
+    let departing_id = handle.current().expect("on top");
+
+    let arrived = handle.pop_and_push_named("/next").expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        handle.current(),
+        Some(arrived),
+        "the new route is what a caller sees on top"
+    );
+    assert_eq!(
+        departing.try_take(),
+        Some(Some(7)),
+        "the departing route completed with its own fallback, immediately — \
+         completion does not wait for the exit transition"
+    );
+    assert!(
+        handle.route_ids().contains(&departing_id),
+        "and its entry is still in the stack, because its exit has not finished: \
+         {:?}",
+        handle.route_ids()
+    );
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, departing_id, arrived],
+        "in that order — the unfinalised route sits below the one that replaced it"
+    );
+}
+
+/// `push_replacement_named` against a route whose exit is still in flight.
+#[test]
+fn deferred_exit_push_replacement_named() {
+    let (handle, mut laid) = navigator_with_deferred_exits();
+    let replaced = handle.push(DeferredExitRoute::new("replaced", 7));
+    laid.tick();
+
+    let arrived = handle.push_replacement_named("/next").expect("registered");
+    laid.tick();
+
+    assert_eq!(handle.current(), Some(arrived));
+    assert!(
+        replaced.is_completed(),
+        "a replacement completes its target at once, exit transition or not"
+    );
+}
+
+/// Two named operations back to back, the first still unfinalised when the
+/// second runs — the sequence a user tapping twice produces, and the one that
+/// cannot happen at all with a synchronously-finalised fixture.
+#[test]
+fn deferred_exit_two_named_operations_back_to_back() {
+    let (handle, mut laid) = navigator_with_deferred_exits();
+    let root = handle.current().expect("seeded");
+    handle.push(DeferredExitRoute::new("first", 7));
+    laid.tick();
+
+    let second = handle.pop_and_push_named("/next").expect("registered");
+    laid.tick();
+    let third = handle.pop_and_push_named("/next").expect("registered");
+    laid.tick();
+
+    assert_ne!(second, third);
+    assert_eq!(
+        handle.current(),
+        Some(third),
+        "the second operation acted on what the first left present, not on a \
+         still-unfinalised entry"
+    );
+    assert!(
+        !handle.route_ids().is_empty() && handle.route_ids()[0] == root,
+        "and the root is untouched underneath"
+    );
+}
+
+/// `push_named_and_remove_until` sweeping past unfinalised routes.
+#[test]
+fn deferred_exit_push_named_and_remove_until() {
+    let (handle, mut laid) = navigator_with_deferred_exits();
+    let root = handle.current().expect("seeded");
+    handle.push(DeferredExitRoute::new("a", 7));
+    laid.tick();
+    handle.push(DeferredExitRoute::new("b", 8));
+    laid.tick();
+    handle.pop();
+    laid.tick();
+
+    let arrived = handle
+        .push_named_and_remove_until("/next", |candidate| candidate == root)
+        .expect("registered");
+    laid.tick();
+
+    assert_eq!(handle.current(), Some(arrived));
+    assert_eq!(
+        handle
+            .route_ids()
+            .into_iter()
+            .filter(|id| *id == root)
+            .count(),
+        1,
+        "the kept route survived exactly once"
+    );
+}
+
+/// The combination the fixture exists for: a re-entrant factory **pops** the
+/// captured route, so by the time the replacement runs its target is already in
+/// the un-finalised `Popping` window — and `push_replacement_with_id` looks its
+/// target up by id across *all* entries, present or not.
+///
+/// Without `arm_complete`'s `>= remove` guard this would complete a route that
+/// has already completed. That guard is what makes the by-id lookup safe, and
+/// nothing pinned the combination before this fixture existed.
+#[test]
+fn deferred_exit_a_factory_that_pops_the_captured_route_before_it_is_replaced() {
+    let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
+    let handle = NavigatorHandle::new();
+    handle.route("/next", {
+        let cell = Rc::clone(&cell);
+        move |_request: &RouteRequest<'_>| {
+            cell.borrow()
+                .clone()
+                .expect("the test filled the cell")
+                .pop();
+            Some(DeferredExitRoute::new("/next", 1))
+        }
+    });
+    *cell.borrow_mut() = Some(handle.clone());
+    handle.seed_initial(DeferredExitRoute::new("/", 0));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("seeded");
+    let victim = handle.push(DeferredExitRoute::new("victim", 7));
+    laid.tick();
+
+    let arrived = handle.push_replacement_named("/next").expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        victim.try_take(),
+        Some(Some(7)),
+        "completed exactly once, by the factory's own pop — the replacement must \
+         not complete it a second time"
+    );
+    assert_eq!(handle.current(), Some(arrived));
+    assert!(handle.route_ids().contains(&root));
+
+    *cell.borrow_mut() = None;
+}
+
+/// A named replacement whose capture came back empty must complete **nothing** —
+/// not "whatever is on top by the time we look".
+///
+/// `Option<RouteId>`'s `None` meant two different things: "replace the current
+/// top" for the unnamed front doors, and "there was nothing to replace" for a
+/// named capture that came back empty. Both landed on `last_present_index()`.
+///
+/// Reachable without an empty stack: a route mid-exit-transition is not
+/// `is_present`, so `current()` answers `None` while the stack is still visibly
+/// occupied. If a factory then pushes, the caller's result is delivered to *the
+/// factory's own route* — a route the caller has never heard of, which was not
+/// replacing anything.
+///
+/// Red-check: collapse the target back to `Option<RouteId>` with
+/// `None => last_present_index()` and the factory's route receives `99`.
+#[test]
+fn a_named_replacement_with_no_captured_target_completes_nothing() {
+    let nested: NestedId = Arc::new(Mutex::new(None));
+    let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
+
+    let handle = NavigatorHandle::new();
+    handle.route("/nested", |_request: &RouteRequest<'_>| {
+        Some(DeferredExitRoute::new("/nested", 11))
+    });
+    handle.route("/next", {
+        let nested = Arc::clone(&nested);
+        let cell = Rc::clone(&cell);
+        move |_request: &RouteRequest<'_>| {
+            *nested.lock() = Some(
+                cell.borrow()
+                    .clone()
+                    .expect("filled")
+                    .push_named("/nested")
+                    .expect("registered"),
+            );
+            Some(DeferredExitRoute::new("/next", 1))
+        }
+    });
+    *cell.borrow_mut() = Some(handle.clone());
+    handle.seed_initial(DeferredExitRoute::new("/", 0));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+
+    // Pop the only route. Its exit is deferred, so the entry stays but is no
+    // longer `is_present` — `current()` is now `None` over a non-empty stack.
+    assert!(handle.pop());
+    laid.tick();
+    assert_eq!(
+        handle.current(),
+        None,
+        "precondition: nothing is present, though the stack is not empty"
+    );
+    assert!(
+        !handle.route_ids().is_empty(),
+        "precondition: the mid-transition entry is still there"
+    );
+
+    let arrived = handle
+        .push_replacement_named_with("/next", 99_i32)
+        .expect("registered");
+    laid.tick();
+    let nested_id = nested.lock().expect("the factory navigated");
+
+    assert_ne!(
+        nested_id, arrived,
+        "precondition: the factory's route and the pushed route are distinct"
+    );
+    assert!(
+        handle.route_ids().contains(&nested_id),
+        "the factory's route was not completed as replaced — it is still present, \
+         because it was never anybody's replacement target"
+    );
+    assert_eq!(
+        handle.current(),
+        Some(arrived),
+        "and the named route landed on top regardless"
+    );
+}
+
+/// A captured target that is mid-exit-transition is **not** a valid replacement
+/// target, is not reported as replaced, and the caller's result is **logged**
+/// rather than silently dropped.
+///
+/// One test for three linked fixes, because they have one observable
+/// consequence. The target is in `Popping`: it has already completed and is only
+/// awaiting finalisation, so `is_present()` excludes it — both target arms now
+/// agree on that, where `Route(id)` previously used an unfiltered `position()`
+/// and `CurrentTop` filtered. Nothing is completed, so `replacing` is `None` and
+/// no `didReplace` names it. And the `99` the caller supplied reaches no route,
+/// which now says so.
+///
+/// **Red-check, and the honest version is narrower than it looks.** Only one of
+/// the three mutations reds this test: dropping the undelivered result instead of
+/// recording it empties the captured log. The other two do **not**, and the
+/// reason is worth knowing —
+///
+/// - giving the `Route(id)` arm back its unfiltered `position()` still passes,
+///   because `arm_complete` then refuses the `Popping` entry itself
+///   (`Popping >= Remove`) and reports `armed: false`;
+/// - deriving `replacing` from the lookup instead of from the arming still
+///   passes, because the presence filter already made `target_index` `None`, so
+///   the mutated line is unreachable.
+///
+/// The two guards cover each other. They differ on exactly one state — `Remove`,
+/// which passes `is_present()` (`Add..=Remove`) and is refused by `arm_complete`
+/// (`>= Remove`) — and `Remove` is transient *within* a flush and never
+/// observable between operations, so no public-API scenario separates them. Both
+/// are kept as defence in depth for one invariant, not as two independent
+/// checks, and this comment exists so nobody deletes one on the strength of a
+/// green suite.
+#[test]
+fn a_target_mid_exit_transition_is_not_replaced_and_its_result_is_reported() {
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
+        let handle = NavigatorHandle::new();
+        handle.route("/next", {
+            let cell = Rc::clone(&cell);
+            move |_request: &RouteRequest<'_>| {
+                // Pop the route the outer replacement captured. Its exit is
+                // deferred, so it lands in `Popping` — present no longer, gone
+                // not yet.
+                cell.borrow().clone().expect("filled").pop();
+                Some(DeferredExitRoute::new("/next", 1))
+            }
+        });
+        *cell.borrow_mut() = Some(handle.clone());
+        handle.seed_initial(DeferredExitRoute::new("/", 0));
+        let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+        let victim = handle.push(DeferredExitRoute::new("victim", 7));
+        laid.tick();
+        let victim_id = handle.current().expect("on top");
+
+        let spy = Arc::new(ReplaceSpy::default());
+        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+        let arrived = handle
+            .push_replacement_named_with("/next", 99_i32)
+            .expect("registered");
+        laid.tick();
+
+        assert_eq!(
+            victim.try_take(),
+            Some(Some(7)),
+            "the victim completed once, from the factory's own pop, with its own \
+             fallback — not with the caller's 99"
+        );
+        assert_eq!(
+            spy.0.lock().clone(),
+            vec![(Some(arrived), None)],
+            "the replacement reports replacing nothing, because nothing was armed \
+             — naming the mid-transition route would report a second replacement \
+             of a route this operation never touched"
+        );
+        assert!(
+            !handle.route_ids().contains(&victim_id) || handle.current() == Some(arrived),
+            "and the new route is on top regardless"
+        );
+        *cell.borrow_mut() = None;
+    });
+
+    assert_eq!(
+        log.count_containing("reached no route and was discarded"),
+        1,
+        "the caller's 99 was reported, not silently swallowed; captured:\n{}",
+        log.render_at_least(tracing::Level::WARN)
+    );
+}
+
+/// A mismatched pop result is reported and dropped **outside** the history lock.
+///
+/// `RouteRecord::did_complete` runs inside the flush, under the history mutex. It
+/// used to emit `tracing::error!` and drop the mismatched box right there — and
+/// both are user code: a subscriber is user-written, and the box wraps a value the
+/// caller supplied, so its `Drop` is theirs. Either can call back into the
+/// navigator, and the mutex is not reentrant.
+///
+/// # Reaching it, given `pop_with`'s `Send` bound
+///
+/// The payload cannot simply capture a `NavigatorHandle` — `pop_with<T: Send>`
+/// forbids it, since the handle is deliberately `!Send`. It can hold a
+/// [`NavigatorCommandTarget`], which **is** `Send + Sync` and is this crate's
+/// documented cross-thread route to a navigator; `apply_on_owner()` resolves the
+/// handle from owner-thread storage and takes the history lock.
+///
+/// **The detour is what makes this legitimate.** Had the reproduction needed a
+/// type the public API forbids, it would have been a contrivance and the defect
+/// arguably unreachable. Instead the deadlock is reachable through a *supported
+/// API on a drop path* — which is exactly the shape a real caller hits, and the
+/// reason the fix is not defensive.
+///
+/// # Expected failure shape
+///
+/// Under the defect this **hangs**, it does not assert: `timeout 60` → exit 124,
+/// with no output after the start line. The drop counter is therefore asserted
+/// inside the capture, as the test proceeds — a final assertion never runs in a
+/// deadlock.
+///
+/// The subscriber half of the same hazard is real but not demonstrated here:
+/// `flui_testing::log_capture`'s subscriber is inert, which is exactly why an
+/// existing test drives this path and passes. This covers the value's `Drop`.
+///
+/// Red-check: emit the `tracing::error!` and drop the box inside
+/// `RouteRecord::did_complete` again, and this deadlocks the owner thread.
+#[test]
+fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock() {
+    /// A payload whose `Drop` commands the navigator — a supported API, on the
+    /// drop path, from a `Send` value.
+    struct CommandsNavigatorOnDrop {
+        target: NavigatorCommandTarget,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for CommandsNavigatorOnDrop {
+        fn drop(&mut self) {
+            // Takes the history lock. Deadlocks if this drop happens under it.
+            let _ = NavigatorCommand::maybe_pop(self.target).apply_on_owner();
+            self.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let built = Built::default();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+
+    // `page` is a `SimpleRoute<i32>`, so this payload is the wrong type for it and
+    // takes the mismatch path.
+    let route = handle.push(page(&built, "target"));
+    laid.tick();
+
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        assert!(handle.pop_with(CommandsNavigatorOnDrop {
+            target: handle.command_target(),
+            drops: Arc::clone(&drops),
+        }));
+        // Reached only if the drop did not deadlock.
+        assert_eq!(
+            drops.load(Ordering::Relaxed),
+            1,
+            "the mismatched payload was dropped, and its Drop reached the navigator \
+             without deadlocking"
+        );
+    });
+    laid.tick();
+
+    assert_eq!(
+        log.count_containing("pop result has the wrong type"),
+        1,
+        "and the mismatch was reported once, from outside the lock; captured:\n{}",
+        log.render_at_least(tracing::Level::WARN)
+    );
+    assert_eq!(
+        route.try_take(),
+        Some(None),
+        "the route completed with None, as the contract says"
+    );
+}
+
+/// `KeyedSettings::untyped` lets a key's arguments reach the seven operations
+/// `push_keyed` is not.
+///
+/// The gap it closes was composability, not semantics: dropping `T` on an untyped
+/// operation is their documented behaviour, and the same discard was already
+/// reachable as `push_replacement_named(KEY.name())` — it simply had no verb, so
+/// carrying a key's *arguments* onto an untyped operation had no spelling at all.
+///
+/// Red-check: make `untyped()` return `RouteSettings::named(name)` without the
+/// arguments and the factory sees `None` instead of `1776`.
+#[test]
+fn keyed_settings_untyped_carries_a_keys_arguments_onto_an_untyped_operation() {
+    const ORDER: RouteKey<u32> = RouteKey::new("/order");
+
+    let built = Built::default();
+    let seen: Arc<Mutex<Vec<Option<u32>>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let handle = NavigatorHandle::new();
+    handle.route_keyed(ORDER, {
+        let seen = Arc::clone(&seen);
+        move |request: &RouteRequest<'_>| {
+            seen.lock().push(request.argument::<u32>().copied());
+            Some(SimpleRoute::<u32>::new(leaf))
+        }
+    });
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("seeded");
+
+    // The typed push, for contrast: `T` is kept.
+    let typed = handle
+        .push_keyed(ORDER.with_arguments(1776_u32))
+        .expect("registered");
+    laid.tick();
+    assert!(!typed.is_completed(), "a live RouteResult<u32>");
+
+    // The same key, the same arguments, on an operation that has no `T` at all.
+    let replaced = handle
+        .push_replacement_named(ORDER.with_arguments(1776_u32).untyped())
+        .expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        seen.lock().clone(),
+        vec![Some(1776), Some(1776)],
+        "both routes were built from the key's arguments — the untyped operation \
+         carried them just as the typed one did"
+    );
+    assert_eq!(handle.route_ids(), vec![root, replaced]);
+
+    // And the shared-payload form composes the same way.
+    let payload: RouteArguments = Arc::new(99_u32);
+    handle
+        .pop_and_push_named(ORDER.with_arguments_shared(Arc::clone(&payload)).untyped())
+        .expect("registered");
+    laid.tick();
+    assert_eq!(
+        seen.lock().last().copied().flatten(),
+        Some(99),
+        "including through with_arguments_shared, which preserves payload identity"
+    );
+}
+
+/// A failing named operation adds **nothing of its own** — but a factory that
+/// navigated before declining keeps what it did.
+///
+/// `ARCHITECTURE.md` §4's totality guarantee is qualified for exactly this shape,
+/// and until now the qualifier rested on a measurement with no test behind it. A
+/// quoted measurement with nothing pinning it reads as evidence, which is worse
+/// than a bare claim.
+///
+/// The factory captures a handle — the only way left, and unsupported rather than
+/// impossible — pushes a route, and *then* answers `None`, so the name is
+/// unresolved. Its push is its own and is not rolled back, for the same reason
+/// §5's captured-target fix does not undo a factory's nested push: it is not this
+/// operation's to undo.
+///
+/// Red-check: make `resolve_named` roll back on failure and the stack assertion
+/// fails; make the failing operation push a placeholder and the "nothing of its
+/// own" assertions fail.
+#[test]
+fn an_unresolvable_name_after_a_navigating_factory_adds_nothing_of_its_own() {
+    let built = Built::default();
+    let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
+    let nested: NestedId = Arc::new(Mutex::new(None));
+
+    let handle = NavigatorHandle::new();
+    handle.route("/nested", {
+        let built = built.clone();
+        move |_request: &RouteRequest<'_>| Some(page(&built, "nested"))
+    });
+    // Navigates, then declines — so nothing answers "/missing".
+    handle.on_generate_route({
+        let cell = Rc::clone(&cell);
+        let nested = Arc::clone(&nested);
+        move |_request: &RouteRequest<'_>| {
+            *nested.lock() = Some(
+                cell.borrow()
+                    .clone()
+                    .expect("the test filled the cell")
+                    .push_named("/nested")
+                    .expect("'/nested' is registered"),
+            );
+            None
+        }
+    });
+    *cell.borrow_mut() = Some(handle.clone());
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("seeded");
+
+    let spy = Arc::new(Spy::default());
+    handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+    let refused = handle.push_named("/missing");
+    laid.tick();
+    let nested_id = nested
+        .lock()
+        .expect("the factory navigated before declining");
+
+    assert_eq!(
+        refused.expect_err("the generator declined, so nothing answered the name"),
+        NamedRouteError::Unresolved {
+            name: "/missing".to_owned()
+        }
+    );
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, nested_id],
+        "one deeper than before — and that route is the FACTORY's, not the failing \
+         operation's: it pushed deliberately and is not rolled back"
+    );
+    assert_eq!(
+        spy.kinds(),
+        vec!["push", "changeTop"],
+        "exactly the factory's own push was observed; the failing operation \
+         notified nothing"
+    );
+    assert_eq!(
+        handle.current(),
+        Some(nested_id),
+        "and the operation left no route of its own on top"
+    );
+
+    *cell.borrow_mut() = None;
 }

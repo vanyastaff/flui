@@ -66,16 +66,18 @@ use super::binding::{
 use super::hero::{HeroRegistry, HeroScope, NestedHeroSource};
 use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
-use super::history::{DeferredEffect, FlushOutcome, RouteHistory};
+use super::history::{DeferredEffect, FlushOutcome, ReplaceTarget, RouteHistory};
 use super::modal_route::ModalHandle;
 use super::named_route::{
-    GeneratedRoute, KeyedRequest, NamedRouteError, PushMode, RouteKey, RouteRegistry, RouteRequest,
-    requested_name,
+    GeneratedRoute, KeyedSettings, NamedRouteError, PushMode, RouteKey, RouteRegistry,
+    RouteRequest, requested_name,
 };
 use super::observer::{NavigatorObserver, Notification, deliver};
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
-use super::route::{AnyResult, Route, RouteId, RoutePopDisposition, RouteSettings};
+use super::route::{
+    AnyResult, Route, RouteId, RoutePopDisposition, RouteSettings, UndeliveredResult,
+};
 use super::subtree::RouteSubtree;
 use crate::animated::VsyncScope;
 use crate::overlay::{Overlay, OverlayEntry, OverlayHandle};
@@ -453,15 +455,65 @@ impl NavigatorShared {
     /// The history lock is **released before** the overlay work, so no lock is
     /// held across `RebuildHandle::schedule`.
     fn mutate<R>(&self, mutate: impl FnOnce(&mut RouteHistory) -> R) -> R {
-        let (value, outcome) = {
+        let (value, outcome, undelivered) = {
             let mut history = self.history.lock();
             let value = mutate(&mut history);
-            (value, history.take_outcome())
+            (value, history.take_outcome(), history.take_undelivered())
         };
+        // Guard released. Both of the following may re-enter this navigator: a
+        // `Route` lifecycle hook, and the `Drop` of a caller-supplied result.
+        report_undelivered(undelivered);
         if let Some(outcome) = outcome {
             self.apply(outcome);
         }
         value
+    }
+}
+
+/// Drop caller-supplied results the history could not deliver, and say so.
+///
+/// Two obligations, both easy to miss. **Dropped with the history guard
+/// released**: an `AnyResult` wraps a value the caller supplied, so its `Drop` is
+/// user code and may reach back into this navigator, which the non-reentrant
+/// history mutex would deadlock on — the same hazard as dropping a registry
+/// closure under its guard. And **logged**: silently evaporating is the failure
+/// mode `pop_with`'s own contract exists to prevent, since the whole point of
+/// that contract is that an undeliverable result is *reported*.
+///
+/// Reachable with no factory involved at all: `pop_with(v)` on an empty stack, or
+/// on one whose top is mid-exit-transition and therefore not `is_present`.
+///
+/// `warn`, not `error`: unlike a type mismatch — where the caller and the route
+/// disagree — this means there was no route to deliver to, which the operation's
+/// own return value usually already says.
+fn report_undelivered(undelivered: Vec<UndeliveredResult>) {
+    for result in undelivered {
+        match result {
+            UndeliveredResult::NoTarget(value) => {
+                tracing::warn!(
+                    "a result supplied to a navigator operation reached no route and was \
+                     discarded: the stack had no present route to deliver it to, or the \
+                     target had already completed. Dropped outside the history lock."
+                );
+                drop(value);
+            }
+            UndeliveredResult::TypeMismatch {
+                route,
+                expected,
+                value,
+            } => {
+                // The message and fields `RouteRecord::did_complete` used to emit
+                // inline, moved here so neither the subscriber nor the value's
+                // `Drop` runs under the history mutex.
+                tracing::error!(
+                    route = route.get(),
+                    expected,
+                    "pop result has the wrong type for this route; completed with None. \
+                     Flutter throws a cast error here"
+                );
+                drop(value);
+            }
+        }
     }
 }
 
@@ -791,7 +843,14 @@ impl NavigatorHandle {
     /// writing an updated `home` into the shared cell that route's builder
     /// reads. Inert before mount, after unmount, and for an unknown id.
     pub(crate) fn mark_route_needs_build(&self, route: RouteId) {
-        if let Some(entry) = self.shared.registries.entries.lock().get(&route) {
+        // Cloned out, so the guard is released before `mark_needs_build` reaches
+        // `RebuildHandle::schedule`. Binding a reference *into* the guard held it
+        // across that call, which contradicts `NavigatorShared::mutate`'s own
+        // documented promise that no lock is held across `schedule`. Nothing
+        // user-supplied runs there today — this keeps the promise true rather than
+        // fixing an observed failure.
+        let entry = { self.shared.registries.entries.lock().get(&route).cloned() };
+        if let Some(entry) = entry {
             entry.mark_needs_build();
         }
     }
@@ -981,9 +1040,9 @@ impl NavigatorHandle {
         route: R,
         result: Option<AnyResult>,
     ) -> RouteResult<R::Output> {
-        // `None` target: nothing can run between this call and the flush, so
-        // "the current top" is still the caller's route.
-        self.push_replacement_erased_reporting_id(route, None, result)
+        // `CurrentTop`: nothing can run between this call and the flush, so "the
+        // top now" is still the caller's route.
+        self.push_replacement_erased_reporting_id(route, Some(ReplaceTarget::CurrentTop), result)
             .1
     }
 
@@ -997,12 +1056,12 @@ impl NavigatorHandle {
     pub(super) fn push_replacement_erased_reporting_id<R: NavigatorRoute>(
         &self,
         route: R,
-        replaced: Option<RouteId>,
+        target: Option<ReplaceTarget>,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
         self.push_prepared(route, |history, id, route| {
             history
-                .push_replacement_with_id(id, replaced, route, result)
+                .push_replacement_with_id(id, target, route, result)
                 .1
         })
     }
@@ -1079,12 +1138,16 @@ impl NavigatorHandle {
             .lock()
             .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
 
-        let (result, outcome) = {
+        let (result, outcome, undelivered) = {
             let mut history = self.shared.history.lock();
             let result = commit(&mut history, id, route);
-            (result, history.take_outcome())
+            (result, history.take_outcome(), history.take_undelivered())
         };
 
+        // Guard released — the same drain `NavigatorShared::mutate` performs, and
+        // needed here too because `push_replacement_with_id` runs under this lock
+        // rather than that one.
+        report_undelivered(undelivered);
         if let Some(outcome) = outcome {
             self.shared.apply(outcome);
         }
@@ -1144,16 +1207,27 @@ impl NavigatorHandle {
         if self.current() != Some(route) {
             return false;
         }
-        self.shared
-            .registries
-            .pop_pacing
-            .lock()
-            .insert(route, PopPacing { duration, curve });
+        // Both `insert` and `remove` hand back the displaced `PopPacing`, which
+        // owns an `Arc<dyn Curve + Send + Sync>` — a caller-supplied value whose
+        // `Drop` is user code. The guard is the first temporary in the statement,
+        // so it would otherwise still be alive when that value drops. Same rule as
+        // the registry's displaced closures and the history's undelivered results.
+        let displaced = {
+            self.shared
+                .registries
+                .pop_pacing
+                .lock()
+                .insert(route, PopPacing { duration, curve })
+        };
+        drop(displaced);
+
         let popped = self.pop_erased(None);
+
         // `did_pop` consumes this on a successful pop; a refused pop (or one
         // that somehow never reached `route`) must not leave a stale override
         // for a later, unrelated pop of the same route.
-        self.shared.registries.pop_pacing.lock().remove(&route);
+        let consumed = { self.shared.registries.pop_pacing.lock().remove(&route) };
+        drop(consumed);
         popped
     }
 
@@ -1527,20 +1601,24 @@ impl NavigatorHandle {
     /// typed routes — so it returns an erased [`GeneratedRoute`] and the caller
     /// writes `GeneratedRoute::new(..)`.
     ///
-    /// # Do not capture a handle; one is handed to you
+    /// # Do not capture a handle, and do not navigate from here
     ///
-    /// [`RouteRequest::navigator`] carries the navigator resolving the request,
-    /// so a factory that navigates needs no captured [`NavigatorHandle`] — and a
-    /// route's *content* never did either, since a
+    /// A factory builds a route; it is not given a [`NavigatorHandle`] and should
+    /// not capture one. To send the user elsewhere, **return the route for
+    /// elsewhere** — see [`RouteRequest`]. A route's *content* needs no captured
+    /// handle either: a
     /// [`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) gets a
-    /// `&dyn BuildContext` and [`maybe_of`](Self::maybe_of) resolves from it.
+    /// `&dyn BuildContext` and [`maybe_of`](Self::maybe_of) resolves from it,
+    /// exactly as Flutter's `Navigator.of(context)` does.
     ///
-    /// Capturing one anyway closes an `Arc` cycle — the navigator owns the
-    /// registry, the registry owns the closure, the closure would own the
-    /// navigator — and nothing reclaims it implicitly, because registrations are
-    /// deliberately **not** mount-scoped (see
-    /// [`clear_routes`](Self::clear_routes)). [`clear_routes`](Self::clear_routes)
-    /// is how you break it, and it is the only thing that does.
+    /// Capturing one anyway is possible — closures capture freely — and costs two
+    /// things. It closes an `Arc` cycle (the navigator owns the registry, the
+    /// registry owns the closure, the closure would own the navigator) which
+    /// nothing reclaims implicitly, because registrations are deliberately **not**
+    /// mount-scoped; [`clear_routes`](Self::clear_routes) is the only thing that
+    /// breaks it. And navigating from a factory puts a mutation inside another
+    /// operation's resolution: survivable, documented, and not supported — see
+    /// `ARCHITECTURE.md` §5 for the two observable consequences.
     ///
     /// # Example
     ///
@@ -1595,7 +1673,7 @@ impl NavigatorHandle {
     ///
     /// It is also the escape for the one cycle this surface can still create:
     /// a factory that captures a [`NavigatorHandle`] despite
-    /// [`RouteRequest::navigator`] handing it one. See
+    /// no accessor offering one. See
     /// [`on_generate_route`](Self::on_generate_route).
     pub fn clear_routes(&self) {
         self.shared.named_routes.clear();
@@ -1606,7 +1684,7 @@ impl NavigatorHandle {
     ///
     /// Named operations resolve first, so an unresolvable name adds nothing of
     /// the operation's own —
-    /// but resolving runs a user factory, and [`RouteRequest::navigator`] makes
+    /// but resolving runs a user factory, and a factory that captured a handle can
     /// navigating from one a supported shape. By the time the departing route is
     /// dealt with it may no longer be on top, or may be gone. Acting on "the
     /// current top" would then dismiss the *factory's* route and leave the
@@ -1640,7 +1718,7 @@ impl NavigatorHandle {
     /// [`NamedRouteError::Unresolved`] when neither the table, the generator,
     /// nor the unknown-route fallback produced a route.
     fn resolve_named(&self, settings: &RouteSettings) -> Result<GeneratedRoute, NamedRouteError> {
-        let request = RouteRequest::new(settings, self);
+        let request = RouteRequest::new(settings);
         self.shared
             .named_routes
             .resolve(&request)
@@ -1670,7 +1748,7 @@ impl NavigatorHandle {
     /// before constructing anything, so the error never has a route to dispose.
     ///
     /// It does **not** promise the stack is unchanged: a factory that navigates
-    /// (via [`RouteRequest::navigator`]) and then declines has already made its
+    /// (through a captured handle) and then declines has already made its
     /// own changes, and those are not rolled back — they were deliberate, and
     /// undoing them is no more this operation's business than undoing a nested
     /// push is (see [`pop_and_push_named`](Self::pop_and_push_named)).
@@ -1684,6 +1762,17 @@ impl NavigatorHandle {
 
     /// [`push_named`](Self::push_named), keeping the new route's typed
     /// [`RouteResult`] instead of dropping it.
+    ///
+    /// # Choosing between this and [`push_keyed`](Self::push_keyed)
+    ///
+    /// They divide by **when the name exists**, not by preference.
+    /// [`RouteKey::new`] takes a `&'static str`, so a name computed at run time —
+    /// a deep link, a config value, a server-supplied path — cannot be a key, and
+    /// this is the only typed push that can reach the
+    /// [`on_generate_route`](Self::on_generate_route) hook such names resolve
+    /// through. For a name known at compile time prefer
+    /// [`push_keyed`](Self::push_keyed): the key checks the route's result type at
+    /// the *registration* site rather than at the push.
     ///
     /// This is the one named entry point that can fail on the result type, and
     /// it fails **before** anything is pushed: the generated route is concrete
@@ -1714,14 +1803,24 @@ impl NavigatorHandle {
 
     /// Push the route a [`RouteKey`] names, keeping its typed [`RouteResult`].
     ///
-    /// The keyed counterpart to
-    /// [`push_named_typed`](Self::push_named_typed), and the reason
-    /// [`RouteKey`] exists: `T` comes from the key rather than from a turbofish,
-    /// and [`route_keyed`](Self::route_keyed) already refused a mismatched route
-    /// at compile time. It does **not** make
+    /// The typed push for a name known at compile time: `T` comes from the key
+    /// rather than from a turbofish, and [`route_keyed`](Self::route_keyed) already
+    /// refused a mismatched route at compile time. It does **not** make
     /// [`NamedRouteError::ResultType`] unreachable — see below.
     ///
-    /// A bare key is a request; [`RouteKey::request`] adds arguments:
+    /// # Choosing between this and [`push_named_typed`](Self::push_named_typed)
+    ///
+    /// They divide by **when the name exists**, and neither substitutes for the
+    /// other. [`RouteKey::new`] takes a `&'static str`, so this cannot express a
+    /// name computed at run time — a deep link, a config value, a server-supplied
+    /// path — and those resolve through
+    /// [`on_generate_route`](Self::on_generate_route), which only
+    /// [`push_named_typed`](Self::push_named_typed) can reach with a type. Prefer
+    /// this one wherever the name *is* a literal: the check moves from the push to
+    /// the registration site, where the mistake is actually made.
+    ///
+    /// A bare key is a request; [`RouteKey::with_arguments`] adds arguments, and
+    /// [`KeyedSettings::untyped`] converts one for an untyped operation:
     ///
     /// ```
     /// use flui_widgets::prelude::*;
@@ -1741,7 +1840,7 @@ impl NavigatorHandle {
     /// }));
     ///
     /// let plain = navigator.push_keyed(ORDER)?;
-    /// let with_id = navigator.push_keyed(ORDER.request(1776_u32))?;
+    /// let with_id = navigator.push_keyed(ORDER.with_arguments(1776_u32))?;
     /// # let _ = (plain, with_id);
     /// # Ok::<(), flui_widgets::NamedRouteError>(())
     /// ```
@@ -1782,7 +1881,7 @@ impl NavigatorHandle {
     /// mutates the stack.
     pub fn push_keyed<T: Send + 'static>(
         &self,
-        request: impl Into<KeyedRequest<T>>,
+        request: impl Into<KeyedSettings<T>>,
     ) -> Result<RouteResult<T>, NamedRouteError> {
         self.push_named_typed::<T>(request.into().into_settings())
     }
@@ -1810,13 +1909,16 @@ impl NavigatorHandle {
         request: impl Into<RouteSettings>,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
-        let replaced = self.current();
+        // Captured before resolving. An empty capture is `None` — no target,
+        // completes nothing — which `ReplaceTarget` cannot express and so cannot
+        // be mistaken for "the current top".
+        let target = self.current().map(ReplaceTarget::Route);
         Ok(self
             .resolve_named(&request)?
             .push(
                 self,
                 PushMode::Replace {
-                    target: replaced,
+                    target,
                     result: None,
                 },
             )
@@ -1842,13 +1944,13 @@ impl NavigatorHandle {
         result: TO,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
-        let replaced = self.current();
+        let target = self.current().map(ReplaceTarget::Route);
         Ok(self
             .resolve_named(&request)?
             .push(
                 self,
                 PushMode::Replace {
-                    target: replaced,
+                    target,
                     result: Some(Box::new(result)),
                 },
             )
@@ -1870,7 +1972,7 @@ impl NavigatorHandle {
     ///
     /// **What that divergence costs, stated rather than claimed as pure gain.**
     /// Resolving first means a factory runs before the departing route is dealt
-    /// with, and [`RouteRequest::navigator`] makes navigating from a factory a
+    /// with, and a factory that captured a handle can navigate — an unsupported but
     /// supported shape. So when a factory navigates, its `didPush` is observed
     /// **before** this operation's own dismissal — an ordering Flutter cannot
     /// produce here, because it has already popped. The departing route is then

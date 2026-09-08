@@ -46,6 +46,34 @@ use super::result::{Completer, RouteResult};
 
 /// A pop result, erased. See the module docs.
 pub(crate) type AnyResult = Box<dyn Any + Send>;
+
+/// A caller-supplied result that reached no route, or reached one that could not
+/// take it — carried out of the history's locked section and reported there.
+///
+/// **Why this is a value and not a `tracing` call at the site.** An `AnyResult`
+/// wraps a value the *caller* supplied, so dropping it runs user `Drop`; and a
+/// `tracing` subscriber is user code too. Both may reach back into the navigator,
+/// and the history mutex is not reentrant. The same rule the registry follows for
+/// a displaced factory closure, and the same rule `FlushOutcome::deferred`
+/// follows for a lifecycle callback.
+///
+/// One channel with a reason, rather than one vector per kind — the argument
+/// `FlushOutcome::deferred` already makes for itself.
+pub(crate) enum UndeliveredResult {
+    /// No present route to deliver to: an empty stack, one whose top is
+    /// mid-exit-transition, or a removal target that had already completed.
+    NoTarget(AnyResult),
+    /// A route received it, and its type did not match that route's `Output`.
+    /// Flutter throws a cast error here; FLUI logs and completes with `None`.
+    TypeMismatch {
+        /// The route that could not take it.
+        route: RouteId,
+        /// `type_name` of the `Output` that route delivers.
+        expected: &'static str,
+        /// The value itself, so it drops outside the lock.
+        value: AnyResult,
+    },
+}
 // Deliberately **not** public. `NavigatorHandle::pop_with<T>` takes a typed `T`
 // and erases it here, so the erasure is an implementation detail rather than a
 // shape callers must name. The boundary was signed off, not its exposure.
@@ -392,11 +420,17 @@ pub(crate) trait ErasedRoute {
 
     /// `Route.didPop(result)`: completes the future and returns `true`, or
     /// refuses and returns `false` without completing.
-    fn did_pop(&mut self, result: Option<AnyResult>) -> bool;
+    ///
+    /// Any mismatched result comes back rather than being reported here — see
+    /// [`UndeliveredResult`].
+    fn did_pop(&mut self, result: Option<AnyResult>) -> (bool, Option<UndeliveredResult>);
 
     /// `Route.didComplete(result)`: completes the future with
     /// `result ?? current_result`. Idempotent.
-    fn did_complete(&mut self, result: Option<AnyResult>);
+    ///
+    /// Any mismatched result comes back rather than being reported here — see
+    /// [`UndeliveredResult`].
+    fn did_complete(&mut self, result: Option<AnyResult>) -> Option<UndeliveredResult>;
 
     fn did_pop_next(&mut self, popped: RouteId);
     fn did_change_next(&mut self, next: Option<RouteId>);
@@ -490,22 +524,24 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
         self.route.did_replace(previous);
     }
 
-    fn did_pop(&mut self, result: Option<AnyResult>) -> bool {
+    fn did_pop(&mut self, result: Option<AnyResult>) -> (bool, Option<UndeliveredResult>) {
         if !self.route.did_pop() {
-            return false;
+            // Refused. The result was never delivered, and it is the caller's
+            // value, so it goes back out rather than being dropped under the lock.
+            return (false, result.map(UndeliveredResult::NoTarget));
         }
-        self.did_complete(result);
-        true
+        (true, self.did_complete(result))
     }
 
-    fn did_complete(&mut self, result: Option<AnyResult>) {
+    fn did_complete(&mut self, result: Option<AnyResult>) -> Option<UndeliveredResult> {
         if self.completer.is_completed() {
-            return;
+            return result.map(UndeliveredResult::NoTarget);
         }
 
         // `result ?? currentResult` (navigator.dart:481). The fallback applies
         // only when no result was supplied — a *mismatched* result is an error,
         // not an absent one, so it must not silently fall back.
+        let mut undelivered = None;
         let value = match result {
             None => self.route.current_result(),
             Some(erased) => {
@@ -514,22 +550,27 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
                 // record downcasts back. Signed off as the only downcast in
                 // `flui-widgets`, and port-check's FR-033/widgets grep keeps it that way.
                 let typed = erased.downcast::<R::Output>(); // PORT-CHECK-OK-DOWNCAST: signed-off pop-result erasure boundary, see module docs
-                if let Ok(value) = typed {
-                    Some(*value)
-                } else {
-                    tracing::error!(
-                        route = self.id.get(),
-                        expected = std::any::type_name::<R::Output>(),
-                        "pop result has the wrong type for this route; completing with None. \
-                         Flutter throws a cast error here"
-                    );
-                    None
+                match typed {
+                    Ok(value) => Some(*value),
+                    Err(mismatched) => {
+                        // Neither reported nor dropped here: this runs inside the
+                        // flush, under the history mutex, and both a `tracing`
+                        // subscriber and the value's own `Drop` are user code that
+                        // may re-enter the navigator.
+                        undelivered = Some(UndeliveredResult::TypeMismatch {
+                            route: self.id,
+                            expected: std::any::type_name::<R::Output>(),
+                            value: mismatched,
+                        });
+                        None
+                    }
                 }
             }
         };
 
         self.route.did_complete(value.as_ref());
         self.completer.complete(value);
+        undelivered
     }
 
     fn did_pop_next(&mut self, popped: RouteId) {
