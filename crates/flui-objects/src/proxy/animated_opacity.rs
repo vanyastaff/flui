@@ -22,13 +22,22 @@
 //! re-blends the cached layer.
 //!
 //! FLUI reaches the same outcome by a different route, and without the
-//! promotion. A tick reports `RenderUpdateImpact::COMPOSITED_LAYER_UPDATE`
-//! (see `mark_needs_composited_layer_update` below), and the frame rebuilds
-//! just this node's own effect layers inside the ENCLOSING repaint boundary's
-//! retained capture — the node stays an ordinary non-boundary. The design and
-//! its accepted trade-offs are recorded in `flui-rendering/ARCHITECTURE.md`,
-//! "A composited-layer update patches the enclosing capture; no node is
-//! promoted to a boundary".
+//! promotion: the frame rebuilds just this node's own effect layers inside the
+//! ENCLOSING repaint boundary's retained capture, so the node stays an ordinary
+//! non-boundary. The design and its accepted trade-offs are recorded in
+//! `flui-rendering/ARCHITECTURE.md`, "A composited-layer update patches the
+//! enclosing capture; no node is promoted to a boundary".
+//!
+//! **Which seam a tick takes matters, and it is not the setter one.** This type
+//! has no impact-returning setter at all: an animation tick runs through the
+//! listener, and `recompute_alpha` pokes a [`RenderInvalidationHandle`]
+//! directly — `mark_needs_composited_layer_update()` for a plain alpha move,
+//! `mark_needs_compositing_bits_update()` across the layered threshold,
+//! `mark_needs_paint()` across alpha 0. Those are fallible cross-thread sends,
+//! which is why each one has a failure arm that leaves the alpha cache
+//! unadvanced so the next tick retries. `RenderUpdateImpact` is the OTHER,
+//! synchronous seam, used by the plain `RenderOpacity`/`RenderSliverOpacity`
+//! setters; conflating the two hides the retry contract.
 //!
 //! # Retargeting — the proxy absorbs `didUpdateAnimation`
 //!
