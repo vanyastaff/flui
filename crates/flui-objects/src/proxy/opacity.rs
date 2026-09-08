@@ -112,9 +112,16 @@ impl RenderOpacity {
         }
         // Starting or stopping suppressing the subtree's paint is a change to
         // what the frame CONTAINS, not to a layer property, and it is invisible
-        // to the layer-update path: at both alpha 255 and alpha 0 this node
-        // emits no `OpacityLayer` at all, so it has no effect-layer slot for an
-        // update to patch. Only a repaint can add or remove that content.
+        // to the layer-update path: WITHOUT the always-compositing flag this
+        // node emits no `OpacityLayer` at either alpha 255 or alpha 0, so it
+        // has no effect-layer slot for an update to patch, and only a repaint
+        // can add or remove that content.
+        //
+        // The flag is exactly the case this clause must NOT fire for, and it
+        // does not: `skip_paint` is `alpha == 0 && !always_needs_compositing`,
+        // so with the flag set it is false on both sides of the crossing and
+        // nothing is added here — while `paint_alpha` keeps returning
+        // `Some(0)`, so the layer survives and the patch has a slot after all.
         //
         // This is the honest impact rather than the last line of defence. The
         // paint phase refuses to graft when a node that requested an update
@@ -415,5 +422,41 @@ mod tests {
         );
         assert_eq!(o.paint_alpha(), Some(0));
         assert!(!o.skip_paint());
+    }
+
+    /// With `always_needs_compositing` set, alpha 0 keeps its `OpacityLayer`,
+    /// so becoming invisible IS a pure layer property change.
+    ///
+    /// The one configuration where the `COMPOSITED_LAYER_UPDATE` base changes
+    /// an alpha-0 crossing: `paint_alpha` still returns `Some(0)` and
+    /// `skip_paint` stays false, so a slot exists for the patch and nothing
+    /// structural moved. Without the flag the same transition must repaint —
+    /// asserted in `opacity_impacts_track_paint_compositing_and_semantics_independently`
+    /// — which is what makes this a discriminating case rather than a
+    /// restatement, and what the setter's `skip_paint` comment claims.
+    #[test]
+    fn an_always_compositing_opacity_updates_its_layer_even_when_going_invisible() {
+        let mut o = RenderOpacity::new(0.5);
+        assert_eq!(
+            o.set_always_needs_compositing(true),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
+        assert_eq!(o.paint_alpha(), Some(128));
+
+        assert_eq!(
+            o.set_opacity(0.0),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            "the flag holds needs_compositing true and skip_paint false across \
+             the crossing, so neither structural bit fires and the alpha change \
+             is served by patching the layer that still exists",
+        );
+        assert_eq!(
+            o.paint_alpha(),
+            Some(0),
+            "precondition for the impact above: the layer really does survive \
+             at alpha 0, so there is a slot for the patch to address",
+        );
+        assert!(!o.skip_paint(), "and the subtree is still painted");
     }
 }

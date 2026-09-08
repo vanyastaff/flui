@@ -74,16 +74,29 @@ mod tests {
         );
         assert_eq!(
             SliverOpacity::new(0.5).update_render_object(&context, &mut render_object),
-            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "entering the composited range is structural (COMPOSITING_BITS, which \
+             implies PAINT) and the layer-update bit rides along; the owner applies \
+             paint first, so the weaker mark refuses itself",
         );
         assert_eq!(
             SliverOpacity::new(0.25).update_render_object(&context, &mut render_object),
-            flui_rendering::RenderUpdateImpact::PAINT,
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "a visible change within the composited range lands only on the \
+             OpacityLayer, so it updates that layer instead of repainting — see \
+             RenderSliverOpacity::set_opacity",
         );
         assert_eq!(
             SliverOpacity::new(0.0).update_render_object(&context, &mut render_object),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
-                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
+            "becoming invisible must REPAINT, not just update a layer: leaving \
+             the composited range AND starting to skip paint are both structural \
+             changes to what the frame contains, not to a layer property — the \
+             0.25 OpacityLayer has no slot for an update to patch once alpha \
+             hits 0 and the layer disappears entirely",
         );
     }
 }

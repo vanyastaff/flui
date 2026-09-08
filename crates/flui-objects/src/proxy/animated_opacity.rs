@@ -14,20 +14,30 @@
 //! needs-compositing-bits whenever the recompute crosses the
 //! `_alpha > 0` repaint-boundary threshold (`isRepaintBoundary` flips).
 //!
-//! # Documented divergence — no composited-layer update
+//! # Composited-layer updates — how this port reaches Flutter's efficiency path
 //!
-//! Flutter's mixin is a `isRepaintBoundary` node: on a tick it calls
-//! `updateCompositedLayer`, which mutates the *retained* `OpacityLayer`'s
-//! alpha in place, so a tick never repaints the child subtree — only the
-//! compositor re-blends the cached layer. FLUI has no composited-layer-update
-//! machinery (no `updateCompositedLayer`/`markNeedsCompositedLayerUpdate`
-//! equivalent anywhere in `flui-rendering`/`flui-objects`), so this port
-//! instead marks the node dirty for a real repaint whenever the effective
-//! alpha changes, exactly like `layout::animated_size` documents its own
-//! divergence at `layout/animated_size.rs:452-457`. The
-//! retained-layer alpha update is Flutter's efficiency path, not yet built
-//! here; a tick costs a full repaint of the subtree instead of a blend-only
-//! update.
+//! Flutter's mixin is an `isRepaintBoundary` node: on a tick it calls
+//! `updateCompositedLayer`, which mutates the *retained* `OpacityLayer`'s alpha
+//! in place, so a tick never repaints the child subtree — only the compositor
+//! re-blends the cached layer.
+//!
+//! FLUI reaches the same outcome by a different route, and without the
+//! promotion: the frame rebuilds just this node's own effect layers inside the
+//! ENCLOSING repaint boundary's retained capture, so the node stays an ordinary
+//! non-boundary. The design and its accepted trade-offs are recorded in
+//! `flui-rendering/ARCHITECTURE.md`, "A composited-layer update patches the
+//! enclosing capture; no node is promoted to a boundary".
+//!
+//! **Which seam a tick takes matters, and it is not the setter one.** This type
+//! has no impact-returning setter at all: an animation tick runs through the
+//! listener, and `recompute_alpha` pokes a [`RenderInvalidationHandle`]
+//! directly — `mark_needs_composited_layer_update()` for a plain alpha move,
+//! `mark_needs_compositing_bits_update()` across the layered threshold,
+//! `mark_needs_paint()` across alpha 0. Those are fallible cross-thread sends,
+//! which is why each one has a failure arm that leaves the alpha cache
+//! unadvanced so the next tick retries. `RenderUpdateImpact` is the OTHER,
+//! synchronous seam, used by the plain `RenderOpacity`/`RenderSliverOpacity`
+//! setters; conflating the two hides the retry contract.
 //!
 //! # Retargeting — the proxy absorbs `didUpdateAnimation`
 //!
