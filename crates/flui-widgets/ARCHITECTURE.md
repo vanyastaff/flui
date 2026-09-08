@@ -376,11 +376,29 @@ this was fixed, `maybe_pop_with(v)` on a one-route navigator discarded the
 caller's value on *every* call, under the guard. The commonest possible stack
 shape was the undelivered-result path.
 
-They were found by enumerating every function taking `Option<AnyResult>`, not by
-reading the file where the state machine consumes it. The distinction matters and
-is the reason four of the nine were missed once: the *machinery* that consumes a
-result lives in `history.rs`, but the *decisions* that discard one live on the
-handle. A sweep scoped to where the type is used does not cross that boundary.
+**Ordering.** An operation's own observations reach observers **before** anything
+a re-entrant drop triggers: a `pop_with` whose payload's `Drop` pops again is
+observed as `didPop(target)` then `didPop(middle)` — cause before effect. That is
+measured both ways; reporting before the flush outcome is applied inverts it to
+`[middle, target]`, from which an observer cannot reconstruct the sequence. So the
+drains apply the outcome first and report second. `apply` deliberately runs
+re-entrant user code — deferred `PopScope` effects, observer delivery,
+`Route::dispose` — and a value's `Drop` running after all of it is a consequence
+landing where consequences belong.
+
+**How they were found, because the axis was wrong twice.** The first enumeration
+read `history.rs`, where the state machine *consumes* a result — and missed the
+sites where a *decision* discards one, which live on the handle. The second
+enumerated `Option<AnyResult>` — the **erased** type — and missed the two sites
+that drop the caller's value *before* erasure, on a `?` that returns while it is
+still `TO`. Those two sweeps have **zero overlap**: five post-erasure sites and
+two pre-erasure ones, disjoint. The correct axis is the caller-supplied generic,
+traced from the parameter to a delivery or a report, accounting for every early
+return in between.
+
+Worth knowing when editing these: four of the six methods carrying a caller value
+are safe only because `Some(Box::new(result))` happens to be their first
+expression. An early return added above it reintroduces the defect silently.
 
 **Where the target is resolved.** The unnamed front doors resolve theirs at
 flush time, because nothing can run between their call and the flush. The named

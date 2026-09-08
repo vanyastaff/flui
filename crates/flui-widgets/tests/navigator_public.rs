@@ -2971,7 +2971,32 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
         "a missing removal target reports too"
     );
 
-    // 5. `maybe_pop_with` on a lone route, which bubbles BY DESIGN — the one that
+    // 5. An **unresolved name** on both `_with` methods. Distinct from row 1: there
+    //    the name resolved and the capture was empty, so `dismiss_captured`
+    //    reported. Here `resolve_named` fails, and the result is still the caller's
+    //    bare `TO` — dropped by a `?` before it was ever erased, which no
+    //    `Option<AnyResult>` audit could see.
+    assert_eq!(
+        warnings_from(|handle| {
+            assert!(
+                handle
+                    .push_replacement_named_with("/nowhere", 7_i32)
+                    .is_err(),
+                "unresolved"
+            );
+        }),
+        1,
+        "push_replacement_named_with reports on the unresolved path"
+    );
+    assert_eq!(
+        warnings_from(|handle| {
+            assert!(handle.pop_and_push_named_with("/nowhere", 7_i32).is_err());
+        }),
+        1,
+        "and so does pop_and_push_named_with"
+    );
+
+    // 6. `maybe_pop_with` on a lone route, which bubbles BY DESIGN — the one that
     //    is not an edge case.
     let bubbled = flui_testing::log_capture::capture(|| {
         let built = Built::default();
@@ -2990,5 +3015,79 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
         "the Bubble arm reports, and it used to drop under the history guard; \
          captured:\n{}",
         bubbled.render_at_least(tracing::Level::WARN)
+    );
+}
+
+/// An operation's own observations reach observers **before** anything a
+/// re-entrant drop triggers.
+///
+/// Wave 5 moved undelivered-result reporting out of the history guard, which was
+/// right, and opened a window: history had advanced but the `FlushOutcome` had not
+/// been applied, so a nested operation launched from a drop path notified
+/// observers *first*. The effect preceded its cause in the stream.
+///
+/// The oracle is the **sequence**, not presence. A test asserting only "the warn
+/// was emitted" or "the nested pop happened" cannot see this at all — both are
+/// true in either order, which is precisely the class of assertion this PR has
+/// spent its length finding.
+///
+/// Red-check: report undelivered values before applying the outcome in
+/// `NavigatorShared::mutate` and the two pops swap places.
+#[test]
+fn an_operations_own_observations_precede_anything_a_re_entrant_drop_triggers() {
+    /// Pops the navigator from its own `Drop`, through the `Send` command target —
+    /// the same supported re-entrant path the mismatch-reporting test uses.
+    struct PopsNavigatorOnDrop {
+        target: NavigatorCommandTarget,
+    }
+
+    impl Drop for PopsNavigatorOnDrop {
+        fn drop(&mut self) {
+            let _ = NavigatorCommand::pop(self.target).apply_on_owner();
+        }
+    }
+
+    /// Records which route each pop named, so the two are distinguishable.
+    #[derive(Default)]
+    struct PopOrder(Mutex<Vec<RouteId>>);
+
+    impl NavigatorObserver for PopOrder {
+        fn did_pop(&self, route: RouteId, _previous: Option<RouteId>) {
+            self.0.lock().push(route);
+        }
+    }
+
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let middle = handle.push(page(&built, "middle"));
+    laid.tick();
+    let middle_id = handle.current().expect("middle on top");
+    handle.push(page(&built, "target"));
+    laid.tick();
+    let target_id = handle.current().expect("target on top");
+
+    let order = Arc::new(PopOrder::default());
+    handle.add_observer(Arc::clone(&order) as Arc<dyn NavigatorObserver>);
+
+    // `page` is a `SimpleRoute<i32>`, so this payload mismatches and travels the
+    // undelivered-result path — where its `Drop` pops again.
+    assert!(handle.pop_with(PopsNavigatorOnDrop {
+        target: handle.command_target(),
+    }));
+    laid.tick();
+
+    assert_eq!(
+        order.0.lock().clone(),
+        vec![target_id, middle_id],
+        "the pop that CAUSED the drop is observed first; the nested pop the drop \
+         triggered comes second. Reversed, an observer sees an effect before its \
+         cause and cannot reconstruct the sequence"
+    );
+    assert!(
+        middle.is_completed(),
+        "and the nested pop really did happen — without this the ordering \
+         assertion could pass on a single event"
     );
 }

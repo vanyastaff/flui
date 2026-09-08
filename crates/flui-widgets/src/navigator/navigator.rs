@@ -460,12 +460,24 @@ impl NavigatorShared {
             let value = mutate(&mut history);
             (value, history.take_outcome(), history.take_undelivered())
         };
-        // Guard released. Both of the following may re-enter this navigator: a
-        // `Route` lifecycle hook, and the `Drop` of a caller-supplied result.
-        report_undelivered(undelivered);
+        // Guard released. Both of the following may re-enter this navigator — a
+        // `Route` lifecycle hook or observer inside `apply`, and the `Drop` of a
+        // caller-supplied result inside `report_undelivered`.
+        //
+        // **Order matters, and it is causal.** `apply` first, so this operation's
+        // own observations reach observers *before* anything a re-entrant drop
+        // triggers. Reporting first left a window in which history had advanced but
+        // the outcome had not been applied: a nested push from a drop path emitted
+        // its `did_push` ahead of the `did_pop` that caused it.
+        //
+        // `apply` is already the re-entrant half — it delivers deferred `PopScope`
+        // effects, notifies observers, and runs `Route::dispose`, all deliberately
+        // unlocked — so putting the report after it adds no new hazard and puts the
+        // drop last, which is where a consequence belongs.
         if let Some(outcome) = outcome {
             self.apply(outcome);
         }
+        report_undelivered(undelivered);
         value
     }
 }
@@ -1144,13 +1156,13 @@ impl NavigatorHandle {
             (result, history.take_outcome(), history.take_undelivered())
         };
 
-        // Guard released — the same drain `NavigatorShared::mutate` performs, and
-        // needed here too because `push_replacement_with_id` runs under this lock
-        // rather than that one.
-        report_undelivered(undelivered);
+        // Guard released — the same drain `NavigatorShared::mutate` performs, in
+        // the same order and for the same reason, and needed here too because
+        // `push_replacement_with_id` runs under this lock rather than that one.
         if let Some(outcome) = outcome {
             self.shared.apply(outcome);
         }
+        report_undelivered(undelivered);
         (id, result)
     }
 
@@ -1959,8 +1971,10 @@ impl NavigatorHandle {
     ///
     /// # Errors
     ///
-    /// As [`push_named`](Self::push_named). On error nothing is replaced and
-    /// `result` is dropped undelivered.
+    /// As [`push_named`](Self::push_named). On error nothing is replaced, and
+    /// `result` is **reported and dropped outside any guard** rather than
+    /// discarded silently — `ARCHITECTURE.md` §5's contract, which this doc used
+    /// to contradict by promising a silent drop.
     pub fn push_replacement_named_with<TO: Send + 'static>(
         &self,
         request: impl Into<RouteSettings>,
@@ -1968,16 +1982,18 @@ impl NavigatorHandle {
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
         let target = self.current().map(ReplaceTarget::Route);
-        Ok(self
-            .resolve_named(&request)?
-            .push(
-                self,
-                PushMode::Replace {
-                    target,
-                    result: Some(Box::new(result)),
-                },
-            )
-            .0)
+        // Erased **before** resolving. `resolve_named` can fail, and a `?` here
+        // would drop the caller's `TO` on the spot — while it is still a bare
+        // generic, so no `Option<AnyResult>` audit can see it. Erasing first makes
+        // the failure path able to report it.
+        let result: Option<AnyResult> = Some(Box::new(result));
+        match self.resolve_named(&request) {
+            Ok(generated) => Ok(generated.push(self, PushMode::Replace { target, result }).0),
+            Err(unresolved) => {
+                report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
+                Err(unresolved)
+            }
+        }
     }
 
     /// [`pop`](Self::pop) the current route and push the one `request` names —
@@ -2033,8 +2049,9 @@ impl NavigatorHandle {
     ///
     /// # Errors
     ///
-    /// As [`push_named`](Self::push_named). On error nothing is popped and
-    /// `result` is dropped undelivered.
+    /// As [`push_named`](Self::push_named). On error nothing is popped, and
+    /// `result` is **reported and dropped outside any guard** — see
+    /// [`push_replacement_named_with`](Self::push_replacement_named_with).
     pub fn pop_and_push_named_with<TO: Send + 'static>(
         &self,
         request: impl Into<RouteSettings>,
@@ -2042,8 +2059,16 @@ impl NavigatorHandle {
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
         let departing = self.current();
-        let generated = self.resolve_named(&request)?;
-        self.dismiss_captured(departing, Some(Box::new(result)));
+        // Erased before resolving — see `push_replacement_named_with`.
+        let result: Option<AnyResult> = Some(Box::new(result));
+        let generated = match self.resolve_named(&request) {
+            Ok(generated) => generated,
+            Err(unresolved) => {
+                report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
+                return Err(unresolved);
+            }
+        };
+        self.dismiss_captured(departing, result);
         Ok(generated.push(self, PushMode::Push).0)
     }
 
