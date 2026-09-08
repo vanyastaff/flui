@@ -247,10 +247,15 @@ fn bench_opacity_alpha_change(c: &mut Criterion) {
 /// tree by the SAME property through the same seam a widget rebuild uses (the
 /// setter, then `apply_render_update_impact`); `repaint` additionally marks
 /// the transform node needing paint, which makes the frame take the old
-/// path. Carries both `inline` and `layered` shapes for the same reason —
-/// quoting only the inline number overstates the general case, the exact
-/// mistake caught in review on #994 for the opacity version of this
-/// benchmark.
+/// path.
+///
+/// Carries both `inline` and `layered` shapes because they measure different
+/// things and only the pair describes the feature. Inline leaves merge into
+/// one `PictureLayer` sharing an `Arc<DisplayList>`, so the update arm is flat
+/// and the win grows with the subtree; once every leaf is its own repaint
+/// boundary the graft is O(retained layers) and the win narrows to a small
+/// constant factor. Reporting the inline number alone would describe the best
+/// case as if it were the general one.
 fn bench_transform_matrix_change(c: &mut Criterion) {
     for (layered, name) in [(false, "inline"), (true, "layered")] {
         let mut group = c.benchmark_group(format!("paint/transform_matrix_change/{name}"));

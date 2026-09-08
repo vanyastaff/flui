@@ -159,12 +159,19 @@ impl RenderTransform {
     /// reason is narrower than it looks and the clause order below is an
     /// invariant, not an accident.
     ///
-    /// What conjugation `T(o)·M·T(-o)` preserves exactly is the **perspective
-    /// row** (`m[3]`, `m[7]`, `m[11]`) and `m[15]`. It does **not** preserve
-    /// the linear 3×3 basis whenever that perspective row is non-zero — with
-    /// `m[3] = 0.25` and a pivot of 8, `m[0] = 1` conjugates to `3`. That is
-    /// harmless here only because a non-zero perspective row is itself enough
-    /// to make [`Matrix4::as_translation`] answer `None` on both sides.
+    /// The only thing conjugation `T(o)·M·T(-o)` preserves unconditionally is
+    /// the **perspective row** (`m[3]`, `m[7]`, `m[11]`). It changes the linear
+    /// 3×3 basis — with `m[3] = 0.25` and a pivot of 8, `m[0] = 1` conjugates
+    /// to `3` — and it changes `m[15]`, by the dot product of that perspective
+    /// row with `-o` (same example: `1` becomes `-1`).
+    ///
+    /// [`Matrix4::as_translation`] agrees across the conjugation anyway, and
+    /// the argument runs through the perspective row rather than around it.
+    /// That function answers `Some` only when the row is zero. When it is
+    /// zero, both changes above vanish — the dot product is zero and the basis
+    /// is untouched — so every bit it tests is preserved. When it is non-zero
+    /// it answers `None` on both sides, whatever happened to the other
+    /// entries. Neither branch can disagree.
     ///
     /// The agreement also fails outright on non-finite matrices:
     /// `Matrix4::translation(f32::INFINITY, 0.0, 0.0)` is `Some` before
