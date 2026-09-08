@@ -293,12 +293,29 @@ shape.
    oracle's" and that "nothing is lost". Both were false; a divergence's cost is
    not visible until something else changes, and `RouteRequest::navigator()` is
    what changed.
-2. **Kind.** Once a factory has pushed on top, the caller's route is no longer
-   the top, and a route that is not on top cannot be popped. `dismiss_captured`
-   therefore has three cases, all documented on it and all asserted: still on top
-   → an ordinary `pop` (`didPop`, and `Route::did_pop` may still refuse); buried
-   → removed by id (`didRemove`); already gone → a no-op, and the operation still
-   returns `Ok` with its new route pushed.
+2. **Kind, on the dismissal path.** Once a factory has pushed on top, the
+   caller's route is no longer the top, and a route that is not on top cannot be
+   popped. `dismiss_captured` therefore has three cases, all documented on it and
+   all asserted: still on top → an ordinary `pop` (`didPop`, and
+   `Route::did_pop` may still refuse); buried → removed by id (`didRemove`);
+   already gone → a no-op, and the operation still returns `Ok` with its new
+   route pushed.
+3. **Identity, on the replacement path.** `didReplace(new, old)` names the route
+   the replacement **actually completed** — the captured one — and this had to be
+   fixed as a second-order consequence of the capture itself. Completing by id
+   while deriving the observation from position left two sources of truth that
+   agreed only while nothing could run in between; with a re-entrant factory they
+   diverged, and observers were told the *factory's* route had been replaced
+   while it was still on the stack, with the genuinely replaced route never
+   reported at all. An observer acting on that would tear down a live route.
+   `RouteEntry::replacing` now carries the id the completion used, resolved once,
+   and the observation reads it. Note this is invisible to a kind-only oracle:
+   the stream is identical either way, which is why the pin asserts the payload.
+
+   The sibling arms keep the positional answer, deliberately: `Push` means "the
+   route below", which is positional by definition and replaces nothing, and the
+   generic mid-stack `Replace` resolves its target positionally in the first
+   place, so for it position *is* the single source of truth.
 
 Non-re-entrant calls — every ordinary one — are unaffected and still emit
 `["pop", "changeTop", "push", "changeTop"]`.
@@ -306,7 +323,8 @@ Non-re-entrant calls — every ordinary one — are unaffected and still emit
 **Where this beats the reference.** `pushReplacementNamed` has the identical
 defect in Flutter: the generator runs in argument position, and a Dart factory
 can navigate through `Navigator.of(context)` just as ours can, after which the
-replacement targets the wrong route. FLUI's capture removes it.
+replacement targets the wrong route. FLUI's capture removes it — completion and
+observation both, per point 3 above.
 
 **Replacement tests** (`tests/navigator_public.rs`), each with the mutation it
 detects:
@@ -324,6 +342,12 @@ detects:
   keeps every other named-route test green, the parity leg included — so the
   discriminator is the observer stream: a pop-and-push emits `didPop` + `didPush`,
   a replacement emits `didReplace` and neither.
+- `a_re_entrant_replacement_reports_the_route_it_actually_replaced` pins point 3
+  on the `didReplace` **payload**; deriving the reported id positionally again
+  makes it name the factory's route. Its sibling
+  `a_re_entrant_replacements_observer_stream_is_pinned` records the stream, and
+  is deliberately *not* the oracle for point 3 — the stream does not change when
+  the identity is wrong.
 
 ### 6. Named-route registration lives on the handle, and the app builder will replace the table wholesale
 

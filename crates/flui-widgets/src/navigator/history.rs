@@ -92,6 +92,22 @@ pub(crate) struct RouteEntry {
     /// `should_announce_change_to_next` suppress the *first* `didChangeNext(null)`
     /// (already sent by `handle_push` / `did_add` when `is_new_first`).
     last_announced_popped_next: Announced,
+
+    /// For a `PushReplace` entry: the route this one replaced, as resolved by
+    /// `push_replacement_with_id` — the **same value its completion used**.
+    ///
+    /// The observation used to be derived positionally, from the nearest present
+    /// entry below this one. That agreed with the completion only while nothing
+    /// could run between the two, which stopped being true once a named
+    /// replacement captured its target before resolving and a factory could
+    /// navigate in between: the captured route was completed, and a route that
+    /// was still on the stack was reported as replaced. One source of truth
+    /// instead of two that happen to agree.
+    ///
+    /// `None` on a `PushReplace` entry means "replaced nothing" (the captured
+    /// route was already gone), which is authoritative — not "fall back to the
+    /// position".
+    replacing: Option<RouteId>,
 }
 
 impl RouteEntry {
@@ -115,7 +131,20 @@ impl RouteEntry {
             last_announced_next: Announced::Never,
             last_announced_previous: Announced::Never,
             last_announced_popped_next: Announced::Never,
+            replacing: None,
         }
+    }
+
+    /// Record which route this entry replaced. Only `PushReplace` entries carry
+    /// one, and `push_replacement_with_id` is the only caller.
+    fn replacing(&mut self, replaced: Option<RouteId>) -> &mut Self {
+        debug_assert_eq!(
+            self.state,
+            RouteLifecycle::PushReplace,
+            "BUG: only a PushReplace entry replaces a route"
+        );
+        self.replacing = replaced;
+        self
     }
 
     pub(crate) fn id(&self) -> RouteId {
@@ -754,12 +783,16 @@ impl RouteHistory {
             Some(replaced) => self.entries.iter().position(|entry| entry.id() == replaced),
             None => self.last_present_index(),
         };
+        // Resolve once. The completion and the observation both read this, so
+        // they cannot disagree.
+        let replaced_id = target.map(|target| self.entries[target].id());
         if let Some(target) = target {
             self.entries[target].arm_complete(result, true);
         }
         let (erased, route_result) = RouteRecord::erase_with_id(id, route);
-        self.entries
-            .push(RouteEntry::new(erased, RouteLifecycle::PushReplace));
+        let mut entry = RouteEntry::new(erased, RouteLifecycle::PushReplace);
+        entry.replacing(replaced_id);
+        self.entries.push(entry);
         self.flush(true);
         (id, route_result)
     }
@@ -1027,11 +1060,19 @@ impl RouteHistory {
                 RouteLifecycle::Push | RouteLifecycle::PushReplace | RouteLifecycle::Replace => {
                     let previous = (index > 0).then(|| self.entries[position - 1].id());
                     let previous_present = self.route_before(index - 1, RouteLifecycle::is_present);
-                    let observation = self.entries[position].handle_push(
-                        previous,
-                        previous_present,
-                        next.is_none(),
-                    );
+                    // `PushReplace` reports the route its own completion targeted;
+                    // the other two keep the positional answer, which is right for
+                    // them — see `RouteEntry::replacing`. `Push` means "the route
+                    // below", which is positional by definition and replaces
+                    // nothing; `Replace` (the generic mid-stack swap) resolves its
+                    // target positionally in the first place, so position *is* its
+                    // single source of truth.
+                    let replaced = match state {
+                        RouteLifecycle::PushReplace => self.entries[position].replacing,
+                        _ => previous_present,
+                    };
+                    let observation =
+                        self.entries[position].handle_push(previous, replaced, next.is_none());
                     self.queues.enqueue(observation);
                     if self.entries[position].state == RouteLifecycle::Idle {
                         advance = false;

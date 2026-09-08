@@ -2154,3 +2154,91 @@ fn a_re_entrant_factory_is_observed_before_the_pop_it_precedes() {
          `pop_and_push_named_observes_a_pop_where_push_replacement_named_does_not`"
     );
 }
+
+/// Records `didReplace` with its full payload, which [`Spy`] flattens to a kind.
+#[derive(Default)]
+struct ReplaceSpy(Mutex<Vec<(Option<RouteId>, Option<RouteId>)>>);
+
+impl NavigatorObserver for ReplaceSpy {
+    fn did_replace(&self, new_route: Option<RouteId>, old_route: Option<RouteId>) {
+        self.0.lock().push((new_route, old_route));
+    }
+}
+
+/// A re-entrant `push_replacement_named` reports the route it **actually
+/// replaced**, not whatever ended up one slot below.
+///
+/// Completing by id and observing by position are two sources of truth for "which
+/// route was replaced", and they disagree exactly when a factory navigates: the
+/// captured route is completed but never reported, while the factory's route —
+/// still very much on the stack — is named as replaced. An observer acting on
+/// `didReplace(new, old)` would tear down a live route.
+///
+/// Red-check: derive the reported id from `previous_present` (the nearest present
+/// entry below the new route) instead of from the id the completion used, and
+/// this reports the factory's `/nested` route.
+#[test]
+fn a_re_entrant_replacement_reports_the_route_it_actually_replaced() {
+    let (handle, built, mut laid, nested) = navigator_with_a_re_entrant_factory();
+    let replaced_route = handle.push(page(&built, "replaced"));
+    laid.tick();
+    let replaced_id = handle.current().expect("on top");
+
+    let spy = Arc::new(ReplaceSpy::default());
+    handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+    let arrived = handle.push_replacement_named("/next").expect("registered");
+    laid.tick();
+    let nested_id = nested.lock().expect("the factory navigated");
+
+    assert_eq!(
+        spy.0.lock().clone(),
+        vec![(Some(arrived), Some(replaced_id))],
+        "didReplace names the captured route — the one that was completed — and \
+         not the factory's route, which is still on the stack"
+    );
+    assert!(
+        replaced_route.is_completed(),
+        "precondition: the captured route really was completed as replaced"
+    );
+    assert!(
+        handle.route_ids().contains(&nested_id),
+        "precondition: the factory's route really is still present, so naming it \
+         as replaced would be reporting a live route as gone"
+    );
+}
+
+/// The full observer stream for a re-entrant `push_replacement_named`, pinned
+/// beside its `pop_and_push_named` counterpart.
+///
+/// `ARCHITECTURE.md` §5 documents the re-entrant ordering; this is the
+/// replacement half of it. Note there is no `pop` and no `remove`: a replacement
+/// completes its target *as replaced*, which is what `didReplace` reports and
+/// why it emits no removal — the contrast
+/// `pop_and_push_named_observes_a_pop_where_push_replacement_named_does_not`
+/// draws for the non-re-entrant case holds here too.
+///
+/// Red-check: give the replacement path a positional target and the stream is
+/// unchanged — which is the point: kinds alone cannot see this defect, only the
+/// payload can. That is why the sibling test above asserts identity.
+#[test]
+fn a_re_entrant_replacements_observer_stream_is_pinned() {
+    let (handle, built, mut laid, _nested) = navigator_with_a_re_entrant_factory();
+    handle.push(page(&built, "replaced"));
+    laid.tick();
+
+    let spy = Arc::new(Spy::default());
+    handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+    handle.push_replacement_named("/next").expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        spy.kinds(),
+        vec![
+            "push",
+            "changeTop", // the factory's nested route, during resolution
+            "changeTop", // then the replacement — didReplace, which Spy does not record
+        ],
+        "the factory's push precedes the replacement it triggered"
+    );
+}
