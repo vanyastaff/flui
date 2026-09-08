@@ -44,10 +44,21 @@
 //!   exposed — a callback that only ever receives an empty platform list
 //!   would be dead API. Both arrive together when the platform layer
 //!   delivers locales.
-//! - **Named-route table / `Router`.** FLUI's [`Navigator`] is handle-driven
-//!   ([`NavigatorHandle`]), not name-driven: there is no `routes` map,
-//!   `onGenerateRoute`, or `onUnknownRoute` to port. The deep-link analog is
-//!   a pre-seeded handle — see [`WidgetsApp::navigator`].
+//! - **Named-route table / `Router`, at the *app* level.** The mechanism
+//!   itself is ported — [`route`](NavigatorHandle::route),
+//!   [`on_generate_route`](NavigatorHandle::on_generate_route) and
+//!   [`on_unknown_route`](NavigatorHandle::on_unknown_route) carry Flutter's
+//!   `routes` map and its two hooks, and
+//!   [`push_named`](NavigatorHandle::push_named) and its five siblings drive
+//!   them (ADR-0024). What this shell does not yet do is *forward* them: there
+//!   is no `WidgetsApp::routes(..)` folding `home` + a table + a user generator
+//!   into one hook the way `WidgetsApp._onGenerateRoute` does, so an app
+//!   registers on the handle it hands to [`WidgetsApp::navigator`]. When that
+//!   forwarding lands, the reconciliation contract is already fixed: the app
+//!   builder replaces the table wholesale at mount, and the handle mutators
+//!   serve imperative or late registration (`ARCHITECTURE.md`,
+//!   `## Mapping decisions`). `Router` / Navigator 2.0 remains unported
+//!   entirely.
 //! - **Restoration scope, `SharedAppData`, `NavigationNotification`,
 //!   shortcut/action overrides, performance overlay, debug banner.** Each
 //!   depends on infrastructure FLUI has not built (state restoration,
@@ -323,6 +334,12 @@ pub struct WidgetsAppState {
     /// `None` in the builder-only form (no navigator at all — the oracle
     /// builds no `Navigator` when `home`, `routes`, `onGenerateRoute`, and
     /// `onUnknownRoute` are all absent) until an update introduces routing.
+    ///
+    /// Only `home` and a caller-supplied handle reach that condition here: this
+    /// shell has no `routes` / `onGenerateRoute` / `onUnknownRoute` of its own
+    /// to consult (the module docs say why), so a handle whose *named* routes
+    /// are registered directly must be handed in through
+    /// [`WidgetsApp::navigator`] to make this `Some`.
     navigator: Option<NavigatorHandle>,
     /// The seeded home route and the live cell its content builder reads —
     /// `did_update_view` writes the current view's `home` into the cell and
@@ -810,7 +827,10 @@ mod tests {
     #[test]
     fn builder_only_app_receives_no_routing_and_supplies_the_subtree() {
         // The oracle builds no Navigator when home/routes/onGenerateRoute/
-        // onUnknownRoute are all absent; builder receives a null child.
+        // onUnknownRoute are all absent; builder receives a null child. Of
+        // those four, only `home` is a knob this shell has — named-route
+        // registration lives on `NavigatorHandle`, and a caller who wants it
+        // supplies the handle through `WidgetsApp::navigator`.
         let received_none = Arc::new(Mutex::new(None::<bool>));
         let received = Arc::clone(&received_none);
         let (probe, captured) = capture(|_ctx| true);

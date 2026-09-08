@@ -204,12 +204,13 @@ pub use flui_objects::OverflowBoxFit;
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
 pub use navigator::{
-    FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode, Navigator,
-    NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome, NavigatorCommandTarget,
-    NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
-    PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route, RouteAnimation,
-    RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult,
-    RouteSettings, RouteTransitionsBuilder, SimpleRoute,
+    FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope, HeroMode,
+    KeyedSettings, NamedRouteError, Navigator, NavigatorCommand, NavigatorCommandError,
+    NavigatorCommandOutcome, NavigatorCommandTarget, NavigatorHandle, NavigatorObserver,
+    NavigatorRoute, NavigatorState, PageRoute, PopInvokedCallback, PopScope, PopupRoute,
+    PushCompletion, Route, RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder,
+    RouteId, RouteKey, RoutePageBuilder, RouteRequest, RouteResult, RouteSettings,
+    RouteTransitionsBuilder, SimpleRoute,
 };
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0036) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to

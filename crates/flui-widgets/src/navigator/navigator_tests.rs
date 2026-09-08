@@ -22,6 +22,7 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use super::binding::RouteBindingSlot;
+use super::named_route::{GeneratedRoute, NamedRouteError, RouteRequest};
 use super::navigator::{
     Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
     NavigatorCommandTarget, NavigatorHandle,
@@ -906,7 +907,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 35] = [
+    const INTERNAL: [&str; 43] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -959,6 +960,24 @@ fn public_no_internal_route_stack_exports() {
         "LocalHistoryScope",
         "LocalHistoryHandle",
         "LocalHistoryEntryHandle",
+        // Named-route generation (ADR-0024) exports **five** names —
+        // `GeneratedRoute`, `KeyedSettings`, `NamedRouteError`, `RouteKey` and
+        // `RouteRequest`. Everything below is the implementation: the registry,
+        // the erased-push seam, the checked-push token, the replacement target,
+        // and `RouteFactory`, which names the `Rc` shape the registry stores and
+        // which no public signature mentions (the three registration methods take
+        // the closure itself).
+        "RouteRegistry",
+        "RouteFactory",
+        "ErasedPush",
+        "TypedPush",
+        "PushMode",
+        "ReplaceTarget",
+        // Absorbed from `tests/navigator_public.rs`, which used to keep a second
+        // list behind its own copy of this scanner. Note whole-identifier
+        // matching means `Observation` above does not cover `ObservationQueues`.
+        "BoundRoute",
+        "ObservationQueues",
     ];
 
     super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);
@@ -1282,8 +1301,9 @@ fn a_disposed_pop_scope_stops_vetoing() {
 /// deadlocked same-thread. Delivery now defers through
 /// `FlushOutcome::pop_invoked` and `apply` fires it with no lock held, still
 /// synchronously within the `pop`/`maybe_pop` call (the outcomes-ordering
-/// tests above pin that), and before observers hear `didPop`
-/// (`navigator.dart:3372` before `:4527`).
+/// tests above pin that), and before observers hear `didPop` —
+/// `onPopInvokedWithResult` fires inside `_RouteEntry.handlePop`, the observation
+/// is delivered later by `NavigatorState._flushObserverNotifications`.
 ///
 /// Red-check (the shipped bug): fan out from `ModalRoute::on_pop_invoked`
 /// again — both phases hang and the watchdog fails the test.
@@ -2041,4 +2061,708 @@ mod user_gesture {
         handle.did_stop_user_gesture(); // 1 -> 0: fires.
         assert_eq!(fires.load(Ordering::SeqCst), 2);
     }
+}
+
+/// The conflict warning is really *emitted*, exactly once, and names the route
+/// and both result types.
+///
+/// The sibling test asserts on `route_conflict_warns()`, a counter this module
+/// maintains. That counter is coupled to the emission by construction, but a
+/// counter is still not an event: it cannot show that `tracing::warn!` ran, that
+/// the message says anything useful, or that the fields carry both type names.
+/// This captures the real events instead, through
+/// [`flui_testing::log_capture::capture`] — which is race-free in a parallel
+/// test binary where a hand-rolled `with_default` is not, because `tracing`
+/// caches each callsite's interest process-globally.
+///
+/// Red-check: delete the `tracing::warn!` call and this fails while every
+/// counter assertion in the sibling test still passes — which is exactly the gap
+/// a counter-only oracle leaves.
+#[test]
+fn the_conflict_warning_is_emitted_once_and_names_both_result_types() {
+    let (handle, log) = flui_testing::log_capture::capture(|| {
+        let handle = NavigatorHandle::new();
+        // Same type twice: legitimate wholesale replacement, no warning.
+        for _ in 0..2 {
+            handle.route("/order", |_request: &RouteRequest<'_>| {
+                Some(SimpleRoute::<u32>::new(|_ctx| {
+                    SizedBox::new(1.0, 1.0).into_view().boxed()
+                }))
+            });
+        }
+        // Then flip the type three times: three conflicts, one warning.
+        for _ in 0..3 {
+            handle.route("/order", |_request: &RouteRequest<'_>| {
+                Some(SimpleRoute::<String>::new(|_ctx| {
+                    SizedBox::new(1.0, 1.0).into_view().boxed()
+                }))
+            });
+            handle.route("/order", |_request: &RouteRequest<'_>| {
+                Some(SimpleRoute::<u32>::new(|_ctx| {
+                    SizedBox::new(1.0, 1.0).into_view().boxed()
+                }))
+            });
+        }
+        handle
+    });
+
+    let conflicts: Vec<_> = log
+        .records()
+        .iter()
+        .filter(|record| record.contains("re-registered with a different result type"))
+        .collect();
+
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "six conflicting re-registrations emit exactly one warning; captured:\n{}",
+        log.render_at_least(tracing::Level::WARN)
+    );
+    let warning = conflicts[0];
+    assert_eq!(warning.level, tracing::Level::WARN);
+    assert!(
+        warning.contains("/order"),
+        "the warning names the route: {warning:?}"
+    );
+    assert!(
+        warning.contains("u32") && warning.contains("String"),
+        "and both result types, so the reader can find the two disagreeing \
+         registration sites: {warning:?}"
+    );
+    assert_eq!(
+        handle.route_conflicts_seen(),
+        6,
+        "while every conflict is still counted"
+    );
+}
+
+/// A re-registration that changes a name's `Output` type is reported **at the
+/// registration site**, once per navigator.
+///
+/// This is what makes a `RouteKey`'s compile-time promise recoverable: the key
+/// checks its own registration, but the table is name-keyed, so two sites that
+/// disagree about one name defeat it. Catching that at registration reports the
+/// mistake where it was made, instead of at some later `push_keyed`.
+///
+/// Latched deliberately: an app that rebuilds its route table in a loop would
+/// otherwise emit one warning per pass. Conflicts are still *counted* in full,
+/// which is how this test can tell "warned once" from "stopped noticing".
+///
+/// Replacing a route with one of the **same** type is not a conflict at all —
+/// `ARCHITECTURE.md` §6's contract is that an app builder replaces the table
+/// wholesale at mount, so that path must stay silent.
+///
+/// Red-check: drop the `warns_emitted == 0` latch and the second assertion
+/// reads 3; drop the `previous.output != output` guard and the same-type
+/// re-registration warns.
+#[test]
+fn a_route_re_registered_with_a_different_output_type_warns_once_per_navigator() {
+    let handle = NavigatorHandle::new();
+
+    // Same type, three times: a legitimate wholesale replacement.
+    for _ in 0..3 {
+        handle.route("/same", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<i32>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+    }
+    assert_eq!(
+        handle.route_conflicts_seen(),
+        0,
+        "replacing a route with one of the same type is not a conflict"
+    );
+    assert_eq!(handle.route_conflict_warns(), 0);
+
+    // Now flip the type, three times.
+    for _ in 0..3 {
+        handle.route("/same", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<String>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+        handle.route("/same", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<i32>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+    }
+
+    assert_eq!(
+        handle.route_conflicts_seen(),
+        6,
+        "every conflicting re-registration is counted"
+    );
+    assert_eq!(
+        handle.route_conflict_warns(),
+        1,
+        "but only the first one warns — a registration loop reports once"
+    );
+
+    // A second navigator has its own latch: the warning is per registry, not a
+    // process-global static, so one navigator's conflict cannot silence another.
+    let other = NavigatorHandle::new();
+    other.route("/same", |_request: &RouteRequest<'_>| {
+        Some(SimpleRoute::<i32>::new(|_ctx| {
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }))
+    });
+    other.route("/same", |_request: &RouteRequest<'_>| {
+        Some(SimpleRoute::<String>::new(|_ctx| {
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }))
+    });
+    assert_eq!(other.route_conflict_warns(), 1, "and it warns for itself");
+}
+
+/// Route registrations survive an unmount and remount over a **retained
+/// handle** — they are not mount-scoped state.
+///
+/// This is the supported flow `widgets_app.rs`'s
+/// `unmount_and_remount_over_a_retained_handle_does_not_duplicate_observers`
+/// exercises for observers, and the two differ deliberately:
+/// `NavigatorState::dispose` *detaches observers* because an observer holds a
+/// handle exactly while the navigator is mounted, whereas a registration has no
+/// such lifecycle — `ARCHITECTURE.md` §6 states that contrast, and clearing the
+/// registry on dispose would contradict it. An app that registers once against a
+/// handle it keeps would then get `Unresolved` from every `push_named` after its
+/// first unmount.
+///
+/// Breaking the `Arc` cycle a handle-capturing factory creates is
+/// [`NavigatorHandle::clear_routes`]'s job, because that is a caller decision:
+/// only the caller knows whether it intends to register again.
+///
+/// Red-check: put `self.shared.named_routes.clear()` back into
+/// `NavigatorState::dispose` and the post-remount push fails with `Unresolved`.
+#[test]
+fn route_registrations_survive_an_unmount_and_remount_over_a_retained_handle() {
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    handle.route("/details", {
+        let built = built.clone();
+        move |_request: &RouteRequest<'_>| Some(page(&built, "details"))
+    });
+
+    let mut harness = mount(Host {
+        show: true,
+        handle: handle.clone(),
+    });
+    handle
+        .push_named("/details")
+        .expect("registered before the first mount");
+    harness.tick();
+
+    harness.swap_root(Host {
+        show: false,
+        handle: handle.clone(),
+    });
+    assert!(!handle.is_mounted(), "the navigator unmounted");
+
+    harness.swap_root(Host {
+        show: true,
+        handle: handle.clone(),
+    });
+    harness.tick();
+
+    handle
+        .push_named("/details")
+        .expect("the registration outlived the unmount — it is not mount-scoped");
+}
+
+/// [`NavigatorHandle::clear_routes`] is the explicit escape: it drops every
+/// registration, and it is the only thing that does.
+///
+/// It exists so the hazard note on `on_generate_route` can point at a break the
+/// surface actually performs. A factory that captured a handle anyway holds an
+/// `Arc` back to this navigator through the registry, and the caller holding
+/// that closure has no other way to reach it.
+///
+/// Red-check: make `clear_routes` a no-op and the post-clear push still
+/// resolves.
+#[test]
+fn clear_routes_drops_every_registration_including_the_generator_hooks() {
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    handle.route("/table", {
+        let built = built.clone();
+        move |_request: &RouteRequest<'_>| Some(page(&built, "table"))
+    });
+    handle.on_generate_route({
+        let built = built.clone();
+        move |_request: &RouteRequest<'_>| Some(GeneratedRoute::new(page(&built, "generated")))
+    });
+    handle.on_unknown_route({
+        let built = built.clone();
+        move |_request: &RouteRequest<'_>| Some(GeneratedRoute::new(page(&built, "unknown")))
+    });
+    let mut harness = mount(Host {
+        show: true,
+        handle: handle.clone(),
+    });
+
+    handle.push_named("/table").expect("the table answers");
+    handle
+        .push_named("/anything")
+        .expect("the generator answers");
+    harness.tick();
+
+    handle.clear_routes();
+
+    assert!(
+        matches!(
+            handle.push_named("/table"),
+            Err(NamedRouteError::Unresolved { .. })
+        ),
+        "the table entry is gone"
+    );
+    assert!(
+        matches!(
+            handle.push_named("/anything"),
+            Err(NamedRouteError::Unresolved { .. })
+        ),
+        "and so are both generator hooks — otherwise the fallback would answer"
+    );
+}
+
+/// The re-entrancy the latch has to survive: a `tracing` subscriber that
+/// registers a conflicting route **while handling the conflict warning**.
+///
+/// # What this actually catches, measured rather than assumed
+///
+/// The reported defect was that latch-after-emit lets the re-entrant
+/// registration observe `warns_emitted == 0` and emit a **second warning**. That
+/// half is *not* reachable, and this test is the evidence: `tracing` suppresses
+/// re-entrant event dispatch on the same thread, so the inner `warn!` never
+/// reaches a subscriber. Under the defective ordering the captured event count
+/// is 1, not 2.
+///
+/// What *is* reachable is a **counter that drifts from the emission**: both the
+/// inner and the outer call increment `warns_emitted`, so it reads 2 while one
+/// event was emitted. Measured, with the increment placed after the warn:
+/// `events=1 warns_counter=2 conflicts=2`; with the decision and the latch
+/// committed together under the lock: `events=1 warns_counter=1 conflicts=2`.
+///
+/// That drift matters because `warns_emitted` is what the sibling counter test
+/// asserts on. A counter that over-reports would make "warned once" pass while
+/// the latch was broken in some other way — the counter is only a usable oracle
+/// while it cannot diverge from the emission, which is exactly what committing
+/// both in one locked step buys.
+///
+/// Recorded so nobody later observes that the double-warn is unreachable and
+/// removes the guard as dead: it is not guarding the warn, it is keeping the
+/// counter honest.
+///
+/// The subscriber is a ZST because `tracing::Subscriber` is `Send + Sync` and
+/// `NavigatorHandle` deliberately is not; the handle reaches it through a
+/// thread-local, which is sound because `with_default` installs per thread and
+/// the warn is emitted on that same thread. `take()` bounds the re-entry to one,
+/// so a failure is an assertion rather than a stack overflow.
+///
+/// Red-check (performed): move the `warns_emitted` increment back after the
+/// `tracing::warn!` call and the counter assertion reads 2.
+#[test]
+fn a_subscriber_that_re_registers_while_handling_the_warning_cannot_skew_the_latch() {
+    use std::cell::RefCell;
+    use std::sync::atomic::AtomicUsize;
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    thread_local! {
+        /// Taken by the first event, so the re-entry happens exactly once.
+        static REENTER_ON: RefCell<Option<NavigatorHandle>> = const { RefCell::new(None) };
+    }
+    static CONFLICT_EVENTS: AtomicUsize = AtomicUsize::new(0);
+
+    fn register_as_text(handle: &NavigatorHandle) {
+        handle.route("/order", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<String>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+    }
+
+    /// The re-entrant registration must flip the type *back*, or it replaces
+    /// `String` with `String` and is not a conflict at all — which is what the
+    /// precondition below exists to catch.
+    fn register_as_number(handle: &NavigatorHandle) {
+        handle.route("/order", |_request: &RouteRequest<'_>| {
+            Some(SimpleRoute::<u32>::new(|_ctx| {
+                SizedBox::new(1.0, 1.0).into_view().boxed()
+            }))
+        });
+    }
+
+    struct ReentrantSubscriber;
+
+    impl Subscriber for ReentrantSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            if event.metadata().target().contains("named_route") {
+                CONFLICT_EVENTS.fetch_add(1, Ordering::Relaxed);
+            }
+            // Re-enter registration from inside the warn's own dispatch.
+            let target = REENTER_ON.with(|cell| cell.borrow_mut().take());
+            if let Some(handle) = target {
+                register_as_number(&handle);
+            }
+        }
+        fn enter(&self, _span: &Id) {}
+        fn exit(&self, _span: &Id) {}
+    }
+
+    flui_testing::log_capture::disarm_interest_cache();
+    let handle = NavigatorHandle::new();
+    register_as_number(&handle);
+    REENTER_ON.with(|cell| *cell.borrow_mut() = Some(handle.clone()));
+
+    tracing::subscriber::with_default(ReentrantSubscriber, || register_as_text(&handle));
+
+    assert_eq!(
+        handle.route_conflicts_seen(),
+        2,
+        "precondition: the re-entry really did register a second conflict — \
+         without this the test would pass by the re-entry never happening, and \
+         it caught exactly that when the re-entrant registration first used the \
+         same type as the one it was replacing"
+    );
+    assert_eq!(
+        handle.route_conflict_warns(),
+        1,
+        "the latch was committed under the lock before the event was dispatched, \
+         so the re-entrant registration saw it and did not count itself as first"
+    );
+    assert_eq!(
+        CONFLICT_EVENTS.load(Ordering::Relaxed),
+        1,
+        "and exactly one warning reached the subscriber — which is 1 under the \
+         defective ordering too, because tracing suppresses re-entrant dispatch; \
+         see this test's docs for why the counter is the discriminating oracle"
+    );
+}
+
+/// Displacing a registration drops a **user closure**, and that closure's `Drop`
+/// may reach back into the registry. It must not deadlock.
+///
+/// `parking_lot::Mutex` is not reentrant and there is no compile-time oracle for
+/// a self-locking call — it compiles clean and hangs at run time. The path is
+/// not exotic here: the closure being dropped by `clear_routes` is, by design,
+/// the one that captured a `NavigatorHandle`, so its captured state is exactly
+/// what a `Drop` impl would hang off.
+///
+/// Both directions are covered: re-registering a name (which drops the entry it
+/// displaces) and `clear_routes` (which drops every entry at once).
+///
+/// Red-check: drop the displaced entry *inside* the guard — in
+/// `RouteRegistry::register_named`, bind `previous` inside the locked block
+/// instead of outside it; in `clear`, call `table.clear()` under the guard
+/// rather than moving the map out. This test then hangs rather than failing,
+/// which is why it is written to make progress observable (`re_registrations`
+/// rises) instead of only asserting at the end.
+#[test]
+fn a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry() {
+    /// Registers another route from its own `Drop` — the self-locking shape.
+    struct ReRegisterOnDrop {
+        navigator: NavigatorHandle,
+        ran: Arc<AtomicUsize>,
+    }
+
+    impl Drop for ReRegisterOnDrop {
+        fn drop(&mut self) {
+            self.ran.fetch_add(1, Ordering::Relaxed);
+            self.navigator
+                .route("/dropped-into", |_request: &RouteRequest<'_>| {
+                    Some(SimpleRoute::<u32>::new(|_ctx| {
+                        SizedBox::new(1.0, 1.0).into_view().boxed()
+                    }))
+                });
+        }
+    }
+
+    let re_registrations = Arc::new(AtomicUsize::new(0));
+    let handle = NavigatorHandle::new();
+
+    // A factory whose captured state re-enters the registry when dropped.
+    let hook = ReRegisterOnDrop {
+        navigator: handle.clone(),
+        ran: Arc::clone(&re_registrations),
+    };
+    handle.route("/replaced", move |_request: &RouteRequest<'_>| {
+        let _keeps_the_hook_alive = &hook;
+        Some(SimpleRoute::<u32>::new(|_ctx| {
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }))
+    });
+
+    // Displacing it drops the hook. Under a guard held across the drop this
+    // deadlocks the owner thread.
+    handle.route("/replaced", |_request: &RouteRequest<'_>| {
+        Some(SimpleRoute::<u32>::new(|_ctx| {
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }))
+    });
+    assert_eq!(
+        re_registrations.load(Ordering::Relaxed),
+        1,
+        "the displaced closure's Drop ran, and re-entered the registry without \
+         deadlocking"
+    );
+    assert!(
+        handle.push_named("/dropped-into").is_ok(),
+        "and its re-entrant registration actually landed"
+    );
+
+    // The same, through `clear_routes`, which drops every entry at once.
+    let hook = ReRegisterOnDrop {
+        navigator: handle.clone(),
+        ran: Arc::clone(&re_registrations),
+    };
+    handle.route("/cleared", move |_request: &RouteRequest<'_>| {
+        let _keeps_the_hook_alive = &hook;
+        Some(SimpleRoute::<u32>::new(|_ctx| {
+            SizedBox::new(1.0, 1.0).into_view().boxed()
+        }))
+    });
+    handle.clear_routes();
+    assert_eq!(
+        re_registrations.load(Ordering::Relaxed),
+        2,
+        "clear_routes dropped the closure outside its guard too"
+    );
+
+    // And the two generator hooks, which displace by assignment rather than by
+    // `HashMap::insert` — the same hazard, reached a different way. Written out
+    // twice rather than looped: the two methods take `impl Fn`, so there is no
+    // one value that installs either.
+    let generator_hook = ReRegisterOnDrop {
+        navigator: handle.clone(),
+        ran: Arc::clone(&re_registrations),
+    };
+    handle.on_generate_route(move |_request: &RouteRequest<'_>| {
+        let _keeps_the_hook_alive = &generator_hook;
+        None
+    });
+    handle.on_generate_route(|_request: &RouteRequest<'_>| None);
+    assert_eq!(
+        re_registrations.load(Ordering::Relaxed),
+        3,
+        "a replaced on_generate_route hook is dropped outside the guard too"
+    );
+
+    let fallback_hook = ReRegisterOnDrop {
+        navigator: handle.clone(),
+        ran: Arc::clone(&re_registrations),
+    };
+    handle.on_unknown_route(move |_request: &RouteRequest<'_>| {
+        let _keeps_the_hook_alive = &fallback_hook;
+        None
+    });
+    handle.on_unknown_route(|_request: &RouteRequest<'_>| None);
+    assert_eq!(
+        re_registrations.load(Ordering::Relaxed),
+        4,
+        "and so is a replaced on_unknown_route hook"
+    );
+}
+
+/// A panic in a route lifecycle hook must not brick the navigator.
+///
+/// `parking_lot` does not poison, so the mutex survives an unwind — but the
+/// `flushing` flag used to be cleared by the statement *after* the walk, which an
+/// unwind skips. Every later flush then tripped `assert!(!self.flushing)`, so one
+/// panicking `did_pop` disabled the navigator permanently.
+///
+/// A hook that panics violates [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md);
+/// forbidding it is not preventing it, and the cost of not surviving it is total.
+///
+/// **What this does not claim.** The same unwind drops a partially built
+/// `FlushOutcome`, so a route already moved into its `dying` list loses its
+/// `Route::dispose`. That is left alone on purpose — see `flush_once`'s doc — so
+/// this test asserts the navigator is *usable*, not that the panicking flush was
+/// clean.
+///
+/// Red-check: replace the `FlushingGuard` in `RouteHistory::flush_once` with a
+/// bare `self.flushing.set(false)` after the call, and the second push panics on
+/// the flush assertion instead of succeeding.
+#[test]
+fn a_panicking_route_hook_leaves_the_navigator_usable() {
+    /// Panics from `did_pop`, once.
+    struct PanicsOnPop {
+        settings: RouteSettings,
+        builder: RouteContentBuilder,
+    }
+
+    impl Route for PanicsOnPop {
+        type Output = i32;
+
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+
+        fn did_pop(&mut self) -> bool {
+            panic!("BUG: a deliberately panicking lifecycle hook");
+        }
+    }
+
+    impl NavigatorRoute for PanicsOnPop {
+        fn content_builder(&self) -> RouteContentBuilder {
+            Rc::clone(&self.builder)
+        }
+    }
+
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    let mut harness = mount(Host {
+        show: true,
+        handle: handle.clone(),
+    });
+
+    handle.push(PanicsOnPop {
+        settings: RouteSettings::named("panics"),
+        builder: Rc::new(|_ctx| SizedBox::new(1.0, 1.0).into_view().boxed()),
+    });
+    harness.tick();
+    let depth_before = handle.route_ids().len();
+
+    // The panic crosses the flush. Caught here so the test can go on to prove the
+    // navigator survived it — which is the whole point.
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle.pop();
+    }));
+    assert!(panicked.is_err(), "precondition: the hook really did panic");
+
+    // The claim: the navigator still works. Under the defect this push panics on
+    // `assert!(!self.flushing)` instead.
+    handle.push(page(&built, "after"));
+    harness.tick();
+    assert_eq!(
+        handle.route_ids().len(),
+        depth_before + 1,
+        "a push after the panicking pop still lands — the flush flag was cleared \
+         by the guard on the way out"
+    );
+    assert!(built.contains("after"), "and its content built");
+}
+
+/// A `PopScope` callback that **navigates** — and where its navigation lands in
+/// the observer stream.
+///
+/// Its sibling above proves such a callback may *read* the navigator without
+/// deadlocking. This one proves it may *mutate* it, and pins the consequence: the
+/// push issued from the callback is observed **before** the pop that caused it.
+///
+/// That order is **parity, not a defect.** In the reference the callback fires
+/// from `_RouteEntry.handlePop` — inside `_flushHistoryUpdates` — while observers
+/// are notified afterwards by `NavigatorState._flushObserverNotifications`, which
+/// drains `_observedRouteDeletions` once the history walk is done. So
+/// `onPopInvokedWithResult` before `NavigatorObserver.didPop` is the reference's
+/// own relative order, and `apply`'s step 0 / step 1 split reproduces it.
+///
+/// What **is** a divergence, recorded here because nothing else records it: the
+/// reference would never let this sequence be observed at all. `handlePop` runs
+/// under `assert(navigator._debugLocked)`, and every imperative entry point on
+/// `NavigatorState` (`push`, `pop`, `pushNamed`, `removeRoute`, … thirteen of
+/// them) opens with `assert(!_debugLocked)` — so a synchronous navigation from
+/// `onPopInvokedWithResult` aborts a debug build before any ordering is visible.
+/// FLUI deliberately permits it (that is what its sibling test exists to
+/// guarantee, after the fan-out deadlock), which means FLUI can reach a state the
+/// reference defines away. The permission was recorded; this ordering consequence
+/// of the permission was not.
+///
+/// Red-check: swap `apply`'s step 0 and step 1 and the sequence inverts to
+/// `[pop, push]` — which would be the *divergence*, not the fix.
+#[test]
+fn a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it() {
+    use std::time::Duration;
+
+    use crate::PopScope;
+    use crate::navigator::{NavigatorObserver, PageRoute, RouteId};
+
+    const BUDGET: Duration = Duration::from_secs(10);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+
+        #[derive(Default)]
+        struct SeqSpy(Mutex<Vec<String>>);
+        impl NavigatorObserver for SeqSpy {
+            fn did_push(&self, route: RouteId, previous: Option<RouteId>) {
+                self.0
+                    .lock()
+                    .push(format!("push({route:?},prev={previous:?})"));
+            }
+            fn did_pop(&self, route: RouteId, previous: Option<RouteId>) {
+                self.0
+                    .lock()
+                    .push(format!("pop({route:?},prev={previous:?})"));
+            }
+        }
+
+        let spy = Arc::new(SeqSpy::default());
+        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+        let navigated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let navigated_for_scope = Arc::clone(&navigated);
+        let handle_for_scope = handle.clone();
+        let built_for_scope = built.clone();
+        let _guarded = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            let log = Arc::clone(&navigated_for_scope);
+            let navigator = handle_for_scope.clone();
+            let b = built_for_scope.clone();
+            PopScope::new(SizedBox::new(10.0, 10.0))
+                .on_pop_invoked(move |did_pop| {
+                    // The re-entrant NAVIGATION, not just a read.
+                    let pushed = navigator.push(page(&b, "/from-callback"));
+                    log.lock().push(format!(
+                        "callback(did_pop={did_pop}) pushed, completed={}",
+                        pushed.is_completed()
+                    ));
+                })
+                .into_view()
+                .boxed()
+        }));
+        harness.tick();
+        spy.0.lock().clear();
+
+        let popped = handle.pop();
+        harness.tick();
+
+        assert!(popped, "the pop went through");
+        assert_eq!(
+            navigated.lock().len(),
+            1,
+            "the callback ran, and navigating from it neither hung nor panicked"
+        );
+        let sequence = spy.0.lock().clone();
+        assert_eq!(
+            sequence.len(),
+            2,
+            "one push from the callback, one pop from the operation: {sequence:?}"
+        );
+        assert!(
+            sequence[0].starts_with("push("),
+            "the callback's push is observed FIRST — the reference's own relative \
+             order, reproduced: {sequence:?}"
+        );
+        assert!(
+            sequence[1].starts_with("pop("),
+            "and the pop that caused it second: {sequence:?}"
+        );
+        let _ = done.send(());
+    });
+    assert!(
+        finished.recv_timeout(BUDGET).is_ok(),
+        "a PopScope callback that navigates deadlocked — the deferred fan-out \
+         ran with the history lock held"
+    );
 }
