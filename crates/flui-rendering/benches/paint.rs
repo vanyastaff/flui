@@ -237,6 +237,82 @@ fn bench_opacity_alpha_change(c: &mut Criterion) {
     }
 }
 
+// ============================================================================
+// run_paint — a transform matrix change: update arm vs. repaint arm
+// ============================================================================
+
+/// What a matrix change costs on the update arm versus the repaint arm.
+///
+/// Mirrors [`bench_opacity_alpha_change`] exactly: both arms mutate the SAME
+/// tree by the SAME property through the same seam a widget rebuild uses (the
+/// setter, then `apply_render_update_impact`); `repaint` additionally marks
+/// the transform node needing paint, which makes the frame take the old
+/// path. Carries both `inline` and `layered` shapes for the same reason —
+/// quoting only the inline number overstates the general case, the exact
+/// mistake caught in review on #994 for the opacity version of this
+/// benchmark.
+fn bench_transform_matrix_change(c: &mut Criterion) {
+    for (layered, name) in [(false, "inline"), (true, "layered")] {
+        let mut group = c.benchmark_group(format!("paint/transform_matrix_change/{name}"));
+        for &subtree in &[1_usize, 10, 100, 1_000] {
+            group.bench_with_input(
+                BenchmarkId::new("update", subtree),
+                &subtree,
+                |b, &subtree| {
+                    b.iter_batched(
+                        || {
+                            let (mut owner, transform) =
+                                helpers::build_transform_tree(layered, subtree);
+                            helpers::set_transform(
+                                &mut owner,
+                                transform,
+                                flui_types::Matrix4::scaling(3.0, 3.0, 1.0),
+                            );
+                            owner
+                        },
+                        |mut owner| {
+                            owner
+                                .run_paint()
+                                .expect("run_paint must succeed after a matrix change");
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new("repaint", subtree),
+                &subtree,
+                |b, &subtree| {
+                    b.iter_batched(
+                        || {
+                            let (mut owner, transform) =
+                                helpers::build_transform_tree(layered, subtree);
+                            helpers::set_transform(
+                                &mut owner,
+                                transform,
+                                flui_types::Matrix4::scaling(3.0, 3.0, 1.0),
+                            );
+                            // Force the old path: an explicit paint mark wins
+                            // over the layer-update mark the setter reported.
+                            owner.mark_needs_paint(transform);
+                            owner
+                        },
+                        |mut owner| {
+                            owner
+                                .run_paint()
+                                .expect("run_paint must succeed after a matrix change");
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_flat_run_compositing,
@@ -245,5 +321,6 @@ criterion_group!(
     bench_single_dirty_boundary,
     bench_eight_dirty_boundaries,
     bench_opacity_alpha_change,
+    bench_transform_matrix_change,
 );
 criterion_main!(benches);

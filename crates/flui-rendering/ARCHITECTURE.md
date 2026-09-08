@@ -316,6 +316,71 @@ for slivers.
 semantics mark on `alwaysIncludeSemantics`, a field neither FLUI opacity render
 object has. Both report semantics unconditionally on a visibility flip.
 
+**And again, further from the reference: `RenderTransform`.** Upstream has no
+composited-layer-update path for a transform *at all* — verified at the pinned
+tag in `proxy_box.dart`: `RenderTransform`'s `transform`, `origin` and
+`alignment` setters each call `markNeedsPaint()` + `markNeedsSemanticsUpdate()`,
+`isRepaintBoundary` is never overridden for the class, and its
+`alwaysNeedsCompositing` is gated on `filterQuality`, not on the matrix. A
+`ScaleTransition` or `RotationTransition` therefore repaints its subtree on
+every animation frame upstream.
+
+FLUI reports `COMPOSITED_LAYER_UPDATE` for a matrix change that stays within the
+layered range, on the same flat-capture argument as the opacity cases: the
+layer is addressable inside the enclosing boundary's capture, so nothing is
+promoted. Measured on the benchmark's two shapes — **133x** at 1000 inline
+nodes, **1.9x** once every leaf is its own boundary.
+
+Two things this costs, both deliberate:
+
+1. **The matrix moved from a `FragmentOp::PushTransform` inside `paint` to the
+   `paint_transform` node hook** — the opposite of the choice `RenderFittedBox`
+   documents for itself, which keeps its matrix in `paint` so it can open its
+   clip *outside* the transform layer. `RenderTransform` has no clip, so it has
+   no such ordering constraint, and only the hook route is patchable. The
+   asymmetry between the two is intentional; a future reader comparing them
+   should not "fix" either toward the other.
+2. **A pure translation keeps the no-layer fast path** (`paint_transform`
+   returns `None`, `paint` applies a plain child offset), so translation ↔
+   non-translation is a layer-count change and the setters report `PAINT`
+   across it, as they do across singular ↔ non-singular. This is what keeps
+   `Transform.translate` and every `SlideTransition` from paying for a
+   compositing layer per frame — a cost upstream's unconditional
+   `markNeedsPaint` never incurs either.
+
+**Oracles** (net-new; upstream has no test driving these setters, so nothing was
+replaced): `a_transform_change_updates_the_layer_without_repainting_the_subtree`
+and `a_transform_layer_update_is_written_back_into_the_retained_capture` are the
+red-green pair; `a_patched_transform_subtree_matches_a_full_repaint_at_any_size`
+is the control that keeps the benchmark's flat update arm from also describing a
+patch that dropped the subtree; and
+`a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`
+pins the invariant the whole thing rests on — see the next entry.
+
+### A transform patch may reuse a captured origin only because layout forces a repaint
+
+**Rule:** `layer_patches_for` rebuilds a node's effect layers at the `origin`
+stored *when the capture was taken*, not a live one. An `OpacityLayer` is
+position-independent (always `Offset::ZERO`), so an alpha patch is correct
+wherever the node sits. A `TransformLayer` is **conjugated by** that origin, so a
+transform patch is correct only while the captured origin still matches the
+node's live accumulated position.
+
+**Why that holds:** `run_layout` ends every walk with `mark_needs_paint` on each
+node it laid out, and that walks up to the nearest enclosing boundary. So any
+same-frame layout change inside a boundary — anything that could move the node —
+enqueues `Repaint` there, which upgrades the `LayerUpdate` entry the setter
+queued (`PaintQueue::enqueue` never downgrades). The patch path is simply
+unreachable with a stale origin.
+
+**Accepted trade-off:** this is a coupling between two subsystems that is stated
+nowhere in the code they connect. An optimisation that decouples "the boundary
+moved" from "the boundary is marked needing paint" — a plausible future change to
+that `mark_needs_paint` loop — silently makes transform patches render about the
+wrong point. `a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`
+exists to fail loudly if that happens; replacing the loop body with a no-op fails
+it with the layer count and discriminant right and the translation column wrong.
+
 ### A retained capture holds no GPU resource, so device loss cannot strand one
 
 **Rule:** #536 asks that "detach, reattach, and device-loss paths reject stale

@@ -147,6 +147,16 @@ mod tests {
 
     use super::*;
 
+    /// Deliberately the CHILDLESS case, and that is why the impacts here are
+    /// plain `PAINT | SEMANTICS` rather than the layer-update classification
+    /// `RenderTransform`'s setters can report.
+    ///
+    /// `RenderObjectContext::detached()` never lays out, so `has_child` stays
+    /// false and `owns_effect_layer()` is false for every setter — this test is
+    /// structurally blind to that classification and is not the place to pin
+    /// it. `targeted_setters_preserve_child_layout_state` in `flui-objects`
+    /// covers the with-child case; what this one pins is the widget's own
+    /// forwarding and its dedupe of an identical configuration.
     #[test]
     fn update_reports_exact_geometry_impact_and_dedupes_identical_configuration() {
         let initial = Transform::translate(2.0, 3.0);

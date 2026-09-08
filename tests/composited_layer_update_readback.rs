@@ -14,13 +14,15 @@
 //! the renderer would pull the whole GPU stack into that crate's test build.
 
 use flui_engine::wgpu::HeadlessRenderer;
-use flui_objects::{RenderColoredBox, RenderFlex, RenderOpacity, RenderRepaintBoundary};
+use flui_objects::{
+    RenderColoredBox, RenderFlex, RenderOpacity, RenderRepaintBoundary, RenderTransform,
+};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
     testing::{box_node, tree},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::{Matrix4, Size, geometry::px};
 
 const SURFACE: (u32, u32) = (200, 200);
 
@@ -164,5 +166,147 @@ fn a_different_alpha_produces_different_pixels() {
         quarter, three_quarters,
         "alpha 0.25 and 0.75 must rasterize differently, or the equivalence \
          assertion is comparing two images that never depended on alpha",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Transform: the same pixel-equivalence proof for a matrix update
+// ---------------------------------------------------------------------------
+
+/// Root row → [boundary → transform → coloured leaves, boundary → leaf].
+///
+/// Mirrors `mount` above, substituting `RenderTransform` for `RenderOpacity`.
+/// The seeded matrix is a SCALE, never a translation — a translation owns no
+/// `TransformLayer` at all (painted as a plain offset), which would route
+/// every mutation through `PAINT` instead of the `COMPOSITED_LAYER_UPDATE`
+/// path this file exists to prove pixel-identical to a repaint.
+fn mount_transform(seed: Matrix4) -> (PipelineOwner, flui_foundation::RenderId) {
+    let content = box_node(RenderFlex::row())
+        .children((0..4).map(|_| box_node(RenderColoredBox::red(40.0, 40.0))));
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderTransform::new(seed))
+                        .label("transform")
+                        .child(content),
+                ),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+            ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
+        px(f32::from(
+            u16::try_from(SURFACE.0).expect("surface fits u16"),
+        )),
+        px(f32::from(
+            u16::try_from(SURFACE.1).expect("surface fits u16"),
+        )),
+    ))));
+    let transform_id = registry.get("transform").expect("transform is labelled");
+    (owner, transform_id)
+}
+
+fn set_transform(owner: &mut PipelineOwner, id: flui_foundation::RenderId, matrix: Matrix4) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("transform node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderTransform>()
+        .expect("RenderTransform")
+        .set_transform(matrix);
+    owner.apply_render_update_impact(id, impact);
+}
+
+/// Rasterize the second frame after changing the matrix to `matrix`.
+///
+/// Mirrors `frame_after_alpha_change`: `force_repaint` picks the arm exactly
+/// the same way.
+fn frame_after_transform_change(
+    renderer: &HeadlessRenderer,
+    matrix: Matrix4,
+    force_repaint: bool,
+) -> Vec<u8> {
+    let (owner, transform_id) = mount_transform(Matrix4::scaling(2.0, 2.0, 1.0));
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    set_transform(&mut owner, transform_id, matrix);
+    if force_repaint {
+        owner.mark_needs_paint(transform_id);
+    }
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    let pixels = renderer
+        .render_layer_tree(&tree, SURFACE)
+        .expect("rasterizing the layer tree");
+    drop(owner);
+    pixels
+}
+
+/// The update path and the repaint path produce the same pixels, for a
+/// matrix change.
+///
+/// Same proof as `the_update_path_and_a_repaint_produce_the_same_pixels`,
+/// for `RenderTransform` instead of `RenderOpacity`: a stale origin, a
+/// dropped layer, or a subtree replayed at the wrong offset shows up here as
+/// a byte difference that no layer-tree assertion would catch.
+#[test]
+fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
+    let renderer = HeadlessRenderer::new()
+        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
+
+    let updated = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), false);
+    let repainted = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), true);
+
+    assert_eq!(
+        updated.len(),
+        repainted.len(),
+        "both arms rasterize the same surface size",
+    );
+
+    let differing = updated
+        .iter()
+        .zip(&repainted)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(
+        differing,
+        0,
+        "the update path must be pixel-identical to a full repaint; \
+         {differing} of {} bytes differ",
+        updated.len(),
+    );
+}
+
+/// The oracle can tell two different matrices apart.
+///
+/// Without this, the equivalence test above passes just as well against a
+/// renderer that ignores the transform entirely. A different scale must
+/// produce different pixels for the comparison to mean anything.
+#[test]
+fn a_different_matrix_produces_different_pixels() {
+    let renderer = HeadlessRenderer::new()
+        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
+
+    let smaller = frame_after_transform_change(&renderer, Matrix4::scaling(1.2, 1.2, 1.0), false);
+    let larger = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), false);
+
+    assert_ne!(
+        smaller, larger,
+        "scale 1.2 and 3.0 must rasterize differently, or the equivalence \
+         assertion is comparing two images that never depended on the matrix",
     );
 }

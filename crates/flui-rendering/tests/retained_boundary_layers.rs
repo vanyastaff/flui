@@ -10,13 +10,16 @@
 //! properties worth pinning are that reuse HAPPENS and that it produces the
 //! same tree painting would have.
 
-use flui_objects::{RenderColoredBox, RenderFlex, RenderOpacity, RenderRepaintBoundary};
+use flui_objects::{
+    RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
+    RenderTransform,
+};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
     testing::{TreeNode, box_node, tree},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::{Matrix4, Size, geometry::px};
 
 /// Root flex row → N boundaries, each wrapping a coloured leaf.
 ///
@@ -2518,6 +2521,414 @@ fn a_grandchild_boundary_is_still_named_after_its_parent_was_grafted() {
 }
 
 // ---------------------------------------------------------------------------
+// Composited-layer updates: RenderTransform
+// ---------------------------------------------------------------------------
+//
+// `RenderTransform::paint_transform` reports its matrix through the same node
+// hook `own_effect_layers`/`layer_patches_for` already generically serve for
+// `paint_alpha` (opacity), so a non-translation matrix change is addressable
+// the same way an alpha change is — see
+// `crates/flui-rendering/ARCHITECTURE.md`'s "A composited-layer update
+// patches the enclosing capture" section for the design this mirrors.
+
+/// Mirrors `mount_opacity_under_boundary` for `RenderTransform`: root row →
+/// [boundary → transform → counting leaf, boundary → leaf].
+///
+/// `matrix` must be non-translation for the transform to own an effect layer
+/// at all — see `RenderTransform::paint_transform`'s fork.
+fn mount_transform_under_boundary(
+    matrix: Matrix4,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+    Arc<AtomicUsize>,
+) {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderTransform::new(matrix))
+                        .label("transform")
+                        .child(box_node(PaintCounter(Arc::clone(&painted))).label("child")),
+                ),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("sibling")
+                    .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+            ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let transform_id = registry.get("transform").expect("transform is labelled");
+    let child_id = registry.get("child").expect("child is labelled");
+    let sibling = registry.get("sibling").expect("sibling is labelled");
+    (owner, transform_id, child_id, sibling, painted)
+}
+
+/// Applies a new matrix through the same seam a widget rebuild uses: the
+/// setter reports an impact, the owner applies it.
+fn set_transform(
+    owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
+    id: flui_foundation::RenderId,
+    matrix: Matrix4,
+) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("transform node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderTransform>()
+        .expect("RenderTransform")
+        .set_transform(matrix);
+    owner.apply_render_update_impact(id, impact);
+}
+
+/// The matrix of the only `TransformLayer` in a tree, or `None` when there is
+/// none.
+fn only_transform_matrix(tree: &flui_layer::LayerTree) -> Option<Matrix4> {
+    fn find(tree: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> Option<Matrix4> {
+        let node = tree.get(id)?;
+        if let flui_layer::Layer::Transform(t) = node.layer() {
+            return Some(*t.transform());
+        }
+        node.children().iter().find_map(|&c| find(tree, c))
+    }
+    find(tree, tree.root()?)
+}
+
+/// A matrix change updates the emitted layer without repainting the subtree.
+///
+/// Mirrors `an_alpha_change_updates_the_layer_without_repainting_the_subtree`.
+/// Both halves are asserted and neither alone is evidence: the paint count
+/// alone passes if nothing painted at all, and the matrix alone passes on a
+/// full repaint.
+#[test]
+fn a_transform_change_updates_the_layer_without_repainting_the_subtree() {
+    let (owner, transform_id, _child, _sibling, painted) =
+        mount_transform_under_boundary(Matrix4::scaling(2.0, 2.0, 1.0));
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+
+    set_transform(&mut owner, transform_id, Matrix4::scaling(3.0, 3.0, 1.0));
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the subtree under the transform must NOT repaint for a matrix-only change",
+    );
+    assert_eq!(
+        only_transform_matrix(&tree),
+        Some(Matrix4::scaling(3.0, 3.0, 1.0)),
+        "and the emitted TransformLayer must carry the new matrix",
+    );
+}
+
+/// The update reaches the STORED capture, not just the emitted frame.
+///
+/// Mirrors `a_layer_update_is_written_back_into_the_retained_capture`. Three
+/// frames, because two cannot see this: change, observe, then dirty something
+/// else so the boundary is grafted for an unrelated reason. If the patch only
+/// touched the emitted tree, the capture still holds the matrix it was
+/// captured with, and this third frame reverts it — permanently, because
+/// nothing marks it again.
+///
+/// Frame 2 also asserts the paint counter is flat — unlike its opacity
+/// counterpart, this check is load-bearing HERE, not merely a restated
+/// precondition: `RenderTransform` has an older, still-present full-repaint
+/// route to the identical matrix (`FragmentOp::PushTransform`'s replay arm in
+/// `paint.rs`, which `paint()` used exclusively before this change and which
+/// remains reachable whenever the boundary repaints for any other reason).
+/// Without pinning that frame 2 took the graft+patch path — not a repaint
+/// that incidentally produces the same output — this test cannot tell "the
+/// patch wrote back" from "the repaint route also happens to write back",
+/// and would pass unchanged if the write-back loop in `run_paint` were
+/// deleted.
+#[test]
+fn a_transform_layer_update_is_written_back_into_the_retained_capture() {
+    let (owner, transform_id, _child, sibling, painted) =
+        mount_transform_under_boundary(Matrix4::scaling(2.0, 2.0, 1.0));
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+
+    set_transform(&mut owner, transform_id, Matrix4::scaling(3.0, 3.0, 1.0));
+    let (mut owner, result) = owner.run_frame();
+    result.expect("second frame");
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "precondition: frame 2 must take the update-only path, not a repaint \
+         — see this test's own doc for why that matters here",
+    );
+
+    // Third frame: the transform is clean; the sibling boundary forces the pass.
+    owner.mark_needs_paint(sibling);
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("third frame")
+        .expect("third frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        only_transform_matrix(&tree),
+        Some(Matrix4::scaling(3.0, 3.0, 1.0)),
+        "a later frame that grafts the capture for an unrelated reason must \
+         replay the UPDATED matrix, not the one it was captured with",
+    );
+}
+
+/// `has_child` is written only in `perform_layout`, so a setter reads the
+/// PREVIOUS frame's value — reachable when a transform-only setter and a
+/// same-frame child removal target the SAME node.
+///
+/// Two independent mechanisms make the combination safe:
+///
+/// 1. `remove_render_object` fires `note_render_child_membership_changed` for
+///    the transform (whose child just left it), applying `LAYOUT |
+///    COMPOSITING_BITS | SEMANTICS`. `LAYOUT` carries `PAINT_BIT`, and
+///    `run_layout` ends every laid-out node with `mark_needs_paint`
+///    (`pipeline/owner/layout.rs`), which upgrades the enclosing boundary's
+///    paint-queue entry from the setter's `LayerUpdate` to `Repaint` —
+///    `PaintQueue::enqueue` never downgrades (`scheduler.rs`'s
+///    `enqueue_paint` doc), so this holds whichever of the two marks landed
+///    first.
+/// 2. Even were that classification wrong, `layer_patches_for` reads
+///    `paint_transform()` LIVE — after layout, which always runs before
+///    paint, has already reset `has_child` to `false` — so it computes zero
+///    fresh effect layers against the ONE slot the capture holds, refuses the
+///    patch on the shape mismatch, and falls back to a repaint on its own.
+///
+/// This test does not try to distinguish which mechanism fires; it pins that
+/// the OUTCOME is correct either way — no stale layer, no repainted ghost of
+/// the removed child.
+#[test]
+fn a_same_frame_child_removal_and_transform_setter_still_repaints_correctly() {
+    let (owner, transform_id, child_id, _sibling, painted) =
+        mount_transform_under_boundary(Matrix4::scaling(2.0, 2.0, 1.0));
+    let (mut owner, result) = owner.run_frame();
+    let first = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    assert!(
+        painted.load(Ordering::Relaxed) > 0,
+        "precondition: the child paints on the first frame",
+    );
+    assert!(
+        only_transform_matrix(&first).is_some(),
+        "precondition: the first frame emits a TransformLayer",
+    );
+    let before = painted.load(Ordering::Relaxed);
+
+    // Same frame: a matrix-only setter call (which reads the STALE
+    // has_child == true and reports COMPOSITED_LAYER_UPDATE) and the child's
+    // removal (which reports LAYOUT for the same node).
+    set_transform(&mut owner, transform_id, Matrix4::scaling(5.0, 5.0, 1.0));
+    owner.remove_render_object(child_id);
+
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the removed child cannot paint again",
+    );
+    assert_eq!(
+        only_transform_matrix(&tree),
+        None,
+        "with the child gone, RenderTransform emits no TransformLayer at all — \
+         a stale has_child read that let a patch through would either keep \
+         the (now childless) layer alive or graft the removed child's \
+         content back in",
+    );
+}
+
+/// `layer_patches_for` rebuilds a patched transform layer at the CAPTURED
+/// `EffectSlots::origin`, not a live one — correct only while that origin
+/// still matches the node's live accumulated position. Nothing states that
+/// invariant in code; this pins it.
+///
+/// Unlike opacity (whose layer is position-independent, always
+/// `Offset::ZERO`), a transform layer is conjugated by the accumulated paint
+/// origin, so a stale origin would silently rotate/scale the content about
+/// the WRONG point. This moves a sibling's size — an ordinary
+/// `mark_needs_layout` — in the SAME frame as a matrix-only
+/// `COMPOSITED_LAYER_UPDATE` request, and compares against a freshly-mounted
+/// second owner that paints the same final state from scratch. The matrix is
+/// a SCALE, never a translation: translations commute with the origin
+/// conjugation (`T(o)·T(v)·T(-o) = T(v)`) and cannot tell a right answer from
+/// a wrong one, so only a non-commuting matrix makes a stale origin visible —
+/// "the right layer count, the right discriminant, and the wrong matrix",
+/// which no other oracle in this file would catch.
+///
+/// The node sits behind a `RenderPadding` so its in-boundary origin is
+/// non-zero — at the boundary root the origin is zero and a stale-origin bug
+/// would be invisible.
+///
+/// **What this pins is the INVARIANT, not this change.** As constructed the
+/// scenario does not reach `layer_patches_for` at all, on either side of this
+/// change, and that is the point rather than a shortfall: a same-frame layout
+/// change ANYWHERE inside a boundary marks that same boundary needing paint
+/// too — `run_layout` ends every laid-out node with `mark_needs_paint`
+/// (`pipeline/owner/layout.rs`), which walks up to the nearest enclosing
+/// boundary and enqueues `Repaint` there, upgrading any `LayerUpdate` entry
+/// the matrix setter queued (`PaintQueue::enqueue` never downgrades). Growing
+/// the sibling therefore forces a full repaint, which computes the
+/// conjugation from a LIVE origin and is trivially correct.
+///
+/// That structural guarantee is the *only* reason a transform patch may reuse
+/// a captured origin, and nothing else in the tree states it. Decouple "the
+/// boundary moved" from "the boundary is marked needing paint" — an
+/// optimisation someone will eventually attempt on that `mark_needs_paint`
+/// loop — and the patch path becomes reachable with a stale origin.
+///
+/// So this test has teeth, and they were measured rather than assumed:
+/// replacing that loop's body with `let _ = id;` fails it with the exact
+/// predicted signature — the layer count right, the discriminant right, and
+/// the translation column reading `-192.0` where a repaint produces `-612.0`.
+/// The subtree would render scaled about the wrong point, silently.
+///
+/// Complementary, not redundant: the patch path's origin correctness for a
+/// genuine `COMPOSITED_LAYER_UPDATE` graft — no repaint, non-zero captured
+/// origin — is pinned by the pre-existing
+/// `a_patched_transform_uses_the_origin_it_was_captured_at` above, unmodified
+/// by this change. That one proves the patch uses the captured origin
+/// correctly; this one proves nothing can move the node out from under it.
+#[test]
+fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
+    #[derive(Debug)]
+    struct Grower {
+        width: f32,
+    }
+
+    impl flui_foundation::Diagnosticable for Grower {}
+
+    impl flui_rendering::traits::RenderBox for Grower {
+        type Arity = flui_tree::Leaf;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            ctx.constrain(Size::new(px(self.width), px(20.0)))
+        }
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+    }
+
+    fn mount(
+        width: f32,
+        matrix: Matrix4,
+    ) -> (
+        PipelineOwner<flui_rendering::pipeline::Idle>,
+        flui_foundation::RenderId,
+        flui_foundation::RenderId,
+    ) {
+        let mut owner = PipelineOwner::new();
+        let (root_id, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderFlex::row()).child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderFlex::row())
+                        .child(box_node(Grower { width }).label("grower"))
+                        .child(
+                            box_node(RenderPadding::all(12.0)).child(
+                                box_node(RenderTransform::new(matrix))
+                                    .label("transform")
+                                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                            ),
+                        ),
+                ),
+            ),
+        );
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        let grower = registry.get("grower").expect("grower is labelled");
+        let transform = registry.get("transform").expect("transform is labelled");
+        (owner, grower, transform)
+    }
+
+    let (owner, grower_id, transform_id) = mount(20.0, Matrix4::scaling(2.0, 2.0, 1.0));
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    // Same frame: grow the preceding sibling (an ordinary layout change) AND
+    // change the transform's matrix through a composited-layer-update
+    // request.
+    owner
+        .render_tree_mut()
+        .get_mut(grower_id)
+        .expect("grower node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<Grower>()
+        .expect("Grower")
+        .width = 90.0;
+    owner.mark_needs_layout(grower_id);
+    set_transform(&mut owner, transform_id, Matrix4::scaling(7.0, 7.0, 1.0));
+
+    let (owner, result) = owner.run_frame();
+    let moved = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    // Reference: a fresh owner that paints the same final state — grower at
+    // width 90, transform at scale 7 — from scratch.
+    let (reference, _grower, _transform) = mount(90.0, Matrix4::scaling(7.0, 7.0, 1.0));
+    let (_, result) = reference.run_frame();
+    let repainted = result
+        .expect("reference frame")
+        .expect("reference frame produces a layer tree");
+
+    assert_eq!(
+        only_transform_matrix(&moved),
+        only_transform_matrix(&repainted),
+        "a same-frame move and matrix-only update together must still produce \
+         the matrix a full repaint would; a stale captured origin would move \
+         it silently",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Composited-layer updates over the Sliver protocol
 // ---------------------------------------------------------------------------
 //
@@ -2807,4 +3218,144 @@ fn a_sliver_layer_update_is_written_back_into_the_retained_capture() {
         "a later frame that grafts the capture for an unrelated reason must \
          replay the UPDATED alpha, not the one it was captured with",
     );
+}
+
+/// Patching a transform's layer produces the same layer tree a full repaint
+/// does, at every subtree size — and the patched tree's node count does not
+/// grow with the subtree.
+///
+/// This is the control that makes `paint/transform_matrix_change` mean
+/// something, and it is the transform twin of
+/// `a_grafted_opacity_subtree_matches_a_full_repaint_at_any_size` above. That
+/// benchmark's update arm reports a flat ~1.2-1.5 µs against a repaint arm
+/// that reaches 198 µs at 1000 nodes, and **a flat number is exactly what a
+/// patch that silently dropped the subtree would also report**. Only the
+/// structural comparison rules that out.
+///
+/// The tree mirrors `helpers::build_transform_tree` in the benchmark itself
+/// rather than the `PaintCounter` fixture above — a control that measures a
+/// different tree from the one benchmarked controls nothing, and
+/// `PaintCounter` emits no draw commands, so it produces no `PictureLayer`
+/// for a structural fingerprint to compare.
+///
+/// The matrix is a SCALE: a pure translation takes `paint`'s no-layer fast
+/// path, so there would be no transform layer to patch and the test would
+/// pass while measuring nothing.
+///
+/// Deliberately green on BOTH sides of the change that introduced it, and not
+/// offered as red-green evidence for it: a full repaint also produces a
+/// correct tree, which is the whole premise of comparing against one. What it
+/// guards is the benchmark's interpretation. The red-green evidence for the
+/// patch path itself is
+/// `a_transform_change_updates_the_layer_without_repainting_the_subtree` and
+/// `a_transform_layer_update_is_written_back_into_the_retained_capture`, both
+/// of which fail with the paint counter at 2 against 1 without it.
+#[test]
+fn a_patched_transform_subtree_matches_a_full_repaint_at_any_size() {
+    fn mount_sized(
+        layered: bool,
+        subtree: usize,
+        matrix: Matrix4,
+    ) -> (
+        PipelineOwner<flui_rendering::pipeline::Idle>,
+        flui_foundation::RenderId,
+    ) {
+        let content = box_node(RenderFlex::row()).children((0..subtree).map(|_| {
+            let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
+            if layered {
+                box_node(RenderRepaintBoundary::new()).child(leaf)
+            } else {
+                leaf
+            }
+        }));
+        let mut owner = PipelineOwner::new();
+        let (root_id, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderFlex::row())
+                .child(
+                    box_node(RenderRepaintBoundary::new()).child(
+                        box_node(RenderTransform::new(matrix))
+                            .label("transform")
+                            .child(content),
+                    ),
+                )
+                .child(
+                    box_node(RenderRepaintBoundary::new())
+                        .child(box_node(RenderColoredBox::red(1.0, 1.0))),
+                ),
+        );
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        let transform_id = registry.get("transform").expect("transform is labelled");
+        (owner, transform_id)
+    }
+
+    let updated = Matrix4::scaling(3.0, 3.0, 1.0);
+
+    for (layered, shape) in [(false, "inline"), (true, "layered")] {
+        let mut patched_counts = Vec::new();
+
+        for &subtree in &[1_usize, 10, 100] {
+            // Frame 1 captures at the ORIGINAL matrix; frame 2 requests a
+            // layer-only update, which is the benchmark's `update` arm exactly.
+            let (owner, transform_id) =
+                mount_sized(layered, subtree, Matrix4::scaling(2.0, 2.0, 1.0));
+            let (mut owner, result) = owner.run_frame();
+            result.expect("first frame");
+            set_transform(&mut owner, transform_id, updated);
+            let (owner, result) = owner.run_frame();
+            let patched = result
+                .expect("second frame")
+                .expect("second frame produces a layer tree");
+            drop(owner);
+
+            // A fresh owner painting its first frame retains nothing, so its tree
+            // is what a full repaint of the final state produces.
+            let (fresh, _) = mount_sized(layered, subtree, updated);
+            let (_, result) = fresh.run_frame();
+            let repainted = result
+                .expect("reference frame")
+                .expect("reference frame produces a layer tree");
+
+            assert_eq!(
+                fingerprint(&patched),
+                fingerprint(&repainted),
+                "patched and repainted layer trees must match at {shape} subtree = {subtree}",
+            );
+            assert_eq!(
+                only_transform_matrix(&patched),
+                only_transform_matrix(&repainted),
+                "and the patched transform layer must carry the matrix a repaint \
+             would produce, conjugated by the same origin ({shape}, subtree = \
+             {subtree})",
+            );
+            assert!(
+                patched.len() > 1,
+                "a patch that produced an empty tree would also look flat in the bench",
+            );
+            patched_counts.push(patched.len());
+        }
+
+        // The O(1) claim is an INLINE property only: it holds because non-boundary
+        // leaves merge into one `PictureLayer` sharing an `Arc<DisplayList>`. In
+        // the layered shape every leaf is its own boundary, so the capture — and
+        // therefore the graft — grows with the subtree by design, which is exactly
+        // why the benchmark's layered arm narrows to ~1.9x instead of 133x.
+        // Asserting a constant count there would be asserting the feature is
+        // broken. Every measurement compared, not just the ends: `[6, 7, 6]` is a
+        // real regression a first-vs-last check would wave through.
+        if layered {
+            assert!(
+                patched_counts.windows(2).all(|w| w[0] < w[1]),
+                "layered leaves each carry their own boundary, so the layer count \
+                 must grow with the subtree; got {patched_counts:?}",
+            );
+        } else {
+            assert!(
+                patched_counts.windows(2).all(|w| w[0] == w[1]),
+                "inline leaves merge into one PictureLayer, so the layer count \
+                 must be identical at every subtree size; got {patched_counts:?}",
+            );
+        }
+    }
 }

@@ -129,6 +129,9 @@ mod table;
 mod text;
 #[path = "text_field.rs"]
 mod text_field;
+/// Issue #536: a `Transform` rebuild reaches the composited layer.
+#[path = "transform_layer_update.rs"]
+mod transform_layer_update;
 #[path = "visibility.rs"]
 mod visibility;
 #[path = "wrap.rs"]
