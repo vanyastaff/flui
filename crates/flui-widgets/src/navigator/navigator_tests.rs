@@ -907,7 +907,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 40] = [
+    const INTERNAL: [&str; 43] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -960,16 +960,24 @@ fn public_no_internal_route_stack_exports() {
         "LocalHistoryScope",
         "LocalHistoryHandle",
         "LocalHistoryEntryHandle",
-        // Named-route generation (ADR-0024) exports exactly `GeneratedRoute`
-        // and `NamedRouteError`. Its registry, the erased-push seam, and the
-        // checked-push token are the implementation — and `RouteFactory` names
-        // the `Rc` shape the registry stores, which no public signature
-        // mentions (the three registration methods take the closure itself).
+        // Named-route generation (ADR-0024) exports **five** names —
+        // `GeneratedRoute`, `KeyedSettings`, `NamedRouteError`, `RouteKey` and
+        // `RouteRequest`. Everything below is the implementation: the registry,
+        // the erased-push seam, the checked-push token, the replacement target,
+        // and `RouteFactory`, which names the `Rc` shape the registry stores and
+        // which no public signature mentions (the three registration methods take
+        // the closure itself).
         "RouteRegistry",
         "RouteFactory",
         "ErasedPush",
         "TypedPush",
         "PushMode",
+        "ReplaceTarget",
+        // Absorbed from `tests/navigator_public.rs`, which used to keep a second
+        // list behind its own copy of this scanner. Note whole-identifier
+        // matching means `Observation` above does not cover `ObservationQueues`.
+        "BoundRoute",
+        "ObservationQueues",
     ];
 
     super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);

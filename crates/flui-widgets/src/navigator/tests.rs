@@ -203,7 +203,7 @@ impl NavigatorObserver for Spy {
 
 /// An erased pop result, as `RouteHistory::pop` takes one.
 fn boxed(value: i32) -> super::route::AnyResult {
-    Box::new(value)
+    super::route::AnyResult::new(value)
 }
 
 fn spy() -> Arc<Spy> {

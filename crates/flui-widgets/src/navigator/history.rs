@@ -321,7 +321,7 @@ impl RouteEntry {
             // result now has nowhere to go, and it is the caller's value.
             return (
                 true,
-                self.pending_result.take().map(UndeliveredResult::NoTarget),
+                self.pending_result.take().map(UndeliveredResult::no_target),
             );
         }
 
@@ -611,7 +611,7 @@ impl RouteHistory {
     /// channel, one reporting path.
     pub(crate) fn record_undelivered(&mut self, result: Option<AnyResult>) {
         self.undelivered
-            .extend(result.map(UndeliveredResult::NoTarget));
+            .extend(result.map(UndeliveredResult::no_target));
     }
 
     /// Flutter's `NavigatorState.canPop` (`navigator.dart:5551-5566`), which walks

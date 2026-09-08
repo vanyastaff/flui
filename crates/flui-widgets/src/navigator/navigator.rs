@@ -314,8 +314,26 @@ impl NavigatorShared {
     /// between frames (an animation status listener), and the commands take
     /// effect now. See `binding.rs`, *Correction 1*.
     ///
+    /// # A flush driver drains *both* channels
+    ///
+    /// This is the third place that runs a flush and releases the guard —
+    /// [`mutate_deferring_report`](Self::mutate_deferring_report) and
+    /// `NavigatorHandle::push_prepared` are the others. Every such driver owes two
+    /// drains, not one: `take_outcome` **and** `take_undelivered`. A flush can
+    /// complete a route carrying a `pending_result`, and if the value's type does
+    /// not match, `did_complete` records a `TypeMismatch` — which a driver that
+    /// only takes the outcome would leave in the history until some later
+    /// operation happened to pick it up, reporting it under the wrong operation
+    /// name and dropping it at an unrelated moment.
+    ///
+    /// No producer reachable from `RouteCommand` exists today — the command
+    /// vocabulary carries no caller-supplied result — so this is the *invariant*
+    /// being enforced rather than a live defect being fixed. Enforced rather than
+    /// merely stated, because "a driver drains both" is the kind of obligation this
+    /// feature has now failed to notice six times, and a comment does not survive
+    /// the seventh.
     fn pump_route_commands(&self) {
-        let outcome = {
+        let (outcome, undelivered) = {
             let Some(mut history) = self.history.try_lock() else {
                 return; // A flush is running; it will drain the queue.
             };
@@ -323,11 +341,14 @@ impl NavigatorShared {
                 return;
             }
             history.flush(false);
-            history.take_outcome()
+            (history.take_outcome(), history.take_undelivered())
         };
+        // Same order as every other driver: apply first, then report — see
+        // `mutate_deferring_report`.
         if let Some(outcome) = outcome {
             self.apply(outcome);
         }
+        report_undelivered("pump_route_commands", undelivered);
     }
 
     /// The observers, cloned out in registration order.
@@ -454,7 +475,32 @@ impl NavigatorShared {
     ///
     /// The history lock is **released before** the overlay work, so no lock is
     /// held across `RebuildHandle::schedule`.
-    fn mutate<R>(&self, mutate: impl FnOnce(&mut RouteHistory) -> R) -> R {
+    /// `operation` names the caller for the undelivered-result report, so a reader
+    /// of the log — and a test — can tell *which* operation discarded a value.
+    /// Nine sites emitted one indistinguishable message before this.
+    fn mutate<R>(&self, operation: &'static str, mutate: impl FnOnce(&mut RouteHistory) -> R) -> R {
+        let (value, undelivered) = self.mutate_deferring_report(mutate);
+        report_undelivered(operation, undelivered);
+        value
+    }
+
+    /// [`mutate`](Self::mutate) without the report: the undelivered values come
+    /// back for the caller to report once it has no observations left to make.
+    ///
+    /// For an operation **composed of two drains**. `pop_and_push_named` dismisses
+    /// and then pushes, so reporting inside the first drain drops the caller's
+    /// value *before* the operation's own `didPush` — an observer saw the drop's
+    /// events land between one operation's `didPop` and its `didPush`.
+    /// `ARCHITECTURE.md` §5 states the ordering per **operation**, and only a
+    /// composed operation can break it: its single-drain siblings physically
+    /// cannot, which is why the ordering test built on `pop_with` was structurally
+    /// blind to this.
+    ///
+    /// `apply` still runs here. Only the report moves.
+    fn mutate_deferring_report<R>(
+        &self,
+        mutate: impl FnOnce(&mut RouteHistory) -> R,
+    ) -> (R, Vec<UndeliveredResult>) {
         let (value, outcome, undelivered) = {
             let mut history = self.history.lock();
             let value = mutate(&mut history);
@@ -477,8 +523,7 @@ impl NavigatorShared {
         if let Some(outcome) = outcome {
             self.apply(outcome);
         }
-        report_undelivered(undelivered);
-        value
+        (value, undelivered)
     }
 }
 
@@ -498,11 +543,13 @@ impl NavigatorShared {
 /// `warn`, not `error`: unlike a type mismatch — where the caller and the route
 /// disagree — this means there was no route to deliver to, which the operation's
 /// own return value usually already says.
-fn report_undelivered(undelivered: Vec<UndeliveredResult>) {
+fn report_undelivered(operation: &'static str, undelivered: Vec<UndeliveredResult>) {
     for result in undelivered {
         match result {
-            UndeliveredResult::NoTarget(value) => {
+            UndeliveredResult::NoTarget { value, supplied } => {
                 tracing::warn!(
+                    operation,
+                    supplied,
                     "a result supplied to a navigator operation reached no route and was \
                      discarded: the stack had no present route to deliver it to, or the \
                      target had already completed. Dropped outside the history lock."
@@ -514,12 +561,15 @@ fn report_undelivered(undelivered: Vec<UndeliveredResult>) {
                 expected,
                 value,
             } => {
+                let supplied = value.supplied();
                 // The message and fields `RouteRecord::did_complete` used to emit
                 // inline, moved here so neither the subscriber nor the value's
                 // `Drop` runs under the history mutex.
                 tracing::error!(
+                    operation,
                     route = route.get(),
                     expected,
+                    supplied,
                     "pop result has the wrong type for this route; completed with None. \
                      Flutter throws a cast error here"
                 );
@@ -652,6 +702,15 @@ pub enum NavigatorCommandOutcome {
 }
 
 /// Why a typed navigation command could not reach its owner-local navigator.
+///
+/// `#[non_exhaustive]`, for ADR-0024 §7.5's argument — which cuts harder here than
+/// for the two enums that got the attribute first. [`NavigatorCommand`]'s own doc
+/// names `PushNamed { target, name }` as the arm this slice makes expressible, and
+/// a *named* command fails in ways neither variant below can express: the name may
+/// resolve to nothing, or to a route whose result type does not match. Those are
+/// [`NamedRouteError`]'s cases, and folding them in means growing this enum. Free
+/// in this release, a major bump after it.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum NavigatorCommandError {
     /// The command was drained outside the thread that owns the navigator.
@@ -1022,7 +1081,7 @@ impl NavigatorHandle {
         &self,
         route: R,
     ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_prepared(route, |history, id, route| {
+        self.push_prepared("push", route, |history, id, route| {
             history.push_with_id(id, route).1
         })
     }
@@ -1044,7 +1103,7 @@ impl NavigatorHandle {
         route: R,
         result: T,
     ) -> RouteResult<R::Output> {
-        self.push_replacement_erased(route, Some(Box::new(result)))
+        self.push_replacement_erased(route, Some(AnyResult::new(result)))
     }
 
     fn push_replacement_erased<R: NavigatorRoute>(
@@ -1071,7 +1130,7 @@ impl NavigatorHandle {
         target: Option<ReplaceTarget>,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_prepared(route, |history, id, route| {
+        self.push_prepared("push_replacement", route, |history, id, route| {
             history
                 .push_replacement_with_id(id, target, route, result)
                 .1
@@ -1111,8 +1170,8 @@ impl NavigatorHandle {
         route: R,
         mut keep: impl FnMut(RouteId) -> bool,
     ) -> (RouteId, RouteResult<R::Output>) {
-        let (id, (result, below_top_to_bottom)) = self
-            .push_prepared(route, |history, id, route| {
+        let (id, (result, below_top_to_bottom)) =
+            self.push_prepared("push_and_remove_until", route, |history, id, route| {
                 history.push_for_remove_until_with_id(id, route)
             });
 
@@ -1124,8 +1183,9 @@ impl NavigatorHandle {
             remove_ids.push(candidate);
         }
 
-        self.shared
-            .mutate(|history| history.complete_removed_and_flush(&remove_ids));
+        self.shared.mutate("push_and_remove_until", |history| {
+            history.complete_removed_and_flush(&remove_ids);
+        });
 
         (id, result)
     }
@@ -1137,6 +1197,7 @@ impl NavigatorHandle {
     /// reach for the entry (`routes.dart:69-71`).
     fn push_prepared<R: NavigatorRoute, O>(
         &self,
+        operation: &'static str,
         route: R,
         commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
     ) -> (RouteId, O) {
@@ -1162,17 +1223,17 @@ impl NavigatorHandle {
         if let Some(outcome) = outcome {
             self.shared.apply(outcome);
         }
-        report_undelivered(undelivered);
+        report_undelivered(operation, undelivered);
         (id, result)
     }
 
     fn pop_erased(&self, result: Option<AnyResult>) -> bool {
-        self.shared.mutate(|history| history.pop(result))
+        self.shared.mutate("pop", |history| history.pop(result))
     }
 
     fn remove_route_erased(&self, id: RouteId, result: Option<AnyResult>) -> bool {
         self.shared
-            .mutate(|history| history.remove_route(id, result))
+            .mutate("remove_route", |history| history.remove_route(id, result))
     }
 
     /// Pop the top route with no result — Flutter's `Navigator.pop()`
@@ -1193,7 +1254,7 @@ impl NavigatorHandle {
     /// wrong type logs an error and completes the future with `None` rather than
     /// panicking; Flutter throws a cast error here.
     pub fn pop_with<T: Send + 'static>(&self, result: T) -> bool {
-        self.pop_erased(Some(Box::new(result)))
+        self.pop_erased(Some(AnyResult::new(result)))
     }
 
     /// Pop `route`, but drive its exit transition with `duration`/`curve`
@@ -1256,7 +1317,7 @@ impl NavigatorHandle {
     /// Remove `id`, delivering `result`. Same type contract as
     /// [`pop_with`](NavigatorHandle::pop_with).
     pub fn remove_route_with<T: Send + 'static>(&self, id: RouteId, result: T) -> bool {
-        self.remove_route_erased(id, Some(Box::new(result)))
+        self.remove_route_erased(id, Some(AnyResult::new(result)))
     }
 
     /// Pop routes one at a time until `keep` accepts the route now on top —
@@ -1308,7 +1369,10 @@ impl NavigatorHandle {
             // "Forget about this pop, we were disposed in the meantime." (`:5595`)
             // The caller's result has nowhere to go. Reported and dropped here —
             // no guard is held yet, but the reporting is owed either way.
-            report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
+            report_undelivered(
+                "maybe_pop",
+                Vec::from_iter(result.map(UndeliveredResult::no_target)),
+            );
             return true;
         }
 
@@ -1326,7 +1390,7 @@ impl NavigatorHandle {
         // `Bubble` is not an edge case: `popDisposition` is `isFirst ? bubble :
         // pop`, so a lone route bubbles *by design*, and `maybe_pop_with` on a
         // one-route navigator took this arm every time.
-        self.shared.mutate(|history| {
+        self.shared.mutate("maybe_pop", |history| {
             let Some(disposition) = history.pop_disposition_of_top() else {
                 history.record_undelivered(result);
                 return false;
@@ -1360,7 +1424,7 @@ impl NavigatorHandle {
 
     /// [`maybe_pop`](NavigatorHandle::maybe_pop), delivering `result` if it pops.
     pub fn maybe_pop_with<T: Send + 'static>(&self, result: T) -> bool {
-        self.maybe_pop_erased(Some(Box::new(result)))
+        self.maybe_pop_erased(Some(AnyResult::new(result)))
     }
 
     /// The topmost present route.
@@ -1713,8 +1777,9 @@ impl NavigatorHandle {
     ///
     /// Named operations resolve first, so an unresolvable name adds nothing of
     /// the operation's own —
-    /// but resolving runs a user factory, and a factory that captured a handle can
-    /// navigating from one a supported shape. By the time the departing route is
+    /// but resolving runs a user factory, and a factory that captured a handle
+    /// can navigate — a shape this crate no longer offers a way to reach, but
+    /// cannot prevent. By the time the departing route is
     /// dealt with it may no longer be on top, or may be gone. Acting on "the
     /// current top" would then dismiss the *factory's* route and leave the
     /// caller's in place, which is the bug this exists to prevent.
@@ -1729,20 +1794,32 @@ impl NavigatorHandle {
     /// - already gone (the factory popped it) — nothing to do, and **not** an
     ///   error: a factory's unrelated navigation must not fail an operation that
     ///   otherwise succeeded.
-    fn dismiss_captured(&self, route: Option<RouteId>, result: Option<AnyResult>) {
+    ///
+    /// Returns anything it could not deliver, **unreported**.
+    ///
+    /// Its two callers are composed operations — they dismiss and then push — so
+    /// reporting here would drop the caller's value before the operation's own
+    /// `didPush`. They report after their final `apply` instead. See
+    /// [`NavigatorShared::mutate_deferring_report`].
+    fn dismiss_captured(
+        &self,
+        route: Option<RouteId>,
+        result: Option<AnyResult>,
+    ) -> Vec<UndeliveredResult> {
         let Some(route) = route else {
             // Nothing was captured — an empty stack, or a top mid-exit-transition,
-            // which is a reachable and documented state. The result must **not**
-            // go to whatever a factory left on top; that is what the capture is
-            // for. So it is reported and dropped, through the same path as every
-            // other undeliverable result.
-            report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
-            return;
+            // which is a reachable and documented state. The result must **not** go
+            // to whatever a factory left on top; that is what the capture is for.
+            return Vec::from_iter(result.map(UndeliveredResult::no_target));
         };
         if self.current() == Some(route) {
-            self.pop_erased(result);
+            self.shared
+                .mutate_deferring_report(|history| history.pop(result))
+                .1
         } else {
-            self.remove_route_erased(route, result);
+            self.shared
+                .mutate_deferring_report(|history| history.remove_route(route, result))
+                .1
         }
     }
 
@@ -1986,11 +2063,14 @@ impl NavigatorHandle {
         // would drop the caller's `TO` on the spot — while it is still a bare
         // generic, so no `Option<AnyResult>` audit can see it. Erasing first makes
         // the failure path able to report it.
-        let result: Option<AnyResult> = Some(Box::new(result));
+        let result: Option<AnyResult> = Some(AnyResult::new(result));
         match self.resolve_named(&request) {
             Ok(generated) => Ok(generated.push(self, PushMode::Replace { target, result }).0),
             Err(unresolved) => {
-                report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
+                report_undelivered(
+                    "push_replacement_named_with",
+                    Vec::from_iter(result.map(UndeliveredResult::no_target)),
+                );
                 Err(unresolved)
             }
         }
@@ -2011,8 +2091,10 @@ impl NavigatorHandle {
     ///
     /// **What that divergence costs, stated rather than claimed as pure gain.**
     /// Resolving first means a factory runs before the departing route is dealt
-    /// with, and a factory that captured a handle can navigate — an unsupported but
-    /// supported shape. So when a factory navigates, its `didPush` is observed
+    /// with, and a factory that captured a handle can navigate — survivable
+    /// rather than supported, since `RouteRequest::navigator()` was withdrawn
+    /// (ADR-0024 §7.10) but a capture still reaches one. So when a factory
+    /// navigates, its `didPush` is observed
     /// **before** this operation's own dismissal — an ordering Flutter cannot
     /// produce here, because it has already popped. The departing route is then
     /// buried, and is removed by id rather than popped (`didRemove`, not
@@ -2037,8 +2119,12 @@ impl NavigatorHandle {
         let request = request.into();
         let departing = self.current();
         let generated = self.resolve_named(&request)?;
-        self.dismiss_captured(departing, None);
-        Ok(generated.push(self, PushMode::Push).0)
+        let undelivered = self.dismiss_captured(departing, None);
+        let pushed = generated.push(self, PushMode::Push).0;
+        // After the push's own `apply`, so this operation's `didPop` **and**
+        // `didPush` both precede anything a re-entrant drop triggers.
+        report_undelivered("pop_and_push_named", undelivered);
+        Ok(pushed)
     }
 
     /// [`pop_and_push_named`](Self::pop_and_push_named), delivering `result` to
@@ -2060,16 +2146,23 @@ impl NavigatorHandle {
         let request = request.into();
         let departing = self.current();
         // Erased before resolving — see `push_replacement_named_with`.
-        let result: Option<AnyResult> = Some(Box::new(result));
+        let result: Option<AnyResult> = Some(AnyResult::new(result));
         let generated = match self.resolve_named(&request) {
             Ok(generated) => generated,
             Err(unresolved) => {
-                report_undelivered(Vec::from_iter(result.map(UndeliveredResult::NoTarget)));
+                report_undelivered(
+                    "pop_and_push_named_with",
+                    Vec::from_iter(result.map(UndeliveredResult::no_target)),
+                );
                 return Err(unresolved);
             }
         };
-        self.dismiss_captured(departing, result);
-        Ok(generated.push(self, PushMode::Push).0)
+        let undelivered = self.dismiss_captured(departing, result);
+        let pushed = generated.push(self, PushMode::Push).0;
+        // See `pop_and_push_named`: reported after the final `apply`, not between
+        // this operation's two halves.
+        report_undelivered("pop_and_push_named_with", undelivered);
+        Ok(pushed)
     }
 
     /// Resolve `request` and
@@ -2477,7 +2570,7 @@ impl ViewState<Navigator> for NavigatorState {
             "BUG: a Navigator was mounted with no routes — seed one before mounting \
              (navigator.dart:3922 asserts the same)"
         );
-        self.shared.mutate(|history| {
+        self.shared.mutate("mount", |history| {
             history.flush(true);
         });
     }

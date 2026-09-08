@@ -44,8 +44,56 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::result::{Completer, RouteResult};
 
-/// A pop result, erased. See the module docs.
-pub(crate) type AnyResult = Box<dyn Any + Send>;
+/// A pop result, erased — and carrying the name of what was erased.
+///
+/// See the module docs for the erasure itself. The `type_name` rides along
+/// because it cannot be recovered afterwards: `dyn Any` yields a `TypeId`, never a
+/// name, so a value that reaches no route could otherwise only be reported as
+/// "something was discarded". It is captured once, at the six public erasure
+/// sites, where the caller's `T` is still known.
+pub(crate) struct AnyResult {
+    value: Box<dyn Any + Send>,
+    supplied: &'static str,
+}
+
+impl AnyResult {
+    /// Erase a caller-supplied result, recording what it was.
+    pub(crate) fn new<T: Send + 'static>(value: T) -> Self {
+        Self {
+            value: Box::new(value),
+            supplied: std::any::type_name::<T>(),
+        }
+    }
+
+    /// `type_name` of the value the caller supplied.
+    pub(crate) fn supplied(&self) -> &'static str {
+        self.supplied
+    }
+
+    /// Recover the concrete value, or hand this back unchanged — so a failed
+    /// downcast does not lose the provenance the failure report needs.
+    pub(crate) fn downcast<T: 'static>(self) -> Result<T, Self> {
+        // The marker has to sit on the calling line: port-check's FR-033/widgets
+        // filter is line-scoped, and rustfmt relocates a trailing comment off a
+        // `match` scrutinee, so the call gets its own `let`.
+        let recovered = self.value.downcast::<T>(); // PORT-CHECK-OK-DOWNCAST: the reverse of `AnyResult::new`'s own erasure, at the signed-off pop-result boundary (ADR-0019); hands the value back on failure rather than losing its provenance
+        match recovered {
+            Ok(value) => Ok(*value),
+            Err(value) => Err(Self {
+                value,
+                supplied: self.supplied,
+            }),
+        }
+    }
+}
+
+impl fmt::Debug for AnyResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnyResult")
+            .field("supplied", &self.supplied)
+            .finish_non_exhaustive()
+    }
+}
 
 /// A caller-supplied result that reached no route, or reached one that could not
 /// take it — carried out of the history's locked section and reported there.
@@ -62,7 +110,15 @@ pub(crate) type AnyResult = Box<dyn Any + Send>;
 pub(crate) enum UndeliveredResult {
     /// No present route to deliver to: an empty stack, one whose top is
     /// mid-exit-transition, or a removal target that had already completed.
-    NoTarget(AnyResult),
+    NoTarget {
+        /// The value itself, so it drops outside the lock.
+        value: AnyResult,
+        /// `type_name` of what the caller supplied. In scope at every erasure
+        /// site, and the only thing that lets a reader of the log tell *which*
+        /// value was lost — its sibling below has always carried type
+        /// information and this had none at all.
+        supplied: &'static str,
+    },
     /// A route received it, and its type did not match that route's `Output`.
     /// Flutter throws a cast error here; FLUI logs and completes with `None`.
     TypeMismatch {
@@ -395,6 +451,16 @@ pub trait Route: 'static {
     fn dispose(&mut self) {}
 }
 
+impl UndeliveredResult {
+    /// A result that reached no route at all.
+    pub(crate) fn no_target(value: AnyResult) -> Self {
+        Self::NoTarget {
+            supplied: value.supplied(),
+            value,
+        }
+    }
+}
+
 /// The framework's view of a route, with `Output` erased.
 ///
 /// Object-safe by construction: no associated type, no generics, and the only
@@ -528,14 +594,14 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
         if !self.route.did_pop() {
             // Refused. The result was never delivered, and it is the caller's
             // value, so it goes back out rather than being dropped under the lock.
-            return (false, result.map(UndeliveredResult::NoTarget));
+            return (false, result.map(UndeliveredResult::no_target));
         }
         (true, self.did_complete(result))
     }
 
     fn did_complete(&mut self, result: Option<AnyResult>) -> Option<UndeliveredResult> {
         if self.completer.is_completed() {
-            return result.map(UndeliveredResult::NoTarget);
+            return result.map(UndeliveredResult::no_target);
         }
 
         // `result ?? currentResult` (navigator.dart:481). The fallback applies
@@ -549,9 +615,9 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
                 // cannot carry each route's `Output`, so `pop` erases and the owning
                 // record downcasts back. Signed off as the only downcast in
                 // `flui-widgets`, and port-check's FR-033/widgets grep keeps it that way.
-                let typed = erased.downcast::<R::Output>(); // PORT-CHECK-OK-DOWNCAST: signed-off pop-result erasure boundary, see module docs
+                let typed = erased.downcast::<R::Output>(); // PORT-CHECK-OK-DOWNCAST: the pop-result erasure boundary itself — a heterogeneous route stack cannot carry each route's `Output`, so `pop` erases and the owning `RouteRecord` recovers its own type here; signed off in ADR-0019's *Public API and sign-off* section
                 match typed {
-                    Ok(value) => Some(*value),
+                    Ok(value) => Some(value),
                     Err(mismatched) => {
                         // Neither reported nor dropped here: this runs inside the
                         // flush, under the history mutex, and both a `tracing`

@@ -36,10 +36,17 @@
 //! `Result<RouteId, NamedRouteError>`, one typed `push_named_typed::<T>`, and
 //! the typed-key path — `RouteKey<T>` / `route_keyed` / `push_keyed`, where the
 //! route's result type is checked against its name by the compiler at the
-//! registration site. Factories receive a `RouteRequest`, which carries the
-//! navigator, so none of them needs to capture a handle.
-//! Still deferred: Navigator 2.0, restoration, `PopScope`,
-//! `LocalHistoryRoute`, and per-route focus scope.
+//! registration site. Factories receive a `RouteRequest` carrying only the
+//! request's settings, name and arguments — a factory is a builder, and a
+//! redirect is expressed by returning a different route rather than by
+//! navigating. `RouteRequest::navigator()` existed briefly and was withdrawn
+//! (ADR-0024 §7.10); navigation from a factory now requires an explicitly
+//! captured handle, is **survivable rather than supported**, and carries the
+//! consequences `ARCHITECTURE.md` §5 records.
+//! Still deferred: Navigator 2.0, restoration, `LocalHistoryRoute` (its module
+//! is entirely `pub(crate)` — crate-private until the first consumer), and
+//! per-route focus scope. `PopScope` is **not** deferred: it shipped
+//! 2026-07-10 and is exported below.
 //!
 //! **Typed siblings of the other five entry points are deliberately not
 //! offered.** `push_named_typed` exists because a caller who wants a pushed

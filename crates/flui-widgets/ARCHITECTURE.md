@@ -366,9 +366,19 @@ condition, on one path, so this sentence is true in exactly one way.
 
 Nine sites can reach it, and the list is worth reading because only two of them
 are the edge cases a reader expects: an empty stack, a top mid-exit-transition, a
-target already completed, a result displaced from an entry that already carried
-one, an id belonging to another navigator, an unmounted handle, a named capture
-that came back empty — and **`maybe_pop` on a lone route**.
+target already completed, an id belonging to another navigator, an unmounted
+handle, a named capture that came back empty, a user `Route::did_pop` returning
+`false` (a public trait whose default is `true`, and ADR-0024 §7.4 sanctions user
+routes), `maybe_pop_with` under a `PopScope` veto — which reports *handled* while
+discarding, so it is worse than the case below — and **`maybe_pop` on a lone
+route**.
+
+A tenth condition, "a result displaced from an entry that already carried one",
+is armed for in `arm_pop` and is believed **unreachable**: every arming site
+flushes inside the same locked section, and every flush arm takes the pending
+result. It is left armed rather than removed, because reachability here is a
+property of the current call graph and this feature has already watched that
+graph change four times.
 
 That last one is not an edge case at all. `Route::pop_disposition` is Flutter's
 `isFirst ? bubble : pop`, so the bottom-most route **bubbles by design**; before
@@ -376,12 +386,21 @@ this was fixed, `maybe_pop_with(v)` on a one-route navigator discarded the
 caller's value on *every* call, under the guard. The commonest possible stack
 shape was the undelivered-result path.
 
-**Ordering.** An operation's own observations reach observers **before** anything
-a re-entrant drop triggers: a `pop_with` whose payload's `Drop` pops again is
-observed as `didPop(target)` then `didPop(middle)` — cause before effect. That is
-measured both ways; reporting before the flush outcome is applied inverts it to
-`[middle, target]`, from which an observer cannot reconstruct the sequence. So the
-drains apply the outcome first and report second. `apply` deliberately runs
+**Ordering, and exactly what it covers.** An operation's own observations reach
+observers **before anything a re-entrant *drop* triggers**: a `pop_with` whose
+payload's `Drop` pops again is observed as `didPop(target)` then `didPop(middle)`
+— cause before effect. That is measured both ways; reporting before the flush
+outcome is applied inverts it to `[middle, target]`, from which an observer cannot
+reconstruct the sequence. So the drains apply the outcome first and report second.
+
+**It does not cover every re-entrancy, and the scope is load-bearing.** `apply`
+runs step 0 — everything the flush owes user code, including deferred `PopScope`
+effects (`notify_pop_invoked`, `drain_local_history`) — *before* step 1 delivers
+to observers. So a navigation issued from a `PopScope` callback **is** observed
+before the operation that triggered it. That is a different path from a value's
+`Drop`, it is not closed by the drain ordering above, and the guarantee here is
+deliberately worded to the drop case rather than generalised. The pinning test
+is named for the drop case too; the prose is what had to be narrowed to match it. `apply` deliberately runs
 re-entrant user code — deferred `PopScope` effects, observer delivery,
 `Route::dispose` — and a value's `Drop` running after all of it is a consequence
 landing where consequences belong.
@@ -633,9 +652,11 @@ is the one that cost a review round:
 what the request delivers. Its predecessor also asserted that `navigator()`
 returned *this* navigator rather than any navigator; that claim's subject no
 longer exists, so nothing pins it and nothing needs to.
-`a_factory_that_pushes_re_entrantly_does_not_deadlock` now pushes through
-`request.navigator()` with no cell, and still pins that the registry guard is
-released before the factory runs — holding it deadlocks the owner thread.
+`a_factory_that_pushes_re_entrantly_does_not_deadlock` now obtains its handle by
+an ordinary capture, through an `Rc<RefCell<Option<NavigatorHandle>>>` cell,
+since the accessor it used to call no longer exists. It still pins that the
+registry guard is released before the factory runs — holding it deadlocks the
+owner thread — and its claim is now the weaker *survivable*, not *supported*.
 
 ### 10. `RouteKey<T>` moves the result-type check from run time to the registration site
 

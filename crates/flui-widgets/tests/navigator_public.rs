@@ -98,6 +98,42 @@ impl NavigatorRoute for RefusingRoute {
     }
 }
 
+/// A pop result whose `Drop` is observable.
+///
+/// Several undelivered-result paths run under the history mutex, where dropping
+/// a caller's value inline runs user code with a lock held. A counter proves the
+/// drop happened once *and* — because the navigator is still usable after it —
+/// that it happened outside the guard.
+struct DropCounter(Arc<AtomicUsize>);
+
+impl DropCounter {
+    fn new(counter: &Arc<AtomicUsize>) -> Self {
+        Self(Arc::clone(counter))
+    }
+}
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The `operation` field of every undeliverable-result report in `log`, in order.
+///
+/// Discriminating per row on the operation name, rather than counting matches of
+/// a message substring: a count cannot tell "the path I meant reported" from
+/// "some other path reported instead", which is the difference between an
+/// assertion and a coincidence.
+fn undelivered_operations(log: &flui_testing::log_capture::CapturedLog) -> Vec<&str> {
+    log.records()
+        .iter()
+        .filter(|record| {
+            record.contains("reached no route") || record.contains("could not be delivered")
+        })
+        .map(|record| record.field("operation").unwrap_or("<no operation field>"))
+        .collect()
+}
+
 /// A route whose result is a `String`, to exercise the erased pop-result boundary.
 struct StringRoute {
     settings: RouteSettings,
@@ -504,62 +540,32 @@ fn no_global_key_in_public_navigator_path() {
     }
 }
 
-/// The prelude exports exactly the approved surface, and no internals.
+/// The prelude exports exactly the approved surface.
 ///
-/// The *positive* half is structural: every name below is imported at the top of
-/// this file or used in these tests, so a missing export is a compile error, not
-/// an assertion failure. This test guards the *negative* half — that the route
-/// stack's internals did not leak into the crate root.
+/// This is the **positive** half, and only an external crate can prove it: every
+/// name below is imported at the top of this file or used in these tests, so a
+/// missing export is a compile error rather than an assertion failure.
 ///
-/// Red-check: add `pub use navigator::history::RouteHistory;` to `lib.rs`.
+/// # The negative half moved, and why
+///
+/// This test used to carry its own `INTERNAL` list plus its own copy of the
+/// export scanner, because `navigator::export_guard` is `pub(crate)` and an
+/// integration test cannot reach it. That copy had two faults that hid each other:
+///
+/// - it filtered to lines *starting* `pub use`, so for `lib.rs`'s wrapped
+///   navigator block it read only `pub use navigator::{` and none of the names;
+/// - its list still carried `PageRoute`, which is public **by decision**
+///   (`navigator/mod.rs`) — so repairing the scanner would have turned it red at
+///   once, which is very likely why it was never repaired.
+///
+/// The negative half is now owned in one place, in-crate, by
+/// `navigator::navigator_tests::public_no_internal_route_stack_exports`: it scans
+/// the same `lib.rs`, through the repaired statement-aware scanner, against a list
+/// of **43** internal names rather than 19 — a superset, with `BoundRoute` and
+/// `ObservationQueues` carried across and only the stale `PageRoute` dropped. One
+/// fact, one place; a second copy is how the two drifted apart.
 #[test]
 fn public_prelude_exports_exact_approved_surface() {
-    const LIB: &str = include_str!("../src/lib.rs");
-    const INTERNAL: [&str; 19] = [
-        "RouteHistory",
-        "RouteLifecycle",
-        "RouteEntry",
-        "ErasedRoute",
-        "AnyResult",
-        "FlushOutcome",
-        "ObservationQueues",
-        "RoutePopDisposition",
-        // The transition/modal route seam and its route classes: all private.
-        "RouteBinding",
-        "RouteCommand",
-        "BoundRoute",
-        "TransitionRoute",
-        "ModalRoute",
-        "PageRoute",
-        // Named-route generation (ADR-0024) exports `GeneratedRoute` and
-        // `NamedRouteError` — imported at the top of this file, so their
-        // absence is a compile error — and nothing else. `AnyResult` above is
-        // the erasure that feature reuses: it stays internal, which is why
-        // §7.2's replacement design adds no public `dyn Any` boundary at all.
-        "RouteRegistry",
-        "RouteFactory",
-        "ErasedPush",
-        "TypedPush",
-        "PushMode",
-    ];
-
-    for line in LIB.lines() {
-        let code = line.trim_start();
-        if !code.starts_with("pub use") && !code.starts_with("pub mod") {
-            continue;
-        }
-        for internal in INTERNAL {
-            assert!(
-                !code.contains(internal),
-                "lib.rs leaks the internal `{internal}`: {line}"
-            );
-        }
-        assert!(
-            !code.starts_with("pub mod overlay"),
-            "the overlay module must stay private: {line}"
-        );
-    }
-
     // Approved names, named here so their absence is a compile error.
     let _: fn() -> NavigatorHandle = NavigatorHandle::new;
     let _: fn(NavigatorHandle) -> Navigator = Navigator::new;
@@ -2337,6 +2343,10 @@ fn navigator_with_deferred_exits() -> (NavigatorHandle, LaidOut) {
 /// anyone looks. With a deferred exit they diverge for the whole transition — so
 /// asserting `route_ids()` equality, as the rest of the suite does, is asserting
 /// a fact about the fixture as much as about the operation.
+///
+/// Red-check: have `dismiss_captured` resolve the name before capturing
+/// `current()` and the departing route is never completed — `try_take()` returns
+/// `None` instead of its fallback.
 #[test]
 fn deferred_exit_pop_and_push_named() {
     let (handle, mut laid) = navigator_with_deferred_exits();
@@ -2373,6 +2383,11 @@ fn deferred_exit_pop_and_push_named() {
 }
 
 /// `push_replacement_named` against a route whose exit is still in flight.
+///
+/// Red-check: make `arm_complete`'s `>= Remove` guard return `armed: true` and
+/// the already-completing target is completed a second time, which
+/// `Completer::complete` rejects — `is_completed()` still holds, but the
+/// undelivered channel gains an entry this test's sibling row asserts is absent.
 #[test]
 fn deferred_exit_push_replacement_named() {
     let (handle, mut laid) = navigator_with_deferred_exits();
@@ -2392,58 +2407,130 @@ fn deferred_exit_push_replacement_named() {
 /// Two named operations back to back, the first still unfinalised when the
 /// second runs — the sequence a user tapping twice produces, and the one that
 /// cannot happen at all with a synchronously-finalised fixture.
+///
+/// The load-bearing assertion is the **whole stack**, not `current()`. Two
+/// unfinalised entries accumulate, and the question the fixture exists to answer
+/// is which entry the second operation's pop targets: the topmost *present* one
+/// (`second`), or the topmost one (`first`, already in `Popping`). Only a full
+/// `route_ids()` comparison can tell those apart — `current() == third` and
+/// `second != third` are both true either way, which is what made the earlier
+/// version of this test unable to fail.
+///
+/// Red-check: collapse `dismiss_captured`'s still-top arm into its buried one, so
+/// the departing route is *removed* rather than *popped*. The stack becomes
+/// `[root, second, third]` — a removal finalises at once, so the entry this test
+/// expects to accumulate never appears.
+///
+/// (Dropping `pop`'s `is_present()` filter, the mutation this line first named,
+/// does **not** go red: an un-finalised entry always sits *below* the route
+/// pushed after it, so `last_present_index` and "the last entry" pick the same
+/// one. Measured, not assumed.)
 #[test]
 fn deferred_exit_two_named_operations_back_to_back() {
     let (handle, mut laid) = navigator_with_deferred_exits();
     let root = handle.current().expect("seeded");
-    handle.push(DeferredExitRoute::new("first", 7));
+    let first = handle.push(DeferredExitRoute::new("first", 7));
     laid.tick();
+    let first_id = handle.current().expect("on top");
 
     let second = handle.pop_and_push_named("/next").expect("registered");
     laid.tick();
+    assert_eq!(
+        first.try_take(),
+        Some(Some(7)),
+        "the first operation completed its target immediately"
+    );
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, first_id, second],
+        "and left its entry behind, un-finalised"
+    );
+
     let third = handle.pop_and_push_named("/next").expect("registered");
     laid.tick();
 
-    assert_ne!(second, third);
     assert_eq!(
-        handle.current(),
-        Some(third),
-        "the second operation acted on what the first left present, not on a \
-         still-unfinalised entry"
+        handle.route_ids(),
+        vec![root, first_id, second, third],
+        "the second operation popped `second` — the topmost PRESENT entry — and \
+         not the still-`Popping` `first` sitting above the root"
     );
-    assert!(
-        !handle.route_ids().is_empty() && handle.route_ids()[0] == root,
-        "and the root is untouched underneath"
-    );
+    assert_eq!(handle.current(), Some(third));
 }
 
 /// `push_named_and_remove_until` sweeping past unfinalised routes.
+///
+/// Two contracts, neither of which the earlier version of this test could see
+/// (it asserted `current() == arrived` and "root appears once" — both true of
+/// any implementation that pushes at all):
+///
+/// 1. The `keep` predicate is consulted over **every** entry top-down, present
+///    or not, and only the *present* ones are removed. That is Flutter's
+///    `pushAndRemoveUntil` loop, which tests `predicate(_history[index].route)`
+///    before it ever asks `isPresent` — so a route that has already been popped
+///    and is waiting out its exit transition is still shown to the predicate.
+/// 2. A **removal** finalises at once where a **pop** does not.
+///    `finishedWhenPopped` gates `didPop`, not `didRemove`, so the swept `a`
+///    leaves the stack inside this frame while the earlier-popped `b` is still
+///    sitting in `Popping`. The two dismissal verbs are not interchangeable, and
+///    the resulting stack is the only place that shows it.
+///
+/// Red-check: filter `RouteHistory::push_for_remove_until_with_id`'s candidate
+/// list to present entries and `consulted` becomes `[a, root]` — measured. (The
+/// same filter added to `push_and_remove_until_with_id`'s own loop changes
+/// nothing: that single-locked-section variant is not the one the named path
+/// uses, which is why the first version of this line was testing dead code.)
+///
+/// The second contract has no cheap mutation of its own: it is asserted by the
+/// final stack, where `a` is absent and `b` present after one frame.
 #[test]
 fn deferred_exit_push_named_and_remove_until() {
     let (handle, mut laid) = navigator_with_deferred_exits();
     let root = handle.current().expect("seeded");
-    handle.push(DeferredExitRoute::new("a", 7));
+    let a = handle.push(DeferredExitRoute::new("a", 7));
     laid.tick();
-    handle.push(DeferredExitRoute::new("b", 8));
+    let a_id = handle.current().expect("on top");
+    let b = handle.push(DeferredExitRoute::new("b", 8));
     laid.tick();
+    let b_id = handle.current().expect("on top");
+
     handle.pop();
     laid.tick();
+    assert_eq!(
+        b.try_take(),
+        Some(Some(8)),
+        "b completed but has not finalised"
+    );
+    assert_eq!(handle.route_ids(), vec![root, a_id, b_id]);
+    assert_eq!(handle.current(), Some(a_id), "b is no longer present");
 
+    let mut consulted = Vec::new();
     let arrived = handle
-        .push_named_and_remove_until("/next", |candidate| candidate == root)
+        .push_named_and_remove_until("/next", |candidate| {
+            consulted.push(candidate);
+            candidate == root
+        })
         .expect("registered");
     laid.tick();
 
-    assert_eq!(handle.current(), Some(arrived));
     assert_eq!(
-        handle
-            .route_ids()
-            .into_iter()
-            .filter(|id| *id == root)
-            .count(),
-        1,
-        "the kept route survived exactly once"
+        consulted,
+        vec![b_id, a_id, root],
+        "top-down over every entry — `b` is shown to the predicate even though it \
+         has already been popped and cannot be removed again"
     );
+    assert_eq!(
+        a.try_take(),
+        Some(Some(7)),
+        "`a` was present and not kept, so it was removed and completed"
+    );
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, b_id, arrived],
+        "`a` left the stack in this frame — a removal does not wait for an exit \
+         transition — while the popped `b` is still waiting out its own"
+    );
+    assert_eq!(handle.current(), Some(arrived));
 }
 
 /// The combination the fixture exists for: a re-entrant factory **pops** the
@@ -2454,6 +2541,10 @@ fn deferred_exit_push_named_and_remove_until() {
 /// Without `arm_complete`'s `>= remove` guard this would complete a route that
 /// has already completed. That guard is what makes the by-id lookup safe, and
 /// nothing pinned the combination before this fixture existed.
+///
+/// Red-check: remove `arm_complete`'s `>= Remove` early return and the
+/// already-popped target is re-armed, so the replacement reports a `didReplace`
+/// for a route that had already left — the observer assertion below fails.
 #[test]
 fn deferred_exit_a_factory_that_pops_the_captured_route_before_it_is_replaced() {
     let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
@@ -2906,14 +2997,25 @@ fn an_unresolvable_name_after_a_navigating_factory_adds_nothing_of_its_own() {
 ///
 /// Asserted on the **captured log**, not a counter: a counter would pin a parallel
 /// predicate rather than the emission, which is the trap this module already
-/// documents for the registration-conflict warning.
+/// documents for the registration-conflict warning. And asserted per row on the
+/// report's `operation` field rather than on a count of matching messages — a
+/// count cannot distinguish "the path I meant reported" from "a different path
+/// reported instead", which for the two `maybe_pop` arms below is the whole
+/// question.
+///
+/// One site is deliberately **not** a row here: the `pending_result` displacement
+/// in `RouteEntry::arm_pop` / `arm_complete`. Reaching it needs one entry armed
+/// twice before its flush, and every public mutation flushes before returning
+/// while `debug_assert!(!flushing)` rejects re-entry from inside a flush — so it
+/// is a defence with no public caller, not an untested path. If a future
+/// operation arms without flushing, that is when it becomes reachable.
 ///
 /// Red-check: restore any one early return to dropping `result` inline and that
-/// row's expected count falls to zero.
+/// row's operation list goes empty.
 #[test]
 fn every_operation_that_cannot_deliver_a_result_reports_it() {
     /// Drive one scenario and report how many "no route" warnings it emitted.
-    fn warnings_from(drive: impl FnOnce(&NavigatorHandle)) -> usize {
+    fn warnings_from(drive: impl FnOnce(&NavigatorHandle)) -> Vec<String> {
         let ((), log) = flui_testing::log_capture::capture(|| {
             let handle = NavigatorHandle::new();
             handle.route("/next", |_request: &RouteRequest<'_>| {
@@ -2921,7 +3023,10 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
             });
             drive(&handle);
         });
-        log.count_containing("reached no route and was discarded")
+        undelivered_operations(&log)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
 
     // 1. `pop_and_push_named_with` with nothing captured — Codex's report.
@@ -2929,8 +3034,9 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
         warnings_from(|handle| {
             let _ = handle.pop_and_push_named_with("/next", 7_i32);
         }),
-        1,
-        "an empty capture reports the result it could not deliver"
+        ["pop_and_push_named_with"],
+        "an empty capture reports the result it could not deliver, under the \
+         composed operation's name rather than the inner pop's"
     );
 
     // 2. `maybe_pop_with` while unmounted.
@@ -2941,7 +3047,7 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
                 "an unmounted navigator swallows the pop"
             );
         }),
-        1,
+        ["maybe_pop"],
         "the unmounted early return reports too"
     );
 
@@ -2950,7 +3056,7 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
         warnings_from(|handle| {
             assert!(!handle.pop_with(7_i32), "nothing to pop");
         }),
-        1,
+        ["pop"],
         "the plainest case of all"
     );
 
@@ -2967,7 +3073,7 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
                 "that route belongs to another navigator"
             );
         }),
-        1,
+        ["remove_route"],
         "a missing removal target reports too"
     );
 
@@ -2985,14 +3091,14 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
                 "unresolved"
             );
         }),
-        1,
+        ["push_replacement_named_with"],
         "push_replacement_named_with reports on the unresolved path"
     );
     assert_eq!(
         warnings_from(|handle| {
             assert!(handle.pop_and_push_named_with("/nowhere", 7_i32).is_err());
         }),
-        1,
+        ["pop_and_push_named_with"],
         "and so does pop_and_push_named_with"
     );
 
@@ -3010,11 +3116,81 @@ fn every_operation_that_cannot_deliver_a_result_reports_it() {
     })
     .1;
     assert_eq!(
-        bubbled.count_containing("reached no route and was discarded"),
-        1,
+        undelivered_operations(&bubbled),
+        ["maybe_pop"],
         "the Bubble arm reports, and it used to drop under the history guard; \
          captured:\n{}",
         bubbled.render_at_least(tracing::Level::WARN)
+    );
+
+    // 7. `DoNotPop` — the arm that reports *and* answers "handled". A vetoing
+    //    route keeps the stack and the caller's result has nowhere to go, so this
+    //    is the one arm where "the request was dealt with" and "your value was
+    //    discarded" are true at once. It is also the row carrying an observable
+    //    `Drop`: the arm runs under the history guard, so the proof that matters
+    //    is that the value's `Drop` ran and the navigator still works afterwards.
+    let vetoed_drops = Arc::new(AtomicUsize::new(0));
+    let vetoed = flui_testing::log_capture::capture(|| {
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+        handle.push(VetoingRoute::new());
+        laid.tick();
+        assert!(
+            handle.maybe_pop_with(DropCounter::new(&vetoed_drops)),
+            "a veto HANDLES the request — it just does not pop"
+        );
+        laid.tick();
+        assert_eq!(
+            handle.route_ids().len(),
+            2,
+            "and the vetoing route is still there"
+        );
+        assert_eq!(
+            vetoed_drops.load(Ordering::Relaxed),
+            1,
+            "the value's Drop ran once, after the guard released — the navigator \
+             below still answers, which it could not do from inside its own lock"
+        );
+        assert!(handle.can_pop(), "still usable");
+    })
+    .1;
+    assert_eq!(
+        undelivered_operations(&vetoed),
+        ["maybe_pop"],
+        "the DoNotPop arm reports; captured:\n{}",
+        vetoed.render_at_least(tracing::Level::WARN)
+    );
+
+    // 8. `pop_disposition_of_top() == None` on a **mounted** navigator — distinct
+    //    from row 2 (unmounted) and row 3 (`pop`, which never asks for a
+    //    disposition). Reached by removing the only route: a removed entry is not
+    //    `is_present`, so the disposition query has no top to ask.
+    let dispositionless = flui_testing::log_capture::capture(|| {
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+        let root = handle.current().expect("seeded");
+        assert!(handle.remove_route(root), "removed");
+        laid.tick();
+        assert_eq!(handle.current(), None, "nothing is present any more");
+        assert!(
+            handle.is_mounted(),
+            "and yet the navigator is mounted — this is not row 2"
+        );
+        assert!(
+            !handle.maybe_pop_with(7_i32),
+            "no disposition means nothing handled it"
+        );
+    })
+    .1;
+    assert_eq!(
+        undelivered_operations(&dispositionless),
+        ["maybe_pop"],
+        "the no-disposition arm reports; captured:\n{}",
+        dispositionless.render_at_least(tracing::Level::WARN)
     );
 }
 
@@ -3089,5 +3265,372 @@ fn an_operations_own_observations_precede_anything_a_re_entrant_drop_triggers() 
         middle.is_completed(),
         "and the nested pop really did happen — without this the ordering \
          assertion could pass on a single event"
+    );
+}
+
+/// A **composed** operation's observations *all* precede anything a re-entrant
+/// drop triggers — both halves of it.
+///
+/// `pop_and_push_named_with` is two drains: a dismissal, then a push. Its sibling
+/// `push_replacement_named_with` is one, so its drop already landed after
+/// everything. Reporting inside the first drain put the caller's value's `Drop`
+/// **between** one operation's `didPop` and its own `didPush`, which
+/// `ARCHITECTURE.md` §5 claims cannot happen — the claim is per *operation*, and
+/// only a composed one can break it.
+///
+/// This needs no re-entrant factory. The payload's type does not match the
+/// departing route's `Output`, which is the documented delivery-time contract, so
+/// it travels the undelivered path and its `Drop` runs there.
+///
+/// **Why the existing ordering test could not catch this.**
+/// `an_operations_own_observations_precede_anything_a_re_entrant_drop_triggers`
+/// drives `pop_with` — a single-drain operation — so it is *structurally* blind to
+/// a two-drain composition, whatever breaks. That is why this one exists rather
+/// than an extra assertion there.
+///
+/// Red-check: report inside `dismiss_captured` again (or before the
+/// `generated.push` call) and the nested pop lands between this operation's own
+/// two events.
+#[test]
+fn a_composed_operations_observations_all_precede_a_re_entrant_drop() {
+    /// Pops the navigator from its own `Drop`, through the `Send` command target.
+    struct PopsNavigatorOnDrop {
+        target: NavigatorCommandTarget,
+    }
+
+    impl Drop for PopsNavigatorOnDrop {
+        fn drop(&mut self) {
+            let _ = NavigatorCommand::pop(self.target).apply_on_owner();
+        }
+    }
+
+    /// Records every event with its route, so the sequence is reconstructable.
+    #[derive(Default)]
+    struct Sequence(Mutex<Vec<(&'static str, RouteId)>>);
+
+    impl NavigatorObserver for Sequence {
+        fn did_push(&self, route: RouteId, _previous: Option<RouteId>) {
+            self.0.lock().push(("push", route));
+        }
+        fn did_pop(&self, route: RouteId, _previous: Option<RouteId>) {
+            self.0.lock().push(("pop", route));
+        }
+    }
+
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.route("/next", {
+        let built = built.clone();
+        move |_request: &RouteRequest<'_>| Some(page(&built, "next"))
+    });
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let collateral = handle.push(page(&built, "collateral"));
+    laid.tick();
+    let collateral_id = handle.current().expect("collateral on top");
+    handle.push(page(&built, "departing"));
+    laid.tick();
+    let departing_id = handle.current().expect("departing on top");
+
+    let sequence = Arc::new(Sequence::default());
+    handle.add_observer(Arc::clone(&sequence) as Arc<dyn NavigatorObserver>);
+
+    // `page` is a `SimpleRoute<i32>`, so this payload mismatches the departing
+    // route's `Output` and travels the undelivered path.
+    let arrived = handle
+        .pop_and_push_named_with(
+            "/next",
+            PopsNavigatorOnDrop {
+                target: handle.command_target(),
+            },
+        )
+        .expect("registered");
+    laid.tick();
+
+    // The nested pop takes whatever is on top *when the drop runs*. Correct
+    // ordering therefore pops `arrived`; the broken ordering runs the drop before
+    // the push and pops `collateral` instead — so the route differs as well as the
+    // position, which makes this a sharper discriminator than order alone.
+    assert_eq!(
+        sequence.0.lock().clone(),
+        vec![("pop", departing_id), ("push", arrived), ("pop", arrived),],
+        "both halves of the composed operation are observed before the nested pop \
+         its own dropped payload triggered. Reported inside the first drain, that \
+         pop lands between them — and takes a different route"
+    );
+    assert!(
+        !collateral.is_completed(),
+        "the collateral route is untouched: it is only popped if the drop ran too \
+         early, which is exactly the defect"
+    );
+    assert!(
+        collateral_id != arrived,
+        "precondition: the two are distinguishable"
+    );
+}
+
+/// A route that answers `Animating` from `did_push`, like every
+/// `TransitionRoute` descendant — and nothing ever completes it.
+///
+/// The mirror of [`DeferredExitRoute`], on the axis that fixture left at its
+/// default. `TransitionRoute::did_push` returns `Animating`, so every production
+/// `PageRoute`/`PopupRoute`/`ModalRoute` sits in `Pushing` for its **entire
+/// entrance transition** — and `Pushing` is inside `is_present()`, so `current()`
+/// returns it and a named operation will capture and act on it.
+struct DeferredEntranceRoute {
+    settings: RouteSettings,
+    builder: RouteContentBuilder,
+    current_result: i32,
+}
+
+impl DeferredEntranceRoute {
+    fn new(name: &'static str, current_result: i32) -> Self {
+        Self {
+            settings: RouteSettings::named(name),
+            builder: Rc::new(leaf),
+            current_result,
+        }
+    }
+}
+
+impl Route for DeferredEntranceRoute {
+    type Output = i32;
+
+    fn settings(&self) -> &RouteSettings {
+        &self.settings
+    }
+
+    fn current_result(&mut self) -> Option<i32> {
+        Some(self.current_result)
+    }
+
+    /// The whole point of this fixture.
+    fn did_push(&mut self) -> PushCompletion {
+        PushCompletion::Animating
+    }
+}
+
+impl NavigatorRoute for DeferredEntranceRoute {
+    fn content_builder(&self) -> RouteContentBuilder {
+        Rc::clone(&self.builder)
+    }
+}
+
+/// `pop_and_push_named` against a route in its **entrance** transition.
+///
+/// The mirror of `deferred_exit_pop_and_push_named`, on the axis that fixture left
+/// at its default. `Pushing` is inside `is_present()`, so `current()` returns a
+/// route mid-entrance and a named operation captures and acts on it — a window no
+/// named operation had ever been issued against.
+///
+/// Measured before being asserted, as with the exit fixture: **nothing went red**.
+/// The pop reaches the captured route and completes it with its own fallback even
+/// though its entrance never finished.
+///
+/// Red-check: capture `current()` *after* resolving instead of before and the
+/// mid-entrance route survives uncompleted (the same defect the exit window's
+/// sibling pins, on the other axis).
+#[test]
+fn deferred_entrance_pop_and_push_named() {
+    let handle = NavigatorHandle::new();
+    handle.route("/next", |_request: &RouteRequest<'_>| {
+        Some(DeferredEntranceRoute::new("/next", 1))
+    });
+    handle.seed_initial(DeferredEntranceRoute::new("/", 0));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("seeded");
+
+    let victim = handle.push(DeferredEntranceRoute::new("victim", 7));
+    laid.tick();
+    let victim_id = handle
+        .current()
+        .expect("mid-entrance and still `is_present`");
+
+    let arrived = handle.pop_and_push_named("/next").expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        victim.try_take(),
+        Some(Some(7)),
+        "the mid-entrance route was popped and completed with its own fallback"
+    );
+    assert_eq!(handle.route_ids(), vec![root, arrived]);
+    assert_ne!(victim_id, arrived);
+}
+
+/// `push_replacement_named` against a route in its **entrance** transition.
+///
+/// Also measured first, and also no red — but the oracle has to be `current()` plus
+/// completion, not `route_ids()`: the replaced route goes to `Removing` and waits
+/// for an exit transition this fixture never finishes, so its entry stays in the
+/// stack. That is the same fixture property the exit block documents, arriving from
+/// the other direction.
+///
+/// Red-check: give the `Route(id)` target arm an unfiltered lookup and the
+/// `didReplace` payload names a different route.
+#[test]
+fn deferred_entrance_push_replacement_named() {
+    let handle = NavigatorHandle::new();
+    handle.route("/next", |_request: &RouteRequest<'_>| {
+        Some(DeferredEntranceRoute::new("/next", 1))
+    });
+    handle.seed_initial(DeferredEntranceRoute::new("/", 0));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+
+    let replaced = handle.push(DeferredEntranceRoute::new("replaced", 7));
+    laid.tick();
+    let replaced_id = handle.current().expect("mid-entrance");
+
+    let spy = Arc::new(ReplaceSpy::default());
+    handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+    let arrived = handle.push_replacement_named("/next").expect("registered");
+    laid.tick();
+
+    assert_eq!(
+        spy.0.lock().clone(),
+        vec![(Some(arrived), Some(replaced_id))],
+        "didReplace names the route that was current at the call, mid-entrance or not"
+    );
+    assert!(replaced.is_completed(), "and it completed");
+    assert_eq!(
+        handle.current(),
+        Some(arrived),
+        "the new route is what a caller sees on top; the replaced entry lingers in \
+         `Removing` only because this fixture never finishes a transition"
+    );
+}
+
+/// A route whose `popDisposition` is `DoNotPop` — the third arm of
+/// `maybe_pop`'s match, and the only one that reports *and* returns "handled".
+struct VetoingRoute {
+    settings: RouteSettings,
+    builder: RouteContentBuilder,
+}
+
+impl VetoingRoute {
+    fn new() -> Self {
+        Self {
+            settings: RouteSettings::named("vetoing"),
+            builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+        }
+    }
+}
+
+impl Route for VetoingRoute {
+    type Output = i32;
+
+    fn settings(&self) -> &RouteSettings {
+        &self.settings
+    }
+
+    fn vetoes_pop(&self) -> bool {
+        true
+    }
+}
+
+impl NavigatorRoute for VetoingRoute {
+    fn content_builder(&self) -> RouteContentBuilder {
+        Rc::clone(&self.builder)
+    }
+}
+
+/// `pop_and_push_named` when the departing route **refuses** its pop.
+///
+/// `dismiss_captured` pops through `Navigator.pop`, which is not `maybePop`: it
+/// does not consult `popDisposition`, but it does honour `didPop`'s return value
+/// (`_RouteEntry.pop`: `if (route.didPop(result) && doingPop) currentState = pop`).
+/// A refusal therefore leaves the entry exactly where it was and the push proceeds
+/// regardless — the composed operation is a pop *request* plus a push, not an
+/// atomic replace.
+///
+/// So the stack grows: `[root, refuser, arrived]`. Surprising, and correct — the
+/// route said it would handle its own dismissal, and the caller asked for a push
+/// as well. `push_replacement_named` is the operation for "the old one must go".
+///
+/// Red-check: ignore `did_pop`'s return value in `RouteRecord::did_pop` and the
+/// refusing entry disappears, leaving `[root, arrived]`.
+#[test]
+fn pop_and_push_named_over_a_route_that_refuses_its_pop_keeps_it() {
+    let built = Built::default();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let handle = NavigatorHandle::new();
+    let next = built.clone();
+    handle.route("/next", move |_request: &RouteRequest<'_>| {
+        Some(page(&next, "/next"))
+    });
+    handle.seed_initial(page(&built, "/"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("seeded");
+
+    let refused = handle.push(RefusingRoute::new(&attempts));
+    laid.tick();
+    let refuser = handle.current().expect("pushed");
+
+    let arrived = handle
+        .pop_and_push_named("/next")
+        .expect("the name is registered");
+    laid.tick();
+
+    assert_eq!(attempts.load(Ordering::Relaxed), 1, "did_pop was consulted");
+    assert_eq!(
+        handle.route_ids(),
+        vec![root, refuser, arrived],
+        "the refusal stands and the push still happens"
+    );
+    assert!(
+        !refused.is_completed(),
+        "a refused pop completes nothing, composed or not"
+    );
+    assert_eq!(handle.current(), Some(arrived));
+}
+
+/// The same refusal, with a caller-supplied result.
+///
+/// `did_pop`'s refusal arm hands the value back as `UndeliveredResult::NoTarget`
+/// rather than dropping it — which matters because that arm runs **under the
+/// history mutex**, where the value's own `Drop` is user code that may re-enter.
+///
+/// Red-check: replace that arm's `result.map(UndeliveredResult::no_target)` with
+/// `None`. The value is then dropped inline under the guard, no warning is
+/// emitted, and this test's `operation`/`supplied` assertion fails while every
+/// stack-shape assertion above it still passes.
+#[test]
+fn a_refused_pop_hands_the_callers_result_back_instead_of_dropping_it() {
+    let built = Built::default();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicUsize::new(0));
+
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        let handle = NavigatorHandle::new();
+        let next = built.clone();
+        handle.route("/next", move |_request: &RouteRequest<'_>| {
+            Some(page(&next, "/next"))
+        });
+        handle.seed_initial(page(&built, "/"));
+        let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+        handle.push(RefusingRoute::new(&attempts));
+        laid.tick();
+
+        handle
+            .pop_and_push_named_with("/next", DropCounter::new(&dropped))
+            .expect("the name is registered");
+        laid.tick();
+
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            1,
+            "the undeliverable value was dropped exactly once, and the navigator \
+             is still usable afterwards — proof it did not run under the guard"
+        );
+        assert!(handle.maybe_pop(), "still usable");
+    });
+
+    let reported: Vec<&str> = undelivered_operations(&log);
+    assert_eq!(
+        reported,
+        vec!["pop_and_push_named_with"],
+        "the refusal arm reported under the composed operation's own name; \
+         captured:\n{}",
+        log.render_at_least(tracing::Level::WARN)
     );
 }
