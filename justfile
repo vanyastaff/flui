@@ -489,7 +489,7 @@ doc-open:
 [group("quality")]
 [doc("Build rustdoc with -D warnings (CI gate)")]
 doc-strict:
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --document-private-items
+    bash scripts/doc-strict.sh
 
 [group("quality")]
 [doc("Check crate inventories + the docs/workspace-layers.toml layer policy against Cargo metadata")]

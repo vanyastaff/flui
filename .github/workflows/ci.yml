@@ -668,8 +668,8 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: cargo doc --no-deps
-        run: cargo doc --workspace --no-deps --locked --document-private-items
+      - name: cargo doc --no-deps (every `testing` feature on)
+        run: bash scripts/doc-strict.sh
 
   # ─────────────────────────────────────────────────────────────────────────
   # deny — cargo-deny over advisories/bans/licenses/sources. deny.toml has

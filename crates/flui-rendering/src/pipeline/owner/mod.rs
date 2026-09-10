@@ -251,7 +251,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// Harness-only parent-data presets keyed by child [`RenderId`].
     ///
-    /// Cloned into per-walk [`ErasedChildState`] / [`ErasedSliverChildState`]
+    /// Cloned into per-walk [`ErasedChildState`](crate::protocol::ErasedChildState) /
+    /// [`ErasedSliverChildState`](crate::protocol::ErasedSliverChildState)
     /// slots before layout so headless tests can express widget-level
     /// configuration (stack positioning, flex factors, future animation
     /// parent slots) without an element tree.
