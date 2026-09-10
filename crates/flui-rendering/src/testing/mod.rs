@@ -83,6 +83,8 @@ pub use harness::{
     PaintRun,
     RenderTester,
     SemanticsRun,
+    edit_render_object,
+    update_render_object,
     // `has_overflow` moved to `flui-objects/tests/helpers.rs` (downcasts concrete objects).
 };
 pub use inspect::{Probe, hit_path_with_transforms, localize_hit_point};

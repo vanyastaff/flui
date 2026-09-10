@@ -17,7 +17,11 @@ use flui_objects::{
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
-    testing::{TreeNode, box_node, tree},
+    testing::{
+        TreeNode, box_node, edit_render_object,
+        inspect::{first_opacity_alpha, first_transform_matrix, transform_matrices},
+        tree, update_render_object,
+    },
 };
 use flui_types::{Matrix4, Size, geometry::px};
 
@@ -803,30 +807,7 @@ fn set_opacity(
     id: flui_foundation::RenderId,
     value: f32,
 ) {
-    let impact = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("opacity node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderOpacity>()
-        .expect("RenderOpacity")
-        .set_opacity(value);
-    owner.apply_render_update_impact(id, impact);
-}
-
-/// The alpha of the only `OpacityLayer` in a tree, or `None` when there is none.
-fn opacity_alpha(tree: &flui_layer::LayerTree) -> Option<f32> {
-    fn find(tree: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> Option<f32> {
-        let node = tree.get(id)?;
-        if let flui_layer::Layer::Opacity(o) = node.layer() {
-            return Some(o.alpha());
-        }
-        node.children().iter().find_map(|&c| find(tree, c))
-    }
-    find(tree, tree.root()?)
+    update_render_object::<RenderOpacity, _>(owner, id, |o| o.set_opacity(value));
 }
 
 /// An alpha change updates the emitted layer without repainting the subtree.
@@ -858,7 +839,7 @@ fn an_alpha_change_updates_the_layer_without_repainting_the_subtree() {
         "the subtree under the opacity must NOT repaint for an alpha-only change",
     );
     assert_eq!(
-        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "and the emitted OpacityLayer must carry the new alpha",
     );
@@ -890,7 +871,7 @@ fn a_layer_update_is_written_back_into_the_retained_capture() {
     drop(owner);
 
     assert_eq!(
-        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "a later frame that grafts the capture for an unrelated reason must \
          replay the UPDATED alpha, not the one it was captured with",
@@ -923,7 +904,7 @@ fn a_repaint_in_the_same_frame_wins_over_a_layer_update() {
         "an explicit paint mark must repaint the subtree, not take the cheap arm",
     );
     assert_eq!(
-        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "and the repaint must still produce the new alpha",
     );
@@ -958,7 +939,7 @@ fn a_structural_alpha_change_falls_back_to_a_repaint() {
         "losing the opacity layer is a structural change and must repaint",
     );
     assert_eq!(
-        opacity_alpha(&tree),
+        first_opacity_alpha(&tree),
         None,
         "a fully opaque node emits no OpacityLayer",
     );
@@ -1035,7 +1016,7 @@ fn a_layer_update_without_retained_output_degrades_to_a_repaint() {
          subtree paints",
     );
     assert_eq!(
-        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "and the painted result carries the new alpha",
     );
@@ -1203,7 +1184,7 @@ fn an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale() {
         .expect("second frame")
         .expect("second frame produces a layer tree");
     assert_eq!(
-        opacity_alpha(&updated).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&updated).map(|a| (a * 100.0).round()),
         Some(25.0),
         "precondition: the update lands in the frame it was requested for",
     );
@@ -1218,7 +1199,7 @@ fn an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale() {
     drop(owner);
 
     assert_eq!(
-        opacity_alpha(&regrafted).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&regrafted).map(|a| (a * 100.0).round()),
         Some(25.0),
         "an outer repaint that grafts the inner boundary must replay the \
          UPDATED alpha; a stale inner capture silently restores the old value",
@@ -1450,7 +1431,7 @@ fn poisoned_frame_keeps_the_update(repaint_arm: bool) {
     drop(owner);
 
     assert_eq!(
-        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "the update must survive a failed frame; clearing its flag mid-walk \
          loses it for good, because the retry sees nothing pending \
@@ -1541,7 +1522,7 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
         .expect("first frame")
         .expect("first frame produces a layer tree");
     assert_eq!(
-        transform_count(&first),
+        transform_matrices(&first).len(),
         0,
         "precondition: no transform layer while the effect is off",
     );
@@ -1549,17 +1530,7 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
     // Switch the effect on and ask for a layer-only update — the wrong impact
     // for a shape change, which is exactly what the guard must catch.
     let mut owner = owner;
-    owner
-        .render_tree_mut()
-        .get_mut(fx)
-        .expect("fx node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<AppearingTransform>()
-        .expect("AppearingTransform")
-        .enabled = true;
+    edit_render_object::<AppearingTransform, _, _>(&mut owner, fx, |object| object.enabled = true);
     owner.mark_needs_composited_layer_update(fx);
 
     let (owner, result) = owner.run_frame();
@@ -1569,7 +1540,7 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
     drop(owner);
 
     assert_eq!(
-        transform_count(&tree),
+        transform_matrices(&tree).len(),
         1,
         "an effect layer that did not exist in the capture cannot be patched \
          into it; the frame must repaint and emit the new layer",
@@ -1577,15 +1548,6 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
 }
 
 /// Number of `TransformLayer`s in a tree.
-fn transform_count(t: &flui_layer::LayerTree) -> usize {
-    fn walk(t: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> usize {
-        let Some(node) = t.get(id) else { return 0 };
-        usize::from(matches!(node.layer(), flui_layer::Layer::Transform(_)))
-            + node.children().iter().map(|&c| walk(t, c)).sum::<usize>()
-    }
-    t.root().map_or(0, |root| walk(t, root))
-}
-
 /// A node whose effect layers change SHAPE cannot be patched, and the frame
 /// must notice by itself.
 ///
@@ -1685,25 +1647,18 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
             .expect("first frame")
             .expect("first frame produces a layer tree");
         assert_eq!(
-            (opacity_alpha(&first).is_some(), transform_count(&first)),
+            (
+                first_opacity_alpha(&first).is_some(),
+                transform_matrices(&first).len()
+            ),
             (true, 0),
             "{label}: precondition — captured with exactly one opacity layer",
         );
 
-        {
-            let object = owner
-                .render_tree_mut()
-                .get_mut(fx)
-                .expect("fx node")
-                .as_box_mut()
-                .expect("box entry")
-                .render_object_mut()
-                .as_any_mut()
-                .downcast_mut::<ShapeShifter>()
-                .expect("ShapeShifter");
+        edit_render_object::<ShapeShifter, _, _>(&mut owner, fx, |object| {
             object.transform = gains_transform;
             object.alpha = keeps_alpha;
-        }
+        });
         owner.mark_needs_composited_layer_update(fx);
 
         let (owner, result) = owner.run_frame();
@@ -1713,7 +1668,10 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
         drop(owner);
 
         assert_eq!(
-            (opacity_alpha(&second).is_some(), transform_count(&second)),
+            (
+                first_opacity_alpha(&second).is_some(),
+                transform_matrices(&second).len()
+            ),
             (keeps_alpha, usize::from(gains_transform)),
             "{label}: a shape change cannot be patched into the capture, so the \
              frame must repaint and emit the new shape",
@@ -1937,17 +1895,7 @@ fn unreached_update_boundary_loses_its_capture(nested: bool) {
     // Second frame: the gate goes fully transparent, so the walk never reaches
     // the boundary — and the effect appears while it is out of sight.
     set_opacity(&mut owner, gate, 0.0);
-    owner
-        .render_tree_mut()
-        .get_mut(fx)
-        .expect("fx node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<GainsATransform>()
-        .expect("GainsATransform")
-        .enabled = true;
+    edit_render_object::<GainsATransform, _, _>(&mut owner, fx, |object| object.enabled = true);
     owner.mark_needs_composited_layer_update(fx);
     let (mut owner, result) = owner.run_frame();
     result.expect("second frame");
@@ -1963,7 +1911,7 @@ fn unreached_update_boundary_loses_its_capture(nested: bool) {
     drop(owner);
 
     assert_eq!(
-        transform_count(&tree),
+        transform_matrices(&tree).len(),
         1,
         "the capture taken before the effect existed must not survive a frame \
          that could not serve the update; nothing else can restore the layer, \
@@ -2140,35 +2088,11 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
         (owner, fx)
     }
 
-    fn only_transform(t: &flui_layer::LayerTree) -> flui_types::Matrix4 {
-        fn find(
-            t: &flui_layer::LayerTree,
-            id: flui_foundation::LayerId,
-        ) -> Option<flui_types::Matrix4> {
-            let node = t.get(id)?;
-            if let flui_layer::Layer::Transform(tr) = node.layer() {
-                return Some(*tr.transform());
-            }
-            node.children().iter().find_map(|&c| find(t, c))
-        }
-        find(t, t.root().expect("root")).expect("a transform layer must be present")
-    }
-
     // Patch path: capture at scale 2, then switch to scale 7 as a layer update.
     let (owner, fx) = mount_shifter(2.0);
     let (mut owner, result) = owner.run_frame();
     result.expect("first frame");
-    owner
-        .render_tree_mut()
-        .get_mut(fx)
-        .expect("fx node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<Shifter>()
-        .expect("Shifter")
-        .dx = 7.0;
+    edit_render_object::<Shifter, _, _>(&mut owner, fx, |object| object.dx = 7.0);
     owner.mark_needs_composited_layer_update(fx);
     let (owner, result) = owner.run_frame();
     let patched = result
@@ -2184,8 +2108,8 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
         .expect("reference frame produces a layer tree");
 
     assert_eq!(
-        only_transform(&patched),
-        only_transform(&repainted),
+        first_transform_matrix(&patched).expect("a transform layer must be present"),
+        first_transform_matrix(&repainted).expect("a transform layer must be present"),
         "a patched transform must equal the one a repaint produces; rebuilding \
          it at the wrong origin moves the layer silently",
     );
@@ -2438,7 +2362,7 @@ fn losing_boundary_status_withdraws_a_pending_update() {
     // is now an ordinary non-boundary, and the frame must render its subtree
     // rather than replay retained output it no longer owns.
     assert!(
-        opacity_alpha(&tree).is_some(),
+        first_opacity_alpha(&tree).is_some(),
         "the subtree must still be composited after its boundary is lost",
     );
     // Deliberately NOT asserting the capture was evicted. The compositing
@@ -2578,31 +2502,7 @@ fn set_transform(
     id: flui_foundation::RenderId,
     matrix: Matrix4,
 ) {
-    let impact = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("transform node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderTransform>()
-        .expect("RenderTransform")
-        .set_transform(matrix);
-    owner.apply_render_update_impact(id, impact);
-}
-
-/// The matrix of the only `TransformLayer` in a tree, or `None` when there is
-/// none.
-fn only_transform_matrix(tree: &flui_layer::LayerTree) -> Option<Matrix4> {
-    fn find(tree: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> Option<Matrix4> {
-        let node = tree.get(id)?;
-        if let flui_layer::Layer::Transform(t) = node.layer() {
-            return Some(*t.transform());
-        }
-        node.children().iter().find_map(|&c| find(tree, c))
-    }
-    find(tree, tree.root()?)
+    update_render_object::<RenderTransform, _>(owner, id, |t| t.set_transform(matrix));
 }
 
 /// A matrix change updates the emitted layer without repainting the subtree.
@@ -2636,7 +2536,7 @@ fn a_transform_change_updates_the_layer_without_repainting_the_subtree() {
         "the subtree under the transform must NOT repaint for a matrix-only change",
     );
     assert_eq!(
-        only_transform_matrix(&tree),
+        first_transform_matrix(&tree),
         Some(Matrix4::scaling(3.0, 3.0, 1.0)),
         "and the emitted TransformLayer must carry the new matrix",
     );
@@ -2689,7 +2589,7 @@ fn a_transform_layer_update_is_written_back_into_the_retained_capture() {
     drop(owner);
 
     assert_eq!(
-        only_transform_matrix(&tree),
+        first_transform_matrix(&tree),
         Some(Matrix4::scaling(3.0, 3.0, 1.0)),
         "a later frame that grafts the capture for an unrelated reason must \
          replay the UPDATED matrix, not the one it was captured with",
@@ -2736,7 +2636,7 @@ fn a_same_frame_child_removal_and_transform_setter_still_repaints_correctly() {
         "precondition: the child paints on the first frame",
     );
     assert!(
-        only_transform_matrix(&first).is_some(),
+        first_transform_matrix(&first).is_some(),
         "precondition: the first frame emits a TransformLayer",
     );
     let before = painted.load(Ordering::Relaxed);
@@ -2759,7 +2659,7 @@ fn a_same_frame_child_removal_and_transform_setter_still_repaints_correctly() {
         "the removed child cannot paint again",
     );
     assert_eq!(
-        only_transform_matrix(&tree),
+        first_transform_matrix(&tree),
         None,
         "with the child gone, RenderTransform emits no TransformLayer at all — \
          a stale has_child read that let a patch through would either keep \
@@ -2897,17 +2797,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
     // Same frame: grow the preceding sibling (an ordinary layout change) AND
     // change the transform's matrix through a composited-layer-update
     // request.
-    owner
-        .render_tree_mut()
-        .get_mut(grower_id)
-        .expect("grower node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<Grower>()
-        .expect("Grower")
-        .width = 90.0;
+    edit_render_object::<Grower, _, _>(&mut owner, grower_id, |object| object.width = 90.0);
     owner.mark_needs_layout(grower_id);
     set_transform(&mut owner, transform_id, Matrix4::scaling(7.0, 7.0, 1.0));
 
@@ -2926,8 +2816,8 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
         .expect("reference frame produces a layer tree");
 
     assert_eq!(
-        only_transform_matrix(&moved),
-        only_transform_matrix(&repainted),
+        first_transform_matrix(&moved),
+        first_transform_matrix(&repainted),
         "a same-frame move and matrix-only update together must still produce \
          the matrix a full repaint would; a stale captured origin would move \
          it silently",
@@ -3050,18 +2940,7 @@ fn set_rotated_box_quarter_turns(
     id: flui_foundation::RenderId,
     quarter_turns: i32,
 ) {
-    let impact = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("rotated box node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderRotatedBox>()
-        .expect("RenderRotatedBox")
-        .set_quarter_turns(quarter_turns);
-    owner.apply_render_update_impact(id, impact);
+    update_render_object::<RenderRotatedBox, _>(owner, id, |r| r.set_quarter_turns(quarter_turns));
 }
 
 /// A parity-preserving quarter-turn change updates the emitted TransformLayer
@@ -3107,7 +2986,7 @@ fn a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back() {
 
     let (turn1_reference, _, _, _) = mount_rotated_box_under_boundary(1);
     let (_, result) = turn1_reference.run_frame();
-    let turn1_matrix = only_transform_matrix(
+    let turn1_matrix = first_transform_matrix(
         &result
             .expect("turn-1 reference frame")
             .expect("turn-1 reference frame produces a layer tree"),
@@ -3116,7 +2995,7 @@ fn a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back() {
 
     let (turn3_reference, _, _, _) = mount_rotated_box_under_boundary(3);
     let (_, result) = turn3_reference.run_frame();
-    let turn3_matrix = only_transform_matrix(
+    let turn3_matrix = first_transform_matrix(
         &result
             .expect("turn-3 reference frame")
             .expect("turn-3 reference frame produces a layer tree"),
@@ -3124,7 +3003,7 @@ fn a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back() {
     .expect("turn-3 reference emits a TransformLayer");
 
     assert_eq!(
-        only_transform_matrix(&frame2),
+        first_transform_matrix(&frame2),
         Some(turn3_matrix),
         "the patched TransformLayer must equal what a fresh owner mounted \
          directly at turn 3 produces",
@@ -3150,7 +3029,7 @@ fn a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back() {
         "the third frame must still not repaint the rotated box's subtree",
     );
     assert_eq!(
-        only_transform_matrix(&frame3),
+        first_transform_matrix(&frame3),
         Some(turn3_matrix),
         "a later frame that grafts the capture for an unrelated reason must \
          replay the UPDATED (turn-3) matrix, not the one it was captured with",
@@ -3204,14 +3083,14 @@ fn a_rotated_box_parity_change_relayouts_and_swaps_size() {
 
     let (reference, _, _, _) = mount_rotated_box_under_boundary(2);
     let (_, result) = reference.run_frame();
-    let turn2_matrix = only_transform_matrix(
+    let turn2_matrix = first_transform_matrix(
         &result
             .expect("turn-2 reference frame")
             .expect("turn-2 reference frame produces a layer tree"),
     )
     .expect("a rotated box with a child always emits a TransformLayer");
     assert_eq!(
-        only_transform_matrix(&frame2).expect("the repainted frame carries the layer"),
+        first_transform_matrix(&frame2).expect("the repainted frame carries the layer"),
         turn2_matrix,
         "the repainted matrix must equal what a fresh owner mounted directly \
          at turn 2 produces",
@@ -3543,18 +3422,7 @@ fn set_sliver_opacity(
     id: flui_foundation::RenderId,
     value: f32,
 ) {
-    let impact = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("sliver opacity node")
-        .as_sliver_mut()
-        .expect("sliver entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderSliverOpacity>()
-        .expect("RenderSliverOpacity")
-        .set_opacity(value);
-    owner.apply_render_update_impact(id, impact);
+    update_render_object::<RenderSliverOpacity, _>(owner, id, |o| o.set_opacity(value));
 }
 
 /// Same oracle as `an_alpha_change_updates_the_layer_without_repainting_the_subtree`,
@@ -3584,7 +3452,7 @@ fn a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree() {
          alpha-only change",
     );
     assert_eq!(
-        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "and the emitted OpacityLayer must carry the new alpha",
     );
@@ -3637,7 +3505,7 @@ fn a_sliver_layer_update_is_written_back_into_the_retained_capture() {
          layers",
     );
     assert_eq!(
-        opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+        first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
         Some(25.0),
         "a later frame that grafts the capture for an unrelated reason must \
          replay the UPDATED alpha, not the one it was captured with",
@@ -3747,8 +3615,8 @@ fn a_patched_transform_subtree_matches_a_full_repaint_at_any_size() {
                 "patched and repainted layer trees must match at {shape} subtree = {subtree}",
             );
             assert_eq!(
-                only_transform_matrix(&patched),
-                only_transform_matrix(&repainted),
+                first_transform_matrix(&patched),
+                first_transform_matrix(&repainted),
                 "and the patched transform layer must carry the matrix a repaint \
              would produce, conjugated by the same origin ({shape}, subtree = \
              {subtree})",

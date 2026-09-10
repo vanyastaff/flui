@@ -66,6 +66,8 @@ Use these directly when you already hold a `LayerTree` (e.g. from
 | `structure_with_depth(tree)` | `Vec<(usize, &'static str)>` |
 | `first_picture_bounds(tree)` | `Option<Rect>` |
 | `first_opacity_alpha(tree)` | `Option<f32>` — first `Opacity` layer |
+| `first_transform_matrix(tree)` | `Option<Matrix4>` — first `Transform` layer |
+| `transform_matrices(tree)` | `Vec<Matrix4>` — every `Transform` layer, pre-order |
 | `has_picture_layer(tree)` | `bool` |
 | `diagnostics_tree(tree)` | `Option<DiagnosticsNode>` |
 

@@ -49,35 +49,56 @@ fn mark_needs_paint<P: crate::pipeline::PipelinePhase>(owner: &mut PipelineOwner
     owner.mark_needs_paint(id);
 }
 
-/// Downcasts the render object at `id` to `T` and runs `edit`.
+/// Downcasts the render object at `id` to `T` and runs `edit`, returning
+/// whatever `edit` returns.
 ///
 /// Dispatches on the node's Box/Sliver protocol; `T` must match the concrete
 /// type stored at `id`.
-fn edit_object<T: 'static, P: crate::pipeline::PipelinePhase>(
+///
+/// Panics if the id is stale or is not a `T`.
+pub fn edit_render_object<T: 'static, P: crate::pipeline::PipelinePhase, R>(
     owner: &mut PipelineOwner<P>,
     id: RenderId,
-    edit: impl FnOnce(&mut T),
-) {
+    edit: impl FnOnce(&mut T) -> R,
+) -> R {
     let node = owner
         .render_tree_mut()
         .get_mut(id)
-        .expect("update: render id must be live");
+        .expect("render id must be live");
     match node {
         RenderNode::Box(entry) => edit(
             entry
                 .render_object_mut()
                 .as_any_mut()
                 .downcast_mut::<T>()
-                .expect("update: render object is not of the requested type"),
+                .expect("render object is not of the requested type"),
         ),
         RenderNode::Sliver(entry) => edit(
             entry
                 .render_object_mut()
                 .as_any_mut()
                 .downcast_mut::<T>()
-                .expect("update: render object is not of the requested type"),
+                .expect("render object is not of the requested type"),
         ),
     }
+}
+
+/// Downcasts the render object at `id` to `T`, runs `update`, and applies the
+/// [`RenderUpdateImpact`](crate::RenderUpdateImpact) it reports — the same
+/// setter-then-apply seam a widget rebuild drives
+/// (`PipelineOwner::apply_render_update_impact`).
+///
+/// Dispatches on the node's Box/Sliver protocol; `T` must match the concrete
+/// type stored at `id`.
+///
+/// Panics if the id is stale or is not a `T`.
+pub fn update_render_object<T: 'static, P: crate::pipeline::PipelinePhase>(
+    owner: &mut PipelineOwner<P>,
+    id: RenderId,
+    update: impl FnOnce(&mut T) -> crate::RenderUpdateImpact,
+) {
+    let impact = edit_render_object(owner, id, update);
+    owner.apply_render_update_impact(id, impact);
 }
 
 /// A configured-but-not-yet-run render-object test.
@@ -260,7 +281,7 @@ impl LayoutRun {
     ///
     /// Panics if the id is stale or is not a `T`.
     pub fn update<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_object(&mut self.owner, id, edit);
+        edit_render_object(&mut self.owner, id, edit);
         self.owner.mark_needs_layout(id);
     }
 
@@ -272,7 +293,7 @@ impl LayoutRun {
     ///
     /// Panics if the id is stale or is not a `T`.
     pub fn update_paint<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_object(&mut self.owner, id, edit);
+        edit_render_object(&mut self.owner, id, edit);
         mark_needs_paint(&mut self.owner, id);
     }
 
@@ -537,7 +558,7 @@ impl FrameRun {
     /// );
     /// ```
     pub fn update<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_object(&mut self.owner, id, edit);
+        edit_render_object(&mut self.owner, id, edit);
         self.owner.mark_needs_layout(id);
     }
 
@@ -546,7 +567,7 @@ impl FrameRun {
     ///
     /// Panics if the id is stale or is not a `T`.
     pub fn update_paint<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_object(&mut self.owner, id, edit);
+        edit_render_object(&mut self.owner, id, edit);
         mark_needs_paint(&mut self.owner, id);
     }
 
@@ -908,7 +929,7 @@ impl SemanticsRun {
             registry,
         } = self;
         let mut owner = owner.finish();
-        edit_object(&mut owner, id, edit);
+        edit_render_object(&mut owner, id, edit);
         owner.mark_needs_layout(id);
         let mut owner = owner.into_layout();
         owner

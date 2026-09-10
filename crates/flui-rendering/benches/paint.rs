@@ -15,6 +15,11 @@ mod helpers;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use flui_foundation::RenderId;
+use flui_objects::{RenderOpacity, RenderRotatedBox, RenderTransform};
+use flui_rendering::pipeline::{PaintPhase, PipelineOwner};
+use flui_rendering::testing::update_render_object;
+use flui_types::Matrix4;
 
 // ============================================================================
 // run_compositing — flat tree, N nodes
@@ -162,15 +167,17 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
     group.finish();
 }
 
-/// What an alpha change costs on the update arm versus the repaint arm.
+/// What a property change costs on the update arm versus the repaint arm —
+/// the comparison shared by the opacity-alpha, transform-matrix, and
+/// rotated-box-turn benches below.
 ///
-/// Both arms mutate the SAME tree by the SAME property through the same seam a
-/// widget rebuild uses; the only difference is that `repaint` additionally
-/// marks the opacity node needing paint, which makes the frame take the old
-/// path. Nothing else is dirtied in either arm, so the two are directly
-/// comparable — an earlier version of this benchmark dirtied a sibling in one
-/// arm only, which quietly folded a whole extra boundary's repaint and
-/// recapture into one side of the comparison.
+/// Both arms mutate the SAME tree (from `build`) by the SAME property (via
+/// `mutate`) through the same seam a widget rebuild uses; the only difference
+/// is that `repaint` additionally marks the effect node needing paint, which
+/// makes the frame take the old path. Nothing else is dirtied in either arm,
+/// so the two are directly comparable — an earlier version of this benchmark
+/// dirtied a sibling in one arm only, which quietly folded a whole extra
+/// boundary's repaint and recapture into one side of the comparison.
 ///
 /// Read the two `layered` groups together, not separately:
 ///
@@ -183,49 +190,52 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
 ///   "clone N layers" against "re-record N layers plus repaint their content".
 ///
 /// Quoting only the inline number would overstate the general case.
-fn bench_opacity_alpha_change(c: &mut Criterion) {
+fn bench_effect_change(
+    c: &mut Criterion,
+    group: &str,
+    build: impl Fn(bool, usize) -> (PipelineOwner<PaintPhase>, RenderId),
+    mutate: impl Fn(&mut PipelineOwner<PaintPhase>, RenderId),
+) {
     for (layered, name) in [(false, "inline"), (true, "layered")] {
-        let mut group = c.benchmark_group(format!("paint/opacity_alpha_change/{name}"));
+        let mut bench_group = c.benchmark_group(format!("{group}/{name}"));
         for &subtree in &[1_usize, 10, 100, 1_000] {
-            group.bench_with_input(
+            bench_group.bench_with_input(
                 BenchmarkId::new("update", subtree),
                 &subtree,
                 |b, &subtree| {
                     b.iter_batched(
                         || {
-                            let (mut owner, opacity) =
-                                helpers::build_opacity_tree(layered, subtree);
-                            helpers::set_opacity(&mut owner, opacity, 0.25);
+                            let (mut owner, id) = build(layered, subtree);
+                            mutate(&mut owner, id);
                             owner
                         },
                         |mut owner| {
                             owner
                                 .run_paint()
-                                .expect("run_paint must succeed after an alpha change");
+                                .expect("run_paint must succeed after the effect change");
                             black_box(owner)
                         },
                         criterion::BatchSize::SmallInput,
                     );
                 },
             );
-            group.bench_with_input(
+            bench_group.bench_with_input(
                 BenchmarkId::new("repaint", subtree),
                 &subtree,
                 |b, &subtree| {
                     b.iter_batched(
                         || {
-                            let (mut owner, opacity) =
-                                helpers::build_opacity_tree(layered, subtree);
-                            helpers::set_opacity(&mut owner, opacity, 0.25);
+                            let (mut owner, id) = build(layered, subtree);
+                            mutate(&mut owner, id);
                             // Force the old path: an explicit paint mark wins
                             // over the layer-update mark the setter reported.
-                            owner.mark_needs_paint(opacity);
+                            owner.mark_needs_paint(id);
                             owner
                         },
                         |mut owner| {
                             owner
                                 .run_paint()
-                                .expect("run_paint must succeed after an alpha change");
+                                .expect("run_paint must succeed after the effect change");
                             black_box(owner)
                         },
                         criterion::BatchSize::SmallInput,
@@ -233,89 +243,53 @@ fn bench_opacity_alpha_change(c: &mut Criterion) {
                 },
             );
         }
-        group.finish();
+        bench_group.finish();
     }
+}
+
+// ============================================================================
+// run_paint — an alpha change: update arm vs. repaint arm
+// ============================================================================
+
+/// What an alpha change costs on the update arm versus the repaint arm — see
+/// [`bench_effect_change`] for what the two arms and the `inline`/`layered`
+/// split measure.
+fn bench_opacity_alpha_change(c: &mut Criterion) {
+    bench_effect_change(
+        c,
+        "paint/opacity_alpha_change",
+        |layered, subtree| helpers::build_effect_tree(layered, subtree, RenderOpacity::new(0.5)),
+        |owner, id| update_render_object::<RenderOpacity, _>(owner, id, |o| o.set_opacity(0.25)),
+    );
 }
 
 // ============================================================================
 // run_paint — a transform matrix change: update arm vs. repaint arm
 // ============================================================================
 
-/// What a matrix change costs on the update arm versus the repaint arm.
-///
-/// Mirrors [`bench_opacity_alpha_change`] exactly: both arms mutate the SAME
-/// tree by the SAME property through the same seam a widget rebuild uses (the
-/// setter, then `apply_render_update_impact`); `repaint` additionally marks
-/// the transform node needing paint, which makes the frame take the old
-/// path.
-///
-/// Carries both `inline` and `layered` shapes because they measure different
-/// things and only the pair describes the feature. Inline leaves merge into
-/// one `PictureLayer` sharing an `Arc<DisplayList>`, so the update arm is flat
-/// and the win grows with the subtree; once every leaf is its own repaint
-/// boundary the graft is O(retained layers) and the win narrows to a small
-/// constant factor. Reporting the inline number alone would describe the best
-/// case as if it were the general one.
+/// What a matrix change costs on the update arm versus the repaint arm — see
+/// [`bench_effect_change`]. The seeded matrix is a SCALE, never a
+/// translation: a translation owns no `TransformLayer` at all (painted as a
+/// plain offset — see `RenderTransform::paint_transform`), which would make
+/// every `update` iteration a structural (`PAINT`) change instead of the
+/// `COMPOSITED_LAYER_UPDATE` this benchmark exists to measure.
 fn bench_transform_matrix_change(c: &mut Criterion) {
-    for (layered, name) in [(false, "inline"), (true, "layered")] {
-        let mut group = c.benchmark_group(format!("paint/transform_matrix_change/{name}"));
-        for &subtree in &[1_usize, 10, 100, 1_000] {
-            group.bench_with_input(
-                BenchmarkId::new("update", subtree),
-                &subtree,
-                |b, &subtree| {
-                    b.iter_batched(
-                        || {
-                            let (mut owner, transform) =
-                                helpers::build_transform_tree(layered, subtree);
-                            helpers::set_transform(
-                                &mut owner,
-                                transform,
-                                flui_types::Matrix4::scaling(3.0, 3.0, 1.0),
-                            );
-                            owner
-                        },
-                        |mut owner| {
-                            owner
-                                .run_paint()
-                                .expect("run_paint must succeed after a matrix change");
-                            black_box(owner)
-                        },
-                        criterion::BatchSize::SmallInput,
-                    );
-                },
-            );
-            group.bench_with_input(
-                BenchmarkId::new("repaint", subtree),
-                &subtree,
-                |b, &subtree| {
-                    b.iter_batched(
-                        || {
-                            let (mut owner, transform) =
-                                helpers::build_transform_tree(layered, subtree);
-                            helpers::set_transform(
-                                &mut owner,
-                                transform,
-                                flui_types::Matrix4::scaling(3.0, 3.0, 1.0),
-                            );
-                            // Force the old path: an explicit paint mark wins
-                            // over the layer-update mark the setter reported.
-                            owner.mark_needs_paint(transform);
-                            owner
-                        },
-                        |mut owner| {
-                            owner
-                                .run_paint()
-                                .expect("run_paint must succeed after a matrix change");
-                            black_box(owner)
-                        },
-                        criterion::BatchSize::SmallInput,
-                    );
-                },
-            );
-        }
-        group.finish();
-    }
+    bench_effect_change(
+        c,
+        "paint/transform_matrix_change",
+        |layered, subtree| {
+            helpers::build_effect_tree(
+                layered,
+                subtree,
+                RenderTransform::new(Matrix4::scaling(2.0, 2.0, 1.0)),
+            )
+        },
+        |owner, id| {
+            update_render_object::<RenderTransform, _>(owner, id, |t| {
+                t.set_transform(Matrix4::scaling(3.0, 3.0, 1.0))
+            });
+        },
+    );
 }
 
 // ============================================================================
@@ -323,73 +297,18 @@ fn bench_transform_matrix_change(c: &mut Criterion) {
 // ============================================================================
 
 /// What a parity-preserving quarter-turn change costs on the update arm
-/// versus the repaint arm.
-///
-/// Mirrors [`bench_transform_matrix_change`] exactly: both arms mutate the
-/// SAME tree by the SAME property through the same seam a widget rebuild
-/// uses (the setter, then `apply_render_update_impact`); `repaint`
-/// additionally marks the rotated box needing paint, which makes the frame
-/// take the old path. The turn moves 1 → 3 — same parity, so the setter
-/// reports `COMPOSITED_LAYER_UPDATE | SEMANTICS`, never `LAYOUT`.
-///
-/// Carries both `inline` and `layered` shapes for the same reason
-/// `bench_transform_matrix_change` does: inline leaves merge into one
-/// `PictureLayer`, so the update arm is flat and the win grows with the
-/// subtree; layered leaves make the graft O(retained layers), narrowing the
-/// win to a constant factor. Reporting the inline number alone would
-/// describe the best case as if it were the general one.
+/// versus the repaint arm — see [`bench_effect_change`]. The turn moves
+/// 1 → 3 — same parity, so the setter reports
+/// `COMPOSITED_LAYER_UPDATE | SEMANTICS`, never `LAYOUT`.
 fn bench_rotated_box_turn_change(c: &mut Criterion) {
-    for (layered, name) in [(false, "inline"), (true, "layered")] {
-        let mut group = c.benchmark_group(format!("paint/rotated_box_turn_change/{name}"));
-        for &subtree in &[1_usize, 10, 100, 1_000] {
-            group.bench_with_input(
-                BenchmarkId::new("update", subtree),
-                &subtree,
-                |b, &subtree| {
-                    b.iter_batched(
-                        || {
-                            let (mut owner, rotated) =
-                                helpers::build_rotated_box_tree(layered, subtree);
-                            helpers::set_rotated_box_quarter_turns(&mut owner, rotated, 3);
-                            owner
-                        },
-                        |mut owner| {
-                            owner
-                                .run_paint()
-                                .expect("run_paint must succeed after a quarter-turn change");
-                            black_box(owner)
-                        },
-                        criterion::BatchSize::SmallInput,
-                    );
-                },
-            );
-            group.bench_with_input(
-                BenchmarkId::new("repaint", subtree),
-                &subtree,
-                |b, &subtree| {
-                    b.iter_batched(
-                        || {
-                            let (mut owner, rotated) =
-                                helpers::build_rotated_box_tree(layered, subtree);
-                            helpers::set_rotated_box_quarter_turns(&mut owner, rotated, 3);
-                            // Force the old path: an explicit paint mark wins
-                            // over the layer-update mark the setter reported.
-                            owner.mark_needs_paint(rotated);
-                            owner
-                        },
-                        |mut owner| {
-                            owner
-                                .run_paint()
-                                .expect("run_paint must succeed after a quarter-turn change");
-                            black_box(owner)
-                        },
-                        criterion::BatchSize::SmallInput,
-                    );
-                },
-            );
-        }
-        group.finish();
-    }
+    bench_effect_change(
+        c,
+        "paint/rotated_box_turn_change",
+        |layered, subtree| helpers::build_effect_tree(layered, subtree, RenderRotatedBox::new(1)),
+        |owner, id| {
+            update_render_object::<RenderRotatedBox, _>(owner, id, |r| r.set_quarter_turns(3));
+        },
+    );
 }
 
 criterion_group!(
