@@ -24,22 +24,6 @@ use flui_geometry::Matrix4;
 use flui_widgets::testing::{lay_out, tight};
 use flui_widgets::{SizedBox, Transform};
 
-/// The matrix of the only `TransformLayer` in the pumped frame.
-fn transform_matrix(harness: &flui_widgets::testing::LaidOut) -> Option<Matrix4> {
-    fn find(
-        tree: &flui_rendering::layer::LayerTree,
-        id: flui_foundation::LayerId,
-    ) -> Option<Matrix4> {
-        let node = tree.get(id)?;
-        if let flui_rendering::layer::Layer::Transform(t) = node.layer() {
-            return Some(*t.transform());
-        }
-        node.children().iter().find_map(|&c| find(tree, c))
-    }
-    let tree = harness.layer_tree()?;
-    find(tree, tree.root()?)
-}
-
 #[test]
 fn rebuilding_a_transform_widget_updates_its_layer() {
     // Scale, not translation: a pure translation is painted as a plain
@@ -50,7 +34,7 @@ fn rebuilding_a_transform_widget_updates_its_layer() {
         tight(200.0, 200.0),
     );
     assert_eq!(
-        transform_matrix(&harness),
+        harness.transform_layer_matrices().first().copied(),
         Some(Matrix4::scaling(2.0, 2.0, 1.0)),
         "precondition: the first frame composites the initial matrix",
     );
@@ -60,7 +44,7 @@ fn rebuilding_a_transform_widget_updates_its_layer() {
     );
 
     assert_eq!(
-        transform_matrix(&harness),
+        harness.transform_layer_matrices().first().copied(),
         Some(Matrix4::scaling(3.0, 3.0, 1.0)),
         "a rebuild with a new matrix must reach the composited layer through \
          the widget's own update path, not only through a direct setter call",

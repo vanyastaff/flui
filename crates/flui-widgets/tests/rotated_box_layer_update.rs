@@ -21,29 +21,13 @@
 use flui_widgets::testing::{lay_out, tight};
 use flui_widgets::{RotatedBox, SizedBox};
 
-/// The matrix of the only `TransformLayer` in the pumped frame.
-fn transform_matrix(harness: &flui_widgets::testing::LaidOut) -> Option<flui_geometry::Matrix4> {
-    fn find(
-        tree: &flui_rendering::layer::LayerTree,
-        id: flui_foundation::LayerId,
-    ) -> Option<flui_geometry::Matrix4> {
-        let node = tree.get(id)?;
-        if let flui_rendering::layer::Layer::Transform(t) = node.layer() {
-            return Some(*t.transform());
-        }
-        node.children().iter().find_map(|&c| find(tree, c))
-    }
-    let tree = harness.layer_tree()?;
-    find(tree, tree.root()?)
-}
-
 #[test]
 fn rebuilding_a_rotated_box_widget_updates_its_layer() {
     let mut harness = lay_out(
         RotatedBox::new(1).child(SizedBox::new(60.0, 40.0)),
         tight(200.0, 200.0),
     );
-    let turn1 = transform_matrix(&harness);
+    let turn1 = harness.transform_layer_matrices().first().copied();
     assert!(
         turn1.is_some(),
         "precondition: the first frame composites a TransformLayer for a \
@@ -53,7 +37,7 @@ fn rebuilding_a_rotated_box_widget_updates_its_layer() {
     // 1 -> 3: same parity, so the render object's own algebra reports an
     // update-only composited-layer commit, not a repaint.
     harness.pump_widget(RotatedBox::new(3).child(SizedBox::new(60.0, 40.0)));
-    let turn3 = transform_matrix(&harness);
+    let turn3 = harness.transform_layer_matrices().first().copied();
 
     let fresh = lay_out(
         RotatedBox::new(3).child(SizedBox::new(60.0, 40.0)),
@@ -61,7 +45,7 @@ fn rebuilding_a_rotated_box_widget_updates_its_layer() {
     );
     assert_eq!(
         turn3,
-        transform_matrix(&fresh),
+        fresh.transform_layer_matrices().first().copied(),
         "a rebuild with a new (same-parity) quarter-turn count must reach \
          the composited layer through the widget's own update path — the \
          matrix must equal what mounting RotatedBox::new(3) fresh produces",

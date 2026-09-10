@@ -1058,28 +1058,22 @@ impl LaidOut {
     /// itself is the frame; the extra call is the honest price of not having the
     /// mount path retain a tree nothing downstream consumes.
     pub fn layer_kinds(&self) -> Vec<&'static str> {
-        let Some(tree) = self.binding.layer_tree() else {
-            return Vec::new();
-        };
-        let Some(root) = tree.root() else {
-            return Vec::new();
-        };
+        self.layer_tree()
+            .map(inspect::layer_structure)
+            .unwrap_or_default()
+    }
 
-        let mut kinds = Vec::with_capacity(tree.len());
-        // Explicit stack rather than recursion: a deep composited tree is
-        // ordinary, and the harness must not be the thing that overflows.
-        let mut stack = vec![root];
-        while let Some(id) = stack.pop() {
-            let Some(layer) = tree.get_layer(id) else {
-                continue;
-            };
-            kinds.push(layer.kind_name());
-            if let Some(children) = tree.children(id) {
-                // Push reversed so siblings pop back in paint order.
-                stack.extend(children.iter().rev().copied());
-            }
-        }
-        kinds
+    /// The transform matrix of every `Layer::Transform` in the most recent
+    /// pumped frame's layer tree, in the same depth-first pre-order as
+    /// [`layer_kinds`](Self::layer_kinds).
+    ///
+    /// **A frame must have been pumped** — see [`layer_kinds`](Self::layer_kinds)
+    /// for why; the same precondition applies here, and an unpumped frame
+    /// answers with an empty vec.
+    pub fn transform_layer_matrices(&self) -> Vec<Matrix4> {
+        self.layer_tree()
+            .map(inspect::transform_matrices)
+            .unwrap_or_default()
     }
 
     /// The unique render node whose short type name equals `render_type_name`.

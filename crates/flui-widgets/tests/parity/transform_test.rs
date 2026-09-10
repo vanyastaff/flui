@@ -219,7 +219,6 @@
 
 use flui_geometry::Matrix4;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::layer::Layer;
 use flui_types::geometry::px;
 use flui_types::{Alignment, Color, Offset};
 use flui_view::ViewExt;
@@ -998,17 +997,7 @@ fn composited_transform_offset_matches_the_oracle_translation() {
         );
     laid.pump();
 
-    let tree = laid.layer_tree().expect("the frame composites a tree");
-    let mut matrices = Vec::new();
-    let mut stack = vec![tree.root().expect("composited root")];
-    while let Some(id) = stack.pop() {
-        if let Some(Layer::Transform(t)) = tree.get_layer(id) {
-            matrices.push(*t.transform());
-        }
-        if let Some(children) = tree.children(id) {
-            stack.extend(children.iter().copied());
-        }
-    }
+    let matrices = laid.transform_layer_matrices();
 
     assert_eq!(
         matrices.len(),

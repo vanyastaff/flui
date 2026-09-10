@@ -6,7 +6,7 @@
 
 use flui_foundation::{Diagnosticable, DiagnosticsNode, LayerId};
 use flui_painting::DisplayListCore;
-use flui_types::Rect;
+use flui_types::{Matrix4, Rect};
 
 use crate::{Layer, LayerTree};
 
@@ -88,6 +88,43 @@ pub fn first_opacity_alpha(tree: &LayerTree) -> Option<f32> {
         let node = tree.get(id)?;
         if let Layer::Opacity(opacity) = node.layer() {
             return Some(opacity.alpha());
+        }
+        node.children().iter().find_map(|&child| find(tree, child))
+    }
+    find(tree, tree.root()?)
+}
+
+/// Returns the transform matrix of every [`Layer::Transform`] node in
+/// pre-order (parent before children) as a flat list.
+#[must_use]
+pub fn transform_matrices(tree: &LayerTree) -> Vec<Matrix4> {
+    fn walk(tree: &LayerTree, id: LayerId, out: &mut Vec<Matrix4>) {
+        let Some(node) = tree.get(id) else {
+            return;
+        };
+        if let Layer::Transform(t) = node.layer() {
+            out.push(*t.transform());
+        }
+        for &child in node.children() {
+            walk(tree, child, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Some(root) = tree.root() {
+        walk(tree, root, &mut out);
+    }
+    out
+}
+
+/// Returns the matrix of the first [`Layer::Transform`] node in pre-order, or
+/// `None` if the tree contains no transform layer.
+#[must_use]
+pub fn first_transform_matrix(tree: &LayerTree) -> Option<Matrix4> {
+    fn find(tree: &LayerTree, id: LayerId) -> Option<Matrix4> {
+        let node = tree.get(id)?;
+        if let Layer::Transform(t) = node.layer() {
+            return Some(*t.transform());
         }
         node.children().iter().find_map(|&child| find(tree, child))
     }
