@@ -457,6 +457,59 @@ setter, so nothing was replaced):
 `crates/flui-objects/src/layout/rotated_box.rs` and the layout-parity harness
 test named above.
 
+### `RenderRotatedBox` reports a baseline only for an even turn
+
+**Rule:** Prime Directive rule 1 — a deliberate improvement over the reference,
+accounted for here.
+
+**Upstream:** `RenderRotatedBox` has no baseline override at all
+(`rotated_box.dart`, 3.44.0: `grep -c aseline` is 0), so its live query
+inherits `RenderBox.computeDistanceToActualBaseline`'s `null` for every turn
+— a baseline-aligned `Row` places a rotated box at the cross start whatever
+the turn, even an unrotated one — and its dry query falls through to
+`RenderBox.computeDryBaseline`'s default, which asserts in debug builds
+(`box.dart`, `debugCannotComputeDryLayout`) rather than answering.
+
+**Choice:** a baseline is a layout line. An even turn keeps the box's size and
+its horizontal axis, so the box takes part in baseline alignment exactly as
+its unrotated self would — the child's baseline is forwarded unchanged and the
+glyphs flip in place at turn 2. That is the model every draw-time rotation
+already uses: `RenderTransform` here (a proxy, via
+`forward_single_child_box_queries!`), Compose's `Modifier.rotate`, SwiftUI's
+`.rotationEffect`. An odd turn rotates the baseline axis into the vertical, so
+there is no horizontal baseline to offer and the box is treated like any child
+without one — as upstream treats it at every turn.
+
+Both halves of the query answer from the same predicate: the dry half in
+`compute_dry_baseline`, and the live half through
+`forwards_baseline_to_only_child`, which returns `!is_vertical()` so the
+layout driver walks to the child as it does for a pure proxy. The two must
+agree, and the live half is the one that matters: the only consumer of a
+rotated box's baseline is a baseline-aligned parent's `perform_layout`, which
+asks the live query — a dry-only forward is inert there, and a same-parity
+equality pin cannot tell either half's value.
+
+**Alternatives:** match upstream (`None` for every turn) — loses the identity
+case for nothing. Forward only at turn 0, or mirror the line to
+`height − baseline` at turn 2 — both read the exact turn rather than its
+parity, which breaks the layout-turn-blindness the same-parity fast path above
+rests on: `set_quarter_turns` would have to report `LAYOUT` for 0↔2 and the
+parity pin would need a baseline exception, to serve a case no framework
+animation drives (`RotationTransition` drives `Transform::rotation`; a widget
+rebuild 0→2 does occur and is what the layer-update route serves). Rejected
+on that cost, not on geometry.
+
+**Replacement oracle:**
+`harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`
+(`crates/flui-objects/tests/render_object_harness.rs`) — a baseline-aligned
+`Row` places `RotatedBox(0)` and `RotatedBox(2)` where their child would sit
+and `RotatedBox(1)` / `RotatedBox(3)` at the cross start, and asserts the dry
+answer by value at all four quadrants; red on the turn-0 offset when the live
+forward is refused, red on the turn-1 offset when it is granted for an odd
+turn, red on the dry rows when `compute_dry_baseline` drifts to either
+"always" answer. Upstream has no baseline test for the class, so nothing was
+replaced.
+
 ### A transform patch may reuse a captured origin only because layout forces a repaint
 
 **Rule:** `layer_patches_for` rebuilds a node's effect layers at the `origin`

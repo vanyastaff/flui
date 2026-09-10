@@ -10624,6 +10624,110 @@ fn harness_rotated_box_without_a_child_sizes_to_the_constraints_smallest_for_eve
     }
 }
 
+/// A rotated box's baseline is its child's for an even turn and absent for an
+/// odd one — the contract recorded in `flui-rendering/ARCHITECTURE.md`
+/// (`## Mapping decisions`, "`RenderRotatedBox` reports a baseline only for an
+/// even turn"). Upstream reports `null` for every turn; this is a deliberate
+/// divergence, so this test is its replacement oracle, observed where a
+/// baseline matters: a baseline-aligned `Row`.
+///
+/// The row from `baseline_row_spec` has a 40px ascent, so its 10px-baseline
+/// child sits at dy 30. The same child wrapped in a rotated box must land at
+/// the same dy for turns 0 and 2 (the box takes part in baseline alignment as
+/// its unrotated self would; the glyphs flip in place), and at the cross start
+/// (dy 0) for turn 1, which has no horizontal baseline to offer — the same
+/// treatment any child without a baseline gets in a baseline-aligned row.
+///
+/// Both branches are pinned: forwarding for an odd turn would baseline-align
+/// the turn-1 and turn-3 children (dy ≠ 0); refusing for an even turn would
+/// top-align the turn-0 and turn-2 children (dy 0 ≠ 30).
+///
+/// The contract has two halves with disjoint consumers: the row's
+/// `perform_layout` asks the LIVE query (the driver walks to the child when
+/// `forwards_baseline_to_only_child` says so), while `run.dry_baseline` asks
+/// `compute_dry_baseline`. The offsets above observe only the live half, so
+/// the dry half is pinned by value below — a dry answer of `None` for every
+/// turn (upstream's) or of the child's for every turn would otherwise survive
+/// the suite, since the parity pin compares same-parity turns for EQUALITY,
+/// not value.
+#[test]
+fn harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd() {
+    let probe = || SizedBaselineProbe {
+        box_size: Size::new(px(100.0), px(60.0)),
+        alphabetic_offset: Some(10.0),
+    };
+    let mut run = RenderTester::mount(
+        baseline_row_spec()
+            .child(
+                box_node(RenderRotatedBox::new(0))
+                    .label("turn0")
+                    .child(box_node(probe())),
+            )
+            .child(
+                box_node(RenderRotatedBox::new(2))
+                    .label("turn2")
+                    .child(box_node(probe())),
+            )
+            .child(
+                box_node(RenderRotatedBox::new(1))
+                    .label("turn1")
+                    .child(box_node(probe())),
+            )
+            .child(
+                box_node(RenderRotatedBox::new(3))
+                    .label("turn3")
+                    .child(box_node(probe())),
+            ),
+    )
+    .with_constraints(loose(1000.0))
+    .run_layout();
+
+    let reference = run.offset(run.id("deep_descent")).dy;
+    assert_eq!(
+        reference,
+        px(30.0),
+        "fixture: the 10px-baseline child sits 30px down"
+    );
+    assert_eq!(
+        run.offset(run.id("turn0")).dy,
+        reference,
+        "turn 0 is the identity: the box is baseline-aligned like its child",
+    );
+    assert_eq!(
+        run.offset(run.id("turn2")).dy,
+        reference,
+        "turn 2 keeps the box where its unrotated self sits; the child's \
+         baseline is forwarded unchanged",
+    );
+    assert_eq!(
+        run.offset(run.id("turn1")).dy,
+        px(0.0),
+        "turn 1 has no horizontal baseline: the box sits at the cross start \
+         like any child without a baseline",
+    );
+    assert_eq!(
+        run.offset(run.id("turn3")).dy,
+        px(0.0),
+        "turn 3 is odd too: an exact-turn read that spared turn 1 would show here",
+    );
+
+    let dry = loose(1000.0);
+    for (label, expected) in [
+        ("turn0", Some(10.0)),
+        ("turn2", Some(10.0)),
+        ("turn1", None),
+        ("turn3", None),
+    ] {
+        let id = run.id(label);
+        assert_eq!(
+            run.dry_baseline(id, dry, TextBaseline::Alphabetic),
+            expected,
+            "{label}: the dry half of the contract must answer as the live half \
+             does — the child's 10px baseline for an even turn, none for odd",
+        );
+    }
+}
+
 /// Non-square leaf with distinct min/max intrinsics per axis and a real
 /// baseline, used only by `harness_rotated_box_layout_is_turn_blind_up_to_parity`
 /// below. `RenderRotatedBox`'s own layout-phase methods are what that test

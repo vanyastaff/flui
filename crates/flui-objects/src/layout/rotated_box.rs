@@ -2,10 +2,14 @@
 //!
 //! # Flutter equivalence
 //!
-//! Behavior-faithful port of Flutter's `RenderRotatedBox`
-//! (`packages/flutter/lib/src/rendering/rotated_box.dart`).
-//! Layout swaps width↔height constraints for odd turn counts; the paint matrix
-//! rotates the child around the center of the parent's slot.
+//! Port of Flutter's `RenderRotatedBox`
+//! (`packages/flutter/lib/src/rendering/rotated_box.dart`): layout swaps
+//! width↔height constraints for odd turn counts; the paint matrix rotates the
+//! child around the center of the parent's slot. Two recorded divergences,
+//! both in `flui-rendering/ARCHITECTURE.md` (`## Mapping decisions`): a
+//! same-parity turn change is served as a composited-layer update rather
+//! than a relayout, and an even turn reports the child's baseline where
+//! upstream reports none.
 //!
 //! # Rust-native improvements
 //!
@@ -95,12 +99,16 @@ impl RenderRotatedBox {
     ///   [`COMPOSITED_LAYER_UPDATE`](flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE)
     ///   `|` [`SEMANTICS`](flui_rendering::RenderUpdateImpact::SEMANTICS).
     ///   `perform_layout`, `compute_dry_layout`, the four intrinsic queries,
-    ///   and `compute_dry_baseline` all key off `is_vertical` (private) —
-    ///   the turn's parity — and never the exact value, so layout is
-    ///   unchanged and only the paint matrix rotates: the retained subtree
-    ///   can be patched in place instead of repainted. Pinned by
-    ///   `harness_rotated_box_layout_is_turn_blind_up_to_parity`
-    ///   (`flui-objects/tests/render_object_harness.rs`).
+    ///   `compute_dry_baseline`, and `forwards_baseline_to_only_child` all
+    ///   key off `is_vertical` (private) — the turn's parity — and never the
+    ///   exact value, so layout is unchanged and only the paint matrix
+    ///   rotates: the retained subtree can be patched in place instead of
+    ///   repainted. Pinned by
+    ///   `harness_rotated_box_layout_is_turn_blind_up_to_parity` (the dry
+    ///   queries, same-parity equality) and
+    ///   `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`
+    ///   (both baseline halves, by value, at every quadrant) in
+    ///   `flui-objects/tests/render_object_harness.rs`.
     /// - Parity change (e.g. `0` → `1`, `3` → `4`):
     ///   [`LAYOUT`](flui_rendering::RenderUpdateImpact::LAYOUT) — axes swap,
     ///   so the child must be re-laid-out under (un)flipped constraints.
@@ -137,7 +145,10 @@ impl RenderRotatedBox {
     /// `set_quarter_turns`'s parity-preserving fast path (module doc)
     /// depends on every layout-phase method reading `quarter_turns` ONLY
     /// through this predicate, never the exact raw value — pinned by
-    /// `harness_rotated_box_layout_is_turn_blind_up_to_parity`
+    /// `harness_rotated_box_layout_is_turn_blind_up_to_parity` for the dry
+    /// queries and by
+    /// `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`
+    /// for the live baseline flag
     /// (`flui-objects/tests/render_object_harness.rs`). A method that
     /// branches on the exact turn instead would go stale under that fast
     /// path: the setter would report no relayout for a change the method
@@ -336,31 +347,43 @@ impl RenderBox for RenderRotatedBox {
         }
     }
 
+    /// The live half of the baseline contract below: for an even turn the
+    /// layout driver walks to the child and answers with its baseline
+    /// unchanged, exactly as it does for a pure proxy; for an odd turn there
+    /// is no horizontal baseline to offer. Reads the turn only through its
+    /// parity, like every other layout-phase method here.
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        !self.is_vertical()
+    }
+
+    /// A rotated box has a baseline only for an even turn, and then it is the
+    /// child's own, unchanged. A baseline is a layout line: an even turn keeps
+    /// the box's size and its horizontal axis, so the box takes part in
+    /// baseline alignment as its unrotated self would (the glyphs flip in
+    /// place at turn 2) — the same model draw-time rotations use, here in
+    /// `RenderTransform` and in Compose's `Modifier.rotate` / SwiftUI's
+    /// `.rotationEffect`. An odd turn rotates the baseline axis into the
+    /// vertical, so there is no horizontal baseline and the box is treated
+    /// like any child without one.
+    ///
+    /// Upstream `RenderRotatedBox` has no baseline override at all
+    /// (`rotated_box.dart`, 3.44.0): its live query reports `null` for every
+    /// turn and its dry query falls through to `RenderBox`'s default, which
+    /// asserts in debug builds. The even-turn answer is a recorded divergence
+    /// — see
+    /// `flui-rendering/ARCHITECTURE.md` (`## Mapping decisions`,
+    /// "`RenderRotatedBox` reports a baseline only for an even turn") and its
+    /// replacement oracle,
+    /// `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`.
+    /// Reads the turn only through `is_vertical()`, which is what keeps
+    /// `set_quarter_turns`'s same-parity fast path valid.
     fn compute_dry_baseline(
         &self,
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
     ) -> Option<f32> {
-        if ctx.child_count() == 0 {
-            return None;
-        }
-        // Reads `quarter_turns` only through `is_vertical()` — see that
-        // method's doc and `set_quarter_turns`'s fast path.
-        //
-        // Rotation means the child's baseline is in a rotated coordinate
-        // frame. FLUI passes the child's own baseline through unchanged for
-        // even turns and reports `None` for odd turns. Upstream
-        // `RenderRotatedBox` has no baseline override at all
-        // (`rotated_box.dart`, 3.44.0) — it always falls through to
-        // `RenderBox`'s default `None`, so FLUI's even-turn passthrough is a
-        // divergence, not a port: arguably an improvement at turn 0 (identity
-        // rotation, the baseline really is unchanged) and arguably wrong at
-        // turn 2 (the box is upside down, so the "same" distance from the top
-        // no longer means what a baseline means). This is a design call that
-        // has not been made, not a silent port — filed rather than fixed
-        // here: #1011.
-        if self.is_vertical() {
+        if ctx.child_count() == 0 || self.is_vertical() {
             return None;
         }
         ctx.child_dry_baseline(0, constraints, baseline)
