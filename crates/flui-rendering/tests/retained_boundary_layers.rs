@@ -12,7 +12,7 @@
 
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
-    RenderTransform,
+    RenderRotatedBox, RenderTransform,
 };
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -2704,9 +2704,12 @@ fn a_transform_layer_update_is_written_back_into_the_retained_capture() {
 ///
 /// 1. `remove_render_object` fires `note_render_child_membership_changed` for
 ///    the transform (whose child just left it), applying `LAYOUT |
-///    COMPOSITING_BITS | SEMANTICS`. `LAYOUT` carries `PAINT_BIT`, and
-///    `run_layout` ends every laid-out node with `mark_needs_paint`
-///    (`pipeline/owner/layout.rs`), which upgrades the enclosing boundary's
+///    COMPOSITING_BITS | SEMANTICS`. `LAYOUT` carries `PAINT_BIT`. The
+///    `mark_needs_layout` flag walk that `LAYOUT` triggers sets
+///    `NEEDS_LAYOUT` on every ancestor up to the relayout boundary, so a
+///    flagged node cannot take the constraints-cache short-circuit — the
+///    enclosing repaint boundary re-enters layout and is recorded as having
+///    laid out (`pipeline/owner/layout.rs`), which upgrades the boundary's
 ///    paint-queue entry from the setter's `LayerUpdate` to `Repaint` —
 ///    `PaintQueue::enqueue` never downgrades (`scheduler.rs`'s
 ///    `enqueue_paint` doc), so this holds whichever of the two marks landed
@@ -2791,10 +2794,13 @@ fn a_same_frame_child_removal_and_transform_setter_still_repaints_correctly() {
 /// scenario does not reach `layer_patches_for` at all, on either side of this
 /// change, and that is the point rather than a shortfall: a same-frame layout
 /// change ANYWHERE inside a boundary marks that same boundary needing paint
-/// too — `run_layout` ends every laid-out node with `mark_needs_paint`
-/// (`pipeline/owner/layout.rs`), which walks up to the nearest enclosing
-/// boundary and enqueues `Repaint` there, upgrading any `LayerUpdate` entry
-/// the matrix setter queued (`PaintQueue::enqueue` never downgrades). Growing
+/// too — the `mark_needs_layout` flag walk sets `NEEDS_LAYOUT` on every
+/// ancestor up to the relayout boundary, a flagged node cannot take the
+/// constraints-cache short-circuit, so the enclosing repaint boundary
+/// re-enters layout and is recorded (`pipeline/owner/layout.rs`) — and if the
+/// relayout boundary sits below it, the dirty-root mark walks up to it too.
+/// Either route enqueues `Repaint`, upgrading any `LayerUpdate` entry the
+/// matrix setter queued (`PaintQueue::enqueue` never downgrades). Growing
 /// the sibling therefore forces a full repaint, which computes the
 /// conjugation from a LIVE origin and is trivially correct.
 ///
@@ -2925,6 +2931,424 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
         "a same-frame move and matrix-only update together must still produce \
          the matrix a full repaint would; a stale captured origin would move \
          it silently",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Composited-layer updates: RenderRotatedBox
+// ---------------------------------------------------------------------------
+//
+// `RenderRotatedBox::paint_transform` reports its matrix through the same
+// node hook `RenderTransform` above does — see
+// `crates/flui-rendering/ARCHITECTURE.md`'s "And `RenderRotatedBox`" entry
+// for the accounting this mirrors, including why the captured origin stays
+// valid for a parity-preserving turn change specifically.
+
+/// A SIZED, non-square counting leaf that also draws. The size is the
+/// load-bearing part: this file's rotated-box tests need a non-square
+/// preferred size so an axis swap is observable (`Size::new(height, width) !=
+/// Size::new(width, height)` only when the two differ), which the plain
+/// `PaintCounter` above — a fixed 10×10 square — cannot give them. Drawing is
+/// secondary: it costs nothing extra and, unlike `PaintCounter`, lets this
+/// fixture also serve a picture-count oracle if a future test here wants one
+/// (`PaintCounter` counts a call but emits no draw commands, so a
+/// picture-count check over it is blind — see `mount_drawing_opacity` for the
+/// same reasoning on the opacity side).
+#[derive(Debug)]
+struct DrawingPaintCounter {
+    size: Size,
+    count: Arc<AtomicUsize>,
+}
+
+impl flui_foundation::Diagnosticable for DrawingPaintCounter {}
+
+impl flui_rendering::traits::RenderBox for DrawingPaintCounter {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> Size {
+        ctx.constrain(self.size)
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
+        ctx.canvas()
+            .draw_rect(rect, &flui_painting::Paint::fill(flui_types::Color::RED));
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// Mirrors `mount_transform_under_boundary` for `RenderRotatedBox`: root row
+/// → [boundary → padding → rotated box → drawing counting leaf, boundary →
+/// leaf].
+///
+/// The `RenderPadding` gives the rotated box a non-zero origin INSIDE the
+/// boundary — `RenderNode::paint_transform` conjugates by the accumulated
+/// paint origin, so a stale-origin bug that a zero origin cannot expose is
+/// exactly the failure mode this shape is built to catch (mirrors
+/// `a_patched_transform_uses_the_origin_it_was_captured_at`'s fixture, above).
+fn mount_rotated_box_under_boundary(
+    quarter_turns: i32,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+    Arc<AtomicUsize>,
+) {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderPadding::all(12.0)).child(
+                        box_node(RenderRotatedBox::new(quarter_turns))
+                            .label("rotated")
+                            .child(box_node(DrawingPaintCounter {
+                                size: Size::new(px(30.0), px(50.0)),
+                                count: Arc::clone(&painted),
+                            })),
+                    ),
+                ),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("sibling")
+                    .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+            ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let rotated_id = registry.get("rotated").expect("rotated is labelled");
+    let sibling = registry.get("sibling").expect("sibling is labelled");
+    (owner, rotated_id, sibling, painted)
+}
+
+/// Applies a new quarter-turn count through the same seam a widget rebuild
+/// uses: the setter reports an impact, the owner applies it.
+fn set_rotated_box_quarter_turns(
+    owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
+    id: flui_foundation::RenderId,
+    quarter_turns: i32,
+) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("rotated box node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderRotatedBox>()
+        .expect("RenderRotatedBox")
+        .set_quarter_turns(quarter_turns);
+    owner.apply_render_update_impact(id, impact);
+}
+
+/// A parity-preserving quarter-turn change updates the emitted TransformLayer
+/// without repainting the subtree, and the write-back reaches the STORED
+/// capture — the three-way oracle plus write-back frame, combined into one
+/// test the way `a_transform_change_updates_the_layer_without_repainting_the_subtree`
+/// and `a_transform_layer_update_is_written_back_into_the_retained_capture`
+/// are two.
+///
+/// Frame 1: mount at turn 1. Frame 2: `set_quarter_turns(3)` — same parity,
+/// different quadrant, so `COMPOSITED_LAYER_UPDATE | SEMANTICS`. Three
+/// things are required together, and none alone is evidence: the paint count
+/// staying FLAT (alone passes if nothing painted at all, including a stale
+/// graft), the matrix matching a FRESH owner mounted directly at turn 3
+/// (alone passes on a full repaint that happens to compute the same value),
+/// and the matrix differing from the turn-1 matrix (alone passes on a patch
+/// that is silently a no-op). Frame 3: dirty the SIBLING boundary so the root
+/// repaints and the rotated box's own (clean) boundary is grafted for an
+/// unrelated reason — the only way to observe what the STORED capture, not
+/// just the emitted frame, holds.
+#[test]
+fn a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back() {
+    let (owner, rotated_id, sibling, painted) = mount_rotated_box_under_boundary(1);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+
+    set_rotated_box_quarter_turns(&mut owner, rotated_id, 3);
+    let (mut owner, result) = owner.run_frame();
+    let frame2 = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the subtree under the rotated box must NOT repaint for a \
+         parity-preserving turn change",
+    );
+
+    let (turn1_reference, _, _, _) = mount_rotated_box_under_boundary(1);
+    let (_, result) = turn1_reference.run_frame();
+    let turn1_matrix = only_transform_matrix(
+        &result
+            .expect("turn-1 reference frame")
+            .expect("turn-1 reference frame produces a layer tree"),
+    )
+    .expect("turn-1 reference emits a TransformLayer");
+
+    let (turn3_reference, _, _, _) = mount_rotated_box_under_boundary(3);
+    let (_, result) = turn3_reference.run_frame();
+    let turn3_matrix = only_transform_matrix(
+        &result
+            .expect("turn-3 reference frame")
+            .expect("turn-3 reference frame produces a layer tree"),
+    )
+    .expect("turn-3 reference emits a TransformLayer");
+
+    assert_eq!(
+        only_transform_matrix(&frame2),
+        Some(turn3_matrix),
+        "the patched TransformLayer must equal what a fresh owner mounted \
+         directly at turn 3 produces",
+    );
+    assert_ne!(
+        turn3_matrix, turn1_matrix,
+        "and turn 3 must differ from turn 1 — otherwise the patch could be a \
+         no-op that happened to pass",
+    );
+
+    // Third frame: the rotated box is clean; the sibling boundary forces the
+    // pass, grafting the rotated box's boundary for an unrelated reason.
+    owner.mark_needs_paint(sibling);
+    let (owner, result) = owner.run_frame();
+    let frame3 = result
+        .expect("third frame")
+        .expect("third frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the third frame must still not repaint the rotated box's subtree",
+    );
+    assert_eq!(
+        only_transform_matrix(&frame3),
+        Some(turn3_matrix),
+        "a later frame that grafts the capture for an unrelated reason must \
+         replay the UPDATED (turn-3) matrix, not the one it was captured with",
+    );
+}
+
+/// A parity change (odd → even) still relayouts and repaints — the fast
+/// path's complement, and the case that would make a reverted
+/// `set_quarter_turns` (unconditional `LAYOUT`) indistinguishable from the
+/// real thing if this file tested only the parity-preserving case above.
+#[test]
+fn a_rotated_box_parity_change_relayouts_and_swaps_size() {
+    let (owner, rotated_id, _sibling, painted) = mount_rotated_box_under_boundary(1);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+    let size_before = owner
+        .render_tree()
+        .get(rotated_id)
+        .and_then(flui_rendering::storage::RenderNode::size)
+        .expect("rotated box has a committed size after the first frame");
+
+    set_rotated_box_quarter_turns(&mut owner, rotated_id, 2);
+    let (owner, result) = owner.run_frame();
+    let frame2 = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+
+    assert!(
+        painted.load(Ordering::Relaxed) > before,
+        "a parity change must relayout and therefore repaint the subtree — \
+         unlike the parity-preserving update in \
+         a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back",
+    );
+    let size_after = owner
+        .render_tree()
+        .get(rotated_id)
+        .and_then(flui_rendering::storage::RenderNode::size)
+        .expect("rotated box has a committed size after the second frame");
+    drop(owner);
+
+    assert_eq!(
+        size_after,
+        Size::new(size_before.height, size_before.width),
+        "an odd-to-even parity change must swap the box's own reported size",
+    );
+
+    let (reference, _, _, _) = mount_rotated_box_under_boundary(2);
+    let (_, result) = reference.run_frame();
+    let turn2_matrix = only_transform_matrix(
+        &result
+            .expect("turn-2 reference frame")
+            .expect("turn-2 reference frame produces a layer tree"),
+    )
+    .expect("a rotated box with a child always emits a TransformLayer");
+    assert_eq!(
+        only_transform_matrix(&frame2).expect("the repainted frame carries the layer"),
+        turn2_matrix,
+        "the repainted matrix must equal what a fresh owner mounted directly \
+         at turn 2 produces",
+    );
+}
+
+/// Mirrors `mount_rotated_box_under_boundary` but leaves the rotated box
+/// CHILDLESS: no leaf, so `RenderRotatedBox::paint_transform` returns `None`
+/// and the boundary's retained capture never allocates an `effect_slots`
+/// entry for it — the shape `layer_patches_for`'s "target has no slot in
+/// this capture" refusal (`pipeline/owner/paint.rs`) exists to catch.
+fn mount_childless_rotated_box_under_boundary(
+    quarter_turns: i32,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+) {
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderPadding::all(12.0))
+                    .child(box_node(RenderRotatedBox::new(quarter_turns)).label("rotated")),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let rotated_id = registry.get("rotated").expect("rotated is labelled");
+    (owner, rotated_id)
+}
+
+/// A childless rotated box's layer-update mark degrades to a repaint
+/// correctly, AND the repaint actually clears the flag the refused patch
+/// never touched — the property `layer_patches_for`'s own comment calls
+/// "latent today" ("the next caller to get that wrong would graft stale
+/// output silently instead of failing loudly"): a childless `RenderRotatedBox`
+/// whose setter reports `COMPOSITED_LAYER_UPDATE` (it has no `has_child`
+/// gate — see the ARCHITECTURE.md "Two edge cases" paragraph) is the first
+/// real caller that hits it, because `RotatedBox::new(n)` seeds an empty
+/// child by default.
+///
+/// Three things, and the third is the one that actually pins the refusal —
+/// the first two pass just as well on a graft that silently swallowed the
+/// request, since a childless box paints nothing either way:
+///
+/// (a) the fallback must not panic;
+/// (b) the resulting frame must match a fresh owner mounted directly at the
+///     new turn (structurally: same layer-kind/child-count fingerprint, since
+///     neither ever emits a `TransformLayer`);
+/// (c) the refusal must not strand the node's own
+///     `NEEDS_COMPOSITED_LAYER_UPDATE` flag. Checked directly rather than
+///     only through "frame 3 is empty" (which passes either way: nothing
+///     re-populates the SCHEDULER's paint queue from a stale per-node flag on
+///     its own, so an empty frame 3 is not evidence) — the flag is public API
+///     (`RenderNode::needs_composited_layer_update`) precisely so a test can
+///     observe it. A stuck flag matters because it self-refuses: a REAL
+///     second change to the same node is silently dropped
+///     (`mark_needs_composited_layer_update`'s own guard reads the flag), so
+///     frame 3 then re-marks the SAME node with a further same-parity turn
+///     and checks it actually reaches the boundary this time.
+///
+/// Red evidence: skipping `layer_patches_for`'s `contains_key` guard leaves
+/// (a) and (b) green (a childless box paints nothing under either path, so
+/// the empty graft and the real repaint are indistinguishable in the emitted
+/// frame) and fails (c) both ways — the flag reads `true` right after frame
+/// 2, and the frame-3 re-mark is swallowed, so frame 3 produces no layer
+/// tree at all instead of a second (degraded-but-real) repaint.
+#[test]
+fn a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag() {
+    let (owner, rotated_id) = mount_childless_rotated_box_under_boundary(1);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    set_rotated_box_quarter_turns(&mut owner, rotated_id, 3);
+    let (owner, result) = owner.run_frame();
+    let frame2 = result
+        .expect("second frame must not panic or error") // (a)
+        .expect("second frame produces a layer tree");
+
+    let (reference, _) = mount_childless_rotated_box_under_boundary(3);
+    let (_, result) = reference.run_frame();
+    let expected = result
+        .expect("turn-3 reference frame")
+        .expect("turn-3 reference frame produces a layer tree");
+    assert_eq!(
+        fingerprint(&frame2),
+        fingerprint(&expected),
+        "a childless rotated box's layer-update mark must degrade to a \
+         repaint whose fingerprint matches a fresh owner mounted directly at \
+         turn 3", // (b)
+    );
+
+    let still_needs_layer_update = owner
+        .render_tree()
+        .get(rotated_id)
+        .expect("rotated box node")
+        .needs_composited_layer_update();
+    assert!(
+        !still_needs_layer_update,
+        "the repaint that served the refused patch must clear \
+         NEEDS_COMPOSITED_LAYER_UPDATE on the childless node the same way it \
+         clears every other node it visits — a stuck flag here means the \
+         patch's refusal never actually visited it", // (c), direct
+    );
+
+    // Nothing newly dirtied: a clean frame produces no layer tree at all.
+    let (mut owner, result) = owner.run_frame();
+    assert!(
+        result.expect("third frame must not error").is_none(),
+        "with nothing dirtied, frame 3 must produce no layer tree",
+    );
+
+    // The flag's real consequence: a stuck flag self-refuses future marks
+    // (`mark_needs_composited_layer_update` returns early while the flag is
+    // already set), so a SECOND real same-parity change must still reach the
+    // boundary rather than being silently dropped.
+    set_rotated_box_quarter_turns(&mut owner, rotated_id, 1);
+    let (owner, result) = owner.run_frame();
+    let frame4 = result.expect("fourth frame must not error").expect(
+        "a second same-parity change must still produce a frame — a \
+                 stuck flag from the first refusal would have swallowed this \
+                 mark and left frame 4 empty, just like a clean frame",
+    ); // (c), consequence
+    drop(owner);
+
+    let (reference, _) = mount_childless_rotated_box_under_boundary(1);
+    let (_, result) = reference.run_frame();
+    let expected = result
+        .expect("turn-1 reference frame")
+        .expect("turn-1 reference frame produces a layer tree");
+    assert_eq!(
+        fingerprint(&frame4),
+        fingerprint(&expected),
+        "the second refusal must ALSO degrade to a correct repaint, matching \
+         a fresh owner mounted directly at turn 1",
     );
 }
 

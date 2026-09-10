@@ -10580,6 +10580,144 @@ fn harness_rotated_box_no_child_odd_turn_zero_area_does_not_crash() {
     );
 }
 
+/// Non-square leaf with distinct min/max intrinsics per axis and a real
+/// baseline, used only by `harness_rotated_box_layout_is_turn_blind_up_to_parity`
+/// below. `RenderRotatedBox`'s own layout-phase methods are what that test
+/// probes, not this fixture's — but every value here differs from its
+/// sibling axis and extreme, so a future turn-specific branch inside
+/// `RenderRotatedBox` (reading `quarter_turns` directly instead of
+/// `is_vertical()`) has somewhere non-trivial to show up as a disagreement
+/// between same-parity turns.
+#[derive(Debug, Clone, Copy)]
+struct AsymmetricBaselineProbe;
+
+impl flui_foundation::Diagnosticable for AsymmetricBaselineProbe {}
+
+impl RenderBox for AsymmetricBaselineProbe {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> Size {
+        ctx.constraints().constrain(Size::new(px(90.0), px(30.0)))
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        constraints.constrain(Size::new(px(90.0), px(30.0)))
+    }
+
+    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        20.0
+    }
+
+    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        90.0
+    }
+
+    fn compute_min_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        10.0
+    }
+
+    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        30.0
+    }
+
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        match baseline {
+            TextBaseline::Alphabetic => Some(12.0),
+            TextBaseline::Ideographic => None,
+        }
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        _constraints: BoxConstraints,
+        baseline: TextBaseline,
+        _ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        match baseline {
+            TextBaseline::Alphabetic => Some(12.0),
+            TextBaseline::Ideographic => None,
+        }
+    }
+}
+
+/// Everything below checks about a `RenderRotatedBox` layout, bundled so one
+/// `assert_eq!` compares all of it between two turns at once.
+#[derive(Debug, PartialEq)]
+struct RotatedBoxLayoutObservations {
+    committed_size: Size,
+    dry_size: Size,
+    min_intrinsic_width: f32,
+    max_intrinsic_width: f32,
+    min_intrinsic_height: f32,
+    max_intrinsic_height: f32,
+    dry_baseline: Option<f32>,
+}
+
+fn observe_rotated_box_layout(
+    quarter_turns: i32,
+    constraints: BoxConstraints,
+) -> RotatedBoxLayoutObservations {
+    let mut run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(quarter_turns)).child(box_node(AsymmetricBaselineProbe)),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+    let root = run.root();
+    RotatedBoxLayoutObservations {
+        committed_size: run.box_geometry(root),
+        dry_size: run.dry_layout(root, constraints),
+        min_intrinsic_width: run.min_intrinsic_width(root, 50.0),
+        max_intrinsic_width: run.max_intrinsic_width(root, 50.0),
+        min_intrinsic_height: run.min_intrinsic_height(root, 50.0),
+        max_intrinsic_height: run.max_intrinsic_height(root, 50.0),
+        dry_baseline: run.dry_baseline(root, constraints, TextBaseline::Alphabetic),
+    }
+}
+
+/// Pins the premise `set_quarter_turns`'s parity-preserving fast path
+/// depends on (`crates/flui-objects/src/layout/rotated_box.rs`): every
+/// `RenderRotatedBox` layout-phase method reads `quarter_turns` only through
+/// [`RenderRotatedBox::is_vertical`] (its parity), never the exact value.
+/// Turns that share parity — (0, 2), (1, 3), (1, -1) — must therefore be
+/// layout-identical: same committed size, dry layout, all four intrinsics,
+/// and dry baseline, under both loose and tight non-square constraints.
+///
+/// Mutation this test is built to catch: a future layout-phase method that
+/// special-cases an exact turn instead of going through `is_vertical()` —
+/// e.g. a "turn-2 baseline fix" returning `Some(height - b)` only when
+/// `quarter_turns == 2` — would make turn 0 and turn 2 disagree here even
+/// though both are even, which is exactly the staleness the fast path would
+/// otherwise hide from `set_quarter_turns`'s caller.
+#[test]
+fn harness_rotated_box_layout_is_turn_blind_up_to_parity() {
+    let loose = BoxConstraints::new(px(0.0), px(150.0), px(0.0), px(80.0));
+    let tight = BoxConstraints::tight(Size::new(px(150.0), px(80.0)));
+
+    for (label, constraints) in [("loose", loose), ("tight", tight)] {
+        for (a, b) in [(0, 2), (1, 3), (1, -1)] {
+            assert_eq!(
+                observe_rotated_box_layout(a, constraints),
+                observe_rotated_box_layout(b, constraints),
+                "quarter_turns={a} and quarter_turns={b} share parity and \
+                 must be layout-identical under {label} non-square \
+                 constraints",
+            );
+        }
+    }
+}
+
 #[test]
 fn harness_render_wrap_diagnostics_reports_all_properties() {
     let run = RenderTester::mount(box_node(RenderWrap::new()))

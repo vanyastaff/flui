@@ -357,6 +357,106 @@ patch that dropped the subtree; and
 `a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`
 pins the invariant the whole thing rests on — see the next entry.
 
+**And `RenderRotatedBox`.** Upstream's `quarterTurns` setter is `if
+(_quarterTurns == value) { return; } _quarterTurns = value;
+markNeedsLayout();` (`rotated_box.dart`, 3.44.0 — read `set quarterTurns`
+directly rather than grepping for `markNeeds` alone, which finds the call but
+hides the equality guard in front of it). The guard compares the RAW value,
+not a reduced form, and nothing narrower than that exists: two turns that are
+merely unequal — including two that share parity, like `0` and `2` — cost a
+full relayout and repaint upstream, exactly as `0` → `1` does. There is no
+fast path at all, mod-4 or otherwise.
+
+`RenderRotatedBox::set_quarter_turns` splits on how much of the turn actually
+changes, not on whether it changed: an unchanged effective angle (mod 4,
+`rem_euclid(4)`) reports `NONE` — the paint matrix and layout are
+byte-identical, so nothing downstream needs to react, even though the raw
+value is still stored. Same parity (even ↔ even or odd ↔ odd), different
+quadrant, reports `COMPOSITED_LAYER_UPDATE | SEMANTICS` — the same node-hook
+route `RenderTransform` already uses (`own_effect_layers` composes from
+`paint_alpha`, `paint_layer_blend`, and `paint_transform`). A parity change
+(odd ↔ even) reports `LAYOUT`, the pre-existing behaviour: it swaps which axis
+the child sees, so the child must be re-laid-out under (un)flipped
+constraints.
+
+**Why the captured origin stays valid.** Two things, not one. First,
+`perform_layout`, `compute_dry_layout`, all four intrinsic queries, and
+`compute_dry_baseline` read `quarter_turns` ONLY through `is_vertical()` (its
+parity) — never the exact value — pinned by a dedicated harness test rather
+than the type system, since nothing in `quarter_turns: i32` stops a future
+method from branching on the exact turn instead:
+`harness_rotated_box_layout_is_turn_blind_up_to_parity`
+(`flui-objects/tests/render_object_harness.rs`). A same-parity quadrant
+change therefore never re-enters `perform_layout` for the rotated box itself
+— the setter reports `COMPOSITED_LAYER_UPDATE`, not `LAYOUT`, so the pipeline
+never calls it — which answers "did the rotated box's OWN layout move its
+origin" trivially: no, it did not run. Second, "did something ELSE inside the
+boundary move it" is the general invariant the next entry below states for
+`RenderTransform` and pins with
+`a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`:
+any same-frame layout change anywhere inside a boundary marks that boundary
+needing paint, upgrading a queued `LayerUpdate` to a `Repaint`
+(`PaintQueue::enqueue` never downgrades) — so a sibling or ancestor that moved
+the rotated box's accumulated position forces a repaint, which recomputes the
+conjugation from a live origin. `RenderNode::paint_transform` hands the paint
+hook the COMMITTED `geometry()` either way (`storage/node.rs`,
+`paint_transform`), and the matrix's third input, `child_size`, is a field
+`perform_layout` caches — the one input `RenderTransform` does not have — so
+it cannot move without a relayout either. Neither size argument is in
+question; only the origin is, and both halves of that are covered.
+
+**Cost.** A patch is O(effect-owning nodes in the boundary) + O(captured
+boundary size) — `layer_patches_for` walks every `effect_slots` entry in the
+capture regardless of how many nodes actually asked for an update, and
+`graft` allocates a map and a vec per call — against a full re-execution of
+`paint()` over the boundary for a repaint. That is a constant-factor win at
+the SAME order, not O(1); the benchmark below measures the factor, not the
+order. The `| SEMANTICS` bit costs no more than the pre-existing `LAYOUT`
+baseline already paid: `run_layout` marks semantics once per walk, on the
+walk's dirty root (`pipeline/owner/layout.rs`), and the new route marks the
+rotated box itself, which either IS that root (the setter's own caller
+dirtied it) or sits under it.
+
+**Two edge cases, both inert rather than unsafe.** A childless rotated box
+that receives a same-parity-quadrant-change mark still reports
+`COMPOSITED_LAYER_UPDATE`: `layer_patches_for` finds no slot for a target
+with no effect layers of its own and refuses the patch, so the enclosing
+boundary's FULL captured subtree repaints instead — correct, just
+unaccelerated. Not worth a `has_child` gate on the setter: that would trade
+this well-understood degrade for a live state read whose own staleness would
+need its own argument. (The case is reachable — `RotatedBox::new(n)` seeds an
+empty child, so rebuilding such a widget 1→3 takes exactly this route — and
+comes out correct through the refusal, which is what
+`a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag`
+pins: the flag is cleared by the fallback repaint, so a later mark is not
+self-refused.) And a
+setter call before the very first frame is refused outright:
+`mark_needs_composited_layer_update` tests `node.needs_paint()`
+(`pipeline/scheduler.rs`), not `needs_layout()`, and freshly mounted state
+seeds BOTH `NEEDS_LAYOUT` and `NEEDS_PAINT` — so the mark is dropped and the
+node is served by its already-scheduled first paint, not by a patch against a
+capture that does not exist yet.
+
+**Measured:** `paint/rotated_box_turn_change`, mirroring
+`bench_transform_matrix_change`'s two shapes and size list — update/repaint
+ratios at N = 1, 10, 100, 1000: inline **1.6x, 3.9x, 25.8x, 208x**; layered
+**1.3x, 2.1x, 2.3x, 1.6x**. Same shape as `RenderTransform`'s own numbers
+(133x / 1.9x at N = 1000) for the same reason: inline leaves merge into one
+`PictureLayer`, so the update arm stays flat while the repaint arm grows with
+N; layered leaves make the graft itself O(N), narrowing the win to a small
+constant factor. The benches install no `SemanticsOwner`, so these ratios
+measure the paint side only; the `SEMANTICS` bit's cost is the unchanged
+baseline argued above, not something the numbers cover.
+
+**Oracles** (net-new; upstream has no test driving `quarterTurns` as a
+setter, so nothing was replaced):
+`a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back`,
+`a_rotated_box_parity_change_relayouts_and_swaps_size`, and
+`a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag`
+(`tests/retained_boundary_layers.rs`), plus the unit impact-table tests in
+`crates/flui-objects/src/layout/rotated_box.rs` and the layout-parity harness
+test named above.
+
 ### A transform patch may reuse a captured origin only because layout forces a repaint
 
 **Rule:** `layer_patches_for` rebuilds a node's effect layers at the `origin`
@@ -366,12 +466,19 @@ wherever the node sits. A `TransformLayer` is **conjugated by** that origin, so 
 transform patch is correct only while the captured origin still matches the
 node's live accumulated position.
 
-**Why that holds:** `run_layout` ends every walk with `mark_needs_paint` on each
-node it laid out, and that walks up to the nearest enclosing boundary. So any
-same-frame layout change inside a boundary — anything that could move the node —
-enqueues `Repaint` there, which upgrades the `LayerUpdate` entry the setter
-queued (`PaintQueue::enqueue` never downgrades). The patch path is simply
-unreachable with a stale origin.
+**Why that holds:** the `mark_needs_layout` flag walk sets `NEEDS_LAYOUT` on
+every ancestor up to the relayout boundary, so a flagged node cannot take the
+constraints-cache short-circuit — the enclosing repaint boundary re-enters
+layout and is recorded as having laid out (`pipeline/owner/layout.rs`), and if
+the relayout boundary sits below the boundary that owns the capture, the
+dirty-root mark (FLUI's once-per-walk counterpart of the per-object
+`markNeedsPaint()` Flutter's `RenderObject.layout` ends with) walks up to it
+too. Either
+route enqueues `Repaint`, which upgrades the `LayerUpdate` entry the setter
+queued (`PaintQueue::enqueue` never downgrades). So any same-frame layout
+change inside a boundary — anything that could move the node — reaches it one
+way or the other, and the patch path is simply unreachable with a stale
+origin.
 
 **Accepted trade-off:** this is a coupling between two subsystems that is stated
 nowhere in the code they connect. An optimisation that decouples "the boundary
