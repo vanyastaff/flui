@@ -444,11 +444,24 @@ fn async_image_provider_swap_under_gapless_playback_retains_the_previous_frame()
         std::thread::sleep(POLL_INTERVAL);
     }
 
-    assert_eq!(
-        seen,
-        vec![old_size(), new_size()],
-        "the frame must go straight from the old image to the new one, with \
-         nothing in between",
+    // Two shapes satisfy the promise, not one. `[old, new]` is the usual
+    // run; `[new]` is the swap frame already showing the decoded new image,
+    // which the first-sample check above deliberately permits — demanding
+    // that the old frame was OBSERVED before the new one asserts the decode
+    // was still in flight at the first sample, a property of the runner's
+    // scheduling, not of gapless playback. It is the same premise the
+    // first-sample check above no longer makes, left standing here at its
+    // mirror site, and it failed on CI the same way: the sequence was `[7x2]`
+    // alone, the new image, against an expected `[5x3, 7x2]`.
+    //
+    // Not redundant with the loop: the one shape the loop lets through that
+    // this line rejects is `[new, old, new]` — the old frame resurfacing after
+    // the new one landed — which the loop cannot see because its `== old`
+    // check does not know `new` was already on screen at the first sample.
+    assert!(
+        seen == [old_size(), new_size()] || seen == [new_size()],
+        "the frame must go from the old image to the new one with nothing in \
+         between, or already show the new one; it went through {seen:?}",
     );
 }
 
@@ -472,16 +485,28 @@ fn async_image_provider_swap_clears_to_the_placeholder_by_default() {
     // Three distinct outcomes are possible here, and with both fixtures the
     // same size two of them were indistinguishable: the placeholder (correct),
     // the OLD frame retained (the bug this test exists to catch), or the NEW
-    // frame already landed (a race -- correct behaviour observed too late).
-    // Different sizes make the failure message say which one happened.
-    assert_eq!(
-        laid.size(laid.current_root()),
-        size(0.0, 0.0),
-        "Flutter's default (gaplessPlayback: false) clears to the \
-         placeholder the instant the provider key changes; {} means the old \
-         frame was retained and {} means the new load had already landed",
+    // frame already landed (also correct — the clear happened and the new
+    // decode landed inside the same frame). Different sizes make the failure
+    // message say which one happened. Only the retained OLD frame is the bug;
+    // demanding the placeholder here would assert the new decode was still
+    // in flight at the swap frame, a property of the runner, not of the
+    // policy — the gapless sibling above failed on CI on exactly that
+    // premise. The deterministic clear-on-swap pin is
+    // `a_cached_to_cold_swap_clears_by_default_and_holds_under_gapless_playback`
+    // below, where the completion is a test input and the placeholder frame
+    // is therefore a guaranteed state.
+    let swap_frame = laid.size(laid.current_root());
+    assert_ne!(
+        swap_frame,
         old_size(),
-        new_size(),
+        "Flutter's default (gaplessPlayback: false) clears to the \
+         placeholder the instant the provider key changes; the old frame was \
+         retained instead",
+    );
+    assert!(
+        swap_frame == size(0.0, 0.0) || swap_frame == new_size(),
+        "the swap frame must be the placeholder or the already-landed new \
+         image, got {swap_frame:?}",
     );
 
     // ...and the NEW provider resolves: clearing is a transition, not a dead
@@ -596,8 +621,13 @@ fn async_image_provider_swap_from_a_cold_stream_to_an_already_cached_provider_la
 /// forced dimension is not silently dropped while a load is in flight.
 #[test]
 fn async_image_with_forced_width_reserves_that_width_during_the_placeholder_frame() {
-    let path = fixture("tiny-forced-width.png");
-    let mut laid = lay_out(Image::asset(registry(), path).width(40.0), loose(1000.0));
+    // A controlled provider, not an asset: the placeholder frame is then a
+    // guaranteed state (nothing can complete until the test says so), so the
+    // exact `40x0` below is a pin on WHAT the frame shows, not on whether the
+    // decode happened to still be in flight when the first frame was read —
+    // the premise the initial-load test above had to drop after a CI red.
+    let (provider, completer) = ControlledProvider::new("forced-width");
+    let mut laid = lay_out(Image::new(provider).width(40.0), loose(1000.0));
 
     assert_eq!(
         laid.size(laid.current_root()),
@@ -607,6 +637,7 @@ fn async_image_with_forced_width_reserves_that_width_during_the_placeholder_fram
          silently collapse layout to 0x0 for one frame",
     );
 
+    completer.complete(opaque(5, 3));
     pump_until(&mut laid, |laid| {
         laid.size(laid.current_root()) == size(40.0, 24.0)
     });
