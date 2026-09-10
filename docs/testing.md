@@ -117,7 +117,7 @@ cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate �
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast  # test-ci (flui-platform gets its own invocation below — see CI Expectations)
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux only — apt install xvfb; skipped with a message on other hosts, see justfile)
 cargo test --workspace --locked --doc                      # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --document-private-items  # doc-strict
+bash scripts/doc-strict.sh                                # doc-strict: cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 ```
 
 ## Build
@@ -560,7 +560,7 @@ cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-m
 cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
 cargo deny check                                              # advisories / bans / licenses / sources
 cargo bench -p flui-rendering --no-run                        # bench-compile job
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items  # doc job
+bash scripts/doc-strict.sh                                    # doc job: the same script as `just doc-strict`
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test job's dedicated flui-platform step
 cargo test --workspace --locked --doc

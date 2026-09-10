@@ -149,7 +149,7 @@ impl PointerContacts {
 
 /// Default spacing between the synthetic pointer samples that record a
 /// velocity sample — i.e. contact Moves, and only those (see
-/// [`LaidOut::advance_pointer_clock`]).
+/// `LaidOut::advance_pointer_clock`).
 ///
 /// 8ms is a ~120Hz pointer-report interval: faster than a 60Hz display, which
 /// is what a high-report-rate pointer actually does, and comfortably inside
@@ -905,7 +905,8 @@ impl LaidOut {
     /// the node's own box (which stays whatever size layout constrained it
     /// to, regardless of alignment).
     ///
-    /// Backed by [`TextPainter::get_boxes_for_selection`], which folds in
+    /// Backed by `flui_painting::TextPainter::get_boxes_for_selection`, which
+    /// folds in
     /// the alignment-driven paint offset (unlike `get_line_metrics`, whose
     /// `left` is the pre-alignment layout-local value). Panics if `id` is
     /// not a `RenderParagraph`, carries no text, or has no laid-out line —
@@ -1129,8 +1130,9 @@ impl LaidOut {
     /// plain-text content.
     ///
     /// Requires the `RenderParagraph` diagnostics to emit a `"text"` property
-    /// (added to [`flui_objects::RenderParagraph::debug_fill_properties`] for
-    /// this purpose). Returns `None` when no paragraph matches.
+    /// (added to `RenderParagraph`'s
+    /// [`Diagnosticable::debug_fill_properties`](flui_foundation::Diagnosticable::debug_fill_properties)
+    /// for this purpose). Returns `None` when no paragraph matches.
     ///
     /// # Panics
     ///
@@ -1260,7 +1262,7 @@ impl LaidOut {
     ///
     /// See [`hit_test_pointer`](Self::hit_test_pointer) for why hit-testing runs inside
     /// the lane scope alongside dispatch. Spends no virtual clock time — see
-    /// [`advance_pointer_clock`](Self::advance_pointer_clock).
+    /// `advance_pointer_clock`.
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
         let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerType::Mouse);
         self.binding
@@ -1359,8 +1361,7 @@ impl LaidOut {
     /// (right-click) pointer-down event — the headless analogue of a right-mouse
     /// button press reaching the framework. Used by `GestureDetector` tests to
     /// assert `on_secondary_tap` fires on right-click.
-    /// Spends no virtual clock time — see
-    /// [`advance_pointer_clock`](Self::advance_pointer_clock).
+    /// Spends no virtual clock time — see `advance_pointer_clock`.
     pub fn dispatch_secondary_down(&self, x: f32, y: f32) {
         use flui_interaction::events::pointer::PointerButton;
 
@@ -1420,8 +1421,8 @@ pub fn offset(dx: f32, dy: f32) -> Offset {
 }
 
 /// The part of `type_name` before its first `<`, if any — the base name
-/// ignoring generic parameters ("RenderViewport<ScrollPosition>" ->
-/// "RenderViewport"; "RenderConstrainedBox" -> "RenderConstrainedBox"
+/// ignoring generic parameters (`RenderViewport<ScrollPosition>` ->
+/// `RenderViewport`; `RenderConstrainedBox` -> `RenderConstrainedBox`
 /// unchanged). Mirrors `flui_foundation::debug`'s private helper of the
 /// same name (not public — this harness has its own tiny copy rather than
 /// growing the library's public surface for a test-only concern).
