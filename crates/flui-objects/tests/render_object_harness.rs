@@ -10561,11 +10561,11 @@ fn harness_rotated_box_odd_turn_lays_out_child_under_flipped_constraints() {
 /// same-shaped `'RotatedBox does not crash at zero area'` case, but it was
 /// added by PR #186201 (commit `c2d451e1237`), which postdates the `3.44.0`
 /// tag this port is scoped to — not an ancestor of `3.44.0`, so not part of
-/// the oracle corpus being ported. This test is an independent regression
-/// guard for the ODD-turn leg of the no-child branch specifically (the
-/// existing `harness_rotated_box_leaf_sizes_to_zero_even_turns` case only
-/// covers `quarter_turns = 0`, which cannot exercise the
-/// `constraints.flipped()` call in `perform_layout`'s empty-child branch).
+/// the oracle corpus being ported. What it guards: a childless odd turn
+/// under a zero-area tight constraint reports `Size::ZERO` and does not
+/// panic. It cannot see the odd-turn SIZE defect the next test pins — at
+/// 0×0 every candidate answer coincides — which is why that test uses a
+/// non-square fixture.
 #[test]
 fn harness_rotated_box_no_child_odd_turn_zero_area_does_not_crash() {
     let run = RenderTester::mount(box_node(RenderRotatedBox::new(1)))
@@ -10578,6 +10578,50 @@ fn harness_rotated_box_no_child_odd_turn_zero_area_does_not_crash() {
         "a childless odd-turn RotatedBox under a zero-area tight constraint \
          must report Size::ZERO without panicking",
     );
+}
+
+/// A childless rotated box has nothing to rotate, so its size is the
+/// smallest the constraints allow — for every turn. `constraints.smallest()`
+/// is a size the parent permits by construction; the flipped variant is not:
+/// under a tight non-square constraint `flipped().smallest()` swaps the axes
+/// and answers 20×10 against a tight 10×20, which the box protocol refuses as
+/// `InvalidGeometry` (`validate_layout_output`, "size does not satisfy layout
+/// constraints") — so without the fix this test fails as a panic inside
+/// `run_layout`, not as an assertion mismatch. The zero-area sibling above
+/// cannot see it because every candidate answer coincides at 0×0.
+///
+/// Two fixtures because they separate different wrong answers: under tight
+/// 10×20 `biggest()` equals `smallest()`, so only the bounded fixture (min
+/// 10×20, room up to 100×100) tells `smallest()` from `biggest()`.
+///
+/// Parity: `RenderRotatedBox.performLayout` and `computeDryLayout` both
+/// return `constraints.smallest` when `child == null`, whatever
+/// `quarterTurns` is (`rotated_box.dart`, 3.44.0). Upstream has no childless
+/// test to port, so this oracle is net-new.
+#[test]
+fn harness_rotated_box_without_a_child_sizes_to_the_constraints_smallest_for_every_turn() {
+    let tight = BoxConstraints::tight(Size::new(px(10.0), px(20.0)));
+    let bounded_with_room = BoxConstraints::new(px(10.0), px(100.0), px(20.0), px(100.0));
+
+    for (label, constraints) in [("tight", tight), ("bounded", bounded_with_room)] {
+        for turns in [0, 1, 2, 3, -1] {
+            let mut run = RenderTester::mount(box_node(RenderRotatedBox::new(turns)))
+                .with_constraints(constraints)
+                .run_layout();
+            let expected = Size::new(px(10.0), px(20.0));
+            assert_eq!(
+                run.box_geometry(run.root()),
+                expected,
+                "{label}: a childless RotatedBox at {turns} turn(s) must lay out to \
+                 the constraints' smallest size, which is within the constraints",
+            );
+            assert_eq!(
+                run.dry_layout(run.root(), constraints),
+                expected,
+                "{label}: dry layout must agree with layout at {turns} turn(s)",
+            );
+        }
+    }
 }
 
 /// Non-square leaf with distinct min/max intrinsics per axis and a real

@@ -194,11 +194,10 @@ impl RenderBox for RenderRotatedBox {
         if ctx.child_count() == 0 {
             self.has_child = false;
             self.child_size = Size::ZERO;
-            return if self.is_vertical() {
-                constraints.flipped().smallest()
-            } else {
-                constraints.smallest()
-            };
+            // Nothing to rotate: the smallest size the constraints allow,
+            // whatever the turn — as upstream. Flipping first would swap the
+            // axes of a non-square constraint and answer a size outside it.
+            return constraints.smallest();
         }
         self.has_child = true;
 
@@ -320,11 +319,9 @@ impl RenderBox for RenderRotatedBox {
         ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
         if ctx.child_count() == 0 {
-            return if self.is_vertical() {
-                constraints.flipped().smallest()
-            } else {
-                constraints.smallest()
-            };
+            // Same answer as `perform_layout`'s childless branch: the turn
+            // does not enter it.
+            return constraints.smallest();
         }
         let child_constraints = if self.is_vertical() {
             constraints.flipped()
