@@ -11,7 +11,7 @@
 use flui_foundation::RenderId;
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
-    RenderTransform,
+    RenderRotatedBox, RenderTransform,
 };
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -327,5 +327,78 @@ pub fn set_transform(owner: &mut PipelineOwner<PaintPhase>, id: RenderId, matrix
         .downcast_mut::<RenderTransform>()
         .expect("RenderTransform")
         .set_transform(matrix);
+    owner.apply_render_update_impact(id, impact);
+}
+
+// ============================================================================
+// RotatedBox: what a parity-preserving quarter-turn change costs on the
+// update arm vs. the repaint arm
+// ============================================================================
+
+/// Build a tree whose rotated box wraps `subtree` leaves, and return it with
+/// the rotated box node's id.
+///
+/// Mirrors [`build_transform_tree`] exactly, substituting `RenderRotatedBox`
+/// for `RenderTransform` — same shape, same `layered` cost-curve split, same
+/// warm-up-and-take discipline. Seeded at turn 1: the benchmark's `update`
+/// arm moves it to turn 3, a same-parity change
+/// (`RenderRotatedBox::set_quarter_turns`'s `COMPOSITED_LAYER_UPDATE |
+/// SEMANTICS` arm), never a parity change (`LAYOUT`) — a parity change would
+/// make every `update` iteration a full relayout instead of the layer patch
+/// this benchmark exists to measure.
+pub fn build_rotated_box_tree(
+    layered: bool,
+    subtree: usize,
+) -> (PipelineOwner<PaintPhase>, RenderId) {
+    let content = box_node(RenderFlex::row()).children((0..subtree).map(|_| {
+        let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
+        if layered {
+            box_node(RenderRepaintBoundary::new()).child(leaf)
+        } else {
+            leaf
+        }
+    }));
+
+    let spec = box_node(RenderFlex::row()).children([
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderRotatedBox::new(1))
+                .label("rotated")
+                .child(content),
+        ),
+        box_node(RenderRepaintBoundary::new()).child(box_node(RenderColoredBox::red(1.0, 1.0))),
+    ]);
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(&mut owner, spec);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(root_constraints()));
+    let rotated = registry.get("rotated").expect("rotated is labelled");
+
+    let mut owner = advance_to_paint(owner.into_layout());
+    owner
+        .run_paint()
+        .expect("the first paint must succeed on a freshly composited tree");
+    drop(owner.take_layer_tree());
+    (owner, rotated)
+}
+
+/// Applies a new quarter-turn count through the seam a widget rebuild uses:
+/// the setter reports an impact, the owner applies it.
+pub fn set_rotated_box_quarter_turns(
+    owner: &mut PipelineOwner<PaintPhase>,
+    id: RenderId,
+    quarter_turns: i32,
+) {
+    let impact = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("rotated box node")
+        .as_box_mut()
+        .expect("box entry")
+        .render_object_mut()
+        .as_any_mut()
+        .downcast_mut::<RenderRotatedBox>()
+        .expect("RenderRotatedBox")
+        .set_quarter_turns(quarter_turns);
     owner.apply_render_update_impact(id, impact);
 }

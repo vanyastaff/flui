@@ -419,10 +419,25 @@ impl PipelineOwner<PaintPhase> {
         // loop below would never even look at it. That is a shape change, and
         // a repaint is the only thing that can express it.
         //
-        // Latent today — every shipped caller reports a repaint itself when its
-        // effect layers appear or disappear — but the loop below walks EXISTING
-        // slots, so without this the next caller to get that wrong would graft
-        // stale output silently instead of failing loudly.
+        // A childless `RenderRotatedBox` is a real, reachable caller of this
+        // branch: its setter reports `COMPOSITED_LAYER_UPDATE` for a
+        // same-parity turn change whether or not it has a child (no
+        // `has_child` gate), `paint_transform` returns `None` without a
+        // child, so it never owns an effect slot to begin with — and
+        // `RotatedBox::new(n)` seeds an empty child by default, so a bare
+        // rebuild hits exactly this. Without this guard the loop below walks
+        // EXISTING slots, silently skips a target that has none, and reports
+        // `Some` — an empty, no-op patch that grafts the boundary's stale
+        // capture instead of refusing. `run_paint`'s `consumed_updates` bookkeeping
+        // then never clears the node's own `NEEDS_COMPOSITED_LAYER_UPDATE`
+        // flag either (that list is populated from what this function
+        // consumes, or from a REAL paint walk — neither runs on the silent
+        // no-op path), stranding the flag set and self-refusing every later
+        // mark to the same node. Pinned by
+        // `a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag`
+        // (`tests/retained_boundary_layers.rs`), which fails on the flag
+        // staying set — not on the emitted frame, which looks the same either
+        // way for a node that paints nothing regardless.
         if targets
             .iter()
             .any(|target| !subtree.effect_slots.contains_key(target))

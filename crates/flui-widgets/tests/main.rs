@@ -97,6 +97,8 @@ mod overflow_box;
 mod post_frame_handle;
 #[path = "rich_text.rs"]
 mod rich_text;
+#[path = "rotated_box_layer_update.rs"]
+mod rotated_box_layer_update;
 #[path = "rotation_transition.rs"]
 mod rotation_transition;
 #[path = "routes.rs"]

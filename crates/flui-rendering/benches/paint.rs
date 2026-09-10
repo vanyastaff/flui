@@ -318,6 +318,80 @@ fn bench_transform_matrix_change(c: &mut Criterion) {
     }
 }
 
+// ============================================================================
+// run_paint — a rotated-box quarter-turn change: update arm vs. repaint arm
+// ============================================================================
+
+/// What a parity-preserving quarter-turn change costs on the update arm
+/// versus the repaint arm.
+///
+/// Mirrors [`bench_transform_matrix_change`] exactly: both arms mutate the
+/// SAME tree by the SAME property through the same seam a widget rebuild
+/// uses (the setter, then `apply_render_update_impact`); `repaint`
+/// additionally marks the rotated box needing paint, which makes the frame
+/// take the old path. The turn moves 1 → 3 — same parity, so the setter
+/// reports `COMPOSITED_LAYER_UPDATE | SEMANTICS`, never `LAYOUT`.
+///
+/// Carries both `inline` and `layered` shapes for the same reason
+/// `bench_transform_matrix_change` does: inline leaves merge into one
+/// `PictureLayer`, so the update arm is flat and the win grows with the
+/// subtree; layered leaves make the graft O(retained layers), narrowing the
+/// win to a constant factor. Reporting the inline number alone would
+/// describe the best case as if it were the general one.
+fn bench_rotated_box_turn_change(c: &mut Criterion) {
+    for (layered, name) in [(false, "inline"), (true, "layered")] {
+        let mut group = c.benchmark_group(format!("paint/rotated_box_turn_change/{name}"));
+        for &subtree in &[1_usize, 10, 100, 1_000] {
+            group.bench_with_input(
+                BenchmarkId::new("update", subtree),
+                &subtree,
+                |b, &subtree| {
+                    b.iter_batched(
+                        || {
+                            let (mut owner, rotated) =
+                                helpers::build_rotated_box_tree(layered, subtree);
+                            helpers::set_rotated_box_quarter_turns(&mut owner, rotated, 3);
+                            owner
+                        },
+                        |mut owner| {
+                            owner
+                                .run_paint()
+                                .expect("run_paint must succeed after a quarter-turn change");
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new("repaint", subtree),
+                &subtree,
+                |b, &subtree| {
+                    b.iter_batched(
+                        || {
+                            let (mut owner, rotated) =
+                                helpers::build_rotated_box_tree(layered, subtree);
+                            helpers::set_rotated_box_quarter_turns(&mut owner, rotated, 3);
+                            // Force the old path: an explicit paint mark wins
+                            // over the layer-update mark the setter reported.
+                            owner.mark_needs_paint(rotated);
+                            owner
+                        },
+                        |mut owner| {
+                            owner
+                                .run_paint()
+                                .expect("run_paint must succeed after a quarter-turn change");
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_flat_run_compositing,
@@ -327,5 +401,6 @@ criterion_group!(
     bench_eight_dirty_boundaries,
     bench_opacity_alpha_change,
     bench_transform_matrix_change,
+    bench_rotated_box_turn_change,
 );
 criterion_main!(benches);

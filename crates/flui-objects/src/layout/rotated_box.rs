@@ -16,6 +16,13 @@
 //! * The paint matrix is a pure computation over `(parent_size, child_size,
 //!   quarter_turns)` — no stale cached `_paintTransform` field that can
 //!   drift from state.
+//! * `set_quarter_turns` reports the narrowest impact the change actually
+//!   needs instead of upstream's relayout on every changed value: an unchanged
+//!   effective angle (mod 4) reports no impact at all, a parity-preserving
+//!   turn (same even/odd class, different quadrant) reports an update-only
+//!   composited-layer commit instead of a full repaint, and only a parity
+//!   change (odd ↔ even) forces layout. See `set_quarter_turns`'s own doc
+//!   for the exact split and the premise it rests on.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -74,16 +81,67 @@ impl RenderRotatedBox {
         self.quarter_turns
     }
 
-    /// Replaces the quarter-turn count and reports layout when changed.
+    /// Replaces the quarter-turn count and reports the narrowest observable
+    /// impact for the change.
+    ///
+    /// - Unchanged raw value, or a value that reduces to the same quadrant
+    ///   mod 4 (e.g. `1` → `5`, `-2` → `2`, `1` → `-3`):
+    ///   [`NONE`](flui_rendering::RenderUpdateImpact::NONE). The raw value is
+    ///   still stored — `quarter_turns()` reflects exactly what was set — but
+    ///   the paint matrix and layout are byte-identical, so nothing
+    ///   downstream needs to react.
+    /// - Same parity (even ↔ even or odd ↔ odd), different quadrant (e.g.
+    ///   `0` → `2`, `1` → `-1`):
+    ///   [`COMPOSITED_LAYER_UPDATE`](flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE)
+    ///   `|` [`SEMANTICS`](flui_rendering::RenderUpdateImpact::SEMANTICS).
+    ///   `perform_layout`, `compute_dry_layout`, the four intrinsic queries,
+    ///   and `compute_dry_baseline` all key off `is_vertical` (private) —
+    ///   the turn's parity — and never the exact value, so layout is
+    ///   unchanged and only the paint matrix rotates: the retained subtree
+    ///   can be patched in place instead of repainted. Pinned by
+    ///   `harness_rotated_box_layout_is_turn_blind_up_to_parity`
+    ///   (`flui-objects/tests/render_object_harness.rs`).
+    /// - Parity change (e.g. `0` → `1`, `3` → `4`):
+    ///   [`LAYOUT`](flui_rendering::RenderUpdateImpact::LAYOUT) — axes swap,
+    ///   so the child must be re-laid-out under (un)flipped constraints.
     pub fn set_quarter_turns(&mut self, quarter_turns: i32) -> flui_rendering::RenderUpdateImpact {
         if self.quarter_turns == quarter_turns {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let old_mod4 = self.quarter_turns.rem_euclid(4);
+        let new_mod4 = quarter_turns.rem_euclid(4);
         self.quarter_turns = quarter_turns;
-        flui_rendering::RenderUpdateImpact::LAYOUT
+
+        if old_mod4 == new_mod4 {
+            // Same effective angle: identical paint matrix, identical layout.
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        // `old_mod4`/`new_mod4` are already reduced to [0, 3] by
+        // `rem_euclid(4)`, so `% 2` on them reads their parity directly —
+        // no separate `rem_euclid(2)` pass over the (possibly negative) raw
+        // values needed.
+        if old_mod4 % 2 != new_mod4 % 2 {
+            // Axis swap: the child must be re-laid-out under (un)flipped
+            // constraints.
+            return flui_rendering::RenderUpdateImpact::LAYOUT;
+        }
+        // Same parity, different quadrant: layout, child size, and origin
+        // are all unchanged — only the paint matrix rotates, so the retained
+        // subtree can be patched in place instead of repainted.
+        flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+            | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Returns `true` when the quarter-turn count is odd (axes are swapped).
+    ///
+    /// `set_quarter_turns`'s parity-preserving fast path (module doc)
+    /// depends on every layout-phase method reading `quarter_turns` ONLY
+    /// through this predicate, never the exact raw value — pinned by
+    /// `harness_rotated_box_layout_is_turn_blind_up_to_parity`
+    /// (`flui-objects/tests/render_object_harness.rs`). A method that
+    /// branches on the exact turn instead would go stale under that fast
+    /// path: the setter would report no relayout for a change the method
+    /// actually treats differently.
     #[inline]
     fn is_vertical(&self) -> bool {
         // `rem_euclid(2)` handles negative values correctly:
@@ -129,6 +187,8 @@ impl RenderBox for RenderRotatedBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+        // Reads `quarter_turns` only through `is_vertical()` — see that
+        // method's doc and `set_quarter_turns`'s fast path.
         let constraints = *ctx.constraints();
 
         if ctx.child_count() == 0 {
@@ -288,12 +348,21 @@ impl RenderBox for RenderRotatedBox {
         if ctx.child_count() == 0 {
             return None;
         }
-        // Rotation means the child's baseline is in a rotated coordinate frame;
-        // for non-trivial rotations the concept of a text baseline does not map
-        // directly. Flutter returns the raw child baseline only for even turns
-        // (no axis swap). For odd turns (vertical), there is no conventional
-        // horizontal baseline — return None to match Flutter's RenderBox default
-        // for objects where a baseline cannot be determined.
+        // Reads `quarter_turns` only through `is_vertical()` — see that
+        // method's doc and `set_quarter_turns`'s fast path.
+        //
+        // Rotation means the child's baseline is in a rotated coordinate
+        // frame. FLUI passes the child's own baseline through unchanged for
+        // even turns and reports `None` for odd turns. Upstream
+        // `RenderRotatedBox` has no baseline override at all
+        // (`rotated_box.dart`, 3.44.0) — it always falls through to
+        // `RenderBox`'s default `None`, so FLUI's even-turn passthrough is a
+        // divergence, not a port: arguably an improvement at turn 0 (identity
+        // rotation, the baseline really is unchanged) and arguably wrong at
+        // turn 2 (the box is upside down, so the "same" distance from the top
+        // no longer means what a baseline means). This is a design call that
+        // has not been made, not a silent port — filed rather than fixed
+        // here: #1011.
         if self.is_vertical() {
             return None;
         }
@@ -372,6 +441,111 @@ mod tests {
             flui_rendering::RenderUpdateImpact::NONE
         );
         assert_eq!(node.quarter_turns(), 2);
+    }
+
+    /// `set_quarter_turns` reports `NONE` whenever the new value reduces to
+    /// the same quadrant mod 4 as the old one — the paint matrix and layout
+    /// are byte-identical (`build_paint_matrix` and every layout-phase
+    /// method key off `rem_euclid`) — but the raw value is still stored, so
+    /// `quarter_turns()` reflects exactly what was set, not the reduced
+    /// form.
+    #[test]
+    fn set_quarter_turns_same_quadrant_is_a_noop_but_stores_the_raw_value() {
+        let mut node = RenderRotatedBox::new(1);
+        assert_eq!(
+            node.set_quarter_turns(1),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "identical raw value",
+        );
+        assert_eq!(node.quarter_turns(), 1);
+
+        assert_eq!(
+            node.set_quarter_turns(5),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "1 and 5 both reduce to quadrant 1 mod 4",
+        );
+        assert_eq!(node.quarter_turns(), 5);
+
+        let mut node = RenderRotatedBox::new(-2);
+        assert_eq!(
+            node.set_quarter_turns(2),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "-2 and 2 both reduce to quadrant 2 mod 4",
+        );
+        assert_eq!(node.quarter_turns(), 2);
+
+        let mut node = RenderRotatedBox::new(1);
+        assert_eq!(
+            node.set_quarter_turns(-3),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "1 and -3 both reduce to quadrant 1 mod 4",
+        );
+        assert_eq!(node.quarter_turns(), -3);
+    }
+
+    /// Same parity (even ↔ even or odd ↔ odd), different quadrant: layout is
+    /// unchanged (`is_vertical` reads the same on both sides) so only the
+    /// paint matrix rotates — an update-only composited-layer commit, not a
+    /// repaint.
+    #[test]
+    fn set_quarter_turns_same_parity_different_quadrant_reports_layer_update() {
+        let mut node = RenderRotatedBox::new(0);
+        assert_eq!(
+            node.set_quarter_turns(2),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+
+        let mut node = RenderRotatedBox::new(1);
+        assert_eq!(
+            node.set_quarter_turns(3),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+
+        let mut node = RenderRotatedBox::new(1);
+        assert_eq!(
+            node.set_quarter_turns(-1),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+
+        let mut node = RenderRotatedBox::new(-2);
+        assert_eq!(
+            node.set_quarter_turns(0),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    /// A parity change (even ↔ odd) swaps which axis the child is laid out
+    /// against, so it must relayout — the one case `set_quarter_turns` still
+    /// reports the pre-existing `LAYOUT` on any change.
+    #[test]
+    fn set_quarter_turns_parity_change_reports_layout() {
+        let mut node = RenderRotatedBox::new(0);
+        assert_eq!(
+            node.set_quarter_turns(1),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+
+        let mut node = RenderRotatedBox::new(1);
+        assert_eq!(
+            node.set_quarter_turns(2),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+
+        let mut node = RenderRotatedBox::new(3);
+        assert_eq!(
+            node.set_quarter_turns(4),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+
+        let mut node = RenderRotatedBox::new(-1);
+        assert_eq!(
+            node.set_quarter_turns(0),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     }
 
     #[test]
