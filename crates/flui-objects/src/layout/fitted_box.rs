@@ -102,8 +102,10 @@ pub struct RenderFittedBox {
     alignment: Alignment,
     clip_behavior: Clip,
     has_child: bool,
-    /// Cached scale factors derived in layout, consumed by
-    /// [`RenderBox::paint_transform`].
+    /// Cached scale factors derived in layout, folded into
+    /// [`Self::effective_transform`] — which `paint` pushes (or, for a
+    /// pure translation, applies as the child offset), `hit_test` inverts,
+    /// and `apply_paint_transform` composes into coordinate mapping.
     scale_x: f32,
     scale_y: f32,
     /// Cached child top-left offset inside `size`.
@@ -192,11 +194,14 @@ impl RenderFittedBox {
     /// The composed translate-scale-translate matrix this box applies to
     /// its child.
     ///
-    /// THE single transform accessor: `paint_transform` hands exactly
-    /// this matrix to the pipeline, and `hit_test` walks through its
-    /// inverse — paint and hit-test can never disagree about where the
-    /// child is. Identity when nothing is cached (pre-layout /
-    /// unit-scale defaults).
+    /// THE single transform accessor: `paint` pushes exactly this matrix
+    /// as its transform scope (or, for a pure translation, applies it as
+    /// the child offset), `apply_paint_transform` folds it into
+    /// coordinate mapping, and `hit_test` walks through its inverse —
+    /// paint, mapping, and hit-test can never disagree about where the
+    /// child is. `paint_transform` is deliberately NOT a consumer: it
+    /// stays at its `None` default (see `paint` for why). Identity when
+    /// nothing is cached (pre-layout / unit-scale defaults).
     ///
     /// Three parts, matching Flutter's `RenderFittedBox._updatePaintData`
     /// (`proxy_box.dart`) exactly: translate to the destination region's
@@ -474,10 +479,10 @@ impl RenderBox for RenderFittedBox {
         // filters those; nothing to add here.
         //
         // Transform symmetry: hit-test through the INVERSE of the same
-        // matrix `paint_transform` hands the pipeline (one accessor,
-        // both directions), so scaled children receive the correct
-        // local point. (The pre-fix shape shifted by align_offset only
-        // — any non-unit scale sent the child a wrong local point.)
+        // matrix `paint` pushes (one accessor, both directions), so scaled
+        // children receive the correct local point. (The pre-fix shape
+        // shifted by align_offset only — any non-unit scale sent the child
+        // a wrong local point.)
         let transform = self.effective_transform();
         let Some(inverse) = transform.try_inverse() else {
             // Degenerate scale (zero area) — nothing is visually
@@ -512,9 +517,12 @@ impl RenderBox for RenderFittedBox {
     /// against the child's scaled ones. Pushing both from `paint`, in this
     /// order, is what puts them the right way round.
     ///
-    /// `paint_transform` is retained for coordinate mapping (`transform_to`
-    /// and the `localToGlobal` family read it), which is a separate concern
-    /// from layer emission — Flutter likewise keeps `applyPaintTransform`
+    /// `paint_transform` itself is not overridden and stays at its `None`
+    /// default — a `Some` there would make the walk push a second transform
+    /// around the one this method opens, applying the fit twice. Coordinate
+    /// mapping (`transform_to` and the local-to-global family) is a separate
+    /// concern from layer emission and reads the `apply_paint_transform`
+    /// override below — Flutter likewise keeps `applyPaintTransform`
     /// alongside `paint`.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if !self.has_child {
@@ -778,27 +786,6 @@ mod tests {
             x.get(),
             y.get(),
         );
-    }
-
-    #[test]
-    fn paint_transform_is_none_without_child() {
-        let node = RenderFittedBox::default();
-        // No child, no transform.
-        assert!(node.paint_transform(Size::ZERO).is_none());
-    }
-
-    #[test]
-    fn paint_transform_short_circuits_without_child() {
-        // Companion to `paint_transform_is_none_without_child`: the
-        // `if !self.has_child { return None; }` gate runs *before* the
-        // identity-state check, so a no-child node returns None even
-        // with scale=1.0 / align=ZERO cached values. The identity-state
-        // path itself is exercised end-to-end in the layout tests
-        // above that drive `perform_layout` with `BoxFit::Fill` against
-        // a size that already matches the child — see e.g.
-        // `fitted_box_layout_*` tests.
-        let node = RenderFittedBox::default();
-        assert!(node.paint_transform(Size::ZERO).is_none());
     }
 
     #[test]
