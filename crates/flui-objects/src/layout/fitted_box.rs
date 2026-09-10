@@ -518,12 +518,13 @@ impl RenderBox for RenderFittedBox {
     /// order, is what puts them the right way round.
     ///
     /// `paint_transform` itself is not overridden and stays at its `None`
-    /// default — a `Some` there would make the walk push a second transform
-    /// around the one this method opens, applying the fit twice. Coordinate
-    /// mapping (`transform_to` and the local-to-global family) is a separate
-    /// concern from layer emission and reads the `apply_paint_transform`
-    /// override below — Flutter likewise keeps `applyPaintTransform`
-    /// alongside `paint`.
+    /// default — a `Some` there would make the walk push a transform layer
+    /// of its own around whatever this method already applies (the transform
+    /// scope, or the child offset for a pure translation), applying the fit
+    /// twice. Coordinate mapping (`transform_to` and the local-to-global
+    /// family) is a separate concern from layer emission and reads the
+    /// `apply_paint_transform` override below — Flutter likewise keeps
+    /// `applyPaintTransform` alongside `paint`.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if !self.has_child {
             return;
