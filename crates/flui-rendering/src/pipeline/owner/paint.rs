@@ -441,10 +441,12 @@ impl PipelineOwner<PaintPhase> {
         // (`tests/retained_boundary_layers.rs`), which fails on the flag
         // staying set — not on the emitted frame, which looks the same either
         // way for a node that paints nothing regardless.
-        if targets
-            .iter()
-            .any(|target| !subtree.effect_slots.contains_key(target))
-        {
+        if targets.iter().any(|target| {
+            !subtree
+                .effect_slots
+                .iter()
+                .any(|(owner, _)| owner == target)
+        }) {
             return None;
         }
         let mut patches = Vec::new();
@@ -456,7 +458,12 @@ impl PipelineOwner<PaintPhase> {
         // walk would leave the retry seeing no pending request, grafting the
         // old layer, and going visibly stale until something else mutates.
         let mut consumed: SmallVec<[RenderId; 2]> = SmallVec::new();
-        for (&render_id, slots) in &subtree.effect_slots {
+        // Iterated in capture order (the `Vec`'s order) rather than hash
+        // order: a target this loop rebuilds resolves in the same sequence a
+        // full repaint's paint walk would visit it in — see the field doc on
+        // `RetainedSubtree::effect_slots`.
+        for (render_id, slots) in &subtree.effect_slots {
+            let render_id = *render_id;
             let Some(node) = self.render_tree.get(render_id) else {
                 // The node is gone but its layers are still in the capture.
                 // Nothing asked for an update, so replaying them is what a
@@ -927,7 +934,21 @@ pub(super) struct RetainedSubtree {
     /// boundary, not just the boundary itself — an `Opacity` nested three
     /// levels down is addressable without being a boundary of its own, which
     /// is the whole reason this design does not need to promote one.
-    effect_slots: FxHashMap<RenderId, EffectSlots>,
+    ///
+    /// A `Vec`, not a map, and appended at each render id's FIRST appearance
+    /// during `capture`'s pre-order walk: capture order equals paint order,
+    /// so the patch arm in `layer_patches_for` resolves and rebuilds targets
+    /// in the order a full repaint would — a stateful path clipper (a `Fn`
+    /// that observes and mutates on every call) sees the same call sequence
+    /// either way. A hash map's iteration order does not carry that
+    /// guarantee. Looked up by linear scan rather than a side index: the
+    /// number of effect-owning nodes per boundary is typically small (1-2
+    /// patch targets per frame), and the `paint` benchmark's `layered`
+    /// update arm at 1,000 nodes — the one that walks this list per patch
+    /// attempt — is unchanged within measurement noise against a hash-map
+    /// version of this same field. Revisit with a side `RenderId -> usize`
+    /// index if a real tree grows this list long enough to change that.
+    effect_slots: Vec<(RenderId, EffectSlots)>,
 }
 
 /// One boundary's worth of composited-layer update work, decided during the
@@ -1252,7 +1273,11 @@ impl FragmentComposer {
         // without re-indexing anything per capture. The same layer can be
         // captured more than once when boundaries nest, which is why the
         // per-capture SLOTS below are still built here rather than shared.
-        let mut effect_slots: FxHashMap<RenderId, EffectSlots> = FxHashMap::default();
+        //
+        // Appended at a render id's FIRST appearance below, so this list ends
+        // up in the same order the pre-order walk below visits render ids —
+        // see the field doc on `RetainedSubtree::effect_slots`.
+        let mut effect_slots: Vec<(RenderId, EffectSlots)> = Vec::new();
 
         // (tree id, parent index in `nodes`)
         let mut stack: Vec<(LayerId, Option<usize>)> = self
@@ -1271,14 +1296,20 @@ impl FragmentComposer {
             }
             let index = nodes.len();
             if let Some(&(render_id, origin)) = self.effect_owner.get(&id) {
-                effect_slots
-                    .entry(render_id)
-                    .or_insert_with(|| EffectSlots {
-                        indices: SmallVec::new(),
-                        origin,
-                    })
-                    .indices
-                    .push(index);
+                // Find-or-push, not `entry().or_insert_with()`: this is a
+                // `Vec` so the first appearance of `render_id` fixes its
+                // position, which is what keeps `effect_slots` capture-
+                // ordered. A short linear scan — see the field doc.
+                if let Some((_, slots)) = effect_slots
+                    .iter_mut()
+                    .find(|(owner, _)| *owner == render_id)
+                {
+                    slots.indices.push(index);
+                } else {
+                    let mut indices = SmallVec::new();
+                    indices.push(index);
+                    effect_slots.push((render_id, EffectSlots { indices, origin }));
+                }
             }
             nodes.push(RetainedNode {
                 layer: layer.clone(),
