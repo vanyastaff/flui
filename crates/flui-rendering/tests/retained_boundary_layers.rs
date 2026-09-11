@@ -19,7 +19,9 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     testing::{
         TreeNode, box_node, edit_render_object,
-        inspect::{first_opacity_alpha, first_transform_matrix, transform_matrices},
+        inspect::{
+            first_opacity_alpha, first_transform_matrix, layer_structure, transform_matrices,
+        },
         tree, update_render_object,
     },
 };
@@ -1560,8 +1562,12 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
 /// never fired and a mutation run found them inert. These drive the path
 /// directly, through a proxy that reports the WRONG impact on purpose.
 ///
-/// - **count** (captured with one layer, now emitting two) pins the length
-///   guard: disabling it turns this red.
+/// - **count** (captured with one layer, now emitting two, or the reverse)
+///   pins the length guard: disabling it turns these red. The clip rows are
+///   the one place a `clip` field's appearance and disappearance reach that
+///   guard — no shipped clip producer reports an update across such a
+///   transition yet, so without them the clip arm of `own_effect_layers`
+///   would be exercised only through a repaint.
 /// - **kind** (captured with one layer, now emitting one of a different type)
 ///   pins the OUTPUT but not the mechanism. `own_effect_layers` emits a fixed
 ///   order, so a same-count swap patches positionally to the same tree a
@@ -1570,11 +1576,28 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
 ///   the comment at it says so rather than claiming a pin it does not have.
 #[test]
 fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
-    /// Emits an opacity layer, a transform layer, or both.
-    #[derive(Debug, Default)]
+    /// Emits any combination of an opacity, a clip and a transform layer.
+    #[derive(Debug, Default, Clone, Copy)]
     struct ShapeShifter {
         alpha: bool,
+        clip: bool,
         transform: bool,
+    }
+
+    /// `(Opacity, ClipRect, Transform)` layer counts a tree must show for a
+    /// shape — the same order `own_effect_layers` nests them in.
+    fn expected_counts(shape: ShapeShifter) -> (usize, usize, usize) {
+        (
+            usize::from(shape.alpha),
+            usize::from(shape.clip),
+            usize::from(shape.transform),
+        )
+    }
+
+    fn counts(tree: &flui_layer::LayerTree) -> (usize, usize, usize) {
+        let kinds = layer_structure(tree);
+        let count = |kind: &str| kinds.iter().filter(|k| **k == kind).count();
+        (count("Opacity"), count("ClipRect"), count("Transform"))
     }
 
     impl flui_foundation::Diagnosticable for ShapeShifter {}
@@ -1612,10 +1635,16 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
             false
         }
 
-        fn paint_effects(&self, _size: Size) -> flui_rendering::traits::PaintEffects {
+        fn paint_effects(&self, size: Size) -> flui_rendering::traits::PaintEffects {
             let mut effects = flui_rendering::traits::PaintEffects::NONE;
             if self.alpha {
                 effects = effects.with_opacity(flui_rendering::traits::PaintOpacity::new(128));
+            }
+            if self.clip {
+                effects = effects.with_clip(flui_rendering::traits::PaintClip::Rect {
+                    rect: flui_types::Rect::from_origin_size(flui_types::Point::ZERO, size),
+                    behavior: flui_types::painting::Clip::HardEdge,
+                });
             }
             if self.transform {
                 effects = effects.with_transform(flui_types::Matrix4::translation(3.0, 5.0, 0.0));
@@ -1624,23 +1653,56 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
         }
     }
 
-    // `gains` says what the second frame switches on; `expect_transform` is
-    // what a correct repaint must then emit.
-    for (label, gains_transform, keeps_alpha) in [
-        ("count: 1 -> 2 layers", true, true),
-        ("kind: opacity -> transform", true, false),
+    // `start` is the shape the capture is taken with; `then` is what the
+    // second frame switches to under an update-only mark, and what a correct
+    // repaint must therefore emit.
+    let alpha = ShapeShifter {
+        alpha: true,
+        ..ShapeShifter::default()
+    };
+    for (label, start, then) in [
+        (
+            "count: 1 -> 2 layers (transform appears)",
+            alpha,
+            ShapeShifter {
+                transform: true,
+                ..alpha
+            },
+        ),
+        (
+            "kind: opacity -> transform",
+            alpha,
+            ShapeShifter {
+                alpha: false,
+                transform: true,
+                ..alpha
+            },
+        ),
+        (
+            "count: 1 -> 2 layers (clip appears)",
+            alpha,
+            ShapeShifter {
+                clip: true,
+                ..alpha
+            },
+        ),
+        (
+            "count: 2 -> 1 layers (clip disappears)",
+            ShapeShifter {
+                clip: true,
+                ..alpha
+            },
+            alpha,
+        ),
     ] {
         let mut owner = PipelineOwner::new();
         let (root_id, registry) = tree::mount(
             &mut owner,
             box_node(RenderFlex::row()).child(
                 box_node(RenderRepaintBoundary::new()).child(
-                    box_node(ShapeShifter {
-                        alpha: true,
-                        transform: false,
-                    })
-                    .label("fx")
-                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                    box_node(start)
+                        .label("fx")
+                        .child(box_node(RenderColoredBox::red(20.0, 20.0))),
                 ),
             ),
         );
@@ -1653,18 +1715,12 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
             .expect("first frame")
             .expect("first frame produces a layer tree");
         assert_eq!(
-            (
-                first_opacity_alpha(&first).is_some(),
-                transform_matrices(&first).len()
-            ),
-            (true, 0),
-            "{label}: precondition — captured with exactly one opacity layer",
+            counts(&first),
+            expected_counts(start),
+            "{label}: precondition — captured with the starting shape",
         );
 
-        edit_render_object::<ShapeShifter, _, _>(&mut owner, fx, |object| {
-            object.transform = gains_transform;
-            object.alpha = keeps_alpha;
-        });
+        edit_render_object::<ShapeShifter, _, _>(&mut owner, fx, |object| *object = then);
         owner.mark_needs_composited_layer_update(fx);
 
         let (owner, result) = owner.run_frame();
@@ -1674,11 +1730,8 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
         drop(owner);
 
         assert_eq!(
-            (
-                first_opacity_alpha(&second).is_some(),
-                transform_matrices(&second).len()
-            ),
-            (keeps_alpha, usize::from(gains_transform)),
+            counts(&second),
+            expected_counts(then),
             "{label}: a shape change cannot be patched into the capture, so the \
              frame must repaint and emit the new shape",
         );
