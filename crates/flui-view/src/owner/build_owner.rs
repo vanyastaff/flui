@@ -2205,6 +2205,7 @@ fn notify_detached(observer: &dyn flui_foundation::observe::TreeObserver) {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use flui_foundation::panic::payload_text;
     use flui_objects::RenderSizedBox;
     use flui_rendering::{
         pipeline::{PipelineCell, PipelineOwner},
@@ -3158,13 +3159,8 @@ mod tests {
     /// `&'static str` or an interpolated `String` — the conflict panic in
     /// `global_key_scope::claim_and_register` uses the latter.
     fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-        if let Some(s) = payload.downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            String::from("<non-string panic payload>")
-        }
+        payload_text(payload)
+            .map_or_else(|| String::from("<non-string panic payload>"), str::to_owned)
     }
 
     /// A `GlobalKey` mounted in one owner while a second owner sharing the

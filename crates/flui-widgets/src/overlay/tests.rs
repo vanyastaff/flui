@@ -37,6 +37,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
+use flui_foundation::panic::payload_text;
 use flui_types::geometry::px;
 use flui_view::InheritedView;
 use flui_view::prelude::*;
@@ -1121,11 +1122,11 @@ fn overlay_of_panics_with_a_helpful_message_without_an_overlay_ancestor() {
     let probe = Peek(move |ctx: &dyn BuildContext| {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Overlay::of(ctx)));
         if let Err(payload) = outcome {
-            let text = payload
-                .downcast_ref::<&str>() // PORT-CHECK-OK-DOWNCAST: test-only extraction of a caught panic's message, not V-type smuggling
-                .map(|s| (*s).to_string())
-                .or_else(|| payload.downcast_ref::<String>().cloned()) // PORT-CHECK-OK-DOWNCAST: same panic-message extraction, the `String`-payload case
-                .unwrap_or_default();
+            // `Some("")` for an opaque payload keeps "did not panic" (`None`)
+            // distinguishable from "panicked with a non-string payload".
+            let text = payload_text(payload.as_ref())
+                .unwrap_or_default()
+                .to_owned();
             *message_for_probe.lock() = Some(text);
         }
     });

@@ -36,6 +36,7 @@ use flui_animation::Vsync;
 #[cfg(test)]
 use flui_engine::EngineError;
 use flui_engine::RasterBackend;
+use flui_foundation::panic::{is_internal_invariant, payload_text};
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::{FocusManager, GestureBinding, InteractionLane};
 use flui_layer::Scene;
@@ -2419,23 +2420,13 @@ impl UiRealm {
                     outcome
                 }
                 Err(payload) => {
-                    let message: Option<Box<str>> = payload
-                        .downcast_ref::<&'static str>()
-                        .copied()
-                        .map(Box::<str>::from)
-                        .or_else(|| {
-                            payload
-                                .downcast_ref::<String>()
-                                .map(|s| Box::<str>::from(s.as_str()))
-                        });
+                    let message = payload_text(&*payload).map(Box::<str>::from);
                     // `docs/PANIC-POLICY.md`'s convention: a `BUG:`-prefixed
                     // payload asserts a violated FRAMEWORK invariant.
                     // Contained all the same (siblings must keep framing),
                     // but reported as what it is instead of being blended
                     // into application-code failures.
-                    let internal_invariant = message
-                        .as_deref()
-                        .is_some_and(|message| message.starts_with("BUG:"));
+                    let internal_invariant = message.as_deref().is_some_and(is_internal_invariant);
                     self.report_frame_failure(
                         presentation,
                         FrameFailureKind::SegmentPanic {

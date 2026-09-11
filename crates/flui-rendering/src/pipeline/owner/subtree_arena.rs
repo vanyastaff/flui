@@ -49,6 +49,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
+use flui_foundation::panic::payload_text;
 use parking_lot::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
@@ -1349,11 +1350,7 @@ unsafe fn layout_subtree_borrowed_impl(
         let geometry = match unwind_result {
             Ok(inner) => inner?,
             Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| payload.downcast_ref::<&'static str>().copied())
-                    .unwrap_or("(non-string panic payload)");
+                let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
                 tracing::error!(
                     render_object = debug_name,
                     panic_msg = msg,
@@ -2022,11 +2019,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let geometry = match unwind_result {
             Ok(inner) => inner?,
             Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| payload.downcast_ref::<&'static str>().copied())
-                    .unwrap_or("(non-string panic payload)");
+                let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
                 tracing::error!(
                     render_object = debug_name,
                     panic_msg = msg,

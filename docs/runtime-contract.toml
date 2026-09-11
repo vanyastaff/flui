@@ -229,6 +229,7 @@ declarations = [
     "pub mod frame_stamp;",
     "pub mod id;",
     "pub mod key;",
+    "pub mod panic;",
     "pub mod wasm;",
     "pub mod diagnostics;",
     "pub mod observe;",

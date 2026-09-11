@@ -17,6 +17,13 @@ file records the repo-consumer-visible summary.
   and `a_leaf_that_never_committed_stands_in_with_zero` (`flui-rendering`'s `layout_poison` tests) tell a
   poisoned node's last committed geometry apart from the `Size::ZERO` stand-in, and go red when the poisoning
   pass is removed; a test-only `PipelineOwner::is_layout_poisoned` is the oracle.
+- **`flui_foundation::panic` — one shared panic-payload classifier** (#561): `payload_text`
+  extracts a caught panic payload's text (`&'static str` from a literal `panic!`, `String` from a
+  formatted one, an honest `None` for anything else) and `is_internal_invariant` reads the
+  `BUG:` prefix documented in `docs/PANIC-POLICY.md`. Every `catch_unwind` site that reads a
+  payload's text — across flui-foundation, flui-platform, flui-app, flui-rendering, flui-view, and
+  flui-widgets — now calls these instead of downcasting (or `Debug`-printing) the payload locally;
+  no behavior change, one fewer place for the extraction to drift.
 - **`flui create --no-check`** skips the `cargo check` that runs on a fresh scaffold. The check
   only reports (it never fails the command) and is a full cold build into the scaffold's own
   target directory — 236 s per template on the CI runner — so scripted, offline, or

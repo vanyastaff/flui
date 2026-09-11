@@ -88,6 +88,7 @@
 use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
+use flui_foundation::panic::payload_text;
 use flui_foundation::{PresentationAddress, RealmId};
 use flui_platform::traits::PlatformWindow;
 use parking_lot::Mutex;
@@ -261,31 +262,6 @@ pub enum CloseRequestError {
          presentation's event loop"
     )]
     NoHostedRuntime,
-}
-
-/// The text of a panic payload, when it has any — `panic!("...")` and
-/// `panic!("{}", x)` produce `&'static str` and `String` respectively, and
-/// nothing else is recoverable as text.
-///
-/// Its own function so the extraction is testable directly: the only other
-/// evidence a panicking close handler leaves is a `tracing` field, and a
-/// test that installs a custom panic hook (as the handler-panic test must,
-/// to keep the default output quiet) suppresses the only other place the
-/// payload would have surfaced.
-#[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-    expect(
-        dead_code,
-        reason = "reached only through install_close_request_wiring, whose production callers \
-                  (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
-                  no close-request wiring yet"
-    )
-)]
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
-    payload
-        .downcast_ref::<&'static str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
 }
 
 // ============================================================================
@@ -489,7 +465,7 @@ impl CloseRequestRouter {
         answered.unwrap_or_else(|payload| {
             tracing::error!(
                 ?address,
-                panic = panic_message(&*payload).unwrap_or("<non-string panic payload>"),
+                panic = payload_text(&*payload).unwrap_or("<non-string panic payload>"),
                 "close-request handler panicked; vetoing the close (a panicking handler cannot \
                  be read as consent to discard unsaved work)"
             );
@@ -813,36 +789,6 @@ mod tests {
             router.consult(realm_two),
             CloseResponse::KeepOpen,
             "a realm uninstall must not drop a sibling realm's entries"
-        );
-    }
-
-    /// The text a panicking handler leaves behind must survive
-    /// `catch_unwind` — both shapes `panic!` produces, and an honest
-    /// `None` for anything else.
-    #[test]
-    fn a_panic_payload_keeps_its_message() {
-        let borrowed = std::panic::catch_unwind(|| panic!("unsaved work check exploded"))
-            .expect_err("the closure panics");
-        assert_eq!(
-            panic_message(&*borrowed),
-            Some("unsaved work check exploded"),
-            "a `panic!(\"literal\")` payload is a &'static str"
-        );
-
-        let owned = std::panic::catch_unwind(|| panic!("document {} is dirty", 7))
-            .expect_err("the closure panics");
-        assert_eq!(
-            panic_message(&*owned),
-            Some("document 7 is dirty"),
-            "a formatted `panic!` payload is a String"
-        );
-
-        let opaque = std::panic::catch_unwind(|| std::panic::panic_any(41_u8))
-            .expect_err("the closure panics");
-        assert_eq!(
-            panic_message(&*opaque),
-            None,
-            "a non-string payload has no text to report, and must not be guessed at"
         );
     }
 
