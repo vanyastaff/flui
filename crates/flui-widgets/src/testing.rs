@@ -43,7 +43,7 @@ use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::geometry::px;
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
-use flui_types::{Offset, Pixels, Rect, Size};
+use flui_types::{Offset, Pixels, RRect, Rect, Size};
 use flui_view::InheritedView;
 use flui_view::View;
 use flui_view::element::InheritedElementAccess;
@@ -1069,6 +1069,19 @@ impl LaidOut {
     pub fn transform_layer_matrices(&self) -> Vec<Matrix4> {
         self.layer_tree()
             .map(inspect::transform_matrices)
+            .unwrap_or_default()
+    }
+
+    /// The rounded rectangle of every `Layer::ClipRRect` in the most recent
+    /// pumped frame's layer tree, in the same depth-first pre-order as
+    /// [`layer_kinds`](Self::layer_kinds).
+    ///
+    /// **A frame must have been pumped** — see [`layer_kinds`](Self::layer_kinds)
+    /// for why; the same precondition applies here, and an unpumped frame
+    /// answers with an empty vec.
+    pub fn clip_rrect_layers(&self) -> Vec<RRect> {
+        self.layer_tree()
+            .map(inspect::clip_rrects)
             .unwrap_or_default()
     }
 
