@@ -604,10 +604,10 @@ impl ElementOwner<'_> {
     /// both unwind through the same catch region, and only the caller
     /// setting this marker first can tell the catch which one it was.
     ///
-    /// Not yet called: the tree-side retake seams that arm this marker
-    /// land with the per-child mount/update boundary. The round trip is
-    /// pinned by `entering_hook_round_trip` below.
-    #[cfg_attr(not(test), expect(dead_code))]
+    /// Called by `retake_inactive_global_key` / `retake_active_global_key`
+    /// (`tree/element_tree.rs`), immediately before `activate_subtree` and
+    /// again before the retake's own `update`. The round trip is pinned by
+    /// `entering_hook_round_trip` below.
     pub(crate) fn note_entering_hook(&self, hook: LifecycleHook) {
         self.entering_hook.set(Some(hook));
     }
@@ -615,8 +615,8 @@ impl ElementOwner<'_> {
     /// Read and clear the entering-hook marker. `None` if nothing armed it
     /// since the last read (or ever).
     ///
-    /// Not yet called: see [`Self::note_entering_hook`].
-    #[cfg_attr(not(test), expect(dead_code))]
+    /// Called from the retake fns' own catch, to label a caught panic's
+    /// [`LifecycleHook`] — see [`Self::note_entering_hook`].
     pub(crate) fn take_entering_hook(&self) -> Option<LifecycleHook> {
         self.entering_hook.take()
     }

@@ -24,7 +24,9 @@ use crate::BoxedView;
 use crate::ElementOwner;
 use crate::tree::ElementNode;
 use crate::tree::ElementTree;
+use crate::tree::ProvisionalOrder;
 use crate::tree::SubtreeRemoval;
+use crate::tree::recovery_view_for;
 use crate::view::View;
 
 /// Bookkeeping for a lazy sliver's on-demand children.
@@ -511,38 +513,19 @@ pub(crate) struct ReconcileOutcome {
 }
 
 /// Mount `view` at `logical_index`, substituting the registered `ErrorView`
-/// when the mount itself panics — the boundary one level up from
-/// [`build_item_or_error`], which bounds only the *builder*.
+/// when [`ElementTree::mount_or_substitute`]'s containment window catches a
+/// panic — the boundary one level up from [`build_item_or_error`], which
+/// bounds only the *builder*.
 ///
-/// The panic this exists for is a user `View::create_render_object`, which
-/// `ElementTree::insert` reaches through `RenderBehavior::on_mount`. An item's
-/// `build` is already bounded a level below, by `build_or_recover` in the
-/// stateless/stateful behaviours, so this covers what that one cannot see.
-///
-/// # Why the tree is usable again after the catch
-///
-/// A panic out of `mount` strands a node that is in the slab and parented,
-/// and announced nowhere: the `Mount` event, the `GlobalKey` registration,
-/// the ancestor parent-data pass and the render-reorder flag all come *after*
-/// `mount` in `insert`, and `insert` never writes the parent's `child_ids`
-/// (a sparse host tracks residency itself, in `by_logical_index`). So the
-/// only reference to it is what `insert_reporting_child` hands back, and
-/// `discard_unannounced` retires exactly that much — silently, because no
-/// observer ever saw the node mount.
-///
-/// A `GlobalKey` retake is the other panic site the same catch covers: it
-/// relocates an existing element and runs its `update` (user
-/// `update_render_object` with it), so the report distinguishes the two and
-/// the recovery removes the relocated subtree the ordinary way. The pipeline is not poisoned
-/// either — `PipelineCell::with_mut` holds a `RefMut` that drops on unwind,
-/// so the owner is free again.
-///
-/// For the case this bounds there is nothing else to undo: a user
-/// `create_render_object` runs *before* the `with_mut` that inserts into the
-/// render tree, so a panic there leaves no render node behind. A panic from
-/// inside that `with_mut` (adoption, the sliver-index stamp) would strand one
-/// render node; those are FLUI-internal `BUG:` paths, not user code, and this
-/// boundary does not pretend to make them recoverable.
+/// The boundary is [`ElementTree::mount_or_substitute`]'s region rule (issue
+/// #561, ADR-0050): `View::create_element()` through the end of `mount`, or
+/// — for a `GlobalKey` retake — `activate_subtree` through the retake's own
+/// `update`. The sliver-index stamp and the `schedule_build_for` tail below
+/// are OUTSIDE that region: a panic there is a `BUG:` in this module's own
+/// bookkeeping, not user code, and propagates rather than being recovered.
+/// Framework code the region does not cover — the debug-only eager
+/// duplicate-GlobalKey rejection, the retake preflight — also propagates,
+/// exactly as it does through a dense parent.
 fn mount_sparse_child(
     logical_index: usize,
     view: &dyn View,
@@ -551,62 +534,48 @@ fn mount_sparse_child(
     owner: &mut ElementOwner<'_>,
     pipeline: &PipelineCell,
 ) -> ElementId {
-    let mut inserted = None;
-    let mounted = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        mount_sparse_child_unbounded(
-            logical_index,
-            view,
-            host,
-            tree,
-            owner,
-            pipeline,
-            &mut inserted,
-        )
-    }));
-    match mounted {
-        Ok(child) => child,
-        Err(payload) => {
-            // Undo whatever the insert had committed. A minted node was never
-            // announced, so it is discarded silently; a retaken one was
-            // announced as a reparent and carries a subtree, so it goes out
-            // the ordinary way.
-            match inserted.take() {
-                Some(crate::tree::InsertedChild::Minted(stranded)) => {
-                    tree.discard_unannounced(stranded, owner);
-                }
-                Some(crate::tree::InsertedChild::Retaken(retaken)) => {
-                    tree.remove_subtree(retaken, owner, crate::tree::SubtreeRemoval::Finalize);
-                }
-                None => {}
-            }
-            let error = crate::view::FlutterError::from_panic(
-                payload.as_ref(),
-                format!("mounting lazy sliver child {logical_index}"),
-            );
-            tracing::error!(
-                logical_index,
-                "lazy sliver child panicked while mounting; substituting ErrorView: {}",
-                error.message
-            );
-            let recovery = recovery_view_for(&error);
-            // Deliberately unbounded: if the registered error-view factory
-            // panics on mount too, there is nothing left to substitute, and
-            // the crash names a broken factory instead of hiding it.
-            mount_sparse_child_unbounded(
-                logical_index,
-                recovery.0.as_ref(),
-                host,
-                tree,
-                owner,
-                pipeline,
-                &mut None,
-            )
-        }
-    }
+    // Declare `host` as the parent being reconciled for the duration of
+    // this insert, including its substitute if the first attempt panics.
+    // `ElementTree::insert` refuses to relocate an active GlobalKey onto a
+    // parent that is not the one currently reconciling, and its rejection
+    // arm panics — so without this, a keyed item scrolling from one lazy
+    // list into another aborted the process instead of moving.
+    // `service_child_requests` calls `service` (and so this) outside any
+    // other reconcile, before its own `build_scope`, so this never nests
+    // inside the guard `reconcile_children_by_id` installs — which
+    // `begin_reconcile` asserts against.
+    let _reconcile_guard = tree.begin_reconcile(host);
+    let child = tree.mount_or_substitute(
+        view,
+        host,
+        logical_index,
+        owner,
+        ProvisionalOrder::NONE,
+        "mounting lazy sliver child",
+    );
+    stamp_logical_index(tree, pipeline, host, child, logical_index);
+
+    // `ElementTree::insert` (via `ElementCore::mount`) sets the child's
+    // `dirty = true` but does NOT push it onto the build heap — only
+    // `id_reconcile.rs` does that through `schedule_build_for`.  Without
+    // this explicit push the follow-up `build_scope` in
+    // `BuildOwner::service_child_requests` drains an empty heap and the
+    // child's own subtree (e.g. Padding(Text)) never expands.
+    let child_depth = tree.get(child).map_or(0, ElementNode::depth);
+    owner.schedule_build_for(child, child_depth, crate::RebuildReason::ChildListChange);
+
+    tracing::trace!(
+        logical_index,
+        ?child,
+        ?host,
+        "SparseChildren mounted lazy child"
+    );
+    child
 }
 
 /// Apply `view` to the resident at `resident_id`, substituting the registered
-/// `ErrorView` when the update panics.
+/// `ErrorView` when [`ElementTree::update_or_substitute`]'s containment
+/// window (the resident's own `update`) catches a panic.
 ///
 /// Returns `Err(replacement)` with the id of the freshly mounted error child
 /// when it had to substitute; the caller re-points its residency map at it.
@@ -626,77 +595,25 @@ fn update_or_replace_resident(
     owner: &mut ElementOwner<'_>,
     pipeline: &PipelineCell,
 ) -> Result<(), ElementId> {
-    let updated = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        tree.update(resident_id, view, owner);
-    }));
-    match updated {
-        Ok(()) => Ok(()),
-        Err(payload) => {
-            let error = crate::view::FlutterError::from_panic(
-                payload.as_ref(),
-                format!("updating lazy sliver child {logical_index}"),
-            );
-            tracing::error!(
-                logical_index,
-                "lazy sliver child panicked while updating; substituting ErrorView: {}",
-                error.message
-            );
-            tree.remove_subtree(resident_id, owner, crate::tree::SubtreeRemoval::Finalize);
-            let recovery = recovery_view_for(&error);
-            Err(mount_sparse_child_unbounded(
-                logical_index,
-                recovery.0.as_ref(),
-                host,
-                tree,
-                owner,
-                pipeline,
-                &mut None,
-            ))
-        }
-    }
-}
-
-/// Mount `view` at `logical_index` under `host` and stamp its render node(s).
-fn mount_sparse_child_unbounded(
-    logical_index: usize,
-    view: &dyn View,
-    host: ElementId,
-    tree: &mut ElementTree,
-    owner: &mut ElementOwner<'_>,
-    pipeline: &PipelineCell,
-    inserted: &mut Option<crate::tree::InsertedChild>,
-) -> ElementId {
-    // Declare `host` as the parent being reconciled for the duration of
-    // this insert. `ElementTree::insert` refuses to relocate an active
-    // GlobalKey onto a parent that is not the one currently reconciling,
-    // and its rejection arm panics — so without this, a keyed item
-    // scrolling from one lazy list into another aborted the process
-    // instead of moving. `service_child_requests` calls `service` (and so
-    // this) outside any other reconcile, before its own `build_scope`,
-    // so this never nests inside the guard `reconcile_children_by_id`
-    // installs — which `begin_reconcile` asserts against.
-    let child = {
-        let _reconcile_guard = tree.begin_reconcile(host);
-        tree.insert_reporting_child(view, host, logical_index, owner, inserted)
-    };
-    stamp_logical_index(tree, pipeline, host, child, logical_index);
-
-    // `ElementTree::insert` (via `ElementCore::mount`) sets the child's
-    // `dirty = true` but does NOT push it onto the build heap — only
-    // `id_reconcile.rs` does that through `schedule_build_for`.  Without
-    // this explicit push the follow-up `build_scope` in
-    // `BuildOwner::service_child_requests` drains an empty heap and the
-    // child's own subtree (e.g. Padding(Text)) never expands.
-    let child_depth = tree.get(child).map_or(0, ElementNode::depth);
-    owner.schedule_build_for(child, child_depth, crate::RebuildReason::ChildListChange);
-
-    tracing::trace!(
+    let now = tree.update_or_substitute(
+        resident_id,
+        view,
+        host,
         logical_index,
-        ?child,
-        ?host,
-        "SparseChildren mounted lazy child"
+        owner,
+        "updating lazy sliver child",
     );
-    child
+    if now == resident_id {
+        Ok(())
+    } else {
+        stamp_logical_index(tree, pipeline, host, now, logical_index);
+        // Same tail `mount_or_substitute`'s own fresh-mount path runs — a
+        // substitute is a fresh child too, and needs the same explicit push
+        // onto the build heap (see `mount_sparse_child`'s doc).
+        let depth = tree.get(now).map_or(0, ElementNode::depth);
+        owner.schedule_build_for(now, depth, crate::RebuildReason::ChildListChange);
+        Err(now)
+    }
 }
 
 /// Build the item at `index` through `builder`, substituting the registered
@@ -733,43 +650,6 @@ pub(crate) fn build_item_or_error(
             );
             Some(recovery_view_for(&error))
         }
-    }
-}
-
-/// The substitute view for an item that failed at `index`, whatever the stage
-/// it failed at (builder, mount, or update).
-///
-/// A recovered item must be unkeyed, whatever the registered error-view
-/// factory returned: a keyed one would take part in the reconcile's key
-/// matching, and a `GlobalKey` would trigger a retake, instead of staying
-/// isolated to the failed index.
-fn recovery_view_for(error: &crate::view::FlutterError) -> BoxedView {
-    let recovered = crate::view::ErrorView::build_error_view(error);
-    if recovered.key().is_some() {
-        BoxedView(Box::new(UnkeyedRecovery {
-            inner: BoxedView(recovered),
-        }))
-    } else {
-        BoxedView(recovered)
-    }
-}
-
-/// A keyless composite around a custom error view that carried a key. Its
-/// render descendant is stamped at adoption like any composite item's.
-#[derive(Clone)]
-struct UnkeyedRecovery {
-    inner: BoxedView,
-}
-
-impl crate::view::StatelessView for UnkeyedRecovery {
-    fn build(&self, _ctx: &dyn crate::BuildContext) -> impl crate::view::IntoView {
-        self.inner.clone()
-    }
-}
-
-impl View for UnkeyedRecovery {
-    fn create_element(&self) -> crate::element::ElementKind {
-        crate::element::ElementKind::stateless(self)
     }
 }
 
@@ -1541,6 +1421,147 @@ mod tests {
             std::any::TypeId::of::<crate::view::ErrorView>(),
             "the index carries the error view"
         );
+
+        let recovered_panics = build_owner.take_recovered_panics();
+        assert_eq!(
+            recovered_panics.len(),
+            1,
+            "exactly one panic must be recorded for the retake's own update"
+        );
+        assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Update);
+    }
+
+    /// A `GlobalKey`'d stateful item whose `ViewState::activate` panics once
+    /// armed — the retake half of a mount that runs *before* the retake's own
+    /// `update`, so this exercises the containment window's earlier half
+    /// (issue #561: the `Retaken` report is written before `activate_subtree`
+    /// runs, not after — an `activate` panic that unwound before the report
+    /// existed used to leave the relocated element stranded, because the
+    /// undo saw nothing to act on).
+    #[derive(Clone)]
+    struct GlobalKeyedPanicsOnActivate {
+        key: GlobalKey<Self>,
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    struct GlobalKeyedPanicsOnActivateState {
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl crate::StatefulView for GlobalKeyedPanicsOnActivate {
+        type State = GlobalKeyedPanicsOnActivateState;
+
+        fn create_state(&self) -> Self::State {
+            GlobalKeyedPanicsOnActivateState {
+                armed: Arc::clone(&self.armed),
+            }
+        }
+    }
+
+    impl crate::ViewState<GlobalKeyedPanicsOnActivate> for GlobalKeyedPanicsOnActivateState {
+        fn build(
+            &self,
+            _view: &GlobalKeyedPanicsOnActivate,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            LeafBox { side: 4.0 }
+        }
+
+        fn activate(&mut self) {
+            assert!(
+                !self.armed.load(std::sync::atomic::Ordering::SeqCst),
+                "retake activate boom"
+            );
+        }
+    }
+
+    impl View for GlobalKeyedPanicsOnActivate {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+        fn key(&self) -> Option<&dyn ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    /// A panic in `activate_subtree` (not the retake's `update`) is undone
+    /// too. Before the `Retaken` write moved ahead of `activate_subtree`, it
+    /// ran AFTER it instead, so an `activate` panic left the relocated
+    /// element live and reparented but reported nowhere: the undo found
+    /// nothing armed and removed nothing, stranding it.
+    #[test]
+    fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+        let pre_mount_count = tree.len();
+        let item = GlobalKeyedPanicsOnActivate {
+            key: GlobalKey::<GlobalKeyedPanicsOnActivate>::new(),
+            armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+
+        let mut children = SparseChildren::new();
+        let first = children.ensure(
+            0,
+            &item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        // Evict: the `GlobalKey` makes this a soft removal, so the element
+        // waits in the inactive queue for a retake instead of being freed.
+        children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
+        assert!(
+            tree.get(first).is_some(),
+            "a globally-keyed eviction is a soft removal — the slab entry survives"
+        );
+
+        item.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Re-ensured at a DIFFERENT index within the same frame — the retake
+        // still resolves by GlobalKey, not by index.
+        let recovered = children.ensure(
+            1,
+            &item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert_ne!(
+            recovered, first,
+            "the reactivated element was removed, not handed back broken"
+        );
+        assert!(
+            tree.get(first).is_none(),
+            "the half-activated element must not stay parented under the host"
+        );
+        assert!(
+            build_owner.element_for_global_key(&item.key).is_none(),
+            "the GlobalKey registration must not still resolve to the removed element"
+        );
+        assert_eq!(
+            tree.get(recovered)
+                .expect("a live element")
+                .element()
+                .view_type_id(),
+            std::any::TypeId::of::<crate::view::ErrorView>(),
+            "the index carries the error view"
+        );
+        assert_eq!(
+            tree.len(),
+            pre_mount_count + 1,
+            "only the substitute error view remains — the stranded original is gone"
+        );
+
+        let recovered_panics = build_owner.take_recovered_panics();
+        assert_eq!(
+            recovered_panics.len(),
+            1,
+            "exactly one panic must be recorded, not double-counted across the retake \
+             and its substitute mount"
+        );
+        assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Activate);
     }
 
     #[test]
@@ -2149,6 +2170,15 @@ mod reconcile_tests {
                 "a neighbour of the failing index is untouched"
             );
         }
+
+        let recovered_panics = fx.owner.take_recovered_panics();
+        assert_eq!(
+            recovered_panics.len(),
+            1,
+            "exactly one panic must be recorded for the one failing mount"
+        );
+        assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Mount);
+        assert_eq!(recovered_panics[0].parent, Some(fx.host));
     }
 
     /// The stranded node a panicking mount leaves in the slab is retired, not
@@ -2167,7 +2197,8 @@ mod reconcile_tests {
         // The error child is one element (plus whatever its own view builds
         // on a later pass, which has not run here). The half-mounted node the
         // panic stranded would push this higher, and it is reachable through
-        // nothing but the report `insert_reporting_child` hands back.
+        // nothing but the `ChildHookPanic` report `mount_or_substitute`'s
+        // containment window hands back.
         assert_eq!(
             recovered,
             clean + 1,
@@ -2229,6 +2260,14 @@ mod reconcile_tests {
             let ok = fx.sparse.get(index).expect("neighbour is resident");
             assert_eq!(view_type_of(&fx, ok), std::any::TypeId::of::<KeyedBox>());
         }
+
+        let recovered_panics = fx.owner.take_recovered_panics();
+        assert_eq!(
+            recovered_panics.len(),
+            1,
+            "exactly one panic must be recorded for the one failing update"
+        );
+        assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Update);
     }
 
     #[test]

@@ -3,10 +3,11 @@
 //! Elements are stored in a Slab for O(1) access by ElementId.
 //! This follows Flutter's approach where Elements form the retained tree.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
+use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -14,7 +15,9 @@ use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
 use slab::Slab;
 
+use crate::BoxedView;
 use crate::element::ElementKind;
+use crate::owner::{LifecycleHook, RecoveredPanic};
 use crate::view::{ElementBase, View};
 
 fn append_sparse_sliver_children(
@@ -464,18 +467,41 @@ pub(crate) enum InsertedChild {
     Retaken(ElementId),
 }
 
+/// A lifecycle-hook panic caught inside a per-child containment window
+/// (issue #561, ADR-0050's REGION rule) — the typed-error half of
+/// [`ElementTree::mount_or_substitute`] / [`ElementTree::update_or_substitute`]'s
+/// undo-then-substitute machinery. Never crosses `element_tree.rs`'s own
+/// boundary: the two primitives consume it, and the infallible public
+/// `insert` / `insert_during_reconcile` / `update` resume the unwind from
+/// its payload instead — today's behavior, unchanged.
+pub(crate) struct ChildHookPanic {
+    /// What the window had committed by the time the panic unwound through
+    /// it, beyond the id the primitive already has, so the primitive knows
+    /// what to undo before mounting the substitute. `None` in two cases: a
+    /// fresh mount's `View::create_element()` itself panicked, before
+    /// anything existed to undo; or the panic came from
+    /// `ElementTree::update`'s window, whose caller already names the live
+    /// element directly and has no separate insert disposition to consult.
+    pub(crate) inserted: Option<InsertedChild>,
+    /// Which lifecycle hook was running when the panic happened.
+    pub(crate) hook: LifecycleHook,
+    /// The caught panic payload, unconverted — the primitive builds the
+    /// `FlutterError`/`RecoveredPanic` from it exactly once.
+    pub(crate) payload: Box<dyn Any + Send>,
+}
+
 /// The partial child order a reconcile has committed so far, which the
 /// `GlobalKey` retake preflight consults to decide whether a candidate can be
 /// relocated into this parent. Empty for an insert outside a reconcile.
 #[derive(Clone, Copy)]
-struct ProvisionalOrder<'a> {
+pub(crate) struct ProvisionalOrder<'a> {
     reconciled_prefix: &'a [ElementId],
     unclaimed_old_slots: &'a [Option<ElementId>],
 }
 
 impl ProvisionalOrder<'_> {
     /// No order committed yet — a fresh insert with nothing to preflight.
-    const NONE: Self = Self {
+    pub(crate) const NONE: Self = Self {
         reconciled_prefix: &[],
         unclaimed_old_slots: &[],
     };
@@ -775,48 +801,8 @@ impl ElementTree {
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
-        self.insert_with_provisional_order(
-            view,
-            parent,
-            slot,
-            owner,
-            ProvisionalOrder::NONE,
-            &mut None,
-        )
-    }
-
-    /// [`insert`](Self::insert), reporting through `inserted` what it did with
-    /// the child — and reporting it *before* any user code runs, so a caller
-    /// that bounds mount panics knows what there is to undo.
-    ///
-    /// The two dispositions differ in what an undo owes them, which is why
-    /// [`InsertedChild`] distinguishes them rather than handing back a bare
-    /// id. A `Minted` node is announced nowhere until `mount` returns, so it
-    /// is reachable through this report alone and must be discarded without
-    /// an unmount observation (no observer ever saw it mount). A `Retaken`
-    /// one was already announced as a reparent and carries user state; its
-    /// own `update` — user `update_render_object` included — runs inside the
-    /// retake, so it is a panic site too, and undoing it is an ordinary
-    /// subtree removal.
-    ///
-    /// `inserted` is cleared on entry, so the report always describes this
-    /// call and never a previous one.
-    pub(crate) fn insert_reporting_child(
-        &mut self,
-        view: &dyn View,
-        parent: ElementId,
-        slot: usize,
-        owner: &mut crate::ElementOwner<'_>,
-        inserted: &mut Option<InsertedChild>,
-    ) -> ElementId {
-        self.insert_with_provisional_order(
-            view,
-            parent,
-            slot,
-            owner,
-            ProvisionalOrder::NONE,
-            inserted,
-        )
+        self.try_insert_with_provisional_order(view, parent, slot, owner, ProvisionalOrder::NONE)
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
     }
 
     pub(super) fn insert_during_reconcile(
@@ -828,7 +814,7 @@ impl ElementTree {
         reconciled_prefix: &[ElementId],
         unclaimed_old_slots: &[Option<ElementId>],
     ) -> ElementId {
-        self.insert_with_provisional_order(
+        self.try_insert_with_provisional_order(
             view,
             parent,
             slot,
@@ -837,27 +823,42 @@ impl ElementTree {
                 reconciled_prefix,
                 unclaimed_old_slots,
             },
-            &mut None,
         )
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
     }
 
-    fn insert_with_provisional_order(
+    /// [`insert`](Self::insert) / [`insert_during_reconcile`](Self::insert_during_reconcile)'s
+    /// fallible core: a caught panic comes back as `Err` instead of
+    /// unwinding through this call, so a bounding caller ([`Self::mount_or_substitute`])
+    /// can undo whatever the containment window committed before deciding
+    /// what to do next.
+    ///
+    /// # The containment window (issue #561, ADR-0050's REGION rule)
+    ///
+    /// A fresh mount's window runs from `View::create_element()` through the
+    /// end of `mount` — every call in between can reach user code
+    /// (`View::create_element`, `RenderView::create_render_object`,
+    /// `did_mount_render_object`, `ViewState::init_state`). A `GlobalKey`
+    /// retake's window is reported by [`retake_inactive_global_key`] /
+    /// [`retake_active_global_key`] themselves, which run `activate_subtree`
+    /// and the retake's own `update` under their own catch and hand back a
+    /// `Result` here. Framework code before `create_element` (the retake
+    /// preflight below) and after `mount` returns (`GlobalKey` registration,
+    /// the `Mount` event, the observer, ancestor parent-data, the
+    /// render-reorder flag) stays outside every window and propagates
+    /// exactly as it always has.
+    fn try_insert_with_provisional_order(
         &mut self,
         view: &dyn View,
         parent: ElementId,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
         order: ProvisionalOrder<'_>,
-        inserted: &mut Option<InsertedChild>,
-    ) -> ElementId {
+    ) -> Result<ElementId, ChildHookPanic> {
         let ProvisionalOrder {
             reconciled_prefix,
             unclaimed_old_slots,
         } = order;
-        // Clear on entry so the report always describes THIS call. A caller
-        // reusing one slot across inserts would otherwise carry a stale id
-        // into a recovery path and remove the wrong element.
-        *inserted = None;
         // ADV-1 state migration. Before creating a fresh element,
         // check whether `view` has a `GlobalKey` that points at an
         // existing element. If it is inactive, pull it back; if it is still
@@ -865,7 +866,6 @@ impl ElementTree {
         // it here. In both cases the `ElementId` and state survive.
         if let Some(key) = global_key_of(view) {
             let destination = RetakeDestination {
-                inserted,
                 parent,
                 slot,
                 reconciled_prefix,
@@ -873,14 +873,20 @@ impl ElementTree {
             };
             match try_retake_global_key(self, owner, key, view, destination) {
                 GlobalKeyRetake::Absent => {}
-                GlobalKeyRetake::Retaken(retaken_id) => {
+                GlobalKeyRetake::Retaken(Ok(retaken_id)) => {
                     // A parent declaring a keyed child has made a claim on
                     // that key for this frame, whether the element was
                     // grafted or freshly mounted. The frame boundary reads
                     // the claims back to tell a legal reparent (one
                     // claimant) from a duplicate (two).
                     owner.reserve_global_key(parent, retaken_id, key);
-                    return retaken_id;
+                    return Ok(retaken_id);
+                }
+                GlobalKeyRetake::Retaken(Err(panic)) => {
+                    // The retake's own containment window already committed
+                    // the relocation and reported it — the caller undoes
+                    // THAT element, not a fresh mint this call never made.
+                    return Err(panic);
                 }
                 GlobalKeyRetake::Rejected => {
                     // The candidate exists but could not be relocated (it is
@@ -902,82 +908,106 @@ impl ElementTree {
             }
         }
 
-        let mut element = view.create_element();
+        // Fresh mount. `inserted` is written the instant the node exists in
+        // the slab, before `mount` runs, so a panic anywhere in the window
+        // below still leaves the caller a report of what to undo — and it
+        // is a plain local, not an out-parameter: a write to it survives the
+        // unwind that follows, the same way the out-parameter it replaces
+        // always did.
+        let mut inserted: Option<InsertedChild> = None;
+        let mount_result = std::panic::catch_unwind(AssertUnwindSafe(|| -> ElementId {
+            let mut element = view.create_element();
 
-        // Read the parent's render-tree propagation context in ONE fresh,
-        // immediately-dropped `&ElementTree` borrow, then apply it to the
-        // freshly-created child BEFORE mount.
-        //
-        // E3 (atomic box→arena swap): the old box graph propagated the
-        // `PipelineOwner` + parent `RenderId` to children inside
-        // `update_or_create_child(ren)`, *before* `mount_children`, because
-        // `RenderBehavior::on_mount` creates its `RenderObject` only when a
-        // `PipelineOwner` is already in scope. Children are now
-        // slab-resident, so that propagate-before-mount ordering moves
-        // here: read `pipeline_owner()` / `child_render_id()` off the
-        // parent node, hand them to the child, then mount.
-        let (
-            parent_depth,
-            parent_owner,
-            child_parent_render_id,
-            child_sliver_slot,
-            parent_inherited,
-        ) = match self.get(parent) {
-            Some(node) => (
-                node.depth,
-                node.element().pipeline_owner(),
-                node.element().child_render_id(),
-                node.element().child_sliver_slot(slot),
-                Arc::clone(&node.inherited),
-            ),
-            None => (0, None, None, None, Arc::new(HashMap::new())),
+            // Read the parent's render-tree propagation context in ONE fresh,
+            // immediately-dropped `&ElementTree` borrow, then apply it to the
+            // freshly-created child BEFORE mount.
+            //
+            // E3 (atomic box→arena swap): the old box graph propagated the
+            // `PipelineOwner` + parent `RenderId` to children inside
+            // `update_or_create_child(ren)`, *before* `mount_children`, because
+            // `RenderBehavior::on_mount` creates its `RenderObject` only when a
+            // `PipelineOwner` is already in scope. Children are now
+            // slab-resident, so that propagate-before-mount ordering moves
+            // here: read `pipeline_owner()` / `child_render_id()` off the
+            // parent node, hand them to the child, then mount.
+            let (
+                parent_depth,
+                parent_owner,
+                child_parent_render_id,
+                child_sliver_slot,
+                parent_inherited,
+            ) = match self.get(parent) {
+                Some(node) => (
+                    node.depth,
+                    node.element().pipeline_owner(),
+                    node.element().child_render_id(),
+                    node.element().child_sliver_slot(slot),
+                    Arc::clone(&node.inherited),
+                ),
+                None => (0, None, None, None, Arc::new(HashMap::new())),
+            };
+
+            if let Some(pipeline_owner) = parent_owner {
+                element.element_mut().set_pipeline_owner(pipeline_owner);
+            }
+            element
+                .element_mut()
+                .set_parent_render_id(child_parent_render_id);
+            element.element_mut().set_sliver_slot(child_sliver_slot);
+
+            let mut node = ElementNode::new(element, Some(parent), slot);
+            node.depth = parent_depth + 1;
+            // FR-022.
+            node.set_key(view.key().map(ViewKey::clone_key));
+
+            let slab_index = self.nodes.insert(node);
+            let id = self.alloc_id(slab_index);
+
+            // Same self-id stamping as mount_root.
+            self.nodes[slab_index].element_mut().set_self_id(id);
+
+            // Report before `mount` — everything from here on can panic through
+            // user code (`View::create_render_object`), and this is the only
+            // handle to the node that would otherwise be stranded.
+            inserted = Some(InsertedChild::Minted(id));
+
+            // Resolve this child's inherited scope from the parent's now that the
+            // element knows whether it is itself a provider (`as_inherited`) and
+            // its `view_type_id`. Computed before `mount` so an
+            // `InheritedBehavior::on_mount` (or any mount-time lookup) already sees
+            // its own scope.
+            self.nodes[slab_index].inherited = {
+                let node = &self.nodes[slab_index];
+                compute_inherited_scope(&parent_inherited, node.element(), id)
+            };
+
+            // Mount the element (PipelineOwner + parent RenderId already set,
+            // so `RenderBehavior::on_mount` can create its RenderObject).
+            self.nodes[slab_index]
+                .element_mut()
+                .mount(Some(parent), slot, owner);
+
+            id
+        }));
+
+        let id = match mount_result {
+            Ok(id) => id,
+            Err(payload) => {
+                return Err(ChildHookPanic {
+                    inserted,
+                    hook: LifecycleHook::Mount,
+                    payload,
+                });
+            }
         };
-
-        if let Some(pipeline_owner) = parent_owner {
-            element.element_mut().set_pipeline_owner(pipeline_owner);
-        }
-        element
-            .element_mut()
-            .set_parent_render_id(child_parent_render_id);
-        element.element_mut().set_sliver_slot(child_sliver_slot);
-
-        let mut node = ElementNode::new(element, Some(parent), slot);
-        node.depth = parent_depth + 1;
-        // FR-022.
-        node.set_key(view.key().map(ViewKey::clone_key));
-
-        let slab_index = self.nodes.insert(node);
-        let id = self.alloc_id(slab_index);
-
-        // Same self-id stamping as mount_root.
-        self.nodes[slab_index].element_mut().set_self_id(id);
-
-        // Report before `mount` — everything from here on can panic through
-        // user code (`View::create_render_object`), and this is the only
-        // handle to the node that would otherwise be stranded.
-        *inserted = Some(InsertedChild::Minted(id));
-
-        // Resolve this child's inherited scope from the parent's now that the
-        // element knows whether it is itself a provider (`as_inherited`) and
-        // its `view_type_id`. Computed before `mount` so an
-        // `InheritedBehavior::on_mount` (or any mount-time lookup) already sees
-        // its own scope.
-        self.nodes[slab_index].inherited = {
-            let node = &self.nodes[slab_index];
-            compute_inherited_scope(&parent_inherited, node.element(), id)
-        };
-
-        // Mount the element (PipelineOwner + parent RenderId already set,
-        // so `RenderBehavior::on_mount` can create its RenderObject).
-        self.nodes[slab_index]
-            .element_mut()
-            .mount(Some(parent), slot, owner);
 
         // Register the GlobalKey → id mapping, and record the declaration
         // for the frame boundary's duplicate check.
         if let Some(key) = global_key_of(view) {
             register_global_key_with_collision_check(owner, key, id);
-            self.nodes[slab_index].registered_global_key = Some(key.clone_key());
+            if let Some(node) = self.get_mut(id) {
+                node.registered_global_key = Some(key.clone_key());
+            }
             owner.reserve_global_key(parent, id, key);
         }
 
@@ -1022,7 +1052,97 @@ impl ElementTree {
             self.needs_render_reorder = true;
         }
 
-        id
+        Ok(id)
+    }
+
+    /// Mount `view` at `(parent, slot)`, substituting the registered
+    /// `ErrorView` when a user lifecycle hook inside the containment window
+    /// panics (issue #561, ADR-0050's REGION rule — see [`ChildHookPanic`]).
+    ///
+    /// On success this behaves exactly like [`insert`](Self::insert). On a
+    /// caught panic it undoes whatever the window had committed (discards
+    /// an unannounced mint via [`discard_unannounced`](Self::discard_unannounced),
+    /// finalizes a reactivated retake via [`remove_subtree`](Self::remove_subtree)),
+    /// records exactly one [`RecoveredPanic`] through `owner`, and mounts
+    /// the substitute unbounded at the same `(parent, slot)` through the
+    /// same insert path — a panicking substitute factory is deliberately
+    /// left to propagate, naming a broken factory instead of hiding it.
+    ///
+    /// `element` on the pushed [`RecoveredPanic`] is a post-mortem identity:
+    /// by the time a later drain reads it, that element has already been
+    /// discarded or removed. For a panic before any element existed
+    /// (`create_element` itself), the substitute mounted here is the only
+    /// live handle a consumer can look at, and `element` names it instead.
+    ///
+    /// Never writes `parent`'s `child_ids` — same contract as
+    /// [`insert`](Self::insert); the caller (a sparse host today, the dense
+    /// reconciler in a later change) owns that.
+    ///
+    /// `context` becomes the `FlutterError`/`RecoveredPanic` breadcrumb
+    /// (e.g. `"mounting lazy sliver child"`) — never user data.
+    pub(crate) fn mount_or_substitute(
+        &mut self,
+        view: &dyn View,
+        parent: ElementId,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+        order: ProvisionalOrder<'_>,
+        context: &'static str,
+    ) -> ElementId {
+        match self.try_insert_with_provisional_order(view, parent, slot, owner, order) {
+            Ok(id) => id,
+            Err(ChildHookPanic {
+                inserted,
+                hook,
+                payload,
+            }) => {
+                let stranded = match inserted {
+                    Some(InsertedChild::Minted(id)) => {
+                        self.discard_unannounced(id, owner);
+                        Some(id)
+                    }
+                    Some(InsertedChild::Retaken(id)) => {
+                        self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
+                        Some(id)
+                    }
+                    None => None,
+                };
+
+                let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
+                let substitute_view = recovery_view_for(&error);
+                // Deliberately unbounded: if the registered error-view
+                // factory panics on mount too, there is nothing left to
+                // substitute, and the crash names a broken factory instead
+                // of hiding it.
+                let substitute_id = self
+                    .try_insert_with_provisional_order(
+                        substitute_view.0.as_ref(),
+                        parent,
+                        slot,
+                        owner,
+                        order,
+                    )
+                    .unwrap_or_else(|substitute_panic| {
+                        std::panic::resume_unwind(substitute_panic.payload)
+                    });
+
+                // The stranded id when the window had committed something
+                // to undo; otherwise (a panic in `create_element`, before
+                // anything existed) the substitute mounted above is the
+                // only live handle a consumer can look at.
+                let element = stranded.unwrap_or(substitute_id);
+                let panic = RecoveredPanic::from_payload(
+                    element,
+                    Some(parent),
+                    view.view_type_id(),
+                    hook,
+                    payload.as_ref(),
+                    context,
+                );
+                owner.push_recovered_panic(panic);
+                substitute_id
+            }
+        }
     }
 
     /// Install or update the nearest ancestor `ParentDataView`'s typed
@@ -1899,6 +2019,15 @@ impl ElementTree {
     /// *after* `mount` returns, so a node abandoned mid-mount was never
     /// announced, and reporting an unmount for it would hand an observer an
     /// id it never saw appear (ADR-0040's causal ordering).
+    ///
+    /// Flutter never reaches this teardown at all: `_InactiveElements` only
+    /// ever holds an element whose `mount` already returned, so a throwing
+    /// `createElement`/mount is contained one level up (issue #561), before
+    /// an element object exists to deactivate. FLUI's version is asymmetric
+    /// with `remove_finalized` for the same reason —
+    /// `RenderView::did_unmount_render_object` still runs here on a render
+    /// object that WAS created and adopted moments earlier (a real seam,
+    /// bounded separately).
     pub(crate) fn discard_unannounced(
         &mut self,
         id: ElementId,
@@ -1986,16 +2115,103 @@ impl ElementTree {
     /// (FR-028) already ensures the keys match on a successful
     /// update — the re-clone preserves that invariant explicitly rather
     /// than relying on the caller having already filtered by it.
+    ///
+    /// A panic inside the update (issue #561, ADR-0050's REGION rule)
+    /// unwinds through here exactly as it always has — the crate-internal
+    /// `try_update` is the fallible core a bounding caller uses instead, and
+    /// `update_or_substitute` is the one that catches and substitutes.
     pub fn update(&mut self, id: ElementId, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
-        if let Some(node) = self.get_mut(id) {
-            node.element_mut().update(view, owner);
-            node.set_key(view.key().map(ViewKey::clone_key));
+        if let Err(panic) = self.try_update(id, view, owner) {
+            std::panic::resume_unwind(panic.payload);
+        }
+    }
+
+    /// [`update`](Self::update)'s fallible core: the element's own `update`
+    /// (`ViewState::did_update_view` / `RenderView::update_render_object`)
+    /// is the containment window, and a caught panic comes back as `Err`
+    /// instead of unwinding through this call.
+    fn try_update(
+        &mut self,
+        id: ElementId,
+        view: &dyn View,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Result<(), ChildHookPanic> {
+        let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            if let Some(node) = self.get_mut(id) {
+                node.element_mut().update(view, owner);
+                node.set_key(view.key().map(ViewKey::clone_key));
+            }
+        }));
+        if let Err(payload) = update_result {
+            return Err(ChildHookPanic {
+                inserted: None,
+                hook: LifecycleHook::Update,
+                payload,
+            });
         }
         // A reconfigured `ParentDataView` ancestor reaches this render child via
         // its own re-`update` (the reconciler walks children after their
         // parent), so re-deriving parent data here keeps it current — e.g.
         // `Expanded`'s `flex` changing between frames.
         self.apply_ancestor_parent_data(id);
+        Ok(())
+    }
+
+    /// Update the element at `id` with `view`, substituting the registered
+    /// `ErrorView` at `(parent, slot)` when the update's containment window
+    /// (`try_update`) catches a panic (issue #561, ADR-0050's REGION rule).
+    ///
+    /// Returns `id` unchanged on success, or the substitute's id when it had
+    /// to recover — the caller (a sparse host today, the dense reconciler in
+    /// a later change) re-points whatever tracked `id` at the return value.
+    ///
+    /// On a caught panic the element is removed outright via
+    /// [`remove_subtree`](Self::remove_subtree) under [`SubtreeRemoval::Finalize`]
+    /// rather than kept: a half-applied `update_render_object` can leave the
+    /// render object carrying part of a new configuration that nothing
+    /// marked dirty, so a silently stale subtree is the one outcome worse
+    /// than a visible error. Exactly one [`RecoveredPanic`] is pushed
+    /// through `owner`; `context` becomes its `FlutterError` breadcrumb.
+    pub(crate) fn update_or_substitute(
+        &mut self,
+        id: ElementId,
+        view: &dyn View,
+        parent: ElementId,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+        context: &'static str,
+    ) -> ElementId {
+        match self.try_update(id, view, owner) {
+            Ok(()) => id,
+            Err(ChildHookPanic { hook, payload, .. }) => {
+                self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
+
+                let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
+                let substitute_view = recovery_view_for(&error);
+                let substitute_id = self
+                    .try_insert_with_provisional_order(
+                        substitute_view.0.as_ref(),
+                        parent,
+                        slot,
+                        owner,
+                        ProvisionalOrder::NONE,
+                    )
+                    .unwrap_or_else(|substitute_panic| {
+                        std::panic::resume_unwind(substitute_panic.payload)
+                    });
+
+                let panic = RecoveredPanic::from_payload(
+                    id,
+                    Some(parent),
+                    view.view_type_id(),
+                    hook,
+                    payload.as_ref(),
+                    context,
+                );
+                owner.push_recovered_panic(panic);
+                substitute_id
+            }
+        }
     }
 
     /// Mark an element as needing rebuild.
@@ -2114,22 +2330,18 @@ fn register_global_key_with_collision_check(
 /// - active candidate under a different parent: forget it from that parent,
 ///   deactivate/activate it, then attach it at the new `(parent, slot)`.
 ///
-/// Returns the migrated `ElementId` on success, or `None` when no retakeable
-/// element exists (caller falls back to creating a fresh element).
+/// Returns the migrated `ElementId` on success (or the [`ChildHookPanic`]
+/// its own containment window caught), or `None` when no retakeable element
+/// exists (caller falls back to creating a fresh element).
 ///
 /// Flutter parity: `framework.dart:4571` `_retakeInactiveElement`.
 enum GlobalKeyRetake {
     Absent,
-    Retaken(ElementId),
+    Retaken(Result<ElementId, ChildHookPanic>),
     Rejected,
 }
 
 struct RetakeDestination<'a> {
-    /// Where the retake reports that it committed the relocation, so a caller
-    /// bounding the retaken element's `update` (user `update_render_object`)
-    /// knows there is a live, reparented element to undo. Written after the
-    /// relocation lands and BEFORE that update runs.
-    inserted: &'a mut Option<InsertedChild>,
     parent: ElementId,
     slot: usize,
     reconciled_prefix: &'a [ElementId],
@@ -2328,7 +2540,7 @@ fn retake_inactive_global_key(
     view: &dyn View,
     candidate_id: ElementId,
     destination: RetakeDestination<'_>,
-) -> Option<ElementId> {
+) -> Option<Result<ElementId, ChildHookPanic>> {
     let new_parent = destination.parent;
     let new_slot = destination.slot;
     let mut relocation = preflight_render_relocation(tree, candidate_id, new_parent)?;
@@ -2366,71 +2578,91 @@ fn retake_inactive_global_key(
         node.element_mut().set_sliver_slot(child_sliver_slot);
     }
 
-    // Reactivate the whole subtree. Deactivation released every inherited
-    // edge; the owner schedules `did_change_dependencies` for nodes that had
-    // dependencies so their next build registers against the new ancestry.
-    tree.activate_subtree(candidate_id, owner);
-
-    // The subtree moved under a new parent, so its inherited scopes (built
-    // against the OLD ancestor chain) and descendant depths are stale.
-    // Recompute both top-down against `new_parent`; this combines Flutter's
-    // recursive `_updateDepth` and `_updateInheritance` reactivation work.
-    tree.recompute_subtree_ancestry(candidate_id);
+    // The relocation is committed; the element is live and parented here.
+    // Report it now — BEFORE the containment window below, which runs
+    // `activate_subtree` and this retake's own `update`, both a panic site
+    // — so a caller bounding that window (issue #561, ADR-0050's REGION
+    // rule) knows to remove THIS element rather than looking for a node
+    // this call never minted.
+    let inserted = InsertedChild::Retaken(candidate_id);
     let provisional = provisional_child_order(
         destination.reconciled_prefix,
         candidate_id,
         destination.unclaimed_old_slots,
     );
-    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
-    for &(element_id, _) in &relocation.frontier {
-        tree.reset_ancestor_parent_data(element_id);
-    }
-    attach_render_relocation(&mut relocation);
 
-    // The relocation is committed; the element is live and parented here.
-    // Report it before running its `update`, which is user code and can
-    // panic — the caller's recovery has to know to remove THIS element
-    // rather than looking for a node this insert never minted.
-    *destination.inserted = Some(InsertedChild::Retaken(candidate_id));
+    owner.note_entering_hook(LifecycleHook::Activate);
+    let window = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        // Reactivate the whole subtree. Deactivation released every
+        // inherited edge; the owner schedules `did_change_dependencies`
+        // for nodes that had dependencies so their next build registers
+        // against the new ancestry.
+        tree.activate_subtree(candidate_id, owner);
 
-    {
-        let node = tree.get_mut(candidate_id)?;
+        // The subtree moved under a new parent, so its inherited scopes
+        // (built against the OLD ancestor chain) and descendant depths are
+        // stale. Recompute both top-down against `new_parent`; this
+        // combines Flutter's recursive `_updateDepth` and
+        // `_updateInheritance` reactivation work.
+        tree.recompute_subtree_ancestry(candidate_id);
+        tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
+        for &(element_id, _) in &relocation.frontier {
+            tree.reset_ancestor_parent_data(element_id);
+        }
+        attach_render_relocation(&mut relocation);
+
+        owner.note_entering_hook(LifecycleHook::Update);
+        let node = tree
+            .get_mut(candidate_id)
+            .expect("BUG: a retaken candidate must still be live for its own update");
         node.element_mut().update(view, owner);
         node.set_key(view.key().map(ViewKey::clone_key));
+    }));
+    // Disarm the marker on every exit so a later window never reads a
+    // stale label; a panic reads it here, a clean run just clears it.
+    let hook = owner.take_entering_hook().unwrap_or(LifecycleHook::Mount);
+
+    match window {
+        Ok(()) => {
+            tracing::debug!(
+                candidate = ?candidate_id,
+                new_parent = ?new_parent,
+                new_slot,
+                "ElementTree::insert retook inactive element for GlobalKey state migration"
+            );
+
+            // Emit ReconcileEvent::Reparent. The element
+            // came from the inactive queue (Lifecycle::Inactive → Active), so
+            // `from_parent: None` per ADV-1 branch case 1 — there is no prior
+            // *active* parent at the moment of reparent; the donor parent
+            // already cleared its slot when it pushed the element into the
+            // inactive queue.
+            super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
+                kind: super::reconcile_event::ReconcileEventKind::Reparent,
+                parent: new_parent,
+                child_key: Some(key.key_hash()),
+                slot: new_slot,
+                view_type_id: view.view_type_id(),
+                from_parent: None,
+            });
+
+            // ADR-0040: identity and state survived — a move, never a second mount.
+            crate::owner::emit_observation(owner.tree_observer, |o| {
+                o.element_moved(&flui_foundation::observe::ElementMoved::new(
+                    candidate_id,
+                    new_parent,
+                    new_slot,
+                ));
+            });
+
+            Some(Ok(candidate_id))
+        }
+        Err(payload) => Some(Err(ChildHookPanic {
+            inserted: Some(inserted),
+            hook,
+            payload,
+        })),
     }
-
-    tracing::debug!(
-        candidate = ?candidate_id,
-        new_parent = ?new_parent,
-        new_slot,
-        "ElementTree::insert retook inactive element for GlobalKey state migration"
-    );
-
-    // Emit ReconcileEvent::Reparent. The element
-    // came from the inactive queue (Lifecycle::Inactive → Active), so
-    // `from_parent: None` per ADV-1 branch case 1 — there is no prior
-    // *active* parent at the moment of reparent; the donor parent
-    // already cleared its slot when it pushed the element into the
-    // inactive queue.
-    super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
-        kind: super::reconcile_event::ReconcileEventKind::Reparent,
-        parent: new_parent,
-        child_key: Some(key.key_hash()),
-        slot: new_slot,
-        view_type_id: view.view_type_id(),
-        from_parent: None,
-    });
-
-    // ADR-0040: identity and state survived — a move, never a second mount.
-    crate::owner::emit_observation(owner.tree_observer, |o| {
-        o.element_moved(&flui_foundation::observe::ElementMoved::new(
-            candidate_id,
-            new_parent,
-            new_slot,
-        ));
-    });
-
-    Some(candidate_id)
 }
 
 fn retake_active_global_key(
@@ -2440,7 +2672,7 @@ fn retake_active_global_key(
     view: &dyn View,
     candidate_id: ElementId,
     destination: RetakeDestination<'_>,
-) -> Option<ElementId> {
+) -> Option<Result<ElementId, ChildHookPanic>> {
     let new_parent = destination.parent;
     let new_slot = destination.slot;
     let from_parent = tree.get(candidate_id)?.parent()?;
@@ -2537,58 +2769,120 @@ fn retake_active_global_key(
             .set_parent_render_id(child_parent_render_id);
         node.element_mut().set_sliver_slot(child_sliver_slot);
     }
-    tree.activate_subtree(candidate_id, owner);
-    // Deactivation above synchronously released dependency edges for the
-    // entire subtree. Repair both inherited scopes and recursive depths before
-    // the next dirty-heap drain.
-    tree.recompute_subtree_ancestry(candidate_id);
+
+    // The relocation is committed; the element is live and parented here.
+    // Report it now — BEFORE the containment window below, which runs
+    // `activate_subtree` and this retake's own `update`, both a panic site
+    // — so a caller bounding that window (issue #561, ADR-0050's REGION
+    // rule) knows to remove THIS element rather than looking for a node
+    // this call never minted.
+    let inserted = InsertedChild::Retaken(candidate_id);
     let provisional = provisional_child_order(
         destination.reconciled_prefix,
         candidate_id,
         destination.unclaimed_old_slots,
     );
-    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
-    for &(element_id, _) in &relocation.frontier {
-        tree.reset_ancestor_parent_data(element_id);
-    }
-    attach_render_relocation(&mut relocation);
 
-    // See the sibling retake path: report the committed relocation before the
-    // element's own `update` runs.
-    *destination.inserted = Some(InsertedChild::Retaken(candidate_id));
+    owner.note_entering_hook(LifecycleHook::Activate);
+    let window = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        tree.activate_subtree(candidate_id, owner);
+        // Deactivation above synchronously released dependency edges for the
+        // entire subtree. Repair both inherited scopes and recursive depths before
+        // the next dirty-heap drain.
+        tree.recompute_subtree_ancestry(candidate_id);
+        tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
+        for &(element_id, _) in &relocation.frontier {
+            tree.reset_ancestor_parent_data(element_id);
+        }
+        attach_render_relocation(&mut relocation);
 
-    {
-        let node = tree.get_mut(candidate_id)?;
+        owner.note_entering_hook(LifecycleHook::Update);
+        let node = tree
+            .get_mut(candidate_id)
+            .expect("BUG: a retaken candidate must still be live for its own update");
         node.element_mut().update(view, owner);
         node.set_key(view.key().map(ViewKey::clone_key));
+    }));
+    // Disarm the marker on every exit so a later window never reads a
+    // stale label; a panic reads it here, a clean run just clears it.
+    let hook = owner.take_entering_hook().unwrap_or(LifecycleHook::Mount);
+
+    match window {
+        Ok(()) => {
+            tracing::debug!(
+                candidate = ?candidate_id,
+                from_parent = ?from_parent,
+                new_parent = ?new_parent,
+                new_slot,
+                "ElementTree::insert moved active GlobalKey element to a new parent"
+            );
+
+            super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent::reparent(
+                from_parent,
+                new_parent,
+                new_slot,
+                view.view_type_id(),
+                key.key_hash(),
+            ));
+
+            // ADR-0040: cross-parent move of a live element.
+            crate::owner::emit_observation(owner.tree_observer, |o| {
+                o.element_moved(&flui_foundation::observe::ElementMoved::new(
+                    candidate_id,
+                    new_parent,
+                    new_slot,
+                ));
+            });
+
+            Some(Ok(candidate_id))
+        }
+        Err(payload) => Some(Err(ChildHookPanic {
+            inserted: Some(inserted),
+            hook,
+            payload,
+        })),
     }
+}
 
-    tracing::debug!(
-        candidate = ?candidate_id,
-        from_parent = ?from_parent,
-        new_parent = ?new_parent,
-        new_slot,
-        "ElementTree::insert moved active GlobalKey element to a new parent"
-    );
+/// The substitute view for a child that failed its containment window
+/// (issue #561), whatever hook it failed at (mount, activate, update).
+///
+/// A recovered child must be unkeyed, whatever the registered error-view
+/// factory returned: a keyed one would take part in a reconcile's key
+/// matching, or trigger a `GlobalKey` retake, instead of staying isolated
+/// to the failed slot. [`ElementTree::mount_or_substitute`] /
+/// [`ElementTree::update_or_substitute`] are the primitive's own callers;
+/// `crate::element::sparse_children::build_item_or_error` — a *different*
+/// containment window, the lazy-sliver item builder itself — calls this
+/// too, so the two never drift into two ways of stripping a key.
+pub(crate) fn recovery_view_for(error: &crate::view::FlutterError) -> BoxedView {
+    let recovered = crate::view::ErrorView::build_error_view(error);
+    if recovered.key().is_some() {
+        BoxedView(Box::new(UnkeyedRecovery {
+            inner: BoxedView(recovered),
+        }))
+    } else {
+        BoxedView(recovered)
+    }
+}
 
-    super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent::reparent(
-        from_parent,
-        new_parent,
-        new_slot,
-        view.view_type_id(),
-        key.key_hash(),
-    ));
+/// A keyless composite around a custom error view that carried a key. Its
+/// render descendant is stamped at adoption like any composite item's.
+#[derive(Clone)]
+struct UnkeyedRecovery {
+    inner: BoxedView,
+}
 
-    // ADR-0040: cross-parent move of a live element.
-    crate::owner::emit_observation(owner.tree_observer, |o| {
-        o.element_moved(&flui_foundation::observe::ElementMoved::new(
-            candidate_id,
-            new_parent,
-            new_slot,
-        ));
-    });
+impl crate::view::StatelessView for UnkeyedRecovery {
+    fn build(&self, _ctx: &dyn crate::BuildContext) -> impl crate::view::IntoView {
+        self.inner.clone()
+    }
+}
 
-    Some(candidate_id)
+impl View for UnkeyedRecovery {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
 }
 
 impl std::fmt::Debug for ElementTree {
@@ -3886,7 +4180,6 @@ mod tests {
             registered_key,
             &keyed_view,
             RetakeDestination {
-                inserted: &mut None,
                 parent: destination,
                 slot: 0,
                 reconciled_prefix: &[],
