@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 
 use flui_foundation::{Diagnosticable, DiagnosticsNode, LayerId};
 use flui_painting::DisplayListCore;
-use flui_types::{Matrix4, Rect};
+use flui_types::{Matrix4, RRect, Rect};
 
 use crate::{Layer, LayerTree};
 
@@ -164,6 +164,24 @@ pub fn clip_rects(tree: &LayerTree) -> Vec<Rect> {
     out
 }
 
+/// Returns the rounded rectangle of every [`Layer::ClipRRect`] node in
+/// pre-order (parent before children) as a flat list.
+///
+/// Mirrors [`clip_rects`] for the rounded-rect shape: [`RRect`] derives
+/// `PartialEq`, so callers compare the whole value directly rather than
+/// picking apart `rect` plus the four corner radii by hand.
+#[must_use]
+pub fn clip_rrects(tree: &LayerTree) -> Vec<RRect> {
+    let mut out = Vec::new();
+    pre_order(tree, |_, layer| {
+        if let Layer::ClipRRect(c) = layer {
+            out.push(*c.clip_rrect());
+        }
+        ControlFlow::Continue(())
+    });
+    out
+}
+
 /// Returns whether the tree contains any [`Layer::Picture`] node in pre-order.
 #[must_use]
 pub fn has_picture_layer(tree: &LayerTree) -> bool {
@@ -178,7 +196,7 @@ mod tests {
     use flui_types::{Matrix4, geometry::px, painting::Clip};
 
     use super::*;
-    use crate::{ClipRectLayer, OffsetLayer, OpacityLayer, TransformLayer};
+    use crate::{ClipRRectLayer, ClipRectLayer, OffsetLayer, OpacityLayer, TransformLayer};
 
     fn offset() -> Layer {
         Layer::Offset(OffsetLayer::zero())
@@ -285,5 +303,36 @@ mod tests {
         tree.add_child(outer, inner);
 
         assert_eq!(clip_rects(&tree), vec![outer_rect, inner_rect]);
+    }
+
+    /// root → [outer → [inner]], both `ClipRRect` layers with distinct
+    /// rounded rects (different corner radii, not just different rects), so
+    /// the walk order (outer before inner) is observable in the result and a
+    /// comparison that ignored the radii could not pass by accident.
+    #[test]
+    fn clip_rrects_returns_every_clip_rrect_layer_in_pre_order() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(offset());
+        let outer_rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(8.0),
+        );
+        let inner_rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0)),
+            px(4.0),
+        );
+        let outer = tree.insert(Layer::ClipRRect(ClipRRectLayer::new(
+            outer_rrect,
+            Clip::AntiAlias,
+        )));
+        let inner = tree.insert(Layer::ClipRRect(ClipRRectLayer::new(
+            inner_rrect,
+            Clip::AntiAlias,
+        )));
+        tree.set_root(Some(root));
+        tree.add_child(root, outer);
+        tree.add_child(outer, inner);
+
+        assert_eq!(clip_rrects(&tree), vec![outer_rrect, inner_rrect]);
     }
 }
