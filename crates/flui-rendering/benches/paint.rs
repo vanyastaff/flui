@@ -13,13 +13,22 @@
 mod helpers;
 
 use std::hint::black_box;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::RenderId;
-use flui_objects::{RenderOpacity, RenderRotatedBox, RenderTransform};
+use flui_interaction::InteractionLane;
+use flui_objects::{
+    RenderClipPath, RenderClipRRect, RenderOpacity, RenderRotatedBox, RenderTransform,
+};
+use flui_rendering::hit_testing::PathClipTarget;
 use flui_rendering::pipeline::{PaintPhase, PipelineOwner};
 use flui_rendering::testing::update_render_object;
-use flui_types::Matrix4;
+use flui_types::geometry::px;
+use flui_types::painting::Path;
+use flui_types::styling::{BorderRadius, BorderRadiusExt};
+use flui_types::{Matrix4, Point, Rect, Size};
 
 // ============================================================================
 // run_compositing — flat tree, N nodes
@@ -311,6 +320,221 @@ fn bench_rotated_box_turn_change(c: &mut Criterion) {
     );
 }
 
+// ============================================================================
+// run_paint — a clip-rrect border-radius change: update arm vs. repaint arm
+// ============================================================================
+
+/// What a border-radius change costs on the update arm versus the repaint
+/// arm — see [`bench_effect_change`]. `RenderClipRRect`'s border radius is a
+/// plain `Option<BorderRadius>` field (`crates/flui-objects/src/proxy/clip.rs`),
+/// so this is a straight copy of the opacity/transform/rotated-box shape: no
+/// owner-lane resolution is involved, and the existing driver applies with no
+/// changes. Compare against [`bench_clip_path_token_change`], the one clip
+/// property that IS owner-lane resolved.
+fn bench_clip_rrect_radius_change(c: &mut Criterion) {
+    bench_effect_change(
+        c,
+        "paint/clip_rrect_radius_change",
+        |layered, subtree| {
+            helpers::build_effect_tree(
+                layered,
+                subtree,
+                RenderClipRRect::anti_alias().with_border_radius(BorderRadius::circular(px(8.0))),
+            )
+        },
+        |owner, id| {
+            update_render_object::<RenderClipRRect, _>(owner, id, |r| {
+                r.set_border_radius(Some(BorderRadius::circular(px(2.0))))
+            });
+        },
+    );
+}
+
+// ============================================================================
+// run_paint — a clip-path token change: update arm vs. repaint arm
+// (owner-lane resolved, unlike every other producer this file measures)
+// ============================================================================
+
+/// Builds a data-only path around `size`; the token registered under it
+/// stands in for a real widget-supplied path factory.
+fn default_rect_clip(size: Size) -> Path {
+    let mut path = Path::new();
+    path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+    path
+}
+
+/// A fresh [`InteractionLane`] plus two path-clip targets registered on it:
+/// `target_a` seeds the built tree (mirrors the rrect bench's initial
+/// radius) and `target_b` is what `mutate` swaps in. `target_b`'s clipper
+/// increments the returned counter on every resolve — the oracle that the
+/// timed `run_paint` genuinely reached [`resolve_path_clip`](
+/// flui_rendering::traits::resolve_path_clip) rather than degrading to the
+/// whole-box default.
+fn new_path_clip_pair() -> (
+    InteractionLane,
+    PathClipTarget,
+    PathClipTarget,
+    Arc<AtomicUsize>,
+) {
+    let lane = InteractionLane::try_new().expect("interaction lane for the bench");
+    let handle = lane.dispatch_handle();
+    let clip_calls = Arc::new(AtomicUsize::new(0));
+    let (target_a, target_b) = lane.enter(|| {
+        let target_a = handle
+            .register_path_clipper(default_rect_clip)
+            .expect("register target_a");
+        let calls = Arc::clone(&clip_calls);
+        let target_b = handle
+            .register_path_clipper(move |size| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                default_rect_clip(size)
+            })
+            .expect("register target_b");
+        (target_a, target_b)
+    });
+    (lane, target_a, target_b, clip_calls)
+}
+
+/// The [`bench_effect_change`] comparison for a producer whose changed
+/// property is an owner-lane [`PathClipTarget`] rather than plain data.
+///
+/// `resolve_path_clip` reads the currently active lane through a thread-local
+/// (`resolve_path_clip_target`, `crates/flui-interaction/src/routing/interaction_lane.rs`),
+/// not a parameter `run_paint` is handed — so the timed `run_paint` call
+/// itself has to execute inside [`InteractionLane::enter`], not just the
+/// setup that registers the target. `bench_effect_change`'s driver calls
+/// `run_paint` with no lane at all, so this is a SECOND driver rather than a
+/// change to that one: `bench_effect_change` and its three existing callers
+/// (opacity/transform/rotated-box) are untouched — same closures, same
+/// generated benchmark ids, same codegen. `bench_clip_rrect_radius_change`
+/// above confirms the alternative (threading an optional `run` hook through
+/// `bench_effect_change` itself) was not needed either: only this one
+/// producer needs a lane.
+///
+/// Each `(shape, arm, subtree)` benchmark id gets its own lane and its own
+/// [`new_path_clip_pair`], so a degrade at one size cannot hide behind a
+/// working size elsewhere. Every `b.iter_batched` iteration rebuilds the tree
+/// from scratch (`build` re-seeds `target_a`, `mutate` re-applies `target_b`),
+/// so the code path is identical run to run — there is no "resolves on some
+/// iterations, degrades on others" — and the counter is read once, AFTER
+/// `b.iter_batched` returns, never inside the timed closure. A zero count
+/// there means every iteration degraded silently, which must fail loud.
+///
+/// What the counter does NOT distinguish, and why that is fine here: both
+/// arms resolve `target_b` exactly once per iteration — the update arm once
+/// while rebuilding the patched layer, the repaint arm once while repainting
+/// the node — so the resolver's own cost is the same constant added to both
+/// arms and cancels out of the ratio. The ratio the two arms show is
+/// therefore expected to compress toward 1× versus the plain-data rrect/
+/// opacity/transform/rotated-box benches, and can never cross it: the update
+/// arm can never be MORE expensive than repaint when repaint pays every cost
+/// the update arm pays, plus the full subtree repaint.
+fn bench_effect_change_in_lane(
+    c: &mut Criterion,
+    group: &str,
+    build: impl Fn(bool, usize, PathClipTarget) -> (PipelineOwner<PaintPhase>, RenderId),
+    mutate: impl Fn(&mut PipelineOwner<PaintPhase>, RenderId, PathClipTarget),
+) {
+    for (layered, name) in [(false, "inline"), (true, "layered")] {
+        let full_group = format!("{group}/{name}");
+        let mut bench_group = c.benchmark_group(full_group.clone());
+        for &subtree in &[1_usize, 10, 100, 1_000] {
+            bench_group.bench_with_input(
+                BenchmarkId::new("update", subtree),
+                &subtree,
+                |b, &subtree| {
+                    let (lane, target_a, target_b, clip_calls) = new_path_clip_pair();
+                    b.iter_batched(
+                        || {
+                            lane.enter(|| {
+                                let (mut owner, id) = build(layered, subtree, target_a);
+                                mutate(&mut owner, id, target_b);
+                                owner
+                            })
+                        },
+                        |mut owner| {
+                            lane.enter(|| {
+                                owner
+                                    .run_paint()
+                                    .expect("run_paint must succeed after the effect change");
+                            });
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                    assert!(
+                        clip_calls.load(Ordering::Relaxed) > 0,
+                        "{full_group}/update/{subtree}: the registered path clipper never \
+                         resolved — resolve_path_clip degraded to the whole-box default \
+                         (no active InteractionLane around run_paint), so this benchmark \
+                         measured nothing"
+                    );
+                },
+            );
+            bench_group.bench_with_input(
+                BenchmarkId::new("repaint", subtree),
+                &subtree,
+                |b, &subtree| {
+                    let (lane, target_a, target_b, clip_calls) = new_path_clip_pair();
+                    b.iter_batched(
+                        || {
+                            lane.enter(|| {
+                                let (mut owner, id) = build(layered, subtree, target_a);
+                                mutate(&mut owner, id, target_b);
+                                // Force the old path: an explicit paint mark
+                                // wins over the layer-update mark the setter
+                                // reported.
+                                owner.mark_needs_paint(id);
+                                owner
+                            })
+                        },
+                        |mut owner| {
+                            lane.enter(|| {
+                                owner
+                                    .run_paint()
+                                    .expect("run_paint must succeed after the effect change");
+                            });
+                            black_box(owner)
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
+                    assert!(
+                        clip_calls.load(Ordering::Relaxed) > 0,
+                        "{full_group}/repaint/{subtree}: the registered path clipper never \
+                         resolved — resolve_path_clip degraded to the whole-box default \
+                         (no active InteractionLane around run_paint), so this benchmark \
+                         measured nothing"
+                    );
+                },
+            );
+        }
+        bench_group.finish();
+    }
+}
+
+/// What a clip-path token change costs on the update arm versus the repaint
+/// arm — see [`bench_effect_change_in_lane`] for why this producer needs its
+/// own driver. `target_a` seeds `RenderClipPath` at construction; `mutate`
+/// replaces it with `target_b`, reporting `COMPOSITED_LAYER_UPDATE |
+/// SEMANTICS` exactly like the rrect radius setter above (`RenderClip::
+/// set_path_clip_target`, `crates/flui-objects/src/proxy/clip.rs`).
+fn bench_clip_path_token_change(c: &mut Criterion) {
+    bench_effect_change_in_lane(
+        c,
+        "paint/clip_path_token_change",
+        |layered, subtree, target_a| {
+            let mut clip = RenderClipPath::anti_alias();
+            let _ = clip.set_path_clip_target(Some(target_a));
+            helpers::build_effect_tree(layered, subtree, clip)
+        },
+        |owner, id, target_b| {
+            update_render_object::<RenderClipPath, _>(owner, id, |r| {
+                r.set_path_clip_target(Some(target_b))
+            });
+        },
+    );
+}
+
 criterion_group!(
     benches,
     bench_flat_run_compositing,
@@ -321,5 +545,7 @@ criterion_group!(
     bench_opacity_alpha_change,
     bench_transform_matrix_change,
     bench_rotated_box_turn_change,
+    bench_clip_rrect_radius_change,
+    bench_clip_path_token_change,
 );
 criterion_main!(benches);
