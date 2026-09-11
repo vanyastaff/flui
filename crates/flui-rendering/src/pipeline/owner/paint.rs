@@ -1,5 +1,7 @@
 //! Paint phase implementation for `PipelineOwner<PaintPhase>`.
 
+use std::sync::Arc;
+
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
@@ -17,6 +19,7 @@ use crate::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
     },
+    traits::PaintClip,
 };
 
 use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
@@ -1447,21 +1450,7 @@ fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
     match scope {
-        FragmentScope::Rect { rect, behavior } => {
-            Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
-        }
-        FragmentScope::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
-            rrect.translate_offset(origin),
-            behavior,
-        )),
-        FragmentScope::Path { path, behavior } => {
-            let path = if origin == Offset::ZERO {
-                *path
-            } else {
-                path.translate(origin)
-            };
-            Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
-        }
+        FragmentScope::Clip(clip) => clip_layer(clip, origin),
         FragmentScope::ShaderMask {
             shader,
             blend_mode,
@@ -1511,6 +1500,35 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
                 .with_leader_anchor(leader_anchor)
                 .with_follower_anchor(follower_anchor),
         ),
+    }
+}
+
+/// Maps a recorded [`PaintClip`] onto its `flui-layer` clip layer.
+///
+/// Shifted by `origin` for the same reason every [`scope_layer`] variant
+/// is (see its doc): `Rect`/`RRect` translate their shape directly.
+/// `Path` is the one case worth spelling out — at `origin == Offset::ZERO`
+/// (the common case, the node opening the clip paints at its own origin)
+/// the already-owned `Arc<Path>` moves through untouched, no clone and no
+/// copy of the command buffer; only a non-zero origin pays for a
+/// translated path in a freshly allocated `Arc`.
+fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
+    match clip {
+        PaintClip::Rect { rect, behavior } => {
+            Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
+        }
+        PaintClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
+            rrect.translate_offset(origin),
+            behavior,
+        )),
+        PaintClip::Path { path, behavior } => {
+            let path = if origin == Offset::ZERO {
+                path
+            } else {
+                Arc::new(path.translate(origin))
+            };
+            Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
+        }
     }
 }
 
