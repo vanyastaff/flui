@@ -132,13 +132,13 @@ file records the repo-consumer-visible summary.
   reports — *after* the walk's `skip_paint`/`needs_layout`/sliver-visibility
   gates, inside the same `catch_unwind` as `paint_raw`, so a gated-out node no
   longer builds a descriptor it will not use; a panic there surfaces as
-  `RenderError::Poisoned { phase: "paint", .. }` instead of an unwind that
-  leaves the phase never exited. `layer_patches_for` (the composited-layer-
-  update patch arm) is fallible for the same reason: a panic while rebuilding
-  a boundary's own effect layers poisons the frame with phase
-  `"layer-update"` rather than falling back to a repaint — which would call
-  the same panicking `paint_effects` a second time — and the queued update
-  survives on the node for the retry.
+  `RenderError::Poisoned { phase: PoisonPhase::Paint, .. }` instead of an
+  unwind that leaves the phase never exited. `layer_patches_for` (the
+  composited-layer-update patch arm) is fallible for the same reason: a panic
+  while rebuilding a boundary's own effect layers poisons the frame with
+  phase `PoisonPhase::LayerUpdate` rather than falling back to a repaint —
+  which would call the same panicking `paint_effects` a second time — and the
+  queued update survives on the node for the retry.
 - **Toolchain 1.98.0 → 1.98.1 (development pin only; MSRV floor stays 1.97).** The current
   stable point release (2026-09-01); CI's `stable` jobs already floated to it, so local and CI
   were a point release apart. Verified with `cargo check --workspace --all-targets`, clippy at

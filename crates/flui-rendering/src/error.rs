@@ -6,6 +6,41 @@
 use flui_foundation::RenderId;
 use thiserror::Error;
 
+/// The pipeline phase whose `catch_unwind` wrapper caught a render object's
+/// (or its own effect-layer build's) panic, carried by
+/// [`RenderError::Poisoned`].
+///
+/// `#[non_exhaustive]`: mirrors [`RenderError`]'s own future-compat stance
+/// (see its doc) so a future poison point can add a variant without a
+/// breaking change for downstream `match`es.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PoisonPhase {
+    /// `perform_layout_raw` panicked
+    /// ([`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only),
+    /// and the non-leaf box/sliver layout walks in
+    /// `pipeline::owner::subtree_arena`).
+    Layout,
+    /// `paint_raw`, a node's own `paint_effects`, or the walk's resolution
+    /// of a `PaintClip::PathTarget` it reports panicked during an ordinary
+    /// paint (`PipelineOwner::<PaintPhase>::paint_subtree_impl`).
+    Paint,
+    /// A retained boundary's own effect layers panicked while being
+    /// rebuilt for a composited-layer-update patch
+    /// (`PipelineOwner::<PaintPhase>::layer_patches_for`).
+    LayerUpdate,
+}
+
+impl core::fmt::Display for PoisonPhase {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Layout => "layout",
+            Self::Paint => "paint",
+            Self::LayerUpdate => "layer-update",
+        })
+    }
+}
+
 /// Errors that can occur during rendering operations.
 ///
 /// Marked `#[non_exhaustive]` as a future-compat measure, matching the
@@ -180,22 +215,28 @@ pub enum RenderError {
         limit: usize,
     },
 
-    /// A render object's `perform_layout_raw` or `paint` panicked. The
-    /// pipeline catches via `std::panic::catch_unwind`, drops the
-    /// in-flight frame, and surfaces this variant so the caller can
-    /// decide (drop the node, retry next frame, abort).
+    /// A render object's `perform_layout_raw` panicked
+    /// ([`PoisonPhase::Layout`]); or a panic occurred while painting it —
+    /// in `paint_raw`, in its own `paint_effects`, or in the walk's
+    /// resolution of a `PaintClip::PathTarget` it reports
+    /// ([`PoisonPhase::Paint`]); or while rebuilding a retained boundary's
+    /// own effect layers for a composited-layer-update patch
+    /// ([`PoisonPhase::LayerUpdate`]). The pipeline catches via
+    /// `std::panic::catch_unwind`, drops the in-flight frame, and surfaces
+    /// this variant so the caller can decide (drop the node, retry next
+    /// frame, abort).
     ///
     /// The `std::panic::catch_unwind` plumbing is live as of 2026-05-20.
     /// See [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
     /// for the layout wrapper and `PipelineOwner::<PaintPhase>` for the
-    /// paint wrapper. The `Mapping decisions` section of
+    /// paint and layer-update wrappers. The `Mapping decisions` section of
     /// `crates/flui-rendering/ARCHITECTURE.md` documents the design.
     #[error("render object {render_object} panicked during {phase}")]
     Poisoned {
         /// Static debug name of the offending render object.
         render_object: &'static str,
-        /// Phase during which the panic occurred (e.g. `"layout"`).
-        phase: &'static str,
+        /// Phase during which the panic occurred.
+        phase: PoisonPhase,
     },
 
     // ========================================================================
@@ -391,7 +432,7 @@ impl RenderError {
     }
 
     /// Creates a Poisoned error.
-    pub fn poisoned(render_object: &'static str, phase: &'static str) -> Self {
+    pub fn poisoned(render_object: &'static str, phase: PoisonPhase) -> Self {
         Self::Poisoned {
             render_object,
             phase,

@@ -15,6 +15,7 @@ use smallvec::SmallVec;
 
 use crate::{
     context::{FragmentOp, FragmentRecorder, FragmentScope},
+    error::PoisonPhase,
     pipeline::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
@@ -414,10 +415,10 @@ impl PipelineOwner<PaintPhase> {
     ///
     /// # Errors
     ///
-    /// `Poisoned` with phase `"layer-update"` when a target's `paint_effects`
-    /// — or the resolution of a `PaintClip::PathTarget` it reports — panics
-    /// while the patch is built; the frame is discarded and the queued update
-    /// survives for the retry.
+    /// `Poisoned` with phase [`PoisonPhase::LayerUpdate`] when a target's
+    /// `paint_effects` — or the resolution of a `PaintClip::PathTarget` it
+    /// reports — panics while the patch is built; the frame is discarded and
+    /// the queued update survives for the retry.
     fn layer_patches_for(
         &self,
         subtree: &RetainedSubtree,
@@ -483,13 +484,16 @@ impl PipelineOwner<PaintPhase> {
             // `AssertUnwindSafe` is sound here for the same reason the paint
             // walk's own `paint_raw` wrapper is: the closure captures `node`
             // (a view over the `dyn RenderObject` state) and `slots.origin`
-            // by shared reference, and if `paint_effects` panics the node's
-            // internal state may be left torn. That is fine ONLY because a
-            // poisoned frame is discarded whole rather than partially
-            // committed: the `?` below unwinds out of this function before
-            // `consumed` (see its doc above) is ever returned to the caller,
-            // so the composited-layer-update request this loop would have
-            // consumed stays on the queue, untouched, for the retry.
+            // by shared reference. Two different things are at stake if
+            // `paint_effects` panics, and only one of them is protected
+            // here: the node's OWN state (interior-mutable fields, if it has
+            // any) may be left torn, and nothing below repairs that — it is
+            // the render object's problem, not this function's. What IS
+            // protected is this function's pipeline bookkeeping: the `?`
+            // below returns out of this function before `consumed` (see its
+            // doc above) is ever handed back to the caller, so the
+            // composited-layer-update request this loop would have consumed
+            // stays on the queue, untouched, for the retry.
             // Refusing here and falling back to a repaint was rejected: the
             // repaint calls this same `paint_effects` on the same node and
             // would panic a second time, so the poison must surface once,
@@ -497,7 +501,9 @@ impl PipelineOwner<PaintPhase> {
             let fresh = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 own_effect_layers(node.paint_effects(), slots.origin)
             }))
-            .map_err(|_| crate::error::RenderError::poisoned(node.debug_name(), "layer-update"))?;
+            .map_err(|_| {
+                crate::error::RenderError::poisoned(node.debug_name(), PoisonPhase::LayerUpdate)
+            })?;
             if fresh.len() != slots.indices.len() {
                 return Ok(None);
             }
@@ -656,26 +662,37 @@ impl PipelineOwner<PaintPhase> {
         // (sans-IO): no tree access, no layer access, no recursion.
         //
         // `paint_effects()` is read HERE, inside this same `catch_unwind`,
-        // rather than up front before the gates above:
+        // behind the same three gates as `paint_raw` itself:
         //
         // (a) a gated-out node (fully transparent, still needing layout, or
-        //     a culled sliver) never builds its descriptor at all now --
-        //     before this move a `needs_layout` node's `paint_effects` ran
-        //     (against `Size::ZERO`) for nothing;
+        //     a culled sliver) never builds a descriptor it will not use.
+        //     That matters because a node reached with `needs_layout` still
+        //     set carries stale geometry -- its last committed size, or
+        //     `Size::ZERO` if it has never been laid out -- so building its
+        //     descriptor unconditionally would build it against a size this
+        //     pass never computed;
         // (b) a panic in `paint_effects` -- or in the walk's
         //     `PaintClip::PathTarget` resolution inside `own_effect_layers`'s
-        //     clip arm -- surfaces as `RenderError::poisoned(name, "paint")`
-        //     instead of an unwind through `run_paint` that leaves the phase
-        //     never exited. Building the own-effect layers in the SAME
-        //     closure as `paint_raw` keeps a single poison point per node
-        //     rather than two.
+        //     clip arm -- surfaces as `RenderError::poisoned(name,
+        //     PoisonPhase::Paint)` instead of an unwind through `run_paint`
+        //     that leaves the phase never exited. Building the own-effect
+        //     layers in the SAME closure as `paint_raw` keeps a single
+        //     poison point per node rather than two.
+        //
+        // `AssertUnwindSafe` is sound here because the closure only borrows
+        // `render_node` (a view over the `dyn RenderObject` state) and
+        // writes into the local `recorder`; a panic mid-closure can leave
+        // only the node's own interior-mutable state (if it has any) torn,
+        // which this poisoned-frame design accepts rather than repairs --
+        // see `layer_patches_for`'s identical wrapper, above, for why that
+        // is fine.
         let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
         let own_effects = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_node.paint_raw(&mut recorder, child_ids.len());
             own_effect_layers(render_node.paint_effects(), origin)
         }))
-        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
+        .map_err(|_| crate::error::RenderError::poisoned(debug_name, PoisonPhase::Paint))?;
         let fragment = recorder.finish();
 
         debug_assert!(

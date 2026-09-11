@@ -1001,7 +1001,11 @@ fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
                 render_object.contains("RenderCustomPaint"),
                 "render_object name must identify the offending node; got {render_object}",
             );
-            assert_eq!(phase, "paint", "phase tag must identify the paint phase");
+            assert_eq!(
+                phase,
+                flui_rendering::PoisonPhase::Paint,
+                "phase tag must identify the paint phase",
+            );
         }
         other => {
             panic!("expected RenderError::Poisoned from the unbalanced save(), got {other:?}")

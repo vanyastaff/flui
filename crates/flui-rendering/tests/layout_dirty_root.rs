@@ -23,7 +23,7 @@ use flui_foundation::RenderId;
 use flui_objects::{RenderCenter, RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
-    error::RenderError,
+    error::{PoisonPhase, RenderError},
     protocol::{BoxProtocol, RenderObject},
 };
 use flui_types::{Size, geometry::px};
@@ -432,7 +432,8 @@ fn non_leaf_perform_layout_panic_surfaces_as_poisoned() {
                 "render_object name must identify the offending widget; got {render_object}",
             );
             assert_eq!(
-                phase, "layout",
+                phase,
+                PoisonPhase::Layout,
                 "phase tag should identify the layout phase, got {phase}",
             );
         }

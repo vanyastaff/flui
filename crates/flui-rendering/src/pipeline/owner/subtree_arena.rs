@@ -1361,7 +1361,10 @@ unsafe fn layout_subtree_borrowed_impl(
                      RenderError::Poisoned (symmetric with leaf-path \
                      layout_leaf_only catch_unwind discipline)",
                 );
-                return Err(crate::error::RenderError::poisoned(debug_name, "layout"));
+                return Err(crate::error::RenderError::poisoned(
+                    debug_name,
+                    crate::error::PoisonPhase::Layout,
+                ));
             }
         };
 
@@ -2030,7 +2033,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                     "perform_layout panicked in non-leaf sliver path — surfacing as \
                      RenderError::Poisoned",
                 );
-                return Err(crate::error::RenderError::poisoned(debug_name, "layout"));
+                return Err(crate::error::RenderError::poisoned(
+                    debug_name,
+                    crate::error::PoisonPhase::Layout,
+                ));
             }
         };
 

@@ -26,6 +26,8 @@ mod dirty_queue_dedup;
 mod dispose_eviction;
 #[path = "dpr_pipeline.rs"]
 mod dpr_pipeline;
+#[path = "effect_descriptor_poison.rs"]
+mod effect_descriptor_poison;
 #[path = "flex_layout_fixes.rs"]
 mod flex_layout_fixes;
 #[path = "harness_animation.rs"]
