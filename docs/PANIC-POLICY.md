@@ -39,6 +39,15 @@ let file = std::fs::read(path).expect("BUG: asset must exist");
 production path — if the invariant is real, name it with `expect("BUG: …")`;
 if you cannot name it, it is not an invariant and the path needs a `Result`.
 
+Exactly one function reads the `BUG:` prefix back out of a caught panic:
+`flui_foundation::panic::is_internal_invariant`. One function reads a
+caught payload's text: `flui_foundation::panic::payload_text` (the platform
+layer's `panic_payload_message` is a fallback-applying wrapper over it). A
+new `catch_unwind` boundary that needs either calls these — never a local
+`downcast_ref` on the payload, a `Debug` print of the boxed payload (which
+renders `Any { .. }` for every panic), or a local `starts_with("BUG:")`
+check.
+
 Panics inside `unsafe` contexts deserve extra scrutiny: an `expect()` whose
 failure would leave a raw-pointer structure half-updated must either be
 hoisted above the unsafe region or the SAFETY comment must cover the

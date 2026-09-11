@@ -452,6 +452,8 @@ pub(crate) fn release_and_unregister(
 mod tests {
     use std::any::Any;
 
+    use flui_foundation::panic::payload_text;
+
     use super::*;
 
     /// A key with a test-chosen identity and hash, so a collision between
@@ -517,13 +519,8 @@ mod tests {
     /// `&'static str` (the `panic!("literal")` fast path) or a `String` (the
     /// `panic!("{a} {b}")` interpolated path this module's panics use).
     fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-        if let Some(s) = payload.downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            String::from("<non-string panic payload>")
-        }
+        payload_text(payload)
+            .map_or_else(|| String::from("<non-string panic payload>"), str::to_owned)
     }
 
     #[test]

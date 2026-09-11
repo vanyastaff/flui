@@ -198,6 +198,7 @@ impl WeakPipelineCell {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::panic::payload_text;
     use static_assertions::assert_not_impl_any;
 
     use super::*;
@@ -230,11 +231,7 @@ mod tests {
             });
         }));
         let err = result.expect_err("reentrant with_mut must panic");
-        let message = err
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| err.downcast_ref::<String>().map(String::as_str))
-            .expect("panic payload must be a string");
+        let message = payload_text(&*err).expect("panic payload must be a string");
         assert!(
             message.contains("BUG: PipelineCell::with_mut called reentrantly"),
             "unexpected panic message: {message}"

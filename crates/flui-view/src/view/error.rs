@@ -24,6 +24,8 @@
 
 use std::sync::RwLock;
 
+use flui_foundation::panic::payload_text;
+
 use super::view::View;
 
 /// Factory function type for creating custom error widgets.
@@ -108,13 +110,10 @@ impl FlutterError {
     /// (`framework.dart:5823-5834`) funnels the caught exception through
     /// `_reportException` into `ErrorWidget.builder`.
     pub fn from_panic(payload: &(dyn std::any::Any + Send), context: impl Into<String>) -> Self {
-        let message = if let Some(s) = payload.downcast_ref::<&'static str>() {
-            (*s).to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "panic during build (non-string payload)".to_string()
-        };
+        let message = payload_text(payload).map_or_else(
+            || "panic during build (non-string payload)".to_string(),
+            str::to_owned,
+        );
         Self {
             message,
             details: Some(context.into()),

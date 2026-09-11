@@ -25,6 +25,7 @@
 use std::fmt::Debug;
 
 use flui_foundation::RenderId;
+use flui_foundation::panic::payload_text;
 
 use super::{links::NodeLinks, state::RenderState};
 use crate::pipeline::handle::AttachmentEpoch;
@@ -432,11 +433,7 @@ impl<P: Protocol> RenderEntry<P> {
                     // `unwrap()` in user widget code), Poisoned is the
                     // catch-all bucket for "we don't know more".
                     Err(payload) => {
-                        let msg = payload
-                            .downcast_ref::<String>()
-                            .map(String::as_str)
-                            .or_else(|| payload.downcast_ref::<&'static str>().copied())
-                            .unwrap_or("(non-string panic payload)");
+                        let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
                         tracing::error!(
                             render_object = debug_name,
                             panic_msg = msg,

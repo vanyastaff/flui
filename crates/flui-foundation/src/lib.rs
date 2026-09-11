@@ -164,6 +164,11 @@ pub mod epoch;
 pub mod frame_stamp;
 pub mod id;
 pub mod key;
+// Panic-payload text extraction and the `BUG:` internal-invariant
+// classifier every `catch_unwind` boundary in the workspace shares. Not in
+// the prelude: this is a narrow, deliberately-reached-for utility, not a
+// commonly-imported type.
+pub mod panic;
 pub mod wasm;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns

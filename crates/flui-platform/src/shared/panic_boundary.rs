@@ -23,6 +23,8 @@
 
 use std::any::Any;
 
+use flui_foundation::panic::payload_text;
+
 /// Fallback text for a panic payload that is neither a `&'static str` nor a
 /// `String` (someone used `std::panic::panic_any` with an arbitrary type).
 pub const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
@@ -34,13 +36,7 @@ pub const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 /// `panic_any`) is opaque and reported as [`OPAQUE_PANIC_PAYLOAD`].
 #[must_use]
 pub fn panic_payload_message(payload: &(dyn Any + Send)) -> &str {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        message
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message
-    } else {
-        OPAQUE_PANIC_PAYLOAD
-    }
+    payload_text(payload).unwrap_or(OPAQUE_PANIC_PAYLOAD)
 }
 
 #[cfg(test)]

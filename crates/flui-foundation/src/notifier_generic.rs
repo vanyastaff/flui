@@ -234,7 +234,8 @@ impl<Arg: Clone> Notifier<Arg> {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| callback(arg.clone()))) {
                 tracing::error!(
                     listener_id = ?id,
-                    panic_payload = ?payload,
+                    panic_payload = crate::panic::payload_text(&*payload)
+                        .unwrap_or("<non-string panic payload>"),
                     "Notifier listener panicked; continuing with remaining listeners"
                 );
             }
