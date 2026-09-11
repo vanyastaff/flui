@@ -89,7 +89,7 @@
 
 | # | Task (outcome) | Acceptance slice | Owner lead | Blocked by | Files | Size | Status |
 |---|----------------|------------------|------------|------------|-------|------|--------|
-| 4.1 | #996 closed with the Deferred table quoted and the two bench numbers per shape; spec archived per studio convention | intent "what fixed looks like" | `product-steward` | 3.10 | GitHub issue #996; `.rust-studio/specs/…` status | S | ☐ |
+| 4.1 | #996 closed with the Deferred table quoted and the two bench numbers per shape; spec archived per studio convention | intent "what fixed looks like" | `product-steward` | 3.10 | GitHub issue #996; `.rust-studio/specs/…` status | S | ☑ |
 
 ## Task detail — PR1 (change, acceptance check, neutrality oracle, atomicity)
 
@@ -360,3 +360,7 @@ Every acceptance check is preceded by `just gate` (exit 0). The full `just test-
 - **`viewport.rs` `let _ = set_clip_behavior(..)`** (spec §Risks 'own item'): read on 2026-09-11 — both discards are in `create_render_object`, before the node joins a tree, with a documented rationale; both `update_render_object` paths OR the impact in. Not a defect; no issue filed.
 - **3.9** — `@ 6aca054c` + `885a0d6a` (N=1 clip ratios; the +4–5% repaint-arm rise re-attributed to the read switch, not the guard move). Spec option labels (`B2`, `C-lite`) replaced with plain English before commit.
 - **3.10** — `just ci` @ cf2a79fc: 9847 + 40 + 273, 0 failed. Three independent passes: `rust-reviewer` NEEDS WORK (minor: two spec-id markers, a stale test doc, engine `Clip::None` pins only for rect); blind acceptance (`qa-lead`, intent only) ACCEPT WITH GAPS (path layer-content oracle, rect/oval pipeline oracles, the captured-origin test on a double); QA-GATE FAIL on AC9 (N=1 missing). All closed in `885a0d6a` + `cf2a79fc`; `verify-report.md` written. ☑
+
+### PR3 — merged; PR4 — done
+- PR #1021 squash-merged as `225e2375` (2026-09-11); CI 21/21 then 19/19 on the doc-fix head; Codex P2 (stale `ClipPath::new`/`ClipSourceToken` repaint-cost docs) and a Copilot nit fixed in `aa82b815`. `just ci` 9847 + 40 + 273.
+- **4.1** — closing comment posted on #996 (three PRs, what fixed looks like delivered for clips, the numbers on both shapes, the Deferred table, the accounting pointers). GitHub had already closed the issue on the PR3 merge: the PR body's sentence "PR4 closes #996" matched the closing-keyword pattern — the memory note 'does-not-close-n-closes-n' in practice; the outcome is the intended one. ☑
