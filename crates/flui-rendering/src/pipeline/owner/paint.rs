@@ -565,7 +565,6 @@ impl PipelineOwner<PaintPhase> {
              status changes, beside mark_needs_compositing_bits_update."
         );
 
-        let effects = render_node.paint_effects();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
         // The generation this node's most recent layout stamped onto the
         // children it laid out; a child carrying anything else was not part of
@@ -631,10 +630,26 @@ impl PipelineOwner<PaintPhase> {
 
         // Record the node's fragment. paint_raw sees ONLY the recorder
         // (sans-IO): no tree access, no layer access, no recursion.
+        //
+        // `paint_effects()` is read HERE, inside this same `catch_unwind`,
+        // rather than up front before the gates above:
+        //
+        // (a) a gated-out node (fully transparent, still needing layout, or
+        //     a culled sliver) never builds its descriptor at all now --
+        //     before this move a `needs_layout` node's `paint_effects` ran
+        //     (against `Size::ZERO`) for nothing;
+        // (b) a panic in `paint_effects` -- or in the walk's
+        //     `PaintClip::PathTarget` resolution inside `own_effect_layers`'s
+        //     clip arm -- surfaces as `RenderError::poisoned(name, "paint")`
+        //     instead of an unwind through `run_paint` that leaves the phase
+        //     never exited. Building the own-effect layers in the SAME
+        //     closure as `paint_raw` keeps a single poison point per node
+        //     rather than two.
         let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let own_effects = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_node.paint_raw(&mut recorder, child_ids.len());
+            own_effect_layers(render_node.paint_effects(), origin)
         }))
         .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
         let fragment = recorder.finish();
@@ -651,7 +666,6 @@ impl PipelineOwner<PaintPhase> {
         // `paint_effects()` implementors draw nothing themselves, so the
         // visible result is identical and the rule matches Flutter
         // (RenderOpacity wraps its child's whole paint).
-        let own_effects = own_effect_layers(effects, origin);
         let effect_layers = own_effects.len();
         for layer in own_effects {
             let layer_id = composer.push_layer(layer);
