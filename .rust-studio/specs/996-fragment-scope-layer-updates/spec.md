@@ -1,6 +1,6 @@
 # Spec: a node's own paint effects as one value — update-only commits for every effect expressed through it
 
-- **Status:** Approved v4 (maintainer approved v3 on 2026-09-10; v4 folds in the four review findings on PR #1018 — market survey, patch-arm resolution order, `Arc<Path>` on coordinate queries, the kind-change guard wording)
+- **Status:** Done 2026-09-11 (PR1 #1019, PR2 #1020, PR3 #1021 merged; #996 closed; verify-report.md) — was Approved v4 (maintainer approved v3 on 2026-09-10; v4 folds in the four review findings on PR #1018 — market survey, patch-arm resolution order, `Arc<Path>` on coordinate queries, the kind-change guard wording)
 - **Slug:** `996-fragment-scope-layer-updates`   ·   **Date:** `2026-09-10`   ·   **Owner:** `chief-architect` (design), `systems-perf-lead` (walk + bench), `api-design-lead` (types, trait method, removals, impact bits)
 - **Governing ADR:** none yet — the composited-layer-update contract lives in `crates/flui-rendering/ARCHITECTURE.md` `## Mapping decisions` and this spec rewrites its trade-off 1. If C-lite (Deferred) is ever built it changes the retention model and gets an ADR.
 
