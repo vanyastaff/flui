@@ -388,7 +388,7 @@ fn test_stateful_deactivate_callback_called() {
     let deactivate_count = element.state().deactivate_called.clone();
     assert_eq!(deactivate_count.load(Ordering::SeqCst), 0);
 
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
 
     assert_eq!(deactivate_count.load(Ordering::SeqCst), 1);
 }
@@ -399,12 +399,12 @@ fn test_stateful_activate_callback_called() {
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     let mut owner = BuildOwner::new();
     element.mount(None, 0, &mut owner.element_owner_mut());
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
 
     let activate_count = element.state().activate_called.clone();
     assert_eq!(activate_count.load(Ordering::SeqCst), 0);
 
-    element.activate();
+    element.activate(&mut owner.element_owner_mut());
 
     assert_eq!(activate_count.load(Ordering::SeqCst), 1);
 }

@@ -310,14 +310,23 @@ pub trait ElementBase: Downcast + 'static {
 
     /// Activate this Element (re-inserted into tree).
     ///
-    /// Called when a previously deactivated Element is reinserted.
-    fn activate(&mut self);
+    /// Called when a previously deactivated Element is reinserted. The
+    /// split-borrow `owner` handle is threaded through for the same reason
+    /// `mount`/`unmount` carry one, mirroring `deactivate` below; a
+    /// `GlobalKey` retake's own containment window already bounds an
+    /// `activate` panic (see the retake path in
+    /// [`ElementTree`](crate::tree::ElementTree)), so `owner` currently
+    /// goes unused at this seam.
+    fn activate(&mut self, owner: &mut crate::ElementOwner<'_>);
 
     /// Deactivate this Element (temporarily removed from tree).
     ///
-    /// Called when the Element is removed but may be reinserted.
-    /// State is preserved.
-    fn deactivate(&mut self);
+    /// Called when the Element is removed but may be reinserted. State is
+    /// preserved. The split-borrow `owner` handle lets a contained
+    /// `deactivate` panic (see `StatefulBehavior::on_deactivate`) report a
+    /// `RecoveredPanic` without skipping the lifecycle flip that must still
+    /// run after this call returns.
+    fn deactivate(&mut self, owner: &mut crate::ElementOwner<'_>);
 
     // ========================================================================
     // Update & Rebuild

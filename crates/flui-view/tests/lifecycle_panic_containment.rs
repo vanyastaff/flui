@@ -1,15 +1,18 @@
-//! Pins the containment seam around `ViewState::dispose` (issue #561): a
-//! panic inside `dispose` is caught per element instead of unwinding out of
-//! `BuildOwner::build_scope` / `BuildOwner::finalize_tree`.
+//! Pins the containment seams around `ViewState::dispose` and
+//! `ViewState::deactivate` (issue #561): a panic inside either is caught per
+//! element instead of unwinding out of `BuildOwner::build_scope` /
+//! `BuildOwner::finalize_tree`.
 //!
 //! Flutter has no equivalent boundary. `StatefulElement.unmount` calls
-//! `state.dispose()` with no `try`/`catch` (`framework.dart`), and
+//! `state.dispose()` with no `try`/`catch`, and `Element.deactivateChild`
+//! calls `state.deactivate()` the same way (`framework.dart`);
 //! `BuildOwner.finalizeTree`'s `_inactiveElements._unmountAll()` carries no
-//! per-element catch either — a throwing `dispose` there aborts the whole
-//! finalize pass. FLUI bounds the panic to the one element whose `dispose`
-//! threw and lets the rest of the frame continue: see
-//! `StatefulBehavior::on_unmount` (`crates/flui-view/src/element/behavior.rs`)
-//! and the containment bullet in `crates/flui-view/AGENTS.md`.
+//! per-element catch either — a throwing hook there aborts the whole
+//! reconcile or finalize pass. FLUI bounds the panic to the one element
+//! whose hook threw and lets the rest of the frame continue: see
+//! `StatefulBehavior::{on_unmount, on_deactivate}`
+//! (`crates/flui-view/src/element/behavior.rs`) and the containment bullet
+//! in `crates/flui-view/AGENTS.md`.
 //!
 //! Also pins the `initialized` gate: `dispose` runs only for a state whose
 //! `init_state` actually completed. FLUI's split mount/build (unlike
@@ -25,8 +28,9 @@ use flui_foundation::ViewKey;
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BoxedView, BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView,
-    LifecycleHook, RebuildReason, RenderView, StatefulView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementId, ElementNode, ElementTree,
+    GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RenderView, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -389,5 +393,273 @@ fn a_state_whose_init_state_never_ran_is_not_disposed() {
     assert!(
         owner.take_recovered_panics().is_empty(),
         "nothing panicked, so nothing should be recorded"
+    );
+}
+
+// ============================================================================
+// Deactivate panic containment: a panic inside `ViewState::deactivate` is
+// caught inside `StatefulBehavior::on_deactivate` instead of unwinding out
+// of the reconcile that dropped the element, and `ElementCore::deactivate`
+// (the lifecycle flip to `Inactive`) still runs right after.
+// ============================================================================
+
+/// A minimal `InheritedView` provider: descendants read `value` through
+/// `BuildContextExt::depend_on` and are recorded as dependents.
+#[derive(Clone)]
+struct CountProvider {
+    value: u32,
+    child: Row,
+}
+
+impl InheritedView for CountProvider {
+    type Data = u32;
+
+    fn data(&self) -> &u32 {
+        &self.value
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self.value != old.value
+    }
+}
+
+impl View for CountProvider {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::inherited(self)
+    }
+}
+
+/// A `GlobalKey`'d Stateful view whose `deactivate` panics exactly once
+/// (mirrors `DisposeCounter`'s one-shot `armed` shape), and whose `build`
+/// depends on `CountProvider` so the provider's dependent map is exercised
+/// end to end by the panic.
+#[derive(Clone)]
+struct DeactivateCounter {
+    key: GlobalKey<DeactivateCounterState>,
+    armed: Rc<Cell<bool>>,
+    deactivated: Rc<Cell<u32>>,
+    disposed: Rc<Cell<u32>>,
+}
+
+struct DeactivateCounterState {
+    armed: Rc<Cell<bool>>,
+    deactivated: Rc<Cell<u32>>,
+    disposed: Rc<Cell<u32>>,
+}
+
+impl StatefulView for DeactivateCounter {
+    type State = DeactivateCounterState;
+
+    fn create_state(&self) -> Self::State {
+        DeactivateCounterState {
+            armed: self.armed.clone(),
+            deactivated: self.deactivated.clone(),
+            disposed: self.disposed.clone(),
+        }
+    }
+}
+
+impl ViewState<DeactivateCounter> for DeactivateCounterState {
+    fn build(&self, _view: &DeactivateCounter, ctx: &dyn BuildContext) -> impl IntoView {
+        // Register as a dependent of `CountProvider` — the panic below must
+        // not leave a stale entry in the provider's dependent map once this
+        // element is parked.
+        let _ = ctx.depend_on::<CountProvider, ()>(|_| ());
+        PlainLeaf.boxed()
+    }
+
+    fn deactivate(&mut self) {
+        self.deactivated.set(self.deactivated.get() + 1);
+        if self.armed.get() {
+            self.armed.set(false);
+            panic!("induced deactivate panic (lifecycle containment test)");
+        }
+    }
+
+    fn dispose(&mut self) {
+        self.disposed.set(self.disposed.get() + 1);
+    }
+}
+
+impl View for DeactivateCounter {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+/// A build-counting Stateless leaf — proof that `build_scope` keeps
+/// servicing OTHER dirty elements after containing a panic elsewhere in the
+/// same pass.
+#[derive(Clone)]
+struct BuildCountingLeaf {
+    build_calls: Rc<Cell<u32>>,
+}
+
+impl StatelessView for BuildCountingLeaf {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.build_calls.set(self.build_calls.get() + 1);
+        PlainLeaf.boxed()
+    }
+}
+
+impl View for BuildCountingLeaf {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+#[test]
+fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
+    let key = GlobalKey::<DeactivateCounterState>::new();
+    let armed = Rc::new(Cell::new(true));
+    let deactivated = Rc::new(Cell::new(0u32));
+    let disposed = Rc::new(Cell::new(0u32));
+    let counter = DeactivateCounter {
+        key: key.clone(),
+        armed,
+        deactivated: deactivated.clone(),
+        disposed: disposed.clone(),
+    };
+
+    let sibling_build_calls = Rc::new(Cell::new(0u32));
+    let sibling = BuildCountingLeaf {
+        build_calls: sibling_build_calls.clone(),
+    };
+
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+
+    let provider_v1 = CountProvider {
+        value: 1,
+        child: Row {
+            children: vec![counter.clone().boxed(), sibling.clone().boxed()],
+        },
+    };
+    let provider_id = tree.mount_root(&provider_v1, &mut owner.element_owner_mut());
+    owner.schedule_build_for(provider_id, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+
+    let deactivate_id = owner
+        .element_for_global_key(&key)
+        .expect("the GlobalKey'd counter is mounted after the initial build");
+    assert!(
+        tree.get(deactivate_id).is_some(),
+        "the counter is live before removal"
+    );
+
+    let row_id = tree
+        .get(deactivate_id)
+        .and_then(ElementNode::parent)
+        .expect("the counter is parented under the Row");
+    let row_depth = tree.get(row_id).expect("row is live").depth();
+    let sibling_id = direct_children_in_slot_order(&tree, row_id)
+        .into_iter()
+        .find(|&id| id != deactivate_id)
+        .expect("the sibling leaf is the Row's other child");
+    let sibling_depth = tree.get(sibling_id).expect("sibling is live").depth();
+
+    // Rebuild the Row WITHOUT the GlobalKey'd counter — a keyed child that
+    // disappears from its parent's declared children soft-parks (see
+    // `ElementTree::remove`'s "Soft vs eager removal" doc) instead of
+    // unmounting eagerly, which is what keeps the slab slot alive for the
+    // `tree.get(deactivate_id).is_some()` check below. The armed
+    // `deactivate` panic fires during that soft-park, inside
+    // `deactivate_subtree`'s reconcile-triggered removal.
+    let row_v2 = Row {
+        children: vec![sibling.clone().boxed()],
+    };
+    tree.update(row_id, &row_v2, &mut owner.element_owner_mut());
+    owner.schedule_build_for(row_id, row_depth, RebuildReason::ParentUpdate);
+    // Scheduled independently of the Row's own reconcile, so servicing it
+    // in the same `build_scope` pass is direct evidence the pass did not
+    // abort when the counter's `deactivate` panicked.
+    owner.schedule_build_for(sibling_id, sibling_depth, RebuildReason::StateChange);
+
+    let sibling_build_calls_before = sibling_build_calls.get();
+
+    // Containment means `build_scope` must RETURN, not unwind (asserted
+    // implicitly: this test function keeps running past the call below).
+    owner.build_scope(&mut tree);
+
+    assert_eq!(
+        sibling_build_calls.get(),
+        sibling_build_calls_before + 1,
+        "a sibling scheduled in the same build_scope still builds despite the contained \
+         deactivate panic"
+    );
+
+    assert!(
+        tree.get(deactivate_id).is_some(),
+        "soft removal parks the counter's slab slot alive for a same-frame retake, even though \
+         its deactivate panicked"
+    );
+    assert_eq!(
+        deactivated.get(),
+        1,
+        "deactivate ran exactly once despite panicking"
+    );
+
+    // The provider no longer lists the parked element as a dependent:
+    // `deactivate_subtree` releases inherited edges before calling
+    // `ElementBase::deactivate`, so a provider update after the panic must
+    // not reschedule it.
+    let provider_v2 = CountProvider {
+        value: 2,
+        child: Row {
+            children: vec![sibling.boxed()],
+        },
+    };
+    tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
+    assert_eq!(
+        owner.dirty_count(),
+        0,
+        "a provider update after the panic must not reschedule the parked element"
+    );
+    assert!(
+        !owner
+            .element_owner_mut()
+            .has_pending_dependency_change(deactivate_id),
+        "the provider no longer lists the parked element as a dependent"
+    );
+
+    // End-of-frame finalize drains the inactive queue: `dispose` runs
+    // cleanly (it is not armed to panic) because `initialized` is true —
+    // the counter's own `build` ran during the initial mount above.
+    owner.finalize_tree(&mut tree);
+
+    assert!(
+        tree.get(deactivate_id).is_none(),
+        "finalize_tree frees the parked slot"
+    );
+    assert_eq!(disposed.get(), 1, "dispose ran once at finalize");
+
+    let mut recovered = owner.take_recovered_panics();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "exactly one contained panic must be recorded, got {recovered:?}"
+    );
+    let panic = recovered.remove(0);
+    assert_eq!(panic.hook, LifecycleHook::Deactivate);
+    assert_eq!(
+        panic.element, deactivate_id,
+        "the recorded element is the panicking counter"
+    );
+    assert_eq!(
+        panic.parent, None,
+        "the unmount-side seam does not see the parent"
+    );
+    assert_eq!(panic.view_type_id, TypeId::of::<DeactivateCounter>());
+    assert!(
+        !panic.internal_invariant,
+        "an ordinary panic message is not a BUG: internal invariant"
     );
 }

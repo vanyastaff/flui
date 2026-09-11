@@ -457,9 +457,9 @@ mod tests {
             unreachable!("test double: unmount is never exercised by this composite test")
         }
 
-        fn activate(&mut self) {}
+        fn activate(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
 
-        fn deactivate(&mut self) {}
+        fn deactivate(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
 
         fn update(
             &mut self,

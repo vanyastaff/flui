@@ -1730,7 +1730,7 @@ impl ElementTree {
             let children = node.child_ids().to_vec();
 
             if let Some(node) = self.get_mut(id) {
-                node.element_mut().activate();
+                node.element_mut().activate(owner);
             }
             if owner.activate_inherited_dependent(id) {
                 owner.note_dependency_change(id);
@@ -1754,7 +1754,7 @@ impl ElementTree {
                 .unwrap_or_default();
             self.deactivate_inherited_dependencies(id, owner);
             if let Some(node) = self.get_mut(id) {
-                node.element_mut().deactivate();
+                node.element_mut().deactivate(owner);
             }
             stack.extend(children.into_iter().rev());
         }

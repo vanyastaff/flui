@@ -196,7 +196,7 @@ fn test_element_deactivate_transitions_to_inactive() {
     element.mount(None, 0, &mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Inactive);
 }
 
@@ -207,10 +207,10 @@ fn test_element_activate_transitions_to_active() {
     let mut owner = BuildOwner::new();
 
     element.mount(None, 0, &mut owner.element_owner_mut());
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Inactive);
 
-    element.activate();
+    element.activate(&mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 }
 
@@ -278,7 +278,7 @@ fn test_stateful_element_deactivate_callback() {
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 0);
 
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 1);
 }
@@ -295,11 +295,11 @@ fn test_stateful_element_activate_callback() {
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     let mut owner = BuildOwner::new();
     element.mount(None, 0, &mut owner.element_owner_mut());
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 0);
 
-    element.activate();
+    element.activate(&mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 1);
 }
@@ -319,16 +319,16 @@ fn test_stateful_element_multiple_deactivate_activate_cycles() {
     element.mount(None, 0, &mut owner.element_owner_mut());
 
     // First cycle
-    element.deactivate();
-    element.activate();
+    element.deactivate(&mut owner.element_owner_mut());
+    element.activate(&mut owner.element_owner_mut());
 
     // Second cycle
-    element.deactivate();
-    element.activate();
+    element.deactivate(&mut owner.element_owner_mut());
+    element.activate(&mut owner.element_owner_mut());
 
     // Third cycle
-    element.deactivate();
-    element.activate();
+    element.deactivate(&mut owner.element_owner_mut());
+    element.activate(&mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 3);
     assert_eq!(deactivated.load(Ordering::SeqCst), 3);

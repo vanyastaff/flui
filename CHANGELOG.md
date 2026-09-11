@@ -130,15 +130,24 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **A `ViewState::dispose` panic is contained per element, not per frame** (#561):
-  `StatefulBehavior::on_unmount` catches a panicking `dispose` and records it through
-  `ElementOwner::push_recovered_panic` instead of letting it unwind out of `BuildOwner::build_scope`
-  / `finalize_tree` — the tree-side teardown (slab slot freed, `GlobalKey` unregistered) still
-  completes either way. A state whose `init_state` never completed (removed before its first build,
-  or `init_state` itself panicked) is never disposed. `flui-app`'s
+- **A `ViewState::dispose` or `deactivate` panic is contained per element, not per frame** (#561):
+  `StatefulBehavior::on_unmount` catches a panicking `dispose` and `StatefulBehavior::on_deactivate`
+  catches a panicking `deactivate`, both recording through `ElementOwner::push_recovered_panic`
+  instead of letting the panic unwind out of `BuildOwner::build_scope` / `finalize_tree` — the
+  tree-side teardown (slab slot freed or parked inactive, `GlobalKey` unregistered, inherited edges
+  released) still completes either way, and `ElementCore::deactivate`'s lifecycle flip to `Inactive`
+  still runs right after a contained `deactivate` panic returns. A state whose `init_state` never
+  completed (removed before its first build, or `init_state` itself panicked) is never disposed.
+  `flui-app`'s
   `frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames`
   (formerly driven by a real `dispose` panic) now pins the frame-transaction boundary itself
   through the controllable `segment_probe`, since a real `dispose` panic no longer reaches it.
+  **Breaking:** `ElementBase::{activate, deactivate}` and `ElementBehavior::{on_activate,
+  on_deactivate}` (public traits) now take an `owner: &mut ElementOwner<'_>` handle, mirroring
+  `mount`/`unmount`'s existing shape, so the deactivate-side catch has an owner to report through.
+  Every implementor lives inside `flui-view` itself (production code and test fixtures); there is
+  no implementor anywhere else in the workspace, so there is no known external implementor to
+  migrate.
 - **`PaintEffects` — one value for a render object's own paint effects**
   (#996): `RenderBox`/`RenderSliver`/`RenderObject::paint_effects(size)`
   returns `PaintEffects { opacity, clip, transform }` with a fixed nesting

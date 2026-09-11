@@ -173,15 +173,24 @@ where
     ///
     /// Default is a no-op. Behaviors that own user-visible state (e.g.
     /// `StatefulBehavior`) override this to forward to `ViewState::activate`.
+    /// `owner` mirrors `on_deactivate`'s shape (both trace back to the
+    /// `ElementBase::{activate, deactivate}` signature they're driven from);
+    /// no override currently reports through it.
     #[expect(unused_variables)]
-    fn on_activate(&mut self, core: &mut ElementCore<V, A>) {}
+    fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called before the element is deactivated (temporarily removed from the tree).
     ///
     /// Default is a no-op. Behaviors that own user-visible state (e.g.
     /// `StatefulBehavior`) override this to forward to `ViewState::deactivate`.
+    /// `owner` lets that override report a contained `deactivate` panic as a
+    /// `RecoveredPanic` — the only place in the removal path where the
+    /// lifecycle flip (`ElementCore::deactivate`) must stay unconditional
+    /// after a user panic, so the catch has to sit here rather than at the
+    /// tree level.
     #[expect(unused_variables)]
-    fn on_deactivate(&mut self, core: &mut ElementCore<V, A>) {}
+    fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+    }
 
     /// Called after the view configuration is replaced, with access to the
     /// previous view value.
@@ -737,12 +746,55 @@ where
         }
     }
 
-    fn on_activate(&mut self, _core: &mut ElementCore<V, A>) {
+    fn on_activate(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
+        // Unlike `on_deactivate` below, `activate` is unreachable from a
+        // plain rebuild: the only path that calls it is a `GlobalKey`
+        // retake, and that retake already runs inside its own containment
+        // window (`ElementTree`'s retake path) that catches and reports an
+        // `activate` panic without this hook's help. `owner` stays unused.
         self.state.activate();
     }
 
-    fn on_deactivate(&mut self, _core: &mut ElementCore<V, A>) {
-        self.state.deactivate();
+    /// Flutter has no equivalent boundary here either (see `on_unmount`'s
+    /// doc): `StatefulElement.deactivate` (`framework.dart`) calls
+    /// `state.deactivate()` with no `try`/`catch`. A panic is caught and
+    /// reported instead of unwinding out of the reconcile that dropped this
+    /// element, mirroring `on_unmount`'s containment shape one hook over —
+    /// see the containment bullet in `crates/flui-view/AGENTS.md`.
+    ///
+    /// The catch sits in the behavior, not around `ElementBase::deactivate`
+    /// at the tree level: `unified.rs`'s `deactivate` still runs
+    /// `self.core.deactivate()` (the lifecycle flip to `Inactive`) right
+    /// after this call returns. A tree-level catch around the whole call
+    /// would skip that flip on a panic and hand a same-frame `GlobalKey`
+    /// retake an element still reporting `Active`.
+    fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate())) {
+            Ok(()) => {}
+            Err(payload) => {
+                let Some(element) = core.self_id() else {
+                    // No slab id — mirrors `on_unmount`'s fallback: nothing
+                    // to attach a `RecoveredPanic` to (a hand-rolled element
+                    // that bypassed `ElementTree::insert`; test fixtures
+                    // only), so this `tracing::error!` is the only signal.
+                    let error =
+                        FlutterError::from_panic(payload.as_ref(), "deactivating StatefulElement");
+                    tracing::error!(
+                        panic_message = %error.message,
+                        "deactivate panicked outside the slab; nothing to record (no element id)"
+                    );
+                    return;
+                };
+                owner.push_recovered_panic(RecoveredPanic::from_payload(
+                    element,
+                    None,
+                    TypeId::of::<V>(),
+                    LifecycleHook::Deactivate,
+                    payload.as_ref(),
+                    "deactivating StatefulElement",
+                ));
+            }
+        }
     }
 
     fn on_view_updated(
@@ -1389,12 +1441,12 @@ where
         self.stateful.on_update(core, owner);
     }
 
-    fn on_activate(&mut self, core: &mut ElementCore<V, A>) {
-        self.stateful.on_activate(core);
+    fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        self.stateful.on_activate(core, owner);
     }
 
-    fn on_deactivate(&mut self, core: &mut ElementCore<V, A>) {
-        self.stateful.on_deactivate(core);
+    fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        self.stateful.on_deactivate(core, owner);
     }
 
     fn on_view_updated(
