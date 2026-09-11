@@ -15,6 +15,7 @@ use smallvec::SmallVec;
 
 use crate::{
     context::{FragmentOp, FragmentRecorder, FragmentScope},
+    error::PoisonPhase,
     pipeline::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
@@ -396,14 +397,14 @@ impl PipelineOwner<PaintPhase> {
     }
 
     /// The effect-layer replacements a grafted `subtree` needs this frame, or
-    /// `None` when one of them cannot be expressed as a patch.
+    /// `Ok(None)` when one of them cannot be expressed as a patch.
     ///
     /// Walks the nodes whose own effect layers this capture holds and rebuilds
     /// those of them that asked for a composited-layer update, through the
     /// same [`own_effect_layers`] the paint walk uses. Everything else in the
     /// capture is replayed untouched.
     ///
-    /// Returns `None` — meaning "repaint instead" — when a node's effect
+    /// Returns `Ok(None)` — meaning "repaint instead" — when a node's effect
     /// layers no longer have the same SHAPE they were captured with: a
     /// different count, or a different layer kind at the same position. Both
     /// are structural changes a patch cannot express (an alpha crossing out of
@@ -411,11 +412,18 @@ impl PipelineOwner<PaintPhase> {
     /// served by a repaint. Comparing the discriminant per position rather
     /// than just the count is what catches the case where one effect appears
     /// as another disappears and the count is unchanged.
+    ///
+    /// # Errors
+    ///
+    /// `Poisoned` with phase [`PoisonPhase::LayerUpdate`] when a target's
+    /// `paint_effects` — or the resolution of a `PaintClip::PathTarget` it
+    /// reports — panics while the patch is built; the frame is discarded and
+    /// the queued update survives for the retry.
     fn layer_patches_for(
         &self,
         subtree: &RetainedSubtree,
         targets: &[RenderId],
-    ) -> Option<LayerPatch> {
+    ) -> crate::error::RenderResult<Option<LayerPatch>> {
         // A node that asked for an update this frame but owns no slot in this
         // capture cannot be served by a patch: its effect layers did not exist
         // when the capture was taken, so there is nothing to replace and the
@@ -447,7 +455,7 @@ impl PipelineOwner<PaintPhase> {
                 .iter()
                 .any(|(owner, _)| owner == target)
         }) {
-            return None;
+            return Ok(None);
         }
         let mut patches = Vec::new();
         // Nodes whose request this patch serves. Returned rather than cleared
@@ -473,9 +481,31 @@ impl PipelineOwner<PaintPhase> {
             if !node.needs_composited_layer_update() {
                 continue;
             }
-            let fresh = own_effect_layers(node.paint_effects(), slots.origin);
+            // `AssertUnwindSafe` is sound here for the same reason the paint
+            // walk's own `paint_raw` wrapper is: the closure captures `node`
+            // (a view over the `dyn RenderObject` state) and `slots.origin`
+            // by shared reference. Two different things are at stake if
+            // `paint_effects` panics, and only one of them is protected
+            // here: the node's OWN state (interior-mutable fields, if it has
+            // any) may be left torn, and nothing below repairs that — it is
+            // the render object's problem, not this function's. What IS
+            // protected is this function's pipeline bookkeeping: the `?`
+            // below returns out of this function before `consumed` (see its
+            // doc above) is ever handed back to the caller, so the
+            // composited-layer-update request this loop would have consumed
+            // stays on the queue, untouched, for the retry.
+            // Refusing here and falling back to a repaint was rejected: the
+            // repaint calls this same `paint_effects` on the same node and
+            // would panic a second time, so the poison must surface once,
+            // not be laundered into an infinite retry loop.
+            let fresh = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                own_effect_layers(node.paint_effects(), slots.origin)
+            }))
+            .map_err(|_| {
+                crate::error::RenderError::poisoned(node.debug_name(), PoisonPhase::LayerUpdate)
+            })?;
             if fresh.len() != slots.indices.len() {
-                return None;
+                return Ok(None);
             }
             for (&index, layer) in slots.indices.iter().zip(fresh) {
                 // Indices come from this same capture, so they are in range by
@@ -485,7 +515,7 @@ impl PipelineOwner<PaintPhase> {
                 // correct.
                 let Some(captured) = subtree.nodes.get(index) else {
                     debug_assert!(false, "BUG: effect slot index outside its own capture");
-                    return None;
+                    return Ok(None);
                 };
                 // Under the FIXED order `own_effect_layers` emits (opacity,
                 // clip, transform), the count check above plus this
@@ -501,13 +531,13 @@ impl PipelineOwner<PaintPhase> {
                 // so no oracle pins that case; the output is pinned by
                 // `an_effect_layer_shape_change_falls_back_to_a_repaint`.
                 if std::mem::discriminant(&layer) != std::mem::discriminant(&captured.layer) {
-                    return None;
+                    return Ok(None);
                 }
                 patches.push((index, layer));
             }
             consumed.push(render_id);
         }
-        Some(LayerPatch { patches, consumed })
+        Ok(Some(LayerPatch { patches, consumed }))
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
@@ -565,7 +595,6 @@ impl PipelineOwner<PaintPhase> {
              status changes, beside mark_needs_compositing_bits_update."
         );
 
-        let effects = render_node.paint_effects();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
         // The generation this node's most recent layout stamped onto the
         // children it laid out; a child carrying anything else was not part of
@@ -631,12 +660,39 @@ impl PipelineOwner<PaintPhase> {
 
         // Record the node's fragment. paint_raw sees ONLY the recorder
         // (sans-IO): no tree access, no layer access, no recursion.
+        //
+        // `paint_effects()` is read HERE, inside this same `catch_unwind`,
+        // behind the same three gates as `paint_raw` itself:
+        //
+        // (a) a gated-out node (fully transparent, still needing layout, or
+        //     a culled sliver) never builds a descriptor it will not use.
+        //     That matters because a node reached with `needs_layout` still
+        //     set carries stale geometry -- its last committed size, or
+        //     `Size::ZERO` if it has never been laid out -- so building its
+        //     descriptor unconditionally would build it against a size this
+        //     pass never computed;
+        // (b) a panic in `paint_effects` -- or in the walk's
+        //     `PaintClip::PathTarget` resolution inside `own_effect_layers`'s
+        //     clip arm -- surfaces as `RenderError::poisoned(name,
+        //     PoisonPhase::Paint)` instead of an unwind through `run_paint`
+        //     that leaves the phase never exited. Building the own-effect
+        //     layers in the SAME closure as `paint_raw` keeps a single
+        //     poison point per node rather than two.
+        //
+        // `AssertUnwindSafe` is sound here because the closure only borrows
+        // `render_node` (a view over the `dyn RenderObject` state) and
+        // writes into the local `recorder`; a panic mid-closure can leave
+        // only the node's own interior-mutable state (if it has any) torn,
+        // which this poisoned-frame design accepts rather than repairs --
+        // see `layer_patches_for`'s identical wrapper, above, for why that
+        // is fine.
         let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let own_effects = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_node.paint_raw(&mut recorder, child_ids.len());
+            own_effect_layers(render_node.paint_effects(), origin)
         }))
-        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
+        .map_err(|_| crate::error::RenderError::poisoned(debug_name, PoisonPhase::Paint))?;
         let fragment = recorder.finish();
 
         debug_assert!(
@@ -651,7 +707,6 @@ impl PipelineOwner<PaintPhase> {
         // `paint_effects()` implementors draw nothing themselves, so the
         // visible result is identical and the rule matches Flutter
         // (RenderOpacity wraps its child's whole paint).
-        let own_effects = own_effect_layers(effects, origin);
         let effect_layers = own_effects.len();
         for layer in own_effects {
             let layer_id = composer.push_layer(layer);
@@ -780,13 +835,19 @@ impl PipelineOwner<PaintPhase> {
                         // `None` here means the structure changed under a
                         // layer-update request (a node gained or lost an effect
                         // layer), which a patch cannot express — fall back to a
-                        // full repaint, which rebuilds it correctly.
-                        let patch = retained.and_then(|subtree| {
-                            self.layer_patches_for(
-                                subtree,
-                                update_targets.map_or(&[][..], |targets| targets),
-                            )
-                        });
+                        // full repaint, which rebuilds it correctly. An `Err`
+                        // here means a target's own effect layers panicked
+                        // while being rebuilt; it propagates as a poisoned
+                        // frame rather than falling back.
+                        let patch = retained
+                            .map(|subtree| {
+                                self.layer_patches_for(
+                                    subtree,
+                                    update_targets.map_or(&[][..], |targets| targets),
+                                )
+                            })
+                            .transpose()?
+                            .flatten();
                         if let (Some(subtree), Some(patch)) = (retained, patch) {
                             let LayerPatch { patches, consumed } = patch;
                             if !patches.is_empty() {

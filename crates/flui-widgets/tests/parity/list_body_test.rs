@@ -57,7 +57,7 @@
 //! paths (not only the sliver child-manager build path
 //! `error_widget_test.rs`'s module doc describes — this is a separate,
 //! more general net), converts the panic to
-//! `RenderError::Poisoned { render_object, phase: "layout" }`, and the
+//! `RenderError::Poisoned { render_object, phase: PoisonPhase::Layout }`, and the
 //! walk's caller swallows that `Err` entirely: the offending node is left
 //! with NO committed geometry, its ancestors still complete their own
 //! layout and the whole frame finishes as if nothing failed. `pump_widget`

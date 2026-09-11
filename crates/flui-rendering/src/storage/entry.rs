@@ -442,7 +442,10 @@ impl<P: Protocol> RenderEntry<P> {
                             panic_msg = msg,
                             "perform_layout panicked — surfacing as RenderError::Poisoned",
                         );
-                        Err(crate::error::RenderError::poisoned(debug_name, "layout"))
+                        Err(crate::error::RenderError::poisoned(
+                            debug_name,
+                            crate::error::PoisonPhase::Layout,
+                        ))
                     }
                 }
             },

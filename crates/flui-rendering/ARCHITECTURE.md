@@ -558,6 +558,31 @@ wrong point. `a_same_frame_layout_change_forces_the_repaint_a_transform_patch_re
 exists to fail loudly if that happens; replacing the loop body with a no-op fails
 it with the layer count and discriminant right and the translation column wrong.
 
+**A patch that panics poisons the frame instead of being refused.**
+Unlike a structural shape mismatch — which `layer_patches_for` refuses by
+returning `Ok(None)`, falling back to a repaint — a panic while rebuilding a
+target's own effect layers (inside `paint_effects`, or the walk's resolution
+of a `PaintClip::PathTarget` it reports) cannot be refused the same way: the
+fallback repaint would call that same panicking `paint_effects` on the same
+node and panic a second time. So it poisons instead
+(`RenderError::Poisoned { phase: PoisonPhase::LayerUpdate, .. }`), the frame
+is discarded whole, and the queued update survives on the node for the retry.
+
+The captured-origin invariant above now has a clip oracle beside the
+transform one:
+`a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on`
+(`tests/retained_boundary_layers.rs`) pins the identical
+same-frame-layout-forces-a-repaint invariant through a clip patch instead of
+a transform one. The two differ in one respect worth being precise about: a
+clip rect is *translated* by the captured origin (`clip_layer`, same file),
+never conjugated by it the way a transform matrix is — but a stale origin is
+exactly as wrong for a translation as for a conjugation, so the same
+same-frame-layout-marks-the-boundary-needing-paint argument covers both. No
+shipped clip producer routes an update-only commit through `paint_effects`'s
+`clip` field yet (see trade-off 1 above), so the oracle drives a test double
+that reports `COMPOSITED_LAYER_UPDATE` for a rect change on purpose, to
+exercise the arm at all.
+
 ### A retained capture holds no GPU resource, so device loss cannot strand one
 
 **Rule:** #536 asks that "detach, reattach, and device-loss paths reject stale
@@ -717,9 +742,16 @@ of how the dead path was found.
 **Choice:** every third-party trait call site has its call wrapped in `std::panic::catch_unwind(AssertUnwindSafe(|| ...))`. A panicking render object surfaces as `RenderError::Poisoned { render_object, phase }` rather than aborting the process. Specifically:
 
 - `RenderEntry::layout` ([`src/storage/entry.rs`](src/storage/entry.rs)) wraps `render_object.perform_layout_raw(...)` and returns `RenderResult<ProtocolGeometry<P>>`. On the panic path, state is left untouched (`NEEDS_LAYOUT` stays set) so the next frame can retry. The retry is not unbounded: the pipeline counts consecutive layout failures per node and poisons nodes that fail structurally or exhaust the budget ([`src/pipeline/owner/poison.rs`](src/pipeline/owner/poison.rs)); a poisoned node is skipped in later walks until `mark_needs_layout` freshly invalidates it.
-- `PipelineOwner::<PaintPhase>::paint_subtree` ([`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)) wraps `render_object.paint(context, offset)`, returns `RenderResult<()>`, and propagates Poisoned through the recursion via a captured error slot in the children-painting closure.
+- `PipelineOwner::<PaintPhase>::paint_subtree_impl` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)) wraps `render_node.paint_raw(&mut recorder, ...)` (the fragment recorder) together with the node's own effect-layer build, `own_effect_layers(render_node.paint_effects(), origin)`, in ONE `catch_unwind`. Both run only after the walk's three return gates (`skip_paint`, `needs_layout`, the sliver visibility cull): a gated-out node never builds a `PaintEffects` descriptor it will not use. Building it there matters: reached outside those gates, a node whose `needs_layout` flag is still set carries stale geometry — its last committed size, or `Size::ZERO` if it has never been laid out — so its descriptor would be built against a size this pass never computed. A panic in either half — the node's own `paint_effects`, or the walk's resolution of a `PaintClip::PathTarget` inside `own_effect_layers`'s clip arm — surfaces as `Poisoned { phase: PoisonPhase::Paint, .. }`, one poison point per node rather than two.
+- `PipelineOwner::<PaintPhase>::layer_patches_for` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)), the composited-layer-update patch arm, wraps the same `own_effect_layers(node.paint_effects(), slots.origin)` rebuild — run once per target being patched into a retained boundary's capture — in its own `catch_unwind`. A panic surfaces as `Poisoned { phase: PoisonPhase::LayerUpdate, .. }` and the function returns `Err` instead of `Ok(None)`: the whole frame is discarded and the queued composited-layer-update request survives on the node for the retry. Falling back to a repaint instead (the way a structural shape mismatch does, via `Ok(None)`) was rejected — the repaint would call the same panicking `paint_effects` on the same node and panic a second time.
 
 The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) now return `RenderResult<()>`. `run_frame` returns `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)` -- the owner **always** comes back at Idle so frame-loop callers can mutex-replace through it on both success and error paths.
+
+`Poisoned`'s `phase` is a [`PoisonPhase`](src/error.rs) (`Layout` | `Paint` | `LayerUpdate`, rendered `"layout"` / `"paint"` / `"layer-update"` by its `Display` impl) — the enum itself is the authoritative, closed set; nothing today produces a fourth variant.
+
+This whole per-node partial-failure-recovery mechanism diverges deliberately from Flutter, and in the opposite direction from what a first read of `object.dart` suggests. `RenderObject._paintWithContext` (3.44.0) wraps only the call to `paint(context, offset)` in `try { … } catch (e, stack) { _reportException('paint', e, stack); }`; `_reportException` forwards to `FlutterError.reportError` and returns — it does **not** rethrow. `PipelineOwner.flushPaint` then continues its depth-sorted walk of `_nodesNeedingPaint` with the next dirty node: one node's exception is isolated to that node, and the rest of the frame still paints and reaches the compositor. `_debugDoingThisPaint` is a debug-only reentrancy assert (catches painting the same node twice in one pass) — it plays no part in exception handling, and does not abort anything. The one gap in Flutter's own isolation is `PaintingContext.updateLayerProperties`, the composited-layer-update-only arm `flushPaint` takes instead of a full repaint: it calls `child.updateCompositedLayer(oldLayer: childLayer)` with no surrounding `try`/`catch` at all, so an exception there is not caught the way `paint`'s is.
+
+FLUI diverges on both arms, in the stricter direction: a panic in `paint_effects` (`PoisonPhase::Paint`) or in `layer_patches_for`'s rebuild (`PoisonPhase::LayerUpdate`) discards the WHOLE frame as `Poisoned` rather than isolating the one node — the dirty queue survives, so the node is retried next frame, but nothing from the poisoned frame reaches the compositor. The trade-off: no partially painted frame is ever presented (Flutter's per-node isolation can and does present one), at the cost that a node stuck panicking blocks the whole frame from completing until it is replaced or stops panicking.
 
 `RenderObject<P>::debug_name(&self) -> &'static str` is the static identifier embedded in `RenderError::Poisoned`. Its default body monomorphizes per concrete impl via `core::any::type_name::<Self>()`; calling through `&dyn RenderObject<P>` yields the concrete type name because the vtable carries the monomorphized stub.
 

@@ -526,7 +526,7 @@ impl FlowDelegate for DuplicatePainterFlowDelegate {
 /// which is the observable proof available at this level.
 #[test]
 #[should_panic(
-    expected = "render_object: \"flui_objects::layout::flow::RenderFlow\", phase: \"paint\""
+    expected = "render_object: \"flui_objects::layout::flow::RenderFlow\", phase: Paint"
 )]
 fn flow_delegate_painting_the_same_child_twice_panics() {
     let _ = harness::pump_widget(

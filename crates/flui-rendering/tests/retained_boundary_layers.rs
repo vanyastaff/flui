@@ -20,7 +20,8 @@ use flui_rendering::{
     testing::{
         TreeNode, box_node, edit_render_object,
         inspect::{
-            first_opacity_alpha, first_transform_matrix, layer_structure, transform_matrices,
+            clip_rects, first_opacity_alpha, first_transform_matrix, layer_structure,
+            transform_matrices,
         },
         tree, update_render_object,
     },
@@ -2885,6 +2886,228 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
         "a same-frame move and matrix-only update together must still produce \
          the matrix a full repaint would; a stale captured origin would move \
          it silently",
+    );
+}
+
+/// Clip counterpart of
+/// `a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`
+/// above: the identical same-frame-layout-change-forces-a-repaint invariant,
+/// pinned through a clip patch instead of a transform one.
+///
+/// No shipped clip producer reports an update-only `RenderUpdateImpact` yet
+/// (`clip_layer`'s translate-by-origin in `pipeline/owner/paint.rs` is only
+/// ever reached through a full repaint today), so `ClipShifter` below is a
+/// proxy that reports `COMPOSITED_LAYER_UPDATE` on purpose — mirroring
+/// `ShapeShifter` and `AppearingTransform` elsewhere in this file — to drive
+/// that arm of `layer_patches_for` through the same-frame race at all.
+///
+/// Like the transform test, a clip rect is translated by the node's
+/// accumulated paint origin at emission time (`clip_layer`, same file),
+/// never conjugated the way a transform matrix is — but a stale ORIGIN is
+/// just as wrong for a translation as for a conjugation: it silently shifts
+/// the clip to the wrong place. Growing the preceding `Grower` sibling and
+/// issuing a clip-only composited-layer-update request in the SAME frame
+/// must still repaint: the layout change marks the enclosing boundary
+/// needing paint too (`PaintQueue::enqueue` never downgrades a queued
+/// `Repaint`), so the resulting clip rect is computed from the LIVE origin,
+/// not a captured one.
+#[test]
+fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
+    #[derive(Debug)]
+    struct Grower {
+        width: f32,
+    }
+
+    impl flui_foundation::Diagnosticable for Grower {}
+
+    impl flui_rendering::traits::RenderBox for Grower {
+        type Arity = flui_tree::Leaf;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            ctx.constrain(Size::new(px(self.width), px(20.0)))
+        }
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Leaf,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+    }
+
+    /// A clip double that reports the WRONG impact on purpose — a rect-only
+    /// field mutation goes through `mark_needs_composited_layer_update`,
+    /// never a repaint — since no shipped clip producer does this yet. See
+    /// this test's doc above.
+    #[derive(Debug)]
+    struct ClipShifter {
+        rect: flui_types::Rect<flui_types::Pixels>,
+    }
+
+    impl flui_foundation::Diagnosticable for ClipShifter {}
+
+    impl flui_rendering::traits::RenderBox for ClipShifter {
+        type Arity = flui_tree::Single;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            if ctx.child_count() > 0 {
+                ctx.layout_child(0, constraints)
+            } else {
+                constraints.smallest()
+            }
+        }
+
+        flui_rendering::forward_single_child_box_queries!();
+
+        fn hit_test(
+            &self,
+            _ctx: &mut flui_rendering::context::BoxHitTestContext<
+                '_,
+                flui_tree::Single,
+                flui_rendering::parent_data::BoxParentData,
+            >,
+        ) -> bool {
+            false
+        }
+
+        fn paint_effects(&self, _size: Size) -> flui_rendering::traits::PaintEffects {
+            flui_rendering::traits::PaintEffects::NONE.with_clip(
+                flui_rendering::traits::PaintClip::Rect {
+                    rect: self.rect,
+                    behavior: flui_types::painting::Clip::HardEdge,
+                },
+            )
+        }
+    }
+
+    fn mount(
+        width: f32,
+        rect: flui_types::Rect<flui_types::Pixels>,
+    ) -> (
+        PipelineOwner<flui_rendering::pipeline::Idle>,
+        flui_foundation::RenderId,
+        flui_foundation::RenderId,
+    ) {
+        let mut owner = PipelineOwner::new();
+        let (root_id, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderFlex::row()).child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderFlex::row())
+                        .child(box_node(Grower { width }).label("grower"))
+                        .child(
+                            box_node(RenderPadding::all(12.0)).child(
+                                box_node(ClipShifter { rect })
+                                    .label("clip")
+                                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                            ),
+                        ),
+                ),
+            ),
+        );
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        let grower = registry.get("grower").expect("grower is labelled");
+        let clip = registry.get("clip").expect("clip is labelled");
+        (owner, grower, clip)
+    }
+
+    /// Applies a new clip rect through the update-only seam
+    /// `mark_needs_composited_layer_update` drives directly — never through
+    /// `RenderUpdateImpact`, since `ClipShifter` reports the wrong impact on
+    /// purpose (see the test's doc above).
+    fn set_rect(
+        owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
+        id: flui_foundation::RenderId,
+        rect: flui_types::Rect<flui_types::Pixels>,
+    ) {
+        edit_render_object::<ClipShifter, _, _>(owner, id, |c| c.rect = rect);
+        owner.mark_needs_composited_layer_update(id);
+    }
+
+    let rect1 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+    let (owner, grower_id, clip_id) = mount(20.0, rect1);
+    let (mut owner, result) = owner.run_frame();
+    let first = result
+        .expect("first frame")
+        .expect("first frame produces a layer tree");
+    assert_eq!(
+        clip_rects(&first).len(),
+        1,
+        "precondition: the first frame emits one ClipRectLayer",
+    );
+
+    // Same frame: grow the preceding sibling (an ordinary layout change) AND
+    // change the clip's rect through a composited-layer-update request. The
+    // new rect differs from `rect1` in BOTH dimensions and is not square, so
+    // neither a transposition nor a stale size can pass this by accident.
+    edit_render_object::<Grower, _, _>(&mut owner, grower_id, |object| object.width = 90.0);
+    owner.mark_needs_layout(grower_id);
+    let rect2 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(15.0), px(5.0));
+    set_rect(&mut owner, clip_id, rect2);
+
+    let (owner, result) = owner.run_frame();
+    let moved = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    // Reference: a fresh owner that paints the same final state — grower at
+    // width 90, clip rect2 — from scratch.
+    let (reference, _grower, _clip) = mount(90.0, rect2);
+    let (_, result) = reference.run_frame();
+    let repainted = result
+        .expect("reference frame")
+        .expect("reference frame produces a layer tree");
+
+    assert_eq!(
+        clip_rects(&moved),
+        clip_rects(&repainted),
+        "a same-frame move and clip-only update together must still produce \
+         the clip rect a full repaint would; a stale captured origin would \
+         leave it at the old position",
+    );
+
+    // The fixture itself must have teeth: the grower's +70px width delta
+    // really did shift the clip's origin, so a correct repaint (new rect at
+    // the NEW origin) cannot coincide with a stale-origin patch (new rect at
+    // the OLD origin) or with no update at all (old rect at the old
+    // origin) by accident.
+    let first_origin = clip_rects(&first)[0].min;
+    assert_eq!(
+        clip_rects(&moved).len(),
+        1,
+        "precondition: the second frame's tree must carry exactly one clip \
+         rect to index into",
+    );
+    let moved_origin = clip_rects(&moved)[0].min;
+    assert_eq!(
+        moved_origin.x - first_origin.x,
+        px(70.0),
+        "the grower's width delta (20 -> 90) must shift the clip rect's \
+         origin by the same 70px in x; first frame origin {first_origin:?}, \
+         second frame origin {moved_origin:?}",
     );
 }
 

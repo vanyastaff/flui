@@ -1787,12 +1787,12 @@ mod tests {
     }
 
     /// A panicking `paint` call must surface as
-    /// `RenderError::Poisoned { phase: "paint", .. }` and not abort.
-    /// The owner must remain usable for a subsequent frame.
+    /// `RenderError::Poisoned { phase: PoisonPhase::Paint, .. }` and not
+    /// abort. The owner must remain usable for a subsequent frame.
     #[test]
     fn test_run_frame_catches_paint_panic() {
         use crate::constraints::BoxConstraints;
-        use crate::error::RenderError;
+        use crate::error::{PoisonPhase, RenderError};
         use flui_types::geometry::px;
 
         // Silence the default panic hook for the duration of this test
@@ -1823,7 +1823,7 @@ mod tests {
         let err = result.expect_err("paint should panic, surface as Err");
         match err {
             RenderError::Poisoned { phase, .. } => {
-                assert_eq!(phase, "paint", "phase should be 'paint'");
+                assert_eq!(phase, PoisonPhase::Paint, "phase should be Paint");
             }
             other => panic!("expected RenderError::Poisoned, got {other:?}"),
         }
@@ -1852,7 +1852,7 @@ mod tests {
     }
 
     /// A panicking `perform_layout_raw` surfaces as
-    /// `RenderError::Poisoned { phase: "layout", .. }` through
+    /// `RenderError::Poisoned { phase: PoisonPhase::Layout, .. }` through
     /// `RenderEntry::layout`. This verifies the catch_unwind wrapper on
     /// the layout call site.
     ///
@@ -1862,7 +1862,7 @@ mod tests {
     /// entry directly rather than through `run_frame`.
     #[test]
     fn test_render_entry_layout_catches_panic() {
-        use crate::error::RenderError;
+        use crate::error::{PoisonPhase, RenderError};
         use crate::storage::RenderEntry;
         use flui_types::Size;
 
@@ -1880,7 +1880,7 @@ mod tests {
         let err = result.expect_err("perform_layout_raw should panic, surface as Err");
         match err {
             RenderError::Poisoned { phase, .. } => {
-                assert_eq!(phase, "layout", "phase should be 'layout'");
+                assert_eq!(phase, PoisonPhase::Layout, "phase should be Layout");
             }
             other => panic!("expected RenderError::Poisoned, got {other:?}"),
         }
