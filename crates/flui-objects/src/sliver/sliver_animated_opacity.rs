@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use flui_tree::Single;
+use flui_types::Size;
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::{Listenable, ListenerId};
@@ -39,7 +40,7 @@ use flui_rendering::{
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     pipeline::RenderInvalidationHandle,
-    traits::RenderSliver,
+    traits::{PaintEffects, PaintOpacity, RenderSliver},
 };
 
 /// A sliver render object that applies a continuously-animated transparency
@@ -258,12 +259,17 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         Self::is_layered(self.alpha())
     }
 
-    fn paint_alpha(&self) -> Option<u8> {
+    // The whole point of this object: the pipeline reads paint_effects
+    // through `&dyn RenderObject<SliverProtocol>`; the blanket impl forwards
+    // here.
+    fn paint_effects(&self, _size: Size) -> PaintEffects {
         let alpha = self.alpha();
+        // None when fully opaque (255) or fully transparent (0): neither
+        // requires an OpacityLayer. Flutter: alpha=0 -> layer=null.
         if alpha == 255 || alpha == 0 {
-            None
+            PaintEffects::NONE
         } else {
-            Some(alpha)
+            PaintEffects::NONE.with_opacity(PaintOpacity::new(alpha))
         }
     }
 
@@ -327,14 +333,29 @@ mod tests {
     }
 
     #[test]
-    fn paint_alpha_returns_none_when_opaque_or_transparent() {
-        assert_eq!(render_at(1.0).paint_alpha(), None);
-        assert_eq!(render_at(0.0).paint_alpha(), None);
+    fn paint_effects_opacity_returns_none_when_opaque_or_transparent() {
+        assert_eq!(
+            RenderSliver::paint_effects(&render_at(1.0), Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            None
+        );
+        assert_eq!(
+            RenderSliver::paint_effects(&render_at(0.0), Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            None
+        );
     }
 
     #[test]
-    fn paint_alpha_returns_some_for_partial() {
-        assert_eq!(render_at(0.5).paint_alpha(), Some(128));
+    fn paint_effects_opacity_returns_some_for_partial() {
+        assert_eq!(
+            RenderSliver::paint_effects(&render_at(0.5), Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(128)
+        );
     }
 
     #[test]

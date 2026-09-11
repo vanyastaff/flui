@@ -9,7 +9,7 @@
 //! / the proxy-sliver variant). Layout is a pure passthrough of the
 //! parent's [`flui_rendering::constraints::SliverConstraints`] to the child; the alpha is consumed
 //! by the compositor via the
-//! [`flui_rendering::traits::RenderSliver::paint_alpha`] override.
+//! [`flui_rendering::traits::RenderSliver::paint_effects`] override.
 //!
 //! # Rust-native improvements
 //!
@@ -25,12 +25,13 @@
 //!   layer.
 
 use flui_tree::Single;
+use flui_types::Size;
 
 use flui_rendering::{
     constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    traits::RenderSliver,
+    traits::{PaintEffects, PaintOpacity, RenderSliver},
 };
 
 // ============================================================================
@@ -42,14 +43,14 @@ use flui_rendering::{
 ///
 /// The `opacity` value ranges from `0.0` (fully transparent) to `1.0`
 /// (fully opaque). The compositor reads it via the
-/// [`flui_rendering::traits::RenderSliver::paint_alpha`] override;
+/// [`flui_rendering::traits::RenderSliver::paint_effects`] override;
 /// layout is a transparent passthrough.
 ///
 /// # Performance
 ///
 /// When `opacity == 1.0` and `always_needs_compositing == false`, no
-/// compositing layer is required and `paint_alpha` returns `None`.
-/// For frequently-changing opacity (e.g. fade animations), set
+/// compositing layer is required and `paint_effects` returns no opacity
+/// effect. For frequently-changing opacity (e.g. fade animations), set
 /// `always_needs_compositing = true` to avoid layer-tree churn each
 /// frame.
 #[derive(Debug, Clone)]
@@ -58,7 +59,7 @@ pub struct RenderSliverOpacity {
     opacity: f32,
     /// Cached alpha as `u8` (0..=255) for efficient layer operations.
     alpha: u8,
-    /// When `true`, always report `Some(alpha)` from `paint_alpha`,
+    /// When `true`, always report an opacity effect from `paint_effects`,
     /// even when `alpha == 255`. Useful for stable compositing under
     /// animation.
     always_needs_compositing: bool,
@@ -114,10 +115,11 @@ impl RenderSliverOpacity {
     /// `proxy_sliver_test.dart` case "RenderSliverOpacity does composite if it
     /// is opaque" asserts exactly that, and this predicate does not satisfy it.
     /// The `alpha != 255` term is deliberate and is the same `is_layered`
-    /// threshold `paint_alpha` and `skip_paint` already use: at alpha 255 no
-    /// layer is ever allocated (`paint_alpha` returns `None`), so demanding
-    /// compositing there is pure overhead with no visual effect. The full
-    /// rationale is recorded once, on the sibling that first made the call —
+    /// threshold `paint_effects` and `skip_paint` already use: at alpha 255 no
+    /// layer is ever allocated (`paint_effects` returns no opacity effect),
+    /// so demanding compositing there is pure overhead with no visual
+    /// effect. The full rationale is recorded once, on the sibling that
+    /// first made the call —
     /// see `proxy::animated_opacity`'s `is_repaint_boundary` comment. Oracle
     /// for the divergent value: `opaque_and_transparent_constructors` below.
     #[inline]
@@ -200,9 +202,9 @@ impl RenderSliverOpacity {
         // The flag is exactly the case this clause must NOT fire for, and it
         // does not: `skip_paint` is `alpha == 0 && !always_needs_compositing`,
         // so with the flag set it is false on both sides of the crossing and
-        // nothing is added here — while `paint_alpha` keeps returning
-        // `Some(0)`, so the layer survives and the patch has a slot after all.
-        // That is the acceleration
+        // nothing is added here — while `paint_effects` keeps returning an
+        // opacity effect at alpha 0, so the layer survives and the patch has
+        // a slot after all. That is the acceleration
         // `an_always_compositing_sliver_updates_its_layer_even_when_going_invisible`
         // pins.
         //
@@ -302,16 +304,17 @@ impl RenderSliver for RenderSliverOpacity {
         self.needs_compositing()
     }
 
-    // The whole point of RenderSliverOpacity: the pipeline reads paint_alpha
-    // through `&dyn RenderObject<SliverProtocol>`; the blanket impl forwards here.
-    fn paint_alpha(&self) -> Option<u8> {
+    // The whole point of RenderSliverOpacity: the pipeline reads
+    // paint_effects through `&dyn RenderObject<SliverProtocol>`; the
+    // blanket impl forwards here.
+    fn paint_effects(&self, _size: Size) -> PaintEffects {
         // None when fully opaque (255) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
         // Flutter proxy_sliver.dart: alpha=0 → layer=null (no layer, just skip).
         if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
-            None
+            PaintEffects::NONE
         } else {
-            Some(self.alpha)
+            PaintEffects::NONE.with_opacity(PaintOpacity::new(self.alpha))
         }
     }
 
@@ -440,11 +443,11 @@ mod tests {
     /// so becoming invisible IS a pure layer property change.
     ///
     /// This is the one configuration where the new base impact changes an
-    /// alpha-0 crossing: `paint_alpha` still returns `Some(0)` and
-    /// `skip_paint` stays false, so a slot exists for the patch to land in and
-    /// nothing structural moved. Without the flag the same transition must
-    /// repaint (asserted above), which is what makes this a discriminating
-    /// case rather than a restatement.
+    /// alpha-0 crossing: `paint_effects` still returns an opacity effect at
+    /// alpha 0 and `skip_paint` stays false, so a slot exists for the patch
+    /// to land in and nothing structural moved. Without the flag the same
+    /// transition must repaint (asserted above), which is what makes this a
+    /// discriminating case rather than a restatement.
     #[test]
     fn an_always_compositing_sliver_updates_its_layer_even_when_going_invisible() {
         let mut o = RenderSliverOpacity::new(0.5);
@@ -452,7 +455,12 @@ mod tests {
             o.set_always_needs_compositing(true),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
         );
-        assert_eq!(o.paint_alpha(), Some(128));
+        assert_eq!(
+            RenderSliver::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(128)
+        );
 
         assert_eq!(
             o.set_opacity(0.0),
@@ -463,7 +471,9 @@ mod tests {
              is served by patching the layer that still exists",
         );
         assert_eq!(
-            o.paint_alpha(),
+            RenderSliver::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
             Some(0),
             "precondition for the impact above: the layer really does survive \
              at alpha 0, so there is a slot for the patch to address",
@@ -487,19 +497,27 @@ mod tests {
     }
 
     #[test]
-    fn paint_alpha_returns_none_when_opaque_without_force() {
+    fn paint_effects_opacity_returns_none_when_opaque_without_force() {
         let o = RenderSliverOpacity::opaque();
-        assert_eq!(o.paint_alpha(), None);
+        assert_eq!(
+            RenderSliver::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            None
+        );
     }
 
-    // 1.3 RED→GREEN: alpha=0 must return None (no layer), not Some(0).
-    // Flutter proxy_sliver.dart: alpha=0 → layer=null (no OpacityLayer emitted).
-    // Before fix: returned Some(0). After fix: returns None.
+    // 1.3 RED→GREEN: alpha=0 must return None from paint_effects's opacity
+    // (no layer), not Some(0). Flutter proxy_sliver.dart: alpha=0 →
+    // layer=null (no OpacityLayer emitted). Before fix: returned Some(0).
+    // After fix: returns None.
     #[test]
-    fn paint_alpha_returns_none_when_transparent() {
+    fn paint_effects_opacity_returns_none_when_transparent() {
         let o = RenderSliverOpacity::transparent(); // alpha = 0
         assert_eq!(
-            o.paint_alpha(),
+            RenderSliver::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
             None,
             "alpha=0 without always-flag must return None (no OpacityLayer); \
              Flutter proxy_sliver.dart: alpha=0 → layer=null"
@@ -514,32 +532,48 @@ mod tests {
     }
 
     // alpha=0 WITH always-flag: still needs compositing (forced), so
-    // paint_alpha returns Some(0) and skip_paint returns false.
+    // paint_effects returns an opacity effect at alpha 0 and skip_paint
+    // returns false.
     #[test]
-    fn paint_alpha_returns_some_when_transparent_but_forced() {
+    fn paint_effects_opacity_returns_some_when_transparent_but_forced() {
         let mut o = RenderSliverOpacity::transparent();
         assert_eq!(
             o.set_always_needs_compositing(true),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
         );
-        assert_eq!(o.paint_alpha(), Some(0));
+        assert_eq!(
+            RenderSliver::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(0)
+        );
         assert!(!o.skip_paint());
     }
 
     #[test]
-    fn paint_alpha_returns_some_when_partial() {
+    fn paint_effects_opacity_returns_some_when_partial() {
         let o = RenderSliverOpacity::new(0.5);
-        assert_eq!(o.paint_alpha(), Some(128));
+        assert_eq!(
+            RenderSliver::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(128)
+        );
     }
 
     #[test]
-    fn paint_alpha_returns_some_when_forced() {
+    fn paint_effects_opacity_returns_some_when_forced() {
         let mut o = RenderSliverOpacity::opaque();
         assert_eq!(
             o.set_always_needs_compositing(true),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
         );
-        assert_eq!(o.paint_alpha(), Some(255));
+        assert_eq!(
+            RenderSliver::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(255)
+        );
     }
 
     #[test]
