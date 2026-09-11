@@ -1726,6 +1726,21 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) {
         self.pending_child_requests.push((sliver_id, index));
     }
+
+    /// Whether `id` is currently bounded-retry layout-poisoned (see the
+    /// crate-internal `LayoutPoison` bounded-retry state).
+    ///
+    /// Test-only oracle for the bounded-retry suite
+    /// (`tests/layout_poison.rs`): no production reader exists. The layout
+    /// walk itself consults `LayoutPoison` directly (`subtree_arena.rs`),
+    /// never through this accessor. Gated the same way as
+    /// [`push_pending_child_request_for_test`](Self::push_pending_child_request_for_test)
+    /// so it never lands in a normal/release build.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn is_layout_poisoned(&self, id: RenderId) -> bool {
+        self.layout_poison.is_poisoned(id)
+    }
 }
 
 /// The fallback semantics-update callback for a lazily-created
