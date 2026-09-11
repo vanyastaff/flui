@@ -11,11 +11,15 @@
 //!   later walks until freshly invalidated;
 //! - retriable failures poison only after a budget of consecutive attempts;
 //! - a fresh invalidation (`mark_needs_layout`) lifts the poison, and a
-//!   success fully clears the failure record.
+//!   success fully clears the failure record;
+//! - a poisoned node's stand-in geometry is its LAST COMMITTED size when it
+//!   once succeeded, and exactly `Size::ZERO` when it never did — never a
+//!   value the node would produce if re-attempted right now. See the
+//!   retention/control pair near the end of this file.
 
 use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use flui_foundation::RenderId;
@@ -26,7 +30,7 @@ use flui_rendering::{
     error::RenderError,
     parent_data::{BoxParentData, ParentData, SliverParentData},
     protocol::{BoxProtocol, ProtocolGeometry},
-    storage::IntrinsicDimension,
+    storage::{IntrinsicDimension, RenderNode},
     testing::{FrameRun, Probe, RenderTester, box_node, sliver_node},
     traits::{HitTestOutcome, RenderBox, RenderObject, RenderSliver},
 };
@@ -956,4 +960,236 @@ fn constraint_independent_poison_stays_skipped_under_new_constraints() {
     );
 
     run.pump_idle_frames(2);
+}
+
+// ============================================================================
+// Retention: a poisoned node's stand-in is its last committed size, not a
+// fake recovery to zero — and its control, a node that never committed
+// ============================================================================
+
+/// A leaf whose layout panics on demand, driven entirely through shared
+/// handles rather than the harness [`FrameRun::update`] flow: `update` calls
+/// `mark_needs_layout` on the edited node, which would lift the very poison
+/// these tests exist to observe before the pass under test even runs.
+///
+/// Counts every attempt (`calls`) and, while `panic` is unset, returns
+/// `size_on_success` constrained by the incoming constraints — letting a
+/// test flip the leaf from failing to succeeding (or back) without ever
+/// touching the tree itself.
+#[derive(Debug)]
+struct RetainingLeaf {
+    calls: Arc<AtomicUsize>,
+    panic: Arc<AtomicBool>,
+    size_on_success: Arc<Mutex<Size>>,
+}
+
+impl flui_foundation::Diagnosticable for RetainingLeaf {}
+
+impl RenderObject<BoxProtocol> for RetainingLeaf {
+    fn perform_layout_raw(
+        &mut self,
+        ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !self.panic.load(Ordering::Relaxed),
+            "RetainingLeaf: deliberate layout panic",
+        );
+        let size = *self
+            .size_on_success
+            .lock()
+            .expect("size_on_success mutex must not be poisoned");
+        Ok(ctx.constraints().constrain(size))
+    }
+
+    fn paint_raw(
+        &self,
+        _recorder: &mut flui_rendering::context::FragmentRecorder,
+        _child_count: usize,
+        _size: Size,
+    ) {
+    }
+
+    fn hit_test_raw(
+        &self,
+        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _child_count: usize,
+        _size: Size,
+        _hit_child: &mut dyn FnMut(
+            usize,
+            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<Matrix4>,
+        ) -> bool,
+    ) -> HitTestOutcome {
+        HitTestOutcome::miss()
+    }
+}
+
+/// The [`RenderNode`] backing `id` in `run`'s owner.
+///
+/// `Probe::box_geometry` panics instead of returning `None` on a node that
+/// never committed, and has no `geometry_degraded` counterpart — both are
+/// exactly what the retention/control pair below needs to read, so they go
+/// through the node directly instead.
+fn node(run: &FrameRun, id: RenderId) -> &RenderNode {
+    run.owner()
+        .render_tree()
+        .get(id)
+        .expect("render id must be live")
+}
+
+/// A poisoned leaf's stand-in geometry is its own LAST COMMITTED size, not a
+/// fresh recomputation and not a collapse to zero — the retention half of
+/// the contract; [`a_leaf_that_never_committed_stands_in_with_zero`] below
+/// is its control, pinning the opposite answer from the identical oracle.
+///
+/// Tree: `RenderPadding(5) → RenderPadding(5) → RetainingLeaf`, root
+/// constraints LOOSE (0..200 × 0..200) so the leaf's size is never derivable
+/// from its constraints alone (a collapse to `Size::ZERO` would otherwise be
+/// invisible), and the leaf sits two levels below the root so it is never
+/// itself the dirty root (whose size is constraint-derived by construction).
+///
+/// Two discriminators prove this test measures retention specifically:
+///
+/// - **Flip pass 2's `panic` back to `false`** (so the re-armed leaf would
+///   now succeed at S2 = 50×60 instead of failing) and this test goes RED on
+///   the geometry assertions: pass 3 would read the leaf at S2 and the
+///   parent at 60×70 instead of the retained S1 / 40×50. `calls` alone
+///   stays at 2 in that variant too — the unchanged-constraints cache
+///   serves the leaf in pass 3 without another `perform_layout_raw` call
+///   either way, so the call count cannot tell these two apart on its own.
+/// - **Delete pass 2 entirely** (go straight from pass 1 to pass 3) and this
+///   test goes RED on the call count: nothing ever poisons the leaf, so
+///   marking the parent in pass 3 re-attempts it — `calls` reads 2 for a
+///   completely different reason (a second real attempt, not a skip).
+#[test]
+fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
+    let s1 = Size::new(px(30.0), px(40.0));
+    let s2 = Size::new(px(50.0), px(60.0));
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let panic = Arc::new(AtomicBool::new(false));
+    let size_on_success = Arc::new(Mutex::new(s1));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0)).label("root").child(
+            box_node(RenderPadding::all(5.0)).label("parent").child(
+                box_node(RetainingLeaf {
+                    calls: Arc::clone(&calls),
+                    panic: Arc::clone(&panic),
+                    size_on_success: Arc::clone(&size_on_success),
+                })
+                .label("leaf"),
+            ),
+        ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .run_frame();
+    let parent = run.id("parent");
+    let leaf = run.id("leaf");
+
+    // Pass 1: the leaf lays out cleanly and commits S1.
+    assert_eq!(node(&run, leaf).geometry_box(), Some(s1));
+    assert_eq!(run.box_geometry(parent), Size::new(px(40.0), px(50.0)));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(!node(&run, parent).geometry_degraded());
+
+    // Pass 2: re-arm the leaf specifically (it must be re-armed before the
+    // failing pass, or nothing below even runs) and fail it. The frame as a
+    // whole still completes `Ok`: a descendant failure is swallowed by the
+    // parent's child-layout callback, which hands the parent `Size::ZERO`
+    // and records the failure against the leaf's retry budget.
+    panic.store(true, Ordering::Relaxed);
+    *size_on_success.lock().expect("size_on_success mutex") = s2;
+    run.owner_mut().mark_needs_layout(leaf);
+    run.pump();
+    assert_eq!(
+        node(&run, leaf).geometry_box(),
+        Some(s1),
+        "a failed layout attempt must not touch the last committed geometry",
+    );
+    assert!(run.owner().is_layout_poisoned(leaf));
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    assert!(node(&run, parent).geometry_degraded());
+    assert_eq!(run.box_geometry(parent), Size::new(px(10.0), px(10.0)));
+
+    // Pass 3: fix the condition (the leaf would now succeed at S2 if
+    // re-attempted) but re-invalidate only the PARENT — not the leaf (that
+    // would lift its poison) and not the root (whose cached geometry under
+    // unchanged constraints would short-circuit before the parent's
+    // `perform_layout` ever re-runs, per `layout_dirty_root`). The leaf
+    // must stay skipped, and what stands in for it is its own last
+    // COMMITTED size, not the fresh S2 it would now produce and not zero.
+    panic.store(false, Ordering::Relaxed);
+    run.owner_mut().mark_needs_layout(parent);
+    run.pump();
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        2,
+        "the poisoned leaf must not be re-attempted",
+    );
+    assert_eq!(
+        node(&run, leaf).geometry_box(),
+        Some(s1),
+        "the poisoned leaf's stand-in is its last committed size, not the \
+         value it would produce now if re-attempted",
+    );
+    assert_eq!(run.box_geometry(parent), Size::new(px(40.0), px(50.0)));
+    assert!(node(&run, parent).geometry_degraded());
+    assert!(run.owner().is_layout_poisoned(leaf));
+}
+
+/// The control for
+/// [`a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero`]: a
+/// leaf that never once succeeded stands in at exactly `Size::ZERO` — never
+/// its own prior geometry (it has none to retain) and never a value it
+/// would produce if re-attempted. Same oracle (`geometry_box`, `calls`,
+/// `geometry_degraded`), opposite answer, which is what proves the
+/// retention test above reads the committed-size mechanism and not, say, a
+/// constant the pipeline always serves for any poisoned node.
+#[test]
+fn a_leaf_that_never_committed_stands_in_with_zero() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let panic = Arc::new(AtomicBool::new(true));
+    let size_on_success = Arc::new(Mutex::new(Size::new(px(30.0), px(40.0))));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0)).label("root").child(
+            box_node(RenderPadding::all(5.0)).label("parent").child(
+                box_node(RetainingLeaf {
+                    calls: Arc::clone(&calls),
+                    panic: Arc::clone(&panic),
+                    size_on_success: Arc::clone(&size_on_success),
+                })
+                .label("leaf"),
+            ),
+        ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .run_frame();
+    let parent = run.id("parent");
+    let leaf = run.id("leaf");
+
+    // Pass 1: the leaf fails its very first-ever attempt — nothing has
+    // committed, so there is nothing to retain.
+    assert_eq!(node(&run, leaf).geometry_box(), None);
+    assert_eq!(run.box_geometry(parent), Size::new(px(10.0), px(10.0)));
+    assert!(node(&run, parent).geometry_degraded());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(run.owner().is_layout_poisoned(leaf));
+
+    // Pass 2: re-invalidate only the parent, exactly as pass 3 of the
+    // retention test does — the leaf stays poisoned and skipped, and its
+    // stand-in is `Size::ZERO`, not a value derived from a prior success
+    // (there is none).
+    run.owner_mut().mark_needs_layout(parent);
+    run.pump();
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "the poisoned leaf must not be re-attempted",
+    );
+    assert_eq!(run.box_geometry(parent), Size::new(px(10.0), px(10.0)));
+    assert!(node(&run, parent).geometry_degraded());
+    assert_eq!(node(&run, leaf).geometry_box(), None);
 }
