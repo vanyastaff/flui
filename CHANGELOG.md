@@ -130,6 +130,15 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **A `ViewState::dispose` panic is contained per element, not per frame** (#561):
+  `StatefulBehavior::on_unmount` catches a panicking `dispose` and records it through
+  `ElementOwner::push_recovered_panic` instead of letting it unwind out of `BuildOwner::build_scope`
+  / `finalize_tree` — the tree-side teardown (slab slot freed, `GlobalKey` unregistered) still
+  completes either way. A state whose `init_state` never completed (removed before its first build,
+  or `init_state` itself panicked) is never disposed. `flui-app`'s
+  `frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames`
+  (formerly driven by a real `dispose` panic) now pins the frame-transaction boundary itself
+  through the controllable `segment_probe`, since a real `dispose` panic no longer reaches it.
 - **`PaintEffects` — one value for a render object's own paint effects**
   (#996): `RenderBox`/`RenderSliver`/`RenderObject::paint_effects(size)`
   returns `PaintEffects { opacity, clip, transform }` with a fixed nesting

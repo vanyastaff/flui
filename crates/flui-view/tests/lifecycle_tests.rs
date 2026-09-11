@@ -8,10 +8,12 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use flui_objects::RenderSizedBox;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatefulBehavior,
-    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, RenderView,
+    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -33,6 +35,40 @@ impl StatelessView for TrackingView {
 impl View for TrackingView {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+/// A true tree leaf — renders directly, with no further `build()` in the
+/// chain. `TrackingView` above deliberately can't serve this role: its own
+/// `build()` returns `self.clone().boxed()`, an intentionally self-
+/// referential fixture (never driven through `build_scope` by the tests
+/// that use it) that would recurse forever if it were.
+#[derive(Clone)]
+struct LeafView;
+
+impl RenderView for LeafView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl View for LeafView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -63,7 +99,7 @@ impl StatefulView for LifecycleTrackingView {
 
 impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
     fn build(&self, _view: &LifecycleTrackingView, _ctx: &dyn BuildContext) -> impl IntoView {
-        TrackingView { id: 0 }.boxed()
+        LeafView.boxed()
     }
 
     fn activate(&mut self) {
@@ -203,13 +239,26 @@ fn test_stateful_element_dispose_called_on_unmount() {
         deactivated: Arc::new(AtomicUsize::new(0)),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // Drive the first build so `init_state` actually runs before unmount —
+    // `mount` alone only flips lifecycle state (Flutter's `mount` calls
+    // `initState` synchronously; FLUI's split mount/build does not). Since
+    // issue #561, `dispose` is gated on a completed `init_state`
+    // (`StatefulBehavior::on_unmount`), so an element that was only
+    // mounted, never built, is never disposed — this test drives a real
+    // `InitialMount` build, same as production, for the removal below to
+    // be meaningful. A raw `StatefulElement::mount`/`unmount` pair (as this
+    // test used before #561) has no live `BuildHandle` to build through, so
+    // this now goes through `ElementTree`/`BuildOwner` like the production
+    // path.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
     assert!(!disposed.load(Ordering::SeqCst));
 
-    element.unmount(&mut owner.element_owner_mut());
+    tree.remove(root_id, &mut owner.element_owner_mut());
 
     assert!(disposed.load(Ordering::SeqCst));
 }

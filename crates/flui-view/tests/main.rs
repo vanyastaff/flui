@@ -47,6 +47,8 @@ mod greeting_widget_loc_golden;
 mod inherited_dependency;
 #[path = "key_roundtrip.rs"]
 mod key_roundtrip;
+#[path = "lifecycle_panic_containment.rs"]
+mod lifecycle_panic_containment;
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[path = "notifications.rs"]

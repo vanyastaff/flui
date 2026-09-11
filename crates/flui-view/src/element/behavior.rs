@@ -5,7 +5,9 @@
 //! view-specific logic while the unified Element handles all common operations.
 
 use flui_rendering::parent_data::SliverSlot;
-use std::{collections::HashMap, marker::PhantomData, sync::Arc};
+use std::{
+    any::TypeId, collections::HashMap, marker::PhantomData, panic::AssertUnwindSafe, sync::Arc,
+};
 
 use flui_foundation::{ElementId, ListenerId, RenderId};
 use flui_rendering::{
@@ -16,9 +18,10 @@ use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     context::{BuildContext, BuildCtx},
     element::RenderSlot,
+    owner::{LifecycleHook, RecoveredPanic},
     view::{
-        AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
-        View, ViewState,
+        AnimatedView, FlutterError, InheritedView, IntoView, ProxyView, RenderView, StatefulView,
+        StatelessView, View, ViewState,
     },
 };
 
@@ -665,8 +668,73 @@ where
         super::behavior_commons::single_child_views(core, child_view, "StatefulBehavior")
     }
 
-    fn on_unmount(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
-        self.state.dispose();
+    /// Run `ViewState::dispose` under a containment catch so a user panic
+    /// there cannot escape `finalize_tree` and abort the rest of the
+    /// per-presentation frame.
+    ///
+    /// # The `initialized` gate
+    ///
+    /// Flutter's `mount` runs `initState` synchronously
+    /// (`StatefulElement.mount`, `framework.dart`), so `dispose`
+    /// (`StatefulElement.unmount`) always follows a completed `initState`.
+    /// FLUI's split mount/build means a state whose `init_state` never ran
+    /// — it panicked, or the element was removed before its first
+    /// `build_scope` drain ever reached it — has never acquired whatever
+    /// `dispose` would release, so `dispose` must not run for it either;
+    /// `create_state` (like Flutter's `createState`) must not itself
+    /// acquire lifecycle resources, so nothing leaks by skipping it here.
+    /// `self.initialized` is set `true` only after `init_state` *returns*
+    /// (see `build_into_views` above), so a panicking `init_state` leaves
+    /// it `false` and this guard holds.
+    ///
+    /// # Containment (issue #561)
+    ///
+    /// Only `state.dispose()` runs inside the catch — nothing else about
+    /// unmount moves. `Element::unmount` (`unified.rs`) always calls
+    /// `core.unmount(owner)` right after this returns, so a contained
+    /// panic here still ends with the tree-side teardown running and the
+    /// caller (`ElementTree::remove_finalized_inner`) still freeing the
+    /// slab slot and bumping its generation — a `dispose` that panicked
+    /// once is never invoked again for the same element. A caught panic
+    /// is recorded through `RecoveredPanic` instead of only reaching
+    /// `tracing`, mirroring `build_or_recover`'s producer side.
+    ///
+    /// Flutter has no equivalent boundary: `BuildOwner.finalizeTree`'s
+    /// `_inactiveElements._unmountAll()` carries no per-element
+    /// try/catch, so a throwing `dispose` there unwinds out of the whole
+    /// finalize pass. This containment is a deliberate improvement over
+    /// that contract, not parity with it.
+    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        if !self.initialized {
+            return;
+        }
+        match std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
+            Ok(()) => {}
+            Err(payload) => {
+                let Some(element) = core.self_id() else {
+                    // No slab id — mirrors `build_or_recover`'s fallback:
+                    // there is nothing to attach a `RecoveredPanic` to
+                    // (a hand-rolled element that bypassed
+                    // `ElementTree::insert`; test fixtures only), so this
+                    // `tracing::error!` is the only signal.
+                    let error =
+                        FlutterError::from_panic(payload.as_ref(), "disposing StatefulElement");
+                    tracing::error!(
+                        panic_message = %error.message,
+                        "dispose panicked outside the slab; nothing to record (no element id)"
+                    );
+                    return;
+                };
+                owner.push_recovered_panic(RecoveredPanic::from_payload(
+                    element,
+                    None,
+                    TypeId::of::<V>(),
+                    LifecycleHook::Dispose,
+                    payload.as_ref(),
+                    "disposing StatefulElement",
+                ));
+            }
+        }
     }
 
     fn on_activate(&mut self, _core: &mut ElementCore<V, A>) {

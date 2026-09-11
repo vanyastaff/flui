@@ -412,14 +412,32 @@ fn test_stateful_activate_callback_called() {
 #[test]
 fn test_stateful_dispose_callback_called_on_unmount() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // Drive the first build so `init_state` actually runs before unmount —
+    // since issue #561, `dispose` is gated on a completed `init_state`
+    // (`StatefulBehavior::on_unmount`), so an element that was only
+    // mounted, never built, is never disposed — this test drives a real
+    // `InitialMount` build, same as production. A raw
+    // `StatefulElement::mount`/`unmount` pair (as this test used before
+    // #561) has no live `BuildHandle` to build through, so this now goes
+    // through `ElementTree`/`BuildOwner` like the production path.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
-    let dispose_count = element.state().dispose_called.clone();
+    let dispose_count = tree
+        .get(root_id)
+        .expect("root exists")
+        .element()
+        .downcast_ref::<StatefulElement<LifecycleCallbackView>>()
+        .expect("root is StatefulElement<LifecycleCallbackView>")
+        .state()
+        .dispose_called
+        .clone();
     assert_eq!(dispose_count.load(Ordering::SeqCst), 0);
 
-    element.unmount(&mut owner.element_owner_mut());
+    tree.remove(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(dispose_count.load(Ordering::SeqCst), 1);
 }

@@ -8409,7 +8409,6 @@ mod tests {
     // `FrameFailureReport` route instead of a silent skip.
     // ========================================================================
     mod frame_failure_containment {
-        use std::cell::RefCell;
         use std::sync::Mutex as StdMutex;
 
         use flui_widgets::SizedBox;
@@ -8493,139 +8492,47 @@ mod tests {
         }
 
         // ====================================================================
-        // The real escape path: a `ViewState::dispose` panic during tree
-        // finalization. Build-phase panics are already substituted with an
-        // `ErrorView` per element, and layout/paint panics surface as
-        // `RenderError::Poisoned` from the pipeline's own catch_unwind —
-        // dispose runs in `finalize_tree`, under neither, so before the
-        // boundary existed it unwound straight through the realm's
-        // per-presentation loop and killed the process via the runner's
-        // `resume_unwind`.
+        // The frame-transaction boundary itself: whatever escapes a
+        // presentation's build+layout+paint segment — of any origin — must
+        // be contained at `UiRealm::draw_frame_entered`'s per-presentation
+        // `catch_unwind`, not unwind out of the realm pump. Before that
+        // boundary existed, ANY panic reaching this deep (a bug in FLUI's
+        // own pipeline, a user callback nothing else had caught) unwound
+        // straight through the realm's per-presentation loop and killed the
+        // process via the runner's `resume_unwind`.
+        //
+        // The removal-path USER hooks are a narrower, closed set: `dispose`
+        // is bounded per element as of issue #561 (`deactivate` and
+        // `did_unmount_render_object` are next in the same series) — see
+        // `StatefulBehavior::on_unmount`
+        // (`crates/flui-view/src/element/behavior.rs`) and the pins in
+        // `crates/flui-view/tests/lifecycle_panic_containment.rs`. A real
+        // `dispose` panic no longer reaches this deep at all, so this test
+        // no longer has a real user-hook escape to drive; it pins the
+        // boundary itself with the controllable stand-in `segment_probe`
+        // exists for (see its field doc on `PresentationState`).
         // ====================================================================
 
-        /// Child whose state panics on dispose — ONE-SHOT, via the shared
-        /// `armed` flag: the tree's own teardown at the end of the test
-        /// (and the half-unmounted element's eventual re-dispose during
-        /// realm drop) runs `dispose` again, and a panic from inside that
-        /// destructor-driven path would be a double panic that aborts the
-        /// whole test process instead of failing one assertion.
-        #[derive(Clone)]
-        struct PanicOnDisposeView {
-            armed: Rc<Cell<bool>>,
-        }
-
-        struct PanicOnDisposeState {
-            armed: Rc<Cell<bool>>,
-        }
-
-        impl StatefulView for PanicOnDisposeView {
-            type State = PanicOnDisposeState;
-
-            fn create_state(&self) -> Self::State {
-                PanicOnDisposeState {
-                    armed: Rc::clone(&self.armed),
-                }
-            }
-        }
-
-        impl ViewState<PanicOnDisposeView> for PanicOnDisposeState {
-            fn build(
-                &self,
-                _view: &PanicOnDisposeView,
-                _ctx: &dyn flui_view::BuildContext,
-            ) -> impl IntoView {
-                SizedBox::new(5.0, 5.0)
-            }
-
-            fn dispose(&mut self) {
-                if self.armed.get() {
-                    self.armed.set(false);
-                    panic!("PanicOnDisposeState::dispose — intentional test panic");
-                }
-            }
-        }
-
-        impl flui_view::View for PanicOnDisposeView {
-            fn create_element(&self) -> flui_view::element::ElementKind {
-                flui_view::element::ElementKind::stateful(self)
-            }
-        }
-
-        /// Root that conditionally includes the panicking child and hands
-        /// the test its `RebuildHandle` so the test can force rebuilds.
-        #[derive(Clone)]
-        struct HostView {
-            include_child: Rc<Cell<bool>>,
-            dispose_armed: Rc<Cell<bool>>,
-            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
-        }
-
-        struct HostState {
-            include_child: Rc<Cell<bool>>,
-            dispose_armed: Rc<Cell<bool>>,
-            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
-        }
-
-        impl StatefulView for HostView {
-            type State = HostState;
-
-            fn create_state(&self) -> Self::State {
-                HostState {
-                    include_child: Rc::clone(&self.include_child),
-                    dispose_armed: Rc::clone(&self.dispose_armed),
-                    handle_slot: Rc::clone(&self.handle_slot),
-                }
-            }
-        }
-
-        impl ViewState<HostView> for HostState {
-            fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
-                *self.handle_slot.borrow_mut() = Some(ctx.rebuild_handle());
-            }
-
-            fn build(&self, _view: &HostView, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
-                if self.include_child.get() {
-                    flui_view::view::ViewExt::boxed(PanicOnDisposeView {
-                        armed: Rc::clone(&self.dispose_armed),
-                    })
-                } else {
-                    flui_view::view::ViewExt::boxed(SizedBox::new(10.0, 10.0))
-                }
-            }
-        }
-
-        impl flui_view::View for HostView {
-            fn create_element(&self) -> flui_view::element::ElementKind {
-                flui_view::element::ElementKind::stateful(self)
-            }
-        }
-
-        /// The headline containment claim, driven through the REAL escape
-        /// path (a dispose panic during finalization, not an injected
-        /// probe): the panic is contained to presentation A's own frame —
-        /// the pump call returns instead of unwinding, sibling B's segment
-        /// still runs and presents in the SAME pump, the typed report names
-        /// A with causal detail, a retry is armed, and the pump after that
-        /// recovers A cleanly (which also pins the `WidgetsBinding`
-        /// building-flag reset on unwind: a flag wedged `true` would turn
-        /// the recovery pump's `draw_frame` into a bogus recursion assert,
-        /// i.e. a second report instead of a clean frame).
+        /// The headline containment claim, driven through the controllable
+        /// probe standing in for a real escape path: the panic is contained
+        /// to presentation A's own frame — the pump call returns instead of
+        /// unwinding, sibling B's segment still runs and presents in the
+        /// SAME pump, the typed report names A with causal detail, a retry
+        /// is armed, and the pump after that recovers A cleanly (which also
+        /// pins the `WidgetsBinding` building-flag reset on unwind: a flag
+        /// wedged `true` would turn the recovery pump's `draw_frame` into a
+        /// bogus recursion assert, i.e. a second report instead of a clean
+        /// frame).
         #[test]
-        fn a_dispose_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames() {
+        fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames()
+         {
             let mut realm = UiRealm::for_test();
             let a_id = realm.presentation_id();
             let b_id = realm.install_second_presentation_for_test();
             let seen = install_collecting_handler(&realm);
 
-            let include_child = Rc::new(Cell::new(true));
-            let dispose_armed = Rc::new(Cell::new(true));
-            let handle_slot = Rc::new(RefCell::new(None));
             realm
-                .attach_root_widget(&HostView {
-                    include_child: Rc::clone(&include_child),
-                    dispose_armed: Rc::clone(&dispose_armed),
-                    handle_slot: Rc::clone(&handle_slot),
-                })
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
                 .expect("A attaches");
             realm
                 .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
@@ -8645,18 +8552,22 @@ mod tests {
                 .expect("B installed")
                 .flush_count();
 
-            // Remove the child: the next build deactivates it and
-            // finalization runs its panicking dispose.
-            include_child.set(false);
-            handle_slot
-                .borrow()
-                .as_ref()
-                .expect("init_state captured the rebuild handle")
-                .schedule(flui_foundation::RebuildReason::StateChange);
-            assert!(
-                realm.presentations.primary().widgets().has_pending_builds(),
-                "precondition: the scheduled rebuild is visible as pending build work"
-            );
+            // Arm A's segment probe for pump 2 only, via a separate `Cell`
+            // the driving test code below toggles between pumps — never by
+            // calling `set_segment_probe` from inside the probe itself,
+            // which would re-borrow the `RefCell` `run_segment_probe` is
+            // already holding for the call (same pattern as
+            // `consecutive_failures_count_up_and_reset_on_a_clean_segment`
+            // above).
+            let probe_armed = Rc::new(Cell::new(true));
+            let armed = Rc::clone(&probe_armed);
+            realm
+                .presentations
+                .primary()
+                .set_segment_probe(Some(Box::new(move || {
+                    assert!(!armed.get(), "segment probe — intentional test panic");
+                })));
+            realm.request_redraw();
             // Give B real work too, so this same pump proves B's segment
             // still runs AFTER A's failure (A is primary and iterates
             // first).
@@ -8670,16 +8581,16 @@ mod tests {
             });
             realm.mark_rendered();
 
-            // Pump 2: A's dispose panics mid-segment. The claim under test:
-            // the pump RETURNS (no unwind out of render_frame_entered) and
-            // B still framed.
+            // Pump 2: A's probe panics at the top of its segment. The claim
+            // under test: the pump RETURNS (no unwind out of
+            // render_frame_entered) and B still framed.
             let outcome = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)
                 }))
             });
             let presented = outcome.expect(
-                "a dispose panic in one presentation's segment must be contained at the \
+                "a panic escaping one presentation's segment must be contained at the \
                  frame-transaction boundary, not unwind out of the realm pump",
             );
             assert!(
@@ -8728,16 +8639,28 @@ mod tests {
                 }
             }
 
-            // Pump 3: A recovers — a fresh rebuild (child re-added) builds,
-            // lays out, paints, and presents cleanly, proving the failed
-            // pump did not wedge the widgets binding (building flag) or
-            // leave the realm unable to frame.
-            include_child.set(true);
-            handle_slot
-                .borrow()
-                .as_ref()
-                .expect("handle still captured")
-                .schedule(flui_foundation::RebuildReason::StateChange);
+            // Pump 3: A recovers — disarm the probe (the assertion above
+            // is what makes it panic, so clearing the flag it reads makes
+            // it inert without ever touching `segment_probe` from inside
+            // itself). The probe fires at the very top of the segment,
+            // before build/layout/paint ever run, so pump 2 never actually
+            // repainted A's tree; give A the same real paint demand B got
+            // for pump 2, so this pump has genuine content to produce
+            // (`needs_redraw()` alone proves a retry is armed, not that
+            // there is anything to paint). Build, layout, and paint then
+            // run cleanly, proving the failed pump did not wedge the
+            // widgets binding (building flag) or leave the realm unable to
+            // frame.
+            probe_armed.set(false);
+            realm.enter(|realm| {
+                let a = realm.presentations.get(a_id).expect("A installed");
+                a.pipeline().with_mut(|owner| {
+                    if let Some(root_id) = owner.root_id() {
+                        owner.mark_needs_paint(root_id);
+                    }
+                });
+            });
+            realm.request_redraw();
             let presented = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)

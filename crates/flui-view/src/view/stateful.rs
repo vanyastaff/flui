@@ -191,21 +191,27 @@ pub trait ViewState<V: StatefulView>: 'static {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc};
+
     use super::*;
     use crate::{
-        StatefulElement,
+        ElementTree, RenderView, StatefulElement,
         element::{Lifecycle, StatefulBehavior},
-        view::{ElementBase, View},
+        view::{ElementBase, View, ViewExt},
     };
 
     #[derive(Clone)]
     struct TestCounter {
         initial: i32,
+        // Shared with the test so `disposed` stays observable after the
+        // element's slab slot (and its owned `TestCounterState`) is freed
+        // on unmount — a plain `bool` field would go with it.
+        disposed: Rc<Cell<bool>>,
     }
 
     struct TestCounterState {
         count: i32,
-        disposed: bool,
+        disposed: Rc<Cell<bool>>,
     }
 
     impl StatefulView for TestCounter {
@@ -214,21 +220,23 @@ mod tests {
         fn create_state(&self) -> Self::State {
             TestCounterState {
                 count: self.initial,
-                disposed: false,
+                disposed: self.disposed.clone(),
             }
         }
     }
 
     impl ViewState<TestCounter> for TestCounterState {
         fn build(&self, _view: &TestCounter, _ctx: &dyn BuildContext) -> impl IntoView {
-            // In real code, return actual child views
-            TestCounter {
-                initial: self.count,
-            }
+            // A true leaf — NOT another `TestCounter`: since issue #561,
+            // `test_stateful_element_dispose` below drives this chain
+            // through a real `build_scope` (dispose is gated on a
+            // completed `init_state`), and a self-returning build would
+            // recurse forever there.
+            TestCounterLeaf.boxed()
         }
 
         fn dispose(&mut self) {
-            self.disposed = true;
+            self.disposed.set(true);
         }
     }
 
@@ -239,9 +247,49 @@ mod tests {
         }
     }
 
+    impl TestCounter {
+        fn new(initial: i32) -> Self {
+            Self {
+                initial,
+                disposed: Rc::new(Cell::new(false)),
+            }
+        }
+    }
+
+    /// The terminal of `TestCounterState::build`'s chain — renders
+    /// directly, with no further `build()`.
+    #[derive(Clone)]
+    struct TestCounterLeaf;
+
+    impl RenderView for TestCounterLeaf {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for TestCounterLeaf {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
     #[test]
     fn test_stateful_element_creation() {
-        let view = TestCounter { initial: 10 };
+        let view = TestCounter::new(10);
         let element = StatefulElement::new(&view, StatefulBehavior::new(&view));
         assert_eq!(element.state().count, 10);
         assert_eq!(element.lifecycle(), Lifecycle::Initial);
@@ -249,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_stateful_element_set_state() {
-        let view = TestCounter { initial: 10 };
+        let view = TestCounter::new(10);
         let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
         element.set_state(|state| {
@@ -262,13 +310,30 @@ mod tests {
 
     #[test]
     fn test_stateful_element_dispose() {
-        let view = TestCounter { initial: 10 };
-        let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-        let mut owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut owner.element_owner_mut());
-        element.unmount(&mut owner.element_owner_mut());
+        let view = TestCounter::new(10);
+        let disposed = view.disposed.clone();
 
-        assert!(element.state().disposed);
-        assert_eq!(element.lifecycle(), Lifecycle::Defunct);
+        let mut tree = ElementTree::new();
+        let mut owner = crate::BuildOwner::new();
+        let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+        // Drive the first build so `init_state` actually runs before
+        // unmount — since issue #561, `dispose` is gated on a completed
+        // `init_state` (`StatefulBehavior::on_unmount`), so an element
+        // that was only mounted, never built, is never disposed. A raw
+        // `StatefulElement::mount`/`unmount` pair (as this test used
+        // before #561) has no live `BuildHandle` to build through, so
+        // this now goes through `ElementTree`/`BuildOwner` like the
+        // production path.
+        owner.schedule_build_for(root_id, 0, crate::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
+
+        assert!(!disposed.get());
+        tree.remove(root_id, &mut owner.element_owner_mut());
+
+        assert!(disposed.get());
+        assert!(
+            tree.get(root_id).is_none(),
+            "an unkeyed root removal frees the slab slot immediately"
+        );
     }
 }
