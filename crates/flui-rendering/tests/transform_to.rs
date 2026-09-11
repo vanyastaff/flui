@@ -17,6 +17,7 @@
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::prelude::*;
 use flui_rendering::testing::{Probe, RenderTester, box_node};
+use flui_rendering::traits::PaintEffects;
 use flui_tree::{Leaf, Single};
 use flui_types::{Matrix4, Offset, Point, Size, geometry::px};
 
@@ -53,9 +54,10 @@ impl RenderBox for OffsetBox {
     }
 }
 
-/// A single-child box that reports a `paint_transform`, like `RenderTransform`.
-/// It positions its child at the origin, so the default composition
-/// (`paint_transform · translate(0)`) reduces to the matrix itself.
+/// A single-child box whose `paint_effects` reports a `transform`, like
+/// `RenderTransform`. It positions its child at the origin, so the default
+/// composition (`paint_effects`'s `transform` field · translate(0)) reduces
+/// to the matrix itself.
 #[derive(Debug)]
 struct MatrixBox(Matrix4);
 impl flui_foundation::Diagnosticable for MatrixBox {}
@@ -71,8 +73,8 @@ impl RenderBox for MatrixBox {
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         ctx.paint_child();
     }
-    fn paint_transform(&self, _size: Size) -> Option<Matrix4> {
-        Some(self.0)
+    fn paint_effects(&self, _size: Size) -> PaintEffects {
+        PaintEffects::NONE.with_transform(self.0)
     }
 }
 
@@ -95,9 +97,9 @@ impl RenderBox for CenterScaleBox {
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         ctx.paint_child();
     }
-    fn paint_transform(&self, size: Size) -> Option<Matrix4> {
+    fn paint_effects(&self, size: Size) -> PaintEffects {
         let (cx, cy) = (size.width.0 / 2.0, size.height.0 / 2.0);
-        Some(
+        PaintEffects::NONE.with_transform(
             Matrix4::translation(cx, cy, 0.0)
                 * Matrix4::scaling(self.0, self.0, 1.0)
                 * Matrix4::translation(-cx, -cy, 0.0),
@@ -169,9 +171,9 @@ fn transform_to_is_identity_for_a_node_and_itself() {
     );
 }
 
-/// An ancestor that reports a `paint_transform` contributes it — this is the
-/// case a naive offset-only accumulation gets silently wrong, and the reason
-/// ADR-0021 exists.
+/// An ancestor whose `paint_effects` reports a `transform` contributes it —
+/// this is the case a naive offset-only accumulation gets silently wrong, and
+/// the reason ADR-0021 exists.
 #[test]
 fn transform_to_respects_a_render_transform_ancestor() {
     let scale = Matrix4::scaling(2.0, 3.0, 1.0);

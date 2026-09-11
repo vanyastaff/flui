@@ -186,12 +186,4 @@ mod tests {
             "RenderRepaintBoundary"
         );
     }
-
-    #[test]
-    fn test_paint_effects_none() {
-        use flui_rendering::traits::RenderBox;
-        let rb = RenderRepaintBoundary::new();
-        assert!(RenderBox::paint_alpha(&rb).is_none());
-        assert!(RenderBox::paint_transform(&rb, flui_types::Size::ZERO).is_none());
-    }
 }
