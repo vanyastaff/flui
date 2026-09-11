@@ -13,9 +13,11 @@
 use std::sync::Arc;
 
 use flui_types::{
-    Matrix4, Pixels, RRect, Rect,
+    Matrix4, Pixels, Point, RRect, Rect, Size,
     painting::{Clip, Path},
 };
+
+use crate::hit_testing::PathClipTarget;
 
 /// A node's own paint effects, in the order they wrap the node's content.
 ///
@@ -216,4 +218,46 @@ pub enum PaintClip {
         /// How to handle content outside the clip boundary.
         behavior: Clip,
     },
+
+    /// A path clip whose shape is a function of the node's size, resolved
+    /// through the active owner lane by the paint walk — never by the
+    /// producer. The descriptor is data: a 16-byte token plus the size the
+    /// clipper is evaluated at, so building this value on a coordinate
+    /// query (`transform_to` through a `ClipPath` with a custom clipper)
+    /// runs no user code and allocates nothing; the walk resolves it once,
+    /// inside the paint frame, with [`resolve_path_clip`].
+    ///
+    /// [`Clip::None`] still yields a layer for this variant, exactly as it
+    /// does for [`Self::Rect`], [`Self::RRect`], and [`Self::Path`].
+    PathTarget {
+        /// The owner-lane token registered for the clipper.
+        target: PathClipTarget,
+        /// The size the clipper is evaluated at — the `size` the
+        /// producer's `paint_effects(size)` was asked for. Carried here
+        /// because the walk builds layers from the descriptor alone
+        /// (own-effect arm, patch arm, and fragment-scope replay) and
+        /// must not need the node back to evaluate it.
+        size: Size,
+        /// How to handle content outside the clip boundary.
+        behavior: Clip,
+    },
+}
+
+/// Resolves a [`PaintClip::PathTarget`] through the active owner lane.
+///
+/// On any resolution failure — no lane active (`InactiveRealm`), an
+/// unregistered target — the clip degrades to the whole box: a rectangle
+/// path of `size` at the origin. That is the same degrade
+/// `RenderClip<Path>` performs for a token it cannot resolve, kept in one
+/// place so paint, hit-test and semantics agree.
+pub fn resolve_path_clip(target: PathClipTarget, size: Size) -> Path {
+    match crate::hit_testing::resolve_path_clip_target(target, size) {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::debug!(?error, "path clip target resolution failed");
+            let mut path = Path::new();
+            path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+            path
+        }
+    }
 }

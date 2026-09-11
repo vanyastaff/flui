@@ -19,7 +19,7 @@ use crate::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
     },
-    traits::{PaintClip, PaintEffects},
+    traits::{PaintClip, PaintEffects, resolve_path_clip},
 };
 
 use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
@@ -1528,7 +1528,12 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
 /// (the common case, the node opening the clip paints at its own origin)
 /// the already-owned `Arc<Path>` moves through untouched, no clone and no
 /// copy of the command buffer; only a non-zero origin pays for a
-/// translated path in a freshly allocated `Arc`.
+/// translated path in a freshly allocated `Arc`. `PathTarget` resolves
+/// through [`resolve_path_clip`] first (never by the producer, and inside
+/// the walk that calls this function), then follows the same
+/// translate-then-box shape as `Path` — the one difference is that its
+/// `Arc::new` is unavoidable either way, since the resolver always hands
+/// back a freshly built owned `Path`, not a pre-existing `Arc`.
 fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
     match clip {
         PaintClip::Rect { rect, behavior } => {
@@ -1546,6 +1551,25 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
             };
             Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
         }
+        PaintClip::PathTarget {
+            target,
+            size,
+            behavior,
+        } => {
+            // The path arm above shares its already-owned `Arc<Path>` for
+            // free at zero origin; there is no pre-existing `Arc` to share
+            // here — `resolve_path_clip` hands back a freshly built owned
+            // `Path` every time, so the single `Arc::new` below is the one
+            // allocation this arm ever pays, made AFTER the translate so a
+            // non-zero origin never boxes a path it is about to discard.
+            let path = resolve_path_clip(target, size);
+            let path = if origin == Offset::ZERO {
+                path
+            } else {
+                path.translate(origin)
+            };
+            Layer::ClipPath(Box::new(ClipPathLayer::new(Arc::new(path), behavior)))
+        }
     }
 }
 
@@ -1555,9 +1579,14 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
 
 #[cfg(test)]
 mod tests {
+    use flui_interaction::InteractionLane;
     use flui_layer::LayerLink;
     use flui_tree::{Exact, Leaf};
-    use flui_types::{Size, geometry::px, painting::Alignment};
+    use flui_types::{
+        Point, Rect, Size,
+        geometry::px,
+        painting::{Alignment, Clip, Path},
+    };
 
     use super::*;
     use crate::{
@@ -1909,5 +1938,161 @@ mod tests {
              skip its subtree rather than falling through to normal \
              traversal"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // `PaintClip::PathTarget` (task 1.14)
+    // ------------------------------------------------------------------
+
+    /// A `PathTarget` resolved with no owner lane active degrades to the
+    /// whole box — the same degrade `RenderClip<Path>` performs for a
+    /// token it cannot resolve. The clipper is registered inside
+    /// `lane.enter`, but `clip_layer` is called after `enter` returns, so
+    /// the lane is inactive at resolution time (`InactiveRealm`).
+    #[test]
+    fn a_path_target_with_no_lane_degrades_to_the_whole_box() {
+        let lane = InteractionLane::try_new().expect("lane construction should succeed");
+        let handle = lane.dispatch_handle();
+        let target = lane.enter(|| {
+            handle
+                .register_path_clipper(|size| {
+                    // Never invoked: resolution happens outside `enter`,
+                    // where this clipper is unreachable.
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    path
+                })
+                .expect("register path clipper")
+        });
+
+        let size = Size::new(px(20.0), px(30.0));
+        let layer = clip_layer(
+            PaintClip::PathTarget {
+                target,
+                size,
+                behavior: Clip::AntiAlias,
+            },
+            Offset::ZERO,
+        );
+
+        let Layer::ClipPath(clip_path) = layer else {
+            panic!("PathTarget must build a Layer::ClipPath");
+        };
+        assert!(
+            clip_path
+                .clip_path()
+                .contains(Point::new(px(10.0), px(10.0))),
+            "a point inside the whole box must be contained by the degrade"
+        );
+        assert!(
+            !clip_path
+                .clip_path()
+                .contains(Point::new(px(100.0), px(100.0))),
+            "a point outside the whole box must not be contained"
+        );
+    }
+
+    /// A `PathTarget` resolved through an active lane runs the registered
+    /// clipper exactly once and produces the clipper's shape, not the
+    /// whole-box degrade.
+    #[test]
+    fn a_path_target_resolves_through_the_active_lane_once() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let lane = InteractionLane::try_new().expect("lane construction should succeed");
+        let handle = lane.dispatch_handle();
+        let calls = Rc::new(Cell::new(0u32));
+
+        lane.enter(|| {
+            let calls_for_clipper = Rc::clone(&calls);
+            let target = handle
+                .register_path_clipper(move |_size| {
+                    calls_for_clipper.set(calls_for_clipper.get() + 1);
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(
+                        Point::ZERO,
+                        Size::new(px(5.0), px(5.0)),
+                    ));
+                    path
+                })
+                .expect("register path clipper");
+
+            let layer = clip_layer(
+                PaintClip::PathTarget {
+                    target,
+                    size: Size::new(px(20.0), px(30.0)),
+                    behavior: Clip::AntiAlias,
+                },
+                Offset::ZERO,
+            );
+
+            let Layer::ClipPath(clip_path) = layer else {
+                panic!("PathTarget must build a Layer::ClipPath");
+            };
+            assert!(
+                clip_path.clip_path().contains(Point::new(px(2.0), px(2.0))),
+                "a point inside the clipper's 5x5 rect must be contained"
+            );
+            assert!(
+                !clip_path
+                    .clip_path()
+                    .contains(Point::new(px(15.0), px(15.0))),
+                "a point inside the whole box but outside the clipper's \
+                 rect must NOT be contained -- otherwise this would pass \
+                 on the whole-box degrade instead of the resolved clip"
+            );
+        });
+
+        assert_eq!(
+            calls.get(),
+            1,
+            "the registered clipper must run exactly once"
+        );
+    }
+
+    /// A resolved `PathTarget` is shifted by the paint walk's captured
+    /// origin, the same as every other `PaintClip` variant.
+    #[test]
+    fn a_path_target_is_translated_by_the_captured_origin() {
+        let lane = InteractionLane::try_new().expect("lane construction should succeed");
+        let handle = lane.dispatch_handle();
+
+        lane.enter(|| {
+            let target = handle
+                .register_path_clipper(|_size| {
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(
+                        Point::ZERO,
+                        Size::new(px(5.0), px(5.0)),
+                    ));
+                    path
+                })
+                .expect("register path clipper");
+
+            let layer = clip_layer(
+                PaintClip::PathTarget {
+                    target,
+                    size: Size::new(px(20.0), px(30.0)),
+                    behavior: Clip::AntiAlias,
+                },
+                Offset::new(px(10.0), px(10.0)),
+            );
+
+            let Layer::ClipPath(clip_path) = layer else {
+                panic!("PathTarget must build a Layer::ClipPath");
+            };
+            assert!(
+                clip_path
+                    .clip_path()
+                    .contains(Point::new(px(12.0), px(12.0))),
+                "the translated 5x5 rect now spans (10,10)..(15,15)"
+            );
+            assert!(
+                !clip_path.clip_path().contains(Point::new(px(2.0), px(2.0))),
+                "the UNtranslated path would contain (2,2) -- this is the \
+                 point that proves the translate ran"
+            );
+        });
     }
 }

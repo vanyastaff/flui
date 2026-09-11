@@ -11,7 +11,7 @@ mod render_box;
 mod render_object;
 mod render_sliver;
 
-pub use paint_effects::{PaintClip, PaintEffects, PaintOpacity};
+pub use paint_effects::{PaintClip, PaintEffects, PaintOpacity, resolve_path_clip};
 pub use render_box::*;
 pub use render_object::*;
 pub use render_sliver::*;
