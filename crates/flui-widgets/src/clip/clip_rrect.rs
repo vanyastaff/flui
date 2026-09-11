@@ -115,7 +115,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn border_radius_update_reports_paint_and_semantics_only_on_change() {
+    fn border_radius_update_reports_a_layer_update_and_semantics_only_on_change() {
         let initial = ClipRRect::new();
         let mut render_object =
             initial.create_render_object(&flui_view::RenderObjectContext::detached());
@@ -132,7 +132,7 @@ mod tests {
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             ),
-            flui_rendering::RenderUpdateImpact::PAINT
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
         );
     }

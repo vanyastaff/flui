@@ -233,7 +233,10 @@ mod tests {
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
-        assert_eq!(impact, flui_rendering::RenderUpdateImpact::PAINT);
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+        );
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
         assert!(!render_object.has_custom_clipper());
@@ -256,7 +259,7 @@ mod tests {
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             ),
-            flui_rendering::RenderUpdateImpact::PAINT
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
         );
     }

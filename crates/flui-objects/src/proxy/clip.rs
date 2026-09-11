@@ -65,7 +65,7 @@ use flui_rendering::{
     context::BoxHitTestContext,
     hit_testing::PathClipTarget,
     parent_data::BoxParentData,
-    traits::{PaintClip, RenderBox, resolve_path_clip},
+    traits::{PaintClip, PaintEffects, RenderBox, resolve_path_clip},
 };
 
 #[derive(Debug)]
@@ -249,6 +249,27 @@ pub trait ClipGeometry:
         None
     }
 
+    /// Produces a node-local [`PaintClip`] descriptor for an owner-lane path
+    /// clip target, when this shape supports one — data only, no user code.
+    ///
+    /// Only [`Path`] overrides this, and it returns the TOKEN as a
+    /// [`PaintClip::PathTarget`] rather than a resolved path: the paint walk
+    /// resolves it through [`resolve_path_clip`] inside the paint frame, so
+    /// building this descriptor from [`RenderClip::paint_effects`] on a
+    /// coordinate query (the default `apply_paint_transform`, outside any
+    /// paint walk) runs no registered clipper. [`Self::resolve_path_clip_target`]
+    /// — used by `RenderClip::resolve_clip` for hit-test and semantics —
+    /// resolves the SAME target eagerly through the same helper, so all
+    /// three agree on the shape. Other clip geometries ignore owner-lane
+    /// path targets and keep the default `None`.
+    fn path_target_descriptor(
+        _target: PathClipTarget,
+        _size: Size,
+        _behavior: Clip,
+    ) -> Option<PaintClip> {
+        None
+    }
+
     /// Resolves a data-only rounded-rect border-radius source for this
     /// geometry, when the shape supports it.
     ///
@@ -266,12 +287,11 @@ pub trait ClipGeometry:
     type Stored: Borrow<Self> + Clone + fmt::Debug + Send + Sync + 'static + From<Self>;
 
     /// Produces the node-local [`PaintClip`] descriptor for this shape at the
-    /// given `behavior`. [`RenderClip::paint`] pushes the result through
-    /// [`flui_rendering::context::PaintCx::with_clip`] — a LAYER scope, not a
-    /// canvas clip, because canvas state is run-local in the fragment paint
-    /// model: it never extends across child markers, and the entire point of
-    /// `RenderClip` is clipping the child. A later step hands this same value
-    /// to `paint_effects` unchanged.
+    /// given `behavior`. [`RenderClip::paint_effects`] reports the result,
+    /// and the pipeline opens a LAYER scope around the node's entire
+    /// fragment from it — not a canvas clip, because canvas state is
+    /// run-local in the fragment paint model: it never extends across child
+    /// markers, and the entire point of `RenderClip` is clipping the child.
     ///
     /// By value: every caller holds a freshly-owned value from
     /// `resolve_clip`, so consuming `stored` is a move — for [`Path`], no
@@ -478,6 +498,19 @@ impl ClipGeometry for Path {
         Some(resolve_path_clip(target, size))
     }
 
+    fn path_target_descriptor(
+        target: PathClipTarget,
+        size: Size,
+        behavior: Clip,
+    ) -> Option<PaintClip> {
+        // The token, not a resolved path — see the trait doc for why.
+        Some(PaintClip::PathTarget {
+            target,
+            size,
+            behavior,
+        })
+    }
+
     fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
         PaintClip::Path {
             path: stored,
@@ -554,13 +587,28 @@ impl<S: ClipGeometry> RenderClip<S> {
         Self::new(Clip::HardEdge)
     }
 
-    /// Replaces the clip behavior and reports paint when changed.
+    /// Replaces the clip behavior and reports a composited-layer update
+    /// when changed.
+    ///
+    /// The clip is a layer property read from [`Self::paint_effects`]: a
+    /// behavior change patches the retained clip layer in the enclosing
+    /// repaint boundary's capture rather than repainting the subtree. There
+    /// is no structural threshold to cross here the way opacity has one at
+    /// alpha 0/255 — the clip layer exists at every `Clip` value, including
+    /// `Clip::None` (see [`PaintClip`]'s docs) — so this setter never needs
+    /// a second impact bit for that reason.
+    ///
+    /// Does not report [`RenderUpdateImpact::SEMANTICS`]: the accessibility
+    /// clip gates on `Clip::None` at
+    /// [`describe_approximate_paint_clip`](RenderBox::describe_approximate_paint_clip)'s
+    /// read site rather than through this setter — a pre-existing gap, not
+    /// fixed here.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        flui_rendering::RenderUpdateImpact::PAINT
+        flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
     }
 
     /// Returns the current clip behavior.
@@ -575,14 +623,8 @@ impl<S: ClipGeometry> RenderClip<S> {
         self.rrect_border_radius.is_some() || self.path_clip_target.is_some()
     }
 
-    /// Computes the clip shape for the given laid-out `size`.
-    ///
-    /// Called from both `paint()` and `hit_test()`, which both take
-    /// `&self`; the size is supplied by the driver (`ctx.size()` /
-    /// `ctx.own_size()`). The cost is one closure call (or one
-    /// `default_for_size` dispatch) per paint/hit-test, which is
-    /// negligible relative to the canvas / hit-test work that follows.
-    /// The caller-supplied clip shape, if one replaces the default whole box.
+    /// Returns the caller-supplied clip shape, if one replaces the default
+    /// whole box.
     #[must_use]
     pub fn clip_shape(&self) -> Option<&S> {
         self.clip_shape.as_ref().map(Borrow::borrow)
@@ -615,12 +657,18 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// own suite uses it. If you need it, `ClipPath::new(|size| …)` takes a
     /// closure and a path can express any rect or oval, so the capability
     /// exists — it is these two convenience widgets that do not carry it.
+    ///
+    /// A changed shape reports a composited-layer update, plus semantics
+    /// (the clipped accessibility rect moves with it): the shape is a layer
+    /// property read from [`Self::paint_effects`], patched in place under a
+    /// retained boundary rather than repainting the subtree.
     pub fn set_clip_shape(&mut self, shape: Option<S>) -> flui_rendering::RenderUpdateImpact {
         if self.clip_shape.as_ref().map(Borrow::borrow) == shape.as_ref() {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_shape = shape.map(Into::into);
-        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
+        flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+            | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Builder form of [`set_clip_shape`](Self::set_clip_shape).
@@ -630,6 +678,15 @@ impl<S: ClipGeometry> RenderClip<S> {
         self
     }
 
+    /// Computes the clip shape for the given laid-out `size`, eagerly
+    /// resolving an owner-lane path target (running the registered clipper)
+    /// when one is installed.
+    ///
+    /// Called from `hit_test()` and `describe_approximate_paint_clip()`,
+    /// both `&self`; the size is supplied by the driver (`ctx.own_size()` /
+    /// the semantics walk). [`Self::clip_descriptor`] is the paint-side
+    /// counterpart: same source precedence, but a path target stays an
+    /// unresolved token there — see its doc for why.
     fn resolve_clip(&self, size: Size) -> S::Stored {
         if let Some(shape) = &self.clip_shape {
             return shape.clone();
@@ -642,6 +699,39 @@ impl<S: ClipGeometry> RenderClip<S> {
             })
             .unwrap_or_else(|| S::default_for_size(size))
             .into()
+    }
+
+    /// Produces the node-local [`PaintClip`] descriptor for the laid-out
+    /// `size`, following exactly [`Self::resolve_clip`]'s source precedence:
+    /// a fixed `clip_shape`, then a data-only `rrect_border_radius`, then an
+    /// owner-lane `path_clip_target`, then the shape's whole-box default.
+    ///
+    /// Unlike `resolve_clip`, an owner-lane path target here does NOT run
+    /// the registered clipper: `S::path_target_descriptor` hands back the
+    /// token as data, and the paint walk resolves it through
+    /// [`resolve_path_clip`] inside the paint frame. That purity is what
+    /// makes it safe to call from [`RenderBox::paint_effects`] below on a
+    /// coordinate query (`transform_to`'s default `apply_paint_transform`)
+    /// outside any paint walk — building this value never runs a caller's
+    /// clipper. Paint, hit-test and semantics still resolve the same target
+    /// eagerly through `resolve_clip`, so all three agree on the shape.
+    fn clip_descriptor(&self, size: Size) -> PaintClip {
+        if let Some(shape) = &self.clip_shape {
+            return S::to_paint_clip(shape.clone(), self.clip_behavior);
+        }
+        if let Some(shape) = self
+            .rrect_border_radius
+            .and_then(|border_radius| S::resolve_rrect_border_radius(border_radius, size))
+        {
+            return S::to_paint_clip(shape.into(), self.clip_behavior);
+        }
+        if let Some(descriptor) = self
+            .path_clip_target
+            .and_then(|target| S::path_target_descriptor(target, size, self.clip_behavior))
+        {
+            return descriptor;
+        }
+        S::to_paint_clip(S::default_for_size(size).into(), self.clip_behavior)
     }
 }
 
@@ -660,7 +750,13 @@ impl RenderClip<RRect> {
         self
     }
 
-    /// Replaces the rounded-rect source and reports paint plus semantics when changed.
+    /// Replaces the rounded-rect source and reports a composited-layer
+    /// update plus semantics when changed.
+    ///
+    /// The radius is a layer property read from [`Self::paint_effects`]: a
+    /// changed radius patches the retained `ClipRRectLayer` in the
+    /// enclosing repaint boundary's capture rather than repainting the
+    /// subtree.
     pub fn set_border_radius(
         &mut self,
         border_radius: Option<BorderRadius>,
@@ -669,7 +765,8 @@ impl RenderClip<RRect> {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.rrect_border_radius = border_radius;
-        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
+        flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+            | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -683,8 +780,11 @@ impl RenderClip<Path> {
 
     /// Replaces the stable path-factory identity.
     ///
-    /// A different source changes both the painted clip and clipped semantics
-    /// geometry. An identical token is a no-op.
+    /// A different source changes both the painted clip and clipped
+    /// semantics geometry, reported as a composited-layer update plus
+    /// semantics: the clip shape is a layer property read from
+    /// [`Self::paint_effects`], patched in place under a retained boundary
+    /// rather than repainting the subtree. An identical token is a no-op.
     pub fn set_path_clip_source_token(
         &mut self,
         source_token: &ClipSourceToken,
@@ -693,7 +793,7 @@ impl RenderClip<Path> {
             return RenderUpdateImpact::NONE;
         }
         self.path_clip_source_token = Some(source_token.clone());
-        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+        RenderUpdateImpact::COMPOSITED_LAYER_UPDATE | RenderUpdateImpact::SEMANTICS
     }
 
     /// Returns the owner-local path clip target, if one is installed.
@@ -703,12 +803,17 @@ impl RenderClip<Path> {
     }
 
     /// Replaces the owner-local path clip target.
+    ///
+    /// A changed target reports a composited-layer update plus semantics:
+    /// the resolved clip is a layer property read from
+    /// [`Self::paint_effects`], patched in place under a retained boundary
+    /// rather than repainting the subtree.
     pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> RenderUpdateImpact {
         if self.path_clip_target == target {
             return RenderUpdateImpact::NONE;
         }
         self.path_clip_target = target;
-        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+        RenderUpdateImpact::COMPOSITED_LAYER_UPDATE | RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -782,17 +887,27 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
-    // (Single's zero-arg overload vs the indexed variant on other arities), so the
-    // closure cannot be replaced by a method reference.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    /// Splices the child's fragment directly — no scope push here.
+    ///
+    /// The clip is reported through [`Self::paint_effects`] instead: the
+    /// pipeline wraps the node's entire fragment (this splice) in the
+    /// `PaintClip` layer `paint_effects` describes, BEFORE replaying it —
+    /// the same split `RenderTransform::paint` makes between `paint` and
+    /// `paint_effects` for its own layer (`crates/flui-objects/src/layout/transform.rs`).
+    /// Pushing the clip again here would wrap the child in it twice.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
-        // The clip is a LAYER scope so it covers the child subtree —
-        // canvas clips are run-local in the fragment paint model and
-        // would never reach the child's commands.
-        let size = ctx.size();
-        let clip = S::to_paint_clip(self.resolve_clip(size), self.clip_behavior);
-        ctx.with_clip(clip, |ctx| ctx.paint_child());
+        ctx.paint_child();
+    }
+
+    /// Reports this node's clip as a composited-layer-patchable effect.
+    ///
+    /// Unconditional, including at [`Clip::None`]: a [`PaintClip`] with
+    /// `behavior: Clip::None` is still a layer scope the engine skips
+    /// pushing, not the absence of one (see [`PaintClip`]'s own docs) — so
+    /// `set_clip_behavior` crossing `Clip::None` is a property update on an
+    /// existing layer, never a structural add/remove of one.
+    fn paint_effects(&self, size: Size) -> PaintEffects {
+        PaintEffects::NONE.with_clip(self.clip_descriptor(size))
     }
 
     /// Content this clip paints over carries no accessibility presence.
@@ -1047,7 +1162,7 @@ mod tests {
             let mut node = RenderClipPath::anti_alias();
             assert_eq!(
                 node.set_path_clip_target(Some(target)),
-                RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+                RenderUpdateImpact::COMPOSITED_LAYER_UPDATE | RenderUpdateImpact::SEMANTICS
             );
             assert_eq!(
                 node.set_path_clip_target(Some(target)),
@@ -1061,6 +1176,102 @@ mod tests {
         });
 
         assert_eq!(calls.get(), 1);
+    }
+
+    // ---------- paint_effects / clip_descriptor ---------------------------
+
+    #[test]
+    fn clip_descriptor_rect_default_matches_default_for_size() {
+        let size = Size::new(px(80.0), px(40.0));
+        let node = RenderClipRect::hard_edge();
+
+        match node.clip_descriptor(size) {
+            PaintClip::Rect { rect, behavior } => {
+                assert_eq!(rect, <Rect<Pixels> as ClipGeometry>::default_for_size(size));
+                assert_eq!(behavior, Clip::HardEdge);
+            }
+            other => panic!("expected PaintClip::Rect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_descriptor_oval_is_an_elliptical_rrect() {
+        let size = Size::new(px(100.0), px(60.0));
+        let node = RenderClipOval::anti_alias();
+        let default_oval = <Oval as ClipGeometry>::default_for_size(size);
+
+        match node.clip_descriptor(size) {
+            PaintClip::RRect { rrect, behavior } => {
+                assert_eq!(behavior, Clip::AntiAlias);
+                assert_eq!(rrect.top_left.x, default_oval.bounds.width() * 0.5);
+                assert_eq!(rrect.top_left.y, default_oval.bounds.height() * 0.5);
+            }
+            other => panic!("expected PaintClip::RRect, got {other:?}"),
+        }
+    }
+
+    // Pins the descriptor's core safety property (spec AC11): building it
+    // for a `PathTarget` carries the token as data and runs the registered
+    // clipper zero times, unlike `resolve_clip` above which runs it once.
+    #[test]
+    fn clip_descriptor_path_target_carries_the_token_and_runs_no_clipper() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use flui_interaction::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let calls = Rc::new(Cell::new(0));
+        let size = Size::new(px(20.0), px(30.0));
+        lane.enter(|| {
+            let calls_for_clipper = Rc::clone(&calls);
+            let target = handle
+                .register_path_clipper(move |size| {
+                    calls_for_clipper.set(calls_for_clipper.get() + 1);
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    path
+                })
+                .expect("register path clipper");
+
+            let mut node = RenderClipPath::anti_alias();
+            let _ = node.set_path_clip_target(Some(target));
+
+            match node.clip_descriptor(size) {
+                PaintClip::PathTarget {
+                    size: descriptor_size,
+                    ..
+                } => assert_eq!(descriptor_size, size),
+                other => panic!("expected PaintClip::PathTarget, got {other:?}"),
+            }
+        });
+
+        assert_eq!(calls.get(), 0, "the descriptor must not run the clipper");
+    }
+
+    // Pins AC11's other half: a statically shaped `clip_shape` is shared by
+    // refcount into the descriptor, never copied.
+    #[test]
+    fn clip_descriptor_fixed_path_shares_the_arc_without_copying() {
+        let mut path = Path::new();
+        path.add_rect(Rect::from_origin_size(
+            Point::ZERO,
+            Size::new(px(10.0), px(10.0)),
+        ));
+        let node = RenderClipPath::anti_alias().with_clip_shape(path);
+        let stored = node.clip_shape().expect("clip_shape set above");
+
+        match node.clip_descriptor(Size::new(px(20.0), px(20.0))) {
+            PaintClip::Path {
+                path: descriptor_path,
+                ..
+            } => assert!(
+                std::ptr::eq(&raw const *descriptor_path, stored),
+                "descriptor must share the stored Arc<Path>, not copy it"
+            ),
+            other => panic!("expected PaintClip::Path, got {other:?}"),
+        }
     }
 
     // ---------- RenderClip<S> generic ------------------------------------
@@ -1083,11 +1294,26 @@ mod tests {
         let mut node = RenderClipRect::anti_alias();
         assert_eq!(
             node.set_clip_behavior(Clip::HardEdge),
-            flui_rendering::RenderUpdateImpact::PAINT
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
         );
         assert_eq!(
             node.set_clip_behavior(Clip::HardEdge),
             flui_rendering::RenderUpdateImpact::NONE
+        );
+    }
+
+    #[test]
+    fn set_clip_shape_returns_exact_impact() {
+        let mut node = RenderClipRect::anti_alias();
+        let shape = Rect::from_origin_size(Point::ZERO, Size::new(px(10.0), px(10.0)));
+        assert_eq!(
+            node.set_clip_shape(Some(shape)),
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_clip_shape(Some(shape)),
+            flui_rendering::RenderUpdateImpact::NONE,
         );
     }
 
@@ -1112,7 +1338,7 @@ mod tests {
         );
         assert_eq!(
             node.set_path_clip_source_token(&ClipSourceToken::fresh()),
-            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+            RenderUpdateImpact::COMPOSITED_LAYER_UPDATE | RenderUpdateImpact::SEMANTICS
         );
     }
 
@@ -1134,7 +1360,7 @@ mod tests {
         let mut node: RenderClipRRect = RenderClip::anti_alias();
         assert_eq!(
             node.set_border_radius(Some(radius)),
-            flui_rendering::RenderUpdateImpact::PAINT
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
         );
         assert_eq!(
