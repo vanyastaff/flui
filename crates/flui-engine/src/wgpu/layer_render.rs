@@ -1001,6 +1001,43 @@ mod tests {
         assert!(renderer.calls.is_empty(), "Clip::None should not pop");
     }
 
+    /// `Clip::None` is a no-op at the engine for the rounded-rect shape too —
+    /// same `clips()` gate `ClipRectLayer` reads, on `ClipRRectLayer`. This is
+    /// what backs the claim that no `RenderClip` setter needs to be
+    /// structural at `Clip::None`: the layer keeps existing, the engine just
+    /// never pushes it.
+    #[test]
+    fn test_clip_rrect_layer_no_clip_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(8.0),
+        );
+        let layer = ClipRRectLayer::new(rrect, Clip::None);
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
+    }
+
+    /// `Clip::None` is a no-op at the engine for the path shape too — same
+    /// `clips()` gate, on `ClipPathLayer`.
+    #[test]
+    fn test_clip_path_layer_no_clip_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let mut path = Path::new();
+        path.add_rect(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let layer = ClipPathLayer::new(path, Clip::None);
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
+    }
+
     // ========================================================================
     // ShaderMaskLayer tests
     // ========================================================================

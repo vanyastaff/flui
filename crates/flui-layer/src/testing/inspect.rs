@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 
 use flui_foundation::{Diagnosticable, DiagnosticsNode, LayerId};
 use flui_painting::DisplayListCore;
-use flui_types::{Matrix4, RRect, Rect};
+use flui_types::{Matrix4, RRect, Rect, painting::Path};
 
 use crate::{Layer, LayerTree};
 
@@ -182,6 +182,29 @@ pub fn clip_rrects(tree: &LayerTree) -> Vec<RRect> {
     out
 }
 
+/// Returns the clip path of every [`Layer::ClipPath`] node in pre-order
+/// (parent before children) as a flat list of owned clones.
+///
+/// Unlike [`clip_rects`]/[`clip_rrects`], callers must not compare the
+/// result with `==`: `Path` derives `PartialEq` over a memoised bounding-box
+/// cache alongside its command list, so two paths with identical commands
+/// can compare unequal (or, after both have had bounds computed, equal by
+/// coincidence) depending on unrelated history — whether something already
+/// forced the cache to populate. Compare paths by sampling
+/// [`Path::contains`] at points that discriminate the shapes under test
+/// instead.
+#[must_use]
+pub fn clip_paths(tree: &LayerTree) -> Vec<Path> {
+    let mut out = Vec::new();
+    pre_order(tree, |_, layer| {
+        if let Layer::ClipPath(c) = layer {
+            out.push(c.clip_path().clone());
+        }
+        ControlFlow::Continue(())
+    });
+    out
+}
+
 /// Returns whether the tree contains any [`Layer::Picture`] node in pre-order.
 #[must_use]
 pub fn has_picture_layer(tree: &LayerTree) -> bool {
@@ -196,7 +219,9 @@ mod tests {
     use flui_types::{Matrix4, geometry::px, painting::Clip};
 
     use super::*;
-    use crate::{ClipRRectLayer, ClipRectLayer, OffsetLayer, OpacityLayer, TransformLayer};
+    use crate::{
+        ClipPathLayer, ClipRRectLayer, ClipRectLayer, OffsetLayer, OpacityLayer, TransformLayer,
+    };
 
     fn offset() -> Layer {
         Layer::Offset(OffsetLayer::zero())
@@ -334,5 +359,47 @@ mod tests {
         tree.add_child(outer, inner);
 
         assert_eq!(clip_rrects(&tree), vec![outer_rrect, inner_rrect]);
+    }
+
+    /// root → [outer → [inner]], both `ClipPath` layers with distinct paths
+    /// (a whole-box rect and a left-half rect), so walk order (outer before
+    /// inner) AND shape are observable — through `Path::contains` at a probe
+    /// point in the half NOT covered by the inner path, never `==` (see
+    /// [`clip_paths`]'s own doc for why equality is unsafe here).
+    #[test]
+    fn clip_paths_returns_every_clip_path_layer_in_pre_order() {
+        use flui_types::geometry::Point;
+
+        let mut tree = LayerTree::new();
+        let root = tree.insert(offset());
+        let mut outer_path = Path::new();
+        outer_path.add_rect(Rect::from_xywh(px(0.0), px(0.0), px(20.0), px(20.0)));
+        let mut inner_path = Path::new();
+        inner_path.add_rect(Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(20.0)));
+        let outer = tree.insert(Layer::ClipPath(Box::new(ClipPathLayer::new(
+            outer_path.clone(),
+            Clip::AntiAlias,
+        ))));
+        let inner = tree.insert(Layer::ClipPath(Box::new(ClipPathLayer::new(
+            inner_path.clone(),
+            Clip::AntiAlias,
+        ))));
+        tree.set_root(Some(root));
+        tree.add_child(root, outer);
+        tree.add_child(outer, inner);
+
+        let paths = clip_paths(&tree);
+        assert_eq!(paths.len(), 2, "one ClipPath layer per node: {paths:?}");
+        let probe = Point::new(px(15.0), px(10.0));
+        assert!(
+            paths[0].contains(probe),
+            "walk order: the OUTER path (whole box) is visited first and \
+             contains the probe on the right half",
+        );
+        assert!(
+            !paths[1].contains(probe),
+            "walk order: the INNER path (left half only) is visited second \
+             and excludes the probe on the right half",
+        );
     }
 }

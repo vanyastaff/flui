@@ -11,8 +11,8 @@
 //! same tree painting would have.
 
 use flui_objects::{
-    RenderClipRRect, RenderColoredBox, RenderFlex, RenderFlow, RenderOpacity, RenderPadding,
-    RenderRepaintBoundary, RenderRotatedBox, RenderTransform,
+    RenderClipRRect, RenderClipRect, RenderColoredBox, RenderFlex, RenderFlow, RenderOpacity,
+    RenderPadding, RenderRepaintBoundary, RenderRotatedBox, RenderTransform,
 };
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -20,8 +20,8 @@ use flui_rendering::{
     testing::{
         TreeNode, box_node, edit_render_object,
         inspect::{
-            clip_rects, clip_rrects, first_opacity_alpha, first_transform_matrix, layer_structure,
-            transform_matrices,
+            clip_paths, clip_rects, clip_rrects, first_opacity_alpha, first_transform_matrix,
+            layer_structure, transform_matrices,
         },
         tree, update_render_object,
     },
@@ -2898,12 +2898,13 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
 /// above: the identical same-frame-layout-change-forces-a-repaint invariant,
 /// pinned through a clip patch instead of a transform one.
 ///
-/// No shipped clip producer reports an update-only `RenderUpdateImpact` yet
-/// (`clip_layer`'s translate-by-origin in `pipeline/owner/paint.rs` is only
-/// ever reached through a full repaint today), so `ClipShifter` below is a
-/// proxy that reports `COMPOSITED_LAYER_UPDATE` on purpose — mirroring
-/// `ShapeShifter` and `AppearingTransform` elsewhere in this file — to drive
-/// that arm of `layer_patches_for` through the same-frame race at all.
+/// Drives the real production clip producer rather than a double:
+/// `RenderClipRect::set_clip_shape` reports `COMPOSITED_LAYER_UPDATE`
+/// (`crates/flui-objects/src/proxy/clip.rs`), the same setter seam the
+/// transform sibling test above drives through `RenderTransform::set_transform`
+/// — so this reaches `clip_layer`'s translate-by-origin in
+/// `pipeline/owner/paint.rs` through the same update arm a widget rebuild
+/// takes.
 ///
 /// Like the transform test, a clip rect is translated by the node's
 /// accumulated paint origin at emission time (`clip_layer`, same file),
@@ -2951,60 +2952,6 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
         }
     }
 
-    /// A clip double that reports the WRONG impact on purpose — a rect-only
-    /// field mutation goes through `mark_needs_composited_layer_update`,
-    /// never a repaint — since no shipped clip producer does this yet. See
-    /// this test's doc above.
-    #[derive(Debug)]
-    struct ClipShifter {
-        rect: flui_types::Rect<flui_types::Pixels>,
-    }
-
-    impl flui_foundation::Diagnosticable for ClipShifter {}
-
-    impl flui_rendering::traits::RenderBox for ClipShifter {
-        type Arity = flui_tree::Single;
-        type ParentData = flui_rendering::parent_data::BoxParentData;
-
-        fn perform_layout(
-            &mut self,
-            ctx: &mut flui_rendering::context::BoxLayoutContext<
-                '_,
-                flui_tree::Single,
-                flui_rendering::parent_data::BoxParentData,
-            >,
-        ) -> Size {
-            let constraints = *ctx.constraints();
-            if ctx.child_count() > 0 {
-                ctx.layout_child(0, constraints)
-            } else {
-                constraints.smallest()
-            }
-        }
-
-        flui_rendering::forward_single_child_box_queries!();
-
-        fn hit_test(
-            &self,
-            _ctx: &mut flui_rendering::context::BoxHitTestContext<
-                '_,
-                flui_tree::Single,
-                flui_rendering::parent_data::BoxParentData,
-            >,
-        ) -> bool {
-            false
-        }
-
-        fn paint_effects(&self, _size: Size) -> flui_rendering::traits::PaintEffects {
-            flui_rendering::traits::PaintEffects::NONE.with_clip(
-                flui_rendering::traits::PaintClip::Rect {
-                    rect: self.rect,
-                    behavior: flui_types::painting::Clip::HardEdge,
-                },
-            )
-        }
-    }
-
     fn mount(
         width: f32,
         rect: flui_types::Rect<flui_types::Pixels>,
@@ -3022,7 +2969,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
                         .child(box_node(Grower { width }).label("grower"))
                         .child(
                             box_node(RenderPadding::all(12.0)).child(
-                                box_node(ClipShifter { rect })
+                                box_node(RenderClipRect::hard_edge().with_clip_shape(rect))
                                     .label("clip")
                                     .child(box_node(RenderColoredBox::red(20.0, 20.0))),
                             ),
@@ -3037,17 +2984,14 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
         (owner, grower, clip)
     }
 
-    /// Applies a new clip rect through the update-only seam
-    /// `mark_needs_composited_layer_update` drives directly — never through
-    /// `RenderUpdateImpact`, since `ClipShifter` reports the wrong impact on
-    /// purpose (see the test's doc above).
-    fn set_rect(
+    /// Applies a new clip rect through the same seam a widget rebuild uses:
+    /// the setter reports an impact, the owner applies it.
+    fn set_clip_shape(
         owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
         id: flui_foundation::RenderId,
         rect: flui_types::Rect<flui_types::Pixels>,
     ) {
-        edit_render_object::<ClipShifter, _, _>(owner, id, |c| c.rect = rect);
-        owner.mark_needs_composited_layer_update(id);
+        update_render_object::<RenderClipRect, _>(owner, id, |c| c.set_clip_shape(Some(rect)));
     }
 
     let rect1 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
@@ -3069,7 +3013,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     edit_render_object::<Grower, _, _>(&mut owner, grower_id, |object| object.width = 90.0);
     owner.mark_needs_layout(grower_id);
     let rect2 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(15.0), px(5.0));
-    set_rect(&mut owner, clip_id, rect2);
+    set_clip_shape(&mut owner, clip_id, rect2);
 
     let (owner, result) = owner.run_frame();
     let moved = result
@@ -3714,6 +3658,225 @@ fn a_clip_layer_update_is_written_back_into_the_retained_capture() {
 }
 
 // ---------------------------------------------------------------------------
+// Composited-layer updates: RenderClipRect / RenderClipOval — the STORED
+// clip_shape branch of `clip_descriptor`
+// ---------------------------------------------------------------------------
+//
+// The two tests above exercise `clip_descriptor`'s data-only
+// `rrect_border_radius` branch; these exercise the OTHER stored-shape
+// branch, `clip_shape` — set through `RenderClipRect`/`RenderClipOval`'s
+// `set_clip_shape` rather than `RenderClipRRect`'s `set_border_radius`, both
+// of which precede the owner-lane `path_clip_target` branch tested
+// separately below.
+
+/// Mirrors `mount_clip_rrect_under_boundary` for `RenderClipRect`: root row
+/// → boundary → padding → clip(rect) → drawing counting leaf. No sibling
+/// boundary — write-back through an unrelated repaint is already pinned for
+/// the border-radius branch above and does not need re-proving per shape.
+fn mount_clip_rect_under_boundary(
+    rect: flui_types::Rect<flui_types::Pixels>,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+    Arc<AtomicUsize>,
+) {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderPadding::all(12.0)).child(
+                    box_node(RenderClipRect::hard_edge().with_clip_shape(rect))
+                        .label("clip")
+                        .child(box_node(DrawingPaintCounter {
+                            size: Size::new(px(30.0), px(20.0)),
+                            count: Arc::clone(&painted),
+                        })),
+                ),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let clip_id = registry.get("clip").expect("clip is labelled");
+    (owner, clip_id, painted)
+}
+
+/// A `set_clip_shape` change updates the emitted `ClipRectLayer` without
+/// repainting the subtree.
+///
+/// Same two-halves discipline as
+/// `a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`
+/// above: the paint count alone passes if nothing painted at all, the rect
+/// alone passes on a full repaint. Compared against TWO fresh reference
+/// owners so both "equals the new value" and "differs from the old value"
+/// are real evidence, not merely restated preconditions.
+#[test]
+fn a_clip_shape_change_updates_the_clip_layer_without_repainting_the_subtree() {
+    let rect1 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(20.0), px(10.0));
+    let rect2 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(15.0), px(5.0));
+
+    let (owner, clip_id, painted) = mount_clip_rect_under_boundary(rect1);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+
+    update_render_object::<RenderClipRect, _>(&mut owner, clip_id, |c| {
+        c.set_clip_shape(Some(rect2))
+    });
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the subtree under the clip must NOT repaint for a clip-shape-only change",
+    );
+    let rects = clip_rects(&tree);
+    assert_eq!(
+        rects.len(),
+        1,
+        "precondition: exactly one ClipRectLayer must be present: {rects:?}",
+    );
+
+    let (rect2_reference, _, _) = mount_clip_rect_under_boundary(rect2);
+    let (_, result) = rect2_reference.run_frame();
+    let rect2_rects = clip_rects(
+        &result
+            .expect("rect2 reference frame")
+            .expect("rect2 reference frame produces a layer tree"),
+    );
+    assert_eq!(
+        rects[0], rect2_rects[0],
+        "the patched ClipRectLayer must equal what a fresh owner mounted \
+         directly at rect2 produces",
+    );
+
+    let (rect1_reference, _, _) = mount_clip_rect_under_boundary(rect1);
+    let (_, result) = rect1_reference.run_frame();
+    let rect1_rects = clip_rects(
+        &result
+            .expect("rect1 reference frame")
+            .expect("rect1 reference frame produces a layer tree"),
+    );
+    assert_ne!(
+        rects[0], rect1_rects[0],
+        "and the new rect must differ from the old — otherwise the patch \
+         could be a no-op that happened to pass",
+    );
+}
+
+/// Mirrors `mount_clip_rect_under_boundary` for `RenderClipOval`: same
+/// shape, but `RenderClipOval`'s `clip_descriptor` resolves through
+/// `ClipGeometry for Oval`, which emits a `PaintClip::RRect` (an inscribed
+/// ellipse expressed as a rounded rect — `clip_descriptor_oval_is_an_elliptical_rrect`
+/// in `flui-objects` pins that mapping), so the emitted layer is a
+/// `ClipRRectLayer` and this compares through `clip_rrects`, not `clip_rects`.
+fn mount_clip_oval_under_boundary(
+    oval: flui_objects::Oval,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    flui_foundation::RenderId,
+    Arc<AtomicUsize>,
+) {
+    let painted = Arc::new(AtomicUsize::new(0));
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderPadding::all(12.0)).child(
+                    box_node(flui_objects::RenderClipOval::hard_edge().with_clip_shape(oval))
+                        .label("clip")
+                        .child(box_node(DrawingPaintCounter {
+                            size: Size::new(px(30.0), px(20.0)),
+                            count: Arc::clone(&painted),
+                        })),
+                ),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let clip_id = registry.get("clip").expect("clip is labelled");
+    (owner, clip_id, painted)
+}
+
+/// The `RenderClipOval` counterpart of
+/// `a_clip_shape_change_updates_the_clip_layer_without_repainting_the_subtree`
+/// above: same setter, same seam, but the emitted layer is a `ClipRRectLayer`
+/// (elliptical), so this asserts against `clip_rrects` instead of `clip_rects`.
+#[test]
+fn an_oval_clip_shape_change_updates_the_clip_layer_without_repainting_the_subtree() {
+    let oval1 = flui_objects::Oval::from_size(Size::new(px(20.0), px(10.0)));
+    let oval2 = flui_objects::Oval::from_size(Size::new(px(15.0), px(5.0)));
+
+    let (owner, clip_id, painted) = mount_clip_oval_under_boundary(oval1);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+    let before = painted.load(Ordering::Relaxed);
+    assert!(
+        before > 0,
+        "precondition: the leaf paints on the first frame"
+    );
+
+    update_render_object::<flui_objects::RenderClipOval, _>(&mut owner, clip_id, |c| {
+        c.set_clip_shape(Some(oval2))
+    });
+    let (owner, result) = owner.run_frame();
+    let tree = result
+        .expect("second frame")
+        .expect("second frame produces a layer tree");
+    drop(owner);
+
+    assert_eq!(
+        painted.load(Ordering::Relaxed),
+        before,
+        "the subtree under the clip must NOT repaint for a clip-shape-only change",
+    );
+    let rrects = clip_rrects(&tree);
+    assert_eq!(
+        rrects.len(),
+        1,
+        "precondition: exactly one ClipRRectLayer must be present: {rrects:?}",
+    );
+
+    let (oval2_reference, _, _) = mount_clip_oval_under_boundary(oval2);
+    let (_, result) = oval2_reference.run_frame();
+    let oval2_rrects = clip_rrects(
+        &result
+            .expect("oval2 reference frame")
+            .expect("oval2 reference frame produces a layer tree"),
+    );
+    assert_eq!(
+        rrects[0], oval2_rrects[0],
+        "the patched ClipRRectLayer must equal what a fresh owner mounted \
+         directly at oval2 produces",
+    );
+
+    let (oval1_reference, _, _) = mount_clip_oval_under_boundary(oval1);
+    let (_, result) = oval1_reference.run_frame();
+    let oval1_rrects = clip_rrects(
+        &result
+            .expect("oval1 reference frame")
+            .expect("oval1 reference frame produces a layer tree"),
+    );
+    assert_ne!(
+        rrects[0], oval1_rrects[0],
+        "and the new oval must differ from the old — otherwise the patch \
+         could be a no-op that happened to pass",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Composited-layer updates: RenderFlow — a structural clip, refused as one
 // ---------------------------------------------------------------------------
 //
@@ -3809,8 +3972,7 @@ fn a_flow_clip_behavior_change_is_structural_and_refused() {
     );
 
     // The wrong classification, on purpose: bypass the setter's own (correct)
-    // impact and drive the update-only path directly, mirroring
-    // `ClipShifter`'s `set_rect` helper above.
+    // impact and drive the update-only path directly.
     owner.mark_needs_composited_layer_update(flow_id);
     let (owner, result) = owner.run_frame();
     let second = result
@@ -3996,6 +4158,211 @@ fn two_path_clips_under_one_boundary_resolve_in_paint_order() {
             );
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Composited-layer updates: RenderClipPath — the layer CONTENT, not just order
+// ---------------------------------------------------------------------------
+//
+// `two_path_clips_under_one_boundary_resolve_in_paint_order` above pins
+// resolution ORDER across two siblings; it never inspects what either
+// `ClipPathLayer` actually contains. This test is the path family's
+// counterpart to `a_clip_shape_change_updates_the_clip_layer_without_repainting_the_subtree`
+// and `a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`
+// above: it changes ONE `RenderClipPath`'s target and checks the emitted
+// path itself.
+
+/// A `set_path_clip_target` change updates the emitted `ClipPathLayer`'s
+/// path without repainting the subtree.
+///
+/// `Path` derives `PartialEq` over a memoised bounds cache alongside its
+/// command list (see `clip_paths`'s own doc in `flui-layer/src/testing/inspect.rs`),
+/// so two paths built through unrelated call paths can compare unequal even
+/// when they describe the same shape, or equal by coincidence when they
+/// don't. Comparing the emitted paths directly would be exactly that trap.
+/// Instead this samples `Path::contains` at two points in LAYER space (the
+/// boundary's coordinate system, where `clip_layer` translates the resolved
+/// path by the node's accumulated paint origin — the padding's `(12, 12)`
+/// here): one inside both clipper A's whole-box rect and clipper B's
+/// left-half rect, and one inside ONLY A's — the probe that actually
+/// discriminates "reached the new target" from "still holding the old one".
+#[test]
+fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() {
+    use flui_interaction::InteractionLane;
+    use flui_rendering::hit_testing::PathClipTarget;
+
+    /// Clipper A: the whole box, exactly as `paint_effects`'s default would
+    /// resolve with no target installed at all — so a stale target and no
+    /// target installed would look identical at both probes below.
+    fn register_whole_box(handle: &flui_interaction::InteractionDispatchHandle) -> PathClipTarget {
+        handle
+            .register_path_clipper(|size: Size| {
+                let mut path = flui_types::painting::Path::new();
+                path.add_rect(flui_types::Rect::from_origin_size(
+                    flui_types::Point::ZERO,
+                    size,
+                ));
+                path
+            })
+            .expect("register path clipper")
+    }
+
+    /// Clipper B: a FIXED left half, ignoring the size it is handed — the
+    /// leaf's own box (30x20) is wider than this, so the discriminating
+    /// probe below is inside A's rect and outside B's, never the reverse.
+    fn register_left_half(handle: &flui_interaction::InteractionDispatchHandle) -> PathClipTarget {
+        handle
+            .register_path_clipper(|_size: Size| {
+                let mut path = flui_types::painting::Path::new();
+                path.add_rect(flui_types::Rect::from_xywh(
+                    px(0.0),
+                    px(0.0),
+                    px(15.0),
+                    px(20.0),
+                ));
+                path
+            })
+            .expect("register path clipper")
+    }
+
+    /// Root row → [boundary → padding → clip(path target) → drawing
+    /// counting leaf, sibling boundary → leaf].
+    fn mount(
+        target: PathClipTarget,
+    ) -> (
+        PipelineOwner<flui_rendering::pipeline::Idle>,
+        flui_foundation::RenderId,
+        Arc<AtomicUsize>,
+    ) {
+        let painted = Arc::new(AtomicUsize::new(0));
+        let mut clip = flui_objects::RenderClipPath::hard_edge();
+        let _ = clip.set_path_clip_target(Some(target));
+
+        let mut owner = PipelineOwner::new();
+        let (root_id, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderFlex::row())
+                .child(
+                    box_node(RenderRepaintBoundary::new()).child(
+                        box_node(RenderPadding::all(12.0)).child(
+                            box_node(clip)
+                                .label("clip")
+                                .child(box_node(DrawingPaintCounter {
+                                    size: Size::new(px(30.0), px(20.0)),
+                                    count: Arc::clone(&painted),
+                                })),
+                        ),
+                    ),
+                )
+                .child(
+                    box_node(RenderRepaintBoundary::new())
+                        .label("sibling")
+                        .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+                ),
+        );
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        let clip_id = registry.get("clip").expect("clip is labelled");
+        (owner, clip_id, painted)
+    }
+
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+
+    lane.enter(|| {
+        let target_a = register_whole_box(&handle);
+        let (owner, clip_id, painted) = mount(target_a);
+        let (mut owner, result) = owner.run_frame();
+        let first = result
+            .expect("first frame")
+            .expect("first frame produces a layer tree");
+        let before = painted.load(Ordering::Relaxed);
+        assert!(
+            before > 0,
+            "precondition: the leaf paints on the first frame"
+        );
+        assert_eq!(
+            layer_structure(&first)
+                .iter()
+                .filter(|&&kind| kind == "ClipPath")
+                .count(),
+            1,
+            "precondition: the first frame emits exactly one ClipPath layer: {:?}",
+            layer_structure(&first),
+        );
+
+        let target_b = register_left_half(&handle);
+        update_render_object::<flui_objects::RenderClipPath, _>(&mut owner, clip_id, |c| {
+            c.set_path_clip_target(Some(target_b))
+        });
+        let (owner, result) = owner.run_frame();
+        let second = result
+            .expect("second frame")
+            .expect("second frame produces a layer tree");
+        drop(owner);
+
+        assert_eq!(
+            painted.load(Ordering::Relaxed),
+            before,
+            "the subtree under the clip must NOT repaint for a path-target-only change",
+        );
+
+        let paths = clip_paths(&second);
+        assert_eq!(
+            paths.len(),
+            1,
+            "precondition: exactly one ClipPathLayer must be present: {paths:?}",
+        );
+
+        // Probe points in LAYER space: the clip sits at the padding's
+        // (12, 12) accumulated paint origin.
+        let inside_both = flui_types::Point::new(px(17.0), px(17.0));
+        let inside_a_only = flui_types::Point::new(px(37.0), px(17.0));
+
+        assert!(
+            paths[0].contains(inside_both),
+            "the patched path must still contain a point inside both A's \
+             and B's rect: {:?}",
+            paths[0],
+        );
+        assert!(
+            !paths[0].contains(inside_a_only),
+            "the patched path must exclude a point inside A's rect but \
+             outside B's — proof the patch reached the new target, not a \
+             stale one: {:?}",
+            paths[0],
+        );
+
+        // Reference: a fresh owner painted once directly at target B — what
+        // a full repaint of the final state would have produced.
+        let target_b_reference = register_left_half(&handle);
+        let (reference, _, _) = mount(target_b_reference);
+        let (_, result) = reference.run_frame();
+        let reference_paths = clip_paths(
+            &result
+                .expect("reference frame")
+                .expect("reference frame produces a layer tree"),
+        );
+        assert_eq!(
+            reference_paths.len(),
+            1,
+            "precondition: the reference tree also carries exactly one ClipPathLayer",
+        );
+        assert_eq!(
+            paths[0].contains(inside_both),
+            reference_paths[0].contains(inside_both),
+            "the patched path and a fresh owner mounted directly at target B \
+             must agree at the shared probe",
+        );
+        assert_eq!(
+            paths[0].contains(inside_a_only),
+            reference_paths[0].contains(inside_a_only),
+            "the patched path and a fresh owner mounted directly at target B \
+             must agree at the discriminating probe — frame 1's path (target \
+             A) contained it; the patched and reference paths (target B) \
+             both must not",
+        );
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -4401,7 +4768,10 @@ fn a_patched_transform_subtree_matches_a_full_repaint_at_any_size() {
         // leaves merge into one `PictureLayer` sharing an `Arc<DisplayList>`. In
         // the layered shape every leaf is its own boundary, so the capture — and
         // therefore the graft — grows with the subtree by design, which is exactly
-        // why the benchmark's layered arm narrows to ~1.9x instead of 133x.
+        // why the benchmark's layered arm narrows to a small constant ratio
+        // instead of the inline arm's few-hundred-x: a graft that clones one
+        // retained layer per leaf scales with the subtree rather than staying
+        // flat.
         // Asserting a constant count there would be asserting the feature is
         // broken. Every measurement compared, not just the ends: `[6, 7, 6]` is a
         // real regression a first-vs-last check would wave through.

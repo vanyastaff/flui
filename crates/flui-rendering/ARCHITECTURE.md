@@ -535,7 +535,8 @@ enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
   (`crates/flui-layer/src/layer/clip_rect.rs` and its rrect/path
   siblings) gate `LayerRender::render`/`cleanup`
   (`crates/flui-engine/src/wgpu/layer_render.rs`), pinned by
-  `test_clip_rect_layer_no_clip_is_noop` — so crossing `Clip::None` never
+  `test_clip_rect_layer_no_clip_is_noop`, `test_clip_rrect_layer_no_clip_is_noop`
+  and `test_clip_path_layer_no_clip_is_noop` — so crossing `Clip::None` never
   changes the layer count. A token-driven path clip is reported as
   `PaintClip::PathTarget` (`ClipGeometry::path_target_descriptor`) and
   resolved exactly once, by the walk, never by the setter and never on a
@@ -563,8 +564,11 @@ the same class across every `paint_effects` producer — opacity 228x inline /
 rrect 220x / 1.71x**, **clip path 192x / 1.69x**. At N = 1 the ratios are
 the per-node floor every producer shares — clip rrect 1.54x inline / 1.29x
 layered, clip path 1.47x / 1.27x (opacity, transform and rotated box:
-1.51–1.55x / 1.30–1.32x). The update arm runs ≈0.9–1.1 µs regardless of
-producer; the repaint arm runs ≈205–210 µs inline, ≈270–275 µs layered —
+1.51–1.55x / 1.30–1.32x). The update arm runs ≈0.9–1.1 µs on the inline
+shape regardless of producer (layered: ≈160 µs, the graft is O(retained
+layers) — every layered leaf is its own repaint boundary, so patching one
+still clones the whole retained capture, unlike inline leaves sharing one
+`PictureLayer`); the repaint arm runs ≈205–210 µs inline, ≈270–275 µs layered —
 the same figures measured when the paint walk switched to reading one
 `PaintEffects` value (a structural ≈4–5% rise on the repaint arm, recorded
 at that switch), so none of this is new overhead from the clip producers

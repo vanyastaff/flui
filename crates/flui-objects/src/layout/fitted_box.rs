@@ -56,8 +56,13 @@
 //! Flutter's `_hasVisualOverflow && clipBehavior != Clip.none` branch. This
 //! module used to record active clipping as deferred, "awaiting the
 //! layer-level clip integration"; that had gone stale — the machinery
-//! (`PaintCx::with_clip_rect`, already used by `RenderClip` and
-//! `RenderPhysicalModel`) was in place.
+//! (`PaintCx::with_clip_rect`) was already in place, used by the rest of
+//! the overflow-gated family that clips from `paint` rather than
+//! `paint_effects` — `RenderViewport`, `RenderConstraintsTransformBox`,
+//! `RenderWrap`, `RenderStack`, `RenderAnimatedSize`. (`RenderClip` is not
+//! among them: it reports its clip through `paint_effects` instead, as a
+//! composited-layer-patchable property rather than a canvas clip scope —
+//! see `crates/flui-rendering/ARCHITECTURE.md`'s clip-producer accounting.)
 //!
 //! What genuinely blocked it was **ordering**, and it is why `paint` pushes
 //! the fit transform itself rather than leaving it to `paint_effects`: the

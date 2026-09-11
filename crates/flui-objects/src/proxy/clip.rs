@@ -1210,9 +1210,9 @@ mod tests {
         }
     }
 
-    // Pins the descriptor's core safety property (spec AC11): building it
-    // for a `PathTarget` carries the token as data and runs the registered
-    // clipper zero times, unlike `resolve_clip` above which runs it once.
+    // Building the descriptor for a `PathTarget` carries the token as data
+    // and runs the registered clipper zero times, unlike `resolve_clip`
+    // above which runs it once.
     #[test]
     fn clip_descriptor_path_target_carries_the_token_and_runs_no_clipper() {
         use std::cell::Cell;
@@ -1250,8 +1250,8 @@ mod tests {
         assert_eq!(calls.get(), 0, "the descriptor must not run the clipper");
     }
 
-    // Pins AC11's other half: a statically shaped `clip_shape` is shared by
-    // refcount into the descriptor, never copied.
+    // A statically shaped `clip_shape` is shared by refcount into the
+    // descriptor, never copied.
     #[test]
     fn clip_descriptor_fixed_path_shares_the_arc_without_copying() {
         let mut path = Path::new();
