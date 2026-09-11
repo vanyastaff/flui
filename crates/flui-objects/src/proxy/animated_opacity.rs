@@ -68,7 +68,7 @@ use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     pipeline::RenderInvalidationHandle,
-    traits::RenderBox,
+    traits::{PaintEffects, PaintOpacity, RenderBox},
 };
 
 /// A render object that applies a continuously-animated transparency to its
@@ -97,8 +97,9 @@ pub struct RenderAnimatedOpacity {
     animation: ProxyAnimation<f32>,
     /// Alpha cache (`0..=255`), shared with the tick listener closure via
     /// `Arc` so both the listener (running off the owning thread, per
-    /// [`RenderInvalidationHandle`]'s cross-thread contract) and `paint_alpha`/
-    /// `skip_paint` (called with `&self` from the pipeline's paint walk)
+    /// [`RenderInvalidationHandle`]'s cross-thread contract) and
+    /// `paint_effects`/`skip_paint` (called with `&self` from the pipeline's
+    /// paint walk)
     /// observe the same up-to-date value. `AtomicU8` over `Mutex<u8>`: a
     /// single-byte cache with no compound invariant needs no lock.
     /// `Ordering::Relaxed` suffices because the dirty-channel send in
@@ -146,7 +147,7 @@ impl RenderAnimatedOpacity {
     /// The composed animation's raw `f32` value, bypassing the `u8` alpha
     /// cache's `1/255` quantization. Test/harness accessor — production
     /// paint/compositing decisions read [`alpha`](Self::alpha)/
-    /// [`paint_alpha`](RenderBox::paint_alpha), which are correctly
+    /// [`paint_effects`](RenderBox::paint_effects), which are correctly
     /// quantized; this exists only because harness assertions pinned to
     /// sub-`1/255` tolerances need the un-rounded value.
     #[inline]
@@ -169,7 +170,7 @@ impl RenderAnimatedOpacity {
     }
 
     /// Whether `alpha` sits in the "layered" range `(0, 255)` — the exact
-    /// threshold `paint_alpha`/`skip_paint` use to decide whether an
+    /// threshold `paint_effects`/`skip_paint` use to decide whether an
     /// `OpacityLayer` is needed. Crossing this threshold is what Flutter's
     /// mixin calls a `isRepaintBoundary` flip (`_alpha! > 0`); FLUI's own
     /// `RenderOpacity` uses the same `alpha != 255` narrowing for its
@@ -323,16 +324,17 @@ impl RenderBox for RenderAnimatedOpacity {
         ctx.hit_test_child_at_offset(0, Offset::ZERO)
     }
 
-    // The whole point of this object: the pipeline reads paint_alpha through
-    // `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards here.
-    fn paint_alpha(&self) -> Option<u8> {
+    // The whole point of this object: the pipeline reads paint_effects
+    // through `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards
+    // here.
+    fn paint_effects(&self, _size: Size) -> PaintEffects {
         let alpha = self.alpha();
         // None when fully opaque (255) or fully transparent (0): neither
         // requires an OpacityLayer. Flutter: alpha=0 -> layer=null.
         if alpha == 255 || alpha == 0 {
-            None
+            PaintEffects::NONE
         } else {
-            Some(alpha)
+            PaintEffects::NONE.with_opacity(PaintOpacity::new(alpha))
         }
     }
 
@@ -358,12 +360,13 @@ impl RenderBox for RenderAnimatedOpacity {
     // threshold is plain `alpha > 0` (fully opaque still counts as
     // needing its own layer). This port instead uses
     // [`is_layered`](Self::is_layered) (`0 < alpha < 255`), the SAME
-    // predicate `paint_alpha`/`skip_paint` above already use, and the one
+    // predicate `paint_effects`/`skip_paint` above already use, and the one
     // `RenderOpacity`/`RenderSliverOpacity` establish for this crate: at
-    // `alpha == 255` no layer is ever allocated (`paint_alpha` returns
-    // `None`), so requiring compositing there would be pure overhead with
-    // no visual effect — consistency with the sibling opacity pair's
-    // predicate wins over a literal transcription of Flutter's threshold.
+    // `alpha == 255` no layer is ever allocated (`paint_effects` returns no
+    // opacity effect), so requiring compositing there would be pure
+    // overhead with no visual effect — consistency with the sibling opacity
+    // pair's predicate wins over a literal transcription of Flutter's
+    // threshold.
     //
     // `RenderOpacity` (the non-animated box sibling) has no analogous
     // override at all — a separate, pre-existing gap in this crate that
@@ -443,14 +446,29 @@ mod tests {
     }
 
     #[test]
-    fn paint_alpha_returns_none_when_opaque_or_transparent() {
-        assert_eq!(render_at(1.0).paint_alpha(), None);
-        assert_eq!(render_at(0.0).paint_alpha(), None);
+    fn paint_effects_opacity_returns_none_when_opaque_or_transparent() {
+        assert_eq!(
+            RenderBox::paint_effects(&render_at(1.0), Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            None
+        );
+        assert_eq!(
+            RenderBox::paint_effects(&render_at(0.0), Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            None
+        );
     }
 
     #[test]
-    fn paint_alpha_returns_some_for_partial() {
-        assert_eq!(render_at(0.5).paint_alpha(), Some(128));
+    fn paint_effects_opacity_returns_some_for_partial() {
+        assert_eq!(
+            RenderBox::paint_effects(&render_at(0.5), Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(128)
+        );
     }
 
     #[test]
