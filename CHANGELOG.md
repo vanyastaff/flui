@@ -130,7 +130,8 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **A `ViewState::dispose` or `deactivate` panic is contained per element, not per frame** (#561):
+- **A `ViewState::dispose`/`deactivate` panic, and a `RenderView::did_unmount_render_object`
+  panic, are contained per element, not per frame** (#561):
   `StatefulBehavior::on_unmount` catches a panicking `dispose` and `StatefulBehavior::on_deactivate`
   catches a panicking `deactivate`, both recording through `ElementOwner::push_recovered_panic`
   instead of letting the panic unwind out of `BuildOwner::build_scope` / `finalize_tree` — the
@@ -148,6 +149,19 @@ file records the repo-consumer-visible summary.
   Every implementor lives inside `flui-view` itself (production code and test fixtures); there is
   no implementor anywhere else in the workspace, so there is no known external implementor to
   migrate.
+  `RenderBehavior::on_unmount` contains a panic from `did_unmount_render_object` the same way,
+  inside the existing `PipelineOwner::with_mut` closure — the recorded panic is only pushed after
+  the closure returns, since the owner handle must not be re-entered while the cell borrow is
+  live — and `remove_render_object_from_tree` still runs unconditionally after, whether or not
+  the hook panicked. `AnimatedBehavior` closes the parallel `listenable()` seam by caching the
+  `Arc<dyn Listenable>` it subscribed to (`subscribed: Option<(Arc<dyn Listenable>, ListenerId)>`,
+  replacing the bare `ListenerId` it used to hold) instead of catching a panic there: `on_unmount`
+  removes through the cached `Arc` and never calls `core.view().listenable()` again, and
+  `on_view_updated` compares the new view's `listenable()` against the cached `Arc` by
+  `Arc::ptr_eq` instead of re-reading `old_view.listenable()` — one user call per update instead
+  of two. `listenable()` is the only handle to the listenable being cleaned up, so a catch around
+  a second call to it at unmount could never make removal safe; caching closes the seam by never
+  calling it there at all.
 - **`PaintEffects` — one value for a render object's own paint effects**
   (#996): `RenderBox`/`RenderSliver`/`RenderObject::paint_effects(size)`
   returns `PaintEffects { opacity, clip, transform }` with a fixed nesting

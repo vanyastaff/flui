@@ -1,18 +1,31 @@
-//! Pins the containment seams around `ViewState::dispose` and
-//! `ViewState::deactivate` (issue #561): a panic inside either is caught per
-//! element instead of unwinding out of `BuildOwner::build_scope` /
-//! `BuildOwner::finalize_tree`.
+//! Pins the containment seams around `ViewState::dispose`,
+//! `ViewState::deactivate`, `RenderView::did_unmount_render_object`, and
+//! `AnimatedView::listenable()` (issue #561): a panic in any of the first
+//! three is caught per element instead of unwinding out of
+//! `BuildOwner::build_scope` / `BuildOwner::finalize_tree`; the fourth is
+//! closed by caching instead — see below.
 //!
-//! Flutter has no equivalent boundary. `StatefulElement.unmount` calls
-//! `state.dispose()` with no `try`/`catch`, and `Element.deactivateChild`
-//! calls `state.deactivate()` the same way (`framework.dart`);
+//! Flutter has no equivalent boundary for the caught hooks.
+//! `StatefulElement.unmount` calls `state.dispose()` with no `try`/`catch`,
+//! `Element.deactivateChild` calls `state.deactivate()` the same way, and
+//! `RenderObjectElement.unmount` calls `widget.didUnmountRenderObject(
+//! renderObject)` the same way too (`framework.dart`);
 //! `BuildOwner.finalizeTree`'s `_inactiveElements._unmountAll()` carries no
 //! per-element catch either — a throwing hook there aborts the whole
 //! reconcile or finalize pass. FLUI bounds the panic to the one element
 //! whose hook threw and lets the rest of the frame continue: see
-//! `StatefulBehavior::{on_unmount, on_deactivate}`
+//! `StatefulBehavior::{on_unmount, on_deactivate}` and
+//! `RenderBehavior::on_unmount`
 //! (`crates/flui-view/src/element/behavior.rs`) and the containment bullet
 //! in `crates/flui-view/AGENTS.md`.
+//!
+//! `AnimatedView::listenable()` is different: it is the only handle to the
+//! listenable an `AnimatedBehavior` subscribed to, so a `catch_unwind`
+//! around a *second* call to it at unmount cannot make removal safe — if
+//! that call panicked, there would be nothing left to remove the listener
+//! from. `AnimatedBehavior` closes this one by caching the `Arc` it
+//! subscribed to and removing through the cache, so `listenable()` is never
+//! called again on the removal path at all.
 //!
 //! Also pins the `initialized` gate: `dispose` runs only for a state whose
 //! `init_state` actually completed. FLUI's split mount/build (unlike
@@ -22,15 +35,16 @@
 //! (mirrors Flutter's `createState` contract), so skipping `dispose` there
 //! costs nothing a well-behaved state depends on.
 
-use std::{any::TypeId, cell::Cell, rc::Rc};
+use std::{any::TypeId, cell::Cell, rc::Rc, sync::Arc};
 
-use flui_foundation::ViewKey;
+use flui_foundation::{ChangeNotifier, Listenable, ViewKey};
 use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementId, ElementNode, ElementTree,
-    GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RenderView, StatefulView,
-    StatelessView, View, ViewExt, ViewState,
+    AnimatedView, BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementId, ElementNode,
+    ElementTree, GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RenderView,
+    StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -661,5 +675,283 @@ fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
     assert!(
         !panic.internal_invariant,
         "an ordinary panic message is not a BUG: internal invariant"
+    );
+}
+
+// ============================================================================
+// `did_unmount_render_object` panic containment: a panic in the render-
+// object unmount hook is caught inside `RenderBehavior::on_unmount`'s
+// `with_mut` closure instead of unwinding out of `build_scope`, and the
+// render node is still detached from the render tree either way.
+// ============================================================================
+
+/// A render-backed leaf whose `did_unmount_render_object` panics exactly
+/// once (mirrors `DisposeCounter`'s one-shot `armed` shape).
+#[derive(Clone)]
+struct UnmountRenderObjectPanicLeaf {
+    armed: Rc<Cell<bool>>,
+    unmount_calls: Rc<Cell<u32>>,
+}
+
+impl RenderView for UnmountRenderObjectPanicLeaf {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
+    fn did_unmount_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+        self.unmount_calls.set(self.unmount_calls.get() + 1);
+        if self.armed.get() {
+            self.armed.set(false);
+            panic!("induced did_unmount_render_object panic (lifecycle containment test)");
+        }
+    }
+}
+
+impl View for UnmountRenderObjectPanicLeaf {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+#[test]
+fn a_did_unmount_render_object_panic_is_contained_and_the_render_node_is_still_removed() {
+    // A `PipelineOwner` must be in scope for `RenderBehavior::on_mount` to
+    // mint a render object at all — without one, `did_unmount_render_object`
+    // never runs and this test would pass for the wrong reason.
+    let pipeline = PipelineCell::new(PipelineOwner::new());
+
+    let armed = Rc::new(Cell::new(true));
+    let unmount_calls = Rc::new(Cell::new(0u32));
+    let panicking_child = UnmountRenderObjectPanicLeaf {
+        armed: armed.clone(),
+        unmount_calls: unmount_calls.clone(),
+    };
+
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+
+    let row_v1 = Row {
+        children: vec![
+            PlainLeaf.boxed(),
+            panicking_child.boxed(),
+            PlainLeaf.boxed(),
+        ],
+    };
+    let parent_id = tree.mount_root_with_pipeline_owner(
+        &row_v1,
+        Some(pipeline.clone()),
+        &mut owner.element_owner_mut(),
+    );
+    owner.schedule_build_for(parent_id, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+
+    let before = direct_children_in_slot_order(&tree, parent_id);
+    assert_eq!(before.len(), 3, "row mounts all three children");
+    let mid = before[1];
+    let render_nodes_before = pipeline.with(|po| po.render_tree().len());
+
+    // Rebuild WITHOUT the middle child — the armed
+    // `did_unmount_render_object` panic fires during the reconcile's inline
+    // removal. Containment means `build_scope` must RETURN, not unwind
+    // (asserted implicitly: this test function keeps running past the call
+    // below).
+    let row_v2 = Row {
+        children: vec![PlainLeaf.boxed(), PlainLeaf.boxed()],
+    };
+    tree.update(parent_id, &row_v2, &mut owner.element_owner_mut());
+    owner.schedule_build_for(parent_id, 0, RebuildReason::ParentUpdate);
+    owner.build_scope(&mut tree);
+
+    assert!(
+        tree.get(mid).is_none(),
+        "the panicking child's slab slot is freed inline during the reconcile that dropped it"
+    );
+    let after = direct_children_in_slot_order(&tree, parent_id);
+    assert_eq!(
+        after.len(),
+        2,
+        "the parent's surviving child list drops the removed middle child, got {after:?}"
+    );
+
+    let render_nodes_after = pipeline.with(|po| po.render_tree().len());
+    assert_eq!(
+        render_nodes_before - render_nodes_after,
+        1,
+        "the render tree loses exactly the removed child's one node despite the panic \
+         (before={render_nodes_before}, after={render_nodes_after})"
+    );
+
+    assert_eq!(
+        unmount_calls.get(),
+        1,
+        "did_unmount_render_object ran exactly once despite panicking"
+    );
+
+    let mut recovered = owner.take_recovered_panics();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "exactly one contained panic must be recorded, got {recovered:?}"
+    );
+    let panic = recovered.remove(0);
+    assert_eq!(panic.hook, LifecycleHook::UnmountRenderObject);
+    assert_eq!(
+        panic.element, mid,
+        "the recorded element is the panicking child"
+    );
+    assert_eq!(
+        panic.parent, None,
+        "the unmount-side seam does not see the parent"
+    );
+    assert_eq!(
+        panic.view_type_id,
+        TypeId::of::<UnmountRenderObjectPanicLeaf>()
+    );
+    assert!(
+        !panic.internal_invariant,
+        "an ordinary panic message is not a BUG: internal invariant"
+    );
+}
+
+// ============================================================================
+// `listenable()` closed by caching: `AnimatedBehavior` caches the
+// `Arc<dyn Listenable>` it subscribed to and unsubscribes through that
+// cache — it never calls `listenable()` again at unmount, so a
+// `listenable()` that panics on every call after mount cannot make removal
+// panic too.
+// ============================================================================
+
+/// An `AnimatedView` whose `listenable()` panics on every call from the
+/// moment the test arms it (right after mount) onward. Unlike
+/// `UnmountRenderObjectPanicLeaf`'s one-shot `armed`, this never disarms —
+/// ANY later call is fatal, so the only way this test can pass is if the
+/// removal path never calls `listenable()` at all.
+#[derive(Clone)]
+struct ListenablePanicAfterMount {
+    notifier: Arc<ChangeNotifier>,
+    armed: Rc<Cell<bool>>,
+    disposed: Rc<Cell<u32>>,
+}
+
+struct ListenablePanicAfterMountState {
+    disposed: Rc<Cell<u32>>,
+}
+
+impl StatefulView for ListenablePanicAfterMount {
+    type State = ListenablePanicAfterMountState;
+
+    fn create_state(&self) -> Self::State {
+        ListenablePanicAfterMountState {
+            disposed: self.disposed.clone(),
+        }
+    }
+}
+
+impl ViewState<ListenablePanicAfterMount> for ListenablePanicAfterMountState {
+    fn build(&self, _view: &ListenablePanicAfterMount, _ctx: &dyn BuildContext) -> impl IntoView {
+        PlainLeaf.boxed()
+    }
+
+    fn dispose(&mut self) {
+        self.disposed.set(self.disposed.get() + 1);
+    }
+}
+
+impl AnimatedView for ListenablePanicAfterMount {
+    fn listenable(&self) -> Arc<dyn Listenable> {
+        assert!(
+            !self.armed.get(),
+            "induced listenable panic (lifecycle containment test)"
+        );
+        self.notifier.clone()
+    }
+}
+
+impl View for ListenablePanicAfterMount {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::animated(self)
+    }
+}
+
+#[test]
+fn an_animated_view_whose_listenable_panics_after_mount_is_still_unsubscribed() {
+    let notifier = Arc::new(ChangeNotifier::new());
+    let armed = Rc::new(Cell::new(false));
+    let disposed = Rc::new(Cell::new(0u32));
+    let animated_child = ListenablePanicAfterMount {
+        notifier: notifier.clone(),
+        armed: armed.clone(),
+        disposed: disposed.clone(),
+    };
+
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+
+    let row_v1 = Row {
+        children: vec![PlainLeaf.boxed(), animated_child.boxed(), PlainLeaf.boxed()],
+    };
+    let parent_id = tree.mount_root(&row_v1, &mut owner.element_owner_mut());
+    owner.schedule_build_for(parent_id, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+
+    assert_eq!(
+        notifier.len(),
+        1,
+        "mount subscribed exactly one listener to the shared notifier"
+    );
+
+    // Arm right after mount: every `listenable()` call from here on panics.
+    armed.set(true);
+
+    let before = direct_children_in_slot_order(&tree, parent_id);
+    let mid = before[1];
+
+    // Rebuild WITHOUT the animated child. No `catch_unwind` here on
+    // purpose: `listenable()` is armed, so if the removal path called it
+    // again this call would panic and fail the test outright — that is
+    // exactly the claim this test pins (`listenable()` is no longer on the
+    // removal path at all).
+    let row_v2 = Row {
+        children: vec![PlainLeaf.boxed(), PlainLeaf.boxed()],
+    };
+    tree.update(parent_id, &row_v2, &mut owner.element_owner_mut());
+    owner.schedule_build_for(parent_id, 0, RebuildReason::ParentUpdate);
+    owner.build_scope(&mut tree);
+
+    assert!(
+        tree.get(mid).is_none(),
+        "the panicking-listenable child's slab slot is freed inline during the reconcile that \
+         dropped it"
+    );
+    assert_eq!(
+        notifier.len(),
+        0,
+        "unmount removed the subscription through the cached Arc, without ever calling the \
+         now-armed listenable() again"
+    );
+    assert_eq!(disposed.get(), 1, "dispose still ran for the removed state");
+
+    assert!(
+        owner.take_recovered_panics().is_empty(),
+        "nothing panicked — listenable() is no longer on the removal path, so there is nothing \
+         to recover"
     );
 }

@@ -6,10 +6,14 @@
 
 use flui_rendering::parent_data::SliverSlot;
 use std::{
-    any::TypeId, collections::HashMap, marker::PhantomData, panic::AssertUnwindSafe, sync::Arc,
+    any::{Any, TypeId},
+    collections::HashMap,
+    marker::PhantomData,
+    panic::AssertUnwindSafe,
+    sync::Arc,
 };
 
-use flui_foundation::{ElementId, ListenerId, RenderId};
+use flui_foundation::{ElementId, Listenable, ListenerId, RenderId};
 use flui_rendering::{
     pipeline::PipelineOwner, protocol::Protocol, traits::RenderObject as RenderObjectTrait,
 };
@@ -1011,7 +1015,39 @@ where
         }
     }
 
+    /// Run `RenderView::did_unmount_render_object` under a containment
+    /// catch so a user panic there cannot escape `finalize_tree` (mirrors
+    /// `StatefulBehavior::{on_unmount, on_deactivate}` one hook over).
+    ///
+    /// # Why the push sits outside `with_mut`
+    ///
+    /// The catch itself has to sit *inside* the `with_mut` closure — the
+    /// render node it hands the user hook a `&mut` into only exists behind
+    /// that borrow. The push happens only after the closure returns and
+    /// the cell borrow is released: `PipelineCell::with_mut` is not
+    /// reentrant (a self-locking call from inside it deadlocks with no
+    /// compile-time oracle to catch the mistake), so nothing in the
+    /// recovery path may call back into the owner while the render tree is
+    /// still checked out — the local `recovered` payload is the handoff
+    /// that keeps the two windows disjoint.
+    ///
+    /// `remove_render_object_from_tree` still runs unconditionally after,
+    /// whether or not the hook panicked.
+    ///
+    /// # Flutter contrast
+    ///
+    /// `RenderObjectElement.unmount` (`framework.dart`, tag 3.44.0)
+    /// calls `oldWidget.didUnmountRenderObject(renderObject)` with no
+    /// `try`/`catch`, so a throwing hook there aborts `unmount` and leaks
+    /// the render object out of `BuildOwner.finalizeTree`'s
+    /// `_inactiveElements._unmountAll()` loop (the render object is never
+    /// disposed/detached because the two calls right after
+    /// `didUnmountRenderObject` never run). FLUI bounds the hook and still
+    /// detaches the node either way — a deliberate improvement over that
+    /// contract, not parity with it; ADR-0048 (the frame transaction
+    /// boundary) is where the accounting for the removal-path seams lives.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        let mut recovered: Option<Box<dyn Any + Send>> = None;
         if let Some(render_id) = self.render_id
             && let Some(pipeline_owner) = core.pipeline_owner()
         {
@@ -1021,10 +1057,40 @@ where
                     .render_tree_mut()
                     .get_mut(render_id)
                     .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
+                    && let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        core.view().did_unmount_render_object(&ctx, render_object);
+                    }))
                 {
-                    core.view().did_unmount_render_object(&ctx, render_object);
+                    recovered = Some(payload);
                 }
             });
+        }
+        if let Some(payload) = recovered {
+            if let Some(element) = core.self_id() {
+                owner.push_recovered_panic(RecoveredPanic::from_payload(
+                    element,
+                    None,
+                    TypeId::of::<V>(),
+                    LifecycleHook::UnmountRenderObject,
+                    payload.as_ref(),
+                    "unmounting the render object of RenderElement",
+                ));
+            } else {
+                // No slab id — mirrors `StatefulBehavior::on_unmount`'s
+                // fallback: nothing to attach a `RecoveredPanic` to (a
+                // hand-rolled element that bypassed `ElementTree::insert`;
+                // test fixtures only), so this `tracing::error!` is the
+                // only signal.
+                let error = FlutterError::from_panic(
+                    payload.as_ref(),
+                    "unmounting the render object of RenderElement",
+                );
+                tracing::error!(
+                    panic_message = %error.message,
+                    "did_unmount_render_object panicked outside the slab; nothing to record \
+                     (no element id)"
+                );
+            }
         }
         super::behavior_commons::remove_render_object_from_tree(
             core,
@@ -1341,8 +1407,24 @@ where
 {
     /// Composed StatefulBehavior for state management
     stateful: StatefulBehavior<V>,
-    /// Listener ID for cleanup
-    listener_id: Option<ListenerId>,
+    /// The listenable this element is currently subscribed to, cached
+    /// together with the `ListenerId` `add_listener` returned — set at
+    /// subscribe time (`on_mount`, and again on a swap in
+    /// `on_view_updated`).
+    ///
+    /// # Why cache instead of re-reading `listenable()` (issue #561)
+    ///
+    /// `on_unmount` removes the subscription through this cached `Arc` and
+    /// never calls `core.view().listenable()` again. `listenable()` is the
+    /// user's only handle to the thing being cleaned up, so a
+    /// `catch_unwind` around a *second* call to it at unmount cannot make
+    /// removal safe: if that call panicked, there is nothing left to
+    /// remove the listener FROM — "the listener is removed regardless"
+    /// would be unreachable. Caching closes the seam instead of catching
+    /// it: the hook is no longer on the removal path at all, so a
+    /// `listenable()` that panics on every call after mount cannot make
+    /// unmount panic too.
+    subscribed: Option<(Arc<dyn Listenable>, ListenerId)>,
 }
 
 impl<V> AnimatedBehavior<V>
@@ -1353,7 +1435,7 @@ where
     pub fn new(view: &V) -> Self {
         Self {
             stateful: StatefulBehavior::new(view),
-            listener_id: None,
+            subscribed: None,
         }
     }
 
@@ -1376,7 +1458,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedBehavior")
             .field("state", &self.stateful.state)
-            .field("has_listener", &self.listener_id.is_some())
+            .field("has_listener", &self.subscribed.is_some())
             .finish()
     }
 }
@@ -1409,19 +1491,24 @@ where
         // First, let StatefulBehavior do its setup (initialize state)
         self.stateful.on_mount(core, owner);
 
-        // Then subscribe to the listenable
+        // Then subscribe to the listenable, caching the `Arc` alongside the
+        // `ListenerId` — `on_unmount` removes through this cache and never
+        // calls `listenable()` again (see the field doc on `subscribed`).
         let listenable = core.view().listenable();
         let mark_dirty = core.create_mark_dirty_callback(crate::RebuildReason::AnimationTick);
-
-        self.listener_id = Some(listenable.add_listener(mark_dirty));
+        let listener_id = listenable.add_listener(mark_dirty);
+        self.subscribed = Some((listenable, listener_id));
 
         tracing::debug!("AnimatedBehavior::on_mount subscribed to listenable");
     }
 
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        // Unsubscribe from the listenable
-        if let Some(listener_id) = self.listener_id.take() {
-            let listenable = core.view().listenable();
+        // Unsubscribe through the CACHED `Arc` — never `core.view()
+        // .listenable()` again. This is the one removal-path hook a catch
+        // cannot make safe (see `subscribed`'s field doc); closing it by
+        // caching means a `listenable()` that panics on every call after
+        // mount cannot reach this method at all.
+        if let Some((listenable, listener_id)) = self.subscribed.take() {
             listenable.remove_listener(listener_id);
             tracing::debug!("AnimatedBehavior::on_unmount unsubscribed from listenable");
         }
@@ -1464,26 +1551,32 @@ where
         // unchanged (by far the common case — the parent rebuilt but the
         // animation itself didn't) must not unsubscribe/resubscribe.
         //
-        // `old_view` is the pre-swap snapshot `Element::update` captured
-        // before replacing `core`'s view, so `old_view.listenable()` reaches
-        // the actual old instance — unlike reading `core.view()` twice, which
-        // is the bug this replaces (both reads would resolve to the new view).
-        let old_listenable = old_view.listenable();
+        // One `listenable()` call here, not two: the CACHED `Arc` in
+        // `subscribed` IS the old instance by construction
+        // — `on_mount` and this method's own swap below are the only
+        // writers — so comparing the new view's `listenable()` against the
+        // cache is equivalent to also reading `old_view.listenable()`,
+        // without the second user call.
         let new_listenable = core.view().listenable();
+        let unchanged = self
+            .subscribed
+            .as_ref()
+            .is_some_and(|(cached, _)| Arc::ptr_eq(cached, &new_listenable));
 
-        if !Arc::ptr_eq(&old_listenable, &new_listenable) {
+        if !unchanged {
             // Safe to unsubscribe unconditionally, even if the old
             // listenable's backing `ChangeNotifier` were already disposed:
             // `Listenable::remove_listener` is a silent no-op on a disposed
             // notifier (Flutter parity — `ChangeNotifier.removeListener`
             // carries no `debugAssertNotDisposed`, precisely so teardown
             // code can detach from an already-disposed listenable).
-            if let Some(listener_id) = self.listener_id.take() {
+            if let Some((old_listenable, listener_id)) = self.subscribed.take() {
                 old_listenable.remove_listener(listener_id);
             }
 
             let mark_dirty = core.create_mark_dirty_callback(crate::RebuildReason::AnimationTick);
-            self.listener_id = Some(new_listenable.add_listener(mark_dirty));
+            let listener_id = new_listenable.add_listener(mark_dirty);
+            self.subscribed = Some((new_listenable, listener_id));
 
             tracing::debug!(
                 "AnimatedBehavior::on_view_updated resubscribed: listenable instance changed"
