@@ -4,7 +4,7 @@
 //! issue #536: `ClipRRect`'s `update_render_object` calls
 //! `RenderClipRRect::set_border_radius` (plus `set_clip_behavior`), and hands
 //! the unioned `RenderUpdateImpact` to the owner. This is the seam an
-//! implicit `AnimatedContainer`/`AnimatedContainer`-style radius animation
+//! implicit `AnimatedContainer`-style radius animation
 //! would drive every frame — a mechanism that only works when a test pokes
 //! the render object directly is the defect class this repository keeps
 //! finding.

@@ -82,10 +82,13 @@ struct ClipSourceMarker;
 ///
 /// Two closures cannot be compared, so "did the clip change" has no structural
 /// answer for a callback-shaped clip source, and this token is the substitute:
-/// a new identity means a changed clip, and the render object repaints. That
-/// makes minting one **not free** — under the ordinary pattern of building a
-/// view fresh on every rebuild, a token minted in the constructor repaints the
-/// clipped subtree every frame the surrounding tree rebuilds.
+/// a new identity means a changed clip, and the render object reports a
+/// composited-layer update — under a retained repaint boundary the clip layer
+/// is patched in place and the clipped subtree is not repainted; without a
+/// retained capture to patch it is a full repaint. That still makes minting
+/// one **not free** — under the ordinary pattern of building a view fresh on
+/// every rebuild, a token minted in the constructor invalidates the clip every
+/// frame the surrounding tree rebuilds.
 ///
 /// Prefer a clip that is DATA where the shape allows it: `ClipRect`,
 /// `ClipOval` and `ClipRRect` take values compared with `==`, so they need no

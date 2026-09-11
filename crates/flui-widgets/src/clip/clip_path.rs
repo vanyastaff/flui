@@ -32,17 +32,19 @@ impl ClipPath {
     /// Clip to the path returned by `clipper` for the laid-out size, with
     /// Flutter's default anti-aliased clip behavior.
     ///
-    /// # Repaint identity
+    /// # Clip identity
     ///
-    /// **Each call mints a NEW clip identity, and that costs a repaint.**
+    /// **Each call mints a NEW clip identity, and that costs an invalidation.**
     /// Rust cannot compare two closures, so the render object is told the clip
     /// changed whenever the identity does — and under the ordinary pattern of
     /// building a view fresh on every rebuild, that is every frame the
-    /// surrounding tree rebuilds. `RenderClip` has no cache of its own, so the
-    /// cost is a full repaint of the clipped subtree, not a cheap
-    /// invalidation.
+    /// surrounding tree rebuilds. Under a retained repaint boundary the cost
+    /// is a composited-layer update: the clip layer is rebuilt in place and
+    /// the clipped subtree is not repainted. Without a retained capture to
+    /// patch (the first frame, or a boundary that is repainting anyway) it is
+    /// a full repaint of the subtree.
     ///
-    /// Two ways to avoid it, in order of preference:
+    /// Two ways to avoid even that, in order of preference:
     ///
     /// * Build the `ClipPath` once and `clone()` it. A clone shares the
     ///   identity, so an update reports no impact.
@@ -61,8 +63,8 @@ impl ClipPath {
     /// Like [`new`](Self::new), but reuses an existing clip identity.
     ///
     /// Supplying the same token across rebuilds tells the render object the
-    /// clip is unchanged, so it does not repaint. Supplying a fresh one says
-    /// it changed. See [`new`](Self::new)'s *Repaint identity* section.
+    /// clip is unchanged, so nothing is invalidated. Supplying a fresh one
+    /// says it changed. See [`new`](Self::new)'s *Clip identity* section.
     pub fn with_source(source: ClipSourceToken, clipper: impl Fn(Size) -> Path + 'static) -> Self {
         Self {
             clipper: Rc::new(clipper),
@@ -97,8 +99,8 @@ impl ClipPath {
     ///
     /// The two are INDEPENDENT, and conflating them was a bug: the closure is
     /// always the live one, while `identity_changed` says only whether the
-    /// clip is considered different. A rebuild that reuses a token to avoid a
-    /// repaint — the documented way to avoid the per-rebuild cost — still
+    /// clip is considered different. A rebuild that reuses a token to avoid an
+    /// invalidation — the documented way to avoid the per-rebuild cost — still
     /// carries a NEW closure allocation, which may capture different state.
     /// Skipping the install there left the render object invoking the previous
     /// widget's closure for every later paint and hit test.
@@ -269,8 +271,8 @@ mod tests {
     ///
     /// This is the escape hatch from the cost the sibling test above
     /// demonstrates: `ClipPath::new` mints a fresh identity, so under the
-    /// ordinary pattern of building a view fresh each rebuild it repaints the
-    /// clipped subtree every frame. `with_source` says "same clip, new
+    /// ordinary pattern of building a view fresh each rebuild it invalidates
+    /// the clip layer every frame. `with_source` says "same clip, new
     /// closure" — the answer Rust cannot derive because closures do not
     /// compare, and the one Flutter forces every `CustomClipper` author to
     /// give through an abstract `shouldReclip`.
