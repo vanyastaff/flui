@@ -1525,7 +1525,7 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
 /// Shifted by `origin` for the same reason every [`scope_layer`] variant
 /// is (see its doc): `Rect`/`RRect` translate their shape directly.
 /// `Path` is the one case worth spelling out — at `origin == Offset::ZERO`
-/// (the common case, the node opening the clip paints at its own origin)
+/// (the node sits at the layer-space origin, directly under its boundary)
 /// the already-owned `Arc<Path>` moves through untouched, no clone and no
 /// copy of the command buffer; only a non-zero origin pays for a
 /// translated path in a freshly allocated `Arc`. `PathTarget` resolves
@@ -1941,7 +1941,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // `PaintClip::PathTarget` (task 1.14)
+    // `PaintClip::PathTarget` — resolved by the walk, never by the producer
     // ------------------------------------------------------------------
 
     /// A `PathTarget` resolved with no owner lane active degrades to the

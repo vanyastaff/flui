@@ -7590,7 +7590,7 @@ fn harness_sliver_opacity_passes_geometry() {
     );
 }
 
-// 1.3 RED test (behavior fix): alpha=0 must NOT need compositing.
+// Behaviour pin: alpha=0 must NOT need compositing.
 // Flutter proxy_sliver.dart: `alwaysNeedsCompositing => alpha > 0`.
 // Currently `needs_compositing` returns true for alpha=0 (condition:
 // `always || alpha != 255`), which diverges from Flutter's rule.
@@ -12955,9 +12955,12 @@ fn harness_theater_intrinsics_ignore_offstage_children() {
 // translation by the child's committed offset — so `RenderRotatedBox` needs
 // **no override**: its transform is reported entirely through `paint_effects`,
 // and the default feeds it. `RenderTransform` and `RenderFittedBox` DO override
-// `apply_paint_transform` (each opens its own transform layer inside `paint`
-// instead of leaving the pipeline to read `paint_effects` unconditionally, so
-// the matrix must be supplied here too), and `RenderFractionalTranslation` and
+// `apply_paint_transform`, for two different reasons: `RenderTransform` leaves
+// `paint_effects().transform` at `None` for a pure translation (its no-layer
+// fast path applies the offset in `paint`), so the mapping must carry the
+// matrix in both branches; `RenderFittedBox` opens its transform layer inside
+// `paint` (so its clip can sit outside it) and reports none through
+// `paint_effects` at all. `RenderFractionalTranslation` and
 // `RenderFlow` also need one, because their paint bypasses the committed offset
 // altogether (`paint_child_at` / a per-child transform scope). These tests pin
 // all four overriding shapes plus the one default-composition case.

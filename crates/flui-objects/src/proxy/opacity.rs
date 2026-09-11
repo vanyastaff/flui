@@ -381,9 +381,9 @@ mod tests {
         assert!((opacity.opacity() - 1.0).abs() < f32::EPSILON);
     }
 
-    // 1.3 RED→GREEN: alpha=0 must return None from paint_effects's opacity
-    // (no layer), not Some(0). Flutter RenderOpacity.paint: alpha=0 →
-    // layer=null. Before fix: returned Some(0). After fix: returns None.
+    // alpha=0 must return None from paint_effects's opacity (no layer), not
+    // Some(0). Flutter RenderOpacity.paint: alpha=0 → layer=null. The defect
+    // this pins is reporting Some(0), which wraps the child in a 0-alpha layer.
     #[test]
     fn paint_effects_opacity_returns_none_when_transparent() {
         let o = RenderOpacity::transparent(); // alpha = 0

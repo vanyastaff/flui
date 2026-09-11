@@ -149,7 +149,12 @@ impl PaintEffects {
 }
 
 /// A node's own group opacity, expressed as a paint effect.
-#[derive(Debug, Clone)]
+///
+/// `Copy + PartialEq + Eq`, unlike [`PaintClip`]: nothing here can carry a
+/// memoised or shared payload, so an oracle may compare the whole value
+/// (`assert_eq!(fx.opacity, Some(PaintOpacity::new(128)))`), and a blend
+/// mode added later keeps all three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PaintOpacity {
     /// Alpha in `0..=255`, applied to everything the node paints.

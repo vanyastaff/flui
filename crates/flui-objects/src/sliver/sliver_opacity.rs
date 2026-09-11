@@ -507,9 +507,9 @@ mod tests {
         );
     }
 
-    // 1.3 RED→GREEN: alpha=0 must return None from paint_effects's opacity
-    // (no layer), not Some(0). Flutter proxy_sliver.dart: alpha=0 →
-    // layer=null (no OpacityLayer emitted). Before fix: returned Some(0).
+    // alpha=0 must return None from paint_effects's opacity (no layer), not
+    // Some(0). Flutter proxy_sliver.dart: alpha=0 → layer=null (no
+    // OpacityLayer emitted). The defect this pins is reporting Some(0).
     // After fix: returns None.
     #[test]
     fn paint_effects_opacity_returns_none_when_transparent() {

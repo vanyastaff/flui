@@ -641,8 +641,8 @@ mod tests {
             "a non-translation paint must only splice the child; got {ops:?}",
         );
 
-        // And the translation branch is the mirror: no layer from the hook, the
-        // matrix carried by the child's offset instead.
+        // And the translation branch is the mirror: no layer from the value,
+        // the matrix carried by the child's offset instead.
         let mut translating = RenderTransform::translate(7.0, 9.0);
         translating.has_child = true;
         assert_eq!(
