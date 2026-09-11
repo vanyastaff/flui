@@ -7,7 +7,7 @@ use flui_types::{Alignment, Matrix4, Offset, Size};
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{PaintEffects, RenderBox},
 };
 
 /// A render object that applies a transformation matrix to its child.
@@ -369,12 +369,13 @@ impl RenderBox for RenderTransform {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // `paint()` and `paint_transform()` below split the matrix by
-    // translation-ness: a pure translation is applied directly in `paint()`
-    // as a plain child offset, with no layer at all; anything else is
-    // reported through `paint_transform()`, which the pipeline wraps in a
-    // `TransformLayer` BEFORE replaying `paint()`'s fragment — so `paint()`
-    // must not (and does not) push that matrix a second time itself.
+    // `paint()` below and `paint_effects()`'s `transform` field split the
+    // matrix by translation-ness: a pure translation is applied directly in
+    // `paint()` as a plain child offset, with no layer at all; anything else
+    // is reported through `paint_effects().transform`, which the pipeline
+    // wraps in a `TransformLayer` BEFORE replaying `paint()`'s fragment — so
+    // `paint()` must not (and does not) push that matrix a second time
+    // itself.
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // A transform does NOT test its own (untransformed) size — how the
@@ -448,15 +449,15 @@ impl RenderBox for RenderTransform {
     /// `Transform.translate`, and every `SlideTransition` built on it, paid for
     /// one on every frame.
     ///
-    /// A non-translation matrix is reported through [`paint_transform`
-    /// below](Self::paint_transform) instead of pushed here: the pipeline
-    /// emits a node's `paint_transform` layer *before* replaying the
-    /// fragments its `paint` recorded, wrapping the whole fragment —
-    /// including the bare child splice below — in it. Pushing the matrix
-    /// again here would wrap the child in it twice. Coordinate mapping keeps
-    /// the matrix through `apply_paint_transform` below regardless of which
-    /// branch painted — the same split Flutter makes between `paint` and
-    /// `applyPaintTransform`.
+    /// A non-translation matrix is reported through [`paint_effects`
+    /// below](Self::paint_effects)'s `transform` field instead of pushed
+    /// here: the pipeline emits a node's `paint_effects` transform layer
+    /// *before* replaying the fragments its `paint` recorded, wrapping the
+    /// whole fragment — including the bare child splice below — in it.
+    /// Pushing the matrix again here would wrap the child in it twice.
+    /// Coordinate mapping keeps the matrix through `apply_paint_transform`
+    /// below regardless of which branch painted — the same split Flutter
+    /// makes between `paint` and `applyPaintTransform`.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if !self.has_child {
             return;
@@ -467,7 +468,7 @@ impl RenderBox for RenderTransform {
             ctx.paint_child_at(Offset::new(px(dx), px(dy)));
         } else {
             // The pipeline already pushed this matrix's TransformLayer (see
-            // `paint_transform` below) before replaying this fragment, so a
+            // `paint_effects` below) before replaying this fragment, so a
             // bare splice is correct — no `with_transform` here.
             ctx.paint_child();
         }
@@ -482,31 +483,31 @@ impl RenderBox for RenderTransform {
     /// capture (`RetainedSubtree::effect_slots`), addressable for
     /// `set_transform` to patch in place instead of repainting the subtree.
     /// See `owns_effect_layer`, which mirrors this same fork for the setters.
-    fn paint_transform(&self, size: Size) -> Option<Matrix4> {
+    fn paint_effects(&self, size: Size) -> PaintEffects {
         if !self.has_child {
-            return None;
+            return PaintEffects::NONE;
         }
         let transform = self.effective_transform(size);
         if transform.as_translation().is_some() {
             // Painted as a plain offset in `paint` above, with no layer at
-            // all — reporting `Some` here too would make the pipeline push a
-            // redundant TransformLayer around content `paint` already
+            // all — reporting a transform here too would make the pipeline
+            // push a redundant TransformLayer around content `paint` already
             // offsets directly.
-            return None;
+            return PaintEffects::NONE;
         }
-        Some(transform)
+        PaintEffects::NONE.with_transform(transform)
     }
 
     /// Folds the transform into a child-to-parent coordinate mapping.
     ///
-    /// Still overridden, and the reason changed with `paint_transform`: the
-    /// default derives the mapping FROM `paint_transform`, which is now `None`
-    /// for a pure translation — `paint` applies that one as a plain child
-    /// offset instead of a layer. Coordinate mapping needs the matrix in
-    /// **both** branches, so deriving it from the hook would silently drop the
-    /// translation from `transform_to` / local-to-global and every hero flight
-    /// built on them. Unconditional here, as Flutter's `applyPaintTransform`
-    /// is.
+    /// Still overridden, and the reason changed with `paint_effects`: the
+    /// default derives the mapping FROM `paint_effects`'s `transform` field,
+    /// which is `None` for a pure translation — `paint` applies that one as a
+    /// plain child offset instead of a layer. Coordinate mapping needs the
+    /// matrix in **both** branches, so deriving it from the value would
+    /// silently drop the translation from `transform_to` / local-to-global
+    /// and every hero flight built on them. Unconditional here, as Flutter's
+    /// `applyPaintTransform` is.
     fn apply_paint_transform(
         &self,
         _child: usize,
@@ -570,22 +571,22 @@ mod tests {
         assert!(!RenderTransform::identity().skip_paint());
     }
 
-    /// Exactly one of `paint_transform` and `paint`'s `paint_child_at` offset
-    /// carries the matrix — selected by translation-ness — which is what
-    /// prevents double application now that `paint_transform` can return
-    /// `Some`.
+    /// Exactly one of `paint_effects`'s `transform` field and `paint`'s
+    /// `paint_child_at` offset carries the matrix — selected by
+    /// translation-ness — which is what prevents double application now that
+    /// the field can be `Some`.
     ///
-    /// Before the composited-layer-update wiring, `paint_transform` stayed at
-    /// its `None` default unconditionally, because `paint` pushed the matrix
+    /// Before the composited-layer-update wiring, the field stayed at its
+    /// `None` default unconditionally, because `paint` pushed the matrix
     /// itself for every case; a `Some` here would have wrapped the child in it
-    /// twice. Now the pipeline pushes `paint_transform`'s layer BEFORE
+    /// twice. Now the pipeline pushes `paint_effects`'s layer BEFORE
     /// replaying `paint`'s fragment, so a non-translation matrix must come
-    /// from `paint_transform` (and `paint` must only splice the child, not
+    /// from `paint_effects` (and `paint` must only splice the child, not
     /// push it again — see `paint`'s own doc), while a translation must keep
-    /// coming from `paint`'s plain offset (and `paint_transform` must stay
-    /// `None` for it, or the pipeline would push a redundant no-op layer).
-    /// Transform symmetry — paint, coordinate mapping, and hit-test all
-    /// reading the SAME `effective_transform` — is asserted through
+    /// coming from `paint`'s plain offset (and the `transform` field must
+    /// stay `None` for it, or the pipeline would push a redundant no-op
+    /// layer). Transform symmetry — paint, coordinate mapping, and hit-test
+    /// all reading the SAME `effective_transform` — is asserted through
     /// `apply_paint_transform`, which stays unconditional across both
     /// branches (see its own doc).
     ///
@@ -603,9 +604,9 @@ mod tests {
         let size = Size::ZERO;
 
         assert_eq!(
-            RenderBox::paint_transform(&node, size),
+            RenderBox::paint_effects(&node, size).transform,
             Some(node.effective_transform(size)),
-            "a non-translation matrix must come from paint_transform, which the \
+            "a non-translation matrix must come from paint_effects, which the \
              pipeline wraps in a layer before replaying paint's fragment",
         );
 
@@ -630,7 +631,7 @@ mod tests {
 
         // The other half of "exactly one", read off `paint`'s real fragment:
         // a non-translation node must splice its child and push NOTHING, since
-        // the pipeline already pushed `paint_transform`'s layer around this
+        // the pipeline already pushed `paint_effects`'s layer around this
         // fragment. A `with_transform` here would record `PushTransform`/`Pop`
         // around the child and apply the matrix twice.
         let ops = capture_paint_ops(&node, size);
@@ -645,7 +646,7 @@ mod tests {
         let mut translating = RenderTransform::translate(7.0, 9.0);
         translating.has_child = true;
         assert_eq!(
-            RenderBox::paint_transform(&translating, size),
+            RenderBox::paint_effects(&translating, size).transform,
             None,
             "a pure translation must NOT report a layer — that is the fast path",
         );
@@ -679,7 +680,7 @@ mod tests {
             .collect()
     }
 
-    /// `paint_transform`'s shape per class: no child, translation,
+    /// `paint_effects`'s `transform` field per class: no child, translation,
     /// non-translation, singular.
     ///
     /// This is what actually feeds the paint driver's decision to push a
@@ -688,21 +689,21 @@ mod tests {
     /// narrower scale-only check in `paint_and_hit_test_share_one_transform`
     /// cannot see.
     ///
-    /// The singular case reports `Some`, not `None`: `paint_transform` does
+    /// The singular case reports `Some`, not `None`: `paint_effects` does
     /// not itself gate on `skip_paint` — the paint driver does, returning
-    /// before it ever calls `paint_transform` this frame (see
+    /// before it ever calls `paint_effects` this frame (see
     /// `paint_subtree_impl`'s `skip_paint` early return) — so keeping the
-    /// hook's own contract uniform ("non-translation ⇒ `Some`") is honest
+    /// value's own contract uniform ("non-translation ⇒ `Some`") is honest
     /// rather than a redundant special case, and the singular exclusion lives
     /// in exactly the one place (`skip_paint`) that already owns it.
     #[test]
-    fn paint_transform_reports_a_layer_only_for_a_non_translation_matrix_with_a_child() {
+    fn paint_effects_reports_a_transform_only_for_a_non_translation_matrix_with_a_child() {
         let size = Size::new(px(40.0), px(40.0));
 
         let mut no_child = RenderTransform::scale(2.0, 2.0);
         no_child.has_child = false;
         assert_eq!(
-            RenderBox::paint_transform(&no_child, size),
+            RenderBox::paint_effects(&no_child, size).transform,
             None,
             "no child, no paint, no layer",
         );
@@ -710,7 +711,7 @@ mod tests {
         let mut translation = RenderTransform::translate(5.0, 7.0);
         translation.has_child = true;
         assert_eq!(
-            RenderBox::paint_transform(&translation, size),
+            RenderBox::paint_effects(&translation, size).transform,
             None,
             "a pure translation is applied as a plain offset in paint",
         );
@@ -718,7 +719,7 @@ mod tests {
         let mut non_translation = RenderTransform::scale(2.0, 3.0);
         non_translation.has_child = true;
         assert_eq!(
-            RenderBox::paint_transform(&non_translation, size),
+            RenderBox::paint_effects(&non_translation, size).transform,
             Some(non_translation.effective_transform(size)),
         );
 
@@ -729,9 +730,9 @@ mod tests {
             "precondition: scale(0,0) is singular"
         );
         assert_eq!(
-            RenderBox::paint_transform(&singular, size),
+            RenderBox::paint_effects(&singular, size).transform,
             Some(singular.effective_transform(size)),
-            "paint_transform answers uniformly; the driver never asks it this \
+            "paint_effects answers uniformly; the driver never asks it this \
              question this frame because skip_paint short-circuits first",
         );
     }
