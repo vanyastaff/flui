@@ -150,6 +150,20 @@ pub fn first_transform_matrix(tree: &LayerTree) -> Option<Matrix4> {
     })
 }
 
+/// Returns the clip rectangle of every [`Layer::ClipRect`] node in pre-order
+/// (parent before children) as a flat list.
+#[must_use]
+pub fn clip_rects(tree: &LayerTree) -> Vec<Rect> {
+    let mut out = Vec::new();
+    pre_order(tree, |_, layer| {
+        if let Layer::ClipRect(c) = layer {
+            out.push(c.clip_rect());
+        }
+        ControlFlow::Continue(())
+    });
+    out
+}
+
 /// Returns whether the tree contains any [`Layer::Picture`] node in pre-order.
 #[must_use]
 pub fn has_picture_layer(tree: &LayerTree) -> bool {
@@ -161,10 +175,10 @@ pub fn has_picture_layer(tree: &LayerTree) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Matrix4;
+    use flui_types::{Matrix4, geometry::px, painting::Clip};
 
     use super::*;
-    use crate::{OffsetLayer, OpacityLayer, TransformLayer};
+    use crate::{ClipRectLayer, OffsetLayer, OpacityLayer, TransformLayer};
 
     fn offset() -> Layer {
         Layer::Offset(OffsetLayer::zero())
@@ -248,5 +262,28 @@ mod tests {
             .expect("the walkers must not overflow a small stack on a deep chain");
 
         assert_eq!(walked, (DEPTH + 1, 1, Some(Matrix4::IDENTITY)));
+    }
+
+    /// root → [outer → [inner]], both `ClipRect` layers with distinct rects,
+    /// so the walk order (outer before inner) is observable in the result.
+    #[test]
+    fn clip_rects_returns_every_clip_rect_layer_in_pre_order() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(offset());
+        let outer_rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let inner_rect = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
+        let outer = tree.insert(Layer::ClipRect(ClipRectLayer::new(
+            outer_rect,
+            Clip::HardEdge,
+        )));
+        let inner = tree.insert(Layer::ClipRect(ClipRectLayer::new(
+            inner_rect,
+            Clip::HardEdge,
+        )));
+        tree.set_root(Some(root));
+        tree.add_child(root, outer);
+        tree.add_child(outer, inner);
+
+        assert_eq!(clip_rects(&tree), vec![outer_rect, inner_rect]);
     }
 }
