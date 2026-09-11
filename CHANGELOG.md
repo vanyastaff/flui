@@ -13,6 +13,10 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **Layout-poison retention fixtures** (#561): `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero`
+  and `a_leaf_that_never_committed_stands_in_with_zero` (`flui-rendering`'s `layout_poison` tests) tell a
+  poisoned node's last committed geometry apart from the `Size::ZERO` stand-in, and go red when the poisoning
+  pass is removed; a test-only `PipelineOwner::is_layout_poisoned` is the oracle.
 - **`flui create --no-check`** skips the `cargo check` that runs on a fresh scaffold. The check
   only reports (it never fails the command) and is a full cold build into the scaffold's own
   target directory — 236 s per template on the CI runner — so scripted, offline, or
