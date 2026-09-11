@@ -48,7 +48,7 @@ You need to...
 | Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | Understand GPU rendering | `crates/flui-engine/AGENTS.md` | `crates/flui-engine/ARCHITECTURE.md` |
 | Write a test that drives a frame, or add test support | `docs/testing.md` — the map of the tiers; pick the shallowest one that can fail | `crates/flui-testing/AGENTS.md`, `crates/flui-rendering/docs/TESTING.md` |
-| Create a PR | Run `just ci` first | Fix any failures before committing |
+| Create a PR | Run `just ci` first | Fix any failures before committing; a PR body may say `close(s)`/`fix(es)`/`resolve(s)` `#N` only when the merge is meant to close that issue — GitHub's linker ignores negation and surrounding prose ("PR4 closes #N" closed #N), so write `Refs #N` otherwise |
 
 ---
 
