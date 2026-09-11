@@ -6,7 +6,7 @@ use flui_types::{Offset, Size};
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{PaintEffects, PaintOpacity, RenderBox},
 };
 
 /// A render object that applies transparency to its child.
@@ -120,8 +120,9 @@ impl RenderOpacity {
         // The flag is exactly the case this clause must NOT fire for, and it
         // does not: `skip_paint` is `alpha == 0 && !always_needs_compositing`,
         // so with the flag set it is false on both sides of the crossing and
-        // nothing is added here — while `paint_alpha` keeps returning
-        // `Some(0)`, so the layer survives and the patch has a slot after all.
+        // nothing is added here — while `paint_effects` keeps returning an
+        // opacity effect at alpha 0, so the layer survives and the patch has
+        // a slot after all.
         //
         // This is the honest impact rather than the last line of defence. The
         // paint phase refuses to graft when a node that requested an update
@@ -212,7 +213,7 @@ impl RenderBox for RenderOpacity {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // paint() uses default no-op - opacity is applied via paint_alpha()
+    // paint() uses default no-op - opacity is applied via paint_effects()
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // Invisible elements can still receive hit tests
@@ -227,16 +228,17 @@ impl RenderBox for RenderOpacity {
         }
     }
 
-    // The whole point of RenderOpacity: the pipeline reads paint_alpha through
-    // `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards here.
-    fn paint_alpha(&self) -> Option<u8> {
+    // The whole point of RenderOpacity: the pipeline reads paint_effects
+    // through `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards
+    // here.
+    fn paint_effects(&self, _size: Size) -> PaintEffects {
         // None when fully opaque (255) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
         // Flutter: alpha=0 → layer=null (no layer needed).
         if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
-            None
+            PaintEffects::NONE
         } else {
-            Some(self.alpha)
+            PaintEffects::NONE.with_opacity(PaintOpacity::new(self.alpha))
         }
     }
 
@@ -379,14 +381,16 @@ mod tests {
         assert!((opacity.opacity() - 1.0).abs() < f32::EPSILON);
     }
 
-    // 1.3 RED→GREEN: alpha=0 must return None from paint_alpha (no layer),
-    // not Some(0). Flutter RenderOpacity.paint: alpha=0 → layer=null.
-    // Before fix: returned Some(0). After fix: returns None.
+    // alpha=0 must return None from paint_effects's opacity (no layer), not
+    // Some(0). Flutter RenderOpacity.paint: alpha=0 → layer=null. The defect
+    // this pins is reporting Some(0), which wraps the child in a 0-alpha layer.
     #[test]
-    fn paint_alpha_returns_none_when_transparent() {
+    fn paint_effects_opacity_returns_none_when_transparent() {
         let o = RenderOpacity::transparent(); // alpha = 0
         assert_eq!(
-            o.paint_alpha(),
+            RenderBox::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
             None,
             "alpha=0 without always-flag must return None (no OpacityLayer); \
              Flutter: alpha=0 → layer=null"
@@ -394,15 +398,25 @@ mod tests {
     }
 
     #[test]
-    fn paint_alpha_returns_none_when_opaque() {
+    fn paint_effects_opacity_returns_none_when_opaque() {
         let o = RenderOpacity::opaque();
-        assert_eq!(o.paint_alpha(), None);
+        assert_eq!(
+            RenderBox::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            None
+        );
     }
 
     #[test]
-    fn paint_alpha_returns_some_for_partial() {
+    fn paint_effects_opacity_returns_some_for_partial() {
         let o = RenderOpacity::new(0.5);
-        assert_eq!(o.paint_alpha(), Some(128));
+        assert_eq!(
+            RenderBox::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(128)
+        );
     }
 
     #[test]
@@ -412,15 +426,21 @@ mod tests {
         assert!(!RenderOpacity::new(0.5).skip_paint());
     }
 
-    // alpha=0 WITH always-flag: paint_alpha returns Some(0), skip_paint false.
+    // alpha=0 WITH always-flag: paint_effects returns an opacity(0),
+    // skip_paint false.
     #[test]
-    fn paint_alpha_returns_some_when_transparent_but_forced() {
+    fn paint_effects_opacity_returns_some_when_transparent_but_forced() {
         let mut o = RenderOpacity::transparent();
         assert_eq!(
             o.set_always_needs_compositing(true),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
         );
-        assert_eq!(o.paint_alpha(), Some(0));
+        assert_eq!(
+            RenderBox::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(0)
+        );
         assert!(!o.skip_paint());
     }
 
@@ -428,9 +448,10 @@ mod tests {
     /// so becoming invisible IS a pure layer property change.
     ///
     /// The one configuration where the `COMPOSITED_LAYER_UPDATE` base changes
-    /// an alpha-0 crossing: `paint_alpha` still returns `Some(0)` and
-    /// `skip_paint` stays false, so a slot exists for the patch and nothing
-    /// structural moved. Without the flag the same transition must repaint —
+    /// an alpha-0 crossing: `paint_effects` still returns an opacity effect
+    /// at alpha 0 and `skip_paint` stays false, so a slot exists for the
+    /// patch and nothing structural moved. Without the flag the same
+    /// transition must repaint —
     /// asserted in `opacity_impacts_track_paint_compositing_and_semantics_independently`
     /// — which is what makes this a discriminating case rather than a
     /// restatement, and what the setter's `skip_paint` comment claims.
@@ -441,7 +462,12 @@ mod tests {
             o.set_always_needs_compositing(true),
             flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
         );
-        assert_eq!(o.paint_alpha(), Some(128));
+        assert_eq!(
+            RenderBox::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
+            Some(128)
+        );
 
         assert_eq!(
             o.set_opacity(0.0),
@@ -452,7 +478,9 @@ mod tests {
              is served by patching the layer that still exists",
         );
         assert_eq!(
-            o.paint_alpha(),
+            RenderBox::paint_effects(&o, Size::ZERO)
+                .opacity
+                .map(|o| o.alpha),
             Some(0),
             "precondition for the impact above: the layer really does survive \
              at alpha 0, so there is a slot for the patch to address",

@@ -39,7 +39,7 @@ use flui_rendering::{
         BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
     },
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{PaintEffects, RenderBox},
 };
 
 // ============================================================================
@@ -249,13 +249,13 @@ impl RenderBox for RenderRotatedBox {
         ctx.hit_test_child(0, Offset::new(child_local_x, child_local_y))
     }
 
-    // ---- paint-transform hooks ----------------------------------------------
+    // ---- paint effects / hit-test transform ---------------------------------
 
-    fn paint_transform(&self, size: Size) -> Option<Matrix4> {
+    fn paint_effects(&self, size: Size) -> PaintEffects {
         if !self.has_child {
-            return None;
+            return PaintEffects::NONE;
         }
-        Some(Self::build_paint_matrix(
+        PaintEffects::NONE.with_transform(Self::build_paint_matrix(
             size,
             self.child_size,
             self.quarter_turns,

@@ -42,6 +42,7 @@ use crate::{
     parent_data::ParentData,
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
+    traits::PaintEffects,
 };
 
 /// Result of a raw hit-test bridge call.
@@ -115,12 +116,12 @@ impl HitTestOutcome {
 ///
 /// # Effect-layer and Lifecycle Methods
 ///
-/// `RenderObject<P>` carries nine defaulted methods that are the former
+/// `RenderObject<P>` carries seven defaulted methods that are the former
 /// capability-supertrait surface, now inlined directly on this trait so
 /// concrete types need no boilerplate impl blocks:
 ///
-/// - `paint_alpha`, `paint_layer_blend`, `skip_paint`, `paint_transform`,
-///   `hit_test_transform` — paint-effect hooks (default `None`/`false`)
+/// - `paint_effects`, `skip_paint`, `hit_test_transform` — paint-effect
+///   hooks (default `NONE`/`false`/`None`)
 /// - `describe_semantics_configuration` — accessibility hook (default no-op)
 /// - `reassemble` — hot-reload hook (default no-op; see note below)
 /// - `attach`/`detach` — tree-lifecycle hook (default no-op; see
@@ -473,27 +474,6 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // Effect Layers
     // ========================================================================
 
-    /// Returns the alpha value to apply to children.
-    ///
-    /// If `Some(alpha)`, the painting pipeline wraps children in an
-    /// `OpacityLayer`. Used by `RenderOpacity` to implement opacity
-    /// animations. Override on [`RenderBox`](crate::traits::RenderBox) or
-    /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
-    /// forward the call here. Default: `None` (no opacity effect).
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
-
-    /// Returns the blend mode for the opacity layer wrapping children.
-    ///
-    /// If `Some(mode)`, the pipeline passes the mode to
-    /// `OpacityLayer::with_blend` so advanced blend modes (Multiply, Screen,
-    /// etc.) are preserved through the layer-tree compositor path.
-    /// Default: `None` (= `SrcOver`).
-    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        None
-    }
-
     /// Whether this render object should suppress all child painting.
     ///
     /// Returns `true` when the node is fully transparent and no children
@@ -504,15 +484,29 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         false
     }
 
-    /// Returns the transform matrix to apply to children.
+    /// This node's own paint effects — opacity, clip, and transform — as one
+    /// value.
     ///
-    /// If `Some(matrix)`, the painting pipeline wraps children in a
-    /// `TransformLayer`. `size` is the node's laid-out size from
-    /// [`RenderState`](crate::storage::RenderState) (2B field dedup).
-    /// Default: `None` (no transform effect).
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    /// Default: [`PaintEffects::NONE`] — a node with no effects of its own.
+    /// A producer overrides this method.
+    ///
+    /// # Contract
+    ///
+    /// This node's OWN effects only — never a child's. Pure in `(self,
+    /// size)`: no user code runs, and the result must not depend on `paint`
+    /// having already run, because the composited-layer-update patch arm
+    /// calls this method without painting. It is also called by the default
+    /// [`Self::apply_paint_transform`] outside any paint walk (coordinate
+    /// queries such as `transform_to`), so it must stay cheap to build.
+    /// [`Self::skip_paint`] is a separate, independent gate — it decides
+    /// whether to paint at all, not what this node's own layers look like.
+    ///
+    /// Override on [`RenderBox`](crate::traits::RenderBox) or
+    /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
+    /// forward the call here.
+    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
         let _ = size;
-        None
+        PaintEffects::NONE
     }
 
     /// Composes onto `transform` the mapping from child `child`'s local
@@ -535,11 +529,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ///
     /// # The default is the paint pipeline's own composition
     ///
-    /// `paint_subtree_impl` wraps children in [`paint_transform`]'s layer and then
-    /// paints each child at its committed offset, so child-local → parent-local is
-    /// `paint_transform · translate(child_offset)`. The default body is exactly
-    /// that, which means every object whose paint follows the pipeline's default
-    /// path gets a correct transform **without overriding anything**.
+    /// `paint_subtree_impl` wraps children in [`paint_effects`]'s transform
+    /// layer and then paints each child at its committed offset, so
+    /// child-local → parent-local is `paint_effects(size).transform ·
+    /// translate(child_offset)`. The default body is exactly that, which
+    /// means every object whose paint follows the pipeline's default path
+    /// gets a correct transform **without overriding anything**.
     ///
     /// Override only when paint *deviates*: an object that calls
     /// `PaintCx::paint_child_at` (an `offset_override`, so the committed offset is
@@ -553,7 +548,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// the child's into this object's. Do **not** use [`Matrix4::translate`],
     /// which pre-multiplies.
     ///
-    /// [`paint_transform`]: RenderObject::paint_transform
+    /// [`paint_effects`]: RenderObject::paint_effects
     /// [`PipelineOwner::transform_to`]: crate::pipeline::PipelineOwner::transform_to
     /// [`Matrix4::translate`]: flui_types::Matrix4::translate
     fn apply_paint_transform(
@@ -564,7 +559,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         transform: &mut flui_types::Matrix4,
     ) {
         let _ = child;
-        if let Some(matrix) = self.paint_transform(size) {
+        if let Some(matrix) = self.paint_effects(size).transform {
             *transform *= matrix;
         }
         *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
@@ -956,10 +951,9 @@ mod tests {
     #[test]
     fn default_effect_layer_hooks_are_inert() {
         let leaf = MinimalLeaf;
-        assert_eq!(leaf.paint_alpha(), None);
-        assert_eq!(leaf.paint_layer_blend(), None);
+        let fx = leaf.paint_effects(Size::ZERO);
+        assert!(fx.opacity.is_none() && fx.clip.is_none() && fx.transform.is_none());
         assert!(!leaf.skip_paint());
-        assert_eq!(leaf.paint_transform(Size::ZERO), None);
         assert_eq!(leaf.hit_test_transform(Size::ZERO), None);
         assert!(leaf.pointer_target().is_none());
         assert_eq!(leaf.mouse_cursor(), CursorIcon::Default);

@@ -1,5 +1,7 @@
 //! Paint phase implementation for `PipelineOwner<PaintPhase>`.
 
+use std::sync::Arc;
+
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
@@ -17,6 +19,7 @@ use crate::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
     },
+    traits::{PaintClip, PaintEffects, resolve_path_clip},
 };
 
 use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
@@ -422,8 +425,8 @@ impl PipelineOwner<PaintPhase> {
         // A childless `RenderRotatedBox` is a real, reachable caller of this
         // branch: its setter reports `COMPOSITED_LAYER_UPDATE` for a
         // same-parity turn change whether or not it has a child (no
-        // `has_child` gate), `paint_transform` returns `None` without a
-        // child, so it never owns an effect slot to begin with — and
+        // `has_child` gate), `paint_effects` returns a `None` transform
+        // without a child, so it never owns an effect slot to begin with — and
         // `RotatedBox::new(n)` seeds an empty child by default, so a bare
         // rebuild hits exactly this. Without this guard the loop below walks
         // EXISTING slots, silently skips a target that has none, and reports
@@ -438,10 +441,12 @@ impl PipelineOwner<PaintPhase> {
         // (`tests/retained_boundary_layers.rs`), which fails on the flag
         // staying set — not on the emitted frame, which looks the same either
         // way for a node that paints nothing regardless.
-        if targets
-            .iter()
-            .any(|target| !subtree.effect_slots.contains_key(target))
-        {
+        if targets.iter().any(|target| {
+            !subtree
+                .effect_slots
+                .iter()
+                .any(|(owner, _)| owner == target)
+        }) {
             return None;
         }
         let mut patches = Vec::new();
@@ -453,7 +458,12 @@ impl PipelineOwner<PaintPhase> {
         // walk would leave the retry seeing no pending request, grafting the
         // old layer, and going visibly stale until something else mutates.
         let mut consumed: SmallVec<[RenderId; 2]> = SmallVec::new();
-        for (&render_id, slots) in &subtree.effect_slots {
+        // Iterated in capture order (the `Vec`'s order) rather than hash
+        // order: a target this loop rebuilds resolves in the same sequence a
+        // full repaint's paint walk would visit it in — see the field doc on
+        // `RetainedSubtree::effect_slots`.
+        for (render_id, slots) in &subtree.effect_slots {
+            let render_id = *render_id;
             let Some(node) = self.render_tree.get(render_id) else {
                 // The node is gone but its layers are still in the capture.
                 // Nothing asked for an update, so replaying them is what a
@@ -463,12 +473,7 @@ impl PipelineOwner<PaintPhase> {
             if !node.needs_composited_layer_update() {
                 continue;
             }
-            let fresh = own_effect_layers(
-                node.paint_alpha(),
-                node.paint_layer_blend(),
-                node.paint_transform(),
-                slots.origin,
-            );
+            let fresh = own_effect_layers(node.paint_effects(), slots.origin);
             if fresh.len() != slots.indices.len() {
                 return None;
             }
@@ -482,15 +487,19 @@ impl PipelineOwner<PaintPhase> {
                     debug_assert!(false, "BUG: effect slot index outside its own capture");
                     return None;
                 };
-                // Defence in depth, and deliberately not claimed as more than
-                // that: `own_effect_layers` emits a FIXED order (alpha, then
-                // transform), so a same-count shape change maps positionally
-                // onto the same kinds and patching it happens to produce what a
-                // repaint would. A mutation run confirms no test distinguishes
-                // this branch today. It earns its place by making that
-                // coincidence explicit rather than load-bearing: adding a third
-                // effect type, or making the order conditional, would otherwise
-                // silently turn a positional patch into a wrong layer.
+                // Under the FIXED order `own_effect_layers` emits (opacity,
+                // clip, transform), the count check above plus this
+                // per-position discriminant compare is a COMPLETE shape
+                // check — no stored shape is needed. It is conservative
+                // rather than load-bearing: the effect chain is positional
+                // (`capture` records it in push order, `graft` swaps only
+                // `layer` at those indices), so a same-count kind change
+                // patched positionally would already yield the repaint's
+                // tree; refusing it only trades a correct patch for a
+                // repaint, and that refusal is observable as one. No
+                // production producer changes its own clip kind at runtime,
+                // so no oracle pins that case; the output is pinned by
+                // `an_effect_layer_shape_change_falls_back_to_a_repaint`.
                 if std::mem::discriminant(&layer) != std::mem::discriminant(&captured.layer) {
                     return None;
                 }
@@ -556,9 +565,7 @@ impl PipelineOwner<PaintPhase> {
              status changes, beside mark_needs_compositing_bits_update."
         );
 
-        let alpha = render_node.paint_alpha();
-        let layer_blend = render_node.paint_layer_blend();
-        let transform = render_node.paint_transform();
+        let effects = render_node.paint_effects();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
         // The generation this node's most recent layout stamped onto the
         // children it laid out; a child carrying anything else was not part of
@@ -593,10 +600,11 @@ impl PipelineOwner<PaintPhase> {
         // Fully transparent subtree: skip recording entirely. Children
         // keep whatever dirty flags they carry; the residue scan in
         // run_paint clears them with a warning.
-        // Uses `skip_paint()` rather than `alpha == Some(0)` so that
-        // `paint_alpha()` encoding only controls layer-emission; the
-        // skip-paint decision is a separate, explicit contract
-        // (Flutter: `if (_alpha == 0) return;` in RenderOpacity.paint).
+        // Uses `skip_paint()` rather than `effects.opacity`'s alpha being
+        // `Some(0)` so that `paint_effects()`'s opacity field only controls
+        // layer-emission; the skip-paint decision is a separate, explicit
+        // contract (Flutter: `if (_alpha == 0) return;` in
+        // RenderOpacity.paint).
         if render_node.skip_paint() {
             return Ok(());
         }
@@ -638,18 +646,12 @@ impl PipelineOwner<PaintPhase> {
              from state read at paint time instead of re-marking",
         );
 
-        // Effect hooks wrap the ENTIRE node fragment (self draws AND
-        // children). The pre-fragment walk wrapped children only; hook
-        // implementors draw nothing themselves, so the visible result
-        // is identical and the new rule matches Flutter (RenderOpacity
-        // wraps its child's whole paint).
-        // Alpha–blend coupling: the layer is emitted only when `paint_alpha()` returns
-        // `Some`.  A render object that overrides `paint_layer_blend() -> Some(mode)`
-        // but leaves `paint_alpha() -> None` will silently drop the blend layer —
-        // the advanced compositor never sees it.  When wiring the first render-tree
-        // consumer of an advanced blend, override BOTH hooks and return `Some(255)`
-        // from `paint_alpha()` for an opaque-blend-only layer.
-        let own_effects = own_effect_layers(alpha, layer_blend, transform, origin);
+        // A node's own paint effects wrap the ENTIRE node fragment (self
+        // draws AND children). The pre-fragment walk wrapped children only;
+        // `paint_effects()` implementors draw nothing themselves, so the
+        // visible result is identical and the rule matches Flutter
+        // (RenderOpacity wraps its child's whole paint).
+        let own_effects = own_effect_layers(effects, origin);
         let effect_layers = own_effects.len();
         for layer in own_effects {
             let layer_id = composer.push_layer(layer);
@@ -932,7 +934,21 @@ pub(super) struct RetainedSubtree {
     /// boundary, not just the boundary itself — an `Opacity` nested three
     /// levels down is addressable without being a boundary of its own, which
     /// is the whole reason this design does not need to promote one.
-    effect_slots: FxHashMap<RenderId, EffectSlots>,
+    ///
+    /// A `Vec`, not a map, and appended at each render id's FIRST appearance
+    /// during `capture`'s pre-order walk: capture order equals paint order,
+    /// so the patch arm in `layer_patches_for` resolves and rebuilds targets
+    /// in the order a full repaint would — a stateful path clipper (a `Fn`
+    /// that observes and mutates on every call) sees the same call sequence
+    /// either way. A hash map's iteration order does not carry that
+    /// guarantee. Looked up by linear scan rather than a side index: the
+    /// number of effect-owning nodes per boundary is typically small (1-2
+    /// patch targets per frame), and the `paint` benchmark's `layered`
+    /// update arm at 1,000 nodes — the one that walks this list per patch
+    /// attempt — is unchanged within measurement noise against a hash-map
+    /// version of this same field. Revisit with a side `RenderId -> usize`
+    /// index if a real tree grows this list long enough to change that.
+    effect_slots: Vec<(RenderId, EffectSlots)>,
 }
 
 /// One boundary's worth of composited-layer update work, decided during the
@@ -950,7 +966,7 @@ struct LayerPatch {
 struct EffectSlots {
     /// Indices into [`RetainedSubtree::nodes`], in push order (outermost
     /// first) — the same order [`own_effect_layers`] returns.
-    indices: SmallVec<[usize; 2]>,
+    indices: SmallVec<[usize; 3]>,
     /// The accumulated origin this node painted at.
     ///
     /// Kept because a transform layer is conjugated by it. A property-only
@@ -971,40 +987,34 @@ struct RetainedNode {
 }
 
 /// The layers a node pushes for its OWN effects, in push order (outermost
-/// first), built from the hooks the paint walk reads off the node.
+/// first: opacity, clip, transform), built from the single
+/// [`PaintEffects`] value the paint walk reads off the node.
 ///
-/// One function with two callers, deliberately: the paint walk pushes these
-/// while painting, and the composited-layer-update arm rebuilds them without
-/// painting. Two copies of this construction would drift, and the drift would
-/// be a wrong-looking layer on a frame no test paints.
+/// One value in, two callers, deliberately: the paint walk pushes these
+/// while painting, and the composited-layer-update patch arm rebuilds them
+/// without painting. Two copies of this construction would drift, and the
+/// drift would be a wrong-looking layer on a frame no test paints.
 ///
-/// `origin` matters only to the transform: the node reports its matrix in
-/// LOCAL coordinates while every run inside the layer space carries the
-/// accumulated origin, so the matrix is conjugated by it. The opacity layer is
+/// `origin` matters to the clip and the transform, not the opacity: both a
+/// clip shape and a transform matrix are reported in the node's LOCAL
+/// coordinates while every run inside the layer space carries the
+/// accumulated origin, so both are conjugated by it ([`clip_layer`] for the
+/// clip, [`conjugate`] for the transform). The opacity layer is
 /// origin-independent (always `Offset::ZERO`), which is why an alpha-only
 /// update is correct no matter where the node sits.
-///
-/// Alpha-blend coupling: the layer is emitted only when `paint_alpha()`
-/// returns `Some`. A render object that overrides `paint_layer_blend() ->
-/// Some(mode)` but leaves `paint_alpha() -> None` silently drops the blend
-/// layer — the advanced compositor never sees it. When wiring the first
-/// render-tree consumer of an advanced blend, override BOTH hooks and return
-/// `Some(255)` from `paint_alpha()` for an opaque-blend-only layer.
-fn own_effect_layers(
-    alpha: Option<u8>,
-    layer_blend: Option<flui_types::painting::BlendMode>,
-    transform: Option<flui_types::Matrix4>,
-    origin: Offset,
-) -> SmallVec<[Layer; 2]> {
+fn own_effect_layers(effects: PaintEffects, origin: Offset) -> SmallVec<[Layer; 3]> {
     let mut layers = SmallVec::new();
-    if let Some(alpha) = alpha {
-        let alpha_f32 = f32::from(alpha) / 255.0;
-        layers.push(Layer::Opacity(match layer_blend {
-            Some(blend) => OpacityLayer::with_blend(alpha_f32, Offset::ZERO, blend),
-            None => OpacityLayer::with_offset(alpha_f32, Offset::ZERO),
-        }));
+    if let Some(opacity) = effects.opacity {
+        let alpha_f32 = f32::from(opacity.alpha) / 255.0;
+        layers.push(Layer::Opacity(OpacityLayer::with_offset(
+            alpha_f32,
+            Offset::ZERO,
+        )));
     }
-    if let Some(matrix) = transform {
+    if let Some(clip) = effects.clip {
+        layers.push(clip_layer(clip, origin));
+    }
+    if let Some(matrix) = effects.transform {
         // Same math and same reason as the per-child `PushTransform` fragment
         // op (RenderFlow and friends).
         layers.push(Layer::Transform(TransformLayer::new(conjugate(
@@ -1263,7 +1273,11 @@ impl FragmentComposer {
         // without re-indexing anything per capture. The same layer can be
         // captured more than once when boundaries nest, which is why the
         // per-capture SLOTS below are still built here rather than shared.
-        let mut effect_slots: FxHashMap<RenderId, EffectSlots> = FxHashMap::default();
+        //
+        // Appended at a render id's FIRST appearance below, so this list ends
+        // up in the same order the pre-order walk below visits render ids —
+        // see the field doc on `RetainedSubtree::effect_slots`.
+        let mut effect_slots: Vec<(RenderId, EffectSlots)> = Vec::new();
 
         // (tree id, parent index in `nodes`)
         let mut stack: Vec<(LayerId, Option<usize>)> = self
@@ -1282,14 +1296,20 @@ impl FragmentComposer {
             }
             let index = nodes.len();
             if let Some(&(render_id, origin)) = self.effect_owner.get(&id) {
-                effect_slots
-                    .entry(render_id)
-                    .or_insert_with(|| EffectSlots {
-                        indices: SmallVec::new(),
-                        origin,
-                    })
-                    .indices
-                    .push(index);
+                // Find-or-push, not `entry().or_insert_with()`: this is a
+                // `Vec` so the first appearance of `render_id` fixes its
+                // position, which is what keeps `effect_slots` capture-
+                // ordered. A short linear scan — see the field doc.
+                if let Some((_, slots)) = effect_slots
+                    .iter_mut()
+                    .find(|(owner, _)| *owner == render_id)
+                {
+                    slots.indices.push(index);
+                } else {
+                    let mut indices = SmallVec::new();
+                    indices.push(index);
+                    effect_slots.push((render_id, EffectSlots { indices, origin }));
+                }
             }
             nodes.push(RetainedNode {
                 layer: layer.clone(),
@@ -1413,10 +1433,10 @@ impl FragmentComposer {
 ///
 /// Both callers report a transform in LOCAL coordinates while every run
 /// they bracket carries the accumulated `origin` baked into its canvas
-/// transform: the per-node [`RenderObject::paint_transform`](crate::traits::RenderObject::paint_transform)
-/// hook (one transform for the whole node, applied here) and the
-/// per-child [`FragmentOp::PushTransform`] op (`RenderFlow` and any
-/// other Variable-arity node giving each child its own paint-time
+/// transform: the per-node [`RenderObject::paint_effects`](crate::traits::RenderObject::paint_effects)
+/// value's `transform` field (one transform for the whole node, applied
+/// here) and the per-child [`FragmentOp::PushTransform`] op (`RenderFlow`
+/// and any other Variable-arity node giving each child its own paint-time
 /// transform). Flutter `PaintingContext.pushTransform`:
 /// `T(offset)·M·T(−offset)`.
 fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4 {
@@ -1447,21 +1467,7 @@ fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
     match scope {
-        FragmentScope::Rect { rect, behavior } => {
-            Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
-        }
-        FragmentScope::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
-            rrect.translate_offset(origin),
-            behavior,
-        )),
-        FragmentScope::Path { path, behavior } => {
-            let path = if origin == Offset::ZERO {
-                *path
-            } else {
-                path.translate(origin)
-            };
-            Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
-        }
+        FragmentScope::Clip(clip) => clip_layer(clip, origin),
         FragmentScope::ShaderMask {
             shader,
             blend_mode,
@@ -1514,15 +1520,73 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
     }
 }
 
+/// Maps a recorded [`PaintClip`] onto its `flui-layer` clip layer.
+///
+/// Shifted by `origin` for the same reason every [`scope_layer`] variant
+/// is (see its doc): `Rect`/`RRect` translate their shape directly.
+/// `Path` is the one case worth spelling out — at `origin == Offset::ZERO`
+/// (the node sits at the layer-space origin, directly under its boundary)
+/// the already-owned `Arc<Path>` moves through untouched, no clone and no
+/// copy of the command buffer; only a non-zero origin pays for a
+/// translated path in a freshly allocated `Arc`. `PathTarget` resolves
+/// through [`resolve_path_clip`] first (never by the producer, and inside
+/// the walk that calls this function), then follows the same
+/// translate-then-box shape as `Path` — the one difference is that its
+/// `Arc::new` is unavoidable either way, since the resolver always hands
+/// back a freshly built owned `Path`, not a pre-existing `Arc`.
+fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
+    match clip {
+        PaintClip::Rect { rect, behavior } => {
+            Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
+        }
+        PaintClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
+            rrect.translate_offset(origin),
+            behavior,
+        )),
+        PaintClip::Path { path, behavior } => {
+            let path = if origin == Offset::ZERO {
+                path
+            } else {
+                Arc::new(path.translate(origin))
+            };
+            Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
+        }
+        PaintClip::PathTarget {
+            target,
+            size,
+            behavior,
+        } => {
+            // The path arm above shares its already-owned `Arc<Path>` for
+            // free at zero origin; there is no pre-existing `Arc` to share
+            // here — `resolve_path_clip` hands back a freshly built owned
+            // `Path` every time, so the single `Arc::new` below is the one
+            // allocation this arm ever pays, made AFTER the translate so a
+            // non-zero origin never boxes a path it is about to discard.
+            let path = resolve_path_clip(target, size);
+            let path = if origin == Offset::ZERO {
+                path
+            } else {
+                path.translate(origin)
+            };
+            Layer::ClipPath(Box::new(ClipPathLayer::new(Arc::new(path), behavior)))
+        }
+    }
+}
+
 // ============================================================================
 // Tests (ADR-0015 Slices A/B — the correlation byproduct + the resolution)
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
+    use flui_interaction::InteractionLane;
     use flui_layer::LayerLink;
     use flui_tree::{Exact, Leaf};
-    use flui_types::{Size, geometry::px, painting::Alignment};
+    use flui_types::{
+        Point, Rect, Size,
+        geometry::px,
+        painting::{Alignment, Clip, Path},
+    };
 
     use super::*;
     use crate::{
@@ -1874,5 +1938,161 @@ mod tests {
              skip its subtree rather than falling through to normal \
              traversal"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // `PaintClip::PathTarget` — resolved by the walk, never by the producer
+    // ------------------------------------------------------------------
+
+    /// A `PathTarget` resolved with no owner lane active degrades to the
+    /// whole box — the same degrade `RenderClip<Path>` performs for a
+    /// token it cannot resolve. The clipper is registered inside
+    /// `lane.enter`, but `clip_layer` is called after `enter` returns, so
+    /// the lane is inactive at resolution time (`InactiveRealm`).
+    #[test]
+    fn a_path_target_with_no_lane_degrades_to_the_whole_box() {
+        let lane = InteractionLane::try_new().expect("lane construction should succeed");
+        let handle = lane.dispatch_handle();
+        let target = lane.enter(|| {
+            handle
+                .register_path_clipper(|size| {
+                    // Never invoked: resolution happens outside `enter`,
+                    // where this clipper is unreachable.
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    path
+                })
+                .expect("register path clipper")
+        });
+
+        let size = Size::new(px(20.0), px(30.0));
+        let layer = clip_layer(
+            PaintClip::PathTarget {
+                target,
+                size,
+                behavior: Clip::AntiAlias,
+            },
+            Offset::ZERO,
+        );
+
+        let Layer::ClipPath(clip_path) = layer else {
+            panic!("PathTarget must build a Layer::ClipPath");
+        };
+        assert!(
+            clip_path
+                .clip_path()
+                .contains(Point::new(px(10.0), px(10.0))),
+            "a point inside the whole box must be contained by the degrade"
+        );
+        assert!(
+            !clip_path
+                .clip_path()
+                .contains(Point::new(px(100.0), px(100.0))),
+            "a point outside the whole box must not be contained"
+        );
+    }
+
+    /// A `PathTarget` resolved through an active lane runs the registered
+    /// clipper exactly once and produces the clipper's shape, not the
+    /// whole-box degrade.
+    #[test]
+    fn a_path_target_resolves_through_the_active_lane_once() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let lane = InteractionLane::try_new().expect("lane construction should succeed");
+        let handle = lane.dispatch_handle();
+        let calls = Rc::new(Cell::new(0u32));
+
+        lane.enter(|| {
+            let calls_for_clipper = Rc::clone(&calls);
+            let target = handle
+                .register_path_clipper(move |_size| {
+                    calls_for_clipper.set(calls_for_clipper.get() + 1);
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(
+                        Point::ZERO,
+                        Size::new(px(5.0), px(5.0)),
+                    ));
+                    path
+                })
+                .expect("register path clipper");
+
+            let layer = clip_layer(
+                PaintClip::PathTarget {
+                    target,
+                    size: Size::new(px(20.0), px(30.0)),
+                    behavior: Clip::AntiAlias,
+                },
+                Offset::ZERO,
+            );
+
+            let Layer::ClipPath(clip_path) = layer else {
+                panic!("PathTarget must build a Layer::ClipPath");
+            };
+            assert!(
+                clip_path.clip_path().contains(Point::new(px(2.0), px(2.0))),
+                "a point inside the clipper's 5x5 rect must be contained"
+            );
+            assert!(
+                !clip_path
+                    .clip_path()
+                    .contains(Point::new(px(15.0), px(15.0))),
+                "a point inside the whole box but outside the clipper's \
+                 rect must NOT be contained -- otherwise this would pass \
+                 on the whole-box degrade instead of the resolved clip"
+            );
+        });
+
+        assert_eq!(
+            calls.get(),
+            1,
+            "the registered clipper must run exactly once"
+        );
+    }
+
+    /// A resolved `PathTarget` is shifted by the paint walk's captured
+    /// origin, the same as every other `PaintClip` variant.
+    #[test]
+    fn a_path_target_is_translated_by_the_captured_origin() {
+        let lane = InteractionLane::try_new().expect("lane construction should succeed");
+        let handle = lane.dispatch_handle();
+
+        lane.enter(|| {
+            let target = handle
+                .register_path_clipper(|_size| {
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(
+                        Point::ZERO,
+                        Size::new(px(5.0), px(5.0)),
+                    ));
+                    path
+                })
+                .expect("register path clipper");
+
+            let layer = clip_layer(
+                PaintClip::PathTarget {
+                    target,
+                    size: Size::new(px(20.0), px(30.0)),
+                    behavior: Clip::AntiAlias,
+                },
+                Offset::new(px(10.0), px(10.0)),
+            );
+
+            let Layer::ClipPath(clip_path) = layer else {
+                panic!("PathTarget must build a Layer::ClipPath");
+            };
+            assert!(
+                clip_path
+                    .clip_path()
+                    .contains(Point::new(px(12.0), px(12.0))),
+                "the translated 5x5 rect now spans (10,10)..(15,15)"
+            );
+            assert!(
+                !clip_path.clip_path().contains(Point::new(px(2.0), px(2.0))),
+                "the UNtranslated path would contain (2,2) -- this is the \
+                 point that proves the translate ran"
+            );
+        });
     }
 }

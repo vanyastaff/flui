@@ -623,26 +623,23 @@ impl LaidOut {
         })
     }
 
-    /// The [`RenderOpacity`] node's `paint_alpha()` — `None` when the node
-    /// paints via a fast-path passthrough (opacity `1.0`, no `OpacityLayer`
-    /// needed) or when it is fully transparent without
-    /// `always_needs_compositing` (opacity `0.0`, subtree skipped, also no
-    /// layer needed); `Some(alpha)` otherwise. This is the exact quantity the
-    /// pipeline reads through `&dyn RenderObject<BoxProtocol>` to decide
-    /// whether to allocate a compositing layer. Panics if `id` is not a
-    /// `RenderOpacity`.
+    /// The opacity component of the [`RenderOpacity`] node's `paint_effects`
+    /// — `None` when the node paints via a fast-path passthrough (opacity
+    /// `1.0`, no `OpacityLayer` needed) or when it is fully transparent
+    /// without `always_needs_compositing` (opacity `0.0`, subtree skipped,
+    /// also no layer needed); `Some(alpha)` otherwise. This is the exact
+    /// quantity the pipeline reads through `&dyn RenderObject<BoxProtocol>`
+    /// to decide whether to allocate a compositing layer. Panics if `id` is
+    /// not a `RenderOpacity`.
     pub fn opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
-        use flui_rendering::traits::RenderBox;
-
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
                 .render_tree_mut()
                 .get_mut(id)
                 .expect("render node should exist");
-            let render = node
-                .downcast_render_object_mut::<RenderOpacity>()
+            node.downcast_render_object_mut::<RenderOpacity>()
                 .expect("render node should be a RenderOpacity");
-            render.paint_alpha()
+            node.paint_effects().opacity.map(|o| o.alpha)
         })
     }
 
@@ -664,23 +661,21 @@ impl LaidOut {
         })
     }
 
-    /// The [`RenderSliverOpacity`] node's `paint_alpha()` — the sliver-protocol
-    /// analog of [`opacity_paint_alpha`](Self::opacity_paint_alpha) (same
-    /// fast-path rule: `None` at full opacity or full transparency without
+    /// The opacity component of the [`RenderSliverOpacity`] node's
+    /// `paint_effects` — the sliver-protocol analog of
+    /// [`opacity_paint_alpha`](Self::opacity_paint_alpha) (same fast-path
+    /// rule: `None` at full opacity or full transparency without
     /// `always_needs_compositing`, `Some(alpha)` for a genuine partial
     /// blend). Panics if `id` is not a `RenderSliverOpacity`.
     pub fn sliver_opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
-        use flui_rendering::traits::RenderSliver;
-
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
                 .render_tree_mut()
                 .get_mut(id)
                 .expect("render node should exist");
-            let render = node
-                .downcast_render_object_mut::<RenderSliverOpacity>()
+            node.downcast_render_object_mut::<RenderSliverOpacity>()
                 .expect("render node should be a RenderSliverOpacity");
-            render.paint_alpha()
+            node.paint_effects().opacity.map(|o| o.alpha)
         })
     }
 
@@ -840,8 +835,8 @@ impl LaidOut {
     }
 
     /// The composed translate-then-scale transform of a [`RenderFittedBox`]
-    /// node — the same matrix `paint_transform` hands the pipeline and
-    /// `hit_test` inverts. Panics if `id` is not a `RenderFittedBox`.
+    /// node — the same matrix `paint` pushes and `hit_test` inverts. Panics
+    /// if `id` is not a `RenderFittedBox`.
     pub fn fitted_box_transform(&self, id: RenderId) -> Matrix4 {
         self.pipeline_owner.with_mut(|owner| {
             owner

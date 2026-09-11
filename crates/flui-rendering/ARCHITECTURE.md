@@ -235,11 +235,23 @@ note below.
 **Accepted trade-off:** three of them, all narrowing WHEN the fast path applies,
 never whether the frame is correct.
 
-1. An effect expressed through some mechanism OTHER than the `paint_alpha()` /
-   `paint_transform()` node hooks has no update-only path. Clips and physical
-   models are recorded as fragment scopes rather than node hooks, so they are
-   not covered and would need their own design. Unchanged from before, so no
-   regression — stated rather than assumed.
+1. An effect expressed through some mechanism OTHER than the node's
+   `paint_effects` value has no update-only path. The value now has a `clip`
+   field and a walk-side `PaintClip::PathTarget` (resolved by
+   `resolve_path_clip`), so the machinery to serve a clip through it exists —
+   but `RenderClip<S>::paint` (`crates/flui-objects/src/proxy/clip.rs`) still
+   pushes its clip as a fragment scope (`PaintCx::with_clip` over the
+   `PaintClip` its `to_paint_clip` builds) rather than reporting it through
+   `paint_effects`, and `RenderPhysicalModel`/`RenderPhysicalShape`
+   (`crates/flui-objects/src/proxy/physical_model.rs`) do likewise for their
+   own clip. Backdrop filter and shader mask
+   (`crates/flui-objects/src/proxy/{backdrop_filter,shader_mask}.rs`) push
+   their own `PaintCx::with_backdrop_filter`/`with_shader_mask` fragment
+   scopes for effect kinds `PaintEffects` has no field for yet at all. Clips
+   and physical models are recorded as fragment scopes rather than through
+   the value, so they are not covered — the remaining step for clips is the
+   producers reporting through the existing `clip` field; filter and mask
+   effects need a field added first. Both are left to follow-up work.
 2. **A boundary declines to graft while any boundary nested inside it has
    pending work of any kind, including a layer update.** Serving a nested
    boundary's update from an enclosing capture is possible — the layers are
@@ -301,16 +313,20 @@ coverage was dropped here.
 
 They are the first coverage of the update-only path over the Sliver protocol at
 all. What that buys is narrower than "the machinery is protocol-agnostic" and
-worth stating exactly: `RenderNode::paint_alpha` dispatches through the uniform
-`with_entry!` macro, so the alpha hook itself has no protocol split to test. What
-these two do pin is that a sliver's `RenderSliver::is_repaint_boundary` is
-honoured by the layer-update walk — without it the walk reaches the viewport
+worth stating exactly: `RenderNode::paint_effects()`
+(`crates/flui-rendering/src/storage/node.rs`) resolves `size` per protocol
+(box → committed `geometry().unwrap_or(Size::ZERO)`, sliver →
+`absolute_paint_size()`) and calls the render object's `paint_effects(size)`
+the same way in both arms, so every field of the value — opacity included —
+now rides the one protocol split, not a dispatch specific to alpha. What
+these two tests pin is unchanged: a sliver's `RenderSliver::is_repaint_boundary`
+is honoured by the layer-update walk — without it the walk reaches the viewport
 paint root and degrades to a plain repaint, which is exactly how both tests fail
 when the setter is reverted. The one place the protocols genuinely diverge is the
-`size` argument `RenderNode::paint_transform` reads (`geometry()` for a box,
-`absolute_paint_size()` for a sliver); `RenderSliverOpacity` does not override
-`paint_transform`, so neither test reaches that branch and it stays unexercised
-for slivers.
+`size` argument `paint_effects` is called with (`geometry()` for a box,
+`absolute_paint_size()` for a sliver); `RenderSliverOpacity`'s `paint_effects`
+never sets `transform`, so the transform arm of `own_effect_layers` stays
+unexercised for slivers.
 
 **Known gap, pre-existing and not introduced here:** upstream gates the
 semantics mark on `alwaysIncludeSemantics`, a field neither FLUI opacity render
@@ -334,14 +350,14 @@ nodes, **1.9x** once every leaf is its own boundary.
 Two things this costs, both deliberate:
 
 1. **The matrix moved from a `FragmentOp::PushTransform` inside `paint` to the
-   `paint_transform` node hook** — the opposite of the choice `RenderFittedBox`
+   `transform` field of `paint_effects`** — the opposite of the choice `RenderFittedBox`
    documents for itself, which keeps its matrix in `paint` so it can open its
    clip *outside* the transform layer. `RenderTransform` has no clip, so it has
-   no such ordering constraint, and only the hook route is patchable. The
+   no such ordering constraint, and only the `paint_effects` route is patchable. The
    asymmetry between the two is intentional; a future reader comparing them
    should not "fix" either toward the other.
-2. **A pure translation keeps the no-layer fast path** (`paint_transform`
-   returns `None`, `paint` applies a plain child offset), so translation ↔
+2. **A pure translation keeps the no-layer fast path** (`paint_effects`
+   reports no transform, `paint` applies a plain child offset), so translation ↔
    non-translation is a layer-count change and the setters report `PAINT`
    across it, as they do across singular ↔ non-singular. This is what keeps
    `Transform.translate` and every `SlideTransition` from paying for a
@@ -372,9 +388,10 @@ changes, not on whether it changed: an unchanged effective angle (mod 4,
 `rem_euclid(4)`) reports `NONE` — the paint matrix and layout are
 byte-identical, so nothing downstream needs to react, even though the raw
 value is still stored. Same parity (even ↔ even or odd ↔ odd), different
-quadrant, reports `COMPOSITED_LAYER_UPDATE | SEMANTICS` — the same node-hook
-route `RenderTransform` already uses (`own_effect_layers` composes from
-`paint_alpha`, `paint_layer_blend`, and `paint_transform`). A parity change
+quadrant, reports `COMPOSITED_LAYER_UPDATE | SEMANTICS` — the same route
+`RenderTransform` already uses (`own_effect_layers` composes the node's
+layers from its one `paint_effects` value — opacity, clip, transform, in
+that fixed nesting order). A parity change
 (odd ↔ even) reports `LAYOUT`, the pre-existing behaviour: it swaps which axis
 the child sees, so the child must be re-laid-out under (un)flipped
 constraints.
@@ -398,9 +415,9 @@ any same-frame layout change anywhere inside a boundary marks that boundary
 needing paint, upgrading a queued `LayerUpdate` to a `Repaint`
 (`PaintQueue::enqueue` never downgrades) — so a sibling or ancestor that moved
 the rotated box's accumulated position forces a repaint, which recomputes the
-conjugation from a live origin. `RenderNode::paint_transform` hands the paint
-hook the COMMITTED `geometry()` either way (`storage/node.rs`,
-`paint_transform`), and the matrix's third input, `child_size`, is a field
+conjugation from a live origin. `RenderNode::paint_effects` hands the value
+the COMMITTED `geometry()` either way (`storage/node.rs`), and the matrix's
+third input, `child_size`, is a field
 `perform_layout` caches — the one input `RenderTransform` does not have — so
 it cannot move without a relayout either. Neither size argument is in
 question; only the origin is, and both halves of that are covered.

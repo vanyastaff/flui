@@ -44,6 +44,7 @@
 //! not expose the choice.)
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use flui_layer::LayerLink;
 use flui_painting::{Canvas, DisplayList, DisplayListCore};
@@ -52,6 +53,8 @@ use flui_types::{
     Matrix4, Offset, Pixels, Point, Rect, Size,
     painting::{Alignment, BlendMode, Clip, ImageFilter, Shader},
 };
+
+use crate::traits::PaintClip;
 
 // ============================================================================
 // Fragment ops
@@ -114,32 +117,19 @@ pub enum FragmentOp {
 /// `Push`/`Pop` ops; test introspection goes through `FragmentOp::Run`).
 #[derive(Debug, Clone)]
 pub enum FragmentScope {
-    /// Axis-aligned rectangular clip.
-    Rect {
-        /// The clip rectangle in node-local coordinates.
-        rect: Rect<Pixels>,
-        /// How to handle content outside the clip boundary.
-        behavior: Clip,
-    },
-    /// Rounded-rectangle clip.
-    RRect {
-        /// The rounded clip rectangle in node-local coordinates.
-        rrect: flui_types::RRect,
-        /// How to handle content outside the clip boundary.
-        behavior: Clip,
-    },
-    /// Arbitrary path clip.
-    Path {
-        /// Boxed: a path's command buffer dwarfs the other clip shapes.
-        path: Box<flui_types::painting::Path>,
-        /// How to handle content outside the clip boundary.
-        behavior: Clip,
-    },
+    /// A clip scope (rect, rounded-rect, or arbitrary path) in
+    /// node-local coordinates — the same [`PaintClip`] value a node's
+    /// declarative `paint_effects().clip` carries. `clip_layer`
+    /// (`pipeline/owner/paint.rs`) maps it onto its `flui-layer` layer
+    /// identically whether it arrived here (an imperative `with_clip*`
+    /// scope) or through that value, so the two routes stay one
+    /// implementation.
+    Clip(PaintClip),
     /// GPU shader mask (`RenderShaderMask`) — the shader is resolved by
     /// the render object from its LOCAL bounds (`Offset.zero & size` in
     /// oracle terms) before being recorded here; the composer shifts
     /// `bounds` by the accumulated origin the same way it already does
-    /// for `Rect`/`RRect`/`Path`, reproducing oracle's local-callback,
+    /// for [`Self::Clip`], reproducing oracle's local-callback,
     /// global-`maskRect` split "for free".
     ShaderMask {
         /// The shader to apply as a mask over everything painted inside
@@ -440,6 +430,20 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     }
 
     /// Clips everything recorded inside `f` — self draws AND child
+    /// subtrees — to `clip` (local coordinates).
+    ///
+    /// The shared entry point behind every `with_clip_*` convenience
+    /// below: each builds the same [`PaintClip`] value a node's
+    /// declarative `paint_effects().clip` carries and pushes it through
+    /// here, so an imperative scope and the declarative value produce
+    /// identical layers.
+    pub fn with_clip(&mut self, clip: PaintClip, f: impl FnOnce(&mut Self)) {
+        self.rec.push_scope(FragmentScope::Clip(clip));
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Clips everything recorded inside `f` — self draws AND child
     /// subtrees — to `rect` (local coordinates).
     pub fn with_clip_rect(
         &mut self,
@@ -447,9 +451,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
-        self.rec.push_scope(FragmentScope::Rect { rect, behavior });
-        f(self);
-        self.rec.pop_scope();
+        self.with_clip(PaintClip::Rect { rect, behavior }, f);
     }
 
     /// Clips everything recorded inside `f` to a rounded rect
@@ -460,10 +462,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
-        self.rec
-            .push_scope(FragmentScope::RRect { rrect, behavior });
-        f(self);
-        self.rec.pop_scope();
+        self.with_clip(PaintClip::RRect { rrect, behavior }, f);
     }
 
     /// Clips everything recorded inside `f` to an arbitrary path
@@ -474,12 +473,13 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
-        self.rec.push_scope(FragmentScope::Path {
-            path: Box::new(path),
-            behavior,
-        });
-        f(self);
-        self.rec.pop_scope();
+        self.with_clip(
+            PaintClip::Path {
+                path: Arc::new(path),
+                behavior,
+            },
+            f,
+        );
     }
 
     /// Applies `shader` as a mask over everything recorded inside `f` —
@@ -577,12 +577,13 @@ impl<'a, A: Arity> PaintCx<'a, A> {
 
     /// Applies `transform` to everything recorded inside `f` — self draws
     /// AND child subtrees — pivoting around this node's own origin
-    /// (matching the per-node [`paint_transform`](crate::traits::RenderObject::paint_transform)
-    /// hook's convention, conjugated the same way in the pipeline replay).
+    /// (matching the per-node `paint_effects().transform` convention,
+    /// conjugated the same way in the pipeline replay).
     ///
-    /// Unlike `paint_transform` (one transform for the whole node, read
-    /// once by the pipeline), this lets a single Variable-arity node give
-    /// each child its own transform at paint time — the primitive
+    /// Unlike `paint_effects().transform` (one transform value for the
+    /// whole node, read once by the pipeline), this lets a single
+    /// Variable-arity node give each child its own transform at paint
+    /// time — the primitive
     /// [`RenderFlow`](https://api.flutter.dev/flutter/rendering/RenderFlow-class.html)
     /// needs and no other FLUI render object has required until now.
     pub fn with_transform(&mut self, transform: Matrix4, f: impl FnOnce(&mut Self)) {

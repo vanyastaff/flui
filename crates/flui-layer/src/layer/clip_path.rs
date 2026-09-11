@@ -3,6 +3,8 @@
 //! This layer clips its children to an arbitrary path shape.
 //! Corresponds to Flutter's `ClipPathLayer`.
 
+use std::sync::Arc;
+
 use flui_types::{
     geometry::{Pixels, Rect},
     painting::{Clip, Path},
@@ -48,8 +50,9 @@ use flui_types::{
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipPathLayer {
-    /// The path to clip to
-    clip_path: Path,
+    /// The path to clip to, shared with the render object that produced it
+    /// so a coordinate query never copies a command buffer.
+    clip_path: Arc<Path>,
 
     /// Clip behavior (HardEdge, AntiAlias, etc.)
     clip_behavior: Clip,
@@ -63,9 +66,9 @@ impl ClipPathLayer {
     /// * `clip_path` - The path to clip to
     /// * `clip_behavior` - How to apply the clip
     #[inline]
-    pub fn new(clip_path: Path, clip_behavior: Clip) -> Self {
+    pub fn new(clip_path: impl Into<Arc<Path>>, clip_behavior: Clip) -> Self {
         Self {
-            clip_path,
+            clip_path: clip_path.into(),
             clip_behavior,
         }
     }
@@ -120,8 +123,8 @@ impl ClipPathLayer {
 
     /// Sets the clipping path.
     #[inline]
-    pub fn set_clip_path(&mut self, clip_path: Path) {
-        self.clip_path = clip_path;
+    pub fn set_clip_path(&mut self, clip_path: impl Into<Arc<Path>>) {
+        self.clip_path = clip_path.into();
     }
 
     /// Returns the clip behavior.

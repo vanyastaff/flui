@@ -9,7 +9,7 @@ use crate::{
     hit_testing::{CursorIcon, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
-    traits::{HitTestOutcome, RenderObject},
+    traits::{HitTestOutcome, PaintEffects, RenderObject},
 };
 
 // ============================================================================
@@ -364,27 +364,10 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Effect Layers
     // ========================================================================
     //
-    // Override these to have the pipeline wrap children in OpacityLayer /
-    // TransformLayer. The blanket `impl RenderObject<BoxProtocol> for T`
-    // forwards every call from the `RenderObject<P>` surface to these
+    // Override `paint_effects` to have the pipeline wrap children in this
+    // node's own effect layers. The blanket `impl RenderObject<BoxProtocol>
+    // for T` forwards every call from the `RenderObject<P>` surface to these
     // RenderBox methods — concrete types override here, not on RenderObject.
-
-    /// Returns the alpha value to apply to children.
-    ///
-    /// Override to have the pipeline wrap children in an `OpacityLayer`.
-    /// Default: `None` (no opacity effect). See
-    /// [`RenderObject::paint_alpha`].
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
-
-    /// Returns the blend mode for the opacity layer wrapping children.
-    ///
-    /// Default: `None` (= `SrcOver`). See
-    /// [`RenderObject::paint_layer_blend`].
-    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        None
-    }
 
     /// Whether this node is a repaint boundary.
     ///
@@ -417,22 +400,25 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         false
     }
 
-    /// Returns the transform matrix to apply to children during painting.
+    /// This node's own paint effects — opacity, clip, and transform — as one
+    /// value.
     ///
-    /// Default: `None`. See
-    /// [`RenderObject::paint_transform`].
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    /// Default: [`PaintEffects::NONE`]. See [`RenderObject::paint_effects`]
+    /// for the full contract (pure in `(self, size)`, no user code, also
+    /// read by the default [`Self::apply_paint_transform`] outside any paint
+    /// walk).
+    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
         let _ = size;
-        None
+        PaintEffects::NONE
     }
 
     /// Composes onto `transform` the mapping from child `child`'s local space
     /// into this box's local space.
     ///
-    /// Default: [`paint_transform`](Self::paint_transform) followed by a
-    /// translation by the child's committed paint offset — the paint pipeline's
-    /// own composition. See [`RenderObject::apply_paint_transform`] for when to
-    /// override, and for the right-multiplication convention.
+    /// Default: [`paint_effects`](Self::paint_effects)'s transform followed by
+    /// a translation by the child's committed paint offset — the paint
+    /// pipeline's own composition. See [`RenderObject::apply_paint_transform`]
+    /// for when to override, and for the right-multiplication convention.
     fn apply_paint_transform(
         &self,
         child: usize,
@@ -441,7 +427,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         transform: &mut flui_types::Matrix4,
     ) {
         let _ = child;
-        if let Some(matrix) = <Self as RenderBox>::paint_transform(self, size) {
+        if let Some(matrix) = <Self as RenderBox>::paint_effects(self, size).transform {
             *transform *= matrix;
         }
         *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
@@ -824,20 +810,12 @@ where
         <T as RenderBox>::always_needs_compositing(self)
     }
 
-    fn paint_alpha(&self) -> Option<u8> {
-        <T as RenderBox>::paint_alpha(self)
-    }
-
-    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        <T as RenderBox>::paint_layer_blend(self)
-    }
-
     fn skip_paint(&self) -> bool {
         <T as RenderBox>::skip_paint(self)
     }
 
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        <T as RenderBox>::paint_transform(self, size)
+    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+        <T as RenderBox>::paint_effects(self, size)
     }
 
     fn apply_paint_transform(

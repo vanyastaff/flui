@@ -397,9 +397,10 @@ fn find_common_ancestor(tree: &LayerTree, a: LayerId, b: LayerId) -> Option<Laye
 /// Accumulates the translation from `start` up to (and excluding) `ancestor`:
 /// every `Layer::Offset`'s offset **plus the translation component of every
 /// `Layer::Transform`** on the path. The paint composer does push
-/// `Layer::Transform` nodes (e.g. for `paint_transform` / `PushTransform`
-/// scopes), so a leader or follower inside a `RenderTransform`/`FittedBox`/flow
-/// transform would otherwise be resolved as if that transform did not exist.
+/// `Layer::Transform` nodes (a node's `paint_effects().transform`, a
+/// `PushTransform` scope), so a leader or follower inside a
+/// `RenderTransform`/`FittedBox`/flow transform would otherwise be resolved
+/// as if that transform did not exist.
 ///
 /// FLUI's follower system is offset-only (`FollowerLayer::calculate_offset`
 /// takes an `Offset`), so a transform layer contributes only its translation

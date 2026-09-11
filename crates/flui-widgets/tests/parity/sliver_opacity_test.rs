@@ -27,10 +27,10 @@
 //! FLUI's `RenderSliverOpacity` has no analog of that semantics knob; its
 //! `always_needs_compositing` field
 //! (`crates/flui-objects/src/sliver/sliver_opacity.rs`) is a paint-side
-//! concept — set, it forces `paint_alpha` to report a layer at every alpha
-//! and disables the `alpha == 0` skip fast path — and every leg below holds
-//! it at its default `false`, so the three paint legs exercise the same
-//! paint behavior the oracle's pump cycles do:
+//! concept — set, it forces `paint_effects().opacity` to report a layer at
+//! every alpha and disables the `alpha == 0` skip fast path — and every leg
+//! below holds it at its default `false`, so the three paint legs exercise
+//! the same paint behavior the oracle's pump cycles do:
 //!
 //! - **Paint-behavior legs** (does the node emit an alpha layer, does it
 //!   suppress painting its child) — ported below, same split

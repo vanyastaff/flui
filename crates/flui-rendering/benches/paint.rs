@@ -270,7 +270,7 @@ fn bench_opacity_alpha_change(c: &mut Criterion) {
 /// What a matrix change costs on the update arm versus the repaint arm — see
 /// [`bench_effect_change`]. The seeded matrix is a SCALE, never a
 /// translation: a translation owns no `TransformLayer` at all (painted as a
-/// plain offset — see `RenderTransform::paint_transform`), which would make
+/// plain offset — see `RenderTransform::paint_effects`), which would make
 /// every `update` iteration a structural (`PAINT`) change instead of the
 /// `COMPOSITED_LAYER_UPDATE` this benchmark exists to measure.
 fn bench_transform_matrix_change(c: &mut Criterion) {

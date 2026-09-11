@@ -60,9 +60,10 @@
 //! `RenderPhysicalModel`) was in place.
 //!
 //! What genuinely blocked it was **ordering**, and it is why `paint` pushes
-//! the fit transform itself rather than leaving it to `paint_transform`: the
-//! paint walk emits a node's `paint_transform` layer *before* replaying the
-//! fragment ops that node's `paint` recorded, so a clip opened in `paint`
+//! the fit transform itself rather than leaving it to `paint_effects`: the
+//! paint walk emits a node's `paint_effects` transform layer *before*
+//! replaying the fragment ops that node's `paint` recorded, so a clip opened
+//! in `paint`
 //! would land inside the transform — clipping a rectangle stated in this
 //! box's coordinates against the child's scaled ones. Pushing both from
 //! `paint` puts them the right way round; `apply_paint_transform` then keeps
@@ -199,8 +200,8 @@ impl RenderFittedBox {
     /// the child offset), `apply_paint_transform` folds it into
     /// coordinate mapping, and `hit_test` walks through its inverse —
     /// paint, mapping, and hit-test can never disagree about where the
-    /// child is. `paint_transform` is deliberately NOT a consumer: it
-    /// stays at its `None` default (see `paint` for why). Identity when
+    /// child is. `paint_effects` is deliberately NOT a consumer of it: its
+    /// `transform` field stays `None` (see `paint` for why). Identity when
     /// nothing is cached (pre-layout / unit-scale defaults).
     ///
     /// Three parts, matching Flutter's `RenderFittedBox._updatePaintData`
@@ -510,21 +511,21 @@ impl RenderBox for RenderFittedBox {
     /// (`[…, ClipRectLayer, TransformLayer, …]`).
     ///
     /// **The order is why this pushes the transform itself instead of leaving
-    /// it to `paint_transform`.** The paint walk emits a node's
-    /// `paint_transform` layer *before* replaying the fragment ops that
-    /// node's `paint` recorded, so a clip opened here would land *inside* the
+    /// it to `paint_effects`.** The paint walk emits a node's `paint_effects`
+    /// transform layer *before* replaying the fragment ops that node's
+    /// `paint` recorded, so a clip opened here would land *inside* the
     /// transform — clipping a rectangle stated in this box's coordinates
     /// against the child's scaled ones. Pushing both from `paint`, in this
     /// order, is what puts them the right way round.
     ///
-    /// `paint_transform` itself is not overridden and stays at its `None`
-    /// default — a `Some` there would make the walk push a transform layer
-    /// of its own around whatever this method already applies (the transform
-    /// scope, or the child offset for a pure translation), applying the fit
-    /// twice. Coordinate mapping (`transform_to` and the local-to-global
-    /// family) is a separate concern from layer emission and reads the
-    /// `apply_paint_transform` override below — Flutter likewise keeps
-    /// `applyPaintTransform` alongside `paint`.
+    /// `paint_effects` itself is not overridden and its `transform` field
+    /// stays `None` — a `Some` there would make the walk push a transform
+    /// layer of its own around whatever this method already applies (the
+    /// transform scope, or the child offset for a pure translation), applying
+    /// the fit twice. Coordinate mapping (`transform_to` and the
+    /// local-to-global family) is a separate concern from layer emission and
+    /// reads the `apply_paint_transform` override below — Flutter likewise
+    /// keeps `applyPaintTransform` alongside `paint`.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if !self.has_child {
             return;
@@ -571,9 +572,9 @@ impl RenderBox for RenderFittedBox {
     /// Folds the fit transform into a child-to-parent coordinate mapping.
     ///
     /// Deliberately overridden instead of leaving the default, which derives
-    /// the same thing from `paint_transform`. `paint` above emits the
-    /// transform layer itself, so `paint_transform` must stay `None` or the
-    /// paint walk would push a *second* transform around the one `paint`
+    /// the same thing from `paint_effects`'s `transform` field. `paint` above
+    /// emits the transform layer itself, so that field must stay `None` or
+    /// the paint walk would push a *second* transform around the one `paint`
     /// already opened — applying the fit twice. Mapping still needs the
     /// matrix, so it is supplied here.
     ///
@@ -702,13 +703,13 @@ mod tests {
     /// to the child-local point — paint, coordinate mapping, and hit-test
     /// cannot disagree.
     ///
-    /// Asserted through `apply_paint_transform` rather than `paint_transform`
+    /// Asserted through `apply_paint_transform` rather than `paint_effects`
     /// because `paint` now emits the transform layer itself (so the box can
-    /// open its clip *outside* that layer). `paint_transform` must therefore
-    /// stay at its `None` default — a `Some` there would make the paint walk
-    /// push a second transform around the one `paint` opened, applying the fit
-    /// twice — and that absence is asserted here so the two cannot drift back
-    /// into double-application.
+    /// open its clip *outside* that layer). `paint_effects`'s `transform`
+    /// field must therefore stay `None` — a `Some` there would make the
+    /// paint walk push a second transform around the one `paint` opened,
+    /// applying the fit twice — and that absence is asserted here so the two
+    /// cannot drift back into double-application.
     #[test]
     fn paint_and_hit_test_share_one_transform() {
         let node = RenderFittedBox {
@@ -720,7 +721,7 @@ mod tests {
         };
 
         assert_eq!(
-            RenderBox::paint_transform(&node, Size::ZERO),
+            RenderBox::paint_effects(&node, Size::ZERO).transform,
             None,
             "paint emits the transform layer itself; a Some here would double it",
         );
