@@ -33,6 +33,7 @@
 //! `for<'a> Fn(&'a mut ElementOwner<'a>)` HRTB fallback.
 
 use std::{
+    cell::Cell,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     rc::Rc,
@@ -52,6 +53,7 @@ use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
+use super::recovered_panic::{LifecycleHook, RecoveredPanic};
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
 use flui_foundation::RebuildReasons;
 
@@ -180,6 +182,24 @@ pub struct ElementOwner<'a> {
     /// `&mut` is load-bearing: the panic-detach policy clears the slot from
     /// inside the emission helper.
     pub(crate) tree_observer: &'a mut Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
+
+    /// Lifecycle-hook panics caught and contained by a per-child
+    /// containment seam this frame (issue #561). Pushed by
+    /// [`Self::push_recovered_panic`]; drained by
+    /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
+    pub(crate) recovered_panics: &'a mut Vec<RecoveredPanic>,
+
+    /// Which lifecycle hook the tree is about to invoke, for a seam that
+    /// cannot otherwise tell which of several hooks it is currently
+    /// inside — a `GlobalKey` retake's `activate_subtree` call versus its
+    /// `update` call, both reachable from the same catch region. Set by
+    /// [`Self::note_entering_hook`] immediately before the call it marks;
+    /// read (and cleared) by [`Self::take_entering_hook`] from inside the
+    /// catch that wraps it. `None` when no marker is armed. A shared `Cell`
+    /// (not `&mut`) because the marking and the reading happen from
+    /// different points in the same recursive traversal, both holding this
+    /// same split-borrow handle.
+    pub(crate) entering_hook: &'a Cell<Option<LifecycleHook>>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
@@ -555,6 +575,53 @@ impl ElementOwner<'_> {
     }
 
     // ========================================================================
+    // Panic containment (issue #561)
+    // ========================================================================
+
+    /// Record a lifecycle-hook panic a containment seam just caught and
+    /// substituted, and log it.
+    ///
+    /// Every containment seam funnels through here instead of logging
+    /// separately: the `tracing::error!` below is this panic's ONE log
+    /// line, so a seam that calls this must not also emit its own error
+    /// line for the same panic (a fallback path with no element id to
+    /// attach — see `build_or_recover` — logs directly instead, because it
+    /// has nothing to push here).
+    pub(crate) fn push_recovered_panic(&mut self, panic: RecoveredPanic) {
+        tracing::error!(
+            element = ?panic.element,
+            hook = %panic.hook,
+            internal_invariant = panic.internal_invariant,
+            panic_message = %panic.error.message,
+            "lifecycle hook panicked; contained and substituted"
+        );
+        self.recovered_panics.push(panic);
+    }
+
+    /// Arm the entering-hook marker immediately before invoking a call site
+    /// that a later catch cannot otherwise identify by itself — a
+    /// `GlobalKey` retake's `activate_subtree` call and its `update` call
+    /// both unwind through the same catch region, and only the caller
+    /// setting this marker first can tell the catch which one it was.
+    ///
+    /// Not yet called: the tree-side retake seams that arm this marker
+    /// land with the per-child mount/update boundary. The round trip is
+    /// pinned by `entering_hook_round_trip` below.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn note_entering_hook(&self, hook: LifecycleHook) {
+        self.entering_hook.set(Some(hook));
+    }
+
+    /// Read and clear the entering-hook marker. `None` if nothing armed it
+    /// since the last read (or ever).
+    ///
+    /// Not yet called: see [`Self::note_entering_hook`].
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn take_entering_hook(&self) -> Option<LifecycleHook> {
+        self.entering_hook.take()
+    }
+
+    // ========================================================================
     // Child-manager registry (lazy sliver backend)
     // ========================================================================
 
@@ -737,5 +804,31 @@ mod tests {
         let mut handle = owner.element_owner_mut();
         recurse(&mut handle, 0);
         assert_eq!(handle.dirty_count(), 4);
+    }
+
+    #[test]
+    fn entering_hook_round_trip() {
+        let mut owner = BuildOwner::new();
+        let handle = owner.element_owner_mut();
+
+        assert_eq!(
+            handle.take_entering_hook(),
+            None,
+            "nothing armed the marker yet"
+        );
+
+        handle.note_entering_hook(LifecycleHook::Update);
+        assert_eq!(
+            handle.take_entering_hook(),
+            Some(LifecycleHook::Update),
+            "the marker set by note_entering_hook is what take_entering_hook reads"
+        );
+
+        // The read consumes the marker.
+        assert_eq!(
+            handle.take_entering_hook(),
+            None,
+            "take_entering_hook clears the marker, so a second read sees nothing armed"
+        );
     }
 }

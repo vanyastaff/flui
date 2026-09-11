@@ -190,8 +190,8 @@ pub use test_only_global_key_registry::{
 };
 // Tree management
 pub use owner::{
-    BuildOwner, DuplicateGlobalKey, ElementOwner, GlobalKeyScope, RebuildHandle, RebuildReason,
-    RebuildReasons,
+    BuildOwner, DuplicateGlobalKey, ElementOwner, GlobalKeyScope, LifecycleHook, RebuildHandle,
+    RebuildReason, RebuildReasons, RecoveredPanic,
 };
 pub use tree::{ElementNode, ElementTree};
 pub use view::{

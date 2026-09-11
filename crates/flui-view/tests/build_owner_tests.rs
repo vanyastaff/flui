@@ -626,5 +626,12 @@ fn test_build_owner_memory_size() {
     // inline rather than boxed on purpose: `BuildCapabilities` derives `Clone`
     // and is built once per `BuildCtx`, so a `Box` here would trade 24 bytes
     // on a per-presentation struct for an allocation on every element build.
-    assert!(size < 608, "BuildOwner is too large: {size} bytes");
+    //
+    // It moved again, 584 -> 608, for issue #561's per-child panic-
+    // containment drain: a measured 24 bytes for
+    // `recovered_panics: Vec<RecoveredPanic>` (ptr+len+cap). The paired
+    // `entering_hook: Cell<Option<LifecycleHook>>` marker costs nothing
+    // extra — a fieldless enum's `Option` niche keeps it to one byte, which
+    // existing padding absorbs.
+    assert!(size < 632, "BuildOwner is too large: {size} bytes");
 }

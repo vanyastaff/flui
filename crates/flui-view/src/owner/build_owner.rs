@@ -7,6 +7,7 @@
 //! - Coordinating InheritedElement lookups
 
 use std::{
+    cell::Cell,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     rc::Rc,
@@ -21,8 +22,8 @@ use parking_lot::Mutex;
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
     owner::{
-        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, RebuildReason,
-        global_key_reservations, global_key_scope,
+        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, LifecycleHook, RebuildReason,
+        RecoveredPanic, global_key_reservations, global_key_scope,
         global_key_scope::{GlobalKeyScope, OwnerTag},
         inherited_dependencies::InheritedDependencies,
         layout_builder::LayoutBuilderRegistry,
@@ -312,6 +313,19 @@ pub struct BuildOwner {
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
     pub(crate) tree_observer: Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
 
+    /// Lifecycle-hook panics caught and contained by a per-child
+    /// containment seam this frame (issue #561), waiting to be drained by
+    /// [`Self::take_recovered_panics`]. `pub(crate)` for the
+    /// [`ElementOwner`](super::ElementOwner) split-borrow.
+    pub(crate) recovered_panics: Vec<RecoveredPanic>,
+
+    /// Marker cell for
+    /// [`ElementOwner::note_entering_hook`](super::ElementOwner::note_entering_hook) /
+    /// [`ElementOwner::take_entering_hook`](super::ElementOwner::take_entering_hook) —
+    /// which lifecycle hook the tree is about to invoke, for a seam that
+    /// cannot otherwise tell. `pub(crate)` for the same split-borrow.
+    pub(crate) entering_hook: Cell<Option<LifecycleHook>>,
+
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -520,6 +534,8 @@ impl BuildOwner {
             inherited_dependencies: InheritedDependencies::default(),
             keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
+            recovered_panics: Vec::new(),
+            entering_hook: Cell::new(None),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -993,6 +1009,8 @@ impl BuildOwner {
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
+            recovered_panics: &mut self.recovered_panics,
+            entering_hook: &self.entering_hook,
         }
     }
 
@@ -1419,6 +1437,8 @@ impl BuildOwner {
                     global_key_scope: &mut self.global_key_scope,
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
+                    recovered_panics: &mut self.recovered_panics,
+                    entering_hook: &self.entering_hook,
                 };
                 if needs_did_change {
                     element
@@ -1516,6 +1536,8 @@ impl BuildOwner {
                 global_key_scope: &mut self.global_key_scope,
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
+                recovered_panics: &mut self.recovered_panics,
+                entering_hook: &self.entering_hook,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -1766,6 +1788,8 @@ impl BuildOwner {
                 global_key_scope: &mut self.global_key_scope,
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
+                recovered_panics: &mut self.recovered_panics,
+                entering_hook: &self.entering_hook,
             };
 
             let did_work = manager_arc.lock().service(
@@ -1966,6 +1990,8 @@ impl BuildOwner {
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
+            recovered_panics: &mut self.recovered_panics,
+            entering_hook: &self.entering_hook,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).
@@ -2129,6 +2155,20 @@ impl BuildOwner {
     /// draining them.
     pub fn global_key_diagnostics(&self) -> &[DuplicateGlobalKey] {
         &self.global_key_diagnostics
+    }
+
+    /// Drain this frame's recovered panics — every lifecycle-hook panic a
+    /// per-child containment seam caught and substituted since the last
+    /// drain.
+    ///
+    /// Called once per presentation per pump, after the build segment, by
+    /// `WidgetsBinding::take_recovered_panics`, which forwards the drain
+    /// as a frame-failure report. `RecoveredPanic::internal_invariant`
+    /// only classifies each entry (a `BUG:`-prefixed panic is still
+    /// contained, like any other) — this drain does not itself route
+    /// anything; the caller decides what a classified entry means.
+    pub fn take_recovered_panics(&mut self) -> Vec<RecoveredPanic> {
+        std::mem::take(&mut self.recovered_panics)
     }
 
     /// Number of `GlobalKey`s currently registered.

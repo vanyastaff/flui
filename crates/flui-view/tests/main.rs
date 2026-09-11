@@ -55,6 +55,8 @@ mod notifications;
 mod production_reconcile_emits;
 #[path = "reconcile_capture.rs"]
 mod reconcile_capture;
+#[path = "recovered_panics.rs"]
+mod recovered_panics;
 #[path = "stateless_stateful_tests.rs"]
 mod stateless_stateful_tests;
 #[path = "trybuild_ui.rs"]

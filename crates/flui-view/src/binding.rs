@@ -65,7 +65,7 @@ use flui_rendering::pipeline::PipelineCell;
 use parking_lot::RwLock;
 
 use crate::{
-    owner::BuildOwner,
+    owner::{BuildOwner, RecoveredPanic},
     tree::ElementTree,
     view::{RootRenderView, View},
 };
@@ -689,6 +689,19 @@ impl WidgetsBinding {
     /// Execute a function with write access to the build owner.
     pub fn with_build_owner_mut<R>(&self, f: impl FnOnce(&mut BuildOwner) -> R) -> R {
         f(&mut self.inner.write().build_owner)
+    }
+
+    /// Drain this presentation's recovered panics — every lifecycle-hook
+    /// panic a per-child containment seam caught and substituted since the
+    /// last drain.
+    ///
+    /// The realm-facing seam (issue #561): called once per presentation
+    /// per pump, after the build segment, and forwarded as a frame-failure
+    /// report. `flui-testing`'s `HeadlessBinding::build_owner_mut` reaches
+    /// the same underlying `BuildOwner::take_recovered_panics` directly for
+    /// tests that want the drain without a realm in the loop.
+    pub fn take_recovered_panics(&self) -> Vec<RecoveredPanic> {
+        self.inner.write().build_owner.take_recovered_panics()
     }
 
     /// Atomic seeded observer install (ADR-0040 §3): under ONE `inner`
