@@ -28,8 +28,8 @@ use crate::{
 // their historical names so the render harness and the migrated tests keep
 // using `inspect::layer_structure` / `inspect::first_picture_bounds`.
 pub use flui_layer::testing::inspect::{
-    clip_rects, first_opacity_alpha, first_picture_bounds, first_transform_matrix,
-    has_picture_layer, layer_kind, structure as layer_structure,
+    clip_paths, clip_rects, clip_rrects, first_opacity_alpha, first_picture_bounds,
+    first_transform_matrix, has_picture_layer, layer_kind, structure as layer_structure,
     structure_with_depth as layer_structure_with_depth, transform_matrices,
 };
 

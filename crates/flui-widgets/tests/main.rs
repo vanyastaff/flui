@@ -20,6 +20,8 @@ mod box_extras;
 mod child_type_swap;
 #[path = "clip.rs"]
 mod clip;
+#[path = "clip_rrect_layer_update.rs"]
+mod clip_rrect_layer_update;
 #[path = "component_child_ordering.rs"]
 mod component_child_ordering;
 #[path = "composition.rs"]

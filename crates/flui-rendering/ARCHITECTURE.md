@@ -227,31 +227,37 @@ measured or verified rather than argued. (a) It buys nothing: the enclosing
 boundary's capture is already what gets grafted, so promotion adds an
 `OffsetLayer` and a whole retained capture per node to reach a position already
 reached; and since a graft is O(retained layers), promoting nodes is what makes
-reuse *slower* (`paint/opacity_alpha_change`: 163x on inline content, 1.4x once
-every leaf is its own boundary). (b) It needs `is_repaint_boundary()` to vary at
+reuse *slower* (`paint/opacity_alpha_change`: 228x on inline content, 1.71x once
+every leaf is its own boundary — measured 2026-09-11 alongside the other four
+`paint_effects` producers; see "the clip family" below for the full
+cross-producer set and the command). (b) It needs `is_repaint_boundary()` to vary at
 runtime, which the storage flag does not support — see the `IS_REPAINT_BOUNDARY`
 note below.
 
 **Accepted trade-off:** three of them, all narrowing WHEN the fast path applies,
 never whether the frame is correct.
 
-1. An effect expressed through some mechanism OTHER than the node's
-   `paint_effects` value has no update-only path. The value now has a `clip`
-   field and a walk-side `PaintClip::PathTarget` (resolved by
-   `resolve_path_clip`), so the machinery to serve a clip through it exists —
-   but `RenderClip<S>::paint` (`crates/flui-objects/src/proxy/clip.rs`) still
-   pushes its clip as a fragment scope (`PaintCx::with_clip` over the
-   `PaintClip` its `to_paint_clip` builds) rather than reporting it through
-   `paint_effects`, and `RenderPhysicalModel`/`RenderPhysicalShape`
-   (`crates/flui-objects/src/proxy/physical_model.rs`) do likewise for their
-   own clip. Backdrop filter and shader mask
-   (`crates/flui-objects/src/proxy/{backdrop_filter,shader_mask}.rs`) push
-   their own `PaintCx::with_backdrop_filter`/`with_shader_mask` fragment
-   scopes for effect kinds `PaintEffects` has no field for yet at all. Clips
-   and physical models are recorded as fragment scopes rather than through
-   the value, so they are not covered — the remaining step for clips is the
-   producers reporting through the existing `clip` field; filter and mask
-   effects need a field added first. Both are left to follow-up work.
+1. **An effect a render object still records as a fragment scope from
+   `paint` has no update-only path.** `RenderClip<S>`
+   (`crates/flui-objects/src/proxy/clip.rs` — `paint_effects`/
+   `clip_descriptor`) and `RenderFlow` (`crates/flui-objects/src/layout/flow.rs`
+   — `paint_effects`) used to be in this bucket and now report their clip
+   through the value instead, so this trade-off has narrowed to whatever a
+   producer still pushes from `paint`. Rather than a list this entry would
+   have to keep in sync by hand every time a producer moves, enumerate the
+   producers directly: `rg -n
+   "with_clip_rect\(|with_clip_rrect\(|with_clip_path\(|with_shader_mask\(|with_backdrop_filter\("
+   crates/flui-objects/src`. Today that returns the overflow-gated clip
+   family (`RenderStack`, `RenderIndexedStack`, `RenderWrap`,
+   `RenderViewport`, `RenderShrinkWrappingViewport`, `RenderFittedBox`,
+   `RenderConstraintsTransformBox`, `RenderAnimatedSize` — each gated on
+   `has_visual_overflow && clip_behavior != Clip::None`, clipping to the
+   node's own size), `RenderPhysicalModel`/`RenderPhysicalShape`'s own clip
+   around their shadow-and-fill draws, and the `RenderBackdropFilter`/
+   `RenderShaderMask` scopes — the two hits that are not clips at all —
+   pushed because `PaintEffects` has no field for either effect yet. Re-run
+   the command before trusting this sentence; "Deferred producers" below
+   records why each is out for now.
 2. **A boundary declines to graft while any boundary nested inside it has
    pending work of any kind, including a layer update.** Serving a nested
    boundary's update from an enclosing capture is possible — the layers are
@@ -344,8 +350,9 @@ every animation frame upstream.
 FLUI reports `COMPOSITED_LAYER_UPDATE` for a matrix change that stays within the
 layered range, on the same flat-capture argument as the opacity cases: the
 layer is addressable inside the enclosing boundary's capture, so nothing is
-promoted. Measured on the benchmark's two shapes — **133x** at 1000 inline
-nodes, **1.9x** once every leaf is its own boundary.
+promoted. Measured on the benchmark's two shapes — **226x** at 1000 inline
+nodes, **1.69x** once every leaf is its own boundary (2026-09-11; see "the
+clip family" below for the full cross-producer set and the command).
 
 Two things this costs, both deliberate:
 
@@ -456,9 +463,13 @@ capture that does not exist yet.
 
 **Measured:** `paint/rotated_box_turn_change`, mirroring
 `bench_transform_matrix_change`'s two shapes and size list — update/repaint
-ratios at N = 1, 10, 100, 1000: inline **1.6x, 3.9x, 25.8x, 208x**; layered
-**1.3x, 2.1x, 2.3x, 1.6x**. Same shape as `RenderTransform`'s own numbers
-(133x / 1.9x at N = 1000) for the same reason: inline leaves merge into one
+ratios at N = 1, 10, 100, 1000: inline **1.53x, 3.9x, 25.8x, 222x**; layered
+**1.30x, 2.1x, 2.3x, 1.71x** (N = 1 and N = 1000 re-measured 2026-09-11
+alongside the other `paint_effects` producers — see "the clip family" below
+for the command; N = 10 and N = 100 are unchanged from their first
+measurement and were not part of that re-run). Same shape as
+`RenderTransform`'s own numbers (226x / 1.69x at N = 1000) for the same
+reason: inline leaves merge into one
 `PictureLayer`, so the update arm stays flat while the repaint arm grows with
 N; layered leaves make the graft itself O(N), narrowing the win to a small
 constant factor. The benches install no `SemanticsOwner`, so these ratios
@@ -473,6 +484,145 @@ setter, so nothing was replaced):
 (`tests/retained_boundary_layers.rs`), plus the unit impact-table tests in
 `crates/flui-objects/src/layout/rotated_box.rs` and the layout-parity harness
 test named above.
+
+**And now, the clip family: `RenderClip` and `RenderFlow`.** Upstream's gap
+is not specific to opacity, transform, or rotated boxes — it is structural,
+and the improvement stated above for those three producers applies to any
+node's own effects:
+
+> Upstream can serve a layer-property change without a repaint only for a
+> node that IS a repaint boundary: `markNeedsCompositedLayerUpdate` degrades
+> to `markNeedsPaint` for any other node (`object.dart`),
+> `updateLayerProperties` asserts `isRepaintBoundary`, and the class must own
+> its layer through a `LayerHandle` and override `updateCompositedLayer` —
+> `RenderOpacity` therefore declares `isRepaintBoundary =>
+> alwaysNeedsCompositing` to qualify, at the cost of an `OffsetLayer` and a
+> retained capture per node. FLUI reads one `PaintEffects` value from any
+> node and builds its layers inside the ENCLOSING boundary's flat capture
+> through one constructor with two callers, so every effect expressed
+> through the value is patchable with no promotion, no layer ownership, and
+> no per-class override; the value fixes the nesting (opacity outermost,
+> transform innermost, node-local shapes between), which is what lets a
+> single per-position layer-kind compare stand as the whole structure guard.
+> Re-derive upstream's contract from `markNeedsCompositedLayerUpdate` and
+> `updateLayerProperties` in `object.dart` and `RenderOpacity` in
+> `proxy_box.dart`, not from a mark grep.
+
+Concretely, for clips: at 3.44.0 `_RenderCustomClip<T>` (`proxy_box.dart`)
+extends `RenderProxyBox` and never overrides `isRepaintBoundary`, so it never
+qualifies for the promoted path either — its `clipper` setter (`_markNeedsClip`
+→ `markNeedsPaint()` + `markNeedsSemanticsUpdate()`) and its `clipBehavior`
+setter (`markNeedsPaint()` directly, no semantics) both fall back to a full
+subtree repaint on every change, the same degrade as any other non-boundary.
+FLUI serves the identical change — a border radius, a clip shape, a path
+source token, or `clipBehavior` itself — as a layer patch inside the
+enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
+`clip_descriptor` (`crates/flui-objects/src/proxy/clip.rs`).
+
+**Per-producer accounting.**
+
+- `RenderClip<S>` (rect / rrect / oval / path): all five setters
+  (`set_clip_behavior`, `set_clip_shape`, `set_border_radius`,
+  `set_path_clip_source_token`, `set_path_clip_target`) report
+  `COMPOSITED_LAYER_UPDATE`, `| SEMANTICS` on the four that change the
+  resolved geometry — `set_clip_behavior` does not, because the
+  accessibility clip reads `clip_behavior` directly at
+  `describe_approximate_paint_clip`'s call site rather than through this
+  setter, a pre-existing gap this change does not touch. No setter is
+  structural: a `PaintClip` at `Clip::None` is still a layer the pipeline
+  builds, and the engine skips pushing it —
+  `ClipRectLayer::clips()`/`ClipRRectLayer::clips()`/`ClipPathLayer::clips()`
+  (`crates/flui-layer/src/layer/clip_rect.rs` and its rrect/path
+  siblings) gate `LayerRender::render`/`cleanup`
+  (`crates/flui-engine/src/wgpu/layer_render.rs`), pinned by
+  `test_clip_rect_layer_no_clip_is_noop`, `test_clip_rrect_layer_no_clip_is_noop`
+  and `test_clip_path_layer_no_clip_is_noop` — so crossing `Clip::None` never
+  changes the layer count. A token-driven path clip is reported as
+  `PaintClip::PathTarget` (`ClipGeometry::path_target_descriptor`) and
+  resolved exactly once, by the walk, never by the setter and never on a
+  coordinate query: building the descriptor runs no caller code, and a
+  fixed `clip_shape`'s `Arc<Path>` is shared into the descriptor by
+  refcount, never copied.
+- `RenderFlow`: its clip is gated on `clip_behavior == Clip::None`
+  (`paint_effects` returns `PaintEffects::NONE` there, a whole-box
+  `PaintClip::Rect` otherwise) rather than reported unconditionally the way
+  `RenderClip`'s is — so `set_clip_behavior` stays `PAINT | SEMANTICS`: a
+  change across `Clip::None` adds or removes the layer, the one structural
+  transition a patch cannot express. This makes `RenderFlow` the production
+  type behind the structural-refusal oracle, and it exercises the clip arm
+  of `own_effect_layers` on every Flow frame that clips at all; its
+  per-child transforms stay in `paint` (Deferred, below). The two
+  conventions coexist deliberately — `RenderClip`'s clip is always a layer
+  (a property), `RenderFlow`'s is an absence at `Clip::None` (derived from
+  the same field it reads for the gate) — and a future reader should not
+  "fix" either toward the other.
+
+**Measured** (`cargo bench -p flui-rendering --bench paint -- '_change/(inline|layered)/(update|repaint)/(1|1000)$' --warm-up-time 1 --measurement-time 3`;
+this machine, 32 cores, 2026-09-11): at N = 1000, update/repaint ratios are
+the same class across every `paint_effects` producer — opacity 228x inline /
+1.71x layered, transform 226x / 1.69x, rotated box 222x / 1.71x, **clip
+rrect 220x / 1.71x**, **clip path 192x / 1.69x**. At N = 1 the ratios are
+the per-node floor every producer shares — clip rrect 1.54x inline / 1.29x
+layered, clip path 1.47x / 1.27x (opacity, transform and rotated box:
+1.51–1.55x / 1.30–1.32x). The update arm runs ≈0.9–1.1 µs on the inline
+shape regardless of producer (layered: ≈160 µs, the graft is O(retained
+layers) — every layered leaf is its own repaint boundary, so patching one
+still clones the whole retained capture, unlike inline leaves sharing one
+`PictureLayer`); the repaint arm runs ≈205–210 µs inline, ≈270–275 µs layered —
+the same figures measured when the paint walk switched to reading one
+`PaintEffects` value (a structural ≈4–5% rise on the repaint arm, recorded
+at that switch), so none of this is new overhead from the clip producers
+themselves. The path ratio
+sits below the rest for a stated reason, not a regression: `resolve_path_clip`
+runs the registered clipper exactly once on BOTH arms — once to rebuild the
+one patched layer, once as part of the whole-subtree repaint — adding the
+same ~140 ns to each side of the same division, which compresses the ratio
+toward 1x and cannot push it below 1x.
+
+**Replacement tests:**
+`a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`,
+`a_clip_layer_update_is_written_back_into_the_retained_capture`,
+`a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on`,
+`a_flow_clip_behavior_change_is_structural_and_refused`, and
+`two_path_clips_under_one_boundary_resolve_in_paint_order`
+(`tests/retained_boundary_layers.rs`; `cargo nextest run -p flui-rendering
+--locked -E 'test(<name>)'`);
+`harness_transform_to_through_a_path_clip_runs_no_registered_clipper`
+(`tests/render_object_harness.rs`; `cargo nextest run -p flui-objects
+--locked -E 'test(harness_transform_to_through_a_path_clip_runs_no_registered_clipper)'`);
+`rebuilding_a_clip_rrect_widget_updates_its_layer`
+(`tests/clip_rrect_layer_update.rs`; `cargo nextest run -p flui-widgets
+--locked -E 'test(rebuilding_a_clip_rrect_widget_updates_its_layer)'`) —
+pins `ClipRRect::update_render_object` forwarding `set_border_radius` and
+its impact to the owner; it cannot see which paint arm served the frame,
+and says so, pointing at the render-level tests above for that; and the
+pixel oracle, `the_clip_update_path_and_a_repaint_produce_the_same_pixels`
+plus `a_different_radius_produces_different_pixels`
+(`tests/composited_layer_update_readback.rs`; `cargo nextest run -p flui
+--features gpu-readback-tests --no-default-features --test
+composited_layer_update_readback --locked --test-threads 1`).
+
+**Deferred producers.** Not served by this change, each for a stated reason:
+
+| Producer | Why not now | Trigger | Shape when reopened |
+|---|---|---|---|
+| `RenderBackdropFilter` filter/blend (`enabled` → `PAINT`) | no widget → no caller | the `BackdropFilter` widget (upstream driver: `FlexibleSpaceBar` blur) | `backdrop_filter:` field at a fixed position (alpha does not commute — position decided at the field) |
+| `RenderShaderMask` | no widget; its shader is lane-resolved like a path clipper | the `ShaderMask` widget | `shader_mask:` field with a walk-resolved target, as `PathTarget` |
+| `ImageFiltered` | no render object | its port (upstream driver: `StretchingOverscrollIndicator`) | a field; `enabled` → `PAINT` |
+| `RenderPhysicalModel`/`RenderPhysicalShape` | shadow + fill are display-list content, and a descriptor clip wraps own draws | `Material` implicit elevation/shape animation (`_MaterialInterior`) | seal a drawing scope-owner's own draw runs into a picture of their own and re-record only that picture on a property change; measure the layered shape first; needs an ADR |
+| `RenderFlow` per-child transforms | variable fragment | an animated `Flow` delegate in the catalog | re-record the flow's own fragment (a per-node picture re-record, not a layer patch); the `paint_effects` clip stays the prefix outside it |
+| `RenderFittedBox` | NOT nesting (the fixed order is exactly its clip-outside-transform) but its translation fast path (`paint_child_at`, a `Some ↔ None` transform transition) and its overflow-gated layout-derived clip | a per-frame fit animation in the catalog | a per-node fragment re-record for the child offset; the overflow clip stays structural |
+| Overflow-gated clips (`RenderStack`/`RenderIndexedStack`, `RenderWrap`, `RenderConstraintsTransformBox`, `RenderAnimatedSize`, box `RenderViewport`/`RenderShrinkWrappingViewport`; rule: `has_visual_overflow && clip_behavior != Clip::None`, rect = own size — enumerate with the `rg` command in trade-off 1 above) | no patchable property | none; re-check the enumeration when one gains a property | n/a |
+| `ClipSuperellipse` | no render object, widget, or variant (its layer debug-asserts against `Clip::None`, unlike rect/rrect/path, which only skip the push) | its port | a `PaintClip` variant; note the per-layer `Clip::None` difference |
+| `blend` on `PaintOpacity` | zero producers | the first advanced-blend producer | additive field on the `#[non_exhaustive]` struct |
+
+The market survey behind this shape (Prime Directive rule 2) covered
+Compose, SwiftUI, Slint, GPUI, and Masonry/Xilem; Compose's
+[`Modifier.graphicsLayer`](https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/graphicsLayer.modifier)
+is the closest market analogue — one declarative value per layer (`alpha`,
+`clip` + `shape`, the transform fields, `renderEffect`, `blendMode`) whose
+property-only changes update the retained layer without re-recording the
+display list, the same contract `PaintEffects` gives FLUI.
 
 ### `RenderRotatedBox` reports a baseline only for an even turn
 

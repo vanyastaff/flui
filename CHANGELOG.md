@@ -108,6 +108,14 @@ file records the repo-consumer-visible summary.
   internal invariants, enforced by `clippy::unwrap_used` at workspace level
   (tracked crate-level opt-outs burned down per quality wave).
 - This changelog.
+- **Clip-producer layer-update test support** (#996): `flui_layer::testing::inspect::clip_rects`/
+  `clip_rrects` walk a `LayerTree` for its `ClipRect`/`ClipRRect` layers in pre-order;
+  `flui_widgets::testing::LaidOut::clip_rrect_layers` exposes the latter to widget tests. New
+  Criterion groups `paint/clip_rrect_radius_change` and `paint/clip_path_token_change`
+  (`flui-rendering`'s `paint` bench) measure the clip producers against the same update/repaint
+  ratio the opacity/transform/rotated-box groups already cover. Two new
+  `tests/composited_layer_update_readback.rs` cases pin the clip patch against a forced repaint
+  pixel-for-pixel at a clipped corner.
 
 ### Changed
 
@@ -126,6 +134,18 @@ file records the repo-consumer-visible summary.
   `resolve_path_clip`, rather than the producer running the clipper itself.
   The composited-layer-update patch arm rebuilds a boundary's effect layers
   in capture order.
+- **`RenderClip<S>` (rect/rrect/oval/path) and `RenderFlow` report their clip through
+  `paint_effects` instead of pushing it as a fragment scope** (#996): `RenderClip`'s five
+  setters (`set_clip_behavior`, `set_clip_shape`, `set_border_radius`,
+  `set_path_clip_source_token`, `set_path_clip_target`) now report `COMPOSITED_LAYER_UPDATE`
+  (`| SEMANTICS` on the four that change the resolved geometry) instead of `PAINT` — a clip
+  property change under a retained boundary patches the layer without repainting the subtree
+  (measured 220x at 1000 inline nodes for a `ClipRRect` radius change, 1.71x layered; 192x/1.69x
+  for a `ClipPath` token change, resolving the registered clipper once on either arm). A
+  token-driven path clipper is carried as `PaintClip::PathTarget` and resolved once, by the paint
+  walk, never on a coordinate query. `RenderFlow`'s clip stays gated on `Clip::None`, so
+  `set_clip_behavior` still reports `PAINT | SEMANTICS` — the production type behind the
+  structural-refusal oracle.
 - **A node's effect descriptor now builds inside the paint guard; a panic while
   building or patching one poisons the frame** (#996): the paint walk reads a
   node's `paint_effects` — and resolves any `PaintClip::PathTarget` it

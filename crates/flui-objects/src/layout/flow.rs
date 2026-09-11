@@ -64,7 +64,7 @@ use flui_rendering::{
     delegates::{FlowDelegate, FlowPaintingContext},
     parent_data::BoxParentData,
     pipeline::RenderInvalidationHandle,
-    traits::RenderBox,
+    traits::{PaintClip, PaintEffects, RenderBox},
 };
 
 /// Positions children with paint-time transform matrices chosen by a
@@ -210,6 +210,12 @@ impl RenderFlow {
     }
 
     /// Updates the clip behavior, affecting paint and the semantics clip.
+    ///
+    /// Reports `PAINT`, not a composited-layer update: the flow's clip is
+    /// gated on `Clip::None` (see `paint_effects`), so a change can add or
+    /// remove the clip layer — a structural change a layer patch cannot
+    /// express. A non-`None` → non-`None` change would be patchable, but one
+    /// impact per setter keeps the contract simple and the case is rare.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -281,29 +287,42 @@ impl RenderBox for RenderFlow {
         true
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
-        let body = |ctx: &mut PaintCx<'_, Variable>| {
-            let n = self.child_sizes.len();
-            let (mut painted, mut paint_order, mut transforms) =
-                (vec![false; n], Vec::with_capacity(n), vec![None; n]);
-            let mut flow_ctx = FlowPaintingContext::for_paint(
-                ctx,
-                &self.child_sizes,
-                &mut paint_order,
-                &mut transforms,
-                &mut painted,
-            );
-            self.delegate.paint_children(&mut flow_ctx);
-        };
-        // Clip-gating on `!= Clip::None` mirrors `RenderStack`'s FLUI idiom
-        // (fewer emitted layers when clipping is off) rather than the
-        // oracle's unconditional `pushClipRect` call — same visible result.
+    /// The flow's own clip, reported as a paint effect so the pipeline opens
+    /// it around the whole fragment `paint` records — outside every per-child
+    /// transform scope the delegate pushes, exactly where `paint` used to
+    /// open it itself.
+    ///
+    /// Gated on `!= Clip::None` rather than reported unconditionally: this
+    /// mirrors `RenderStack`'s FLUI idiom (no layer at all when clipping is
+    /// off) rather than the oracle's unconditional `pushClipRect`, so
+    /// `set_clip_behavior` across `Clip::None` is a layer-COUNT change and
+    /// stays a structural `PAINT` — the one clip producer whose clip can
+    /// appear and disappear.
+    fn paint_effects(&self, size: Size) -> PaintEffects {
         if self.clip_behavior == Clip::None {
-            body(ctx);
-        } else {
-            ctx.with_clip_rect(bounds, self.clip_behavior, body);
+            return PaintEffects::NONE;
         }
+        PaintEffects::NONE.with_clip(PaintClip::Rect {
+            rect: Rect::from_origin_size(Point::ZERO, size),
+            behavior: self.clip_behavior,
+        })
+    }
+
+    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+        // The clip (when any) is reported through `paint_effects` above and
+        // opened by the pipeline around this whole fragment; only the
+        // delegate's per-child transform scopes are recorded here.
+        let n = self.child_sizes.len();
+        let (mut painted, mut paint_order, mut transforms) =
+            (vec![false; n], Vec::with_capacity(n), vec![None; n]);
+        let mut flow_ctx = FlowPaintingContext::for_paint(
+            ctx,
+            &self.child_sizes,
+            &mut paint_order,
+            &mut transforms,
+            &mut painted,
+        );
+        self.delegate.paint_children(&mut flow_ctx);
     }
 
     /// Flutter's `RenderFlow.applyPaintTransform` (`flow.dart:456-462`), which

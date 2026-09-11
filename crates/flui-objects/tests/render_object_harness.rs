@@ -13134,6 +13134,73 @@ fn harness_transform_to_composes_a_whole_chain() {
     assert_transform_point(x, y, 10.0, -10.0, "scale ∘ fractional translation");
 }
 
+/// A coordinate query through a `RenderClipPath` with a registered,
+/// owner-lane path clipper must not run that clipper.
+///
+/// `apply_paint_transform`'s default reads `paint_effects(size).transform` —
+/// `RenderClipPath` reports none, so this exercises only the "build the
+/// whole `PaintEffects` value" half of that default, which is exactly what
+/// matters here: `PaintClip::PathTarget` carries the owner-lane token as
+/// DATA (`ClipGeometry::path_target_descriptor`), and only a real paint
+/// WALK resolves it through `resolve_path_clip`. Mirrors
+/// `clip_descriptor_path_target_carries_the_token_and_runs_no_clipper` in
+/// `crates/flui-objects/src/proxy/clip.rs`, which pins the same property one
+/// layer down by calling `clip_descriptor` directly; this test pins it at
+/// the actual `PipelineOwner::transform_to` call site the acceptance
+/// criterion is about. The whole mount + query runs inside the lane
+/// (mirroring that unit test), not after it: outside an active lane, target
+/// resolution degrades before ever reaching the closure, so calling
+/// `transform_to` after `lane.enter` returned would pass even if the
+/// descriptor eagerly resolved — the lane must still be live when the query
+/// runs for a stray resolve to be observable at all.
+#[test]
+fn harness_transform_to_through_a_path_clip_runs_no_registered_clipper() {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let calls = Rc::new(Cell::new(0usize));
+
+    lane.enter(|| {
+        let calls_for_clipper = Rc::clone(&calls);
+        let target = handle
+            .register_path_clipper(move |size: Size| {
+                calls_for_clipper.set(calls_for_clipper.get() + 1);
+                let mut path = Path::new();
+                path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                path
+            })
+            .expect("register path clipper");
+
+        let mut clip = RenderClipPath::anti_alias();
+        let _ = clip.set_path_clip_target(Some(target));
+
+        let run = RenderTester::mount(
+            box_node(clip)
+                .label("root")
+                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("leaf")),
+        )
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+        let transform = run
+            .owner()
+            .transform_to(run.id("leaf"), run.root())
+            .expect("leaf is a descendant of root");
+        assert!(
+            transform.is_identity(),
+            "the leaf sits at the clip's own origin with no transform of its \
+             own, so root-to-leaf must be identity: got {transform:?}",
+        );
+
+        assert_eq!(
+            calls.get(),
+            0,
+            "a coordinate query through a path-target clip must not run the \
+             registered clipper — the descriptor carries the token as data \
+             and only a real paint walk resolves it",
+        );
+    });
+}
+
 /// Asserts a transformed point, with the tolerance a 4×4 float matrix needs
 /// (a quarter turn leaves ~2e-6 of residue on the zeroed axis).
 fn assert_transform_point(
