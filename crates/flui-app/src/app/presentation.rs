@@ -259,9 +259,12 @@ pub(crate) struct PresentationState {
     /// presentation's build+layout+paint segment (`UiRealm::
     /// draw_frame_for_presentation`), where a panic it raises escapes
     /// every inner recovery layer and reaches the realm's per-presentation
-    /// `catch_unwind` boundary — the controllable stand-in for real
-    /// escape paths (e.g. a panicking `ViewState::dispose` during tree
-    /// finalization) that are hard to re-trigger repeatedly.
+    /// `catch_unwind` boundary — the controllable stand-in for real escape
+    /// paths (e.g. a child's `RenderView::create_render_object` panicking
+    /// on the dense reconciler, which has not yet adopted the per-child
+    /// containment windows `ElementTree::mount_or_substitute` /
+    /// `update_or_substitute` give the sparse path) that are hard to
+    /// re-trigger repeatedly.
     #[cfg(test)]
     segment_probe: RefCell<Option<Box<dyn Fn()>>>,
     /// Test-only oracle: how many times this presentation's own

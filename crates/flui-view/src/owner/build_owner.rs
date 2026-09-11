@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
     owner::{
-        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, LifecycleHook, RebuildReason,
+        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, RebuildReason,
         RecoveredPanic, global_key_reservations, global_key_scope,
         global_key_scope::{GlobalKeyScope, OwnerTag},
         inherited_dependencies::InheritedDependencies,
@@ -319,12 +319,12 @@ pub struct BuildOwner {
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
     pub(crate) recovered_panics: Vec<RecoveredPanic>,
 
-    /// Marker cell for
-    /// [`ElementOwner::note_entering_hook`](super::ElementOwner::note_entering_hook) /
-    /// [`ElementOwner::take_entering_hook`](super::ElementOwner::take_entering_hook) —
-    /// which lifecycle hook the tree is about to invoke, for a seam that
-    /// cannot otherwise tell. `pub(crate)` for the same split-borrow.
-    pub(crate) entering_hook: Cell<Option<LifecycleHook>>,
+    /// Backing cell for
+    /// [`ElementOwner::hook_panic_recorded`](super::ElementOwner::hook_panic_recorded) —
+    /// whether the panic currently unwinding through a containment window
+    /// was already recorded by an inner, more accurate seam. `pub(crate)`
+    /// for the same split-borrow.
+    pub(crate) hook_panic_recorded: Cell<bool>,
 
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
@@ -535,7 +535,7 @@ impl BuildOwner {
             keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
             recovered_panics: Vec::new(),
-            entering_hook: Cell::new(None),
+            hook_panic_recorded: Cell::new(false),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -1010,7 +1010,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
-            entering_hook: &self.entering_hook,
+            hook_panic_recorded: &self.hook_panic_recorded,
         }
     }
 
@@ -1438,7 +1438,7 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
-                    entering_hook: &self.entering_hook,
+                    hook_panic_recorded: &self.hook_panic_recorded,
                 };
                 if needs_did_change {
                     element
@@ -1537,7 +1537,7 @@ impl BuildOwner {
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
-                entering_hook: &self.entering_hook,
+                hook_panic_recorded: &self.hook_panic_recorded,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -1789,7 +1789,7 @@ impl BuildOwner {
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
-                entering_hook: &self.entering_hook,
+                hook_panic_recorded: &self.hook_panic_recorded,
             };
 
             let did_work = manager_arc.lock().service(
@@ -1991,7 +1991,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
-            entering_hook: &self.entering_hook,
+            hook_panic_recorded: &self.hook_panic_recorded,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).

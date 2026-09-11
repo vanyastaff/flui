@@ -396,15 +396,36 @@ fn test_stateful_deactivate_callback_called() {
 #[test]
 fn test_stateful_activate_callback_called() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-    element.deactivate(&mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // Drive the first build so `init_state` actually runs before
+    // deactivate/activate — since issue #561, `StatefulBehavior::on_activate`
+    // is gated on a completed `init_state` (matching Flutter's guaranteed
+    // `initState` -> `activate`/`deactivate` ordering), so an element that
+    // was only mounted, never built, never runs its `activate` callback
+    // either — same gate `test_stateful_dispose_callback_called_on_unmount`
+    // pins on the dispose side. A raw `StatefulElement::mount`/`activate`
+    // pair (as this test used before #561) has no live `BuildHandle` to
+    // build through, so this now goes through `ElementTree`/`BuildOwner`
+    // like the production path.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
-    let activate_count = element.state().activate_called.clone();
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+
+    let activate_count = tree
+        .get(root_id)
+        .expect("root exists")
+        .element()
+        .downcast_ref::<StatefulElement<LifecycleCallbackView>>()
+        .expect("root is StatefulElement<LifecycleCallbackView>")
+        .state()
+        .activate_called
+        .clone();
     assert_eq!(activate_count.load(Ordering::SeqCst), 0);
 
-    element.activate(&mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(activate_count.load(Ordering::SeqCst), 1);
 }

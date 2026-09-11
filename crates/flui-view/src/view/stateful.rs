@@ -328,12 +328,20 @@ mod tests {
         owner.build_scope(&mut tree);
 
         assert!(!disposed.get());
-        tree.remove(root_id, &mut owner.element_owner_mut());
+        let removed = tree
+            .remove(root_id, &mut owner.element_owner_mut())
+            .expect("an unkeyed root removal returns the freed node");
 
         assert!(disposed.get());
         assert!(
             tree.get(root_id).is_none(),
             "an unkeyed root removal frees the slab slot immediately"
+        );
+        assert_eq!(
+            removed.element().lifecycle(),
+            Lifecycle::Defunct,
+            "the freed node's lifecycle reflects the unmount, same as tests/lifecycle_tests.rs's \
+             test_tree_remove_unmounts_element"
         );
     }
 }

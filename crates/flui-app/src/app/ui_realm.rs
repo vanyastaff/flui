@@ -8501,10 +8501,11 @@ mod tests {
         // straight through the realm's per-presentation loop and killed the
         // process via the runner's `resume_unwind`.
         //
-        // The removal-path USER hooks are a narrower, closed set: `dispose`
-        // is bounded per element as of issue #561 (`deactivate` and
-        // `did_unmount_render_object` are next in the same series) — see
-        // `StatefulBehavior::on_unmount`
+        // The removal-path USER hooks are a narrower, closed set: `dispose`,
+        // `deactivate`, `activate`, and `did_unmount_render_object` are all
+        // bounded per element (issue #561) — see
+        // `StatefulBehavior::{on_unmount, on_activate, on_deactivate}` and
+        // `RenderBehavior::on_unmount`
         // (`crates/flui-view/src/element/behavior.rs`) and the pins in
         // `crates/flui-view/tests/lifecycle_panic_containment.rs`. A real
         // `dispose` panic no longer reaches this deep at all, so this test

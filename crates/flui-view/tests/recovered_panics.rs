@@ -16,7 +16,7 @@ use std::any::TypeId;
 
 use flui_view::{
     BuildContext, BuildOwner, ElementId, ElementTree, ErrorView, IntoView, LifecycleHook,
-    RebuildReason, StatelessView, View, ViewExt,
+    RebuildReason, RecoveredAt, StatelessView, View, ViewExt,
 };
 
 // ============================================================================
@@ -126,7 +126,11 @@ fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook() {
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Build);
     assert_eq!(
-        panic.element, child_id,
+        panic.at,
+        RecoveredAt::Element {
+            element: child_id,
+            parent: None
+        },
         "the recorded element is the panicking child, not the well-behaved host"
     );
     assert_eq!(panic.view_type_id, TypeId::of::<PanicBuildView>());

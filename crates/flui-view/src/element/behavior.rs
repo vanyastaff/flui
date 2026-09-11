@@ -22,10 +22,10 @@ use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     context::{BuildContext, BuildCtx},
     element::RenderSlot,
-    owner::{LifecycleHook, RecoveredPanic},
+    owner::LifecycleHook,
     view::{
-        AnimatedView, FlutterError, InheritedView, IntoView, ProxyView, RenderView, StatefulView,
-        StatelessView, View, ViewState,
+        AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
+        View, ViewState,
     },
 };
 
@@ -709,62 +709,99 @@ where
     /// caller (`ElementTree::remove_finalized_inner`) still freeing the
     /// slab slot and bumping its generation — a `dispose` that panicked
     /// once is never invoked again for the same element. A caught panic
-    /// is recorded through `RecoveredPanic` instead of only reaching
-    /// `tracing`, mirroring `build_or_recover`'s producer side.
+    /// is recorded through `ElementOwner::record_hook_panic` instead of
+    /// only reaching `tracing`, mirroring `build_or_recover`'s producer
+    /// side.
     ///
-    /// Flutter has no equivalent boundary: `BuildOwner.finalizeTree`'s
-    /// `_inactiveElements._unmountAll()` carries no per-element
-    /// try/catch, so a throwing `dispose` there unwinds out of the whole
-    /// finalize pass. This containment is a deliberate improvement over
-    /// that contract, not parity with it.
+    /// # Flutter contrast
+    ///
+    /// Flutter's `_unmountAll` (`BuildOwner.finalizeTree`'s drain of
+    /// `_inactiveElements`) carries no per-element `try`/`catch` of its
+    /// own, but the pass itself is not uncontained: `finalizeTree` wraps
+    /// the whole drain in one `try`/`catch` that reports through
+    /// `_reportException("while finalizing the widget tree")` and lets the
+    /// frame continue. Its failure mode is therefore coarser than FLUI's,
+    /// not absent — a throwing `dispose` there leaves every element after
+    /// it in `_elements` un-unmounted for the rest of that pass, while
+    /// FLUI's per-element catch here contains the damage to the one
+    /// element whose `dispose` panicked.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !self.initialized {
             return;
         }
-        match std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
-            Ok(()) => {}
-            Err(payload) => {
-                let Some(element) = core.self_id() else {
-                    // No slab id — mirrors `build_or_recover`'s fallback:
-                    // there is nothing to attach a `RecoveredPanic` to
-                    // (a hand-rolled element that bypassed
-                    // `ElementTree::insert`; test fixtures only), so this
-                    // `tracing::error!` is the only signal.
-                    let error =
-                        FlutterError::from_panic(payload.as_ref(), "disposing StatefulElement");
-                    tracing::error!(
-                        panic_message = %error.message,
-                        "dispose panicked outside the slab; nothing to record (no element id)"
-                    );
-                    return;
-                };
-                owner.push_recovered_panic(RecoveredPanic::from_payload(
-                    element,
-                    None,
-                    TypeId::of::<V>(),
-                    LifecycleHook::Dispose,
-                    payload.as_ref(),
-                    "disposing StatefulElement",
-                ));
-            }
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
+            owner.record_hook_panic(
+                core.self_id(),
+                None,
+                TypeId::of::<V>(),
+                LifecycleHook::Dispose,
+                payload.as_ref(),
+                "disposing StatefulElement",
+            );
         }
     }
 
-    fn on_activate(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
-        // Unlike `on_deactivate` below, `activate` is unreachable from a
-        // plain rebuild: the only path that calls it is a `GlobalKey`
-        // retake, and that retake already runs inside its own containment
-        // window (`ElementTree`'s retake path) that catches and reports an
-        // `activate` panic without this hook's help. `owner` stays unused.
-        self.state.activate();
+    /// Run `ViewState::activate` under the same containment shape as
+    /// [`Self::on_unmount`]/[`Self::on_deactivate`] (issue #561).
+    ///
+    /// # The `initialized` gate
+    ///
+    /// Symmetric with `dispose`/`deactivate`: a state whose `init_state`
+    /// never ran has nothing to resume either.
+    ///
+    /// # Why this needs its own catch, not just the retake window's
+    ///
+    /// `activate` is reachable only from a `GlobalKey` retake
+    /// (`ElementTree::retake_inactive_global_key` /
+    /// `retake_active_global_key`), which already wraps its
+    /// `activate_subtree` call in its own containment window. But that
+    /// window walks the WHOLE reactivated subtree — the retaken element
+    /// AND every descendant — so a panic anywhere in it, caught only one
+    /// level up, can only be attributed to the retake's own candidate,
+    /// never to the actual descendant whose `activate` failed. Catching
+    /// here, at the element whose hook is actually running, records the
+    /// panic under its OWN accurate identity — then re-raises (via
+    /// `ElementOwner::mark_hook_panic_recorded`) so the retake's own
+    /// window still observes the unwind and still undoes the relocation,
+    /// but does not push a second, coarser record for the same panic.
+    fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        if !self.initialized {
+            return;
+        }
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.activate())) {
+            owner.record_hook_panic(
+                core.self_id(),
+                None,
+                TypeId::of::<V>(),
+                LifecycleHook::Activate,
+                payload.as_ref(),
+                "activating StatefulElement",
+            );
+            owner.mark_hook_panic_recorded();
+            std::panic::resume_unwind(payload);
+        }
     }
 
-    /// Flutter has no equivalent boundary here either (see `on_unmount`'s
-    /// doc): `StatefulElement.deactivate` (`framework.dart`) calls
-    /// `state.deactivate()` with no `try`/`catch`. A panic is caught and
-    /// reported instead of unwinding out of the reconcile that dropped this
-    /// element, mirroring `on_unmount`'s containment shape one hook over —
-    /// see the containment bullet in `crates/flui-view/AGENTS.md`.
+    /// # Flutter contrast
+    ///
+    /// `StatefulElement.deactivate` (`framework.dart`) calls
+    /// `state.deactivate()` with no `try`/`catch` of its own, and (unlike
+    /// `dispose`) Flutter DOES catch a throwing one: `_InactiveElements
+    /// ._deactivateRecursively` wraps the whole subtree's deactivation,
+    /// and on a caught exception marks every element in it
+    /// `_ElementLifecycle.defunct`-adjacent (`_ElementLifecycle.failed`
+    /// applied recursively via `_deactivateFailedSubtreeRecursively`)
+    /// before rethrowing into `ComponentElement.performRebuild`'s second
+    /// `try`/`catch`, which substitutes an `ErrorWidget` at the
+    /// *rebuilding ancestor* — not at the failed element itself. FLUI's
+    /// improvement is a narrower blast radius: only the one element whose
+    /// `deactivate` panicked is affected, it stays parked `Inactive` (not
+    /// a whole-subtree `failed` state), and it is still disposed normally
+    /// at `finalize_tree` — Flutter never disposes a `failed` subtree at
+    /// all. A panic is caught and reported instead of unwinding out of the
+    /// reconcile that dropped this element, mirroring `on_unmount`'s
+    /// containment shape one hook over — see the containment bullet in
+    /// `crates/flui-view/AGENTS.md`.
     ///
     /// The catch sits in the behavior, not around `ElementBase::deactivate`
     /// at the tree level: `unified.rs`'s `deactivate` still runs
@@ -773,31 +810,16 @@ where
     /// would skip that flip on a panic and hand a same-frame `GlobalKey`
     /// retake an element still reporting `Active`.
     fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        match std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate())) {
-            Ok(()) => {}
-            Err(payload) => {
-                let Some(element) = core.self_id() else {
-                    // No slab id — mirrors `on_unmount`'s fallback: nothing
-                    // to attach a `RecoveredPanic` to (a hand-rolled element
-                    // that bypassed `ElementTree::insert`; test fixtures
-                    // only), so this `tracing::error!` is the only signal.
-                    let error =
-                        FlutterError::from_panic(payload.as_ref(), "deactivating StatefulElement");
-                    tracing::error!(
-                        panic_message = %error.message,
-                        "deactivate panicked outside the slab; nothing to record (no element id)"
-                    );
-                    return;
-                };
-                owner.push_recovered_panic(RecoveredPanic::from_payload(
-                    element,
-                    None,
-                    TypeId::of::<V>(),
-                    LifecycleHook::Deactivate,
-                    payload.as_ref(),
-                    "deactivating StatefulElement",
-                ));
-            }
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate()))
+        {
+            owner.record_hook_panic(
+                core.self_id(),
+                None,
+                TypeId::of::<V>(),
+                LifecycleHook::Deactivate,
+                payload.as_ref(),
+                "deactivating StatefulElement",
+            );
         }
     }
 
@@ -985,6 +1007,16 @@ where
                 // Use helper to insert (handles Protocol type)
                 let render_id = insert_render_object_helper(render_object, pipeline_owner);
 
+                // Set the field HERE, before adoption/stamp below can
+                // panic — not after this closure returns. A panic in
+                // either step still leaves `self.render_id` populated, so
+                // the undo path a panicking mount takes
+                // (`ElementTree::discard_unannounced` ->
+                // `RenderBehavior::on_unmount`) can find and detach the
+                // already-inserted, now-orphaned render object instead of
+                // leaking it (issue #561).
+                self.render_id = Some(render_id);
+
                 // Handle parent relationship. `adopt_child` writes the
                 // child's parent link and the parent's child-list entry in
                 // one call — the two directions can never be written
@@ -1036,16 +1068,18 @@ where
     ///
     /// # Flutter contrast
     ///
-    /// `RenderObjectElement.unmount` (`framework.dart`, tag 3.44.0)
-    /// calls `oldWidget.didUnmountRenderObject(renderObject)` with no
-    /// `try`/`catch`, so a throwing hook there aborts `unmount` and leaks
-    /// the render object out of `BuildOwner.finalizeTree`'s
-    /// `_inactiveElements._unmountAll()` loop (the render object is never
-    /// disposed/detached because the two calls right after
-    /// `didUnmountRenderObject` never run). FLUI bounds the hook and still
-    /// detaches the node either way — a deliberate improvement over that
-    /// contract, not parity with it; ADR-0048 (the frame transaction
-    /// boundary) is where the accounting for the removal-path seams lives.
+    /// `RenderObjectElement.unmount` (`framework.dart`, tag 3.44.0) runs
+    /// `super.unmount()` — which detaches the render object from its
+    /// parent — and its detach-related asserts BEFORE calling
+    /// `widget.didUnmountRenderObject(renderObject)`, with no
+    /// `try`/`catch` around the hook. So a throwing hook there does NOT
+    /// skip the detach — the detach already happened. What it skips is
+    /// only the two calls that come after it: `renderObject.dispose()` and
+    /// clearing `_renderObject` to `null`. FLUI's `remove_render_object_from_tree`
+    /// below runs unconditionally either way, so this containment closes
+    /// that same narrower gap rather than a leaked-detach one; ADR-0048
+    /// (the frame transaction boundary) is where the accounting for the
+    /// removal-path seams lives.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         let mut recovered: Option<Box<dyn Any + Send>> = None;
         if let Some(render_id) = self.render_id
@@ -1066,31 +1100,14 @@ where
             });
         }
         if let Some(payload) = recovered {
-            if let Some(element) = core.self_id() {
-                owner.push_recovered_panic(RecoveredPanic::from_payload(
-                    element,
-                    None,
-                    TypeId::of::<V>(),
-                    LifecycleHook::UnmountRenderObject,
-                    payload.as_ref(),
-                    "unmounting the render object of RenderElement",
-                ));
-            } else {
-                // No slab id — mirrors `StatefulBehavior::on_unmount`'s
-                // fallback: nothing to attach a `RecoveredPanic` to (a
-                // hand-rolled element that bypassed `ElementTree::insert`;
-                // test fixtures only), so this `tracing::error!` is the
-                // only signal.
-                let error = FlutterError::from_panic(
-                    payload.as_ref(),
-                    "unmounting the render object of RenderElement",
-                );
-                tracing::error!(
-                    panic_message = %error.message,
-                    "did_unmount_render_object panicked outside the slab; nothing to record \
-                     (no element id)"
-                );
-            }
+            owner.record_hook_panic(
+                core.self_id(),
+                None,
+                TypeId::of::<V>(),
+                LifecycleHook::UnmountRenderObject,
+                payload.as_ref(),
+                "unmounting the render object of RenderElement",
+            );
         }
         super::behavior_commons::remove_render_object_from_tree(
             core,

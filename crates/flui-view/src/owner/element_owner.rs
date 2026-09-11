@@ -40,6 +40,8 @@ use std::{
     sync::Arc,
 };
 
+use std::any::{Any, TypeId};
+
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_interaction::FocusManager;
 use parking_lot::Mutex;
@@ -53,8 +55,9 @@ use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
-use super::recovered_panic::{LifecycleHook, RecoveredPanic};
+use super::recovered_panic::{LifecycleHook, RecoveredAt, RecoveredPanic};
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
+use crate::view::FlutterError;
 use flui_foundation::RebuildReasons;
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
@@ -189,17 +192,23 @@ pub struct ElementOwner<'a> {
     /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
     pub(crate) recovered_panics: &'a mut Vec<RecoveredPanic>,
 
-    /// Which lifecycle hook the tree is about to invoke, for a seam that
-    /// cannot otherwise tell which of several hooks it is currently
-    /// inside — a `GlobalKey` retake's `activate_subtree` call versus its
-    /// `update` call, both reachable from the same catch region. Set by
-    /// [`Self::note_entering_hook`] immediately before the call it marks;
-    /// read (and cleared) by [`Self::take_entering_hook`] from inside the
-    /// catch that wraps it. `None` when no marker is armed. A shared `Cell`
-    /// (not `&mut`) because the marking and the reading happen from
-    /// different points in the same recursive traversal, both holding this
-    /// same split-borrow handle.
-    pub(crate) entering_hook: &'a Cell<Option<LifecycleHook>>,
+    /// Whether the innermost containment seam that caught the panic
+    /// currently unwinding has already pushed its [`RecoveredPanic`].
+    ///
+    /// A behavior that catches a user hook, records it with its own
+    /// accurate identity (via [`Self::record_hook_panic`]), and re-raises
+    /// sets this before resuming the unwind — [`StatefulBehavior::
+    /// on_activate`](crate::element::behavior) is the first such site. A
+    /// tree-level window one level up (`ElementTree::mount_or_substitute` /
+    /// `update_or_substitute`) that also catches the same panic reads (and
+    /// clears) this flag before deciding whether to push its own,
+    /// coarser-grained record: set means "already recorded, attributed at
+    /// the innermost site that knew" — skip the second push; unset means
+    /// the window is the first (and only) thing that saw the panic, so it
+    /// records normally. A shared `Cell` (not `&mut`) because the mark and
+    /// the read happen from different points in the same recursive
+    /// traversal, both holding this same split-borrow handle.
+    pub(crate) hook_panic_recorded: &'a Cell<bool>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
@@ -589,7 +598,7 @@ impl ElementOwner<'_> {
     /// has nothing to push here).
     pub(crate) fn push_recovered_panic(&mut self, panic: RecoveredPanic) {
         tracing::error!(
-            element = ?panic.element,
+            at = ?panic.at,
             hook = %panic.hook,
             internal_invariant = panic.internal_invariant,
             panic_message = %panic.error.message,
@@ -598,27 +607,67 @@ impl ElementOwner<'_> {
         self.recovered_panics.push(panic);
     }
 
-    /// Arm the entering-hook marker immediately before invoking a call site
-    /// that a later catch cannot otherwise identify by itself — a
-    /// `GlobalKey` retake's `activate_subtree` call and its `update` call
-    /// both unwind through the same catch region, and only the caller
-    /// setting this marker first can tell the catch which one it was.
+    /// Record a lifecycle-hook panic whose subject is the panicking element
+    /// itself (`RecoveredAt::Element`) — the shape every removal-side seam
+    /// (`dispose`, `deactivate`, `did_unmount_render_object`) and a
+    /// behavior-level `activate` catch share.
     ///
-    /// Called by `retake_inactive_global_key` / `retake_active_global_key`
-    /// (`tree/element_tree.rs`), immediately before `activate_subtree` and
-    /// again before the retake's own `update`. The round trip is pinned by
-    /// `entering_hook_round_trip` below.
-    pub(crate) fn note_entering_hook(&self, hook: LifecycleHook) {
-        self.entering_hook.set(Some(hook));
+    /// `element` is `core.self_id()` at the call site: `None` means a
+    /// hand-rolled element that bypassed `ElementTree::insert` (test
+    /// fixtures only) — there is no slab id to attach a record to, so this
+    /// logs the one `tracing::error!` and pushes nothing, exactly like the
+    /// four call sites this helper replaces used to do inline. `Some`
+    /// builds a [`RecoveredAt::Element`] and pushes through
+    /// [`Self::push_recovered_panic`] (which logs at error level itself, so
+    /// this never double-logs).
+    pub(crate) fn record_hook_panic(
+        &mut self,
+        element: Option<ElementId>,
+        parent: Option<ElementId>,
+        view_type_id: TypeId,
+        hook: LifecycleHook,
+        payload: &(dyn Any + Send),
+        context: impl Into<String>,
+    ) {
+        let Some(element) = element else {
+            let error = FlutterError::from_panic(payload, context);
+            tracing::error!(
+                hook = %hook,
+                panic_message = %error.message,
+                "lifecycle hook panicked outside the slab; nothing to record (no element id)"
+            );
+            return;
+        };
+        self.push_recovered_panic(RecoveredPanic::from_payload(
+            RecoveredAt::Element { element, parent },
+            view_type_id,
+            hook,
+            payload,
+            context,
+        ));
     }
 
-    /// Read and clear the entering-hook marker. `None` if nothing armed it
-    /// since the last read (or ever).
+    /// Mark that the panic currently unwinding through this call has
+    /// already been recorded, by the innermost site that caught it — see
+    /// [`Self::hook_panic_recorded`]'s field doc for the full contract.
     ///
-    /// Called from the retake fns' own catch, to label a caught panic's
-    /// [`LifecycleHook`] — see [`Self::note_entering_hook`].
-    pub(crate) fn take_entering_hook(&self) -> Option<LifecycleHook> {
-        self.entering_hook.take()
+    /// Called immediately before re-raising a caught-and-recorded panic
+    /// (e.g. `StatefulBehavior::on_activate`), so an outer window that
+    /// catches the same unwind does not push a second, coarser record for
+    /// it.
+    pub(crate) fn mark_hook_panic_recorded(&self) {
+        self.hook_panic_recorded.set(true);
+    }
+
+    /// Read and clear the recorded-panic marker. `false` if nothing set it
+    /// since the last read (or ever) — the window's own catch is the first
+    /// (and only) thing that saw this panic, so it should record normally.
+    ///
+    /// Called from a tree-level containment window's `Err` path (`mount_or_substitute`
+    /// / `update_or_substitute`) before deciding whether to push its own
+    /// record.
+    pub(crate) fn take_hook_panic_recorded(&self) -> bool {
+        self.hook_panic_recorded.take()
     }
 
     // ========================================================================
@@ -807,28 +856,72 @@ mod tests {
     }
 
     #[test]
-    fn entering_hook_round_trip() {
+    fn hook_panic_recorded_round_trip() {
         let mut owner = BuildOwner::new();
         let handle = owner.element_owner_mut();
 
-        assert_eq!(
-            handle.take_entering_hook(),
-            None,
-            "nothing armed the marker yet"
+        assert!(
+            !handle.take_hook_panic_recorded(),
+            "nothing marked the flag yet"
         );
 
-        handle.note_entering_hook(LifecycleHook::Update);
-        assert_eq!(
-            handle.take_entering_hook(),
-            Some(LifecycleHook::Update),
-            "the marker set by note_entering_hook is what take_entering_hook reads"
+        handle.mark_hook_panic_recorded();
+        assert!(
+            handle.take_hook_panic_recorded(),
+            "the flag set by mark_hook_panic_recorded is what take_hook_panic_recorded reads"
         );
 
-        // The read consumes the marker.
-        assert_eq!(
-            handle.take_entering_hook(),
+        // The read consumes the flag.
+        assert!(
+            !handle.take_hook_panic_recorded(),
+            "take_hook_panic_recorded clears the flag, so a second read sees it unset"
+        );
+    }
+
+    #[test]
+    fn record_hook_panic_with_no_element_logs_and_pushes_nothing() {
+        let mut owner = BuildOwner::new();
+        let mut handle = owner.element_owner_mut();
+
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        handle.record_hook_panic(
             None,
-            "take_entering_hook clears the marker, so a second read sees nothing armed"
+            None,
+            std::any::TypeId::of::<()>(),
+            LifecycleHook::Dispose,
+            payload.as_ref(),
+            "test fallback",
+        );
+
+        assert!(
+            handle.recovered_panics.is_empty(),
+            "no slab id means nothing to attach a record to"
+        );
+    }
+
+    #[test]
+    fn record_hook_panic_with_an_element_pushes_an_element_record() {
+        let mut owner = BuildOwner::new();
+        let id = ElementId::new(3);
+        let mut handle = owner.element_owner_mut();
+
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        handle.record_hook_panic(
+            Some(id),
+            None,
+            std::any::TypeId::of::<()>(),
+            LifecycleHook::Dispose,
+            payload.as_ref(),
+            "test fallback",
+        );
+
+        assert_eq!(handle.recovered_panics.len(), 1);
+        assert_eq!(
+            handle.recovered_panics[0].at,
+            RecoveredAt::Element {
+                element: id,
+                parent: None
+            }
         );
     }
 }

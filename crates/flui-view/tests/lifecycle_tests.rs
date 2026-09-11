@@ -292,14 +292,26 @@ fn test_stateful_element_activate_callback() {
         deactivated: Arc::new(AtomicUsize::new(0)),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-    element.deactivate(&mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // Drive the first build so `init_state` actually runs before the first
+    // `deactivate`/`activate` — since issue #561,
+    // `StatefulBehavior::on_activate` is gated on a completed `init_state`
+    // (matching Flutter's guaranteed `initState` -> `activate`/`deactivate`
+    // ordering), so an element that was only mounted, never built, never
+    // runs its `activate` callback either. A raw `StatefulElement::mount`/
+    // `activate` pair (as this test used before #561) has no live
+    // `BuildHandle` to build through, so this now goes through
+    // `ElementTree`/`BuildOwner` like the production path.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 0);
 
-    element.activate(&mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 1);
 }
@@ -314,21 +326,24 @@ fn test_stateful_element_multiple_deactivate_activate_cycles() {
         deactivated: deactivated.clone(),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // See `test_stateful_element_activate_callback`'s comment.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
     // First cycle
-    element.deactivate(&mut owner.element_owner_mut());
-    element.activate(&mut owner.element_owner_mut());
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     // Second cycle
-    element.deactivate(&mut owner.element_owner_mut());
-    element.activate(&mut owner.element_owner_mut());
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     // Third cycle
-    element.deactivate(&mut owner.element_owner_mut());
-    element.activate(&mut owner.element_owner_mut());
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 3);
     assert_eq!(deactivated.load(Ordering::SeqCst), 3);

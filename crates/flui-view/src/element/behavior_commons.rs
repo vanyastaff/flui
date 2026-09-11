@@ -35,7 +35,7 @@ use flui_foundation::RenderId;
 
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
-    owner::{LifecycleHook, RecoveredPanic},
+    owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
     view::{FlutterError, IntoView, View},
 };
 
@@ -204,8 +204,10 @@ where
             // the record moves into `push_recovered_panic` below, so the
             // panic is converted to a `FlutterError` exactly once.
             let panic = RecoveredPanic::from_payload(
-                element,
-                None,
+                RecoveredAt::Element {
+                    element,
+                    parent: None,
+                },
                 TypeId::of::<V>(),
                 LifecycleHook::Build,
                 payload.as_ref(),

@@ -629,9 +629,11 @@ fn test_build_owner_memory_size() {
     //
     // It moved again, 584 -> 608, for issue #561's per-child panic-
     // containment drain: a measured 24 bytes for
-    // `recovered_panics: Vec<RecoveredPanic>` (ptr+len+cap). The paired
-    // `entering_hook: Cell<Option<LifecycleHook>>` marker costs nothing
-    // extra — a fieldless enum's `Option` niche keeps it to one byte, which
-    // existing padding absorbs.
+    // `recovered_panics: Vec<RecoveredPanic>` (ptr+len+cap) — the vector's
+    // own header stays 24 bytes regardless of what `RecoveredPanic` itself
+    // grows to (its `element`/`parent` fields became one `RecoveredAt` enum
+    // without changing this count). The paired
+    // `hook_panic_recorded: Cell<bool>` flag costs nothing extra — one byte,
+    // which existing padding absorbs.
     assert!(size < 632, "BuildOwner is too large: {size} bytes");
 }

@@ -6,8 +6,9 @@
 //!   lifecycle (mount/unmount/update) so per-frame registries
 //!   (GlobalKey, dirty heap, inactive queue) are updated without a
 //!   blanket `&mut BuildOwner` borrow across the recursive traversal.
-//! - [`RecoveredPanic`] / [`LifecycleHook`] - What a per-child containment
-//!   seam records about a caught lifecycle-hook panic, and the drain
+//! - [`RecoveredPanic`] / [`RecoveredAt`] / [`LifecycleHook`] - What a
+//!   per-child containment seam records about a caught lifecycle-hook
+//!   panic, what element it happened to, and the drain
 //!   (`BuildOwner::take_recovered_panics`) that collects them.
 
 mod build_owner;
@@ -50,8 +51,9 @@ pub use element_owner::ElementOwner;
 // `build_scope` drain (PR-K). Crate-internal.
 pub(crate) use element_owner::BuildHandle;
 // A per-child containment seam's caught-and-substituted panic (issue
-// #561), and the enum naming which lifecycle hook it was caught inside.
-pub use recovered_panic::{LifecycleHook, RecoveredPanic};
+// #561), what it happened to, and the enum naming which lifecycle hook it
+// was caught inside.
+pub use recovered_panic::{LifecycleHook, RecoveredAt, RecoveredPanic};
 
 /// Emit one tree observation through the realm's observer slot (ADR-0040).
 ///

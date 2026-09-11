@@ -3,7 +3,7 @@
 //! Elements are stored in a Slab for O(1) access by ElementId.
 //! This follows Flutter's approach where Elements form the retained tree.
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -15,10 +15,11 @@ use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
 use slab::Slab;
 
-use crate::BoxedView;
 use crate::element::ElementKind;
-use crate::owner::{LifecycleHook, RecoveredPanic};
+use crate::owner::LifecycleHook;
 use crate::view::{ElementBase, View};
+
+use super::containment::ChildHookPanic;
 
 fn append_sparse_sliver_children(
     render_tree: &flui_rendering::storage::RenderTree,
@@ -467,29 +468,6 @@ pub(crate) enum InsertedChild {
     Retaken(ElementId),
 }
 
-/// A lifecycle-hook panic caught inside a per-child containment window
-/// (issue #561, ADR-0050's REGION rule) — the typed-error half of
-/// [`ElementTree::mount_or_substitute`] / [`ElementTree::update_or_substitute`]'s
-/// undo-then-substitute machinery. Never crosses `element_tree.rs`'s own
-/// boundary: the two primitives consume it, and the infallible public
-/// `insert` / `insert_during_reconcile` / `update` resume the unwind from
-/// its payload instead — today's behavior, unchanged.
-pub(crate) struct ChildHookPanic {
-    /// What the window had committed by the time the panic unwound through
-    /// it, beyond the id the primitive already has, so the primitive knows
-    /// what to undo before mounting the substitute. `None` in two cases: a
-    /// fresh mount's `View::create_element()` itself panicked, before
-    /// anything existed to undo; or the panic came from
-    /// `ElementTree::update`'s window, whose caller already names the live
-    /// element directly and has no separate insert disposition to consult.
-    pub(crate) inserted: Option<InsertedChild>,
-    /// Which lifecycle hook was running when the panic happened.
-    pub(crate) hook: LifecycleHook,
-    /// The caught panic payload, unconverted — the primitive builds the
-    /// `FlutterError`/`RecoveredPanic` from it exactly once.
-    pub(crate) payload: Box<dyn Any + Send>,
-}
-
 /// The partial child order a reconcile has committed so far, which the
 /// `GlobalKey` retake preflight consults to decide whether a candidate can be
 /// relocated into this parent. Empty for an insert outside a reconcile.
@@ -833,12 +811,13 @@ impl ElementTree {
     /// can undo whatever the containment window committed before deciding
     /// what to do next.
     ///
-    /// # The containment window (issue #561, ADR-0050's REGION rule)
+    /// # The containment window
     ///
     /// A fresh mount's window runs from `View::create_element()` through the
     /// end of `mount` — every call in between can reach user code
-    /// (`View::create_element`, `RenderView::create_render_object`,
-    /// `did_mount_render_object`, `ViewState::init_state`). A `GlobalKey`
+    /// (`View::create_element`, `RenderView::create_render_object`).
+    /// `ViewState::init_state` is NOT inside this window: it runs later, in
+    /// the `build_scope` drain, not during `mount`. A `GlobalKey`
     /// retake's window is reported by [`retake_inactive_global_key`] /
     /// [`retake_active_global_key`] themselves, which run `activate_subtree`
     /// and the retake's own `update` under their own catch and hand back a
@@ -846,8 +825,9 @@ impl ElementTree {
     /// preflight below) and after `mount` returns (`GlobalKey` registration,
     /// the `Mount` event, the observer, ancestor parent-data, the
     /// render-reorder flag) stays outside every window and propagates
-    /// exactly as it always has.
-    fn try_insert_with_provisional_order(
+    /// exactly as it always has — see [`ChildHookPanic`]'s doc for the full
+    /// rule.
+    pub(super) fn try_insert_with_provisional_order(
         &mut self,
         view: &dyn View,
         parent: ElementId,
@@ -873,7 +853,7 @@ impl ElementTree {
             };
             match try_retake_global_key(self, owner, key, view, destination) {
                 GlobalKeyRetake::Absent => {}
-                GlobalKeyRetake::Retaken(Ok(retaken_id)) => {
+                GlobalKeyRetake::Retaken(retaken_id) => {
                     // A parent declaring a keyed child has made a claim on
                     // that key for this frame, whether the element was
                     // grafted or freshly mounted. The frame boundary reads
@@ -882,7 +862,7 @@ impl ElementTree {
                     owner.reserve_global_key(parent, retaken_id, key);
                     return Ok(retaken_id);
                 }
-                GlobalKeyRetake::Retaken(Err(panic)) => {
+                GlobalKeyRetake::RetakePanicked(panic) => {
                     // The retake's own containment window already committed
                     // the relocation and reported it — the caller undoes
                     // THAT element, not a fresh mint this call never made.
@@ -1053,96 +1033,6 @@ impl ElementTree {
         }
 
         Ok(id)
-    }
-
-    /// Mount `view` at `(parent, slot)`, substituting the registered
-    /// `ErrorView` when a user lifecycle hook inside the containment window
-    /// panics (issue #561, ADR-0050's REGION rule — see [`ChildHookPanic`]).
-    ///
-    /// On success this behaves exactly like [`insert`](Self::insert). On a
-    /// caught panic it undoes whatever the window had committed (discards
-    /// an unannounced mint via [`discard_unannounced`](Self::discard_unannounced),
-    /// finalizes a reactivated retake via [`remove_subtree`](Self::remove_subtree)),
-    /// records exactly one [`RecoveredPanic`] through `owner`, and mounts
-    /// the substitute unbounded at the same `(parent, slot)` through the
-    /// same insert path — a panicking substitute factory is deliberately
-    /// left to propagate, naming a broken factory instead of hiding it.
-    ///
-    /// `element` on the pushed [`RecoveredPanic`] is a post-mortem identity:
-    /// by the time a later drain reads it, that element has already been
-    /// discarded or removed. For a panic before any element existed
-    /// (`create_element` itself), the substitute mounted here is the only
-    /// live handle a consumer can look at, and `element` names it instead.
-    ///
-    /// Never writes `parent`'s `child_ids` — same contract as
-    /// [`insert`](Self::insert); the caller (a sparse host today, the dense
-    /// reconciler in a later change) owns that.
-    ///
-    /// `context` becomes the `FlutterError`/`RecoveredPanic` breadcrumb
-    /// (e.g. `"mounting lazy sliver child"`) — never user data.
-    pub(crate) fn mount_or_substitute(
-        &mut self,
-        view: &dyn View,
-        parent: ElementId,
-        slot: usize,
-        owner: &mut crate::ElementOwner<'_>,
-        order: ProvisionalOrder<'_>,
-        context: &'static str,
-    ) -> ElementId {
-        match self.try_insert_with_provisional_order(view, parent, slot, owner, order) {
-            Ok(id) => id,
-            Err(ChildHookPanic {
-                inserted,
-                hook,
-                payload,
-            }) => {
-                let stranded = match inserted {
-                    Some(InsertedChild::Minted(id)) => {
-                        self.discard_unannounced(id, owner);
-                        Some(id)
-                    }
-                    Some(InsertedChild::Retaken(id)) => {
-                        self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
-                        Some(id)
-                    }
-                    None => None,
-                };
-
-                let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
-                let substitute_view = recovery_view_for(&error);
-                // Deliberately unbounded: if the registered error-view
-                // factory panics on mount too, there is nothing left to
-                // substitute, and the crash names a broken factory instead
-                // of hiding it.
-                let substitute_id = self
-                    .try_insert_with_provisional_order(
-                        substitute_view.0.as_ref(),
-                        parent,
-                        slot,
-                        owner,
-                        order,
-                    )
-                    .unwrap_or_else(|substitute_panic| {
-                        std::panic::resume_unwind(substitute_panic.payload)
-                    });
-
-                // The stranded id when the window had committed something
-                // to undo; otherwise (a panic in `create_element`, before
-                // anything existed) the substitute mounted above is the
-                // only live handle a consumer can look at.
-                let element = stranded.unwrap_or(substitute_id);
-                let panic = RecoveredPanic::from_payload(
-                    element,
-                    Some(parent),
-                    view.view_type_id(),
-                    hook,
-                    payload.as_ref(),
-                    context,
-                );
-                owner.push_recovered_panic(panic);
-                substitute_id
-            }
-        }
     }
 
     /// Install or update the nearest ancestor `ParentDataView`'s typed
@@ -2116,10 +2006,11 @@ impl ElementTree {
     /// update — the re-clone preserves that invariant explicitly rather
     /// than relying on the caller having already filtered by it.
     ///
-    /// A panic inside the update (issue #561, ADR-0050's REGION rule)
-    /// unwinds through here exactly as it always has — the crate-internal
-    /// `try_update` is the fallible core a bounding caller uses instead, and
-    /// `update_or_substitute` is the one that catches and substitutes.
+    /// A panic inside the update (issue #561 — see `ChildHookPanic`'s doc
+    /// in `tree/containment.rs`) unwinds through here exactly as it always
+    /// has — the crate-internal `try_update` is the fallible core a
+    /// bounding caller uses instead, and `update_or_substitute` is the one
+    /// that catches and substitutes.
     pub fn update(&mut self, id: ElementId, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         if let Err(panic) = self.try_update(id, view, owner) {
             std::panic::resume_unwind(panic.payload);
@@ -2130,7 +2021,7 @@ impl ElementTree {
     /// (`ViewState::did_update_view` / `RenderView::update_render_object`)
     /// is the containment window, and a caught panic comes back as `Err`
     /// instead of unwinding through this call.
-    fn try_update(
+    pub(super) fn try_update(
         &mut self,
         id: ElementId,
         view: &dyn View,
@@ -2155,63 +2046,6 @@ impl ElementTree {
         // `Expanded`'s `flex` changing between frames.
         self.apply_ancestor_parent_data(id);
         Ok(())
-    }
-
-    /// Update the element at `id` with `view`, substituting the registered
-    /// `ErrorView` at `(parent, slot)` when the update's containment window
-    /// (`try_update`) catches a panic (issue #561, ADR-0050's REGION rule).
-    ///
-    /// Returns `id` unchanged on success, or the substitute's id when it had
-    /// to recover — the caller (a sparse host today, the dense reconciler in
-    /// a later change) re-points whatever tracked `id` at the return value.
-    ///
-    /// On a caught panic the element is removed outright via
-    /// [`remove_subtree`](Self::remove_subtree) under [`SubtreeRemoval::Finalize`]
-    /// rather than kept: a half-applied `update_render_object` can leave the
-    /// render object carrying part of a new configuration that nothing
-    /// marked dirty, so a silently stale subtree is the one outcome worse
-    /// than a visible error. Exactly one [`RecoveredPanic`] is pushed
-    /// through `owner`; `context` becomes its `FlutterError` breadcrumb.
-    pub(crate) fn update_or_substitute(
-        &mut self,
-        id: ElementId,
-        view: &dyn View,
-        parent: ElementId,
-        slot: usize,
-        owner: &mut crate::ElementOwner<'_>,
-        context: &'static str,
-    ) -> ElementId {
-        match self.try_update(id, view, owner) {
-            Ok(()) => id,
-            Err(ChildHookPanic { hook, payload, .. }) => {
-                self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
-
-                let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
-                let substitute_view = recovery_view_for(&error);
-                let substitute_id = self
-                    .try_insert_with_provisional_order(
-                        substitute_view.0.as_ref(),
-                        parent,
-                        slot,
-                        owner,
-                        ProvisionalOrder::NONE,
-                    )
-                    .unwrap_or_else(|substitute_panic| {
-                        std::panic::resume_unwind(substitute_panic.payload)
-                    });
-
-                let panic = RecoveredPanic::from_payload(
-                    id,
-                    Some(parent),
-                    view.view_type_id(),
-                    hook,
-                    payload.as_ref(),
-                    context,
-                );
-                owner.push_recovered_panic(panic);
-                substitute_id
-            }
-        }
     }
 
     /// Mark an element as needing rebuild.
@@ -2337,7 +2171,8 @@ fn register_global_key_with_collision_check(
 /// Flutter parity: `framework.dart:4571` `_retakeInactiveElement`.
 enum GlobalKeyRetake {
     Absent,
-    Retaken(Result<ElementId, ChildHookPanic>),
+    Retaken(ElementId),
+    RetakePanicked(ChildHookPanic),
     Rejected,
 }
 
@@ -2367,7 +2202,11 @@ fn try_retake_global_key(
     } else {
         retake_active_global_key(tree, owner, key, view, candidate_id, destination)
     };
-    retaken.map_or(GlobalKeyRetake::Rejected, GlobalKeyRetake::Retaken)
+    match retaken {
+        None => GlobalKeyRetake::Rejected,
+        Some(Ok(id)) => GlobalKeyRetake::Retaken(id),
+        Some(Err(panic)) => GlobalKeyRetake::RetakePanicked(panic),
+    }
 }
 
 fn can_retake_global_key_candidate(
@@ -2579,11 +2418,11 @@ fn retake_inactive_global_key(
     }
 
     // The relocation is committed; the element is live and parented here.
-    // Report it now — BEFORE the containment window below, which runs
-    // `activate_subtree` and this retake's own `update`, both a panic site
-    // — so a caller bounding that window (issue #561, ADR-0050's REGION
-    // rule) knows to remove THIS element rather than looking for a node
-    // this call never minted.
+    // Report it now — BEFORE either containment window below, which run
+    // `activate_subtree` and (separately) this retake's own `update`, both
+    // panic sites — so a caller bounding those windows (issue #561, see
+    // `ChildHookPanic`'s doc) knows to remove THIS element rather than
+    // looking for a node this call never minted.
     let inserted = InsertedChild::Retaken(candidate_id);
     let provisional = provisional_child_order(
         destination.reconciled_prefix,
@@ -2591,38 +2430,47 @@ fn retake_inactive_global_key(
         destination.unclaimed_old_slots,
     );
 
-    owner.note_entering_hook(LifecycleHook::Activate);
-    let window = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        // Reactivate the whole subtree. Deactivation released every
-        // inherited edge; the owner schedules `did_change_dependencies`
-        // for nodes that had dependencies so their next build registers
-        // against the new ancestry.
+    // Window 1: reactivate the whole subtree alone. Deactivation released
+    // every inherited edge; the owner schedules `did_change_dependencies`
+    // for nodes that had dependencies so their next build registers
+    // against the new ancestry. A descendant's own `ViewState::activate`
+    // can panic here — a behavior that catches its own (see
+    // `StatefulBehavior::on_activate`) records it under its own identity
+    // and re-raises, so this still observes the unwind.
+    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
+    })) {
+        return Some(Err(ChildHookPanic {
+            inserted: Some(inserted),
+            hook: LifecycleHook::Activate,
+            payload,
+        }));
+    }
 
-        // The subtree moved under a new parent, so its inherited scopes
-        // (built against the OLD ancestor chain) and descendant depths are
-        // stale. Recompute both top-down against `new_parent`; this
-        // combines Flutter's recursive `_updateDepth` and
-        // `_updateInheritance` reactivation work.
-        tree.recompute_subtree_ancestry(candidate_id);
-        tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
-        for &(element_id, _) in &relocation.frontier {
-            tree.reset_ancestor_parent_data(element_id);
-        }
-        attach_render_relocation(&mut relocation);
+    // Framework code between the two windows, never user code — a `BUG:`
+    // here propagates uncontained (see `ChildHookPanic`'s doc). The
+    // subtree moved under a new parent, so its inherited scopes (built
+    // against the OLD ancestor chain) and descendant depths are stale.
+    // Recompute both top-down against `new_parent`; this combines
+    // Flutter's recursive `_updateDepth` and `_updateInheritance`
+    // reactivation work.
+    tree.recompute_subtree_ancestry(candidate_id);
+    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
+    for &(element_id, _) in &relocation.frontier {
+        tree.reset_ancestor_parent_data(element_id);
+    }
+    attach_render_relocation(&mut relocation);
 
-        owner.note_entering_hook(LifecycleHook::Update);
+    // Window 2: the retake's own `update`.
+    let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let node = tree
             .get_mut(candidate_id)
             .expect("BUG: a retaken candidate must still be live for its own update");
         node.element_mut().update(view, owner);
         node.set_key(view.key().map(ViewKey::clone_key));
     }));
-    // Disarm the marker on every exit so a later window never reads a
-    // stale label; a panic reads it here, a clean run just clears it.
-    let hook = owner.take_entering_hook().unwrap_or(LifecycleHook::Mount);
 
-    match window {
+    match update_result {
         Ok(()) => {
             tracing::debug!(
                 candidate = ?candidate_id,
@@ -2659,7 +2507,7 @@ fn retake_inactive_global_key(
         }
         Err(payload) => Some(Err(ChildHookPanic {
             inserted: Some(inserted),
-            hook,
+            hook: LifecycleHook::Update,
             payload,
         })),
     }
@@ -2771,11 +2619,11 @@ fn retake_active_global_key(
     }
 
     // The relocation is committed; the element is live and parented here.
-    // Report it now — BEFORE the containment window below, which runs
-    // `activate_subtree` and this retake's own `update`, both a panic site
-    // — so a caller bounding that window (issue #561, ADR-0050's REGION
-    // rule) knows to remove THIS element rather than looking for a node
-    // this call never minted.
+    // Report it now — BEFORE either containment window below, which run
+    // `activate_subtree` and (separately) this retake's own `update`, both
+    // panic sites — so a caller bounding those windows (issue #561, see
+    // `ChildHookPanic`'s doc) knows to remove THIS element rather than
+    // looking for a node this call never minted.
     let inserted = InsertedChild::Retaken(candidate_id);
     let provisional = provisional_child_order(
         destination.reconciled_prefix,
@@ -2783,31 +2631,42 @@ fn retake_active_global_key(
         destination.unclaimed_old_slots,
     );
 
-    owner.note_entering_hook(LifecycleHook::Activate);
-    let window = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    // Window 1: reactivate the whole subtree alone. A descendant's own
+    // `ViewState::activate` can panic here — a behavior that catches its
+    // own (see `StatefulBehavior::on_activate`) records it under its own
+    // identity and re-raises, so this still observes the unwind.
+    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
-        // Deactivation above synchronously released dependency edges for the
-        // entire subtree. Repair both inherited scopes and recursive depths before
-        // the next dirty-heap drain.
-        tree.recompute_subtree_ancestry(candidate_id);
-        tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
-        for &(element_id, _) in &relocation.frontier {
-            tree.reset_ancestor_parent_data(element_id);
-        }
-        attach_render_relocation(&mut relocation);
+    })) {
+        return Some(Err(ChildHookPanic {
+            inserted: Some(inserted),
+            hook: LifecycleHook::Activate,
+            payload,
+        }));
+    }
 
-        owner.note_entering_hook(LifecycleHook::Update);
+    // Framework code between the two windows, never user code — a `BUG:`
+    // here propagates uncontained (see `ChildHookPanic`'s doc).
+    // Deactivation above synchronously released dependency edges for the
+    // entire subtree. Repair both inherited scopes and recursive depths
+    // before the next dirty-heap drain.
+    tree.recompute_subtree_ancestry(candidate_id);
+    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
+    for &(element_id, _) in &relocation.frontier {
+        tree.reset_ancestor_parent_data(element_id);
+    }
+    attach_render_relocation(&mut relocation);
+
+    // Window 2: the retake's own `update`.
+    let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let node = tree
             .get_mut(candidate_id)
             .expect("BUG: a retaken candidate must still be live for its own update");
         node.element_mut().update(view, owner);
         node.set_key(view.key().map(ViewKey::clone_key));
     }));
-    // Disarm the marker on every exit so a later window never reads a
-    // stale label; a panic reads it here, a clean run just clears it.
-    let hook = owner.take_entering_hook().unwrap_or(LifecycleHook::Mount);
 
-    match window {
+    match update_result {
         Ok(()) => {
             tracing::debug!(
                 candidate = ?candidate_id,
@@ -2838,50 +2697,9 @@ fn retake_active_global_key(
         }
         Err(payload) => Some(Err(ChildHookPanic {
             inserted: Some(inserted),
-            hook,
+            hook: LifecycleHook::Update,
             payload,
         })),
-    }
-}
-
-/// The substitute view for a child that failed its containment window
-/// (issue #561), whatever hook it failed at (mount, activate, update).
-///
-/// A recovered child must be unkeyed, whatever the registered error-view
-/// factory returned: a keyed one would take part in a reconcile's key
-/// matching, or trigger a `GlobalKey` retake, instead of staying isolated
-/// to the failed slot. [`ElementTree::mount_or_substitute`] /
-/// [`ElementTree::update_or_substitute`] are the primitive's own callers;
-/// `crate::element::sparse_children::build_item_or_error` — a *different*
-/// containment window, the lazy-sliver item builder itself — calls this
-/// too, so the two never drift into two ways of stripping a key.
-pub(crate) fn recovery_view_for(error: &crate::view::FlutterError) -> BoxedView {
-    let recovered = crate::view::ErrorView::build_error_view(error);
-    if recovered.key().is_some() {
-        BoxedView(Box::new(UnkeyedRecovery {
-            inner: BoxedView(recovered),
-        }))
-    } else {
-        BoxedView(recovered)
-    }
-}
-
-/// A keyless composite around a custom error view that carried a key. Its
-/// render descendant is stamped at adoption like any composite item's.
-#[derive(Clone)]
-struct UnkeyedRecovery {
-    inner: BoxedView,
-}
-
-impl crate::view::StatelessView for UnkeyedRecovery {
-    fn build(&self, _ctx: &dyn crate::BuildContext) -> impl crate::view::IntoView {
-        self.inner.clone()
-    }
-}
-
-impl View for UnkeyedRecovery {
-    fn create_element(&self) -> ElementKind {
-        ElementKind::stateless(self)
     }
 }
 

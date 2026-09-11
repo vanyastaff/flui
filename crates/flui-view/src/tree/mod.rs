@@ -8,6 +8,7 @@
 //! - [`ReconcileEvent`] - structured trace stream for the keyed
 //!   reconciler (FR-035)
 
+mod containment;
 mod element_tree;
 pub(crate) mod id_reconcile;
 pub mod reconcile_event;
@@ -21,7 +22,5 @@ pub mod reconcile_event;
 pub mod test_utils;
 
 pub use element_tree::{ElementNode, ElementTree};
-pub(crate) use element_tree::{
-    ProvisionalOrder, SubtreeRemoval, enclosing_sparse_child, recovery_view_for,
-};
+pub(crate) use element_tree::{ProvisionalOrder, SubtreeRemoval, enclosing_sparse_child};
 pub use reconcile_event::{RECONCILE_TARGET, ReconcileEvent, ReconcileEventKind};

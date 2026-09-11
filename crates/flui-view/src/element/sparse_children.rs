@@ -26,8 +26,8 @@ use crate::tree::ElementNode;
 use crate::tree::ElementTree;
 use crate::tree::ProvisionalOrder;
 use crate::tree::SubtreeRemoval;
-use crate::tree::recovery_view_for;
 use crate::view::View;
+use crate::view::recovery_view_for;
 
 /// Bookkeeping for a lazy sliver's on-demand children.
 ///
@@ -551,7 +551,7 @@ fn mount_sparse_child(
         logical_index,
         owner,
         ProvisionalOrder::NONE,
-        "mounting lazy sliver child",
+        format!("mounting lazy sliver child {logical_index}"),
     );
     stamp_logical_index(tree, pipeline, host, child, logical_index);
 
@@ -598,10 +598,8 @@ fn update_or_replace_resident(
     let now = tree.update_or_substitute(
         resident_id,
         view,
-        host,
-        logical_index,
         owner,
-        "updating lazy sliver child",
+        format!("updating lazy sliver child {logical_index}"),
     );
     if now == resident_id {
         Ok(())
@@ -767,6 +765,7 @@ mod tests {
 
     use super::SparseChildren;
     use crate::GlobalKey;
+    use crate::owner::RecoveredAt;
     use crate::view::{RenderView, View};
     use crate::{BuildOwner, ElementTree};
 
@@ -1507,6 +1506,13 @@ mod tests {
             &mut build_owner.element_owner_mut(),
             &pipeline,
         );
+        // Drive the first build so `init_state` actually runs before the
+        // retake — since issue #561, `StatefulBehavior::on_activate` is
+        // gated on a completed `init_state` (matching Flutter's guaranteed
+        // `initState` -> `activate` ordering), so an item that was only
+        // mounted, never built, never runs its `activate` callback (and
+        // this fixture's induced panic would never fire).
+        build_owner.build_scope(&mut tree);
 
         // Evict: the `GlobalKey` makes this a soft removal, so the element
         // waits in the inactive queue for a retake instead of being freed.
@@ -1562,6 +1568,250 @@ mod tests {
              and its substitute mount"
         );
         assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Activate);
+        // `StatefulBehavior::on_activate` catches its OWN panic (issue
+        // #561) and records it under its own accurate identity — `first`,
+        // the retaken candidate itself, since `activate` panicked on the
+        // candidate's own state, not a descendant's — then re-raises so
+        // the retake window still observes the unwind. Without that
+        // behavior-level catch the retake window one level up would be the
+        // only thing to record it, and could only name the retake as a
+        // `Substituted { element: Some(first), .. }` (a coarser identity
+        // than the element whose hook actually panicked; see
+        // `a_panicking_activate_records_the_actual_panicking_descendant_not_the_retake_root`
+        // for the case where those two differ).
+        assert_eq!(
+            recovered_panics[0].at,
+            RecoveredAt::Element {
+                element: first,
+                parent: None
+            }
+        );
+    }
+
+    /// A `GlobalKey`'d Stateful host whose OWN `activate` never panics — its
+    /// single build child does. Proves attribution names the DESCENDANT
+    /// whose hook actually panicked, not the retake candidate, when the two
+    /// differ.
+    #[derive(Clone)]
+    struct GlobalKeyedHostOverActivatePanicChild {
+        key: GlobalKey<Self>,
+        child_armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    struct GlobalKeyedHostOverActivatePanicChildState {
+        child_armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl crate::StatefulView for GlobalKeyedHostOverActivatePanicChild {
+        type State = GlobalKeyedHostOverActivatePanicChildState;
+
+        fn create_state(&self) -> Self::State {
+            GlobalKeyedHostOverActivatePanicChildState {
+                child_armed: Arc::clone(&self.child_armed),
+            }
+        }
+    }
+
+    impl crate::ViewState<GlobalKeyedHostOverActivatePanicChild>
+        for GlobalKeyedHostOverActivatePanicChildState
+    {
+        fn build(
+            &self,
+            _view: &GlobalKeyedHostOverActivatePanicChild,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            ActivatePanicChild {
+                armed: Arc::clone(&self.child_armed),
+            }
+        }
+
+        // No `activate` override: this host's own `activate` never panics —
+        // only its build child's does.
+    }
+
+    impl View for GlobalKeyedHostOverActivatePanicChild {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+
+        fn key(&self) -> Option<&dyn ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    /// An unkeyed Stateful descendant whose `activate` panics once armed.
+    #[derive(Clone)]
+    struct ActivatePanicChild {
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    struct ActivatePanicChildState {
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl crate::StatefulView for ActivatePanicChild {
+        type State = ActivatePanicChildState;
+
+        fn create_state(&self) -> Self::State {
+            ActivatePanicChildState {
+                armed: Arc::clone(&self.armed),
+            }
+        }
+    }
+
+    impl crate::ViewState<ActivatePanicChild> for ActivatePanicChildState {
+        fn build(
+            &self,
+            _view: &ActivatePanicChild,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            LeafBox { side: 4.0 }
+        }
+
+        fn activate(&mut self) {
+            assert!(
+                !self.armed.load(std::sync::atomic::Ordering::SeqCst),
+                "descendant activate boom"
+            );
+        }
+    }
+
+    impl View for ActivatePanicChild {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+    }
+
+    /// The record names the DESCENDANT whose `activate` actually panicked,
+    /// not the retake root — `StatefulBehavior::on_activate` catches its
+    /// own panic under its own identity before the retake window one level
+    /// up ever sees the unwind (issue #561).
+    ///
+    /// RED before `StatefulBehavior::on_activate` gained its own catch: the
+    /// retake window was the only thing to record the panic, and could only
+    /// name the retake candidate itself — `Substituted { element:
+    /// Some(root_first), .. }` — because it has no way to see which element
+    /// deep in the reactivated subtree actually panicked.
+    #[test]
+    fn a_panicking_activate_records_the_actual_panicking_descendant_not_the_retake_root() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+        let child_armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let item = GlobalKeyedHostOverActivatePanicChild {
+            key: GlobalKey::<GlobalKeyedHostOverActivatePanicChild>::new(),
+            child_armed: Arc::clone(&child_armed),
+        };
+
+        let mut children = SparseChildren::new();
+        let root_first = children.ensure(
+            0,
+            &item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+        // Drive the first build so the descendant `ActivatePanicChild`
+        // element actually exists (and its own `init_state` runs) before
+        // the retake — `on_activate` is gated on a completed `init_state`.
+        build_owner.build_scope(&mut tree);
+
+        let descendant_id = tree
+            .iter_nodes()
+            .find_map(|(id, node)| (node.parent() == Some(root_first)).then_some(id))
+            .expect("the host's build mounted exactly one child (ActivatePanicChild)");
+
+        children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
+        assert!(
+            tree.get(root_first).is_some(),
+            "a globally-keyed eviction is a soft removal — the slab entry survives"
+        );
+
+        child_armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let recovered = children.ensure(
+            1,
+            &item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert_ne!(
+            recovered, root_first,
+            "the reactivated subtree was removed, not handed back broken"
+        );
+        assert!(
+            tree.get(root_first).is_none(),
+            "the half-activated subtree must not stay parented under the host"
+        );
+        assert_eq!(
+            tree.get(recovered)
+                .expect("a live element")
+                .element()
+                .view_type_id(),
+            std::any::TypeId::of::<crate::view::ErrorView>(),
+            "the index carries the error view"
+        );
+
+        let recovered_panics = build_owner.take_recovered_panics();
+        assert_eq!(
+            recovered_panics.len(),
+            1,
+            "exactly one panic must be recorded, not double-counted across the descendant's \
+             own catch and the retake window"
+        );
+        assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Activate);
+        assert_eq!(
+            recovered_panics[0].at,
+            RecoveredAt::Element {
+                element: descendant_id,
+                parent: None
+            },
+            "the record names the actual panicking descendant, not the retake root"
+        );
+    }
+
+    /// The debug-only eager duplicate-`GlobalKey` rejection (ADR-0050) must
+    /// propagate through a lazy host exactly as it does through a dense
+    /// parent: ensuring the SAME key at a second index under the SAME host,
+    /// with no evict between the two, is a genuine intra-frame duplicate —
+    /// not a same-frame retake — so `retake_active_global_key`'s
+    /// same-active-parent check panics before either per-child containment
+    /// window opens (issue #561, see `ChildHookPanic`'s doc: framework code
+    /// outside those windows is never contained). If a future change
+    /// widened the substituting primitives' catch to swallow this, an
+    /// application-level bug that duplicates a key would silently render
+    /// two `ErrorView`s instead of aborting where Flutter's `assert` does.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "duplicate GlobalKey children are not allowed")]
+    fn ensuring_the_same_global_key_twice_under_one_lazy_host_without_an_evict_panics() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+        let keyed_item = GlobalKeyedLeafBox {
+            side: 4.0,
+            key: GlobalKey::<GlobalKeyedLeafBox>::new(),
+            detach_count: Arc::new(AtomicUsize::new(0)),
+        };
+
+        let mut children = SparseChildren::new();
+        children.ensure(
+            0,
+            &keyed_item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+        // No evict between the two — the first is still active under the
+        // same host, so this is the duplicate case, not a retake.
+        children.ensure(
+            1,
+            &keyed_item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
     }
 
     #[test]
@@ -2178,7 +2428,36 @@ mod reconcile_tests {
             "exactly one panic must be recorded for the one failing mount"
         );
         assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Mount);
-        assert_eq!(recovered_panics[0].parent, Some(fx.host));
+        // A window-level record, not a behavior-level one:
+        // `RenderBehavior::on_mount` does not catch/record its own panic
+        // (unlike `StatefulBehavior::on_activate`), so `hook_panic_recorded`
+        // stays unset and `mount_or_substitute` pushes this `Substituted`
+        // record itself.
+        match recovered_panics[0].at {
+            crate::owner::RecoveredAt::Substituted {
+                element,
+                substitute,
+                parent,
+                slot,
+            } => {
+                assert_eq!(parent, fx.host);
+                assert_eq!(slot, 1);
+                assert_eq!(
+                    substitute, failed,
+                    "the substitute named in the record is the ErrorView actually mounted at \
+                     that index"
+                );
+                assert!(
+                    element.is_some(),
+                    "create_render_object panics after the child is minted (`InsertedChild::Minted`), \
+                     so there is a stranded element to name"
+                );
+            }
+            other => panic!(
+                "expected a Substituted record for a window-level create_render_object panic, \
+                 got {other:?}"
+            ),
+        }
     }
 
     /// The stranded node a panicking mount leaves in the slab is retired, not

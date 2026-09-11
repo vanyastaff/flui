@@ -5,17 +5,34 @@
 //! `BuildOwner::build_scope` / `BuildOwner::finalize_tree`; the fourth is
 //! closed by caching instead — see below.
 //!
-//! Flutter has no equivalent boundary for the caught hooks.
-//! `StatefulElement.unmount` calls `state.dispose()` with no `try`/`catch`,
-//! `Element.deactivateChild` calls `state.deactivate()` the same way, and
-//! `RenderObjectElement.unmount` calls `widget.didUnmountRenderObject(
-//! renderObject)` the same way too (`framework.dart`);
-//! `BuildOwner.finalizeTree`'s `_inactiveElements._unmountAll()` carries no
-//! per-element catch either — a throwing hook there aborts the whole
-//! reconcile or finalize pass. FLUI bounds the panic to the one element
-//! whose hook threw and lets the rest of the frame continue: see
-//! `StatefulBehavior::{on_unmount, on_deactivate}` and
-//! `RenderBehavior::on_unmount`
+//! Flutter's own boundaries for the caught hooks are coarser, not absent:
+//! - `dispose` — `_InactiveElements._unmountAll()` carries no per-element
+//!   `try`/`catch` of its own, but `BuildOwner.finalizeTree` wraps the
+//!   whole drain in one `try`/`catch` that reports through
+//!   `_reportException("while finalizing the widget tree")` and lets the
+//!   frame continue. Flutter's failure mode is "the rest of `_elements` is
+//!   leaked un-unmounted, the frame continues", not an unwound frame; FLUI's
+//!   is per element.
+//! - `deactivate` — Flutter DOES contain it:
+//!   `_InactiveElements._deactivateRecursively` catches, runs
+//!   `_deactivateFailedSubtreeRecursively` (the whole subtree is marked
+//!   `_ElementLifecycle.failed`), and rethrows into
+//!   `ComponentElement.performRebuild`'s second `catch`, which substitutes
+//!   an `ErrorWidget` at the *rebuilding ancestor*. FLUI's improvement is a
+//!   narrower blast radius: per element, the element stays parked inactive
+//!   and is still disposed normally at `finalize_tree` — Flutter never
+//!   disposes a `failed` subtree.
+//! - `did_unmount_render_object` — `RenderObjectElement.unmount` runs
+//!   `super.unmount()` (which detaches the render object) and its
+//!   detach-related asserts BEFORE calling
+//!   `widget.didUnmountRenderObject(renderObject)`, with no `try`/`catch`
+//!   around the hook. A throwing hook there does NOT skip the detach — that
+//!   already happened; it skips only `renderObject.dispose()` and clearing
+//!   `_renderObject` to `null`.
+//!
+//! FLUI bounds the panic to the one element whose hook threw and lets the
+//! rest of the frame continue: see `StatefulBehavior::{on_unmount,
+//! on_deactivate, on_activate}` and `RenderBehavior::on_unmount`
 //! (`crates/flui-view/src/element/behavior.rs`) and the containment bullet
 //! in `crates/flui-view/AGENTS.md`.
 //!
@@ -43,8 +60,8 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     AnimatedView, BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementId, ElementNode,
-    ElementTree, GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RenderView,
-    StatefulView, StatelessView, View, ViewExt, ViewState,
+    ElementTree, GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt,
+    RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -275,12 +292,13 @@ fn a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed() {
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Dispose);
     assert_eq!(
-        panic.element, mid,
-        "the recorded element is the panicking child"
-    );
-    assert_eq!(
-        panic.parent, None,
-        "the unmount-side seam does not see the parent"
+        panic.at,
+        RecoveredAt::Element {
+            element: mid,
+            parent: None
+        },
+        "the recorded element is the panicking child; the unmount-side seam does not see the \
+         parent"
     );
     assert_eq!(panic.view_type_id, TypeId::of::<DisposeCounter>());
     assert!(
@@ -356,9 +374,12 @@ fn a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry() {
     assert_eq!(recovered.len(), 1, "got {recovered:?}");
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Dispose);
-    assert_eq!(panic.element, root_id);
     assert_eq!(
-        panic.parent, None,
+        panic.at,
+        RecoveredAt::Element {
+            element: root_id,
+            parent: None
+        },
         "the unmount-side seam does not see the parent"
     );
     assert_eq!(panic.view_type_id, TypeId::of::<DisposeCounter>());
@@ -664,12 +685,13 @@ fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Deactivate);
     assert_eq!(
-        panic.element, deactivate_id,
-        "the recorded element is the panicking counter"
-    );
-    assert_eq!(
-        panic.parent, None,
-        "the unmount-side seam does not see the parent"
+        panic.at,
+        RecoveredAt::Element {
+            element: deactivate_id,
+            parent: None
+        },
+        "the recorded element is the panicking counter; the unmount-side seam does not see the \
+         parent"
     );
     assert_eq!(panic.view_type_id, TypeId::of::<DeactivateCounter>());
     assert!(
@@ -814,12 +836,13 @@ fn a_did_unmount_render_object_panic_is_contained_and_the_render_node_is_still_r
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::UnmountRenderObject);
     assert_eq!(
-        panic.element, mid,
-        "the recorded element is the panicking child"
-    );
-    assert_eq!(
-        panic.parent, None,
-        "the unmount-side seam does not see the parent"
+        panic.at,
+        RecoveredAt::Element {
+            element: mid,
+            parent: None
+        },
+        "the recorded element is the panicking child; the unmount-side seam does not see the \
+         parent"
     );
     assert_eq!(
         panic.view_type_id,
