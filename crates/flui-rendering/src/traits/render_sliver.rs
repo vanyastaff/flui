@@ -8,7 +8,7 @@ use crate::{
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::ParentData,
     protocol::SliverProtocol,
-    traits::{HitTestOutcome, RenderObject},
+    traits::{HitTestOutcome, PaintEffects, PaintOpacity, RenderObject},
 };
 
 // ============================================================================
@@ -361,14 +361,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         None
     }
 
-    /// Returns the blend mode for the opacity layer wrapping children.
-    ///
-    /// Default: `None`. See
-    /// [`RenderObject::paint_layer_blend`].
-    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        None
-    }
-
     /// Whether this render object should suppress all child painting.
     ///
     /// Default: `false`. See
@@ -384,6 +376,22 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         let _ = size;
         None
+    }
+
+    /// This node's own paint effects — opacity, clip, and transform — as one
+    /// value.
+    ///
+    /// Default derives from [`Self::paint_alpha`] / [`Self::paint_transform`]
+    /// above (never a clip, since no hook produces one); a producer overrides
+    /// this method directly instead. See
+    /// [`RenderObject::paint_effects`] for the full contract (pure in
+    /// `(self, size)`, no user code).
+    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+        PaintEffects {
+            opacity: <Self as RenderSliver>::paint_alpha(self).map(PaintOpacity::new),
+            clip: None,
+            transform: <Self as RenderSliver>::paint_transform(self, size),
+        }
     }
 
     /// Returns the transform matrix for hit testing.
@@ -633,16 +641,16 @@ where
         <T as RenderSliver>::metadata(self)
     }
 
-    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        <T as RenderSliver>::paint_layer_blend(self)
-    }
-
     fn skip_paint(&self) -> bool {
         <T as RenderSliver>::skip_paint(self)
     }
 
     fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         <T as RenderSliver>::paint_transform(self, size)
+    }
+
+    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+        <T as RenderSliver>::paint_effects(self, size)
     }
 
     fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {

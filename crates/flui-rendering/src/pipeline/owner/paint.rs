@@ -19,7 +19,7 @@ use crate::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
     },
-    traits::PaintClip,
+    traits::{PaintClip, PaintEffects},
 };
 
 use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
@@ -425,8 +425,8 @@ impl PipelineOwner<PaintPhase> {
         // A childless `RenderRotatedBox` is a real, reachable caller of this
         // branch: its setter reports `COMPOSITED_LAYER_UPDATE` for a
         // same-parity turn change whether or not it has a child (no
-        // `has_child` gate), `paint_transform` returns `None` without a
-        // child, so it never owns an effect slot to begin with — and
+        // `has_child` gate), `paint_effects` returns a `None` transform
+        // without a child, so it never owns an effect slot to begin with — and
         // `RotatedBox::new(n)` seeds an empty child by default, so a bare
         // rebuild hits exactly this. Without this guard the loop below walks
         // EXISTING slots, silently skips a target that has none, and reports
@@ -466,12 +466,7 @@ impl PipelineOwner<PaintPhase> {
             if !node.needs_composited_layer_update() {
                 continue;
             }
-            let fresh = own_effect_layers(
-                node.paint_alpha(),
-                node.paint_layer_blend(),
-                node.paint_transform(),
-                slots.origin,
-            );
+            let fresh = own_effect_layers(node.paint_effects(), slots.origin);
             if fresh.len() != slots.indices.len() {
                 return None;
             }
@@ -485,15 +480,19 @@ impl PipelineOwner<PaintPhase> {
                     debug_assert!(false, "BUG: effect slot index outside its own capture");
                     return None;
                 };
-                // Defence in depth, and deliberately not claimed as more than
-                // that: `own_effect_layers` emits a FIXED order (alpha, then
-                // transform), so a same-count shape change maps positionally
-                // onto the same kinds and patching it happens to produce what a
-                // repaint would. A mutation run confirms no test distinguishes
-                // this branch today. It earns its place by making that
-                // coincidence explicit rather than load-bearing: adding a third
-                // effect type, or making the order conditional, would otherwise
-                // silently turn a positional patch into a wrong layer.
+                // Under the FIXED order `own_effect_layers` emits (opacity,
+                // clip, transform), the count check above plus this
+                // per-position discriminant compare is a COMPLETE shape
+                // check — no stored shape is needed. It is conservative
+                // rather than load-bearing: the effect chain is positional
+                // (`capture` records it in push order, `graft` swaps only
+                // `layer` at those indices), so a same-count kind change
+                // patched positionally would already yield the repaint's
+                // tree; refusing it only trades a correct patch for a
+                // repaint, and that refusal is observable as one. No
+                // production producer changes its own clip kind at runtime,
+                // so no oracle pins that case; the output is pinned by
+                // `an_effect_layer_shape_change_falls_back_to_a_repaint`.
                 if std::mem::discriminant(&layer) != std::mem::discriminant(&captured.layer) {
                     return None;
                 }
@@ -559,9 +558,7 @@ impl PipelineOwner<PaintPhase> {
              status changes, beside mark_needs_compositing_bits_update."
         );
 
-        let alpha = render_node.paint_alpha();
-        let layer_blend = render_node.paint_layer_blend();
-        let transform = render_node.paint_transform();
+        let effects = render_node.paint_effects();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
         // The generation this node's most recent layout stamped onto the
         // children it laid out; a child carrying anything else was not part of
@@ -596,10 +593,11 @@ impl PipelineOwner<PaintPhase> {
         // Fully transparent subtree: skip recording entirely. Children
         // keep whatever dirty flags they carry; the residue scan in
         // run_paint clears them with a warning.
-        // Uses `skip_paint()` rather than `alpha == Some(0)` so that
-        // `paint_alpha()` encoding only controls layer-emission; the
-        // skip-paint decision is a separate, explicit contract
-        // (Flutter: `if (_alpha == 0) return;` in RenderOpacity.paint).
+        // Uses `skip_paint()` rather than `effects.opacity`'s alpha being
+        // `Some(0)` so that `paint_effects()`'s opacity field only controls
+        // layer-emission; the skip-paint decision is a separate, explicit
+        // contract (Flutter: `if (_alpha == 0) return;` in
+        // RenderOpacity.paint).
         if render_node.skip_paint() {
             return Ok(());
         }
@@ -641,18 +639,12 @@ impl PipelineOwner<PaintPhase> {
              from state read at paint time instead of re-marking",
         );
 
-        // Effect hooks wrap the ENTIRE node fragment (self draws AND
-        // children). The pre-fragment walk wrapped children only; hook
-        // implementors draw nothing themselves, so the visible result
-        // is identical and the new rule matches Flutter (RenderOpacity
-        // wraps its child's whole paint).
-        // Alpha–blend coupling: the layer is emitted only when `paint_alpha()` returns
-        // `Some`.  A render object that overrides `paint_layer_blend() -> Some(mode)`
-        // but leaves `paint_alpha() -> None` will silently drop the blend layer —
-        // the advanced compositor never sees it.  When wiring the first render-tree
-        // consumer of an advanced blend, override BOTH hooks and return `Some(255)`
-        // from `paint_alpha()` for an opaque-blend-only layer.
-        let own_effects = own_effect_layers(alpha, layer_blend, transform, origin);
+        // A node's own paint effects wrap the ENTIRE node fragment (self
+        // draws AND children). The pre-fragment walk wrapped children only;
+        // `paint_effects()` implementors draw nothing themselves, so the
+        // visible result is identical and the rule matches Flutter
+        // (RenderOpacity wraps its child's whole paint).
+        let own_effects = own_effect_layers(effects, origin);
         let effect_layers = own_effects.len();
         for layer in own_effects {
             let layer_id = composer.push_layer(layer);
@@ -953,7 +945,7 @@ struct LayerPatch {
 struct EffectSlots {
     /// Indices into [`RetainedSubtree::nodes`], in push order (outermost
     /// first) — the same order [`own_effect_layers`] returns.
-    indices: SmallVec<[usize; 2]>,
+    indices: SmallVec<[usize; 3]>,
     /// The accumulated origin this node painted at.
     ///
     /// Kept because a transform layer is conjugated by it. A property-only
@@ -974,40 +966,34 @@ struct RetainedNode {
 }
 
 /// The layers a node pushes for its OWN effects, in push order (outermost
-/// first), built from the hooks the paint walk reads off the node.
+/// first: opacity, clip, transform), built from the single
+/// [`PaintEffects`] value the paint walk reads off the node.
 ///
-/// One function with two callers, deliberately: the paint walk pushes these
-/// while painting, and the composited-layer-update arm rebuilds them without
-/// painting. Two copies of this construction would drift, and the drift would
-/// be a wrong-looking layer on a frame no test paints.
+/// One value in, two callers, deliberately: the paint walk pushes these
+/// while painting, and the composited-layer-update patch arm rebuilds them
+/// without painting. Two copies of this construction would drift, and the
+/// drift would be a wrong-looking layer on a frame no test paints.
 ///
-/// `origin` matters only to the transform: the node reports its matrix in
-/// LOCAL coordinates while every run inside the layer space carries the
-/// accumulated origin, so the matrix is conjugated by it. The opacity layer is
+/// `origin` matters to the clip and the transform, not the opacity: both a
+/// clip shape and a transform matrix are reported in the node's LOCAL
+/// coordinates while every run inside the layer space carries the
+/// accumulated origin, so both are conjugated by it ([`clip_layer`] for the
+/// clip, [`conjugate`] for the transform). The opacity layer is
 /// origin-independent (always `Offset::ZERO`), which is why an alpha-only
 /// update is correct no matter where the node sits.
-///
-/// Alpha-blend coupling: the layer is emitted only when `paint_alpha()`
-/// returns `Some`. A render object that overrides `paint_layer_blend() ->
-/// Some(mode)` but leaves `paint_alpha() -> None` silently drops the blend
-/// layer — the advanced compositor never sees it. When wiring the first
-/// render-tree consumer of an advanced blend, override BOTH hooks and return
-/// `Some(255)` from `paint_alpha()` for an opaque-blend-only layer.
-fn own_effect_layers(
-    alpha: Option<u8>,
-    layer_blend: Option<flui_types::painting::BlendMode>,
-    transform: Option<flui_types::Matrix4>,
-    origin: Offset,
-) -> SmallVec<[Layer; 2]> {
+fn own_effect_layers(effects: PaintEffects, origin: Offset) -> SmallVec<[Layer; 3]> {
     let mut layers = SmallVec::new();
-    if let Some(alpha) = alpha {
-        let alpha_f32 = f32::from(alpha) / 255.0;
-        layers.push(Layer::Opacity(match layer_blend {
-            Some(blend) => OpacityLayer::with_blend(alpha_f32, Offset::ZERO, blend),
-            None => OpacityLayer::with_offset(alpha_f32, Offset::ZERO),
-        }));
+    if let Some(opacity) = effects.opacity {
+        let alpha_f32 = f32::from(opacity.alpha) / 255.0;
+        layers.push(Layer::Opacity(OpacityLayer::with_offset(
+            alpha_f32,
+            Offset::ZERO,
+        )));
     }
-    if let Some(matrix) = transform {
+    if let Some(clip) = effects.clip {
+        layers.push(clip_layer(clip, origin));
+    }
+    if let Some(matrix) = effects.transform {
         // Same math and same reason as the per-child `PushTransform` fragment
         // op (RenderFlow and friends).
         layers.push(Layer::Transform(TransformLayer::new(conjugate(
@@ -1416,10 +1402,10 @@ impl FragmentComposer {
 ///
 /// Both callers report a transform in LOCAL coordinates while every run
 /// they bracket carries the accumulated `origin` baked into its canvas
-/// transform: the per-node [`RenderObject::paint_transform`](crate::traits::RenderObject::paint_transform)
-/// hook (one transform for the whole node, applied here) and the
-/// per-child [`FragmentOp::PushTransform`] op (`RenderFlow` and any
-/// other Variable-arity node giving each child its own paint-time
+/// transform: the per-node [`RenderObject::paint_effects`](crate::traits::RenderObject::paint_effects)
+/// value's `transform` field (one transform for the whole node, applied
+/// here) and the per-child [`FragmentOp::PushTransform`] op (`RenderFlow`
+/// and any other Variable-arity node giving each child its own paint-time
 /// transform). Flutter `PaintingContext.pushTransform`:
 /// `T(offset)·M·T(−offset)`.
 fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4 {

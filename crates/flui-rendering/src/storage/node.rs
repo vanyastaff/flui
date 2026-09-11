@@ -675,15 +675,6 @@ impl RenderNode {
         with_entry!(self, entry => entry.render_object().skip_paint())
     }
 
-    /// Optional blend mode for the opacity layer wrapping children.
-    ///
-    /// Returns the blend mode set by `paint_layer_blend`, or `None` when the
-    /// object uses the default `SrcOver` compositing (most objects).
-    #[inline]
-    pub fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        with_entry!(self, entry => entry.render_object().paint_layer_blend())
-    }
-
     /// Optional paint transform effect for this render object.
     ///
     /// The laid-out size is resolved from
@@ -702,6 +693,30 @@ impl RenderNode {
             Self::Sliver(entry) => {
                 let size = entry.state().absolute_paint_size();
                 entry.render_object().paint_transform(size)
+            }
+        }
+    }
+
+    /// This node's own paint effects (opacity, clip, transform), resolved at
+    /// its committed size.
+    ///
+    /// The laid-out size is resolved exactly as [`Self::paint_transform`]
+    /// does: box → committed `Size` from
+    /// [`RenderState`](crate::storage::RenderState); sliver → absolute paint
+    /// size. See
+    /// [`RenderObject::paint_effects`] for the value's purity contract —
+    /// pure in `(self, size)`, no user code, safe to call outside a paint
+    /// walk.
+    #[inline]
+    pub fn paint_effects(&self) -> crate::traits::PaintEffects {
+        match self {
+            Self::Box(entry) => {
+                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+                entry.render_object().paint_effects(size)
+            }
+            Self::Sliver(entry) => {
+                let size = entry.state().absolute_paint_size();
+                entry.render_object().paint_effects(size)
             }
         }
     }

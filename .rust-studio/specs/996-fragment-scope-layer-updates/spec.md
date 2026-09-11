@@ -151,6 +151,7 @@ Each traces to intent's "flat paint count + same layer tree as a repaint, or a r
 - The walk-resolved `PathTarget` moves the `InactiveRealm` degrade into flui-rendering's resolver; hit-test/semantics in flui-objects call the same helper so there is one behaviour — verified by AC11 + the existing clip hit-test/semantics tests.
 - `SEMANTICS` per tick stays for shape changes (same `mark_needs_semantics` call as today's `PAINT | SEMANTICS`).
 - Layered N=1 ratio compresses toward 1×; quoted as measured.
+- **Measured at task 1.5 (the switch):** the full-repaint arm of the three N=1000 inline benches rose ~4–5% (≈199–202 µs → 208–210 µs, ≈7 ns per node) while the update arm stayed at ≈0.9 µs. A throwaway simulation of the post-1.13 default (`PaintEffects::NONE` for every non-producer) recovered only about a third of it, so the cost is structural — the 128-byte value materialised per node plus the 368-byte `SmallVec<[Layer; 3]>` local — not the interim double dispatch. Accepted (≈0.05% of a 16.6 ms frame on the expensive path; the programme's target arm is untouched); the lever, if it is ever needed, is a smaller representation — `Option<PaintClip>` is 56 of the 128 bytes and no current producer sets it — decided with PR3's AC9 numbers, not before.
 - Seen in passing, not this spec: `crates/flui-widgets/src/scroll/viewport.rs` ~:193/:384 discard `set_clip_behavior`'s impact with `let _ =` — own item.
 
 ## Ordered tasks (each PR independently green and one kind of change)
