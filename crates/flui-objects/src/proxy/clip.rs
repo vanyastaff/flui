@@ -63,9 +63,9 @@ use flui_types::{
 use flui_rendering::{
     RenderUpdateImpact,
     context::BoxHitTestContext,
-    hit_testing::{PathClipTarget, resolve_path_clip_target},
+    hit_testing::PathClipTarget,
     parent_data::BoxParentData,
-    traits::{PaintClip, RenderBox},
+    traits::{PaintClip, RenderBox, resolve_path_clip},
 };
 
 #[derive(Debug)]
@@ -472,13 +472,10 @@ impl ClipGeometry for Path {
     }
 
     fn resolve_path_clip_target(target: PathClipTarget, size: Size) -> Option<Self> {
-        match resolve_path_clip_target(target, size) {
-            Ok(path) => Some(path),
-            Err(error) => {
-                tracing::debug!(?error, "path clip target resolution failed");
-                None
-            }
-        }
+        // The shared resolver owns the degrade (no lane, unregistered target
+        // → the whole box), so paint, hit-test and semantics answer the same
+        // path the paint walk builds for a `PaintClip::PathTarget`.
+        Some(resolve_path_clip(target, size))
     }
 
     fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
