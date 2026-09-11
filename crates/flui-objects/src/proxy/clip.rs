@@ -50,7 +50,7 @@
 //! owner-lane [`PathClipTarget`] for path factories; executable clipper
 //! callbacks never live in render storage.
 
-use std::{fmt, marker::PhantomData, sync::Arc};
+use std::{borrow::Borrow, fmt, marker::PhantomData, sync::Arc};
 
 use flui_tree::Single;
 use flui_types::{
@@ -65,7 +65,7 @@ use flui_rendering::{
     context::BoxHitTestContext,
     hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{PaintClip, RenderBox},
 };
 
 #[derive(Debug)]
@@ -258,26 +258,32 @@ pub trait ClipGeometry:
         None
     }
 
-    /// Opens this clip as a layer scope on the paint context — the
-    /// clip covers everything recorded inside `f`, child subtrees
-    /// included. The shape is given in local coordinates (the paint
-    /// context's canvas space).
+    /// The representation `RenderClip<Self>` keeps once a shape is set: `Self`
+    /// for the three value shapes, `Arc<Path>` for `Path`, so a stored path is
+    /// shared by refcount on every `resolve_clip`/`to_paint_clip` call and
+    /// never deep-cloned. `Self: Into<Self::Stored>` is std's own
+    /// `From<T> for T` / `From<T> for Arc<T>` — no per-shape conversion code.
+    type Stored: Borrow<Self> + Clone + fmt::Debug + Send + Sync + 'static + From<Self>;
+
+    /// Produces the node-local [`PaintClip`] descriptor for this shape at the
+    /// given `behavior`. [`RenderClip::paint`] pushes the result through
+    /// [`flui_rendering::context::PaintCx::with_clip`] — a LAYER scope, not a
+    /// canvas clip, because canvas state is run-local in the fragment paint
+    /// model: it never extends across child markers, and the entire point of
+    /// `RenderClip` is clipping the child. A later step hands this same value
+    /// to `paint_effects` unchanged.
     ///
-    /// A layer scope (not a canvas clip) because canvas state is
-    /// run-local in the fragment paint model: it never extends across
-    /// child markers, and the entire point of `RenderClip` is clipping
-    /// the child.
-    fn with_clip_scope(
-        &self,
-        ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
-        clip_behavior: Clip,
-        f: impl FnOnce(&mut flui_rendering::context::PaintCx<'_, Single>),
-    );
+    /// By value: every caller holds a freshly-owned value from
+    /// `resolve_clip`, so consuming `stored` is a move — for [`Path`], no
+    /// second `Arc::clone`.
+    fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip;
 }
 
 // ---- Rect ------------------------------------------------------------------
 
 impl ClipGeometry for Rect<Pixels> {
+    type Stored = Self;
+
     const DIAGNOSTIC_NAME: &'static str = "RenderClipRect";
 
     fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
@@ -292,19 +298,19 @@ impl ClipGeometry for Rect<Pixels> {
         Rect::contains(self, position)
     }
 
-    fn with_clip_scope(
-        &self,
-        ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
-        clip_behavior: Clip,
-        f: impl FnOnce(&mut flui_rendering::context::PaintCx<'_, Single>),
-    ) {
-        ctx.with_clip_rect(*self, clip_behavior, f);
+    fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
+        PaintClip::Rect {
+            rect: stored,
+            behavior,
+        }
     }
 }
 
 // ---- RRect -----------------------------------------------------------------
 
 impl ClipGeometry for RRect {
+    type Stored = Self;
+
     const DIAGNOSTIC_NAME: &'static str = "RenderClipRRect";
 
     fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
@@ -390,19 +396,19 @@ impl ClipGeometry for RRect {
         ))
     }
 
-    fn with_clip_scope(
-        &self,
-        ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
-        clip_behavior: Clip,
-        f: impl FnOnce(&mut flui_rendering::context::PaintCx<'_, Single>),
-    ) {
-        ctx.with_clip_rrect(*self, clip_behavior, f);
+    fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
+        PaintClip::RRect {
+            rrect: stored,
+            behavior,
+        }
     }
 }
 
 // ---- Oval ------------------------------------------------------------------
 
 impl ClipGeometry for Oval {
+    type Stored = Self;
+
     const DIAGNOSTIC_NAME: &'static str = "RenderClipOval";
 
     fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
@@ -418,26 +424,25 @@ impl ClipGeometry for Oval {
         Oval::contains(self, position)
     }
 
-    fn with_clip_scope(
-        &self,
-        ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
-        clip_behavior: Clip,
-        f: impl FnOnce(&mut flui_rendering::context::PaintCx<'_, Single>),
-    ) {
+    fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
         // Approximate the oval with an RRect whose corner radii equal half
         // the bounding-rect dimensions — a perfect inscribed ellipse.
         // (The engine may specialise this in a future backend; the
         // approximation is exact for the inscribed-ellipse case.)
-        let rx = self.bounds.width() * 0.5;
-        let ry = self.bounds.height() * 0.5;
-        let rrect = RRect::from_rect_elliptical(self.bounds, rx, ry);
-        ctx.with_clip_rrect(rrect, clip_behavior, f);
+        let rx = stored.bounds.width() * 0.5;
+        let ry = stored.bounds.height() * 0.5;
+        PaintClip::RRect {
+            rrect: RRect::from_rect_elliptical(stored.bounds, rx, ry),
+            behavior,
+        }
     }
 }
 
 // ---- Path ------------------------------------------------------------------
 
 impl ClipGeometry for Path {
+    type Stored = Arc<Path>;
+
     const DIAGNOSTIC_NAME: &'static str = "RenderClipPath";
 
     fn approximate_bounds(&self, size: Size) -> Rect<Pixels> {
@@ -476,13 +481,11 @@ impl ClipGeometry for Path {
         }
     }
 
-    fn with_clip_scope(
-        &self,
-        ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
-        clip_behavior: Clip,
-        f: impl FnOnce(&mut flui_rendering::context::PaintCx<'_, Single>),
-    ) {
-        ctx.with_clip_path(self.clone(), clip_behavior, f);
+    fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
+        PaintClip::Path {
+            path: stored,
+            behavior,
+        }
     }
 }
 
@@ -521,7 +524,7 @@ pub struct RenderClip<S: ClipGeometry> {
     ///
     /// Data, not a callback — see `set_clip_shape` for why that is the right
     /// shape here and what it does not cover.
-    clip_shape: Option<S>,
+    clip_shape: Option<S::Stored>,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
     /// Keeps the generic shape parameter part of the render object's type even
@@ -584,8 +587,8 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// negligible relative to the canvas / hit-test work that follows.
     /// The caller-supplied clip shape, if one replaces the default whole box.
     #[must_use]
-    pub const fn clip_shape(&self) -> Option<&S> {
-        self.clip_shape.as_ref()
+    pub fn clip_shape(&self) -> Option<&S> {
+        self.clip_shape.as_ref().map(Borrow::borrow)
     }
 
     /// Replaces the default whole-box clip with a fixed shape.
@@ -616,21 +619,21 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// closure and a path can express any rect or oval, so the capability
     /// exists — it is these two convenience widgets that do not carry it.
     pub fn set_clip_shape(&mut self, shape: Option<S>) -> flui_rendering::RenderUpdateImpact {
-        if self.clip_shape == shape {
+        if self.clip_shape.as_ref().map(Borrow::borrow) == shape.as_ref() {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        self.clip_shape = shape;
+        self.clip_shape = shape.map(Into::into);
         flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Builder form of [`set_clip_shape`](Self::set_clip_shape).
     #[must_use]
     pub fn with_clip_shape(mut self, shape: S) -> Self {
-        self.clip_shape = Some(shape);
+        self.clip_shape = Some(shape.into());
         self
     }
 
-    fn resolve_clip(&self, size: Size) -> S {
+    fn resolve_clip(&self, size: Size) -> S::Stored {
         if let Some(shape) = &self.clip_shape {
             return shape.clone();
         }
@@ -641,6 +644,7 @@ impl<S: ClipGeometry> RenderClip<S> {
                     .and_then(|target| S::resolve_path_clip_target(target, size))
             })
             .unwrap_or_else(|| S::default_for_size(size))
+            .into()
     }
 }
 
@@ -790,8 +794,8 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         // canvas clips are run-local in the fragment paint model and
         // would never reach the child's commands.
         let size = ctx.size();
-        self.resolve_clip(size)
-            .with_clip_scope(ctx, self.clip_behavior, |ctx| ctx.paint_child());
+        let clip = S::to_paint_clip(self.resolve_clip(size), self.clip_behavior);
+        ctx.with_clip(clip, |ctx| ctx.paint_child());
     }
 
     /// Content this clip paints over carries no accessibility presence.
@@ -814,7 +818,11 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         if self.clip_behavior == Clip::None {
             return None;
         }
-        Some(self.resolve_clip(size).approximate_bounds(size))
+        let stored = self.resolve_clip(size);
+        Some(S::approximate_bounds(
+            <S::Stored as Borrow<S>>::borrow(&stored),
+            size,
+        ))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
@@ -824,7 +832,8 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         // Honour the clip: a hit outside the clip shape doesn't reach
         // the child. Flutter parity.
         let position = Point::new(ctx.x(), ctx.y());
-        if !self.resolve_clip(ctx.own_size()).contains(position) {
+        let stored = self.resolve_clip(ctx.own_size());
+        if !S::contains(<S::Stored as Borrow<S>>::borrow(&stored), position) {
             return false;
         }
         if self.has_child {
