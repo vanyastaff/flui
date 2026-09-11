@@ -111,6 +111,21 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`PaintEffects` — one value for a render object's own paint effects**
+  (#996): `RenderBox`/`RenderSliver`/`RenderObject::paint_effects(size)`
+  returns `PaintEffects { opacity, clip, transform }` with a fixed nesting
+  (opacity outermost, then clip, then transform); the value is read by the
+  paint walk, the composited-layer-update patch arm, and the default
+  `apply_paint_transform`. The six existing producers — `RenderOpacity`,
+  `RenderAnimatedOpacity`, `RenderSliverOpacity`, `RenderSliverAnimatedOpacity`,
+  `RenderTransform`, `RenderRotatedBox` — migrated behaviour-neutrally.
+  `ClipPathLayer` and `RenderClip<Path>` now share a fixed path as one
+  `Arc<Path>` (`ClipGeometry` gains an associated `type Stored`); a
+  size-dependent clipper can be reported as data through
+  `PaintClip::PathTarget` and resolved by the walk through
+  `resolve_path_clip`, rather than the producer running the clipper itself.
+  The composited-layer-update patch arm rebuilds a boundary's effect layers
+  in capture order.
 - **Toolchain 1.98.0 → 1.98.1 (development pin only; MSRV floor stays 1.97).** The current
   stable point release (2026-09-01); CI's `stable` jobs already floated to it, so local and CI
   were a point release apart. Verified with `cargo check --workspace --all-targets`, clippy at
@@ -480,6 +495,15 @@ file records the repo-consumer-visible summary.
   CI again.
 
 ### Removed
+
+- **`paint_alpha`, `paint_layer_blend`, `paint_transform`** (#996): the three
+  separate hooks on `RenderBox`/`RenderSliver`/`RenderObject`, and
+  `RenderNode`'s dispatch of them, are gone — replaced by the single
+  `paint_effects` value described above. `ClipGeometry::with_clip_scope` is
+  replaced by `to_paint_clip`. `flui_widgets::testing::LaidOut::opacity_paint_alpha`
+  and `sliver_opacity_paint_alpha` keep their names (both still read an alpha
+  out of a test probe) but now read it off the `paint_effects` value instead
+  of the deleted hook.
 
 - **Five dead stubs leave the public `Platform` trait** (#551, executing
   ADR-0039 §2's recorded "deleted outright in slice 3, not moved" decision):
