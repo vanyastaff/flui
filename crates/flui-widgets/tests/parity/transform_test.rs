@@ -724,7 +724,7 @@ fn transform_rotation_widget_wires_the_angle_through_to_the_render_object() {
 /// `localToGlobal`/`applyPaintTransform` matrix walk, not a
 /// `parentData.offset` sum. The harness's `absolute_offset` sums each
 /// ancestor's *committed layout offset*, and `RenderTransform` never writes
-/// one for its child (the shift lives only in `paint_transform`
+/// one for its child (the shift lives only in `paint_effects().transform`
 /// /`effective_transform`) — confirmed empirically: `absolute_offset` reads
 /// `Offset::ZERO` for the child below, not `(100.0, 50.0)`, so it cannot
 /// stand in for `getTopLeft` here. This proves the same shift the way every

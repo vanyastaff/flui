@@ -8,7 +8,7 @@ use crate::{
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::ParentData,
     protocol::SliverProtocol,
-    traits::{HitTestOutcome, PaintEffects, PaintOpacity, RenderObject},
+    traits::{HitTestOutcome, PaintEffects, RenderObject},
 };
 
 // ============================================================================
@@ -337,18 +337,10 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     // Effect Layers
     // ========================================================================
     //
-    // Override these to have the pipeline wrap children in OpacityLayer /
-    // TransformLayer. The blanket `impl RenderObject<SliverProtocol> for T`
-    // forwards every call from the `RenderObject<P>` surface to these
+    // Override `paint_effects` to have the pipeline wrap children in this
+    // node's own effect layers. The blanket `impl RenderObject<SliverProtocol>
+    // for T` forwards every call from the `RenderObject<P>` surface to these
     // RenderSliver methods — concrete types override here.
-
-    /// Returns the alpha value to apply to children.
-    ///
-    /// Default: `None`. See
-    /// [`RenderObject::paint_alpha`].
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
 
     /// Opaque payload this sliver attaches to any hit that lands on it — see
     /// [`RenderObject::metadata`].
@@ -369,29 +361,14 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         false
     }
 
-    /// Returns the transform matrix to apply to children during painting.
-    ///
-    /// Default: `None`. See
-    /// [`RenderObject::paint_transform`].
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        let _ = size;
-        None
-    }
-
     /// This node's own paint effects — opacity, clip, and transform — as one
     /// value.
     ///
-    /// Default derives from [`Self::paint_alpha`] / [`Self::paint_transform`]
-    /// above (never a clip, since no hook produces one); a producer overrides
-    /// this method directly instead. See
-    /// [`RenderObject::paint_effects`] for the full contract (pure in
-    /// `(self, size)`, no user code).
+    /// Default: [`PaintEffects::NONE`]. See [`RenderObject::paint_effects`]
+    /// for the full contract (pure in `(self, size)`, no user code).
     fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
-        PaintEffects {
-            opacity: <Self as RenderSliver>::paint_alpha(self).map(PaintOpacity::new),
-            clip: None,
-            transform: <Self as RenderSliver>::paint_transform(self, size),
-        }
+        let _ = size;
+        PaintEffects::NONE
     }
 
     /// Returns the transform matrix for hit testing.
@@ -633,20 +610,12 @@ where
     // Effect-layer and lifecycle forwards — same pattern as the BoxProtocol
     // blanket: call into the RenderSliver method so overrides are visible
     // through `&dyn RenderObject<SliverProtocol>`.
-    fn paint_alpha(&self) -> Option<u8> {
-        <T as RenderSliver>::paint_alpha(self)
-    }
-
     fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
         <T as RenderSliver>::metadata(self)
     }
 
     fn skip_paint(&self) -> bool {
         <T as RenderSliver>::skip_paint(self)
-    }
-
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        <T as RenderSliver>::paint_transform(self, size)
     }
 
     fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {

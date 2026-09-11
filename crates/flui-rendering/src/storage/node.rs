@@ -647,8 +647,8 @@ impl RenderNode {
     // no bounds-based culling yet) and, once geometry moved to
     // `RenderState`, derived an *untransformed* rect that silently dropped
     // `RenderTransform`'s corner-mapped bounds. A future culling consumer
-    // must reintroduce it transform-aware (apply `paint_transform()` to the
-    // committed `RenderState` geometry), not resurrect a half-correct
+    // must reintroduce it transform-aware (apply `paint_effects().transform`
+    // to the committed `RenderState` geometry), not resurrect a half-correct
     // producer. Root paint bounds for the engine live on
     // `RenderView::physical_paint_bounds`.
 
@@ -656,12 +656,6 @@ impl RenderNode {
     #[inline]
     pub fn debug_name(&self) -> &'static str {
         with_entry!(self, entry => entry.render_object().debug_name())
-    }
-
-    /// Optional paint opacity effect for this render object.
-    #[inline]
-    pub fn paint_alpha(&self) -> Option<u8> {
-        with_entry!(self, entry => entry.render_object().paint_alpha())
     }
 
     /// Whether this node's render object requests that child paint be skipped.
@@ -675,38 +669,16 @@ impl RenderNode {
         with_entry!(self, entry => entry.render_object().skip_paint())
     }
 
-    /// Optional paint transform effect for this render object.
-    ///
-    /// The laid-out size is resolved from
-    /// [`RenderState`](crate::storage::RenderState) (geometry's sole
-    /// owner) and threaded in so an alignment-relative transform reads it
-    /// instead of caching its own size (channel for the `&self`
-    /// `paint_transform` hook). Box → committed `Size`; sliver → absolute
-    /// paint size.
-    #[inline]
-    pub fn paint_transform(&self) -> Option<flui_types::Matrix4> {
-        match self {
-            Self::Box(entry) => {
-                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
-                entry.render_object().paint_transform(size)
-            }
-            Self::Sliver(entry) => {
-                let size = entry.state().absolute_paint_size();
-                entry.render_object().paint_transform(size)
-            }
-        }
-    }
-
     /// This node's own paint effects (opacity, clip, transform), resolved at
     /// its committed size.
     ///
-    /// The laid-out size is resolved exactly as [`Self::paint_transform`]
-    /// does: box → committed `Size` from
-    /// [`RenderState`](crate::storage::RenderState); sliver → absolute paint
-    /// size. See
-    /// [`RenderObject::paint_effects`] for the value's purity contract —
-    /// pure in `(self, size)`, no user code, safe to call outside a paint
-    /// walk.
+    /// The laid-out size is resolved from
+    /// [`RenderState`](crate::storage::RenderState) (geometry's sole owner)
+    /// and threaded in so an alignment-relative effect reads it instead of
+    /// caching its own size: box → committed `Size`; sliver → absolute paint
+    /// size. See [`RenderObject::paint_effects`] for the value's purity
+    /// contract — pure in `(self, size)`, no user code, safe to call outside
+    /// a paint walk.
     #[inline]
     pub fn paint_effects(&self) -> crate::traits::PaintEffects {
         match self {

@@ -835,8 +835,8 @@ impl LaidOut {
     }
 
     /// The composed translate-then-scale transform of a [`RenderFittedBox`]
-    /// node — the same matrix `paint_transform` hands the pipeline and
-    /// `hit_test` inverts. Panics if `id` is not a `RenderFittedBox`.
+    /// node — the same matrix `paint` pushes and `hit_test` inverts. Panics
+    /// if `id` is not a `RenderFittedBox`.
     pub fn fitted_box_transform(&self, id: RenderId) -> Matrix4 {
         self.pipeline_owner.with_mut(|owner| {
             owner

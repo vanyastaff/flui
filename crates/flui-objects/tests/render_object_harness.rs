@@ -7619,11 +7619,11 @@ fn box_opacity_alpha_zero_does_not_need_compositing() {
     );
 }
 
-// 1.3 paint_alpha RED→GREEN test: alpha=0 sliver must not emit an Opacity layer.
-// Flutter proxy_sliver.dart: alpha 0 → layer=null, return — no layer painted.
-// Before the paint_alpha fix, paint_alpha returned Some(0) for alpha=0, causing
-// the owner to wrap the child in a 0-alpha OpacityLayer (present in structure).
-// After fix: paint_alpha returns None at alpha=0, no OpacityLayer emitted.
+// An alpha=0 sliver must not emit an Opacity layer. Flutter
+// proxy_sliver.dart: alpha 0 → layer=null, return — no layer painted. The
+// defect this pins: reporting `Some(0)` through `paint_effects().opacity`
+// makes the owner wrap the child in a 0-alpha OpacityLayer (present in
+// structure); the correct answer at alpha=0 is `None`, no layer emitted.
 #[test]
 fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
     let run = RenderTester::mount(viewport(
@@ -7795,7 +7795,7 @@ fn harness_sliver_animated_opacity_boundary_crossing_tick_marks_compositing_bits
     );
 }
 
-// 1.3 paint_alpha RED→GREEN test: alpha=0 box must not emit an Opacity layer.
+// An alpha=0 box must not emit an Opacity layer.
 // Mirrors the sliver test above for RenderOpacity (box variant).
 #[test]
 fn harness_opacity_alpha_zero_emits_no_opacity_layer() {
@@ -11042,9 +11042,9 @@ fn harness_flow_paints_children_in_delegate_order_under_per_child_transform_laye
 
     // Each child must be wrapped in its OWN Transform layer — proof that
     // paint emits a per-child transform, not one shared node-level
-    // transform (which `RenderObject::paint_transform` already supports
-    // and would show up as a single Transform layer regardless of child
-    // count).
+    // transform (which `RenderObject::paint_effects().transform` already
+    // supports and would show up as a single Transform layer regardless of
+    // child count).
     let transform_layers = run
         .structure()
         .iter()
@@ -12951,16 +12951,20 @@ fn harness_theater_intrinsics_ignore_offstage_children() {
 //
 // `PipelineOwner::transform_to` composes one
 // `RenderObject::apply_paint_transform` per level. The default body is the paint
-// pipeline's own composition — `paint_transform(size)` then a translation by the
-// child's committed offset — so `RenderTransform`, `RenderRotatedBox` and
-// `RenderFittedBox` need **no override**: their existing `paint_transform` feeds
-// it. `RenderFractionalTranslation` and `RenderFlow` do need one, because their
-// paint bypasses the committed offset (`paint_child_at` / a per-child transform
-// scope). These tests pin both halves.
+// pipeline's own composition — `paint_effects(size).transform` then a
+// translation by the child's committed offset — so `RenderRotatedBox` needs
+// **no override**: its transform is reported entirely through `paint_effects`,
+// and the default feeds it. `RenderTransform` and `RenderFittedBox` DO override
+// `apply_paint_transform` (each opens its own transform layer inside `paint`
+// instead of leaving the pipeline to read `paint_effects` unconditionally, so
+// the matrix must be supplied here too), and `RenderFractionalTranslation` and
+// `RenderFlow` also need one, because their paint bypasses the committed offset
+// altogether (`paint_child_at` / a per-child transform scope). These tests pin
+// all four overriding shapes plus the one default-composition case.
 
 /// `RenderTransform::uniform_scale(2.0)` pivots about the box's centre, so on a
 /// 20×20 box the child's local origin lands at (-10, -10) and its centre stays
-/// put. A transform_to that ignored `paint_transform` would report (0, 0).
+/// put. A transform_to that ignored `apply_paint_transform` would report (0, 0).
 #[test]
 fn harness_transform_to_respects_a_render_transform_ancestor() {
     let run = RenderTester::mount(

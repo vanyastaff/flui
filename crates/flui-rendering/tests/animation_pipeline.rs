@@ -161,8 +161,8 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
         tree.root().is_some_and(|r| find(tree, r))
     }
 
-    // Frame at t=0: still fully opaque. `paint_alpha` returns None at
-    // alpha 255 (Flutter parity: a fully opaque RenderOpacity pushes no
+    // Frame at t=0: still fully opaque. `paint_effects().opacity` is `None`
+    // at alpha 255 (Flutter parity: a fully opaque RenderOpacity pushes no
     // layer) — the child paints directly, with no OpacityLayer to pay for.
     ctrl.tick_at(0.0);
     let impact = {

@@ -42,7 +42,7 @@ use crate::{
     parent_data::ParentData,
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
-    traits::{PaintEffects, PaintOpacity},
+    traits::PaintEffects,
 };
 
 /// Result of a raw hit-test bridge call.
@@ -116,12 +116,12 @@ impl HitTestOutcome {
 ///
 /// # Effect-layer and Lifecycle Methods
 ///
-/// `RenderObject<P>` carries eight defaulted methods that are the former
+/// `RenderObject<P>` carries seven defaulted methods that are the former
 /// capability-supertrait surface, now inlined directly on this trait so
 /// concrete types need no boilerplate impl blocks:
 ///
-/// - `paint_alpha`, `skip_paint`, `paint_transform`,
-///   `hit_test_transform` — paint-effect hooks (default `None`/`false`)
+/// - `paint_effects`, `skip_paint`, `hit_test_transform` — paint-effect
+///   hooks (default `NONE`/`false`/`None`)
 /// - `describe_semantics_configuration` — accessibility hook (default no-op)
 /// - `reassemble` — hot-reload hook (default no-op; see note below)
 /// - `attach`/`detach` — tree-lifecycle hook (default no-op; see
@@ -474,17 +474,6 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // Effect Layers
     // ========================================================================
 
-    /// Returns the alpha value to apply to children.
-    ///
-    /// If `Some(alpha)`, the painting pipeline wraps children in an
-    /// `OpacityLayer`. Used by `RenderOpacity` to implement opacity
-    /// animations. Override on [`RenderBox`](crate::traits::RenderBox) or
-    /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
-    /// forward the call here. Default: `None` (no opacity effect).
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
-
     /// Whether this render object should suppress all child painting.
     ///
     /// Returns `true` when the node is fully transparent and no children
@@ -495,26 +484,11 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         false
     }
 
-    /// Returns the transform matrix to apply to children.
-    ///
-    /// If `Some(matrix)`, the painting pipeline wraps children in a
-    /// `TransformLayer`. `size` is the node's laid-out size from
-    /// [`RenderState`](crate::storage::RenderState) (2B field dedup).
-    /// Default: `None` (no transform effect).
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        let _ = size;
-        None
-    }
-
     /// This node's own paint effects — opacity, clip, and transform — as one
     /// value.
     ///
-    /// The interim default derives from the individual hooks above
-    /// ([`Self::paint_alpha`], [`Self::paint_transform`]; never a clip, since
-    /// no hook produces one) so every reader can switch to this method before
-    /// every producer has migrated off those hooks. A producer migrates by
-    /// overriding this method directly and deleting its hook overrides in the
-    /// same change.
+    /// Default: [`PaintEffects::NONE`] — a node with no effects of its own.
+    /// A producer overrides this method.
     ///
     /// # Contract
     ///
@@ -531,11 +505,8 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
     /// forward the call here.
     fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
-        PaintEffects {
-            opacity: self.paint_alpha().map(PaintOpacity::new),
-            clip: None,
-            transform: self.paint_transform(size),
-        }
+        let _ = size;
+        PaintEffects::NONE
     }
 
     /// Composes onto `transform` the mapping from child `child`'s local
@@ -980,9 +951,9 @@ mod tests {
     #[test]
     fn default_effect_layer_hooks_are_inert() {
         let leaf = MinimalLeaf;
-        assert_eq!(leaf.paint_alpha(), None);
+        let fx = leaf.paint_effects(Size::ZERO);
+        assert!(fx.opacity.is_none() && fx.clip.is_none() && fx.transform.is_none());
         assert!(!leaf.skip_paint());
-        assert_eq!(leaf.paint_transform(Size::ZERO), None);
         assert_eq!(leaf.hit_test_transform(Size::ZERO), None);
         assert!(leaf.pointer_target().is_none());
         assert_eq!(leaf.mouse_cursor(), CursorIcon::Default);

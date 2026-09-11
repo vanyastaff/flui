@@ -9,7 +9,7 @@ use crate::{
     hit_testing::{CursorIcon, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
-    traits::{HitTestOutcome, PaintEffects, PaintOpacity, RenderObject},
+    traits::{HitTestOutcome, PaintEffects, RenderObject},
 };
 
 // ============================================================================
@@ -364,19 +364,10 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Effect Layers
     // ========================================================================
     //
-    // Override these to have the pipeline wrap children in OpacityLayer /
-    // TransformLayer. The blanket `impl RenderObject<BoxProtocol> for T`
-    // forwards every call from the `RenderObject<P>` surface to these
+    // Override `paint_effects` to have the pipeline wrap children in this
+    // node's own effect layers. The blanket `impl RenderObject<BoxProtocol>
+    // for T` forwards every call from the `RenderObject<P>` surface to these
     // RenderBox methods — concrete types override here, not on RenderObject.
-
-    /// Returns the alpha value to apply to children.
-    ///
-    /// Override to have the pipeline wrap children in an `OpacityLayer`.
-    /// Default: `None` (no opacity effect). See
-    /// [`RenderObject::paint_alpha`].
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
 
     /// Whether this node is a repaint boundary.
     ///
@@ -409,30 +400,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         false
     }
 
-    /// Returns the transform matrix to apply to children during painting.
-    ///
-    /// Default: `None`. See
-    /// [`RenderObject::paint_transform`].
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        let _ = size;
-        None
-    }
-
     /// This node's own paint effects — opacity, clip, and transform — as one
     /// value.
     ///
-    /// Default derives from [`Self::paint_alpha`] / [`Self::paint_transform`]
-    /// above (never a clip, since no hook produces one); a producer overrides
-    /// this method directly instead. See
-    /// [`RenderObject::paint_effects`] for the full contract (pure in
-    /// `(self, size)`, no user code, also read by the default
-    /// [`Self::apply_paint_transform`] outside any paint walk).
+    /// Default: [`PaintEffects::NONE`]. See [`RenderObject::paint_effects`]
+    /// for the full contract (pure in `(self, size)`, no user code, also
+    /// read by the default [`Self::apply_paint_transform`] outside any paint
+    /// walk).
     fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
-        PaintEffects {
-            opacity: <Self as RenderBox>::paint_alpha(self).map(PaintOpacity::new),
-            clip: None,
-            transform: <Self as RenderBox>::paint_transform(self, size),
-        }
+        let _ = size;
+        PaintEffects::NONE
     }
 
     /// Composes onto `transform` the mapping from child `child`'s local space
@@ -833,16 +810,8 @@ where
         <T as RenderBox>::always_needs_compositing(self)
     }
 
-    fn paint_alpha(&self) -> Option<u8> {
-        <T as RenderBox>::paint_alpha(self)
-    }
-
     fn skip_paint(&self) -> bool {
         <T as RenderBox>::skip_paint(self)
-    }
-
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        <T as RenderBox>::paint_transform(self, size)
     }
 
     fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {

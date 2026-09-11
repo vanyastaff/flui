@@ -235,8 +235,9 @@ fn a_scaled_and_offset_ancestor_localises_the_delivered_position() {
 /// sign/handedness error unrelated to the bug under test), this forward-maps
 /// that quoted local answer through the exact matrix the pipeline pushes
 /// (`RenderTransform::hit_test_transform`, proven identical to
-/// `paint_transform` by its own `paint_and_hit_test_share_one_transform` unit
-/// test) to get the global dispatch point, then asserts the round trip
+/// `paint_effects().transform` by its own
+/// `paint_and_hit_test_share_one_transform` unit test) to get the global
+/// dispatch point, then asserts the round trip
 /// recovers Flutter's local answer.
 ///
 /// RED before the fix: same composition-order defect as the scaled case —
@@ -428,7 +429,7 @@ fn fractionally_sized_box_localises_the_delivered_position_to_the_aligned_child(
 
 /// `RenderFittedBox::hit_test` (`crates/flui-objects/src/layout/fitted_box.rs`)
 /// computes the child-local position by inverting `effective_transform()` —
-/// the same scale/align matrix `paint_transform` hands the pipeline — but,
+/// the same scale/align matrix `paint` pushes via `with_transform` — but,
 /// before the fix, called the raw `ctx.hit_test_child` directly with that
 /// computed position, recording nothing: neither a driver-level
 /// `hit_test_transform` override (the mechanism `RenderTransform` and
