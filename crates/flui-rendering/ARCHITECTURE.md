@@ -560,11 +560,15 @@ enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
 this machine, 32 cores, 2026-09-11): at N = 1000, update/repaint ratios are
 the same class across every `paint_effects` producer — opacity 228x inline /
 1.71x layered, transform 226x / 1.69x, rotated box 222x / 1.71x, **clip
-rrect 220x / 1.71x**, **clip path 192x / 1.69x**. The update arm runs
-≈0.9–1.1 µs regardless of producer; the repaint arm runs ≈205–210 µs inline,
-≈270–275 µs layered — unregressed from the ≈4–5% rise the guard move alone
-already cost (the descriptor read moving inside `catch_unwind`), so none of
-this is new overhead from the clip producers themselves. The path ratio
+rrect 220x / 1.71x**, **clip path 192x / 1.69x**. At N = 1 the ratios are
+the per-node floor every producer shares — clip rrect 1.54x inline / 1.29x
+layered, clip path 1.47x / 1.27x (opacity, transform and rotated box:
+1.51–1.55x / 1.30–1.32x). The update arm runs ≈0.9–1.1 µs regardless of
+producer; the repaint arm runs ≈205–210 µs inline, ≈270–275 µs layered —
+the same figures measured when the paint walk switched to reading one
+`PaintEffects` value (a structural ≈4–5% rise on the repaint arm, recorded
+at that switch), so none of this is new overhead from the clip producers
+themselves. The path ratio
 sits below the rest for a stated reason, not a regression: `resolve_path_clip`
 runs the registered clipper exactly once on BOTH arms — once to rebuild the
 one patched layer, once as part of the whole-subtree repaint — adding the
