@@ -1,5 +1,7 @@
 //! Dense reconciliation containment: topology, layout, and observation stay
 //! one committed version when a mount or `GlobalKey` retake hook panics.
+//! A `BUG:` payload prefix classifies a recovered panic as an internal
+//! invariant; it never routes the panic or expands the containment window.
 
 use std::{
     any::TypeId,
@@ -104,7 +106,23 @@ impl View for DenseHealthyLeaf {
 }
 
 #[derive(Clone)]
-pub(super) struct DensePanicsOnCreate;
+pub(super) struct DensePanicsOnCreate {
+    panic_classification: PanicClassification,
+}
+
+impl DensePanicsOnCreate {
+    pub(super) const fn ordinary() -> Self {
+        Self {
+            panic_classification: PanicClassification::Ordinary,
+        }
+    }
+
+    const fn internal_invariant() -> Self {
+        Self {
+            panic_classification: PanicClassification::InternalInvariant,
+        }
+    }
+}
 
 impl RenderView for DensePanicsOnCreate {
     type Protocol = BoxProtocol;
@@ -114,7 +132,12 @@ impl RenderView for DensePanicsOnCreate {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        panic!("dense create_render_object panic")
+        match self.panic_classification {
+            PanicClassification::Ordinary => panic!("dense create_render_object panic"),
+            PanicClassification::InternalInvariant => {
+                panic!("BUG: dense create_render_object invariant")
+            }
+        }
     }
 
     fn update_render_object(
@@ -129,6 +152,18 @@ impl RenderView for DensePanicsOnCreate {
 impl View for DensePanicsOnCreate {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PanicClassification {
+    Ordinary,
+    InternalInvariant,
+}
+
+impl PanicClassification {
+    pub(super) const fn is_internal_invariant(self) -> bool {
+        matches!(self, Self::InternalInvariant)
     }
 }
 
@@ -479,10 +514,13 @@ pub(super) fn mount_dense_root(
     (tree, owner, pipeline, observer, root_id)
 }
 
-#[test]
-fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
+fn assert_dense_mount_panic_containment(
+    panicking_view: BoxedView,
+    expected_view_type_id: TypeId,
+    expected_classification: PanicClassification,
+) {
     let (mut tree, mut owner, pipeline, observer, parent) = mount_dense_root(DenseRow {
-        children: dense_children_with(PANICKING_SLOT, DensePanicsOnCreate.boxed()),
+        children: dense_children_with(PANICKING_SLOT, panicking_view),
     });
 
     owner.build_scope(&mut tree);
@@ -505,7 +543,7 @@ fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
     assert_eq!(recovered.len(), 1, "one failing mount records once");
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Mount);
-    assert_eq!(panic.view_type_id, TypeId::of::<DensePanicsOnCreate>());
+    assert_eq!(panic.view_type_id, expected_view_type_id);
     let minted = match panic.at {
         RecoveredAt::Substituted {
             element: Some(minted),
@@ -543,6 +581,29 @@ fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
         owner.take_recovered_panics().is_empty(),
         "the recovery drain is consuming and cannot report the same panic twice"
     );
+    assert_eq!(
+        panic.internal_invariant,
+        expected_classification.is_internal_invariant(),
+        "the payload prefix must classify without changing containment"
+    );
+}
+
+#[test]
+fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
+    assert_dense_mount_panic_containment(
+        DensePanicsOnCreate::ordinary().boxed(),
+        TypeId::of::<DensePanicsOnCreate>(),
+        PanicClassification::Ordinary,
+    );
+}
+
+#[test]
+fn bug_prefixed_dense_mount_panic_is_contained_and_classified() {
+    assert_dense_mount_panic_containment(
+        DensePanicsOnCreate::internal_invariant().boxed(),
+        TypeId::of::<DensePanicsOnCreate>(),
+        PanicClassification::InternalInvariant,
+    );
 }
 
 #[test]
@@ -567,7 +628,10 @@ fn repeated_dense_mount_panics_do_not_accumulate_ghosts() {
         tree.update(
             parent,
             &DenseRow {
-                children: dense_children_with(PANICKING_SLOT, DensePanicsOnCreate.boxed()),
+                children: dense_children_with(
+                    PANICKING_SLOT,
+                    DensePanicsOnCreate::ordinary().boxed(),
+                ),
             },
             &mut owner.element_owner_mut(),
         );

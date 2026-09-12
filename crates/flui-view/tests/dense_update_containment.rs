@@ -1,4 +1,6 @@
 //! Dense reconciliation update containment across the three production update phases.
+//! A `BUG:` payload prefix classifies a recovered panic as an internal
+//! invariant; it never routes the panic or expands the containment window.
 
 use std::{any::TypeId, cell::Cell, collections::HashSet, rc::Rc};
 
@@ -13,7 +15,7 @@ use flui_view::{
 
 use crate::dense_reconcile_containment::{
     DENSE_CHILD_COUNT, DenseGlobalKeyUpdatePanicSubtree, DenseHealthyLeaf, DenseObservation,
-    DenseObserver, DenseRow, DenseSnapshot, assert_dense_snapshot_with_count,
+    DenseObserver, DenseRow, DenseSnapshot, PanicClassification, assert_dense_snapshot_with_count,
     first_render_descendant, mount_dense_root, run_real_pipeline_frame,
 };
 
@@ -91,6 +93,7 @@ impl View for DenseRenderUpdateLeaf {
 pub(super) struct DenseDidUpdateView {
     key: ValueKey<u32>,
     armed: Rc<Cell<bool>>,
+    panic_classification: PanicClassification,
 }
 
 pub(super) struct DenseDidUpdateState;
@@ -100,6 +103,15 @@ impl DenseDidUpdateView {
         Self {
             key: ValueKey::new(key),
             armed,
+            panic_classification: PanicClassification::Ordinary,
+        }
+    }
+
+    fn bug_prefixed(key: u32, armed: Rc<Cell<bool>>) -> Self {
+        Self {
+            key: ValueKey::new(key),
+            armed,
+            panic_classification: PanicClassification::InternalInvariant,
         }
     }
 }
@@ -118,7 +130,14 @@ impl ViewState<DenseDidUpdateView> for DenseDidUpdateState {
     }
 
     fn did_update_view(&mut self, _old_view: &DenseDidUpdateView, new_view: &DenseDidUpdateView) {
-        assert!(!new_view.armed.get(), "dense did_update_view panic");
+        if new_view.armed.get() {
+            match new_view.panic_classification {
+                PanicClassification::Ordinary => panic!("dense did_update_view panic"),
+                PanicClassification::InternalInvariant => {
+                    panic!("BUG: dense did_update_view invariant for key {}", 1)
+                }
+            }
+        }
     }
 }
 
@@ -209,6 +228,7 @@ struct UpdateRecoveryExpectation {
     parent: ElementId,
     slot: usize,
     failed_view_type_id: TypeId,
+    panic_classification: PanicClassification,
 }
 
 fn assert_update_recovery(
@@ -223,6 +243,7 @@ fn assert_update_recovery(
         parent,
         slot,
         failed_view_type_id,
+        panic_classification,
     } = expected;
     let mut recovered = owner.take_recovered_panics();
     assert_eq!(recovered.len(), 1, "one update hook panic records once");
@@ -242,11 +263,6 @@ fn assert_update_recovery(
             && recorded_parent == parent
             && recorded_slot == slot
     ));
-    assert!(
-        owner.take_recovered_panics().is_empty(),
-        "the recovery drain must consume the update record"
-    );
-
     let new_events = &observer.events()[observation_start..];
     let resident_events: Vec<_> = new_events
         .iter()
@@ -291,6 +307,15 @@ fn assert_update_recovery(
         ],
         "the substitute must announce one final-slot Mount and one InitialMount rebuild"
     );
+    assert!(
+        owner.take_recovered_panics().is_empty(),
+        "the recovery drain must consume the update record"
+    );
+    assert_eq!(
+        panic.internal_invariant,
+        panic_classification.is_internal_invariant(),
+        "the payload prefix must classify without changing containment"
+    );
 }
 
 fn assert_sibling_ids(snapshot: &DenseSnapshot, expected_by_slot: &[(usize, ElementId)]) {
@@ -302,14 +327,16 @@ fn assert_sibling_ids(snapshot: &DenseSnapshot, expected_by_slot: &[(usize, Elem
     }
 }
 
-#[test]
-fn phase_one_did_update_view_panic_substitutes_at_same_slot() {
+fn assert_phase_one_did_update_view_panic_containment(
+    expected_classification: PanicClassification,
+) {
     let armed = Rc::new(Cell::new(false));
+    let make_view = |armed| match expected_classification {
+        PanicClassification::Ordinary => DenseDidUpdateView::new(1, armed),
+        PanicClassification::InternalInvariant => DenseDidUpdateView::bug_prefixed(1, armed),
+    };
     let (mut tree, mut owner, pipeline, observer, parent) = mount_dense_root(DenseRow {
-        children: phase_one_children(
-            PHASE_ONE_FAILED_SLOT,
-            DenseDidUpdateView::new(1, armed.clone()).boxed(),
-        ),
+        children: phase_one_children(PHASE_ONE_FAILED_SLOT, make_view(armed.clone()).boxed()),
     });
     owner.build_scope(&mut tree);
     let before =
@@ -322,10 +349,7 @@ fn phase_one_did_update_view_panic_substitutes_at_same_slot() {
         &mut tree,
         &mut owner,
         parent,
-        phase_one_children(
-            PHASE_ONE_FAILED_SLOT,
-            DenseDidUpdateView::new(1, armed).boxed(),
-        ),
+        phase_one_children(PHASE_ONE_FAILED_SLOT, make_view(armed).boxed()),
     );
 
     let after =
@@ -361,8 +385,19 @@ fn phase_one_did_update_view_panic_substitutes_at_same_slot() {
             parent,
             slot: PHASE_ONE_FAILED_SLOT,
             failed_view_type_id: TypeId::of::<DenseDidUpdateView>(),
+            panic_classification: expected_classification,
         },
     );
+}
+
+#[test]
+fn phase_one_did_update_view_panic_substitutes_at_same_slot() {
+    assert_phase_one_did_update_view_panic_containment(PanicClassification::Ordinary);
+}
+
+#[test]
+fn bug_prefixed_phase_one_did_update_view_panic_is_contained_and_classified() {
+    assert_phase_one_did_update_view_panic_containment(PanicClassification::InternalInvariant);
 }
 
 #[test]
@@ -418,6 +453,7 @@ fn phase_one_update_render_object_panic_repeats_without_ghosts() {
                 parent,
                 slot: PHASE_ONE_FAILED_SLOT,
                 failed_view_type_id: TypeId::of::<DenseRenderUpdateLeaf>(),
+                panic_classification: PanicClassification::Ordinary,
             },
         );
 
@@ -512,6 +548,7 @@ fn phase_one_global_key_update_panic_releases_resident_and_reservation() {
             parent,
             slot: PHASE_ONE_FAILED_SLOT,
             failed_view_type_id: TypeId::of::<DenseGlobalKeyUpdatePanicSubtree>(),
+            panic_classification: PanicClassification::Ordinary,
         },
     );
     owner.finalize_tree(&mut tree);
@@ -593,6 +630,7 @@ fn phase_four_keyed_middle_move_update_panic_uses_final_slot() {
             parent,
             slot: 1,
             failed_view_type_id: TypeId::of::<DenseRenderUpdateLeaf>(),
+            panic_classification: PanicClassification::Ordinary,
         },
     );
 }
@@ -646,6 +684,7 @@ fn phase_five_a_shifted_suffix_update_panic_uses_final_slot() {
             parent,
             slot: 10,
             failed_view_type_id: TypeId::of::<DenseRenderUpdateLeaf>(),
+            panic_classification: PanicClassification::Ordinary,
         },
     );
 

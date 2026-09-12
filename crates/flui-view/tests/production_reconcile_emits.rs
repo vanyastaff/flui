@@ -730,7 +730,10 @@ fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let pipeline = PipelineCell::new(PipelineOwner::new());
-    let root = MultiBox::host(0, dense_stream_children(DensePanicsOnCreate.boxed()));
+    let root = MultiBox::host(
+        0,
+        dense_stream_children(DensePanicsOnCreate::ordinary().boxed()),
+    );
     let root_id =
         tree.mount_root_with_pipeline_owner(&root, Some(pipeline), &mut owner.element_owner_mut());
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
