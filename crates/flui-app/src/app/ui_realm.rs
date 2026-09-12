@@ -8564,79 +8564,21 @@ mod tests {
         // straight through the realm's per-presentation loop and killed the
         // process via the runner's `resume_unwind`.
         //
-        // The removal-path USER hooks are a narrower, closed set: `dispose`,
-        // `deactivate`, `activate`, and `did_unmount_render_object` are all
-        // bounded per element — see
-        // `StatefulBehavior::{on_unmount, on_activate, on_deactivate}` and
-        // `RenderBehavior::on_unmount`
-        // (`crates/flui-view/src/element/behavior.rs`) and the pins in
-        // `crates/flui-view/tests/lifecycle_panic_containment.rs`. A real
-        // `dispose` panic no longer reaches this deep at all. The dense
-        // reconciler's fresh-child `create_render_object` call remains a
-        // real escape until that path adopts flui-view's child-substitution
-        // primitive, so the headline test drives that production path.
+        // User lifecycle hooks now have narrower per-child boundaries,
+        // including dense reconcile insertion and GlobalKey retake. They do
+        // not exercise this outer presentation boundary. The headline test
+        // therefore uses the dedicated segment probe to inject an unwind at
+        // precisely this boundary without depending on a lifecycle escape.
         // ====================================================================
 
-        #[derive(Clone)]
-        struct DenseMountEscapeHost {
-            panic_on_build: Rc<Cell<bool>>,
-        }
-
-        impl flui_view::StatelessView for DenseMountEscapeHost {
-            fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-                if self.panic_on_build.get() {
-                    DenseCreateRenderObjectPanic.boxed()
-                } else {
-                    SizedBox::new(10.0, 10.0).boxed()
-                }
-            }
-        }
-
-        impl flui_view::View for DenseMountEscapeHost {
-            fn create_element(&self) -> flui_view::element::ElementKind {
-                flui_view::element::ElementKind::stateless(self)
-            }
-        }
-
-        #[derive(Clone)]
-        struct DenseCreateRenderObjectPanic;
-
-        impl flui_view::RenderView for DenseCreateRenderObjectPanic {
-            type Protocol = flui_rendering::protocol::BoxProtocol;
-            type RenderObject = flui_objects::RenderSizedBox;
-
-            fn create_render_object(
-                &self,
-                _ctx: &flui_view::RenderObjectContext<'_>,
-            ) -> Self::RenderObject {
-                panic!("dense create_render_object — intentional test panic")
-            }
-
-            fn update_render_object(
-                &self,
-                _ctx: &flui_view::RenderObjectContext<'_>,
-                _render_object: &mut Self::RenderObject,
-            ) -> flui_rendering::RenderUpdateImpact {
-                flui_rendering::RenderUpdateImpact::NONE
-            }
-        }
-
-        impl flui_view::View for DenseCreateRenderObjectPanic {
-            fn create_element(&self) -> flui_view::element::ElementKind {
-                flui_view::element::ElementKind::render_variable(self)
-            }
-        }
-
-        /// The headline containment claim, driven through the dense
-        /// reconciler's still-real `create_render_object` escape: the panic is contained
-        /// to presentation A's own frame — the pump call returns instead of
-        /// unwinding, sibling B's segment still runs and presents in the
-        /// SAME pump, the typed report names A with causal detail, a retry
-        /// is armed, and the pump after that recovers A cleanly (which also
-        /// pins the `WidgetsBinding` building-flag reset on unwind: a flag
-        /// wedged `true` would turn the recovery pump's `draw_frame` into a
-        /// bogus recursion assert, i.e. a second report instead of a clean
-        /// frame).
+        /// The headline containment claim, driven through a one-shot segment
+        /// probe: the panic is contained to presentation A's own frame, the
+        /// pump returns, sibling B's segment still runs and presents in the
+        /// same pump, the typed report names A with causal detail, a retry is
+        /// armed, and the next pump recovers A cleanly. The probe runs before
+        /// `WidgetsBinding::draw_frame`, so this test intentionally makes no
+        /// building-flag claim; lifecycle insertion panics are now bounded by
+        /// the dense reconciler itself.
         #[test]
         fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames()
          {
@@ -8644,12 +8586,8 @@ mod tests {
             let a_id = realm.presentation_id();
             let b_id = realm.install_second_presentation_for_test();
             let seen = install_collecting_handler(&realm);
-            let panic_on_build = Rc::new(Cell::new(false));
-
             realm
-                .attach_root_widget(&DenseMountEscapeHost {
-                    panic_on_build: Rc::clone(&panic_on_build),
-                })
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
                 .expect("A attaches");
             realm
                 .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
@@ -8663,21 +8601,27 @@ mod tests {
                 "pump 1: a clean two-presentation frame must present"
             );
             assert!(seen.lock().expect("mutex").is_empty(), "no failures yet");
+            let a_frames_after_pump_1 = realm.presentations.primary().frames_rendered();
             let b_flushes_after_pump_1 = realm
                 .presentations
                 .get(b_id)
                 .expect("B installed")
                 .flush_count();
 
-            // Replace A's clean dense child with a different render view.
-            // Its `create_render_object` runs during the real dense reconcile,
-            // after `WidgetsBinding::draw_frame` has raised its building flag.
-            panic_on_build.set(true);
+            // Inject exactly one segment failure for A. The closure remains
+            // installed for pump 3 but disarms itself before panicking, so
+            // the clean retry also proves the presentation can make progress.
+            let probe_armed = Rc::new(Cell::new(true));
+            let armed = Rc::clone(&probe_armed);
             realm
                 .presentations
                 .primary()
-                .widgets()
-                .schedule_root_rebuild();
+                .set_segment_probe(Some(Box::new(move || {
+                    assert!(
+                        !armed.replace(false),
+                        "segment probe — intentional test panic"
+                    );
+                })));
             realm.request_redraw();
             // Give B real work too, so this same pump proves B's segment
             // still runs AFTER A's failure (A is primary and iterates
@@ -8692,9 +8636,8 @@ mod tests {
             });
             realm.mark_rendered();
 
-            // Pump 2: A's dense child mount panics during the build. The claim
-            // under test: the pump RETURNS (no unwind out of
-            // render_frame_entered) and B still framed.
+            // Pump 2: A's segment probe panics. The pump must return and B
+            // must still frame after A's earlier failure.
             let outcome = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)
@@ -8707,6 +8650,11 @@ mod tests {
             assert!(
                 presented,
                 "sibling B's own segment must still produce and present in the same pump"
+            );
+            assert_eq!(
+                realm.presentations.primary().frames_rendered(),
+                a_frames_after_pump_1,
+                "A's failed segment must not be counted as rendered"
             );
             assert_eq!(
                 realm
@@ -8735,7 +8683,7 @@ mod tests {
                         assert!(
                             message
                                 .as_deref()
-                                .is_some_and(|m| m.contains("dense create_render_object")),
+                                .is_some_and(|m| m.contains("segment probe")),
                             "causal detail (the panic message) must reach the report; got \
                              {message:?}"
                         );
@@ -8750,16 +8698,8 @@ mod tests {
                 }
             }
 
-            // Pump 3: A recovers by building the clean child again. Because
-            // pump 2 unwound from inside `WidgetsBinding::draw_frame`, this
-            // directly proves its building flag reset; a latched flag would
-            // turn this retry into the recursive-draw assertion.
-            panic_on_build.set(false);
-            realm
-                .presentations
-                .primary()
-                .widgets()
-                .schedule_root_rebuild();
+            // Pump 3: the probe is now disarmed. Give A real pipeline work so
+            // the retry proves that presentation resumes normal progress.
             realm.enter(|realm| {
                 let a = realm.presentations.get(a_id).expect("A installed");
                 a.pipeline().with_mut(|owner| {
@@ -8777,10 +8717,14 @@ mod tests {
             .expect("the recovery pump must not panic");
             assert!(presented, "the recovery pump must present");
             assert_eq!(
+                realm.presentations.primary().frames_rendered(),
+                a_frames_after_pump_1 + 1,
+                "A's clean retry must resume rendering"
+            );
+            assert_eq!(
                 seen.lock().expect("mutex").len(),
                 1,
-                "the recovery pump must not produce a second failure report (a wedged \
-                 building flag would panic draw_frame again and produce one)"
+                "the one-shot probe must not produce a second failure report"
             );
         }
 

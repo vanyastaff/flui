@@ -9,9 +9,9 @@
 //! [`ElementTree::mount_or_substitute`] / [`ElementTree::update_or_substitute`].
 //! Neither `ChildHookPanic` nor its containment window ever crosses this
 //! crate's boundary: the two primitives consume it, and the infallible
-//! public `ElementTree::insert` / `insert_during_reconcile` / `update`
-//! resume the unwind from its payload instead — unchanged behavior for
-//! every caller that does not opt into substitution.
+//! public `ElementTree::insert` / `update` resume the unwind from its payload
+//! instead — unchanged behavior for every caller that does not opt into
+//! substitution.
 
 use std::any::Any;
 

@@ -477,12 +477,23 @@ pub(crate) struct ProvisionalOrder<'a> {
     unclaimed_old_slots: &'a [Option<ElementId>],
 }
 
-impl ProvisionalOrder<'_> {
+impl<'a> ProvisionalOrder<'a> {
     /// No order committed yet — a fresh insert with nothing to preflight.
     pub(crate) const NONE: Self = Self {
         reconciled_prefix: &[],
         unclaimed_old_slots: &[],
     };
+
+    /// The order committed so far by dense reconciliation.
+    pub(super) const fn during_reconcile(
+        reconciled_prefix: &'a [ElementId],
+        unclaimed_old_slots: &'a [Option<ElementId>],
+    ) -> Self {
+        Self {
+            reconciled_prefix,
+            unclaimed_old_slots,
+        }
+    }
 }
 
 /// The lazy sliver child `from` lives inside — the direct child of the nearest
@@ -783,30 +794,7 @@ impl ElementTree {
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
     }
 
-    pub(super) fn insert_during_reconcile(
-        &mut self,
-        view: &dyn View,
-        parent: ElementId,
-        slot: usize,
-        owner: &mut crate::ElementOwner<'_>,
-        reconciled_prefix: &[ElementId],
-        unclaimed_old_slots: &[Option<ElementId>],
-    ) -> ElementId {
-        self.try_insert_with_provisional_order(
-            view,
-            parent,
-            slot,
-            owner,
-            ProvisionalOrder {
-                reconciled_prefix,
-                unclaimed_old_slots,
-            },
-        )
-        .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
-    }
-
-    /// [`insert`](Self::insert) / [`insert_during_reconcile`](Self::insert_during_reconcile)'s
-    /// fallible core: a caught panic comes back as `Err` instead of
+    /// [`insert`](Self::insert)'s fallible core: a caught panic comes back as `Err` instead of
     /// unwinding through this call, so a bounding caller ([`Self::mount_or_substitute`])
     /// can undo whatever the containment window committed before deciding
     /// what to do next.
@@ -4330,15 +4318,19 @@ mod tests {
         });
 
         let _guard = tree.begin_reconcile(destination);
-        let moved = tree.insert_during_reconcile(
+        let moved = tree.mount_or_substitute(
             &keyed,
             destination,
             1,
             &mut owner.element_owner_mut(),
-            &[prefix],
-            &[Some(suffix)],
+            ProvisionalOrder::during_reconcile(&[prefix], &[Some(suffix)]),
+            "retaking child during reconcile test",
         );
         assert_eq!(moved, candidate);
+        assert!(
+            owner.take_recovered_panics().is_empty(),
+            "a successful retake records no recovered panic"
+        );
         assert!(
             !tree
                 .get(donor)

@@ -54,14 +54,14 @@
 
 use std::{any::TypeId, cell::Cell, rc::Rc, sync::Arc};
 
-use flui_foundation::{ChangeNotifier, Listenable, ViewKey};
+use flui_foundation::{ChangeNotifier, ElementId, Listenable, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    AnimatedView, BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementId, ElementNode,
-    ElementTree, GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt,
-    RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
+    AnimatedView, BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementNode, ElementTree,
+    GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt, RenderView,
+    StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -231,8 +231,6 @@ fn direct_children_in_slot_order(tree: &ElementTree, parent: ElementId) -> Vec<E
     children.sort_by_key(|(slot, _)| *slot);
     children.into_iter().map(|(_, id)| id).collect()
 }
-
-// ============================================================================
 // Inline removal: an unkeyed dispose panic is contained during the
 // id-reconcile that drops the child, and the freed slot never re-disposes.
 // ============================================================================

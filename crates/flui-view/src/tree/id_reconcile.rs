@@ -26,10 +26,10 @@
 //! `old_bottom == new_bottom`).
 //!
 //! The insert path delegates its event to
-//! [`ElementTree::insert`](super::ElementTree::insert), the single
-//! child-minting site: it emits `Mount` for a fresh element or
-//! `Reparent` when it retakes an inactive GlobalKey element — never
-//! both, so the reconciler must NOT also emit `Mount` for an insert.
+//! [`ElementTree::mount_or_substitute`](super::ElementTree::mount_or_substitute):
+//! it emits `Mount` for a fresh element or substitute, or `Reparent` when it
+//! successfully retakes a GlobalKey element — never both, so the reconciler
+//! must NOT also emit a disposition for an insert.
 //!
 //! # The borrow discipline this module proves out
 //!
@@ -73,7 +73,7 @@ use std::collections::HashMap;
 
 use flui_foundation::ElementId;
 
-use super::element_tree::ElementTree;
+use super::element_tree::{ElementTree, ProvisionalOrder};
 use super::reconcile_event::{ReconcileEvent, emit as emit_event};
 use crate::view::{ElementBase, View};
 
@@ -83,9 +83,9 @@ use crate::view::{ElementBase, View};
 ///
 /// On return, `parent_id`'s [`child_ids`](super::ElementNode::child_ids)
 /// holds exactly `new_views.len()` ids in new-view order: a reused (and
-/// `update`d) old child where type + key matched, or a freshly
-/// [`inserted`](ElementTree::insert) child otherwise. Old children that
-/// found no match have been [`removed`](ElementTree::remove). Every
+/// `update`d) old child where type + key matched, or a freshly mounted child
+/// (possibly a recovery substitute) otherwise. Old children that found no
+/// match have been [`removed`](ElementTree::remove). Every
 /// surviving child's [`slot`](super::ElementNode::slot) is refreshed to
 /// its final index, so the node metadata stays coherent after a reorder.
 ///
@@ -281,12 +281,18 @@ pub(crate) fn reconcile_children_by_id(
             }
             result.push(old_id);
         } else {
-            // `ElementTree::insert` emits the disposition itself — `Mount`
-            // for a fresh element, or `Reparent` when it retakes a GlobalKey
-            // element (`try_retake_global_key`). Emitting `Mount`
-            // here too would double-fire on the retake path.
-            let new_id = tree
-                .insert_during_reconcile(new_view, parent_id, new_slot, owner, &result, &old_slots);
+            // `mount_or_substitute` emits the disposition itself — `Mount`
+            // for a fresh element or substitute, or `Reparent` when it
+            // successfully retakes a GlobalKey element. Emitting here too
+            // would double-fire on either path.
+            let new_id = tree.mount_or_substitute(
+                new_view,
+                parent_id,
+                new_slot,
+                owner,
+                ProvisionalOrder::during_reconcile(&result, &old_slots),
+                "mounting child during reconcile",
+            );
             scheduling_reasons.insert(new_id, crate::RebuildReason::InitialMount);
             result.push(new_id);
         }
