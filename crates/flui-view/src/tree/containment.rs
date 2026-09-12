@@ -174,7 +174,7 @@ impl ElementTree {
     }
 
     /// Update the element at `id` with `view`, substituting the registered
-    /// `ErrorView` at its current `(parent, slot)` when the update's
+    /// `ErrorView` at `(resident parent, replacement_slot)` when the update's
     /// containment window (`try_update`) catches a panic (see
     /// [`ChildHookPanic`]).
     ///
@@ -192,68 +192,80 @@ impl ElementTree {
     /// already-recorded skip); `context` becomes its `FlutterError`
     /// breadcrumb.
     #[must_use = "a substitute mount re-points whatever id the caller was tracking"]
+    #[inline]
     pub(crate) fn update_or_substitute(
         &mut self,
         id: ElementId,
         view: &dyn View,
+        replacement_slot: usize,
         owner: &mut crate::ElementOwner<'_>,
         context: impl Into<String>,
     ) -> ElementId {
-        match self.try_update(id, view, owner) {
-            Ok(()) => id,
-            Err(ChildHookPanic {
+        let Err(panic) = self.try_update(id, view, owner) else {
+            return id;
+        };
+        self.recover_update_panic(id, view, replacement_slot, owner, context, panic)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn recover_update_panic(
+        &mut self,
+        id: ElementId,
+        view: &dyn View,
+        replacement_slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+        context: impl Into<String>,
+        ChildHookPanic {
+            hook,
+            recording,
+            payload,
+            ..
+        }: ChildHookPanic,
+    ) -> ElementId {
+        // Read the parent BEFORE `remove_subtree` wipes the node —
+        // there is nowhere else left to ask once it is gone. The
+        // caller supplies the authoritative target slot because a
+        // dense phase-4 or phase-5a update can move an old resident
+        // before the final slot is stamped onto the node.
+        let parent = self
+            .get(id)
+            .map(super::element_tree::ElementNode::parent)
+            .expect("BUG: a node try_update just touched must still resolve before removal");
+        let parent = parent.expect(
+            "BUG: update_or_substitute's target must be a parented child; the root \
+             never calls this primitive",
+        );
+
+        self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
+
+        let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
+        let substitute_view = recovery_view_for(&error);
+        let substitute_id = self
+            .try_insert_with_provisional_order(
+                substitute_view.0.as_ref(),
+                parent,
+                replacement_slot,
+                owner,
+                ProvisionalOrder::NONE,
+            )
+            .unwrap_or_else(|substitute_panic| std::panic::resume_unwind(substitute_panic.payload));
+
+        if recording == HookPanicRecording::Unrecorded {
+            let panic = RecoveredPanic::with_error(
+                RecoveredAt::Substituted {
+                    element: Some(id),
+                    substitute: substitute_id,
+                    parent,
+                    slot: replacement_slot,
+                },
+                view.view_type_id(),
                 hook,
-                recording,
-                payload,
-                ..
-            }) => {
-                // Read the current parent/slot BEFORE `remove_subtree`
-                // wipes the node — there is nowhere else left to ask once
-                // it is gone.
-                let (parent, slot) = self
-                    .get(id)
-                    .map(|node| (node.parent(), node.slot()))
-                    .expect(
-                        "BUG: a node try_update just touched must still resolve before removal",
-                    );
-                let parent = parent.expect(
-                    "BUG: update_or_substitute's target must be a parented child; the root \
-                     never calls this primitive",
-                );
-
-                self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
-
-                let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
-                let substitute_view = recovery_view_for(&error);
-                let substitute_id = self
-                    .try_insert_with_provisional_order(
-                        substitute_view.0.as_ref(),
-                        parent,
-                        slot,
-                        owner,
-                        ProvisionalOrder::NONE,
-                    )
-                    .unwrap_or_else(|substitute_panic| {
-                        std::panic::resume_unwind(substitute_panic.payload)
-                    });
-
-                if recording == HookPanicRecording::Unrecorded {
-                    let panic = RecoveredPanic::with_error(
-                        RecoveredAt::Substituted {
-                            element: Some(id),
-                            substitute: substitute_id,
-                            parent,
-                            slot,
-                        },
-                        view.view_type_id(),
-                        hook,
-                        payload.as_ref(),
-                        error,
-                    );
-                    owner.push_recovered_panic(panic);
-                }
-                substitute_id
-            }
+                payload.as_ref(),
+                error,
+            );
+            owner.push_recovered_panic(panic);
         }
+        substitute_id
     }
 }

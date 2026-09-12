@@ -23,6 +23,8 @@ mod build_owner_tests;
 mod build_phase_span;
 #[path = "dense_reconcile_containment.rs"]
 mod dense_reconcile_containment;
+#[path = "dense_update_containment.rs"]
+mod dense_update_containment;
 #[path = "derive_bon_stack.rs"]
 mod derive_bon_stack;
 #[path = "derive_smoke.rs"]

@@ -20,12 +20,12 @@ use flui_view::{
     LifecycleHook, RebuildReason, RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,
 };
 
-const DENSE_CHILD_COUNT: usize = 10;
-const PANICKING_SLOT: usize = 7;
+pub(super) const DENSE_CHILD_COUNT: usize = 10;
+pub(super) const PANICKING_SLOT: usize = 7;
 
 #[derive(Clone)]
-struct DenseRow {
-    children: Vec<BoxedView>,
+pub(super) struct DenseRow {
+    pub(super) children: Vec<BoxedView>,
 }
 
 impl RenderView for DenseRow {
@@ -65,8 +65,8 @@ impl View for DenseRow {
 }
 
 #[derive(Clone)]
-struct DenseHealthyLeaf {
-    marker: usize,
+pub(super) struct DenseHealthyLeaf {
+    pub(super) marker: usize,
 }
 
 impl DenseHealthyLeaf {
@@ -133,7 +133,7 @@ impl View for DensePanicsOnCreate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DenseObservation {
+pub(super) enum DenseObservation {
     Mount {
         element: ElementId,
         parent: Option<ElementId>,
@@ -143,10 +143,20 @@ enum DenseObservation {
     Unmount {
         element: ElementId,
     },
+    Move {
+        element: ElementId,
+        parent: ElementId,
+        slot: usize,
+    },
+    Rebuilt {
+        element: ElementId,
+        view_type_id: TypeId,
+        reasons: flui_foundation::RebuildReasons,
+    },
 }
 
 #[derive(Default)]
-struct DenseObserver {
+pub(super) struct DenseObserver {
     events: parking_lot::Mutex<Vec<DenseObservation>>,
 }
 
@@ -165,14 +175,30 @@ impl flui_foundation::observe::TreeObserver for DenseObserver {
             element: event.element,
         });
     }
+
+    fn element_moved(&self, event: &flui_foundation::observe::ElementMoved) {
+        self.events.lock().push(DenseObservation::Move {
+            element: event.element,
+            parent: event.parent,
+            slot: event.slot,
+        });
+    }
+
+    fn element_rebuilt(&self, event: &flui_foundation::observe::ElementRebuilt) {
+        self.events.lock().push(DenseObservation::Rebuilt {
+            element: event.element,
+            view_type_id: event.view_type_id,
+            reasons: event.reasons,
+        });
+    }
 }
 
 impl DenseObserver {
-    fn events(&self) -> Vec<DenseObservation> {
+    pub(super) fn events(&self) -> Vec<DenseObservation> {
         self.events.lock().clone()
     }
 
-    fn events_for(&self, element: ElementId) -> Vec<DenseObservation> {
+    fn lifecycle_events_for(&self, element: ElementId) -> Vec<DenseObservation> {
         self.events()
             .into_iter()
             .filter(|event| match event {
@@ -180,16 +206,17 @@ impl DenseObserver {
                     element: observed, ..
                 }
                 | DenseObservation::Unmount { element: observed } => *observed == element,
+                DenseObservation::Move { .. } | DenseObservation::Rebuilt { .. } => false,
             })
             .collect()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DenseSnapshot {
-    child_ids: Vec<ElementId>,
-    render_children: Vec<RenderId>,
-    live_ids: HashSet<ElementId>,
+pub(super) struct DenseSnapshot {
+    pub(super) child_ids: Vec<ElementId>,
+    pub(super) render_children: Vec<RenderId>,
+    pub(super) live_ids: HashSet<ElementId>,
 }
 
 fn dense_children_with(slot: usize, child: BoxedView) -> Vec<BoxedView> {
@@ -210,7 +237,7 @@ fn dense_healthy_children() -> Vec<BoxedView> {
         .collect()
 }
 
-fn first_render_descendant(tree: &ElementTree, element: ElementId) -> Option<RenderId> {
+pub(super) fn first_render_descendant(tree: &ElementTree, element: ElementId) -> Option<RenderId> {
     let node = tree.get(element)?;
     node.element().render_id().or_else(|| {
         node.child_ids()
@@ -236,7 +263,11 @@ fn subtree_element_ids(tree: &ElementTree, root: ElementId) -> Vec<ElementId> {
     ids
 }
 
-fn run_real_pipeline_frame(tree: &ElementTree, pipeline: &PipelineCell, expected_root: ElementId) {
+pub(super) fn run_real_pipeline_frame(
+    tree: &ElementTree,
+    pipeline: &PipelineCell,
+    expected_root: ElementId,
+) {
     let expected_render_root = tree
         .get(expected_root)
         .expect("the expected pipeline root element must resolve")
@@ -300,6 +331,7 @@ fn assert_observer_conservation(
                      {element:?}"
                 );
             }
+            DenseObservation::Move { .. } | DenseObservation::Rebuilt { .. } => {}
         }
     }
 
@@ -311,22 +343,23 @@ fn assert_observer_conservation(
     live_ids
 }
 
-fn assert_dense_snapshot(
+pub(super) fn assert_dense_snapshot_with_count(
     tree: &ElementTree,
     pipeline: &PipelineCell,
     parent: ElementId,
     observer: &DenseObserver,
+    expected_child_count: usize,
 ) -> DenseSnapshot {
     let parent_node = tree.get(parent).expect("the dense parent must remain live");
     let child_ids = parent_node.child_ids().to_vec();
     assert_eq!(
         child_ids.len(),
-        DENSE_CHILD_COUNT,
+        expected_child_count,
         "the parent must store exactly one child id per declared dense slot"
     );
     assert_eq!(
         child_ids.iter().copied().collect::<HashSet<_>>().len(),
-        DENSE_CHILD_COUNT,
+        expected_child_count,
         "the parent's stored generational child ids must be unique"
     );
 
@@ -378,6 +411,15 @@ fn assert_dense_snapshot(
     }
 }
 
+fn assert_dense_snapshot(
+    tree: &ElementTree,
+    pipeline: &PipelineCell,
+    parent: ElementId,
+    observer: &DenseObserver,
+) -> DenseSnapshot {
+    assert_dense_snapshot_with_count(tree, pipeline, parent, observer, DENSE_CHILD_COUNT)
+}
+
 fn assert_healthy_dense_layout(
     tree: &ElementTree,
     pipeline: &PipelineCell,
@@ -412,7 +454,7 @@ fn assert_healthy_dense_layout(
     }
 }
 
-fn mount_dense_root(
+pub(super) fn mount_dense_root(
     root: DenseRow,
 ) -> (
     ElementTree,
@@ -484,11 +526,11 @@ fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
         "the discarded minted generational id must not resolve"
     );
     assert!(
-        observer.events_for(minted).is_empty(),
+        observer.lifecycle_events_for(minted).is_empty(),
         "an abandoned mint is never announced to the observer"
     );
     assert_eq!(
-        observer.events_for(substitute),
+        observer.lifecycle_events_for(substitute),
         vec![DenseObservation::Mount {
             element: substitute,
             parent: Some(parent),
@@ -756,7 +798,7 @@ fn dense_inactive_retake_update_panic_finalizes_original() {
         }
     });
     assert_eq!(
-        observer.events_for(original),
+        observer.lifecycle_events_for(original),
         vec![
             DenseObservation::Mount {
                 element: original,

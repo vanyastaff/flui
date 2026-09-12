@@ -616,6 +616,7 @@ fn update_or_replace_resident(
     let now = tree.update_or_substitute(
         resident_id,
         view,
+        logical_index,
         owner,
         format!("updating lazy sliver child {logical_index}"),
     );

@@ -31,7 +31,12 @@ use flui_view::{
 use serial_test::serial;
 
 use crate::dense_reconcile_containment::{
-    DenseGlobalKeyUpdatePanicSubtree, DensePanicsOnCreate, DenseRetakeRoot, DenseRetakeRootState,
+    DENSE_CHILD_COUNT, DenseGlobalKeyUpdatePanicSubtree, DensePanicsOnCreate, DenseRetakeRoot,
+    DenseRetakeRootState, DenseRow, mount_dense_root,
+};
+use crate::dense_update_containment::{
+    DenseDidUpdateView, DenseRenderUpdateLeaf, PHASE_ONE_FAILED_SLOT, keyed_render_children,
+    phase_one_children, update_dense_parent,
 };
 use crate::reconcile_capture::capture;
 
@@ -779,5 +784,152 @@ fn failed_activate_retake_production_reconcile_emits_substitute_without_reparent
         &events,
         destination,
         TypeId::of::<DenseRetakeRoot>(),
+    );
+}
+
+fn assert_failed_update_emits_only_final_slot(
+    events: &[flui_view::tree::test_utils::CollectedEvent],
+    parent: ElementId,
+    slot: usize,
+    failed_view_type_id: TypeId,
+    failed_key_hash: u64,
+) {
+    let parent_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.parent == parent.as_u64())
+        .collect();
+    assert!(
+        !parent_events.is_empty(),
+        "the production collector must observe the tested parent's reconcile stream"
+    );
+    let error_mounts: Vec<_> = parent_events
+        .iter()
+        .filter(|event| {
+            event.kind == ReconcileEventKind::Mount
+                && event.view_type_id == format!("{:?}", TypeId::of::<ErrorView>())
+        })
+        .map(|event| (event.slot, event.child_key))
+        .collect();
+    assert_eq!(
+        error_mounts,
+        vec![(slot as u64, None)],
+        "the parent's complete ErrorView Mount set must be exactly one unkeyed substitute at the final slot"
+    );
+    assert!(
+        parent_events.iter().all(|event| {
+            !(event.child_key == Some(failed_key_hash)
+                && event.view_type_id == format!("{failed_view_type_id:?}")
+                && matches!(
+                    event.kind,
+                    ReconcileEventKind::Reuse | ReconcileEventKind::Reorder
+                ))
+        }),
+        "the failed resident must not leave a stale Reuse or Reorder disposition"
+    );
+    assert!(
+        parent_events.iter().any(|event| {
+            event.slot != slot as u64
+                && matches!(
+                    event.kind,
+                    ReconcileEventKind::Reuse
+                        | ReconcileEventKind::Reorder
+                        | ReconcileEventKind::Mount
+                )
+        }),
+        "the parent-filtered stream must contain a positive sibling disposition"
+    );
+}
+
+#[test]
+#[serial]
+fn failed_phase_one_update_emits_substitute_without_stale_reuse() {
+    let armed = Rc::new(Cell::new(false));
+    let (mut tree, mut owner, _pipeline, _observer, parent) = mount_dense_root(DenseRow {
+        children: phase_one_children(
+            PHASE_ONE_FAILED_SLOT,
+            DenseDidUpdateView::new(1, armed.clone()).boxed(),
+        ),
+    });
+    owner.build_scope(&mut tree);
+    armed.set(true);
+
+    let events = capture(|| {
+        update_dense_parent(
+            &mut tree,
+            &mut owner,
+            parent,
+            phase_one_children(
+                PHASE_ONE_FAILED_SLOT,
+                DenseDidUpdateView::new(1, armed).boxed(),
+            ),
+        );
+    });
+
+    assert_failed_update_emits_only_final_slot(
+        &events,
+        parent,
+        PHASE_ONE_FAILED_SLOT,
+        TypeId::of::<DenseDidUpdateView>(),
+        ValueKey::new(1_u32).key_hash(),
+    );
+}
+
+#[test]
+#[serial]
+fn failed_phase_four_update_emits_substitute_without_stale_reorder() {
+    let armed = Rc::new(Cell::new(false));
+    let old_keys: Vec<_> = (0..DENSE_CHILD_COUNT as u32).collect();
+    let (mut tree, mut owner, _pipeline, _observer, parent) = mount_dense_root(DenseRow {
+        children: keyed_render_children(&old_keys, None, armed.clone()),
+    });
+    owner.build_scope(&mut tree);
+    armed.set(true);
+    let new_keys = [100, 3, 0, 1, 2, 4, 5, 6, 101, 9];
+
+    let events = capture(|| {
+        update_dense_parent(
+            &mut tree,
+            &mut owner,
+            parent,
+            keyed_render_children(&new_keys, Some(3), armed),
+        );
+    });
+
+    assert_failed_update_emits_only_final_slot(
+        &events,
+        parent,
+        1,
+        TypeId::of::<DenseRenderUpdateLeaf>(),
+        ValueKey::new(3_u32).key_hash(),
+    );
+}
+
+#[test]
+#[serial]
+fn failed_phase_five_a_update_emits_substitute_without_stale_reorder() {
+    let armed = Rc::new(Cell::new(false));
+    let old_keys: Vec<_> = (0..DENSE_CHILD_COUNT as u32).collect();
+    let (mut tree, mut owner, _pipeline, _observer, parent) = mount_dense_root(DenseRow {
+        children: keyed_render_children(&old_keys, None, armed.clone()),
+    });
+    owner.build_scope(&mut tree);
+    armed.set(true);
+    let new_keys = [0, 1, 2, 3, 4, 5, 6, 7, 8, 100, 9];
+
+    let events = capture(|| {
+        update_dense_parent(
+            &mut tree,
+            &mut owner,
+            parent,
+            keyed_render_children(&new_keys, Some(9), armed),
+        );
+    });
+
+    assert_failed_update_emits_only_final_slot(
+        &events,
+        parent,
+        10,
+        TypeId::of::<DenseRenderUpdateLeaf>(),
+        ValueKey::new(9_u32).key_hash(),
     );
 }
