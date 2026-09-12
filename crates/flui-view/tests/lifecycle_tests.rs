@@ -12,8 +12,7 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, RenderView,
-    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
-    StatelessView, View, ViewExt, ViewState,
+    StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -245,14 +244,12 @@ fn test_stateful_element_dispose_called_on_unmount() {
     // Drive the first build so `init_state` actually runs before unmount —
     // `mount` alone only flips lifecycle state (Flutter's `mount` calls
     // `initState` synchronously; FLUI's split mount/build does not). Since
-    // issue #561, `dispose` is gated on a completed `init_state`
+    // `dispose` is gated on a completed `init_state`
     // (`StatefulBehavior::on_unmount`), so an element that was only
     // mounted, never built, is never disposed — this test drives a real
     // `InitialMount` build, same as production, for the removal below to
-    // be meaningful. A raw `StatefulElement::mount`/`unmount` pair (as this
-    // test used before #561) has no live `BuildHandle` to build through, so
-    // this now goes through `ElementTree`/`BuildOwner` like the production
-    // path.
+    // be meaningful. The fixture goes through `ElementTree`/`BuildOwner`
+    // because a raw element has no live `BuildHandle` to build through.
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
@@ -272,13 +269,15 @@ fn test_stateful_element_deactivate_callback() {
         deactivated: deactivated.clone(),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 0);
 
-    element.deactivate(&mut owner.element_owner_mut());
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 1);
 }
@@ -296,14 +295,13 @@ fn test_stateful_element_activate_callback() {
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
     // Drive the first build so `init_state` actually runs before the first
-    // `deactivate`/`activate` — since issue #561,
+    // `deactivate`/`activate` —
     // `StatefulBehavior::on_activate` is gated on a completed `init_state`
     // (matching Flutter's guaranteed `initState` -> `activate`/`deactivate`
     // ordering), so an element that was only mounted, never built, never
-    // runs its `activate` callback either. A raw `StatefulElement::mount`/
-    // `activate` pair (as this test used before #561) has no live
-    // `BuildHandle` to build through, so this now goes through
-    // `ElementTree`/`BuildOwner` like the production path.
+    // runs its `activate` callback either. The fixture goes through
+    // `ElementTree`/`BuildOwner` because a raw element has no live
+    // `BuildHandle` to build through.
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 

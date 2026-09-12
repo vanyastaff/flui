@@ -52,8 +52,8 @@ behavior:
 What was missing was the layer above them, and it had two concrete holes:
 
 - **An escaped panic was process-fatal.** Segment phases covered by neither
-  inner layer — `ViewState::dispose` during `finalize_tree`, lazy-sliver child
-  servicing, overlay attachment — unwound through the realm's per-presentation
+  inner layer — lifecycle teardown, child mounting outside a substitution
+  window, and overlay attachment — unwound through the realm's per-presentation
   loop (aborting every later sibling's segment in the same pump) and then
   through `dispatch_platform_realm`'s restore-then-`resume_unwind`, killing the
   process. One window's teardown bug took down every window in every realm.
@@ -86,6 +86,41 @@ presentation's segment; parking_lot guards release during unwind (no lock
 poisoning), `RefCell` borrows drop, and the pipeline's own failure discipline
 (validate-before-commit, retained dirty marks) means the retained premises are
 consistent even when the frame's partial work is not.
+
+### Per-child lifecycle containment inside the frame boundary
+
+The outer frame boundary is the fallback, not the preferred granularity.
+`flui-view` contains user lifecycle failures at the smallest element or lazy
+delegate seam that can attribute and repair them:
+
+- `build`, `dispose`, `activate`, `deactivate`, and
+  `did_unmount_render_object` record the exact panicking element;
+- a fresh sparse-child mount and a `GlobalKey` retake substitute at the
+  affected slot, with separate catch windows for `activate_subtree` and the
+  retaken element's `update`; framework relocation bookkeeping remains outside
+  both windows;
+- a lazy delegate's mounted-item builder records the host plus logical index;
+  `find_index_by_key` records the host with no index and declines the move.
+  Count probes catch and render an error view but intentionally do not record:
+  they either precede the mounted-item call that records the same index, or
+  probe an index that never becomes production content.
+
+These are narrower improvements over Flutter 3.44.0, not claims that Flutter
+has no boundary. `_InactiveElements._deactivateRecursively` catches a throwing
+`deactivate`, marks the subtree `failed`, and rethrows into
+`ComponentElement.performRebuild`'s second catch; FLUI keeps the blast radius
+to the one element, completes its `Inactive` transition, and still permits a
+same-frame retake or later disposal. `BuildOwner.finalizeTree` catches once per
+inactive-drain pass, whereas FLUI contains each `dispose` independently.
+`RenderObjectElement.unmount` detaches through `super.unmount()` before
+`didUnmountRenderObject`; when that hook throws, only the subsequent render
+object disposal is skipped. FLUI likewise preserves detach and additionally
+continues teardown after recording the hook failure.
+
+Every contained failure enters a frame-scoped `RecoveredPanic` queue. A host
+may drain it after the build segment; otherwise the next frame entry discards
+the stale records with one aggregate warning. Thus a producer shipped ahead of
+its forwarding consumer is bounded by construction.
 
 ### Failure classification and the typed route
 
@@ -138,7 +173,7 @@ embedder's opt-in.
   ("halt this presentation after N consecutive failures") is deliberately NOT
   in this slice: it needs its own wake-predicate exclusions to avoid a
   busy-spin, and the embedder already gets `consecutive_failures` to make that
-  call itself. Part of #561's remaining work.
+  call itself. Automatic suspension is a separate scheduling-policy decision.
 - The post-frame stationary-device re-hit-test is skipped on any pump with a
   failed segment: hover state holds the last cleanly committed version instead
   of actively probing a mid-commit tree.
@@ -152,9 +187,9 @@ Honestly named, per the issue's "transactional" acceptance criterion:
   old geometry AND its `NEEDS_LAYOUT` mark (pipeline discipline, pre-existing).
 - Locks/borrows: parking_lot guards and `RefCell` borrows release during
   unwind; no poisoning, no deadlock on retry.
-- `WidgetsBinding`'s `debug_building_dirty_elements` flag now resets via RAII
-  on unwind (this change) — previously a caught mid-`draw_frame` panic wedged
-  it `true`, turning every later debug-build frame into a bogus
+- `WidgetsBinding`'s `debug_building_dirty_elements` flag resets via RAII on
+  unwind; a caught mid-`draw_frame` panic cannot wedge it `true` and turn every
+  later debug-build frame into a bogus
   "recursive draw_frame" assert.
 - First-frame latch, segment-span telemetry, submit gating: all keyed off the
   `Errored` outcome exactly as the pipeline-error path always was.
@@ -182,8 +217,9 @@ Honestly named, per the issue's "transactional" acceptance criterion:
 
 ## Consequences
 
-- One window's frame bug (including a `dispose` panic) no longer kills a
-  multi-window process; siblings keep framing in the same pump. Pinned by
+- One window's frame bug no longer kills a multi-window process; per-element
+  lifecycle containment prevents most user-hook failures from reaching this
+  boundary at all, and an escape still leaves siblings framing in the same pump. Pinned by
   born-red tests in `ui_realm.rs`'s `frame_failure_containment` module, each
   verified to fail with the specific seam disabled.
 - Embedders get a typed, addressed failure feed with streak accounting;

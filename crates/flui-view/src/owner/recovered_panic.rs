@@ -6,9 +6,14 @@
 //! (`ElementTree::mount_or_substitute`); a `GlobalKey` retake's two
 //! windows, `activate_subtree` and the retake's own `update`
 //! (`ElementTree::update_or_substitute` and the retake fns in
-//! `tree/element_tree.rs`); and the removal-path hooks `dispose`,
+//! `tree/element_tree.rs`); the removal-path hooks `dispose`,
 //! `activate`, `deactivate`, and `did_unmount_render_object`
-//! (`StatefulBehavior`/`RenderBehavior` in `element/behavior.rs`) — catches
+//! (`StatefulBehavior`/`RenderBehavior` in `element/behavior.rs`); and a
+//! lazy sliver host's own delegate — the item builder
+//! (`sparse_children::build_item_or_report`, on the mount path only; the
+//! count-probe callers in `sliver_adaptor.rs` stay unreported by design,
+//! see `build_item_or_error`'s doc) and `find_index_by_key`
+//! (`sparse_children::find_index_or_none`) — catches
 //! a user lifecycle-hook panic and substitutes an
 //! [`ErrorView`](crate::view::ErrorView) rather than letting the unwind
 //! abort the frame. Substituting is not reporting: a panic that only ever
@@ -22,13 +27,12 @@
 //! Every per-child containment seam pushes through
 //! [`ElementOwner::push_recovered_panic`](super::ElementOwner::push_recovered_panic),
 //! which logs at error level and pushes in one call, so a seam never logs
-//! and records separately. The realm drains once per presentation per
-//! pump, after the build segment, through
-//! `WidgetsBinding::take_recovered_panics`, and forwards the drain as a
-//! frame-failure report; tests drain directly through
+//! and records separately. A host drains after the build segment through
+//! `WidgetsBinding::take_recovered_panics`; tests drain directly through
 //! [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
-//! The queue is frame-scoped scratch state: nothing here outlives the
-//! drain that reads it.
+//! The queue is frame-scoped scratch state by construction: if a host does
+//! not drain it, the next `WidgetsBinding::draw_frame` entry discards the
+//! stale records with one aggregate warning before new frame work begins.
 
 use std::{
     any::{Any, TypeId},
@@ -86,6 +90,13 @@ pub enum LifecycleHook {
     /// object is still attached, just before it is removed from the
     /// render tree.
     UnmountRenderObject,
+    /// A lazy sliver delegate's `find_index_by_key` — a distinct user hook
+    /// from the item builder (`Self::Build`): it searches the whole data
+    /// source for a key rather than building one item, and a panic there
+    /// declines the move (answers `None`, the same outcome a genuine
+    /// "not found" produces) instead of substituting a view, since there is
+    /// no single index to substitute at.
+    LazyIndexLookup,
 }
 
 impl fmt::Display for LifecycleHook {
@@ -104,30 +115,32 @@ impl fmt::Display for LifecycleHook {
             Self::Deactivate => "deactivate",
             Self::Dispose => "dispose",
             Self::UnmountRenderObject => "did_unmount_render_object",
+            Self::LazyIndexLookup => "find_index_by_key",
         })
     }
 }
 
-/// What a [`RecoveredPanic`] happened *to* — which element, and what a
-/// containment seam did with it once the panic was caught.
+/// Where a [`RecoveredPanic`] was attributed and, when applicable, which
+/// substitute location the containing seam produced.
 ///
-/// The three variants are the three shapes a containment window's undo can
-/// take, not three arbitrary tags: which one applies falls out of what the
-/// seam had committed by the time the panic unwound through it.
+/// The variants distinguish three attribution contexts: an exact element,
+/// a window-level substitution, or a lazy delegate call made before an item
+/// element existed. They do not by themselves promise that the attributed
+/// element survived or describe every cleanup action an outer seam took.
 ///
-/// `#[non_exhaustive]`: the containment seams are added one at a time (issue
-/// #561), and a later one may need a shape neither of these three cover.
+/// `#[non_exhaustive]`: containment seams are added one at a time, and a
+/// later one may need a shape none of these three cover.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveredAt {
-    /// The hook ran on this element and the element itself stays exactly
-    /// where it is — nothing was undone or substituted at `element`'s own
-    /// position. Covers `Build` (the panicking element's *child* became the
-    /// substitute, not `element` itself) and the removal-path hooks
-    /// (`Deactivate`, `Dispose`, `UnmountRenderObject`): by the time a later
-    /// drain reads this record, `element` is already on its way out (parked
-    /// inactive or freed), so the id is a post-mortem identity, not a live
-    /// handle.
+    /// The hook was attributed to this exact element rather than to a
+    /// substitute slot. This is location, not a promise that the element
+    /// survives recovery: an `Activate` panic is recorded here by the
+    /// behavior for accurate descendant attribution, then the retake removes
+    /// the failed subtree and mounts a substitute. For removal hooks
+    /// (`Deactivate`, `Dispose`, `UnmountRenderObject`), a later drain may
+    /// likewise see a post-mortem identity rather than a live handle.
+    #[non_exhaustive]
     Element {
         /// The element whose lifecycle hook panicked.
         element: ElementId,
@@ -140,6 +153,7 @@ pub enum RecoveredAt {
     },
     /// The element at `(parent, slot)` was discarded or removed and
     /// `substitute` now stands in its place.
+    #[non_exhaustive]
     Substituted {
         /// The element that panicked, when one existed to discard. `None`
         /// when the panic came from `View::create_element` itself —
@@ -160,6 +174,7 @@ pub enum RecoveredAt {
     /// (`index: None`). The host mounts the substitute itself (builder) or
     /// declines the move (key lookup) — neither path has an `ElementId` of
     /// its own to report.
+    #[non_exhaustive]
     LazyDelegate {
         /// The lazy sliver host whose delegate panicked.
         host: ElementId,
@@ -184,19 +199,38 @@ impl RecoveredAt {
         }
     }
 
-    /// The parent of the panicking element or delegate host, when this
-    /// variant carries one.
+    /// The parent of the panicking element, when this variant carries one.
+    ///
+    /// A [`Self::LazyDelegate`] record returns `None`: its `host` identifies
+    /// the owner of the delegate, not the host's parent, and must not be
+    /// reinterpreted as an element-tree edge.
     pub fn parent(&self) -> Option<ElementId> {
         match self {
             Self::Element { parent, .. } => *parent,
             Self::Substituted { parent, .. } => Some(*parent),
-            Self::LazyDelegate { host, .. } => Some(*host),
+            Self::LazyDelegate { .. } => None,
         }
     }
 }
 
-/// One lifecycle-hook panic a per-child containment seam caught and
-/// substituted, recorded so it can be forwarded as a frame-failure report
+/// Whether an inner behavior seam already recorded the panic currently
+/// unwinding into a tree-level containment window.
+///
+/// This stays crate-private: it is a handoff between two implementation
+/// layers, not part of the diagnostic API. A domain enum makes the two states
+/// explicit at every read and prevents a bare boolean from acquiring a second
+/// interpretation later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum HookPanicRecording {
+    /// The tree-level window is the first seam able to record this panic.
+    #[default]
+    Unrecorded,
+    /// An inner behavior seam already recorded the panic with finer attribution.
+    Recorded,
+}
+
+/// One lifecycle-hook panic a per-child containment seam caught and recovered
+/// from, recorded so it can be forwarded as a frame-failure report
 /// instead of vanishing into `tracing` alone.
 ///
 /// `#[non_exhaustive]`: the realm maps this into a `FrameFailureKind`

@@ -1,6 +1,6 @@
 //! Pins the containment seams around `ViewState::dispose`,
 //! `ViewState::deactivate`, `RenderView::did_unmount_render_object`, and
-//! `AnimatedView::listenable()` (issue #561): a panic in any of the first
+//! `AnimatedView::listenable()`: a panic in any of the first
 //! three is caught per element instead of unwinding out of
 //! `BuildOwner::build_scope` / `BuildOwner::finalize_tree`; the fourth is
 //! closed by caching instead — see below.
@@ -27,8 +27,8 @@
 //!   detach-related asserts BEFORE calling
 //!   `widget.didUnmountRenderObject(renderObject)`, with no `try`/`catch`
 //!   around the hook. A throwing hook there does NOT skip the detach — that
-//!   already happened; it skips only `renderObject.dispose()` and clearing
-//!   `_renderObject` to `null`.
+//!   already happened; the lifecycle work it skips is the subsequent
+//!   `renderObject.dispose()`.
 //!
 //! FLUI bounds the panic to the one element whose hook threw and lets the
 //! rest of the frame continue: see `StatefulBehavior::{on_unmount,
@@ -291,14 +291,18 @@ fn a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed() {
     );
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Dispose);
-    assert_eq!(
-        panic.at,
-        RecoveredAt::Element {
-            element: mid,
-            parent: None
-        },
+    assert!(
+        matches!(
+            panic.at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == mid
+        ),
         "the recorded element is the panicking child; the unmount-side seam does not see the \
-         parent"
+         parent: {:?}",
+        panic.at
     );
     assert_eq!(panic.view_type_id, TypeId::of::<DisposeCounter>());
     assert!(
@@ -374,13 +378,17 @@ fn a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry() {
     assert_eq!(recovered.len(), 1, "got {recovered:?}");
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Dispose);
-    assert_eq!(
-        panic.at,
-        RecoveredAt::Element {
-            element: root_id,
-            parent: None
-        },
-        "the unmount-side seam does not see the parent"
+    assert!(
+        matches!(
+            panic.at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == root_id
+        ),
+        "the unmount-side seam does not see the parent: {:?}",
+        panic.at
     );
     assert_eq!(panic.view_type_id, TypeId::of::<DisposeCounter>());
     assert!(!panic.internal_invariant);
@@ -637,6 +645,14 @@ fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
          its deactivate panicked"
     );
     assert_eq!(
+        tree.get(deactivate_id)
+            .expect("the soft-parked element remains addressable")
+            .element()
+            .lifecycle(),
+        flui_view::element::Lifecycle::Inactive,
+        "the behavior-level catch must return so ElementCore performs the Active -> Inactive flip"
+    );
+    assert_eq!(
         deactivated.get(),
         1,
         "deactivate ran exactly once despite panicking"
@@ -649,7 +665,7 @@ fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
     let provider_v2 = CountProvider {
         value: 2,
         child: Row {
-            children: vec![sibling.boxed()],
+            children: vec![sibling.clone().boxed()],
         },
     };
     tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
@@ -665,9 +681,42 @@ fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
         "the provider no longer lists the parked element as a dependent"
     );
 
+    // Reintroduce the same key before finalization: this is the same-frame
+    // retake the lifecycle flip exists to permit. Identity must survive even
+    // though the preceding deactivate hook panicked.
+    let row_v3 = Row {
+        children: vec![counter.boxed(), sibling.boxed()],
+    };
+    tree.update(row_id, &row_v3, &mut owner.element_owner_mut());
+    owner.schedule_build_for(row_id, row_depth, RebuildReason::ParentUpdate);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        owner.element_for_global_key(&key),
+        Some(deactivate_id),
+        "a same-frame retake preserves the original element identity"
+    );
+    assert_eq!(
+        tree.get(deactivate_id)
+            .expect("the retaken element is live")
+            .element()
+            .lifecycle(),
+        flui_view::element::Lifecycle::Active,
+        "the same-frame retake reactivates the parked element"
+    );
+
+    // Drop it again so end-of-frame finalization proves dispose still runs.
+    tree.update(
+        row_id,
+        &Row {
+            children: vec![PlainLeaf.boxed()],
+        },
+        &mut owner.element_owner_mut(),
+    );
+    owner.schedule_build_for(row_id, row_depth, RebuildReason::ParentUpdate);
+    owner.build_scope(&mut tree);
+
     // End-of-frame finalize drains the inactive queue: `dispose` runs
-    // cleanly (it is not armed to panic) because `initialized` is true —
-    // the counter's own `build` ran during the initial mount above.
+    // cleanly (it is not armed to panic) because `initialized` is true.
     owner.finalize_tree(&mut tree);
 
     assert!(
@@ -684,14 +733,18 @@ fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
     );
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Deactivate);
-    assert_eq!(
-        panic.at,
-        RecoveredAt::Element {
-            element: deactivate_id,
-            parent: None
-        },
+    assert!(
+        matches!(
+            panic.at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == deactivate_id
+        ),
         "the recorded element is the panicking counter; the unmount-side seam does not see the \
-         parent"
+         parent: {:?}",
+        panic.at
     );
     assert_eq!(panic.view_type_id, TypeId::of::<DeactivateCounter>());
     assert!(
@@ -835,14 +888,18 @@ fn a_did_unmount_render_object_panic_is_contained_and_the_render_node_is_still_r
     );
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::UnmountRenderObject);
-    assert_eq!(
-        panic.at,
-        RecoveredAt::Element {
-            element: mid,
-            parent: None
-        },
+    assert!(
+        matches!(
+            panic.at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == mid
+        ),
         "the recorded element is the panicking child; the unmount-side seam does not see the \
-         parent"
+         parent: {:?}",
+        panic.at
     );
     assert_eq!(
         panic.view_type_id,

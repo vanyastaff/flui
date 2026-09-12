@@ -976,6 +976,7 @@ impl ElementTree {
                 return Err(ChildHookPanic {
                     inserted,
                     hook: LifecycleHook::Mount,
+                    recording: crate::owner::HookPanicRecording::Unrecorded,
                     payload,
                 });
             }
@@ -1912,7 +1913,7 @@ impl ElementTree {
     ///
     /// Flutter never reaches this teardown at all: `_InactiveElements` only
     /// ever holds an element whose `mount` already returned, so a throwing
-    /// `createElement`/mount is contained one level up (issue #561), before
+    /// `createElement`/mount is contained one level up, before
     /// an element object exists to deactivate. FLUI's version is asymmetric
     /// with `remove_finalized` for the same reason —
     /// `RenderView::did_unmount_render_object` still runs here on a render
@@ -2006,7 +2007,7 @@ impl ElementTree {
     /// update — the re-clone preserves that invariant explicitly rather
     /// than relying on the caller having already filtered by it.
     ///
-    /// A panic inside the update (issue #561 — see `ChildHookPanic`'s doc
+    /// A panic inside the update (see `ChildHookPanic`'s doc
     /// in `tree/containment.rs`) unwinds through here exactly as it always
     /// has — the crate-internal `try_update` is the fallible core a
     /// bounding caller uses instead, and `update_or_substitute` is the one
@@ -2037,6 +2038,7 @@ impl ElementTree {
             return Err(ChildHookPanic {
                 inserted: None,
                 hook: LifecycleHook::Update,
+                recording: crate::owner::HookPanicRecording::Unrecorded,
                 payload,
             });
         }
@@ -2062,7 +2064,15 @@ impl ElementTree {
 
     /// Activate an element (re-insertion after deactivation).
     pub fn activate(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        self.activate_subtree(id, owner);
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            self.activate_subtree(id, owner);
+        })) {
+            // Public activation has no substituting caller to consume the
+            // handoff. Clear it before resuming so a caught unwind cannot
+            // suppress an unrelated later recovery on this owner.
+            owner.take_hook_panic_recorded();
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// Iterate over all live element IDs.
@@ -2420,7 +2430,7 @@ fn retake_inactive_global_key(
     // The relocation is committed; the element is live and parented here.
     // Report it now — BEFORE either containment window below, which run
     // `activate_subtree` and (separately) this retake's own `update`, both
-    // panic sites — so a caller bounding those windows (issue #561, see
+    // panic sites — so a caller bounding those windows (see
     // `ChildHookPanic`'s doc) knows to remove THIS element rather than
     // looking for a node this call never minted.
     let inserted = InsertedChild::Retaken(candidate_id);
@@ -2430,22 +2440,26 @@ fn retake_inactive_global_key(
         destination.unclaimed_old_slots,
     );
 
-    // Window 1: reactivate the whole subtree alone. Deactivation released
+    // Containment window — Activate: reactivate the whole subtree alone. Deactivation released
     // every inherited edge; the owner schedules `did_change_dependencies`
     // for nodes that had dependencies so their next build registers
     // against the new ancestry. A descendant's own `ViewState::activate`
     // can panic here — a behavior that catches its own (see
     // `StatefulBehavior::on_activate`) records it under its own identity
     // and re-raises, so this still observes the unwind.
+    owner.arm_hook_panic_recording();
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
     })) {
+        let recording = owner.take_hook_panic_recorded();
         return Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Activate,
+            recording,
             payload,
         }));
     }
+    owner.take_hook_panic_recorded();
 
     // Framework code between the two windows, never user code — a `BUG:`
     // here propagates uncontained (see `ChildHookPanic`'s doc). The
@@ -2461,7 +2475,7 @@ fn retake_inactive_global_key(
     }
     attach_render_relocation(&mut relocation);
 
-    // Window 2: the retake's own `update`.
+    // Containment window — Update: the retake's own `update`.
     let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let node = tree
             .get_mut(candidate_id)
@@ -2508,6 +2522,7 @@ fn retake_inactive_global_key(
         Err(payload) => Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Update,
+            recording: crate::owner::HookPanicRecording::Unrecorded,
             payload,
         })),
     }
@@ -2621,7 +2636,7 @@ fn retake_active_global_key(
     // The relocation is committed; the element is live and parented here.
     // Report it now — BEFORE either containment window below, which run
     // `activate_subtree` and (separately) this retake's own `update`, both
-    // panic sites — so a caller bounding those windows (issue #561, see
+    // panic sites — so a caller bounding those windows (see
     // `ChildHookPanic`'s doc) knows to remove THIS element rather than
     // looking for a node this call never minted.
     let inserted = InsertedChild::Retaken(candidate_id);
@@ -2631,19 +2646,23 @@ fn retake_active_global_key(
         destination.unclaimed_old_slots,
     );
 
-    // Window 1: reactivate the whole subtree alone. A descendant's own
+    // Containment window — Activate: reactivate the whole subtree alone. A descendant's own
     // `ViewState::activate` can panic here — a behavior that catches its
     // own (see `StatefulBehavior::on_activate`) records it under its own
     // identity and re-raises, so this still observes the unwind.
+    owner.arm_hook_panic_recording();
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
     })) {
+        let recording = owner.take_hook_panic_recorded();
         return Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Activate,
+            recording,
             payload,
         }));
     }
+    owner.take_hook_panic_recorded();
 
     // Framework code between the two windows, never user code — a `BUG:`
     // here propagates uncontained (see `ChildHookPanic`'s doc).
@@ -2657,7 +2676,7 @@ fn retake_active_global_key(
     }
     attach_render_relocation(&mut relocation);
 
-    // Window 2: the retake's own `update`.
+    // Containment window — Update: the retake's own `update`.
     let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let node = tree
             .get_mut(candidate_id)
@@ -2698,6 +2717,7 @@ fn retake_active_global_key(
         Err(payload) => Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Update,
+            recording: crate::owner::HookPanicRecording::Unrecorded,
             payload,
         })),
     }
@@ -2719,7 +2739,7 @@ mod tests {
 
     use crate::{
         BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, GlobalKey,
-        InheritedElement, ParentDataView, RenderView, StatelessView, View,
+        InheritedElement, ParentDataView, RecoveredAt, RenderView, StatelessView, View,
     };
 
     #[derive(Clone)]
@@ -2835,6 +2855,50 @@ mod tests {
     impl View for KeyedTransparentView {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[derive(Clone)]
+    struct ActiveRetakePanicsOnActivate {
+        key: GlobalKey<ActiveRetakePanicState>,
+        armed: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+
+    struct ActiveRetakePanicState {
+        armed: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+
+    impl crate::StatefulView for ActiveRetakePanicsOnActivate {
+        type State = ActiveRetakePanicState;
+
+        fn create_state(&self) -> Self::State {
+            ActiveRetakePanicState {
+                armed: std::rc::Rc::clone(&self.armed),
+            }
+        }
+    }
+
+    impl crate::ViewState<ActiveRetakePanicsOnActivate> for ActiveRetakePanicState {
+        fn build(
+            &self,
+            _view: &ActiveRetakePanicsOnActivate,
+            _ctx: &dyn BuildContext,
+        ) -> impl IntoView {
+            UnitRenderHost
+        }
+
+        fn activate(&mut self) {
+            assert!(!self.armed.get(), "active retake activate panic");
+        }
+    }
+
+    impl View for ActiveRetakePanicsOnActivate {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
         }
 
         fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
@@ -4299,6 +4363,96 @@ mod tests {
                 expected,
             );
         });
+    }
+
+    #[test]
+    fn active_retake_activate_panic_removes_its_detached_render_frontier() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let root = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let donor = tree.insert(&UnitRenderHost, root, 0, &mut owner.element_owner_mut());
+        let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        tree.get_mut(root)
+            .expect("root")
+            .set_child_ids(vec![donor, destination]);
+
+        let armed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let keyed = ActiveRetakePanicsOnActivate {
+            key: GlobalKey::new(),
+            armed: std::rc::Rc::clone(&armed),
+        };
+        let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
+        tree.get_mut(donor)
+            .expect("donor")
+            .set_child_ids(vec![candidate]);
+        let candidate_depth = tree.get(candidate).expect("candidate").depth();
+        owner.schedule_build_for(
+            candidate,
+            candidate_depth,
+            crate::RebuildReason::InitialMount,
+        );
+        owner.build_scope(&mut tree);
+
+        let frontier_element = tree
+            .get(candidate)
+            .expect("candidate")
+            .child_ids()
+            .first()
+            .copied()
+            .expect("stateful candidate built one render child");
+        let frontier_render = tree
+            .get(frontier_element)
+            .expect("frontier element")
+            .element()
+            .render_id()
+            .expect("frontier render id");
+        assert!(pipeline.with(|owner| owner.render_tree().contains(frontier_render)));
+
+        armed.set(true);
+        let _reconcile_guard = tree.begin_reconcile(destination);
+        let substitute = tree.mount_or_substitute(
+            &keyed,
+            destination,
+            0,
+            &mut owner.element_owner_mut(),
+            ProvisionalOrder::NONE,
+            "actively retaking test child",
+        );
+
+        assert_ne!(substitute, candidate);
+        assert!(
+            tree.get(candidate).is_none(),
+            "the failed retake is finalized"
+        );
+        assert_eq!(
+            owner.element_for_global_key(&keyed.key),
+            None,
+            "the failed candidate is unregistered"
+        );
+        assert!(
+            !pipeline.with(|owner| owner.render_tree().contains(frontier_render)),
+            "the render frontier detached before activate must be released by the undo"
+        );
+        assert_eq!(
+            tree.get(substitute).expect("substitute").parent(),
+            Some(destination)
+        );
+        let recovered = owner.take_recovered_panics();
+        assert_eq!(recovered.len(), 1, "one behavior-level panic is recorded");
+        assert_eq!(recovered[0].hook, LifecycleHook::Activate);
+        assert!(matches!(
+            recovered[0].at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == candidate
+        ));
     }
 
     #[test]

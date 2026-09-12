@@ -1,4 +1,4 @@
-//! Integration tests for `BuildOwner::take_recovered_panics` (issue #561).
+//! Integration tests for `BuildOwner::take_recovered_panics`.
 //!
 //! `build_or_recover` is the first producer feeding the drain: when a
 //! Stateless/Stateful `build()` panics, it substitutes an `ErrorView` —
@@ -125,13 +125,17 @@ fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook() {
     );
     let panic = recovered.remove(0);
     assert_eq!(panic.hook, LifecycleHook::Build);
-    assert_eq!(
-        panic.at,
-        RecoveredAt::Element {
-            element: child_id,
-            parent: None
-        },
-        "the recorded element is the panicking child, not the well-behaved host"
+    assert!(
+        matches!(
+            panic.at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == child_id
+        ),
+        "the recorded element is the panicking child, not the well-behaved host: {:?}",
+        panic.at
     );
     assert_eq!(panic.view_type_id, TypeId::of::<PanicBuildView>());
     assert!(

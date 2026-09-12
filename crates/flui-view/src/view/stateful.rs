@@ -227,11 +227,10 @@ mod tests {
 
     impl ViewState<TestCounter> for TestCounterState {
         fn build(&self, _view: &TestCounter, _ctx: &dyn BuildContext) -> impl IntoView {
-            // A true leaf — NOT another `TestCounter`: since issue #561,
-            // `test_stateful_element_dispose` below drives this chain
-            // through a real `build_scope` (dispose is gated on a
-            // completed `init_state`), and a self-returning build would
-            // recurse forever there.
+            // A true leaf — NOT another `TestCounter`: the dispose test
+            // drives this chain through a real `build_scope` (dispose is
+            // gated on a completed `init_state`), and a self-returning
+            // build would recurse forever there.
             TestCounterLeaf.boxed()
         }
 
@@ -317,13 +316,11 @@ mod tests {
         let mut owner = crate::BuildOwner::new();
         let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
         // Drive the first build so `init_state` actually runs before
-        // unmount — since issue #561, `dispose` is gated on a completed
-        // `init_state` (`StatefulBehavior::on_unmount`), so an element
-        // that was only mounted, never built, is never disposed. A raw
-        // `StatefulElement::mount`/`unmount` pair (as this test used
-        // before #561) has no live `BuildHandle` to build through, so
-        // this now goes through `ElementTree`/`BuildOwner` like the
-        // production path.
+        // unmount. `dispose` is gated on a completed `init_state`
+        // (`StatefulBehavior::on_unmount`), so an element that was only
+        // mounted, never built, is never disposed. The fixture goes through
+        // `ElementTree`/`BuildOwner` because a raw element has no live
+        // `BuildHandle` to build through.
         owner.schedule_build_for(root_id, 0, crate::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 

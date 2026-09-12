@@ -1,6 +1,6 @@
 //! Per-child containment: undo a fresh mount / `GlobalKey` retake / update
 //! that a user lifecycle-hook panic interrupted, and substitute the
-//! registered `ErrorView` in its place (issue #561).
+//! registered `ErrorView` in its place.
 //!
 //! [`ChildHookPanic`] is the typed-error handoff between the fallible cores
 //! in `element_tree.rs` (`ElementTree::try_insert_with_provisional_order`,
@@ -17,7 +17,7 @@ use std::any::Any;
 
 use flui_foundation::ElementId;
 
-use crate::owner::{LifecycleHook, RecoveredAt, RecoveredPanic};
+use crate::owner::{HookPanicRecording, LifecycleHook, RecoveredAt, RecoveredPanic};
 use crate::view::View;
 use crate::view::recovery_view_for;
 
@@ -41,10 +41,9 @@ use super::{ProvisionalOrder, SubtreeRemoval};
 /// the relocation bookkeeping (`recompute_subtree_ancestry`,
 /// `synchronize_destination_render_children_for_relocation`,
 /// `reset_ancestor_parent_data`, `attach_render_relocation`) — is framework
-/// code, not user code, and propagates exactly as it always has. This is
-/// what ADR-0050's eager duplicate-`GlobalKey` rejection relies on: it
-/// panics from OUTSIDE any window, so it is never swallowed by a
-/// containment catch.
+/// code, not user code, and propagates. This is a permanent boundary
+/// invariant: the eager duplicate-`GlobalKey` rejection panics outside
+/// every window and is never swallowed by a containment catch.
 pub(crate) struct ChildHookPanic {
     /// What the window had committed by the time the panic unwound through
     /// it, beyond the id the primitive already has, so the primitive knows
@@ -56,6 +55,12 @@ pub(crate) struct ChildHookPanic {
     pub(crate) inserted: Option<InsertedChild>,
     /// Which lifecycle hook was running when the panic happened.
     pub(crate) hook: LifecycleHook,
+    /// Whether the innermost behavior catch already recorded this unwind.
+    ///
+    /// The immediate `activate_subtree` catch consumes the owner's transient
+    /// marker and carries the value here. Consequently no owner-global
+    /// `Recorded` state can outlive the unwind that created it.
+    pub(crate) recording: HookPanicRecording,
     /// The caught panic payload, unconverted — the primitive builds the
     /// `FlutterError`/`RecoveredPanic` from it exactly once.
     pub(crate) payload: Box<dyn Any + Send>,
@@ -64,16 +69,16 @@ pub(crate) struct ChildHookPanic {
 impl ElementTree {
     /// Mount `view` at `(parent, slot)`, substituting the registered
     /// `ErrorView` when a user lifecycle hook inside the containment window
-    /// panics (issue #561 — see [`ChildHookPanic`]).
+    /// panics (see [`ChildHookPanic`]).
     ///
     /// On success this behaves exactly like [`insert`](Self::insert). On a
     /// caught panic it undoes whatever the window had committed (discards
     /// an unannounced mint via [`discard_unannounced`](Self::discard_unannounced),
     /// finalizes a reactivated retake via [`remove_subtree`](Self::remove_subtree)),
     /// records at most one [`RecoveredPanic`] through `owner` — skipped
-    /// when `owner.take_hook_panic_recorded()` reports an inner seam
-    /// already recorded this same panic under its own, more accurate
-    /// identity — and mounts the substitute unbounded at the same
+    /// when [`ChildHookPanic::recording`] reports an inner seam already
+    /// recorded this same panic under its own, more accurate identity — and
+    /// mounts the substitute unbounded at the same
     /// `(parent, slot)` through the same insert path — a panicking
     /// substitute factory is deliberately left to propagate, naming a
     /// broken factory instead of hiding it.
@@ -86,8 +91,7 @@ impl ElementTree {
     /// instead.
     ///
     /// Never writes `parent`'s `child_ids` — same contract as
-    /// [`insert`](Self::insert); the caller (a sparse host today, the dense
-    /// reconciler in a later change) owns that.
+    /// [`insert`](Self::insert); its caller owns the child collection.
     ///
     /// `context` becomes the `FlutterError`/`RecoveredPanic` breadcrumb
     /// (e.g. `"mounting lazy sliver child 3"`) — never user data.
@@ -106,6 +110,7 @@ impl ElementTree {
             Err(ChildHookPanic {
                 inserted,
                 hook,
+                recording,
                 payload,
             }) => {
                 let stranded = match inserted {
@@ -148,7 +153,7 @@ impl ElementTree {
                 // accurate identity and re-raised it — this window's job
                 // is only the undo-and-substitute above, not a second,
                 // coarser record.
-                if !owner.take_hook_panic_recorded() {
+                if recording == HookPanicRecording::Unrecorded {
                     let panic = RecoveredPanic::with_error(
                         RecoveredAt::Substituted {
                             element: stranded,
@@ -170,12 +175,12 @@ impl ElementTree {
 
     /// Update the element at `id` with `view`, substituting the registered
     /// `ErrorView` at its current `(parent, slot)` when the update's
-    /// containment window (`try_update`) catches a panic (issue #561 — see
+    /// containment window (`try_update`) catches a panic (see
     /// [`ChildHookPanic`]).
     ///
     /// Returns `id` unchanged on success, or the substitute's id when it had
-    /// to recover — the caller (a sparse host today, the dense reconciler in
-    /// a later change) re-points whatever tracked `id` at the return value.
+    /// to recover — the caller re-points whatever tracked `id` at the return
+    /// value.
     ///
     /// On a caught panic the element is removed outright via
     /// [`remove_subtree`](Self::remove_subtree) under [`SubtreeRemoval::Finalize`]
@@ -196,7 +201,12 @@ impl ElementTree {
     ) -> ElementId {
         match self.try_update(id, view, owner) {
             Ok(()) => id,
-            Err(ChildHookPanic { hook, payload, .. }) => {
+            Err(ChildHookPanic {
+                hook,
+                recording,
+                payload,
+                ..
+            }) => {
                 // Read the current parent/slot BEFORE `remove_subtree`
                 // wipes the node — there is nowhere else left to ask once
                 // it is gone.
@@ -227,7 +237,7 @@ impl ElementTree {
                         std::panic::resume_unwind(substitute_panic.payload)
                     });
 
-                if !owner.take_hook_panic_recorded() {
+                if recording == HookPanicRecording::Unrecorded {
                     let panic = RecoveredPanic::with_error(
                         RecoveredAt::Substituted {
                             element: Some(id),

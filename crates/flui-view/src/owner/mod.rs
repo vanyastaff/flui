@@ -53,6 +53,7 @@ pub(crate) use element_owner::BuildHandle;
 // A per-child containment seam's caught-and-substituted panic (issue
 // #561), what it happened to, and the enum naming which lifecycle hook it
 // was caught inside.
+pub(crate) use recovered_panic::HookPanicRecording;
 pub use recovered_panic::{LifecycleHook, RecoveredAt, RecoveredPanic};
 
 /// Emit one tree observation through the realm's observer slot (ADR-0040).

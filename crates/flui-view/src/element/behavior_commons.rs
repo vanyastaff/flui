@@ -154,7 +154,7 @@ pub(crate) fn stamp_sliver_slot(
 /// `behavior_name` names what was building (e.g. `"building
 /// StatelessElement"`) for the `FlutterError` breadcrumb.
 ///
-/// # Recording the panic (issue #561)
+/// # Recording the panic
 ///
 /// A caught panic is also recorded as a [`RecoveredPanic`] through
 /// `owner`, so a later drain (`BuildOwner::take_recovered_panics`) can
@@ -162,8 +162,7 @@ pub(crate) fn stamp_sliver_slot(
 /// `crate::owner::recovered_panic`. When `core.self_id()` is `None` (a
 /// hand-rolled element that bypassed `ElementTree::insert`; test fixtures
 /// only), there is no slab id to attach the record to, so the push is
-/// skipped and a `tracing::error!` is the only signal, same as before this
-/// drain existed.
+/// skipped and a `tracing::error!` is the only signal.
 pub(crate) fn build_or_recover<V, A, F>(
     core: &mut ElementCore<V, A>,
     owner: &mut crate::ElementOwner<'_>,

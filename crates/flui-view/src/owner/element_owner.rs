@@ -55,7 +55,7 @@ use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
-use super::recovered_panic::{LifecycleHook, RecoveredAt, RecoveredPanic};
+use super::recovered_panic::{HookPanicRecording, LifecycleHook, RecoveredAt, RecoveredPanic};
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
 use crate::view::FlutterError;
 use flui_foundation::RebuildReasons;
@@ -187,7 +187,7 @@ pub struct ElementOwner<'a> {
     pub(crate) tree_observer: &'a mut Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
 
     /// Lifecycle-hook panics caught and contained by a per-child
-    /// containment seam this frame (issue #561). Pushed by
+    /// containment seam this frame. Pushed by
     /// [`Self::push_recovered_panic`]; drained by
     /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
     pub(crate) recovered_panics: &'a mut Vec<RecoveredPanic>,
@@ -195,20 +195,15 @@ pub struct ElementOwner<'a> {
     /// Whether the innermost containment seam that caught the panic
     /// currently unwinding has already pushed its [`RecoveredPanic`].
     ///
-    /// A behavior that catches a user hook, records it with its own
-    /// accurate identity (via [`Self::record_hook_panic`]), and re-raises
-    /// sets this before resuming the unwind — [`StatefulBehavior::
-    /// on_activate`](crate::element::behavior) is the first such site. A
-    /// tree-level window one level up (`ElementTree::mount_or_substitute` /
-    /// `update_or_substitute`) that also catches the same panic reads (and
-    /// clears) this flag before deciding whether to push its own,
-    /// coarser-grained record: set means "already recorded, attributed at
-    /// the innermost site that knew" — skip the second push; unset means
-    /// the window is the first (and only) thing that saw the panic, so it
-    /// records normally. A shared `Cell` (not `&mut`) because the mark and
-    /// the read happen from different points in the same recursive
-    /// traversal, both holding this same split-borrow handle.
-    pub(crate) hook_panic_recorded: &'a Cell<bool>,
+    /// A behavior that catches a user hook, records it with its own accurate
+    /// identity (via [`Self::record_hook_panic`]), and re-raises sets this
+    /// before resuming the unwind — [`StatefulBehavior::on_activate`](crate::element::behavior)
+    /// is such a site. The immediate `activate_subtree` catch consumes the
+    /// marker and carries its value inside `ChildHookPanic`; public unbounded
+    /// activation clears it before resuming. The cell is therefore transient
+    /// unwind-local handoff state, never a pending decision for a later
+    /// recovery.
+    pub(crate) hook_panic_recorded: &'a Cell<Option<HookPanicRecording>>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
@@ -584,7 +579,7 @@ impl ElementOwner<'_> {
     }
 
     // ========================================================================
-    // Panic containment (issue #561)
+    // Panic containment
     // ========================================================================
 
     /// Record a lifecycle-hook panic a containment seam just caught and
@@ -615,8 +610,7 @@ impl ElementOwner<'_> {
     /// `element` is `core.self_id()` at the call site: `None` means a
     /// hand-rolled element that bypassed `ElementTree::insert` (test
     /// fixtures only) — there is no slab id to attach a record to, so this
-    /// logs the one `tracing::error!` and pushes nothing, exactly like the
-    /// four call sites this helper replaces used to do inline. `Some`
+    /// logs the one `tracing::error!` and pushes nothing. `Some`
     /// builds a [`RecoveredAt::Element`] and pushes through
     /// [`Self::push_recovered_panic`] (which logs at error level itself, so
     /// this never double-logs).
@@ -651,23 +645,35 @@ impl ElementOwner<'_> {
     /// already been recorded, by the innermost site that caught it — see
     /// [`Self::hook_panic_recorded`]'s field doc for the full contract.
     ///
-    /// Called immediately before re-raising a caught-and-recorded panic
-    /// (e.g. `StatefulBehavior::on_activate`), so an outer window that
-    /// catches the same unwind does not push a second, coarser record for
-    /// it.
+    /// Called immediately before re-raising a caught-and-recorded panic.
+    /// The immediate activation catch consumes it: a substituting retake
+    /// carries the state with its `ChildHookPanic`, while an unbounded public
+    /// activation clears it before resuming.
     pub(crate) fn mark_hook_panic_recorded(&self) {
-        self.hook_panic_recorded.set(true);
+        if self.hook_panic_recorded.get().is_some() {
+            self.hook_panic_recorded
+                .set(Some(HookPanicRecording::Recorded));
+        }
     }
 
-    /// Read and clear the recorded-panic marker. `false` if nothing set it
-    /// since the last read (or ever) — the window's own catch is the first
-    /// (and only) thing that saw this panic, so it should record normally.
-    ///
-    /// Called from a tree-level containment window's `Err` path (`mount_or_substitute`
-    /// / `update_or_substitute`) before deciding whether to push its own
-    /// record.
-    pub(crate) fn take_hook_panic_recorded(&self) -> bool {
-        self.hook_panic_recorded.take()
+    /// Arm the unwind-local handoff immediately before a retake's bounded
+    /// activation call. While disarmed, behavior-level records never mutate
+    /// owner state, so a direct `ElementBase::activate` unwind cannot leak a
+    /// marker even if its caller catches it.
+    pub(crate) fn arm_hook_panic_recording(&self) {
+        debug_assert_eq!(
+            self.hook_panic_recorded.get(),
+            None,
+            "activation panic handoffs must not be nested"
+        );
+        self.hook_panic_recorded
+            .set(Some(HookPanicRecording::Unrecorded));
+    }
+
+    /// Read and clear the recorded-panic marker at the immediate boundary of
+    /// the activation unwind that owns it.
+    pub(crate) fn take_hook_panic_recorded(&self) -> HookPanicRecording {
+        self.hook_panic_recorded.take().unwrap_or_default()
     }
 
     // ========================================================================
@@ -860,21 +866,32 @@ mod tests {
         let mut owner = BuildOwner::new();
         let handle = owner.element_owner_mut();
 
-        assert!(
-            !handle.take_hook_panic_recorded(),
-            "nothing marked the flag yet"
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Unrecorded,
+            "nothing marked the handoff yet"
         );
 
         handle.mark_hook_panic_recorded();
-        assert!(
+        assert_eq!(
             handle.take_hook_panic_recorded(),
-            "the flag set by mark_hook_panic_recorded is what take_hook_panic_recorded reads"
+            HookPanicRecording::Unrecorded,
+            "a direct unbounded activation cannot arm a persistent handoff"
         );
 
-        // The read consumes the flag.
-        assert!(
-            !handle.take_hook_panic_recorded(),
-            "take_hook_panic_recorded clears the flag, so a second read sees it unset"
+        handle.arm_hook_panic_recording();
+        handle.mark_hook_panic_recorded();
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Recorded,
+            "an armed immediate catch receives the behavior-level record state"
+        );
+
+        handle.arm_hook_panic_recording();
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Unrecorded,
+            "a clean bounded activation disarms without reporting"
         );
     }
 
@@ -916,12 +933,13 @@ mod tests {
         );
 
         assert_eq!(handle.recovered_panics.len(), 1);
-        assert_eq!(
+        assert!(matches!(
             handle.recovered_panics[0].at,
             RecoveredAt::Element {
-                element: id,
-                parent: None
-            }
-        );
+                element,
+                parent: None,
+                ..
+            } if element == id
+        ));
     }
 }

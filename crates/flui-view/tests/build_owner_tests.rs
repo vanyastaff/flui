@@ -627,13 +627,12 @@ fn test_build_owner_memory_size() {
     // and is built once per `BuildCtx`, so a `Box` here would trade 24 bytes
     // on a per-presentation struct for an allocation on every element build.
     //
-    // It moved again, 584 -> 608, for issue #561's per-child panic-
-    // containment drain: a measured 24 bytes for
+    // The per-child panic-containment drain costs a measured 24 bytes for
     // `recovered_panics: Vec<RecoveredPanic>` (ptr+len+cap) — the vector's
     // own header stays 24 bytes regardless of what `RecoveredPanic` itself
     // grows to (its `element`/`parent` fields became one `RecoveredAt` enum
     // without changing this count). The paired
-    // `hook_panic_recorded: Cell<bool>` flag costs nothing extra — one byte,
-    // which existing padding absorbs.
+    // typed `hook_panic_recorded` flag costs nothing extra because existing
+    // padding absorbs it.
     assert!(size < 632, "BuildOwner is too large: {size} bytes");
 }

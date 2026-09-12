@@ -13,6 +13,14 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **Recovered lifecycle-panic diagnostics** (#561): `flui-view` exports the
+  cloneable, non-exhaustive `RecoveredPanic`, `RecoveredAt`, and
+  `LifecycleHook` record types. `BuildOwner::take_recovered_panics` and
+  `WidgetsBinding::take_recovered_panics` are explicit `#[must_use]` drains;
+  records name the panicking element, the mounted substitute, or a lazy
+  delegate without overloading one id field with multiple meanings. Undrained
+  records are discarded with one warning at the next frame start, bounding
+  the producer even before a host forwards the diagnostics.
 - **Layout-poison retention fixtures** (#561): `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero`
   and `a_leaf_that_never_committed_stands_in_with_zero` (`flui-rendering`'s `layout_poison` tests) tell a
   poisoned node's last committed geometry apart from the `Size::ZERO` stand-in, and go red when the poisoning
@@ -130,19 +138,17 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **A `ViewState::dispose`/`deactivate` panic, and a `RenderView::did_unmount_render_object`
+- **A `ViewState::dispose`/`activate`/`deactivate` panic, and a `RenderView::did_unmount_render_object`
   panic, are contained per element, not per frame** (#561):
   `StatefulBehavior::on_unmount` catches a panicking `dispose` and `StatefulBehavior::on_deactivate`
   catches a panicking `deactivate`, both recording through `ElementOwner::push_recovered_panic`
   instead of letting the panic unwind out of `BuildOwner::build_scope` / `finalize_tree` — the
   tree-side teardown (slab slot freed or parked inactive, `GlobalKey` unregistered, inherited edges
   released) still completes either way, and `ElementCore::deactivate`'s lifecycle flip to `Inactive`
-  still runs right after a contained `deactivate` panic returns. A state whose `init_state` never
-  completed (removed before its first build, or `init_state` itself panicked) is never disposed.
-  `flui-app`'s
-  `frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames`
-  (formerly driven by a real `dispose` panic) now pins the frame-transaction boundary itself
-  through the controllable `segment_probe`, since a real `dispose` panic no longer reaches it.
+  still runs right after a contained `deactivate` panic returns. `activate` records at the exact
+  descendant whose hook panicked, then rethrows into the retake window so the relocation is undone
+  without a duplicate record. A state whose `init_state` never completed (removed before its first
+  build, or `init_state` itself panicked) receives none of `activate`, `deactivate`, or `dispose`.
   **Breaking:** `ElementBase::{activate, deactivate}` and `ElementBehavior::{on_activate,
   on_deactivate}` (public traits) now take an `owner: &mut ElementOwner<'_>` handle, mirroring
   `mount`/`unmount`'s existing shape, so the deactivate-side catch has an owner to report through.
@@ -161,7 +167,10 @@ file records the repo-consumer-visible summary.
   `Arc::ptr_eq` instead of re-reading `old_view.listenable()` — one user call per update instead
   of two. `listenable()` is the only handle to the listenable being cleaned up, so a catch around
   a second call to it at unmount could never make removal safe; caching closes the seam by never
-  calling it there at all.
+  calling it there at all. **Breaking:** storing `Arc<dyn Listenable>` means
+  `AnimatedBehavior<V>` no longer auto-implements `UnwindSafe` or `RefUnwindSafe`; callers that
+  cross an unwind boundary must establish safety explicitly, as the framework's narrow
+  containment windows do with `AssertUnwindSafe`.
 - **`PaintEffects` — one value for a render object's own paint effects**
   (#996): `RenderBox`/`RenderSliver`/`RenderObject::paint_effects(size)`
   returns `PaintEffects { opacity, clip, transform }` with a fixed nesting

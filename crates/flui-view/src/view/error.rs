@@ -230,9 +230,9 @@ impl View for ErrorView {
     }
 }
 
-/// The substitute view for a child whose containment window (issue #561)
-/// caught and substituted a lifecycle-hook panic, whatever hook it failed
-/// at (mount, activate, update).
+/// The substitute view for a child whose containment window caught and
+/// substituted a lifecycle-hook panic, whatever hook it failed at (mount,
+/// activate, update).
 ///
 /// A recovered child must be unkeyed, whatever the registered error-view
 /// factory returned: a keyed one would take part in a reconcile's key

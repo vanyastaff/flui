@@ -62,7 +62,7 @@ use flui_rendering::{
 };
 use parking_lot::Mutex;
 
-use super::sparse_children::{ReconcileSource, build_item_or_error};
+use super::sparse_children::{ReconcileSource, build_item_or_report};
 use super::{
     Variable,
     behavior::{ElementBehavior, RenderBehavior},
@@ -603,6 +603,14 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
             tracing::warn!("SliverAdaptorManager::service called before host element was mounted");
             return false;
         };
+        // Resolved once for this service pass — see `SparseChildren::reconcile`'s
+        // identical computation for why it is the host's `view_type_id`, not an
+        // item's: a lazy-delegate panic (the item builder here) has no item view
+        // to name yet.
+        let host_view_type_id = tree
+            .get(host)
+            .map(|node| node.element().view_type_id())
+            .expect("BUG: host must be live while its own ChildManager services it");
 
         // Reconcile against the (possibly just-updated) delegate BEFORE
         // evicting by band: a keyed resident whose old index falls outside
@@ -656,7 +664,13 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
                 // Already built — no work needed.
                 continue;
             }
-            match build_item_or_error(&*self.builder, logical_index) {
+            match build_item_or_report(
+                &*self.builder,
+                logical_index,
+                host,
+                host_view_type_id,
+                owner,
+            ) {
                 Some(view) => {
                     self.sparse_children.ensure(
                         logical_index,
@@ -2057,6 +2071,41 @@ mod tests {
             manager.sparse_children.get(0).is_some(),
             "the requested child must be present in SparseChildren after service"
         );
+    }
+
+    /// The post-layout service path is a production mount path, not a count
+    /// probe: a requested item's builder panic must be both substituted and
+    /// recorded exactly once.
+    #[test]
+    fn service_records_a_requested_panicking_item_as_one_lazy_delegate_panic() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+        let mut manager = list_manager(host, 3);
+        manager.builder = Rc::new(|index| {
+            assert_ne!(index, 1, "requested item builder panic");
+            Some(BoxedView(Box::new(ItemView)))
+        });
+
+        let did_work = manager.service(
+            &[1],
+            0,
+            2,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert!(did_work, "the substituted requested item was mounted");
+        let recovered = build_owner.take_recovered_panics();
+        assert_eq!(recovered.len(), 1, "one builder call yields one record");
+        assert_eq!(recovered[0].hook, crate::LifecycleHook::Build);
+        assert!(matches!(
+            recovered[0].at,
+            crate::RecoveredAt::LazyDelegate {
+                host: recorded_host,
+                index: Some(1),
+                ..
+            } if recorded_host == host
+        ));
     }
 
     /// `ChildManager::service` must return `true` when it evicts at least one

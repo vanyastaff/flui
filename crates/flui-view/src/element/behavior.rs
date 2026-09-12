@@ -700,7 +700,7 @@ where
     /// (see `build_into_views` above), so a panicking `init_state` leaves
     /// it `false` and this guard holds.
     ///
-    /// # Containment (issue #561)
+    /// # Containment
     ///
     /// Only `state.dispose()` runs inside the catch — nothing else about
     /// unmount moves. `Element::unmount` (`unified.rs`) always calls
@@ -742,7 +742,7 @@ where
     }
 
     /// Run `ViewState::activate` under the same containment shape as
-    /// [`Self::on_unmount`]/[`Self::on_deactivate`] (issue #561).
+    /// [`Self::on_unmount`]/[`Self::on_deactivate`].
     ///
     /// # The `initialized` gate
     ///
@@ -751,19 +751,14 @@ where
     ///
     /// # Why this needs its own catch, not just the retake window's
     ///
-    /// `activate` is reachable only from a `GlobalKey` retake
-    /// (`ElementTree::retake_inactive_global_key` /
-    /// `retake_active_global_key`), which already wraps its
-    /// `activate_subtree` call in its own containment window. But that
-    /// window walks the WHOLE reactivated subtree — the retaken element
-    /// AND every descendant — so a panic anywhere in it, caught only one
-    /// level up, can only be attributed to the retake's own candidate,
-    /// never to the actual descendant whose `activate` failed. Catching
-    /// here, at the element whose hook is actually running, records the
-    /// panic under its OWN accurate identity — then re-raises (via
-    /// `ElementOwner::mark_hook_panic_recorded`) so the retake's own
-    /// window still observes the unwind and still undoes the relocation,
-    /// but does not push a second, coarser record for the same panic.
+    /// A `GlobalKey` retake wraps `activate_subtree`, but that window walks
+    /// the WHOLE reactivated subtree. A panic caught only there can name the
+    /// retake candidate, never the actual descendant whose `activate`
+    /// failed. Catching here records the exact element and marks the unwind
+    /// before re-raising it. The retake's immediate catch consumes and
+    /// carries that mark while it undoes the relocation, avoiding a second,
+    /// coarser record. Public unbounded `ElementTree::activate` also consumes
+    /// the mark before resuming the unwind to its caller.
     fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !self.initialized {
             return;
@@ -810,6 +805,9 @@ where
     /// would skip that flip on a panic and hand a same-frame `GlobalKey`
     /// retake an element still reporting `Active`.
     fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        if !self.initialized {
+            return;
+        }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate()))
         {
             owner.record_hook_panic(
@@ -1014,7 +1012,7 @@ where
                 // (`ElementTree::discard_unannounced` ->
                 // `RenderBehavior::on_unmount`) can find and detach the
                 // already-inserted, now-orphaned render object instead of
-                // leaking it (issue #561).
+                // leaking it.
                 self.render_id = Some(render_id);
 
                 // Handle parent relationship. `adopt_child` writes the
@@ -1073,9 +1071,8 @@ where
     /// parent — and its detach-related asserts BEFORE calling
     /// `widget.didUnmountRenderObject(renderObject)`, with no
     /// `try`/`catch` around the hook. So a throwing hook there does NOT
-    /// skip the detach — the detach already happened. What it skips is
-    /// only the two calls that come after it: `renderObject.dispose()` and
-    /// clearing `_renderObject` to `null`. FLUI's `remove_render_object_from_tree`
+    /// skip the detach — the detach already happened. The lifecycle work it
+    /// skips is `renderObject.dispose()`, which follows the hook. FLUI's `remove_render_object_from_tree`
     /// below runs unconditionally either way, so this containment closes
     /// that same narrower gap rather than a leaked-detach one; ADR-0048
     /// (the frame transaction boundary) is where the accounting for the
@@ -1429,7 +1426,7 @@ where
     /// subscribe time (`on_mount`, and again on a swap in
     /// `on_view_updated`).
     ///
-    /// # Why cache instead of re-reading `listenable()` (issue #561)
+    /// # Why cache instead of re-reading `listenable()`
     ///
     /// `on_unmount` removes the subscription through this cached `Arc` and
     /// never calls `core.view().listenable()` again. `listenable()` is the

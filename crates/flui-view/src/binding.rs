@@ -692,14 +692,26 @@ impl WidgetsBinding {
     }
 
     /// Drain this presentation's recovered panics — every lifecycle-hook
-    /// panic a per-child containment seam caught and substituted since the
+    /// panic a per-child containment seam caught and recovered from since the
     /// last drain.
     ///
-    /// The realm-facing seam (issue #561): called once per presentation
-    /// per pump, after the build segment, and forwarded as a frame-failure
-    /// report. `flui-testing`'s `HeadlessBinding::build_owner_mut` reaches
+    /// Drain after the build segment before forwarding diagnostics. If a
+    /// host omits the drain, the next
+    /// [`Self::draw_frame`] discards the stale records with an aggregate
+    /// warning. `flui-testing`'s `HeadlessBinding::build_owner_mut` reaches
     /// the same underlying `BuildOwner::take_recovered_panics` directly for
     /// tests that want the drain without a realm in the loop.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_view::WidgetsBinding;
+    ///
+    /// let binding = WidgetsBinding::new();
+    /// let recovered = binding.take_recovered_panics();
+    /// assert!(recovered.is_empty());
+    /// ```
+    #[must_use = "discarding the drain loses lifecycle-panic diagnostics"]
     pub fn take_recovered_panics(&self) -> Vec<RecoveredPanic> {
         self.inner.write().build_owner.take_recovered_panics()
     }
@@ -1158,6 +1170,14 @@ impl WidgetsBinding {
                 .store(true, Ordering::Relaxed);
             BuildingFlagReset(&self.debug_building_dirty_elements)
         };
+
+        let discarded_recovered_panics = inner.build_owner.discard_stale_recovered_panics();
+        if discarded_recovered_panics != 0 {
+            tracing::warn!(
+                count = discarded_recovered_panics,
+                "discarding recovered lifecycle panics left undrained from the previous frame"
+            );
+        }
 
         inner.build_scheduled = false;
 
@@ -1680,6 +1700,28 @@ mod tests {
         }
     }
 
+    /// Panics on every build, so each frame must leave its own fresh record
+    /// after discarding the previous frame's undrained batch.
+    #[derive(Clone)]
+    struct EveryBuildPanics {
+        build_calls: Rc<std::cell::Cell<u32>>,
+    }
+
+    impl crate::StatelessView for EveryBuildPanics {
+        fn build(&self, _ctx: &dyn crate::BuildContext) -> impl IntoView {
+            let call = self.build_calls.get() + 1;
+            self.build_calls.set(call);
+            assert_eq!(call, 0, "intentional build panic on call {call}");
+            LeafView.boxed()
+        }
+    }
+
+    impl View for EveryBuildPanics {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
+        }
+    }
+
     #[derive(Clone)]
     struct RegistryStateView {
         key: crate::GlobalKey<RegistryState>,
@@ -2041,6 +2083,70 @@ mod tests {
 
         binding.draw_frame();
         assert!(!binding.has_pending_builds());
+    }
+
+    #[test]
+    fn next_frame_discards_undrained_recovered_panics_without_growing_the_queue() {
+        let binding = WidgetsBinding::new();
+        let build_calls = Rc::new(std::cell::Cell::new(0));
+        binding
+            .attach_root_widget(&EveryBuildPanics {
+                build_calls: Rc::clone(&build_calls),
+            })
+            .expect("attach succeeds");
+
+        binding.draw_frame();
+        let (panicking_element, retained_capacity) = {
+            let inner = binding.inner.read();
+            assert_eq!(
+                inner.build_owner.recovered_panics.len(),
+                1,
+                "the first frame must leave exactly one record for the missing consumer"
+            );
+            let panicking_element = inner.build_owner.recovered_panics[0]
+                .at
+                .element()
+                .expect("the first frame identifies its panicking element");
+            (
+                panicking_element,
+                inner.build_owner.recovered_panics.capacity(),
+            )
+        };
+
+        let depth = binding.with_element_tree_mut(|tree| {
+            tree.mark_needs_build(panicking_element);
+            tree.get(panicking_element)
+                .expect("panicking element remains live")
+                .depth()
+        });
+        binding.with_build_owner_mut(|owner| {
+            owner.schedule_build_for(panicking_element, depth, crate::RebuildReason::StateChange);
+        });
+
+        binding.draw_frame();
+        assert_eq!(
+            binding.inner.read().build_owner.recovered_panics.capacity(),
+            retained_capacity,
+            "discarding stale records retains the allocation for later frames"
+        );
+        let current_frame_records = binding.take_recovered_panics();
+        assert_eq!(
+            current_frame_records.len(),
+            1,
+            "the stale batch is discarded at entry and this frame's panic remains drainable"
+        );
+        assert!(
+            current_frame_records[0]
+                .error
+                .message
+                .contains("intentional build panic on call 2"),
+            "the surviving record belongs to the second frame"
+        );
+        assert_eq!(
+            build_calls.get(),
+            2,
+            "the producer fails deterministically every frame"
+        );
     }
 
     #[test]
