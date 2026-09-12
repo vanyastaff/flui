@@ -344,6 +344,26 @@ impl ElementNode {
     pub(crate) fn set_child_ids(&mut self, ids: Vec<ElementId>) {
         self.child_ids = ids;
     }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "consumed when BuildOwner wires build-hook recovery"
+        )
+    )]
+    fn commit_child_replacement(
+        &mut self,
+        slot: usize,
+        expected_old: ElementId,
+        replacement: ElementId,
+    ) {
+        assert!(
+            self.child_ids.get(slot) == Some(&expected_old),
+            "BUG: a replacement slot must still contain its preflighted old child after mount",
+        );
+        self.child_ids[slot] = replacement;
+    }
 }
 
 impl std::fmt::Debug for ElementNode {
@@ -792,6 +812,88 @@ impl ElementTree {
     ) -> ElementId {
         self.try_insert_with_provisional_order(view, parent, slot, owner, ProvisionalOrder::NONE)
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
+    }
+
+    /// Finalize one child subtree and mount a keyless replacement in its exact slot.
+    ///
+    /// Validation completes before mutation. The old parent-child
+    /// `GlobalKey` reservation is then withdrawn, the old subtree is finalized,
+    /// and the replacement is inserted through the unbounded insertion path.
+    /// Only after insertion succeeds is the parent's child-id slot committed,
+    /// render reordering armed and notified, and the replacement scheduled for
+    /// its initial build.
+    ///
+    /// A panic from replacement creation or mounting propagates after the old
+    /// subtree has been removed but before the child-id slot, render reorder, or
+    /// build schedule is committed. That failure is fatal and has no rollback;
+    /// callers must not continue using the partially advanced tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a `BUG:` invariant failure before mutation if the replacement
+    /// is keyed, the parent or old child is missing, the slot does not exist, or
+    /// the old child's reverse parent/slot edge disagrees. Also propagates any
+    /// panic raised while creating or mounting the replacement, with the
+    /// post-removal failure state described above.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "consumed when BuildOwner wires build-hook recovery"
+        )
+    )]
+    pub(crate) fn replace_child_with(
+        &mut self,
+        parent: ElementId,
+        slot: usize,
+        view: &dyn View,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> ElementId {
+        assert!(
+            view.key().is_none(),
+            "BUG: a failure replacement must be keyless",
+        );
+        let (old_child, parent_depth, render_notification) = {
+            let parent_node = self
+                .get(parent)
+                .expect("BUG: a failure replacement parent must remain live");
+            let old_child = *parent_node
+                .child_ids()
+                .get(slot)
+                .expect("BUG: a failure replacement slot must exist on its parent");
+            let parent_element = parent_node.element();
+            let render_notification = parent_element.render_id().map(|render_id| {
+                let pipeline = parent_element
+                    .pipeline_owner()
+                    .expect("BUG: an active render replacement parent must have a PipelineOwner");
+                (pipeline, render_id)
+            });
+            (old_child, parent_node.depth(), render_notification)
+        };
+        let old_node = self
+            .get(old_child)
+            .expect("BUG: a failure replacement slot must name a live child");
+        assert!(
+            old_node.parent() == Some(parent) && old_node.slot() == slot,
+            "BUG: a replacement child's reverse edge must match its containing parent and slot",
+        );
+
+        owner.forget_global_key_reservation(parent, old_child);
+        self.remove_subtree(old_child, owner, SubtreeRemoval::Finalize);
+        let replacement = self.insert(view, parent, slot, owner);
+        self.get_mut(parent)
+            .expect("BUG: a replacement parent must remain live through child mount")
+            .commit_child_replacement(slot, old_child, replacement);
+        self.mark_render_reorder_needed();
+        if let Some((pipeline, render_id)) = render_notification {
+            pipeline.with_mut(|owner| owner.note_render_children_reordered(render_id));
+        }
+        owner.schedule_build_for(
+            replacement,
+            parent_depth + 1,
+            crate::RebuildReason::InitialMount,
+        );
+        replacement
     }
 
     /// [`insert`](Self::insert)'s fallible core: a caught panic comes back as `Err` instead of
@@ -2724,6 +2826,9 @@ impl std::fmt::Debug for ElementTree {
 mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
+
+    #[path = "replace_child_with_tests.rs"]
+    mod replace_child_with_tests;
 
     use crate::{
         BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, GlobalKey,
