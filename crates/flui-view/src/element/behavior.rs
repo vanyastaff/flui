@@ -754,25 +754,24 @@ where
     /// A `GlobalKey` retake wraps `activate_subtree`, but that window walks
     /// the WHOLE reactivated subtree. A panic caught only there can name the
     /// retake candidate, never the actual descendant whose `activate`
-    /// failed. Catching here records the exact element and marks the unwind
-    /// before re-raising it. The retake's immediate catch consumes and
-    /// carries that mark while it undoes the relocation, avoiding a second,
-    /// coarser record. Public unbounded `ElementTree::activate` also consumes
-    /// the mark before resuming the unwind to its caller.
+    /// failed. While that bounded retake has armed its transient handoff,
+    /// catching here records the exact element and marks the unwind before
+    /// re-raising it. The retake's immediate catch consumes and carries that
+    /// mark while it undoes the relocation, avoiding a second, coarser
+    /// record. A direct, unbounded `ElementTree::activate` call does not arm
+    /// the handoff, so its panic propagates without being reported as
+    /// recovered.
     fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !self.initialized {
             return;
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.activate())) {
-            owner.record_hook_panic(
+            owner.record_armed_activation_panic(
                 core.self_id(),
-                None,
                 TypeId::of::<V>(),
-                LifecycleHook::Activate,
                 payload.as_ref(),
                 "activating StatefulElement",
             );
-            owner.mark_hook_panic_recorded();
             std::panic::resume_unwind(payload);
         }
     }

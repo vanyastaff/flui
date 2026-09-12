@@ -7,8 +7,9 @@
 //! windows, `activate_subtree` and the retake's own `update`
 //! (`ElementTree::update_or_substitute` and the retake fns in
 //! `tree/element_tree.rs`); the removal-path hooks `dispose`,
-//! `activate`, `deactivate`, and `did_unmount_render_object`
-//! (`StatefulBehavior`/`RenderBehavior` in `element/behavior.rs`); and a
+//! bounded-retake `activate`, `deactivate`, and `did_unmount_render_object`
+//! (`StatefulBehavior`/`RenderBehavior` in `element/behavior.rs`; a direct
+//! public activation remains unbounded and unrecorded); and a
 //! lazy sliver host's own delegate — the item builder
 //! (`sparse_children::build_item_or_report`, on the mount path only; the
 //! count-probe callers in `sliver_adaptor.rs` stay unreported by design,
@@ -70,8 +71,9 @@ pub enum LifecycleHook {
     /// runs later, in the `build_scope` drain, not during `mount`. See
     /// [`Self::InitState`].
     Mount,
-    /// A `GlobalKey` retake's `activate_subtree` call, reactivating an
-    /// element that was queued inactive.
+    /// A bounded `GlobalKey` retake's `activate_subtree` call, reactivating
+    /// an element that was queued inactive. A direct public activation panic
+    /// propagates without producing a recovered-panic record.
     Activate,
     /// `ViewState::did_update_view` / `RenderView::update_render_object`,
     /// or `AnimatedBehavior::on_view_updated`'s `listenable()` read. That

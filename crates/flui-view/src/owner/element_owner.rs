@@ -195,14 +195,14 @@ pub struct ElementOwner<'a> {
     /// Whether the innermost containment seam that caught the panic
     /// currently unwinding has already pushed its [`RecoveredPanic`].
     ///
-    /// A behavior that catches a user hook, records it with its own accurate
-    /// identity (via [`Self::record_hook_panic`]), and re-raises sets this
-    /// before resuming the unwind — [`StatefulBehavior::on_activate`](crate::element::behavior)
-    /// is such a site. The immediate `activate_subtree` catch consumes the
-    /// marker and carries its value inside `ChildHookPanic`; public unbounded
-    /// activation clears it before resuming. The cell is therefore transient
-    /// unwind-local handoff state, never a pending decision for a later
-    /// recovery.
+    /// While a bounded retake has armed the handoff, a behavior that catches
+    /// a user activation records it with its own accurate identity through
+    /// [`Self::record_armed_activation_panic`] and transitions this state
+    /// before resuming the unwind. The immediate `activate_subtree` catch
+    /// consumes the marker and carries its value inside `ChildHookPanic`.
+    /// Direct unbounded activation never arms the cell and therefore neither
+    /// records nor leaves state behind. The cell is transient unwind-local
+    /// handoff state, never a pending decision for a later recovery.
     pub(crate) hook_panic_recorded: &'a Cell<Option<HookPanicRecording>>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
@@ -603,9 +603,11 @@ impl ElementOwner<'_> {
     }
 
     /// Record a lifecycle-hook panic whose subject is the panicking element
-    /// itself (`RecoveredAt::Element`) — the shape every removal-side seam
-    /// (`dispose`, `deactivate`, `did_unmount_render_object`) and a
-    /// behavior-level `activate` catch share.
+    /// itself (`RecoveredAt::Element`) — the shape used by removal-side
+    /// seams (`dispose`, `deactivate`, `did_unmount_render_object`). Bounded
+    /// activation uses [`Self::record_armed_activation_panic`] instead so
+    /// recording and its unwind-local handoff transition stay atomic;
+    /// unbounded activation records nothing.
     ///
     /// `element` is `core.self_id()` at the call site: `None` means a
     /// hand-rolled element that bypassed `ElementTree::insert` (test
@@ -641,19 +643,43 @@ impl ElementOwner<'_> {
         ));
     }
 
-    /// Mark that the panic currently unwinding through this call has
-    /// already been recorded, by the innermost site that caught it — see
-    /// [`Self::hook_panic_recorded`]'s field doc for the full contract.
+    /// Record an activation panic only while a bounded `GlobalKey` retake
+    /// owns the transient handoff, then transition that handoff from
+    /// `Unrecorded` to `Recorded`.
     ///
-    /// Called immediately before re-raising a caught-and-recorded panic.
-    /// The immediate activation catch consumes it: a substituting retake
-    /// carries the state with its `ChildHookPanic`, while an unbounded public
-    /// activation clears it before resuming.
-    pub(crate) fn mark_hook_panic_recorded(&self) {
-        if self.hook_panic_recorded.get().is_some() {
-            self.hook_panic_recorded
-                .set(Some(HookPanicRecording::Recorded));
+    /// Keeping the gate and transition in this helper prevents a direct,
+    /// unbounded `ElementTree::activate` call from publishing a
+    /// [`RecoveredPanic`] even when its caller catches the propagated unwind.
+    /// If an inner activation already transitioned the handoff, an outer
+    /// behavior catch leaves its more accurate record untouched. An armed
+    /// call with `element == None` pushes nothing and deliberately leaves the
+    /// handoff `Unrecorded`, allowing the outer retake seam to emit its
+    /// coarser recovery record.
+    pub(crate) fn record_armed_activation_panic(
+        &mut self,
+        element: Option<ElementId>,
+        view_type_id: TypeId,
+        payload: &(dyn Any + Send),
+        context: impl Into<String>,
+    ) {
+        if self.hook_panic_recorded.get() != Some(HookPanicRecording::Unrecorded) {
+            return;
         }
+        let Some(element) = element else {
+            return;
+        };
+        self.push_recovered_panic(RecoveredPanic::from_payload(
+            RecoveredAt::Element {
+                element,
+                parent: None,
+            },
+            view_type_id,
+            LifecycleHook::Activate,
+            payload,
+            context,
+        ));
+        self.hook_panic_recorded
+            .set(Some(HookPanicRecording::Recorded));
     }
 
     /// Arm the unwind-local handoff immediately before a retake's bounded
@@ -864,7 +890,9 @@ mod tests {
     #[test]
     fn hook_panic_recorded_round_trip() {
         let mut owner = BuildOwner::new();
-        let handle = owner.element_owner_mut();
+        let mut handle = owner.element_owner_mut();
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        let element = ElementId::new(1);
 
         assert_eq!(
             handle.take_hook_panic_recorded(),
@@ -872,15 +900,62 @@ mod tests {
             "nothing marked the handoff yet"
         );
 
-        handle.mark_hook_panic_recorded();
+        handle.record_armed_activation_panic(
+            Some(element),
+            TypeId::of::<()>(),
+            payload.as_ref(),
+            "direct activation",
+        );
         assert_eq!(
             handle.take_hook_panic_recorded(),
             HookPanicRecording::Unrecorded,
             "a direct unbounded activation cannot arm a persistent handoff"
         );
+        assert!(
+            handle.recovered_panics.is_empty(),
+            "an unbounded activation is not a recovered panic"
+        );
 
         handle.arm_hook_panic_recording();
-        handle.mark_hook_panic_recorded();
+        handle.record_armed_activation_panic(
+            None,
+            TypeId::of::<()>(),
+            payload.as_ref(),
+            "bounded activation without an element id",
+        );
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Unrecorded,
+            "the outer retake must still emit the coarse recovery record"
+        );
+        assert!(
+            handle.recovered_panics.is_empty(),
+            "an absent element id cannot produce an exact record"
+        );
+
+        handle.arm_hook_panic_recording();
+        handle.record_armed_activation_panic(
+            Some(element),
+            TypeId::of::<()>(),
+            payload.as_ref(),
+            "bounded activation",
+        );
+        handle.record_armed_activation_panic(
+            Some(ElementId::new(2)),
+            TypeId::of::<String>(),
+            payload.as_ref(),
+            "outer behavior catch",
+        );
+        assert_eq!(
+            handle.recovered_panics.len(),
+            1,
+            "a recorded handoff must preserve the first exact record"
+        );
+        assert_eq!(
+            handle.recovered_panics[0].element(),
+            Some(element),
+            "the inner panicking element remains the attribution target"
+        );
         assert_eq!(
             handle.take_hook_panic_recorded(),
             HookPanicRecording::Recorded,

@@ -25,9 +25,10 @@ View and Element tree: immutable Views → mutable Elements → RenderObjects. T
 - **Benchmarks** — `key_storage_shape`, `static_path_algorithm`, `global_key_reparent_latency`.
 - **`cargo-shear` false positive** — `tests/ui/*.rs` declared in `[package.metadata.cargo-shear] ignored-paths`.
 - **A user lifecycle-hook panic is contained at the narrowest attributable seam.**
-  `build`, `activate`, `deactivate`, `dispose`, and `did_unmount_render_object` record the exact
-  element; `activate` rethrows after recording so the surrounding `GlobalKey` retake can undo the
-  relocation without double-recording. `activate`/`deactivate`/`dispose` run only after
+  `build`, `deactivate`, `dispose`, and `did_unmount_render_object` record the exact element.
+  `activate` records only while a bounded `GlobalKey` retake has armed its transient handoff, then
+  rethrows so that retake can undo the relocation without double-recording; direct public
+  activation remains unbounded and unrecorded. `activate`/`deactivate`/`dispose` run only after
   `init_state` completed. Fresh sparse mounts and retake updates use
   `ElementTree::{mount_or_substitute, update_or_substitute}`; a retake has separate literal
   `Activate` and `Update` catch windows, while duplicate-key checks, preflight, relocation, and

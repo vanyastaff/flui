@@ -916,6 +916,44 @@ impl View for ActivatePanicChild {
     }
 }
 
+/// Direct public activation has no recovery boundary: its panic propagates,
+/// remains unrecorded, and cannot leave the retake-only handoff armed.
+#[test]
+fn direct_public_activate_panic_is_not_reported_as_recovered() {
+    let (mut tree, mut build_owner, _pipeline, host) = host_tree();
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let activating = tree.insert(
+        &ActivatePanicChild {
+            armed: Arc::clone(&armed),
+        },
+        host,
+        0,
+        &mut build_owner.element_owner_mut(),
+    );
+    let depth = tree.get(activating).expect("activating child").depth();
+    build_owner.schedule_build_for(activating, depth, crate::RebuildReason::InitialMount);
+    build_owner.build_scope(&mut tree);
+    tree.deactivate(activating, &mut build_owner.element_owner_mut());
+
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let escaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tree.activate(activating, &mut build_owner.element_owner_mut());
+    }));
+    assert!(
+        escaped.is_err(),
+        "direct public activation remains unbounded"
+    );
+    assert_eq!(
+        build_owner.hook_panic_recorded.get(),
+        None,
+        "direct activation must leave the retake-only handoff disarmed"
+    );
+    assert!(
+        build_owner.take_recovered_panics().is_empty(),
+        "an unbounded panic must not be reported as recovered"
+    );
+}
+
 /// A recorded activation unwind that escapes the public dense insertion
 /// path must disarm its transient handoff before the caller catches it.
 ///
