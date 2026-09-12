@@ -1122,6 +1122,12 @@ impl WidgetsBinding {
     /// automatically by the engine when it is time to lay out and paint a
     /// frame.
     ///
+    /// The application frame driver calls this once for every produced
+    /// presentation segment, even when [`Self::has_pending_builds`] is false.
+    /// The build drain below remains conditional, while the frame-entry
+    /// expiry of undrained recovered-panic records and inactive-element
+    /// finalization still run for pipeline-only and lazy-service-only frames.
+    ///
     /// # Frame phases
     ///
     /// 1. **Build phase**: All dirty `Element`s in the widget tree are rebuilt.

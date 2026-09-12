@@ -2496,13 +2496,14 @@ impl UiRealm {
         #[cfg(test)]
         presentation.run_segment_probe();
 
-        // Phase 1: Build (WidgetsBinding)
-        {
-            let w = presentation.widgets();
-            if w.has_pending_builds() {
-                w.draw_frame();
-            }
-        }
+        // Phase 1: enter the widget frame unconditionally. `draw_frame`
+        // already skips `build_scope` when nothing is dirty, but its frame
+        // entry also discards any undrained lifecycle-panic records from the
+        // preceding frame. A pipeline-only segment must still perform that
+        // cleanup: lazy child service below can produce records after the
+        // preceding frame's build phase, leaving no pending build to make a
+        // conditional call here run on the next frame.
+        presentation.widgets().draw_frame();
 
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
         // typestate-driven orchestrator.
@@ -5224,6 +5225,68 @@ mod tests {
 
         fn test_constraints() -> BoxConstraints {
             BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+        }
+
+        #[derive(Clone)]
+        struct PanicsOnFirstBuild {
+            should_panic: Rc<Cell<bool>>,
+        }
+
+        impl flui_view::StatelessView for PanicsOnFirstBuild {
+            fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+                assert!(
+                    !self.should_panic.replace(false),
+                    "intentional first-frame build panic"
+                );
+                LeafView
+            }
+        }
+
+        impl flui_view::View for PanicsOnFirstBuild {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateless(self)
+            }
+        }
+
+        /// Recovered-panic expiry belongs to every produced presentation
+        /// frame, not only frames whose widget tree is dirty. Before the
+        /// unconditional widget-frame entry, the second pipeline-only frame
+        /// skipped `WidgetsBinding::draw_frame` and left the first frame's
+        /// contained build-panic record drainable indefinitely.
+        #[test]
+        fn a_pipeline_only_frame_discards_the_prior_frames_undrained_recovered_panics() {
+            let realm = UiRealm::for_test();
+            let should_panic = Rc::new(Cell::new(true));
+            realm
+                .attach_root_widget(&PanicsOnFirstBuild {
+                    should_panic: Rc::clone(&should_panic),
+                })
+                .expect("root attaches");
+
+            let _ = realm.draw_frame(test_constraints());
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "the next frame must have no widget build work"
+            );
+            assert!(
+                !should_panic.get(),
+                "the first frame exercised the contained build-panic producer"
+            );
+
+            realm.pipeline_for_test().with_mut(|owner| {
+                let root_id = owner.root_id().expect("attached render root");
+                owner.mark_needs_paint(root_id);
+            });
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "render dirtiness must not manufacture widget work"
+            );
+
+            let _ = realm.draw_frame(test_constraints());
+            assert!(
+                realm.widgets().take_recovered_panics().is_empty(),
+                "the pipeline-only frame entry must discard the stale batch"
+            );
         }
 
         #[test]

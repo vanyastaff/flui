@@ -119,8 +119,12 @@ continues teardown after recording the hook failure.
 
 Every contained failure enters a frame-scoped `RecoveredPanic` queue. A host
 may drain it after the build segment; otherwise the next frame entry discards
-the stale records with one aggregate warning. Thus a producer shipped ahead of
-its forwarding consumer is bounded by construction.
+the stale records with one aggregate warning. Every produced presentation
+segment enters `WidgetsBinding::draw_frame` for this expiry even when the
+widget tree has no pending builds; the build drain itself stays conditional.
+Thus a record produced by late lazy-child service is still bounded when the
+next frame carries only pipeline work, and a producer shipped ahead of its
+forwarding consumer is bounded by construction.
 
 ### Failure classification and the typed route
 
