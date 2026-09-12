@@ -26,6 +26,8 @@ use std::sync::RwLock;
 
 use flui_foundation::panic::payload_text;
 
+use super::into_view::BoxedView;
+use super::stateless::StatelessView;
 use super::view::View;
 
 /// Factory function type for creating custom error widgets.
@@ -225,6 +227,48 @@ impl View for ErrorView {
     /// Flutter's `ErrorWidget` is a `RenderErrorBox` for the same reason.
     fn create_element(&self) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
+    }
+}
+
+/// The substitute view for a child whose containment window caught and
+/// substituted a lifecycle-hook panic, whatever hook it failed at (mount,
+/// activate, update).
+///
+/// A recovered child must be unkeyed, whatever the registered error-view
+/// factory returned: a keyed one would take part in a reconcile's key
+/// matching, or trigger a `GlobalKey` retake, instead of staying isolated
+/// to the failed slot. `ElementTree::mount_or_substitute` /
+/// `ElementTree::update_or_substitute` are this primitive's own callers;
+/// `crate::element::sparse_children::build_item_or_error` — a *different*
+/// containment window, the lazy-sliver item builder itself — calls this
+/// too, so the two never drift into two ways of stripping a key.
+pub(crate) fn recovery_view_for(error: &FlutterError) -> BoxedView {
+    let recovered = ErrorView::build_error_view(error);
+    if recovered.key().is_some() {
+        BoxedView(Box::new(UnkeyedRecovery {
+            inner: BoxedView(recovered),
+        }))
+    } else {
+        BoxedView(recovered)
+    }
+}
+
+/// A keyless composite around a custom error view that carried a key. Its
+/// render descendant is stamped at adoption like any composite item's.
+#[derive(Clone)]
+struct UnkeyedRecovery {
+    inner: BoxedView,
+}
+
+impl StatelessView for UnkeyedRecovery {
+    fn build(&self, _ctx: &dyn crate::BuildContext) -> impl crate::view::IntoView {
+        self.inner.clone()
+    }
+}
+
+impl View for UnkeyedRecovery {
+    fn create_element(&self) -> crate::element::ElementKind {
+        crate::element::ElementKind::stateless(self)
     }
 }
 

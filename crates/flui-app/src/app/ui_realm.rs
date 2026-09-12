@@ -2496,13 +2496,14 @@ impl UiRealm {
         #[cfg(test)]
         presentation.run_segment_probe();
 
-        // Phase 1: Build (WidgetsBinding)
-        {
-            let w = presentation.widgets();
-            if w.has_pending_builds() {
-                w.draw_frame();
-            }
-        }
+        // Phase 1: enter the widget frame unconditionally. `draw_frame`
+        // already skips `build_scope` when nothing is dirty, but its frame
+        // entry also discards any undrained lifecycle-panic records from the
+        // preceding frame. A pipeline-only segment must still perform that
+        // cleanup: lazy child service below can produce records after the
+        // preceding frame's build phase, leaving no pending build to make a
+        // conditional call here run on the next frame.
+        presentation.widgets().draw_frame();
 
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
         // typestate-driven orchestrator.
@@ -5224,6 +5225,68 @@ mod tests {
 
         fn test_constraints() -> BoxConstraints {
             BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+        }
+
+        #[derive(Clone)]
+        struct PanicsOnFirstBuild {
+            should_panic: Rc<Cell<bool>>,
+        }
+
+        impl flui_view::StatelessView for PanicsOnFirstBuild {
+            fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+                assert!(
+                    !self.should_panic.replace(false),
+                    "intentional first-frame build panic"
+                );
+                LeafView
+            }
+        }
+
+        impl flui_view::View for PanicsOnFirstBuild {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateless(self)
+            }
+        }
+
+        /// Recovered-panic expiry belongs to every produced presentation
+        /// frame, not only frames whose widget tree is dirty. Before the
+        /// unconditional widget-frame entry, the second pipeline-only frame
+        /// skipped `WidgetsBinding::draw_frame` and left the first frame's
+        /// contained build-panic record drainable indefinitely.
+        #[test]
+        fn a_pipeline_only_frame_discards_the_prior_frames_undrained_recovered_panics() {
+            let realm = UiRealm::for_test();
+            let should_panic = Rc::new(Cell::new(true));
+            realm
+                .attach_root_widget(&PanicsOnFirstBuild {
+                    should_panic: Rc::clone(&should_panic),
+                })
+                .expect("root attaches");
+
+            let _ = realm.draw_frame(test_constraints());
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "the next frame must have no widget build work"
+            );
+            assert!(
+                !should_panic.get(),
+                "the first frame exercised the contained build-panic producer"
+            );
+
+            realm.pipeline_for_test().with_mut(|owner| {
+                let root_id = owner.root_id().expect("attached render root");
+                owner.mark_needs_paint(root_id);
+            });
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "render dirtiness must not manufacture widget work"
+            );
+
+            let _ = realm.draw_frame(test_constraints());
+            assert!(
+                realm.widgets().take_recovered_panics().is_empty(),
+                "the pipeline-only frame entry must discard the stale batch"
+            );
         }
 
         #[test]
@@ -8400,7 +8463,7 @@ mod tests {
     /// behavior unedited) — these are the NEW clock-level guarantees this
     /// slice adds.
     // ========================================================================
-    // Presentation-frame transaction boundary (ADR-0048, issue #561):
+    // Presentation-frame transaction boundary (ADR-0048):
     // a frame failure — a structured pipeline error or a panic that escaped
     // every inner recovery layer — is contained to the one presentation
     // whose frame it was. Siblings keep framing, the process survives, the
@@ -8409,7 +8472,6 @@ mod tests {
     // `FrameFailureReport` route instead of a silent skip.
     // ========================================================================
     mod frame_failure_containment {
-        use std::cell::RefCell;
         use std::sync::Mutex as StdMutex;
 
         use flui_widgets::SizedBox;
@@ -8493,138 +8555,100 @@ mod tests {
         }
 
         // ====================================================================
-        // The real escape path: a `ViewState::dispose` panic during tree
-        // finalization. Build-phase panics are already substituted with an
-        // `ErrorView` per element, and layout/paint panics surface as
-        // `RenderError::Poisoned` from the pipeline's own catch_unwind —
-        // dispose runs in `finalize_tree`, under neither, so before the
-        // boundary existed it unwound straight through the realm's
-        // per-presentation loop and killed the process via the runner's
-        // `resume_unwind`.
+        // The frame-transaction boundary itself: whatever escapes a
+        // presentation's build+layout+paint segment — of any origin — must
+        // be contained at `UiRealm::draw_frame_entered`'s per-presentation
+        // `catch_unwind`, not unwind out of the realm pump. Before that
+        // boundary existed, ANY panic reaching this deep (a bug in FLUI's
+        // own pipeline, a user callback nothing else had caught) unwound
+        // straight through the realm's per-presentation loop and killed the
+        // process via the runner's `resume_unwind`.
+        //
+        // The removal-path USER hooks are a narrower, closed set: `dispose`,
+        // `deactivate`, `activate`, and `did_unmount_render_object` are all
+        // bounded per element — see
+        // `StatefulBehavior::{on_unmount, on_activate, on_deactivate}` and
+        // `RenderBehavior::on_unmount`
+        // (`crates/flui-view/src/element/behavior.rs`) and the pins in
+        // `crates/flui-view/tests/lifecycle_panic_containment.rs`. A real
+        // `dispose` panic no longer reaches this deep at all. The dense
+        // reconciler's fresh-child `create_render_object` call remains a
+        // real escape until that path adopts flui-view's child-substitution
+        // primitive, so the headline test drives that production path.
         // ====================================================================
 
-        /// Child whose state panics on dispose — ONE-SHOT, via the shared
-        /// `armed` flag: the tree's own teardown at the end of the test
-        /// (and the half-unmounted element's eventual re-dispose during
-        /// realm drop) runs `dispose` again, and a panic from inside that
-        /// destructor-driven path would be a double panic that aborts the
-        /// whole test process instead of failing one assertion.
         #[derive(Clone)]
-        struct PanicOnDisposeView {
-            armed: Rc<Cell<bool>>,
+        struct DenseMountEscapeHost {
+            panic_on_build: Rc<Cell<bool>>,
         }
 
-        struct PanicOnDisposeState {
-            armed: Rc<Cell<bool>>,
-        }
-
-        impl StatefulView for PanicOnDisposeView {
-            type State = PanicOnDisposeState;
-
-            fn create_state(&self) -> Self::State {
-                PanicOnDisposeState {
-                    armed: Rc::clone(&self.armed),
-                }
-            }
-        }
-
-        impl ViewState<PanicOnDisposeView> for PanicOnDisposeState {
-            fn build(
-                &self,
-                _view: &PanicOnDisposeView,
-                _ctx: &dyn flui_view::BuildContext,
-            ) -> impl IntoView {
-                SizedBox::new(5.0, 5.0)
-            }
-
-            fn dispose(&mut self) {
-                if self.armed.get() {
-                    self.armed.set(false);
-                    panic!("PanicOnDisposeState::dispose — intentional test panic");
-                }
-            }
-        }
-
-        impl flui_view::View for PanicOnDisposeView {
-            fn create_element(&self) -> flui_view::element::ElementKind {
-                flui_view::element::ElementKind::stateful(self)
-            }
-        }
-
-        /// Root that conditionally includes the panicking child and hands
-        /// the test its `RebuildHandle` so the test can force rebuilds.
-        #[derive(Clone)]
-        struct HostView {
-            include_child: Rc<Cell<bool>>,
-            dispose_armed: Rc<Cell<bool>>,
-            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
-        }
-
-        struct HostState {
-            include_child: Rc<Cell<bool>>,
-            dispose_armed: Rc<Cell<bool>>,
-            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
-        }
-
-        impl StatefulView for HostView {
-            type State = HostState;
-
-            fn create_state(&self) -> Self::State {
-                HostState {
-                    include_child: Rc::clone(&self.include_child),
-                    dispose_armed: Rc::clone(&self.dispose_armed),
-                    handle_slot: Rc::clone(&self.handle_slot),
-                }
-            }
-        }
-
-        impl ViewState<HostView> for HostState {
-            fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
-                *self.handle_slot.borrow_mut() = Some(ctx.rebuild_handle());
-            }
-
-            fn build(&self, _view: &HostView, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
-                if self.include_child.get() {
-                    flui_view::view::ViewExt::boxed(PanicOnDisposeView {
-                        armed: Rc::clone(&self.dispose_armed),
-                    })
+        impl flui_view::StatelessView for DenseMountEscapeHost {
+            fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+                if self.panic_on_build.get() {
+                    DenseCreateRenderObjectPanic.boxed()
                 } else {
-                    flui_view::view::ViewExt::boxed(SizedBox::new(10.0, 10.0))
+                    SizedBox::new(10.0, 10.0).boxed()
                 }
             }
         }
 
-        impl flui_view::View for HostView {
+        impl flui_view::View for DenseMountEscapeHost {
             fn create_element(&self) -> flui_view::element::ElementKind {
-                flui_view::element::ElementKind::stateful(self)
+                flui_view::element::ElementKind::stateless(self)
             }
         }
 
-        /// The headline containment claim, driven through the REAL escape
-        /// path (a dispose panic during finalization, not an injected
-        /// probe): the panic is contained to presentation A's own frame —
-        /// the pump call returns instead of unwinding, sibling B's segment
-        /// still runs and presents in the SAME pump, the typed report names
-        /// A with causal detail, a retry is armed, and the pump after that
-        /// recovers A cleanly (which also pins the `WidgetsBinding`
-        /// building-flag reset on unwind: a flag wedged `true` would turn
-        /// the recovery pump's `draw_frame` into a bogus recursion assert,
-        /// i.e. a second report instead of a clean frame).
+        #[derive(Clone)]
+        struct DenseCreateRenderObjectPanic;
+
+        impl flui_view::RenderView for DenseCreateRenderObjectPanic {
+            type Protocol = flui_rendering::protocol::BoxProtocol;
+            type RenderObject = flui_objects::RenderSizedBox;
+
+            fn create_render_object(
+                &self,
+                _ctx: &flui_view::RenderObjectContext<'_>,
+            ) -> Self::RenderObject {
+                panic!("dense create_render_object — intentional test panic")
+            }
+
+            fn update_render_object(
+                &self,
+                _ctx: &flui_view::RenderObjectContext<'_>,
+                _render_object: &mut Self::RenderObject,
+            ) -> flui_rendering::RenderUpdateImpact {
+                flui_rendering::RenderUpdateImpact::NONE
+            }
+        }
+
+        impl flui_view::View for DenseCreateRenderObjectPanic {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::render_variable(self)
+            }
+        }
+
+        /// The headline containment claim, driven through the dense
+        /// reconciler's still-real `create_render_object` escape: the panic is contained
+        /// to presentation A's own frame — the pump call returns instead of
+        /// unwinding, sibling B's segment still runs and presents in the
+        /// SAME pump, the typed report names A with causal detail, a retry
+        /// is armed, and the pump after that recovers A cleanly (which also
+        /// pins the `WidgetsBinding` building-flag reset on unwind: a flag
+        /// wedged `true` would turn the recovery pump's `draw_frame` into a
+        /// bogus recursion assert, i.e. a second report instead of a clean
+        /// frame).
         #[test]
-        fn a_dispose_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames() {
+        fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames()
+         {
             let mut realm = UiRealm::for_test();
             let a_id = realm.presentation_id();
             let b_id = realm.install_second_presentation_for_test();
             let seen = install_collecting_handler(&realm);
+            let panic_on_build = Rc::new(Cell::new(false));
 
-            let include_child = Rc::new(Cell::new(true));
-            let dispose_armed = Rc::new(Cell::new(true));
-            let handle_slot = Rc::new(RefCell::new(None));
             realm
-                .attach_root_widget(&HostView {
-                    include_child: Rc::clone(&include_child),
-                    dispose_armed: Rc::clone(&dispose_armed),
-                    handle_slot: Rc::clone(&handle_slot),
+                .attach_root_widget(&DenseMountEscapeHost {
+                    panic_on_build: Rc::clone(&panic_on_build),
                 })
                 .expect("A attaches");
             realm
@@ -8645,18 +8669,16 @@ mod tests {
                 .expect("B installed")
                 .flush_count();
 
-            // Remove the child: the next build deactivates it and
-            // finalization runs its panicking dispose.
-            include_child.set(false);
-            handle_slot
-                .borrow()
-                .as_ref()
-                .expect("init_state captured the rebuild handle")
-                .schedule(flui_foundation::RebuildReason::StateChange);
-            assert!(
-                realm.presentations.primary().widgets().has_pending_builds(),
-                "precondition: the scheduled rebuild is visible as pending build work"
-            );
+            // Replace A's clean dense child with a different render view.
+            // Its `create_render_object` runs during the real dense reconcile,
+            // after `WidgetsBinding::draw_frame` has raised its building flag.
+            panic_on_build.set(true);
+            realm
+                .presentations
+                .primary()
+                .widgets()
+                .schedule_root_rebuild();
+            realm.request_redraw();
             // Give B real work too, so this same pump proves B's segment
             // still runs AFTER A's failure (A is primary and iterates
             // first).
@@ -8670,16 +8692,16 @@ mod tests {
             });
             realm.mark_rendered();
 
-            // Pump 2: A's dispose panics mid-segment. The claim under test:
-            // the pump RETURNS (no unwind out of render_frame_entered) and
-            // B still framed.
+            // Pump 2: A's dense child mount panics during the build. The claim
+            // under test: the pump RETURNS (no unwind out of
+            // render_frame_entered) and B still framed.
             let outcome = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)
                 }))
             });
             let presented = outcome.expect(
-                "a dispose panic in one presentation's segment must be contained at the \
+                "a panic escaping one presentation's segment must be contained at the \
                  frame-transaction boundary, not unwind out of the realm pump",
             );
             assert!(
@@ -8713,7 +8735,7 @@ mod tests {
                         assert!(
                             message
                                 .as_deref()
-                                .is_some_and(|m| m.contains("intentional test panic")),
+                                .is_some_and(|m| m.contains("dense create_render_object")),
                             "causal detail (the panic message) must reach the report; got \
                              {message:?}"
                         );
@@ -8728,16 +8750,25 @@ mod tests {
                 }
             }
 
-            // Pump 3: A recovers — a fresh rebuild (child re-added) builds,
-            // lays out, paints, and presents cleanly, proving the failed
-            // pump did not wedge the widgets binding (building flag) or
-            // leave the realm unable to frame.
-            include_child.set(true);
-            handle_slot
-                .borrow()
-                .as_ref()
-                .expect("handle still captured")
-                .schedule(flui_foundation::RebuildReason::StateChange);
+            // Pump 3: A recovers by building the clean child again. Because
+            // pump 2 unwound from inside `WidgetsBinding::draw_frame`, this
+            // directly proves its building flag reset; a latched flag would
+            // turn this retry into the recursive-draw assertion.
+            panic_on_build.set(false);
+            realm
+                .presentations
+                .primary()
+                .widgets()
+                .schedule_root_rebuild();
+            realm.enter(|realm| {
+                let a = realm.presentations.get(a_id).expect("A installed");
+                a.pipeline().with_mut(|owner| {
+                    if let Some(root_id) = owner.root_id() {
+                        owner.mark_needs_paint(root_id);
+                    }
+                });
+            });
+            realm.request_redraw();
             let presented = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)
@@ -8756,8 +8787,8 @@ mod tests {
         /// Last-good retention, distinguished from zero-value fake
         /// recovery: a failed frame submits NOTHING — `render_scene` is
         /// never called with a blank/empty stand-in scene — so whatever the
-        /// surface last presented stays on screen. (Issue #561's "tests
-        /// distinguish last-good retention from zero-value fake recovery".)
+        /// surface last presented stays on screen rather than being replaced
+        /// by a zero-value fake recovery.
         #[test]
         fn a_failed_frame_submits_nothing_rather_than_a_blank_scene() {
             let realm = UiRealm::for_test();

@@ -1090,7 +1090,7 @@ mod tests {
         tree.get_mut(element)
             .expect("live element")
             .element_mut()
-            .deactivate();
+            .deactivate(&mut owner.element_owner_mut());
         cell.publish(constraints(44.0));
 
         assert!(!owner.service_layout_builders(&mut tree, &pipeline));

@@ -33,6 +33,12 @@ pub use animated::AnimatedView;
 pub use error::{
     ErrorView, ErrorViewBuilder, FlutterError, clear_error_view_builder, set_error_view_builder,
 };
+// The containment substitute-view factory: `ErrorView`'s own
+// concept, so it lives beside `ErrorView::build_error_view` rather than in
+// `tree::element_tree`. Crate-internal — `ElementTree::mount_or_substitute`
+// / `update_or_substitute` and the lazy-sliver item builder are its only
+// callers.
+pub(crate) use error::recovery_view_for;
 pub use inherited::InheritedView;
 pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
 pub use memo::Memo;

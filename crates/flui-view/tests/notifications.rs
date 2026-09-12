@@ -171,11 +171,11 @@ impl<N: Notification> ElementBase for NotificationListenerElement<N> {
         self.lifecycle = Lifecycle::Defunct;
     }
 
-    fn activate(&mut self) {
+    fn activate(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {
         self.lifecycle = Lifecycle::Active;
     }
 
-    fn deactivate(&mut self) {
+    fn deactivate(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {
         self.lifecycle = Lifecycle::Inactive;
     }
 

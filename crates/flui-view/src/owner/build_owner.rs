@@ -7,6 +7,7 @@
 //! - Coordinating InheritedElement lookups
 
 use std::{
+    cell::Cell,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     rc::Rc,
@@ -21,8 +22,8 @@ use parking_lot::Mutex;
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
     owner::{
-        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, RebuildReason,
-        global_key_reservations, global_key_scope,
+        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, HookPanicRecording,
+        RebuildReason, RecoveredPanic, global_key_reservations, global_key_scope,
         global_key_scope::{GlobalKeyScope, OwnerTag},
         inherited_dependencies::InheritedDependencies,
         layout_builder::LayoutBuilderRegistry,
@@ -312,6 +313,17 @@ pub struct BuildOwner {
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
     pub(crate) tree_observer: Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
 
+    /// Lifecycle-hook panics caught and contained by a per-child
+    /// containment seam this frame, waiting to be drained by
+    /// [`Self::take_recovered_panics`]. `pub(crate)` for the
+    /// [`ElementOwner`](super::ElementOwner) split-borrow.
+    pub(crate) recovered_panics: Vec<RecoveredPanic>,
+
+    /// Backing cell for the activation unwind's transient recorded-panic
+    /// handoff. The immediate activation catch always consumes it before
+    /// returning or resuming the unwind. `pub(crate)` for the split-borrow.
+    pub(crate) hook_panic_recorded: Cell<Option<HookPanicRecording>>,
+
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -520,6 +532,8 @@ impl BuildOwner {
             inherited_dependencies: InheritedDependencies::default(),
             keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
+            recovered_panics: Vec::new(),
+            hook_panic_recorded: Cell::new(None),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -993,6 +1007,8 @@ impl BuildOwner {
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
+            recovered_panics: &mut self.recovered_panics,
+            hook_panic_recorded: &self.hook_panic_recorded,
         }
     }
 
@@ -1419,6 +1435,8 @@ impl BuildOwner {
                     global_key_scope: &mut self.global_key_scope,
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
+                    recovered_panics: &mut self.recovered_panics,
+                    hook_panic_recorded: &self.hook_panic_recorded,
                 };
                 if needs_did_change {
                     element
@@ -1516,6 +1534,8 @@ impl BuildOwner {
                 global_key_scope: &mut self.global_key_scope,
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
+                recovered_panics: &mut self.recovered_panics,
+                hook_panic_recorded: &self.hook_panic_recorded,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -1766,6 +1786,8 @@ impl BuildOwner {
                 global_key_scope: &mut self.global_key_scope,
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
+                recovered_panics: &mut self.recovered_panics,
+                hook_panic_recorded: &self.hook_panic_recorded,
             };
 
             let did_work = manager_arc.lock().service(
@@ -1966,6 +1988,8 @@ impl BuildOwner {
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
+            recovered_panics: &mut self.recovered_panics,
+            hook_panic_recorded: &self.hook_panic_recorded,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).
@@ -2129,6 +2153,42 @@ impl BuildOwner {
     /// draining them.
     pub fn global_key_diagnostics(&self) -> &[DuplicateGlobalKey] {
         &self.global_key_diagnostics
+    }
+
+    /// Drain this frame's recovered panics — every lifecycle-hook panic a
+    /// per-child containment seam caught and recovered from since the last
+    /// drain.
+    ///
+    /// Intended for a presentation host to call after its build segment and
+    /// forward into its diagnostic route. Until such a consumer is wired, the
+    /// next `WidgetsBinding::draw_frame` entry discards an undrained prior
+    /// batch with one aggregate warning. `RecoveredPanic::internal_invariant`
+    /// only classifies each entry (a `BUG:`-prefixed panic is still
+    /// contained); this drain does not route anything itself.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_view::BuildOwner;
+    ///
+    /// let mut owner = BuildOwner::new();
+    /// let recovered = owner.take_recovered_panics();
+    /// assert!(recovered.is_empty());
+    /// ```
+    #[must_use = "discarding the drain loses lifecycle-panic diagnostics"]
+    pub fn take_recovered_panics(&mut self) -> Vec<RecoveredPanic> {
+        std::mem::take(&mut self.recovered_panics)
+    }
+
+    /// Discard recovered panics left undrained from the previous frame while
+    /// retaining the queue allocation for this frame's records.
+    ///
+    /// Returns the number discarded so the frame entry point can emit one
+    /// aggregate warning rather than one warning per stale record.
+    pub(crate) fn discard_stale_recovered_panics(&mut self) -> usize {
+        let discarded = self.recovered_panics.len();
+        self.recovered_panics.clear();
+        discarded
     }
 
     /// Number of `GlobalKey`s currently registered.

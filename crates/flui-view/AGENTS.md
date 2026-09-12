@@ -24,6 +24,22 @@ View and Element tree: immutable Views → mutable Elements → RenderObjects. T
 - **No `downcast_ref::<V>()` in update-dispatch path** — enforced by FR-033. `dispatch_view_update` (TypeId-keyed `Box::downcast::<V>`) is the only path.
 - **Benchmarks** — `key_storage_shape`, `static_path_algorithm`, `global_key_reparent_latency`.
 - **`cargo-shear` false positive** — `tests/ui/*.rs` declared in `[package.metadata.cargo-shear] ignored-paths`.
+- **A user lifecycle-hook panic is contained at the narrowest attributable seam.**
+  `build`, `deactivate`, `dispose`, and `did_unmount_render_object` record the exact element.
+  `activate` records only while a bounded `GlobalKey` retake has armed its transient handoff, then
+  rethrows so that retake can undo the relocation without double-recording; direct public
+  activation remains unbounded and unrecorded. `activate`/`deactivate`/`dispose` run only after
+  `init_state` completed. Fresh sparse mounts and retake updates use
+  `ElementTree::{mount_or_substitute, update_or_substitute}`; a retake has separate literal
+  `Activate` and `Update` catch windows, while duplicate-key checks, preflight, relocation, and
+  parent-data repair remain outside. Lazy mounted-item builders record host plus index;
+  `find_index_by_key` records the host with no index and declines the move; count probes catch but
+  do not record because they either precede the mounted-item record or never affect production
+  content. `AnimatedBehavior` caches the subscribed `Arc<dyn Listenable>` so teardown never has
+  to re-read a possibly panicking handle. The registered `ErrorView` factory remains deliberately
+  unbounded. All records flow through `ElementOwner::push_recovered_panic`; a host drains via
+  `BuildOwner::take_recovered_panics` / `WidgetsBinding::take_recovered_panics`, and the next frame
+  discards any undrained prior-frame records with one aggregate warning.
 
 ## Related crates
 

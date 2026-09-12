@@ -260,7 +260,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         self.lifecycle = Lifecycle::Defunct;
     }
 
-    fn activate(&mut self) {
+    fn activate(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         debug_assert!(
             self.lifecycle.can_activate(),
             "BUG: activate from {:?} — only an Inactive element may be \
@@ -270,7 +270,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         self.lifecycle = Lifecycle::Active;
     }
 
-    fn deactivate(&mut self) {
+    fn deactivate(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         debug_assert!(
             self.lifecycle.can_deactivate(),
             "BUG: deactivate from {:?} — only an Active element may be \

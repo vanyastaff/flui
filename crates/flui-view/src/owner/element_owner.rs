@@ -33,11 +33,14 @@
 //! `for<'a> Fn(&'a mut ElementOwner<'a>)` HRTB fallback.
 
 use std::{
+    cell::Cell,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     rc::Rc,
     sync::Arc,
 };
+
+use std::any::{Any, TypeId};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_interaction::FocusManager;
@@ -52,7 +55,9 @@ use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
+use super::recovered_panic::{HookPanicRecording, LifecycleHook, RecoveredAt, RecoveredPanic};
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
+use crate::view::FlutterError;
 use flui_foundation::RebuildReasons;
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
@@ -180,6 +185,25 @@ pub struct ElementOwner<'a> {
     /// `&mut` is load-bearing: the panic-detach policy clears the slot from
     /// inside the emission helper.
     pub(crate) tree_observer: &'a mut Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
+
+    /// Lifecycle-hook panics caught and contained by a per-child
+    /// containment seam this frame. Pushed by
+    /// [`Self::push_recovered_panic`]; drained by
+    /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
+    pub(crate) recovered_panics: &'a mut Vec<RecoveredPanic>,
+
+    /// Whether the innermost containment seam that caught the panic
+    /// currently unwinding has already pushed its [`RecoveredPanic`].
+    ///
+    /// While a bounded retake has armed the handoff, a behavior that catches
+    /// a user activation records it with its own accurate identity through
+    /// [`Self::record_armed_activation_panic`] and transitions this state
+    /// before resuming the unwind. The immediate `activate_subtree` catch
+    /// consumes the marker and carries its value inside `ChildHookPanic`.
+    /// Direct unbounded activation never arms the cell and therefore neither
+    /// records nor leaves state behind. The cell is transient unwind-local
+    /// handoff state, never a pending decision for a later recovery.
+    pub(crate) hook_panic_recorded: &'a Cell<Option<HookPanicRecording>>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
@@ -555,6 +579,130 @@ impl ElementOwner<'_> {
     }
 
     // ========================================================================
+    // Panic containment
+    // ========================================================================
+
+    /// Record a lifecycle-hook panic a containment seam just caught and
+    /// substituted, and log it.
+    ///
+    /// Every containment seam funnels through here instead of logging
+    /// separately: the `tracing::error!` below is this panic's ONE log
+    /// line, so a seam that calls this must not also emit its own error
+    /// line for the same panic (a fallback path with no element id to
+    /// attach — see `build_or_recover` — logs directly instead, because it
+    /// has nothing to push here).
+    pub(crate) fn push_recovered_panic(&mut self, panic: RecoveredPanic) {
+        tracing::error!(
+            at = ?panic.at,
+            hook = %panic.hook,
+            internal_invariant = panic.internal_invariant,
+            panic_message = %panic.error.message,
+            "lifecycle hook panicked; contained and substituted"
+        );
+        self.recovered_panics.push(panic);
+    }
+
+    /// Record a lifecycle-hook panic whose subject is the panicking element
+    /// itself (`RecoveredAt::Element`) — the shape used by removal-side
+    /// seams (`dispose`, `deactivate`, `did_unmount_render_object`). Bounded
+    /// activation uses [`Self::record_armed_activation_panic`] instead so
+    /// recording and its unwind-local handoff transition stay atomic;
+    /// unbounded activation records nothing.
+    ///
+    /// `element` is `core.self_id()` at the call site: `None` means a
+    /// hand-rolled element that bypassed `ElementTree::insert` (test
+    /// fixtures only) — there is no slab id to attach a record to, so this
+    /// logs the one `tracing::error!` and pushes nothing. `Some`
+    /// builds a [`RecoveredAt::Element`] and pushes through
+    /// [`Self::push_recovered_panic`] (which logs at error level itself, so
+    /// this never double-logs).
+    pub(crate) fn record_hook_panic(
+        &mut self,
+        element: Option<ElementId>,
+        parent: Option<ElementId>,
+        view_type_id: TypeId,
+        hook: LifecycleHook,
+        payload: &(dyn Any + Send),
+        context: impl Into<String>,
+    ) {
+        let Some(element) = element else {
+            let error = FlutterError::from_panic(payload, context);
+            tracing::error!(
+                hook = %hook,
+                panic_message = %error.message,
+                "lifecycle hook panicked outside the slab; nothing to record (no element id)"
+            );
+            return;
+        };
+        self.push_recovered_panic(RecoveredPanic::from_payload(
+            RecoveredAt::Element { element, parent },
+            view_type_id,
+            hook,
+            payload,
+            context,
+        ));
+    }
+
+    /// Record an activation panic only while a bounded `GlobalKey` retake
+    /// owns the transient handoff, then transition that handoff from
+    /// `Unrecorded` to `Recorded`.
+    ///
+    /// Keeping the gate and transition in this helper prevents a direct,
+    /// unbounded `ElementTree::activate` call from publishing a
+    /// [`RecoveredPanic`] even when its caller catches the propagated unwind.
+    /// If an inner activation already transitioned the handoff, an outer
+    /// behavior catch leaves its more accurate record untouched. An armed
+    /// call with `element == None` pushes nothing and deliberately leaves the
+    /// handoff `Unrecorded`, allowing the outer retake seam to emit its
+    /// coarser recovery record.
+    pub(crate) fn record_armed_activation_panic(
+        &mut self,
+        element: Option<ElementId>,
+        view_type_id: TypeId,
+        payload: &(dyn Any + Send),
+        context: impl Into<String>,
+    ) {
+        if self.hook_panic_recorded.get() != Some(HookPanicRecording::Unrecorded) {
+            return;
+        }
+        let Some(element) = element else {
+            return;
+        };
+        self.push_recovered_panic(RecoveredPanic::from_payload(
+            RecoveredAt::Element {
+                element,
+                parent: None,
+            },
+            view_type_id,
+            LifecycleHook::Activate,
+            payload,
+            context,
+        ));
+        self.hook_panic_recorded
+            .set(Some(HookPanicRecording::Recorded));
+    }
+
+    /// Arm the unwind-local handoff immediately before a retake's bounded
+    /// activation call. While disarmed, behavior-level records never mutate
+    /// owner state, so a direct `ElementBase::activate` unwind cannot leak a
+    /// marker even if its caller catches it.
+    pub(crate) fn arm_hook_panic_recording(&self) {
+        debug_assert_eq!(
+            self.hook_panic_recorded.get(),
+            None,
+            "activation panic handoffs must not be nested"
+        );
+        self.hook_panic_recorded
+            .set(Some(HookPanicRecording::Unrecorded));
+    }
+
+    /// Read and clear the recorded-panic marker at the immediate boundary of
+    /// the activation unwind that owns it.
+    pub(crate) fn take_hook_panic_recorded(&self) -> HookPanicRecording {
+        self.hook_panic_recorded.take().unwrap_or_default()
+    }
+
+    // ========================================================================
     // Child-manager registry (lazy sliver backend)
     // ========================================================================
 
@@ -737,5 +885,136 @@ mod tests {
         let mut handle = owner.element_owner_mut();
         recurse(&mut handle, 0);
         assert_eq!(handle.dirty_count(), 4);
+    }
+
+    #[test]
+    fn hook_panic_recorded_round_trip() {
+        let mut owner = BuildOwner::new();
+        let mut handle = owner.element_owner_mut();
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        let element = ElementId::new(1);
+
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Unrecorded,
+            "nothing marked the handoff yet"
+        );
+
+        handle.record_armed_activation_panic(
+            Some(element),
+            TypeId::of::<()>(),
+            payload.as_ref(),
+            "direct activation",
+        );
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Unrecorded,
+            "a direct unbounded activation cannot arm a persistent handoff"
+        );
+        assert!(
+            handle.recovered_panics.is_empty(),
+            "an unbounded activation is not a recovered panic"
+        );
+
+        handle.arm_hook_panic_recording();
+        handle.record_armed_activation_panic(
+            None,
+            TypeId::of::<()>(),
+            payload.as_ref(),
+            "bounded activation without an element id",
+        );
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Unrecorded,
+            "the outer retake must still emit the coarse recovery record"
+        );
+        assert!(
+            handle.recovered_panics.is_empty(),
+            "an absent element id cannot produce an exact record"
+        );
+
+        handle.arm_hook_panic_recording();
+        handle.record_armed_activation_panic(
+            Some(element),
+            TypeId::of::<()>(),
+            payload.as_ref(),
+            "bounded activation",
+        );
+        handle.record_armed_activation_panic(
+            Some(ElementId::new(2)),
+            TypeId::of::<String>(),
+            payload.as_ref(),
+            "outer behavior catch",
+        );
+        assert_eq!(
+            handle.recovered_panics.len(),
+            1,
+            "a recorded handoff must preserve the first exact record"
+        );
+        assert_eq!(
+            handle.recovered_panics[0].element(),
+            Some(element),
+            "the inner panicking element remains the attribution target"
+        );
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Recorded,
+            "an armed immediate catch receives the behavior-level record state"
+        );
+
+        handle.arm_hook_panic_recording();
+        assert_eq!(
+            handle.take_hook_panic_recorded(),
+            HookPanicRecording::Unrecorded,
+            "a clean bounded activation disarms without reporting"
+        );
+    }
+
+    #[test]
+    fn record_hook_panic_with_no_element_logs_and_pushes_nothing() {
+        let mut owner = BuildOwner::new();
+        let mut handle = owner.element_owner_mut();
+
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        handle.record_hook_panic(
+            None,
+            None,
+            std::any::TypeId::of::<()>(),
+            LifecycleHook::Dispose,
+            payload.as_ref(),
+            "test fallback",
+        );
+
+        assert!(
+            handle.recovered_panics.is_empty(),
+            "no slab id means nothing to attach a record to"
+        );
+    }
+
+    #[test]
+    fn record_hook_panic_with_an_element_pushes_an_element_record() {
+        let mut owner = BuildOwner::new();
+        let id = ElementId::new(3);
+        let mut handle = owner.element_owner_mut();
+
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        handle.record_hook_panic(
+            Some(id),
+            None,
+            std::any::TypeId::of::<()>(),
+            LifecycleHook::Dispose,
+            payload.as_ref(),
+            "test fallback",
+        );
+
+        assert_eq!(handle.recovered_panics.len(), 1);
+        assert!(matches!(
+            handle.recovered_panics[0].at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == id
+        ));
     }
 }

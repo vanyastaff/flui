@@ -47,6 +47,8 @@ mod greeting_widget_loc_golden;
 mod inherited_dependency;
 #[path = "key_roundtrip.rs"]
 mod key_roundtrip;
+#[path = "lifecycle_panic_containment.rs"]
+mod lifecycle_panic_containment;
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[path = "notifications.rs"]
@@ -55,6 +57,8 @@ mod notifications;
 mod production_reconcile_emits;
 #[path = "reconcile_capture.rs"]
 mod reconcile_capture;
+#[path = "recovered_panics.rs"]
+mod recovered_panics;
 #[path = "stateless_stateful_tests.rs"]
 mod stateless_stateful_tests;
 #[path = "trybuild_ui.rs"]

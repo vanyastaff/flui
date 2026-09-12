@@ -602,12 +602,12 @@ impl ElementBase for ElementKind {
         self.element_mut().unmount(owner);
     }
 
-    fn activate(&mut self) {
-        self.element_mut().activate();
+    fn activate(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.element_mut().activate(owner);
     }
 
-    fn deactivate(&mut self) {
-        self.element_mut().deactivate();
+    fn deactivate(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.element_mut().deactivate(owner);
     }
 
     fn update(&mut self, new_view: &dyn crate::view::View, owner: &mut crate::ElementOwner<'_>) {

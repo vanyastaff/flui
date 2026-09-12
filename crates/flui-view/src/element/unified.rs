@@ -362,13 +362,13 @@ where
         self.core.unmount(owner);
     }
 
-    fn activate(&mut self) {
+    fn activate(&mut self, owner: &mut crate::ElementOwner<'_>) {
         self.core.activate();
-        self.behavior.on_activate(&mut self.core);
+        self.behavior.on_activate(&mut self.core, owner);
     }
 
-    fn deactivate(&mut self) {
-        self.behavior.on_deactivate(&mut self.core);
+    fn deactivate(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.behavior.on_deactivate(&mut self.core, owner);
         self.core.deactivate();
     }
 }

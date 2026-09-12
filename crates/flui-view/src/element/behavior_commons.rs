@@ -29,12 +29,15 @@
 //! themselves so a future regression in extraction quality is caught
 //! before the integration suite.
 
-use std::panic::AssertUnwindSafe;
+use std::{any::TypeId, panic::AssertUnwindSafe};
 
 use flui_foundation::RenderId;
 
 use super::{arity::ElementArity, generic::ElementCore};
-use crate::view::{FlutterError, IntoView, View};
+use crate::{
+    owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
+    view::{FlutterError, IntoView, View},
+};
 
 // ============================================================================
 // perform_build helpers
@@ -150,9 +153,19 @@ pub(crate) fn stamp_sliver_slot(
 ///
 /// `behavior_name` names what was building (e.g. `"building
 /// StatelessElement"`) for the `FlutterError` breadcrumb.
+///
+/// # Recording the panic
+///
+/// A caught panic is also recorded as a [`RecoveredPanic`] through
+/// `owner`, so a later drain (`BuildOwner::take_recovered_panics`) can
+/// forward it instead of it vanishing into `tracing` alone — see
+/// `crate::owner::recovered_panic`. When `core.self_id()` is `None` (a
+/// hand-rolled element that bypassed `ElementTree::insert`; test fixtures
+/// only), there is no slab id to attach the record to, so the push is
+/// skipped and a `tracing::error!` is the only signal.
 pub(crate) fn build_or_recover<V, A, F>(
     core: &mut ElementCore<V, A>,
-    _owner: &mut crate::ElementOwner<'_>,
+    owner: &mut crate::ElementOwner<'_>,
     behavior_name: &'static str,
     build: F,
 ) -> Box<dyn View>
@@ -170,18 +183,38 @@ where
     // opaque value via `IntoView::into_view()` + `Box::new`, producing an
     // owned `Box<dyn View>` with no escaping borrows. Authors need no
     // `+ use<…>` annotations on their `build()` impls.
-    let _ = core; // `core` kept on the signature for symmetry / future hooks.
     match std::panic::catch_unwind(AssertUnwindSafe(build)) {
         Ok(child_view) => child_view,
         Err(payload) => {
-            let error =
-                FlutterError::from_panic(payload.as_ref(), format!("building {behavior_name}"));
-            tracing::error!(
-                "{}::build_into_views caught a panic, substituting ErrorView: {}",
-                behavior_name,
-                error.message
+            let Some(element) = core.self_id() else {
+                // No slab id — see the doc comment above.
+                let error =
+                    FlutterError::from_panic(payload.as_ref(), format!("building {behavior_name}"));
+                tracing::error!(
+                    behavior_name,
+                    panic_message = %error.message,
+                    "lifecycle hook panicked outside the slab; substituting ErrorView \
+                     (no element id to record)"
+                );
+                return crate::view::ErrorView::build_error_view(&error);
+            };
+            // `RecoveredPanic::from_payload` classifies and builds the
+            // `FlutterError` in one step; the ErrorView borrows it before
+            // the record moves into `push_recovered_panic` below, so the
+            // panic is converted to a `FlutterError` exactly once.
+            let panic = RecoveredPanic::from_payload(
+                RecoveredAt::Element {
+                    element,
+                    parent: None,
+                },
+                TypeId::of::<V>(),
+                LifecycleHook::Build,
+                payload.as_ref(),
+                format!("building {behavior_name}"),
             );
-            crate::view::ErrorView::build_error_view(&error)
+            let error_view = crate::view::ErrorView::build_error_view(&panic.error);
+            owner.push_recovered_panic(panic); // logs at error level
+            error_view
         }
     }
 }

@@ -176,7 +176,7 @@ impl crate::view::ElementBase for RootElementImpl {
         self.child = None;
     }
 
-    fn activate(&mut self) {
+    fn activate(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         debug_assert!(
             self.lifecycle.can_activate(),
             "BUG: activate from {:?} — only an Inactive element may be \
@@ -186,7 +186,7 @@ impl crate::view::ElementBase for RootElementImpl {
         self.lifecycle = crate::element::Lifecycle::Active;
     }
 
-    fn deactivate(&mut self) {
+    fn deactivate(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         debug_assert!(
             self.lifecycle.can_deactivate(),
             "BUG: deactivate from {:?} — only an Active element may be \
@@ -282,10 +282,16 @@ mod tests {
         }
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
 
-        root.deactivate();
+        {
+            let mut handle = handle_owner.element_owner_mut();
+            root.deactivate(&mut handle);
+        }
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Inactive);
 
-        root.activate();
+        {
+            let mut handle = handle_owner.element_owner_mut();
+            root.activate(&mut handle);
+        }
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
 
         {

@@ -8,10 +8,11 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use flui_objects::RenderSizedBox;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatefulBehavior,
-    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, RenderView,
+    StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -33,6 +34,40 @@ impl StatelessView for TrackingView {
 impl View for TrackingView {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+/// A true tree leaf — renders directly, with no further `build()` in the
+/// chain. `TrackingView` above deliberately can't serve this role: its own
+/// `build()` returns `self.clone().boxed()`, an intentionally self-
+/// referential fixture (never driven through `build_scope` by the tests
+/// that use it) that would recurse forever if it were.
+#[derive(Clone)]
+struct LeafView;
+
+impl RenderView for LeafView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl View for LeafView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -63,7 +98,7 @@ impl StatefulView for LifecycleTrackingView {
 
 impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
     fn build(&self, _view: &LifecycleTrackingView, _ctx: &dyn BuildContext) -> impl IntoView {
-        TrackingView { id: 0 }.boxed()
+        LeafView.boxed()
     }
 
     fn activate(&mut self) {
@@ -160,7 +195,7 @@ fn test_element_deactivate_transitions_to_inactive() {
     element.mount(None, 0, &mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Inactive);
 }
 
@@ -171,10 +206,10 @@ fn test_element_activate_transitions_to_active() {
     let mut owner = BuildOwner::new();
 
     element.mount(None, 0, &mut owner.element_owner_mut());
-    element.deactivate();
+    element.deactivate(&mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Inactive);
 
-    element.activate();
+    element.activate(&mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 }
 
@@ -203,13 +238,24 @@ fn test_stateful_element_dispose_called_on_unmount() {
         deactivated: Arc::new(AtomicUsize::new(0)),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // Drive the first build so `init_state` actually runs before unmount —
+    // `mount` alone only flips lifecycle state (Flutter's `mount` calls
+    // `initState` synchronously; FLUI's split mount/build does not). Since
+    // `dispose` is gated on a completed `init_state`
+    // (`StatefulBehavior::on_unmount`), so an element that was only
+    // mounted, never built, is never disposed — this test drives a real
+    // `InitialMount` build, same as production, for the removal below to
+    // be meaningful. The fixture goes through `ElementTree`/`BuildOwner`
+    // because a raw element has no live `BuildHandle` to build through.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
     assert!(!disposed.load(Ordering::SeqCst));
 
-    element.unmount(&mut owner.element_owner_mut());
+    tree.remove(root_id, &mut owner.element_owner_mut());
 
     assert!(disposed.load(Ordering::SeqCst));
 }
@@ -223,13 +269,15 @@ fn test_stateful_element_deactivate_callback() {
         deactivated: deactivated.clone(),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 0);
 
-    element.deactivate();
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 1);
 }
@@ -243,14 +291,25 @@ fn test_stateful_element_activate_callback() {
         deactivated: Arc::new(AtomicUsize::new(0)),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-    element.deactivate();
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // Drive the first build so `init_state` actually runs before the first
+    // `deactivate`/`activate` —
+    // `StatefulBehavior::on_activate` is gated on a completed `init_state`
+    // (matching Flutter's guaranteed `initState` -> `activate`/`deactivate`
+    // ordering), so an element that was only mounted, never built, never
+    // runs its `activate` callback either. The fixture goes through
+    // `ElementTree`/`BuildOwner` because a raw element has no live
+    // `BuildHandle` to build through.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 0);
 
-    element.activate();
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 1);
 }
@@ -265,21 +324,24 @@ fn test_stateful_element_multiple_deactivate_activate_cycles() {
         deactivated: deactivated.clone(),
     };
 
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    // See `test_stateful_element_activate_callback`'s comment.
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
 
     // First cycle
-    element.deactivate();
-    element.activate();
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     // Second cycle
-    element.deactivate();
-    element.activate();
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     // Third cycle
-    element.deactivate();
-    element.activate();
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     assert_eq!(activated.load(Ordering::SeqCst), 3);
     assert_eq!(deactivated.load(Ordering::SeqCst), 3);
