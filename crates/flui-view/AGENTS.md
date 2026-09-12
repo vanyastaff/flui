@@ -37,9 +37,12 @@ View and Element tree: immutable Views → mutable Elements → RenderObjects. T
   do not record because they either precede the mounted-item record or never affect production
   content. `AnimatedBehavior` caches the subscribed `Arc<dyn Listenable>` so teardown never has
   to re-read a possibly panicking handle. The registered `ErrorView` factory remains deliberately
-  unbounded. All records flow through `ElementOwner::push_recovered_panic`; a host drains via
-  `BuildOwner::take_recovered_panics` / `WidgetsBinding::take_recovered_panics`, and the next frame
-  discards any undrained prior-frame records with one aggregate warning.
+  unbounded. Committed records use `ElementOwner::push_recovered_panic`. Armed behavior-level
+  attribution instead stages a record with one transaction-neutral trace. If the phase-one
+  recovery-view factory panics before replacement, that attempt's staged record is truncated and
+  earlier records survive; after destructive recovery starts, no rollback is promised. A host
+  drains via `BuildOwner::take_recovered_panics` / `WidgetsBinding::take_recovered_panics`, and the
+  next frame discards any undrained prior-frame records with one aggregate warning.
 
 ## Related crates
 

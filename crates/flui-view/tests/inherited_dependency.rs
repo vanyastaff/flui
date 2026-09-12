@@ -606,11 +606,18 @@ fn get_inherited_returns_none_when_no_ancestor() {
 // ============================================================================
 
 mod did_change_dependencies_on_inherited_update {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        any::TypeId,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use flui_view::{
-        BuildContext, BuildContextExt, BuildOwner, ElementTree, IntoView, StatefulView, View,
-        ViewExt, ViewState,
+        BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementTree, ErrorView,
+        InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt, RenderView,
+        StatefulView, StatelessView, View, ViewExt, ViewState,
     };
 
     use super::{DummyChild, LeafView, MyTheme};
@@ -1028,7 +1035,7 @@ mod did_change_dependencies_on_inherited_update {
         }
 
         fn build(&self, _view: &PanicDcd, ctx: &dyn BuildContext) -> impl IntoView {
-            let _ = ctx.depend_on::<super::ThemeProvider, ()>(|_| ());
+            let _ = ctx.depend_on::<PanicThemeProvider, ()>(|_| ());
             LeafView.boxed()
         }
     }
@@ -1039,39 +1046,170 @@ mod did_change_dependencies_on_inherited_update {
         }
     }
 
-    #[test]
-    fn did_change_dependencies_panic_leaves_the_slot_intact_not_a_hole() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+    #[derive(Clone)]
+    struct PanicThemeProvider {
+        theme: MyTheme,
+        child: DcdHost,
+    }
 
+    impl InheritedView for PanicThemeProvider {
+        type Data = MyTheme;
+
+        fn data(&self) -> &Self::Data {
+            &self.theme
+        }
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn update_should_notify(&self, old: &Self) -> bool {
+            self.theme != old.theme
+        }
+    }
+
+    impl View for PanicThemeProvider {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::inherited(self)
+        }
+    }
+
+    #[derive(Clone)]
+    struct DcdHost {
+        children: Vec<BoxedView>,
+    }
+
+    impl RenderView for DcdHost {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+
+        fn has_children(&self) -> bool {
+            true
+        }
+
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+            self.children.iter().for_each(|child| visitor(child));
+        }
+    }
+
+    impl View for DcdHost {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingSibling(Arc<AtomicUsize>);
+
+    impl StatelessView for CountingSibling {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            LeafView
+        }
+    }
+
+    impl View for CountingSibling {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+
+    #[test]
+    fn did_change_dependencies_panic_is_replaced_and_the_sibling_continues() {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
+        let sibling_builds = Arc::new(AtomicUsize::new(0));
+        let provider_v1 = PanicThemeProvider {
+            theme: MyTheme { color: 0x00FF_0000 },
+            child: DcdHost {
+                children: vec![
+                    PanicDcd.boxed(),
+                    CountingSibling(sibling_builds.clone()).boxed(),
+                ],
+            },
+        };
+        let provider_id = tree.mount_root_with_pipeline_owner(
+            &provider_v1,
+            Some(flui_rendering::pipeline::PipelineCell::new(
+                flui_rendering::pipeline::PipelineOwner::new(),
+            )),
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(provider_id, 0, RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
+        let host = tree
+            .get(provider_id)
+            .expect("provider stays live")
+            .child_ids()[0];
+        let before = tree
+            .get(host)
+            .expect("host stays live")
+            .child_ids()
+            .to_vec();
+        let dep_id = before[0];
+        let sibling = before[1];
+        let sibling_before = sibling_builds.load(Ordering::Relaxed);
 
-        let (provider_id, dep_id) =
-            mount_provider_and_record_dependency(&mut tree, &mut owner, 0x00FF_0000, &PanicDcd);
-
-        // Change the inherited value so the dependent is notified: scheduled +
-        // pending typed-hook. Its build window will fire the panicking hook.
-        let provider_v2 = super::ThemeProvider {
+        let provider_v2 = PanicThemeProvider {
             theme: MyTheme { color: 0x0000_FF00 },
-            child: DummyChild,
+            child: provider_v1.child.clone(),
         };
         tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
+        tree.mark_needs_build(sibling);
+        owner.schedule_build_for(sibling, 2, RebuildReason::StateChange);
 
-        let outcome = catch_unwind(AssertUnwindSafe(|| owner.build_scope(&mut tree)));
-        assert!(
-            outcome.is_err(),
-            "the did_change_dependencies panic must propagate out of build_scope",
-        );
+        owner.build_scope(&mut tree);
 
-        // The guard restored the dependent's slot before re-raising; without
-        // it this read would observe a `None` hole.
-        assert!(
-            tree.get(dep_id)
-                .expect("dependent node still present")
-                .element_opt()
-                .is_some(),
-            "a panic in did_change_dependencies must restore the dependent's slot, not hole it",
+        let children = tree.get(host).expect("host stays live").child_ids();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[1], sibling);
+        let replacement = children[0];
+        assert_ne!(replacement, dep_id);
+        assert_eq!(
+            tree.get(replacement)
+                .expect("replacement stays live")
+                .element()
+                .view_type_id(),
+            TypeId::of::<ErrorView>(),
         );
+        assert!(tree.get(dep_id).is_none());
+        assert_eq!(owner.pending_rebuild_reasons(dep_id), None);
+        assert!(
+            !owner
+                .element_owner_mut()
+                .has_pending_dependency_change(dep_id)
+        );
+        assert_eq!(owner.pending_rebuild_reasons(replacement), None);
+        assert_eq!(sibling_builds.load(Ordering::Relaxed), sibling_before + 1);
+        let recovered = owner.take_recovered_panics();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].hook, LifecycleHook::DidChangeDependencies);
+        assert_eq!(recovered[0].view_type_id, TypeId::of::<PanicDcd>());
+        assert!(matches!(
+            recovered[0].at,
+            RecoveredAt::Element {
+                element,
+                parent: None,
+                ..
+            } if element == dep_id
+        ));
+        assert!(owner.take_recovered_panics().is_empty());
+        assert_eq!(owner.dirty_count(), 0);
     }
 }
 
@@ -1544,7 +1682,7 @@ mod build_window_panic_restores_slot {
     }
 
     #[test]
-    fn init_state_panic_leaves_the_slot_intact_not_a_hole() {
+    fn root_init_state_panic_propagates_with_retryable_slot_and_no_recovery_record() {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
 
@@ -1567,5 +1705,14 @@ mod build_window_panic_restores_slot {
                 .is_some(),
             "a panic in the build window must restore the slot, not leave a hole",
         );
+        assert!(
+            tree.get(root_id)
+                .expect("root stays live")
+                .element()
+                .is_dirty()
+        );
+        assert!(owner.pending_rebuild_reasons(root_id).is_some());
+        assert_eq!(owner.dirty_count(), 1);
+        assert!(owner.take_recovered_panics().is_empty());
     }
 }

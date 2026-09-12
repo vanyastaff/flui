@@ -654,7 +654,18 @@ where
         // `should_build` guard so a freshly-mounted `StatefulView` calls
         // `init_state` exactly once even if the element is clean.
         if !self.initialized {
-            self.state.init_state(ctx);
+            if let Err(payload) =
+                std::panic::catch_unwind(AssertUnwindSafe(|| self.state.init_state(ctx)))
+            {
+                owner.record_armed_lifecycle_panic(
+                    core.self_id(),
+                    TypeId::of::<V>(),
+                    LifecycleHook::InitState,
+                    payload.as_ref(),
+                    "initializing StatefulElement",
+                );
+                std::panic::resume_unwind(payload);
+            }
             self.initialized = true;
         }
 
@@ -766,9 +777,10 @@ where
             return;
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.activate())) {
-            owner.record_armed_activation_panic(
+            owner.record_armed_lifecycle_panic(
                 core.self_id(),
                 TypeId::of::<V>(),
+                LifecycleHook::Activate,
                 payload.as_ref(),
                 "activating StatefulElement",
             );
@@ -857,7 +869,18 @@ where
         // ancestor chain, matching Flutter (`framework.dart:5977-5982` runs
         // the hook with the element's live `BuildContext`).
         let ctx_choice = make_build_ctx(core, owner);
-        self.state.did_change_dependencies(ctx_choice.as_ctx());
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            self.state.did_change_dependencies(ctx_choice.as_ctx());
+        })) {
+            owner.record_armed_lifecycle_panic(
+                core.self_id(),
+                TypeId::of::<V>(),
+                LifecycleHook::DidChangeDependencies,
+                payload.as_ref(),
+                "notifying StatefulElement dependency change",
+            );
+            std::panic::resume_unwind(payload);
+        }
     }
 }
 

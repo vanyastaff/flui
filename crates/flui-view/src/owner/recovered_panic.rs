@@ -25,10 +25,13 @@
 //!
 //! # Who pushes, who drains
 //!
-//! Every per-child containment seam pushes through
+//! A seam whose substitution has committed pushes through
 //! [`ElementOwner::push_recovered_panic`](super::ElementOwner::push_recovered_panic),
-//! which logs at error level and pushes in one call, so a seam never logs
-//! and records separately. A host drains after the build segment through
+//! which logs and records in one call. Armed behavior-level attribution uses
+//! a private staging path with one transaction-neutral trace instead. A
+//! phase-one recovery-factory panic truncates just that staged attempt before
+//! replacement and preserves earlier records; after destructive recovery
+//! starts, no rollback is promised. A host drains after the build segment through
 //! `WidgetsBinding::take_recovered_panics`; tests drain directly through
 //! [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
 //! The queue is frame-scoped scratch state by construction: if a host does
@@ -59,7 +62,8 @@ pub enum LifecycleHook {
     /// `StatelessView::build` / `ViewState::build` — the read half of
     /// `ElementBase::build_into_views`.
     Build,
-    /// `ViewState::init_state`, run once at mount before the first build.
+    /// `ViewState::init_state`, run once during the first build-scope drain,
+    /// immediately before the first build.
     InitState,
     /// `ViewState::did_change_dependencies`, run when an ancestor
     /// `InheritedView` this element depends on notifies a change.
@@ -73,7 +77,8 @@ pub enum LifecycleHook {
     Mount,
     /// A bounded `GlobalKey` retake's `activate_subtree` call, reactivating
     /// an element that was queued inactive. A direct public activation panic
-    /// propagates without producing a recovered-panic record.
+    /// propagates without producing a recovered-panic record; the shared
+    /// behavior-level recorder is armed only by a containing tree seam.
     Activate,
     /// `ViewState::did_update_view` / `RenderView::update_render_object`,
     /// or `AnimatedBehavior::on_view_updated`'s `listenable()` read. That
@@ -147,10 +152,14 @@ pub enum RecoveredAt {
         /// The element whose lifecycle hook panicked.
         element: ElementId,
         /// `element`'s parent at the time of the panic, when the seam that
-        /// caught it can see one. `None` at the unmount-side seams
-        /// (`Deactivate` / `Dispose` / `UnmountRenderObject`) —
-        /// `ElementCore` does not record its own parent, and those hooks
-        /// see only `core`, never the tree.
+        /// caught it can see one. `None` for behavior-level `InitState`,
+        /// `DidChangeDependencies`, and `Activate` attribution, and at the
+        /// unmount-side seams (`Deactivate` / `Dispose` /
+        /// `UnmountRenderObject`): those hooks know the element through
+        /// `ElementCore`, which does not store its own tree parent. A
+        /// containing transaction uses the surrounding tree topology to
+        /// replace or remove the failed element without changing this
+        /// behavior-level attribution.
         parent: Option<ElementId>,
     },
     /// The element at `(parent, slot)` was discarded or removed and
@@ -224,7 +233,8 @@ impl RecoveredAt {
 /// interpretation later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum HookPanicRecording {
-    /// The tree-level window is the first seam able to record this panic.
+    /// The tree-level window is the first seam able to record this panic, or
+    /// the unwind did not come from an armed lifecycle hook.
     #[default]
     Unrecorded,
     /// An inner behavior seam already recorded the panic with finer attribution.

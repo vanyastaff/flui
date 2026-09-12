@@ -186,23 +186,25 @@ pub struct ElementOwner<'a> {
     /// inside the emission helper.
     pub(crate) tree_observer: &'a mut Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
 
-    /// Lifecycle-hook panics caught and contained by a per-child
-    /// containment seam this frame. Pushed by
-    /// [`Self::push_recovered_panic`]; drained by
+    /// Lifecycle-hook panics caught by a per-child containment seam this
+    /// frame. Committed records use [`Self::push_recovered_panic`]; armed
+    /// behavior-level attribution is staged privately with one
+    /// transaction-neutral trace. A phase-one recovery-factory unwind
+    /// truncates that attempt before replacement without disturbing earlier
+    /// records; destructive recovery has no rollback promise. Drained by
     /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
     pub(crate) recovered_panics: &'a mut Vec<RecoveredPanic>,
 
     /// Whether the innermost containment seam that caught the panic
     /// currently unwinding has already pushed its [`RecoveredPanic`].
     ///
-    /// While a bounded retake has armed the handoff, a behavior that catches
-    /// a user activation records it with its own accurate identity through
-    /// [`Self::record_armed_activation_panic`] and transitions this state
-    /// before resuming the unwind. The immediate `activate_subtree` catch
-    /// consumes the marker and carries its value inside `ChildHookPanic`.
-    /// Direct unbounded activation never arms the cell and therefore neither
-    /// records nor leaves state behind. The cell is transient unwind-local
-    /// handoff state, never a pending decision for a later recovery.
+    /// A behavior that catches an armed user lifecycle panic records it with
+    /// its exact identity through [`Self::record_armed_lifecycle_panic`] and
+    /// transitions this state before resuming the unwind. The immediate tree
+    /// seam consumes the marker before doing recovery work. Unbounded calls
+    /// never arm the cell and therefore neither record nor leave state behind.
+    /// The cell is transient unwind-local handoff state, never a pending
+    /// decision for a later recovery.
     pub(crate) hook_panic_recorded: &'a Cell<Option<HookPanicRecording>>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
@@ -582,8 +584,8 @@ impl ElementOwner<'_> {
     // Panic containment
     // ========================================================================
 
-    /// Record a lifecycle-hook panic a containment seam just caught and
-    /// substituted, and log it.
+    /// Record a lifecycle-hook panic a containment seam has finished
+    /// substituting, and log it.
     ///
     /// Every containment seam funnels through here instead of logging
     /// separately: the `tracing::error!` below is this panic's ONE log
@@ -602,12 +604,31 @@ impl ElementOwner<'_> {
         self.recovered_panics.push(panic);
     }
 
+    /// Stage a behavior-attributed panic while its containing transaction is
+    /// still deciding whether recovery can commit.
+    ///
+    /// The trace is deliberately transaction-neutral: the configurable error
+    /// view factory and the replacement itself have not succeeded yet. The
+    /// containing seam either keeps this record after committing replacement
+    /// or removes only this attempt's record before propagating a factory
+    /// panic.
+    fn stage_recovered_panic(&mut self, panic: RecoveredPanic) {
+        tracing::error!(
+            at = ?panic.at,
+            hook = %panic.hook,
+            internal_invariant = panic.internal_invariant,
+            panic_message = %panic.error.message,
+            "lifecycle hook panicked; recovery transaction pending"
+        );
+        self.recovered_panics.push(panic);
+    }
+
     /// Record a lifecycle-hook panic whose subject is the panicking element
     /// itself (`RecoveredAt::Element`) — the shape used by removal-side
     /// seams (`dispose`, `deactivate`, `did_unmount_render_object`). Bounded
-    /// activation uses [`Self::record_armed_activation_panic`] instead so
-    /// recording and its unwind-local handoff transition stay atomic;
-    /// unbounded activation records nothing.
+    /// lifecycle windows use [`Self::record_armed_lifecycle_panic`] instead so
+    /// recording and their unwind-local handoff transition stay atomic;
+    /// unbounded calls record nothing.
     ///
     /// `element` is `core.self_id()` at the call site: `None` means a
     /// hand-rolled element that bypassed `ElementTree::insert` (test
@@ -643,22 +664,24 @@ impl ElementOwner<'_> {
         ));
     }
 
-    /// Record an activation panic only while a bounded `GlobalKey` retake
+    /// Record a lifecycle panic only while its containing tree-level seam
     /// owns the transient handoff, then transition that handoff from
     /// `Unrecorded` to `Recorded`.
     ///
     /// Keeping the gate and transition in this helper prevents a direct,
-    /// unbounded `ElementTree::activate` call from publishing a
-    /// [`RecoveredPanic`] even when its caller catches the propagated unwind.
-    /// If an inner activation already transitioned the handoff, an outer
-    /// behavior catch leaves its more accurate record untouched. An armed
-    /// call with `element == None` pushes nothing and deliberately leaves the
-    /// handoff `Unrecorded`, allowing the outer retake seam to emit its
-    /// coarser recovery record.
-    pub(crate) fn record_armed_activation_panic(
+    /// unbounded lifecycle call from publishing a [`RecoveredPanic`] even
+    /// when its caller catches the propagated unwind. If an inner behavior
+    /// already transitioned the handoff, an outer catch leaves its more
+    /// accurate record untouched. An armed call with `element == None` pushes
+    /// nothing and deliberately leaves the handoff `Unrecorded`, allowing the
+    /// outer seam to emit its coarser recovery record. The staged record's
+    /// single trace is transaction-neutral because the containing seam has
+    /// not yet committed its substitute.
+    pub(crate) fn record_armed_lifecycle_panic(
         &mut self,
         element: Option<ElementId>,
         view_type_id: TypeId,
+        hook: LifecycleHook,
         payload: &(dyn Any + Send),
         context: impl Into<String>,
     ) {
@@ -668,13 +691,13 @@ impl ElementOwner<'_> {
         let Some(element) = element else {
             return;
         };
-        self.push_recovered_panic(RecoveredPanic::from_payload(
+        self.stage_recovered_panic(RecoveredPanic::from_payload(
             RecoveredAt::Element {
                 element,
                 parent: None,
             },
             view_type_id,
-            LifecycleHook::Activate,
+            hook,
             payload,
             context,
         ));
@@ -682,22 +705,22 @@ impl ElementOwner<'_> {
             .set(Some(HookPanicRecording::Recorded));
     }
 
-    /// Arm the unwind-local handoff immediately before a retake's bounded
-    /// activation call. While disarmed, behavior-level records never mutate
-    /// owner state, so a direct `ElementBase::activate` unwind cannot leak a
-    /// marker even if its caller catches it.
+    /// Arm the unwind-local handoff immediately before a bounded lifecycle
+    /// call. While disarmed, behavior-level records never mutate owner state,
+    /// so a direct lifecycle unwind cannot leak a marker even if its caller
+    /// catches it.
     pub(crate) fn arm_hook_panic_recording(&self) {
         debug_assert_eq!(
             self.hook_panic_recorded.get(),
             None,
-            "activation panic handoffs must not be nested"
+            "lifecycle panic handoffs must not be nested"
         );
         self.hook_panic_recorded
             .set(Some(HookPanicRecording::Unrecorded));
     }
 
     /// Read and clear the recorded-panic marker at the immediate boundary of
-    /// the activation unwind that owns it.
+    /// the lifecycle unwind that owns it.
     pub(crate) fn take_hook_panic_recorded(&self) -> HookPanicRecording {
         self.hook_panic_recorded.take().unwrap_or_default()
     }
@@ -900,9 +923,10 @@ mod tests {
             "nothing marked the handoff yet"
         );
 
-        handle.record_armed_activation_panic(
+        handle.record_armed_lifecycle_panic(
             Some(element),
             TypeId::of::<()>(),
+            LifecycleHook::Activate,
             payload.as_ref(),
             "direct activation",
         );
@@ -917,9 +941,10 @@ mod tests {
         );
 
         handle.arm_hook_panic_recording();
-        handle.record_armed_activation_panic(
+        handle.record_armed_lifecycle_panic(
             None,
             TypeId::of::<()>(),
+            LifecycleHook::Activate,
             payload.as_ref(),
             "bounded activation without an element id",
         );
@@ -934,15 +959,17 @@ mod tests {
         );
 
         handle.arm_hook_panic_recording();
-        handle.record_armed_activation_panic(
+        handle.record_armed_lifecycle_panic(
             Some(element),
             TypeId::of::<()>(),
+            LifecycleHook::Activate,
             payload.as_ref(),
             "bounded activation",
         );
-        handle.record_armed_activation_panic(
+        handle.record_armed_lifecycle_panic(
             Some(ElementId::new(2)),
             TypeId::of::<String>(),
+            LifecycleHook::Activate,
             payload.as_ref(),
             "outer behavior catch",
         );

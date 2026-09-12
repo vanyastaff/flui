@@ -345,13 +345,6 @@ impl ElementNode {
         self.child_ids = ids;
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "consumed when BuildOwner wires build-hook recovery"
-        )
-    )]
     fn commit_child_replacement(
         &mut self,
         slot: usize,
@@ -835,13 +828,6 @@ impl ElementTree {
     /// the old child's reverse parent/slot edge disagrees. Also propagates any
     /// panic raised while creating or mounting the replacement, with the
     /// post-removal failure state described above.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "consumed when BuildOwner wires build-hook recovery"
-        )
-    )]
     pub(crate) fn replace_child_with(
         &mut self,
         parent: ElementId,
