@@ -26,6 +26,8 @@ mod async_driver;
 mod controller_restart;
 #[path = "layout_builder_seam.rs"]
 mod layout_builder_seam;
+#[path = "lifecycle_panic_containment.rs"]
+mod lifecycle_panic_containment;
 #[path = "log_capture.rs"]
 mod log_capture;
 #[path = "long_press_via_pump_frame.rs"]
