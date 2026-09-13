@@ -54,13 +54,13 @@
 
 use std::{any::TypeId, cell::Cell, rc::Rc, sync::Arc};
 
-use flui_foundation::{ChangeNotifier, Listenable, ViewKey};
+use flui_foundation::{ChangeNotifier, ElementId, Listenable, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    AnimatedView, BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementId, ElementNode,
-    ElementTree, GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt,
+    AnimatedView, BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementNode, ElementTree,
+    ErrorView, GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt,
     RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 
@@ -96,6 +96,93 @@ impl RenderView for PlainLeaf {
 impl View for PlainLeaf {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+#[derive(Clone)]
+struct KeyedPlainLeaf {
+    key: GlobalKey<()>,
+}
+
+impl RenderView for KeyedPlainLeaf {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl View for KeyedPlainLeaf {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+#[derive(Clone)]
+struct InitStatePanicChild {
+    key: GlobalKey<InitStatePanicChildState>,
+    failed_id: Rc<Cell<Option<ElementId>>>,
+    init_calls: Rc<Cell<u32>>,
+    dispose_calls: Rc<Cell<u32>>,
+}
+
+struct InitStatePanicChildState {
+    failed_id: Rc<Cell<Option<ElementId>>>,
+    init_calls: Rc<Cell<u32>>,
+    dispose_calls: Rc<Cell<u32>>,
+}
+
+impl StatefulView for InitStatePanicChild {
+    type State = InitStatePanicChildState;
+
+    fn create_state(&self) -> Self::State {
+        InitStatePanicChildState {
+            failed_id: self.failed_id.clone(),
+            init_calls: self.init_calls.clone(),
+            dispose_calls: self.dispose_calls.clone(),
+        }
+    }
+}
+
+impl ViewState<InitStatePanicChild> for InitStatePanicChildState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.failed_id.set(Some(ctx.element_id()));
+        self.init_calls.set(self.init_calls.get() + 1);
+        panic!("induced child init_state panic");
+    }
+
+    fn build(&self, _view: &InitStatePanicChild, _ctx: &dyn BuildContext) -> impl IntoView {
+        PlainLeaf
+    }
+
+    fn dispose(&mut self) {
+        self.dispose_calls.set(self.dispose_calls.get() + 1);
+    }
+}
+
+impl View for InitStatePanicChild {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
     }
 }
 
@@ -232,7 +319,118 @@ fn direct_children_in_slot_order(tree: &ElementTree, parent: ElementId) -> Vec<E
     children.into_iter().map(|(_, id)| id).collect()
 }
 
-// ============================================================================
+#[test]
+fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues() {
+    let left_key = GlobalKey::<()>::new();
+    let failed_key = GlobalKey::<InitStatePanicChildState>::new();
+    let right_key = GlobalKey::<()>::new();
+    let failed_id = Rc::new(Cell::new(None));
+    let init_calls = Rc::new(Cell::new(0));
+    let dispose_calls = Rc::new(Cell::new(0));
+    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let parent = tree.mount_root_with_pipeline_owner(
+        &Row {
+            children: vec![
+                KeyedPlainLeaf {
+                    key: left_key.clone(),
+                }
+                .boxed(),
+                InitStatePanicChild {
+                    key: failed_key.clone(),
+                    failed_id: failed_id.clone(),
+                    init_calls: init_calls.clone(),
+                    dispose_calls: dispose_calls.clone(),
+                }
+                .boxed(),
+                KeyedPlainLeaf {
+                    key: right_key.clone(),
+                }
+                .boxed(),
+            ],
+        },
+        Some(pipeline.clone()),
+        &mut owner.element_owner_mut(),
+    );
+    owner.schedule_build_for(parent, 0, RebuildReason::InitialMount);
+
+    let ((), captured_log) = flui_testing::log_capture::capture(|| owner.build_scope(&mut tree));
+
+    let failed = failed_id.get().expect("init_state records its element id");
+    let left = owner
+        .element_for_global_key(&left_key)
+        .expect("left sibling stays mounted");
+    let right = owner
+        .element_for_global_key(&right_key)
+        .expect("right sibling stays mounted");
+    let children = tree
+        .get(parent)
+        .expect("parent stays live")
+        .child_ids()
+        .to_vec();
+    assert_eq!((children[0], children[2]), (left, right));
+    let replacement = children[1];
+    assert_eq!(
+        tree.get(replacement)
+            .expect("replacement stays live")
+            .element()
+            .view_type_id(),
+        TypeId::of::<ErrorView>(),
+    );
+    assert!(tree.get(failed).is_none());
+    assert_eq!(owner.element_for_global_key(&failed_key), None);
+    assert_eq!((init_calls.get(), dispose_calls.get()), (1, 0));
+    let parent_render = tree
+        .get(parent)
+        .expect("parent stays live")
+        .element()
+        .render_id()
+        .expect("row owns a render object");
+    pipeline.with(|pipeline| {
+        assert_eq!(
+            pipeline
+                .render_tree()
+                .get(parent_render)
+                .expect("parent render object stays live")
+                .children()
+                .len(),
+            3,
+        );
+    });
+    let recovered = owner.take_recovered_panics();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].hook, LifecycleHook::InitState);
+    assert_eq!(
+        recovered[0].view_type_id,
+        TypeId::of::<InitStatePanicChild>()
+    );
+    assert!(matches!(
+        recovered[0].at,
+        RecoveredAt::Element {
+            element,
+            parent: None,
+            ..
+        } if element == failed
+    ));
+    assert!(owner.take_recovered_panics().is_empty());
+    assert_eq!(
+        captured_log.count_containing("recovery transaction pending"),
+        1
+    );
+    assert_eq!(
+        captured_log.count_containing("lifecycle hook panicked; contained"),
+        0,
+        "committing a staged init_state record must not log twice: {captured_log}"
+    );
+    assert_eq!(owner.dirty_count(), 0);
+    assert_eq!(owner.pending_rebuild_reasons(replacement), None);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        tree.get(parent).expect("parent stays live").child_ids(),
+        children
+    );
+}
 // Inline removal: an unkeyed dispose panic is contained during the
 // id-reconcile that drops the child, and the freed slot never re-disposes.
 // ============================================================================

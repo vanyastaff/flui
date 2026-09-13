@@ -7,17 +7,26 @@
 //! [`ElementTree::insert`](super::ElementTree::insert) emits `Mount` for
 //! a fresh element or [`Reparent`](ReconcileEventKind::Reparent) when it
 //! retakes an inactive GlobalKey element — never both for one new-side
-//! view. Observers (the `ReconcileEventCollector` test fixture in the
-//! in-crate `tree::test_utils` module, gated behind the `test-utils`
-//! feature; the future devtools panel) reconstruct the per-frame
-//! reconciliation outcome WITHOUT a tree-diff comparison.
+//! view. The raw stream carries no reconcile-invocation or frame identifier
+//! and no batch delimiter. The `ReconcileEventCollector` test fixture (in the
+//! in-crate `tree::test_utils` module, gated behind `test-utils`) and other
+//! callers that externally scope capture around one reconcile call can
+//! aggregate that call's disposition multiset without a tree diff. Other
+//! trace-tooling subscribers receive non-causal diagnostic records, not a
+//! complete per-frame reconstruction or mutation log. Consumers that need
+//! mount/unmount causality use [`TreeObserver`](flui_foundation::observe::TreeObserver).
+//!
+//! Relative event order follows the reconciler's traversal and is not a
+//! stable contract or a promise of tree-mutation order. Externally scoped
+//! consumers aggregate by parent and disposition identity rather than
+//! interpreting adjacency or sequence as causality.
 //!
 //! # Stability boundary
 //!
 //! The `target: "flui::reconcile"` string is a **stability boundary**
 //! per FR-035. Renaming or relocating it requires a `#[deprecated]`
-//! alias period for one release — selection-persistence consumers and
-//! devtools subscribers filter by exactly this target string.
+//! alias period for one release — trace-tooling and test subscribers filter
+//! by exactly this target string.
 //!
 //! Field names on the emitted `tracing::Event` are equally stable.
 //! Each field is recorded as a typed primitive (per FEAS-008) so the
@@ -31,7 +40,7 @@
 //! | `parent`               | `u64`  | Owning parent's [`ElementId`] as `usize → u64`                    |
 //! | `child_key`            | `u64`  | `0` when absent (paired with `child_key_present`)                 |
 //! | `child_key_present`    | `bool` | `true` iff the child carries a key                                |
-//! | `slot`                 | `u64`  | New slot index for the child                                      |
+//! | `slot`                 | `u64`  | Old vacated slot for `Unmount`; new/final slot for every other kind |
 //! | `view_type_id`         | `str`  | `format!("{:?}", TypeId)` — Debug is the only stable identifier   |
 //! | `from_parent`          | `u64`  | `0` when absent (paired with `from_parent_present`)               |
 //! | `from_parent_present`  | `bool` | `true` only on cross-parent reparent (FR-030)                     |
@@ -40,9 +49,10 @@ use std::any::TypeId;
 
 use flui_foundation::ElementId;
 
-/// Disposition recorded by the keyed reconciler for a single child
-/// slot. `#[non_exhaustive]` per FR-035 so adding a new disposition
-/// (e.g. an `Async` suspend variant) is not a breaking change.
+/// One child-reconciliation disposition. When emitted during one keyed
+/// reconcile invocation, these records form that invocation's disposition
+/// multiset. `#[non_exhaustive]` per FR-035 so adding a new disposition (e.g.
+/// an `Async` suspend variant) is not a breaking change.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -96,7 +106,7 @@ impl ReconcileEventKind {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ReconcileEvent {
-    /// What happened to the slot.
+    /// The child's reconcile disposition.
     pub kind: ReconcileEventKind,
     /// Owning parent element. The reconciler caller threads its own
     /// `ElementId` in so subscribers can correlate events back to the
@@ -104,9 +114,11 @@ pub struct ReconcileEvent {
     pub parent: ElementId,
     /// Hash of the child's `ViewKey`, if any.
     pub child_key: Option<u64>,
-    /// New slot index of the child (0-based, into the new-views list).
+    /// Slot associated with the disposition. For `Unmount`, this is the old
+    /// slot the child vacated. For `Mount`, `Reuse`, `Reorder`, and `Reparent`,
+    /// this is the new/final slot (0-based, into the new-views list).
     pub slot: usize,
-    /// `TypeId` of the view that owns the slot — survives the
+    /// `TypeId` of the view named by this disposition — survives the
     /// type-erased reconciler boundary so the collector can group
     /// events by widget type.
     pub view_type_id: TypeId,
@@ -117,7 +129,7 @@ pub struct ReconcileEvent {
 }
 
 impl ReconcileEvent {
-    /// Build a `Mount` event for a freshly created element.
+    /// Build a `Mount` event for a freshly created element at its final slot.
     pub fn mount(
         parent: ElementId,
         slot: usize,
@@ -134,7 +146,7 @@ impl ReconcileEvent {
         }
     }
 
-    /// Build an `Unmount` event for a dropped old element.
+    /// Build an `Unmount` event for a dropped old element at its vacated slot.
     pub fn unmount(
         parent: ElementId,
         slot: usize,
@@ -151,8 +163,7 @@ impl ReconcileEvent {
         }
     }
 
-    /// Build a `Reuse` event for an old element matched in its same
-    /// slot.
+    /// Build a `Reuse` event for an old element matched in its final slot.
     pub fn reuse(
         parent: ElementId,
         slot: usize,
@@ -169,8 +180,8 @@ impl ReconcileEvent {
         }
     }
 
-    /// Build a `Reorder` event for an old element matched to a
-    /// different slot.
+    /// Build a `Reorder` event for an old element matched to a different
+    /// final slot.
     pub fn reorder(
         parent: ElementId,
         slot: usize,
@@ -188,8 +199,8 @@ impl ReconcileEvent {
     }
 
     /// Build a `Reparent` event for a global-key element moving
-    /// across parents in the same frame. `from_parent` is required;
-    /// `child_key` is the GlobalKey's hash.
+    /// across parents in the same frame into its final slot. `from_parent` is
+    /// required; `child_key` is the GlobalKey's hash.
     pub fn reparent(
         from_parent: ElementId,
         parent: ElementId,

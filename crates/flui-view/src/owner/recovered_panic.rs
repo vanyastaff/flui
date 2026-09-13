@@ -15,9 +15,10 @@
 //! count-probe callers in `sliver_adaptor.rs` stay unreported by design,
 //! see `build_item_or_error`'s doc) and `find_index_by_key`
 //! (`sparse_children::find_index_or_none`) — catches
-//! a user lifecycle-hook panic and substitutes an
-//! [`ErrorView`](crate::view::ErrorView) rather than letting the unwind
-//! abort the frame. Substituting is not reporting: a panic that only ever
+//! a user lifecycle-hook panic and applies that seam's local outcome
+//! (substitution, removal cleanup, or declining a lazy move) rather than
+//! letting the unwind abort the containing operation. Recovery is not
+//! reporting: a panic that only ever
 //! reaches `tracing::error!` has nowhere a later consumer can read it back
 //! from, act on it, or forward it. [`RecoveredPanic`] is the record a seam
 //! pushes instead; [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics)
@@ -25,10 +26,15 @@
 //!
 //! # Who pushes, who drains
 //!
-//! Every per-child containment seam pushes through
+//! A seam whose local recovery has committed pushes through
 //! [`ElementOwner::push_recovered_panic`](super::ElementOwner::push_recovered_panic),
-//! which logs at error level and pushes in one call, so a seam never logs
-//! and records separately. A host drains after the build segment through
+//! which logs and records in one call. Armed behavior-level attribution uses
+//! a private staging path with one transaction-neutral trace instead. A
+//! staged token is owned by the immediate outer catch and reaches the public
+//! queue only after substitute/replacement commits. A factory, create, mount,
+//! or replacement unwind drops that token without touching earlier records;
+//! after destructive recovery starts, no tree rollback is promised. A host
+//! drains after the build segment through
 //! `WidgetsBinding::take_recovered_panics`; tests drain directly through
 //! [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
 //! The queue is frame-scoped scratch state by construction: if a host does
@@ -59,7 +65,8 @@ pub enum LifecycleHook {
     /// `StatelessView::build` / `ViewState::build` — the read half of
     /// `ElementBase::build_into_views`.
     Build,
-    /// `ViewState::init_state`, run once at mount before the first build.
+    /// `ViewState::init_state`, run once during the first build-scope drain,
+    /// immediately before the first build.
     InitState,
     /// `ViewState::did_change_dependencies`, run when an ancestor
     /// `InheritedView` this element depends on notifies a change.
@@ -73,7 +80,8 @@ pub enum LifecycleHook {
     Mount,
     /// A bounded `GlobalKey` retake's `activate_subtree` call, reactivating
     /// an element that was queued inactive. A direct public activation panic
-    /// propagates without producing a recovered-panic record.
+    /// propagates without producing a recovered-panic record; the shared
+    /// behavior-level recorder is armed only by a containing tree seam.
     Activate,
     /// `ViewState::did_update_view` / `RenderView::update_render_object`,
     /// or `AnimatedBehavior::on_view_updated`'s `listenable()` read. That
@@ -147,10 +155,14 @@ pub enum RecoveredAt {
         /// The element whose lifecycle hook panicked.
         element: ElementId,
         /// `element`'s parent at the time of the panic, when the seam that
-        /// caught it can see one. `None` at the unmount-side seams
-        /// (`Deactivate` / `Dispose` / `UnmountRenderObject`) —
-        /// `ElementCore` does not record its own parent, and those hooks
-        /// see only `core`, never the tree.
+        /// caught it can see one. `None` for behavior-level `InitState`,
+        /// `DidChangeDependencies`, and `Activate` attribution, and at the
+        /// unmount-side seams (`Deactivate` / `Dispose` /
+        /// `UnmountRenderObject`): those hooks know the element through
+        /// `ElementCore`, which does not store its own tree parent. A
+        /// containing transaction uses the surrounding tree topology to
+        /// replace or remove the failed element without changing this
+        /// behavior-level attribution.
         parent: Option<ElementId>,
     },
     /// The element at `(parent, slot)` was discarded or removed and
@@ -215,22 +227,6 @@ impl RecoveredAt {
     }
 }
 
-/// Whether an inner behavior seam already recorded the panic currently
-/// unwinding into a tree-level containment window.
-///
-/// This stays crate-private: it is a handoff between two implementation
-/// layers, not part of the diagnostic API. A domain enum makes the two states
-/// explicit at every read and prevents a bare boolean from acquiring a second
-/// interpretation later.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum HookPanicRecording {
-    /// The tree-level window is the first seam able to record this panic.
-    #[default]
-    Unrecorded,
-    /// An inner behavior seam already recorded the panic with finer attribution.
-    Recorded,
-}
-
 /// One lifecycle-hook panic a per-child containment seam caught and recovered
 /// from, recorded so it can be forwarded as a frame-failure report
 /// instead of vanishing into `tracing` alone.
@@ -261,7 +257,8 @@ pub struct RecoveredPanic {
     pub error: FlutterError,
     /// Whether the payload text started with `BUG:` — FLUI's own
     /// internal-invariant convention (`docs/PANIC-POLICY.md`). Computed
-    /// here, at push time, before any consumer has a chance to redact
+    /// while constructing the record from the raw payload, before any
+    /// consumer has a chance to redact
     /// `error.message`: a release build that redacts the message must
     /// still classify correctly, so classification cannot depend on the
     /// message surviving intact.
@@ -332,5 +329,53 @@ impl RecoveredPanic {
             internal_invariant: payload_text(payload).is_some_and(is_internal_invariant),
             error,
         }
+    }
+}
+
+/// Owned behavior-attributed diagnostic waiting for its recovery transaction
+/// to commit.
+///
+/// This stays crate-private: dropping it is the rollback for every unwind
+/// before substitution commits, while consuming it into the public queue is
+/// the success path. Its box keeps the owner-local handoff compact and
+/// allocates only on the already-cold panic path. It deliberately has no
+/// `Clone` implementation so a transaction cannot publish the same diagnostic
+/// twice by accident.
+#[derive(Debug)]
+pub(crate) struct StagedRecoveredPanic(Box<RecoveredPanic>);
+
+impl StagedRecoveredPanic {
+    pub(crate) fn new(panic: RecoveredPanic) -> Self {
+        Self(Box::new(panic))
+    }
+
+    pub(crate) fn into_recovered(self) -> RecoveredPanic {
+        *self.0
+    }
+}
+
+/// Owner-local state for the one literal lifecycle window currently running.
+#[derive(Debug, Default)]
+pub(crate) enum LifecyclePanicHandoff {
+    /// No bounded lifecycle window is active.
+    #[default]
+    Disarmed,
+    /// A bounded window is active but no behavior-level panic was staged.
+    Armed,
+    /// The behavior caught and attributed a panic; the immediate outer catch
+    /// must take ownership of this token.
+    Staged(StagedRecoveredPanic),
+}
+
+impl LifecyclePanicHandoff {
+    pub(crate) fn into_staged(self) -> Option<StagedRecoveredPanic> {
+        match self {
+            Self::Staged(staged) => Some(staged),
+            Self::Disarmed | Self::Armed => None,
+        }
+    }
+
+    pub(crate) fn is_disarmed(&self) -> bool {
+        matches!(self, Self::Disarmed)
     }
 }

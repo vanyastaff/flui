@@ -7,6 +7,7 @@
 //! - Coordinating InheritedElement lookups
 
 use std::{
+    any::Any,
     cell::Cell,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
@@ -22,8 +23,9 @@ use parking_lot::Mutex;
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
     owner::{
-        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, HookPanicRecording,
-        RebuildReason, RecoveredPanic, global_key_reservations, global_key_scope,
+        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, LifecyclePanicHandoff,
+        RebuildReason, RecoveredPanic, StagedRecoveredPanic, global_key_reservations,
+        global_key_scope,
         global_key_scope::{GlobalKeyScope, OwnerTag},
         inherited_dependencies::InheritedDependencies,
         layout_builder::LayoutBuilderRegistry,
@@ -189,12 +191,8 @@ impl DirtyElement {
 
     /// Depth used to order the heap (shallowest first).
     ///
-    /// Currently consumed only by inline tests; a future consumer will read it during
-    /// dirty-element drain dispatching. The `Ord` impl reads
-    /// `self.depth` directly (private field access from the same `impl`
-    /// block), so the accessor stays on the surface for future
-    /// `ElementOwner` consumers.
-    #[cfg_attr(not(test), expect(dead_code))]
+    /// Used when an unwinding rebuild is restored to the active queue without
+    /// changing the ordering key it had at the start of the attempt.
     pub(crate) fn depth(&self) -> usize {
         self.depth
     }
@@ -319,10 +317,10 @@ pub struct BuildOwner {
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
     pub(crate) recovered_panics: Vec<RecoveredPanic>,
 
-    /// Backing cell for the activation unwind's transient recorded-panic
-    /// handoff. The immediate activation catch always consumes it before
+    /// Owner-local state for a bounded lifecycle window's transient staged
+    /// diagnostic. The immediate containing catch takes and disarms it before
     /// returning or resuming the unwind. `pub(crate)` for the split-borrow.
-    pub(crate) hook_panic_recorded: Cell<Option<HookPanicRecording>>,
+    pub(crate) lifecycle_panic_handoff: Cell<LifecyclePanicHandoff>,
 
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
@@ -533,7 +531,7 @@ impl BuildOwner {
             keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
             recovered_panics: Vec::new(),
-            hook_panic_recorded: Cell::new(None),
+            lifecycle_panic_handoff: Cell::new(LifecyclePanicHandoff::Disarmed),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -1008,7 +1006,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
-            hook_panic_recorded: &self.hook_panic_recorded,
+            lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         }
     }
 
@@ -1180,6 +1178,47 @@ impl BuildOwner {
             }
         };
         let _ = self.drain_prepared_build_target(tree, target, live_scopes.as_ref());
+    }
+
+    /// Finish a parented lifecycle recovery after the panicking element has
+    /// been restored to its slab slot.
+    ///
+    /// The configurable view factory is the last fallible step before the
+    /// destructive replacement transaction begins. A factory unwind retains
+    /// the original element and its dirty entry; the owned staged diagnostic
+    /// is then dropped without touching earlier committed records. Once
+    /// `replace_child_with` starts, its fatal no-rollback contract applies.
+    #[cold]
+    fn replace_failed_lifecycle_element(
+        &mut self,
+        tree: &mut ElementTree,
+        failed: ElementId,
+        replacement_location: (ElementId, usize),
+        dirty: DirtyElement,
+        staged: StagedRecoveredPanic,
+        payload: Box<dyn Any + Send>,
+    ) {
+        let (parent, slot) = replacement_location;
+        let error = crate::view::FlutterError::from_panic(
+            payload.as_ref(),
+            "running a stateful lifecycle hook during rebuild",
+        );
+        let recovery_view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::view::recovery_view_for(&error)
+        })) {
+            Ok(view) => view,
+            Err(factory_payload) => {
+                self.dirty_elements
+                    .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                std::panic::resume_unwind(factory_payload)
+            }
+        };
+
+        self.dirty_reasons.remove(&failed);
+        self.pending_dependency_changes.remove(&failed);
+        let mut element_owner = self.element_owner_mut();
+        tree.replace_child_with(parent, slot, recovery_view.0.as_ref(), &mut element_owner);
+        element_owner.commit_staged_lifecycle_panic(staged);
     }
 
     pub(crate) fn drain_prepared_build_target(
@@ -1388,22 +1427,22 @@ impl BuildOwner {
             let Some(mut element) = tree.take_element(id) else {
                 continue;
             };
+            let replacement_location = tree
+                .get(id)
+                .and_then(|node| node.parent().map(|parent| (parent, node.slot())));
             let dep_sink: parking_lot::Mutex<Vec<crate::context::DependentRecord>> =
                 parking_lot::Mutex::new(Vec::new());
 
             // Run the build half under `catch_unwind` so the extracted element
-            // is ALWAYS restored to its slot, even on an unwind. The user
-            // `build()` is already caught one level down (`build_or_recover`
-            // substitutes an `ErrorView`), but the other user hooks reachable
-            // in this window — `did_change_dependencies` (via
-            // `notify_dependency_change`) and `init_state` (inside
-            // `StatefulBehavior::build_into_views`) — are not. Without this
-            // guard a panic in either would drop `element` and leave a
-            // permanent `None` hole, turning every later
-            // `element()`/`element_mut()` access on this node into an
-            // `ELEMENT_PRESENT` panic. `AssertUnwindSafe` is sound because the
-            // sole cross-unwind invariant — the slot is whole again — is
-            // re-established by the unconditional `put_element` below.
+            // is ALWAYS restored to its slot before this seam decides whether
+            // to substitute or propagate. User `build()` is already recovered
+            // one level down. The two stateful lifecycle calls reachable here
+            // catch only their literal user-hook expressions, stage only when
+            // this parented seam arms them, and rethrow into this guard. Any
+            // other unwind remains unrecorded and propagates after restoration.
+            // `AssertUnwindSafe` is sound because the sole cross-unwind
+            // invariant — the slot is whole again — is re-established by the
+            // unconditional `put_element` below.
             let partitioned_dirty_count = self.partitioned_dirty_count();
             let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
@@ -1436,14 +1475,33 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
-                    hook_panic_recorded: &self.hook_panic_recorded,
+                    lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
                 };
                 if needs_did_change {
+                    if replacement_location.is_some() {
+                        element_owner.arm_lifecycle_panic_handoff();
+                    }
                     element
                         .element_mut()
                         .notify_dependency_change(&mut element_owner);
+                    if replacement_location.is_some() {
+                        assert!(
+                            element_owner.take_staged_lifecycle_panic().is_none(),
+                            "a successful dependency hook must leave its own window unrecorded"
+                        );
+                    }
                 }
-                element.element_mut().build_into_views(&mut element_owner)
+                if replacement_location.is_some() {
+                    element_owner.arm_lifecycle_panic_handoff();
+                }
+                let views = element.element_mut().build_into_views(&mut element_owner);
+                if replacement_location.is_some() {
+                    assert!(
+                        element_owner.take_staged_lifecycle_panic().is_none(),
+                        "a successful initial-state/build call must leave its own window unrecorded"
+                    );
+                }
+                views
             })); // `element_owner` + its `&*tree` borrow drop here.
 
             // Restore the element BEFORE anything else — the slot must be whole
@@ -1455,14 +1513,42 @@ impl BuildOwner {
             tree.put_element(id, element);
 
             let new_views: Vec<Box<dyn View>> = match build_outcome {
-                Ok(views) => views,
-                // Slot restored above; re-raise so the frame aborts exactly as
-                // it did before (no behavior change beyond keeping the slab
-                // consistent). Partial `dep_sink` records are intentionally
-                // dropped — the build did not complete.
+                Ok(views) => {
+                    debug_assert!(
+                        self.lifecycle_panic_handoff.take().is_disarmed(),
+                        "successful lifecycle windows must disarm their handoff immediately"
+                    );
+                    views
+                }
                 Err(payload) => {
-                    self.dirty_elements.push(Reverse(dirty));
-                    std::panic::resume_unwind(payload)
+                    let staged = self.lifecycle_panic_handoff.take().into_staged();
+                    let Some((parent, slot)) = replacement_location else {
+                        self.dirty_elements
+                            .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                        std::panic::resume_unwind(payload)
+                    };
+                    let Some(staged) = staged else {
+                        self.dirty_elements
+                            .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                        std::panic::resume_unwind(payload)
+                    };
+
+                    self.replace_failed_lifecycle_element(
+                        tree,
+                        id,
+                        (parent, slot),
+                        dirty,
+                        staged,
+                        payload,
+                    );
+                    result.any_rebuilt = true;
+
+                    if !matches!(target, BuildScopeTarget::All) {
+                        let fresh_live_scopes = self.live_layout_scope_ids(tree);
+                        self.repartition_dirty(tree, &fresh_live_scopes);
+                        self.activate_build_target(target);
+                    }
+                    continue;
                 }
             };
 
@@ -1506,43 +1592,62 @@ impl BuildOwner {
             // ── Phase 2: reconcile the returned views against the node's
             // slab-resident children with a fresh `&mut tree`. Newly inserted
             // children are scheduled inside the reconciler so this same drain
-            // loop reaches them.
+            // loop reaches them. The outer catch below is unwind hygiene, not
+            // containment: an unbounded framework panic still propagates, but
+            // the rebuilding parent regains its consumed reason and queue
+            // entry before the scoped-drain guard repartitions all work.
             let partitioned_dirty_count = self.partitioned_dirty_count();
-            let mut element_owner = super::ElementOwner {
-                global_keys: &mut self.global_keys,
-                global_key_reservations: &mut self.global_key_reservations,
-                dirty_elements: &mut self.dirty_elements,
-                partitioned_dirty_count,
-                dirty_reasons: &mut self.dirty_reasons,
-                inactive_elements: &mut self.inactive_elements,
-                pending_dependency_changes: &mut self.pending_dependency_changes,
-                inherited_dependencies: &mut self.inherited_dependencies,
-                keep_alive: self.keep_alive.clone(),
-                on_build_scheduled: self.on_build_scheduled.as_deref(),
-                external_inbox: &self.external_inbox,
-                external_request_frame: self.on_build_scheduled.as_ref(),
-                build_view: None,
-                child_manager_registry: &self.child_manager_registry,
-                layout_builder_registry: &self.layout_builder_registry,
-                focus_manager: &self.focus_manager,
-                async_driver: &self.async_driver,
-                post_frame_handle: &self.post_frame_handle,
-                local_post_frame_handle: &self.local_post_frame_handle,
-                text_input_handle: &self.text_input_handle,
-                interaction_dispatch: &self.interaction_dispatch,
-                hit_test_handle: &self.hit_test_handle,
-                global_key_scope: &mut self.global_key_scope,
-                owner_tag: self.owner_tag,
-                tree_observer: &mut self.tree_observer,
-                recovered_panics: &mut self.recovered_panics,
-                hook_panic_recorded: &self.hook_panic_recorded,
-            };
-            crate::tree::id_reconcile::reconcile_children_by_id(
-                tree,
-                id,
-                &new_views,
-                &mut element_owner,
-            );
+            let reconcile_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut element_owner = super::ElementOwner {
+                    global_keys: &mut self.global_keys,
+                    global_key_reservations: &mut self.global_key_reservations,
+                    dirty_elements: &mut self.dirty_elements,
+                    partitioned_dirty_count,
+                    dirty_reasons: &mut self.dirty_reasons,
+                    inactive_elements: &mut self.inactive_elements,
+                    pending_dependency_changes: &mut self.pending_dependency_changes,
+                    inherited_dependencies: &mut self.inherited_dependencies,
+                    keep_alive: self.keep_alive.clone(),
+                    on_build_scheduled: self.on_build_scheduled.as_deref(),
+                    external_inbox: &self.external_inbox,
+                    external_request_frame: self.on_build_scheduled.as_ref(),
+                    build_view: None,
+                    child_manager_registry: &self.child_manager_registry,
+                    layout_builder_registry: &self.layout_builder_registry,
+                    focus_manager: &self.focus_manager,
+                    async_driver: &self.async_driver,
+                    post_frame_handle: &self.post_frame_handle,
+                    local_post_frame_handle: &self.local_post_frame_handle,
+                    text_input_handle: &self.text_input_handle,
+                    interaction_dispatch: &self.interaction_dispatch,
+                    hit_test_handle: &self.hit_test_handle,
+                    global_key_scope: &mut self.global_key_scope,
+                    owner_tag: self.owner_tag,
+                    tree_observer: &mut self.tree_observer,
+                    recovered_panics: &mut self.recovered_panics,
+                    lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
+                };
+                crate::tree::id_reconcile::reconcile_children_by_id(
+                    tree,
+                    id,
+                    &new_views,
+                    &mut element_owner,
+                );
+            }));
+            if let Err(payload) = reconcile_outcome {
+                tree.mark_needs_build(id);
+                match self.dirty_reasons.entry(id) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(reasons);
+                        self.dirty_elements
+                            .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        entry.get_mut().merge(reasons);
+                    }
+                }
+                std::panic::resume_unwind(payload);
+            }
         }
 
         // The build drained: every render child has attached. Settle each
@@ -1787,7 +1892,7 @@ impl BuildOwner {
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
-                hook_panic_recorded: &self.hook_panic_recorded,
+                lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
             };
 
             let did_work = manager_arc.lock().service(
@@ -1989,7 +2094,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
-            hook_panic_recorded: &self.hook_panic_recorded,
+            lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).
@@ -2263,6 +2368,7 @@ fn notify_detached(observer: &dyn flui_foundation::observe::TreeObserver) {
 
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_foundation::panic::payload_text;
@@ -2273,7 +2379,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::{BoxedView, View, ViewExt, element::LayoutBuilder, tree::ElementTree};
+    use crate::{
+        BoxedView, ErrorView, LifecycleHook, RecoveredAt, View, ViewExt, element::LayoutBuilder,
+        tree::ElementTree,
+    };
 
     /// A render-family leaf view with no child views.
     #[derive(Clone)]
@@ -2497,91 +2606,12 @@ mod tests {
         assert!(!owner.pending_dependency_changes.contains(&descendant));
     }
 
-    #[derive(Clone)]
-    struct DependencyPanicView {
-        hook_calls: Arc<AtomicUsize>,
-    }
-
-    struct DependencyPanicState {
-        hook_calls: Arc<AtomicUsize>,
-    }
-
-    impl crate::StatefulView for DependencyPanicView {
-        type State = DependencyPanicState;
-
-        fn create_state(&self) -> Self::State {
-            DependencyPanicState {
-                hook_calls: Arc::clone(&self.hook_calls),
-            }
-        }
-    }
-
-    impl crate::ViewState<DependencyPanicView> for DependencyPanicState {
-        fn build(
-            &self,
-            _view: &DependencyPanicView,
-            _ctx: &dyn crate::BuildContext,
-        ) -> impl crate::IntoView {
-            TestView
-        }
-
-        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
-            self.hook_calls.fetch_add(1, Ordering::Relaxed);
-            panic!("dependency hook panic");
-        }
-    }
-
-    impl View for DependencyPanicView {
-        fn create_element(&self) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateful(self)
-        }
-    }
-
-    #[test]
-    fn scoped_drain_unwind_restores_foreign_work_reasons_dependency_and_flags() {
-        let mut owner = BuildOwner::new();
-        let mut tree = ElementTree::new();
-        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
-        settle_initial_builds(&mut tree, &mut owner);
-        let scope = insert_child(&mut tree, &mut owner, root, 0);
-        settle_initial_builds(&mut tree, &mut owner);
-        let hook_calls = Arc::new(AtomicUsize::new(0));
-        let panicking = tree.insert(
-            &DependencyPanicView {
-                hook_calls: Arc::clone(&hook_calls),
-            },
-            scope,
-            0,
-            &mut owner.element_owner_mut(),
-        );
-        let foreign = insert_child(&mut tree, &mut owner, root, 1);
-        settle_initial_builds(&mut tree, &mut owner);
-        let _cell = owner.register_layout_builder_for_test(RenderId::new(71), scope);
-
-        tree.mark_needs_build(panicking);
-        owner.schedule_build_for(panicking, 2, RebuildReason::DependencyChange);
-        owner.pending_dependency_changes.insert(panicking);
-        tree.mark_needs_build(foreign);
-        owner.schedule_build_for(foreign, 1, RebuildReason::StateChange);
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope));
-        }));
-        assert!(outcome.is_err());
-        assert_eq!(hook_calls.load(Ordering::Relaxed), 1);
-        assert!(owner.pending_rebuild_reasons(panicking).is_some());
-        assert!(owner.pending_dependency_changes.contains(&panicking));
-        assert!(owner.pending_rebuild_reasons(foreign).is_some());
-        assert_eq!(
-            owner.dirty_count(),
-            2,
-            "active and foreign heap work restored"
-        );
-        #[cfg(debug_assertions)]
-        {
-            assert!(!owner.is_building());
-            assert_eq!(owner.scope_depth(), 0);
-        }
+    #[cfg(test)]
+    mod lifecycle_recovery_tests {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/build_owner_lifecycle_recovery.rs"
+        ));
     }
 
     #[test]

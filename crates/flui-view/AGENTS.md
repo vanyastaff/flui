@@ -26,9 +26,10 @@ View and Element tree: immutable Views → mutable Elements → RenderObjects. T
 - **`cargo-shear` false positive** — `tests/ui/*.rs` declared in `[package.metadata.cargo-shear] ignored-paths`.
 - **A user lifecycle-hook panic is contained at the narrowest attributable seam.**
   `build`, `deactivate`, `dispose`, and `did_unmount_render_object` record the exact element.
-  `activate` records only while a bounded `GlobalKey` retake has armed its transient handoff, then
-  rethrows so that retake can undo the relocation without double-recording; direct public
-  activation remains unbounded and unrecorded. `activate`/`deactivate`/`dispose` run only after
+  `activate` stages an owned diagnostic only while a bounded `GlobalKey` retake has armed its
+  handoff, then rethrows; the immediate catch takes the token and publishes it only after the
+  substitute commits, or drops it when recovery fails. Direct public activation remains
+  unbounded and unrecorded. `activate`/`deactivate`/`dispose` run only after
   `init_state` completed. Fresh sparse mounts and retake updates use
   `ElementTree::{mount_or_substitute, update_or_substitute}`; a retake has separate literal
   `Activate` and `Update` catch windows, while duplicate-key checks, preflight, relocation, and
@@ -37,9 +38,13 @@ View and Element tree: immutable Views → mutable Elements → RenderObjects. T
   do not record because they either precede the mounted-item record or never affect production
   content. `AnimatedBehavior` caches the subscribed `Arc<dyn Listenable>` so teardown never has
   to re-read a possibly panicking handle. The registered `ErrorView` factory remains deliberately
-  unbounded. All records flow through `ElementOwner::push_recovered_panic`; a host drains via
-  `BuildOwner::take_recovered_panics` / `WidgetsBinding::take_recovered_panics`, and the next frame
-  discards any undrained prior-frame records with one aggregate warning.
+  unbounded. Committed records use `ElementOwner::push_recovered_panic`. Armed behavior-level
+  attribution instead stages an owned record with one transaction-neutral trace. The immediate
+  outer catch owns that token and publishes it only after substitute/replacement commits. A
+  factory, create, mount, or replacement unwind drops the token without touching earlier records;
+  after destructive recovery starts, no tree rollback is promised. A host
+  drains via `BuildOwner::take_recovered_panics` / `WidgetsBinding::take_recovered_panics`, and the
+  next frame discards any undrained prior-frame records with one aggregate warning.
 
 ## Related crates
 

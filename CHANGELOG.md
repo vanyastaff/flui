@@ -138,17 +138,33 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **A `ViewState::dispose`/`activate`/`deactivate` panic, and a `RenderView::did_unmount_render_object`
-  panic, are contained per element, not per frame** (#561):
-  `StatefulBehavior::on_unmount` catches a panicking `dispose` and `StatefulBehavior::on_deactivate`
-  catches a panicking `deactivate`, both recording through `ElementOwner::push_recovered_panic`
-  instead of letting the panic unwind out of `BuildOwner::build_scope` / `finalize_tree` — the
-  tree-side teardown (slab slot freed or parked inactive, `GlobalKey` unregistered, inherited edges
-  released) still completes either way, and `ElementCore::deactivate`'s lifecycle flip to `Inactive`
-  still runs right after a contained `deactivate` panic returns. `activate` records at the exact
-  descendant whose hook panicked, then rethrows into the retake window so the relocation is undone
-  without a duplicate record. A state whose `init_state` never completed (removed before its first
-  build, or `init_state` itself panicked) receives none of `activate`, `deactivate`, or `dispose`.
+- **Build-side lifecycle and reconciliation failures are contained at the
+  failing child** (#561): a parented state whose `init_state` or
+  `did_change_dependencies` panics is finalized and replaced by an `ErrorView`
+  at its own slot, then the build drain continues; a root still propagates
+  because it has no parent slot to repair. Fresh child creation and
+  `GlobalKey` retake/update failures use the same bounded substitution in both
+  sparse and dense reconciliation, so healthy siblings continue and recovery
+  records identify the panicking element or mounted substitute without a
+  duplicate record. The catch region, not the panic text, selects recovery:
+  `BUG:` only marks the record as an internal invariant. A failing custom
+  recovery-view factory and framework bookkeeping outside the documented
+  child regions are not locally recovered; they propagate to the
+  presentation boundary rather than being misreported as recovered.
+- **A `ViewState::dispose`/`activate`/`deactivate` panic, and a
+  `RenderView::did_unmount_render_object` panic, are contained per element,
+  not per frame** (#561): `StatefulBehavior::on_unmount` catches a panicking
+  `dispose` and `StatefulBehavior::on_deactivate` catches a panicking
+  `deactivate` instead of letting the panic unwind out of
+  `BuildOwner::build_scope` / `finalize_tree` — the tree-side teardown (slab
+  slot freed or parked inactive, `GlobalKey` unregistered, inherited edges
+  released) still completes either way, and `ElementCore::deactivate`'s
+  lifecycle flip to `Inactive` still runs right after a contained `deactivate`
+  panic returns. `activate` records at the exact descendant whose hook
+  panicked, then rethrows into the retake window so the relocation is undone
+  without a duplicate record. A state whose `init_state` never completed
+  (removed before its first build, or `init_state` itself panicked) receives
+  none of `activate`, `deactivate`, or `dispose`.
   **Breaking:** `ElementBase::{activate, deactivate}` and `ElementBehavior::{on_activate,
   on_deactivate}` (public traits) now take an `owner: &mut ElementOwner<'_>` handle, mirroring
   `mount`/`unmount`'s existing shape, so the deactivate-side catch has an owner to report through.

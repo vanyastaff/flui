@@ -131,6 +131,10 @@ name = "global_key_reparent_latency"
 harness = false
 
 [[bench]]
+name = "dense_update_reconcile"
+harness = false
+
+[[bench]]
 name = "scoped_build_drain"
 harness = false
 required-features = ["test-utils"]

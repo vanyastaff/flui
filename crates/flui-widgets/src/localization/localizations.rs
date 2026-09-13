@@ -410,6 +410,7 @@ mod tests {
     use std::sync::Mutex;
 
     use flui_types::typography::TextDirection;
+    use flui_view::{BuildOwner, ElementTree};
 
     use super::*;
     use crate::SizedBox;
@@ -617,14 +618,10 @@ mod tests {
     // `of`'s panic path
     // ------------------------------------------------------------------
     //
-    // Unlike a panic inside `build()` (caught by the framework's build-error
-    // boundary and substituted with an `ErrorView` — see
-    // `crates/flui-widgets/tests/theme.rs`'s documented limitation for
-    // `Theme::of`), a panic inside `ViewState::init_state` runs OUTSIDE that
-    // `catch_unwind` (`element/behavior.rs`'s `StatefulBehavior::build_into_views`
-    // calls `self.state.init_state(ctx)` before the build closure it wraps),
-    // so it propagates all the way out to `mount()` — genuinely observable
-    // with `#[should_panic]`, not a self-authored guess about the message.
+    // A parented `init_state` panic is contained and substituted, so these
+    // public panic-message oracles deliberately mount the probe as the root.
+    // Root lifecycle failures remain unbounded and propagate from the first
+    // build-scope drain.
 
     /// A boxed `init_state` probe action — see [`InitStatePanicProbe`].
     type InitStateAction = Arc<dyn Fn(&dyn BuildContext) + Send + Sync>;
@@ -661,6 +658,14 @@ mod tests {
         }
     }
 
+    fn build_root(probe: &InitStatePanicProbe) {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let root = tree.mount_root(probe, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
+    }
+
     #[test]
     #[should_panic(expected = "Localizations::locale_of called with no Localizations ancestor")]
     fn locale_of_panics_with_no_localizations_ancestor() {
@@ -669,7 +674,7 @@ mod tests {
                 let _ = Localizations::locale_of(ctx);
             }),
         };
-        let _harness = mount(probe.boxed());
+        build_root(&probe);
     }
 
     #[test]
@@ -682,6 +687,6 @@ mod tests {
                 let _ = Localizations::of::<NotProvided>(ctx);
             }),
         };
-        let _harness = mount(probe.boxed());
+        build_root(&probe);
     }
 }

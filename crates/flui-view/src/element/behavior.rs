@@ -178,8 +178,11 @@ where
     /// Default is a no-op. Behaviors that own user-visible state (e.g.
     /// `StatefulBehavior`) override this to forward to `ViewState::activate`.
     /// `owner` mirrors `on_deactivate`'s shape (both trace back to the
-    /// `ElementBase::{activate, deactivate}` signature they're driven from);
-    /// no override currently reports through it.
+    /// `ElementBase::{activate, deactivate}` signature they're driven from).
+    /// `StatefulBehavior` uses it to stage an owned diagnostic only while a
+    /// bounded retake handoff is armed. The immediate retake catch takes that
+    /// token, and the recovery path publishes it only after the substitute
+    /// commits.
     #[expect(unused_variables)]
     fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
@@ -654,7 +657,18 @@ where
         // `should_build` guard so a freshly-mounted `StatefulView` calls
         // `init_state` exactly once even if the element is clean.
         if !self.initialized {
-            self.state.init_state(ctx);
+            if let Err(payload) =
+                std::panic::catch_unwind(AssertUnwindSafe(|| self.state.init_state(ctx)))
+            {
+                owner.record_armed_lifecycle_panic(
+                    core.self_id(),
+                    TypeId::of::<V>(),
+                    LifecycleHook::InitState,
+                    payload.as_ref(),
+                    "initializing StatefulElement",
+                );
+                std::panic::resume_unwind(payload);
+            }
             self.initialized = true;
         }
 
@@ -755,20 +769,23 @@ where
     /// the WHOLE reactivated subtree. A panic caught only there can name the
     /// retake candidate, never the actual descendant whose `activate`
     /// failed. While that bounded retake has armed its transient handoff,
-    /// catching here records the exact element and marks the unwind before
-    /// re-raising it. The retake's immediate catch consumes and carries that
-    /// mark while it undoes the relocation, avoiding a second, coarser
-    /// record. A direct, unbounded `ElementTree::activate` call does not arm
-    /// the handoff, so its panic propagates without being reported as
-    /// recovered.
+    /// catching here stages an owned diagnostic for the exact element before
+    /// re-raising the unwind. The retake's immediate catch takes and carries
+    /// that token while recovery removes the failed retake and mounts its
+    /// substitute; the public recovery record is published only after that
+    /// mount commits, with no second, coarser publication. A direct,
+    /// unbounded `ElementTree::activate` call
+    /// does not arm the handoff, so its panic propagates without being
+    /// reported as recovered.
     fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !self.initialized {
             return;
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.activate())) {
-            owner.record_armed_activation_panic(
+            owner.record_armed_lifecycle_panic(
                 core.self_id(),
                 TypeId::of::<V>(),
+                LifecycleHook::Activate,
                 payload.as_ref(),
                 "activating StatefulElement",
             );
@@ -857,7 +874,18 @@ where
         // ancestor chain, matching Flutter (`framework.dart:5977-5982` runs
         // the hook with the element's live `BuildContext`).
         let ctx_choice = make_build_ctx(core, owner);
-        self.state.did_change_dependencies(ctx_choice.as_ctx());
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            self.state.did_change_dependencies(ctx_choice.as_ctx());
+        })) {
+            owner.record_armed_lifecycle_panic(
+                core.self_id(),
+                TypeId::of::<V>(),
+                LifecycleHook::DidChangeDependencies,
+                payload.as_ref(),
+                "notifying StatefulElement dependency change",
+            );
+            std::panic::resume_unwind(payload);
+        }
     }
 }
 

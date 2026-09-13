@@ -344,6 +344,19 @@ impl ElementNode {
     pub(crate) fn set_child_ids(&mut self, ids: Vec<ElementId>) {
         self.child_ids = ids;
     }
+
+    fn commit_child_replacement(
+        &mut self,
+        slot: usize,
+        expected_old: ElementId,
+        replacement: ElementId,
+    ) {
+        assert!(
+            self.child_ids.get(slot) == Some(&expected_old),
+            "BUG: a replacement slot must still contain its preflighted old child after mount",
+        );
+        self.child_ids[slot] = replacement;
+    }
 }
 
 impl std::fmt::Debug for ElementNode {
@@ -477,12 +490,23 @@ pub(crate) struct ProvisionalOrder<'a> {
     unclaimed_old_slots: &'a [Option<ElementId>],
 }
 
-impl ProvisionalOrder<'_> {
+impl<'a> ProvisionalOrder<'a> {
     /// No order committed yet — a fresh insert with nothing to preflight.
     pub(crate) const NONE: Self = Self {
         reconciled_prefix: &[],
         unclaimed_old_slots: &[],
     };
+
+    /// The order committed so far by dense reconciliation.
+    pub(super) const fn during_reconcile(
+        reconciled_prefix: &'a [ElementId],
+        unclaimed_old_slots: &'a [Option<ElementId>],
+    ) -> Self {
+        Self {
+            reconciled_prefix,
+            unclaimed_old_slots,
+        }
+    }
 }
 
 /// The lazy sliver child `from` lives inside — the direct child of the nearest
@@ -783,30 +807,82 @@ impl ElementTree {
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
     }
 
-    pub(super) fn insert_during_reconcile(
+    /// Finalize one child subtree and mount a keyless replacement in its exact slot.
+    ///
+    /// Validation completes before mutation. The old parent-child
+    /// `GlobalKey` reservation is then withdrawn, the old subtree is finalized,
+    /// and the replacement is inserted through the unbounded insertion path.
+    /// Only after insertion succeeds is the parent's child-id slot committed,
+    /// render reordering armed and notified, and the replacement scheduled for
+    /// its initial build.
+    ///
+    /// A panic from replacement creation or mounting propagates after the old
+    /// subtree has been removed but before the child-id slot, render reorder, or
+    /// build schedule is committed. That failure is fatal and has no rollback;
+    /// callers must not continue using the partially advanced tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a `BUG:` invariant failure before mutation if the replacement
+    /// is keyed, the parent or old child is missing, the slot does not exist, or
+    /// the old child's reverse parent/slot edge disagrees. Also propagates any
+    /// panic raised while creating or mounting the replacement, with the
+    /// post-removal failure state described above.
+    pub(crate) fn replace_child_with(
         &mut self,
-        view: &dyn View,
         parent: ElementId,
         slot: usize,
+        view: &dyn View,
         owner: &mut crate::ElementOwner<'_>,
-        reconciled_prefix: &[ElementId],
-        unclaimed_old_slots: &[Option<ElementId>],
     ) -> ElementId {
-        self.try_insert_with_provisional_order(
-            view,
-            parent,
-            slot,
-            owner,
-            ProvisionalOrder {
-                reconciled_prefix,
-                unclaimed_old_slots,
-            },
-        )
-        .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
+        assert!(
+            view.key().is_none(),
+            "BUG: a failure replacement must be keyless",
+        );
+        let (old_child, parent_depth, render_notification) = {
+            let parent_node = self
+                .get(parent)
+                .expect("BUG: a failure replacement parent must remain live");
+            let old_child = *parent_node
+                .child_ids()
+                .get(slot)
+                .expect("BUG: a failure replacement slot must exist on its parent");
+            let parent_element = parent_node.element();
+            let render_notification = parent_element.render_id().map(|render_id| {
+                let pipeline = parent_element
+                    .pipeline_owner()
+                    .expect("BUG: an active render replacement parent must have a PipelineOwner");
+                (pipeline, render_id)
+            });
+            (old_child, parent_node.depth(), render_notification)
+        };
+        let old_node = self
+            .get(old_child)
+            .expect("BUG: a failure replacement slot must name a live child");
+        assert!(
+            old_node.parent() == Some(parent) && old_node.slot() == slot,
+            "BUG: a replacement child's reverse edge must match its containing parent and slot",
+        );
+
+        owner.forget_global_key_reservation(parent, old_child);
+        self.remove_subtree(old_child, owner, SubtreeRemoval::Finalize);
+        let replacement = self.insert(view, parent, slot, owner);
+        self.get_mut(parent)
+            .expect("BUG: a replacement parent must remain live through child mount")
+            .commit_child_replacement(slot, old_child, replacement);
+        self.mark_render_reorder_needed();
+        if let Some((pipeline, render_id)) = render_notification {
+            pipeline.with_mut(|owner| owner.note_render_children_reordered(render_id));
+        }
+        owner.schedule_build_for(
+            replacement,
+            parent_depth + 1,
+            crate::RebuildReason::InitialMount,
+        );
+        replacement
     }
 
-    /// [`insert`](Self::insert) / [`insert_during_reconcile`](Self::insert_during_reconcile)'s
-    /// fallible core: a caught panic comes back as `Err` instead of
+    /// [`insert`](Self::insert)'s fallible core: a caught panic comes back as `Err` instead of
     /// unwinding through this call, so a bounding caller ([`Self::mount_or_substitute`])
     /// can undo whatever the containment window committed before deciding
     /// what to do next.
@@ -976,7 +1052,7 @@ impl ElementTree {
                 return Err(ChildHookPanic {
                     inserted,
                     hook: LifecycleHook::Mount,
-                    recording: crate::owner::HookPanicRecording::Unrecorded,
+                    staged: None,
                     payload,
                 });
             }
@@ -2021,27 +2097,33 @@ impl ElementTree {
     /// [`update`](Self::update)'s fallible core: the element's own `update`
     /// (`ViewState::did_update_view` / `RenderView::update_render_object`)
     /// is the containment window, and a caught panic comes back as `Err`
-    /// instead of unwinding through this call.
+    /// instead of unwinding through this call. Reading and cloning the new
+    /// view's key happens before that literal window, so a key implementation
+    /// panic remains an unbounded framework-input failure and user `update`
+    /// has not started.
     pub(super) fn try_update(
         &mut self,
         id: ElementId,
         view: &dyn View,
         owner: &mut crate::ElementOwner<'_>,
     ) -> Result<(), ChildHookPanic> {
-        let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            if let Some(node) = self.get_mut(id) {
-                node.element_mut().update(view, owner);
-                node.set_key(view.key().map(ViewKey::clone_key));
-            }
-        }));
+        let Some(node) = self.get_mut(id) else {
+            return Ok(());
+        };
+        let stored_key = view.key().map(ViewKey::clone_key);
+        let update_result = {
+            let element = node.element_mut();
+            std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
+        };
         if let Err(payload) = update_result {
             return Err(ChildHookPanic {
                 inserted: None,
                 hook: LifecycleHook::Update,
-                recording: crate::owner::HookPanicRecording::Unrecorded,
+                staged: None,
                 payload,
             });
         }
+        node.set_key(stored_key);
         // A reconfigured `ParentDataView` ancestor reaches this render child via
         // its own re-`update` (the reconciler walks children after their
         // parent), so re-deriving parent data here keeps it current — e.g.
@@ -2070,7 +2152,7 @@ impl ElementTree {
             // Public activation has no substituting caller to consume the
             // handoff. Clear it before resuming so a caught unwind cannot
             // suppress an unrelated later recovery on this owner.
-            owner.take_hook_panic_recorded();
+            owner.take_staged_lifecycle_panic();
             std::panic::resume_unwind(payload);
         }
     }
@@ -2404,6 +2486,9 @@ fn retake_inactive_global_key(
     {
         return None;
     }
+    // Clone caller-controlled key data before dequeueing the inactive entry.
+    // `remove_inactive` is the first point of no return for this retake.
+    let stored_key = view.key().map(ViewKey::clone_key);
     relocation.detached_render_subtrees = owner.remove_inactive(candidate_id);
 
     let parent_depth = tree.get(new_parent).map_or(0, ElementNode::depth);
@@ -2445,21 +2530,21 @@ fn retake_inactive_global_key(
     // for nodes that had dependencies so their next build registers
     // against the new ancestry. A descendant's own `ViewState::activate`
     // can panic here — a behavior that catches its own (see
-    // `StatefulBehavior::on_activate`) records it under its own identity
+    // `StatefulBehavior::on_activate`) stages it under its own identity
     // and re-raises, so this still observes the unwind.
-    owner.arm_hook_panic_recording();
+    owner.arm_lifecycle_panic_handoff();
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
     })) {
-        let recording = owner.take_hook_panic_recorded();
+        let staged = owner.take_staged_lifecycle_panic();
         return Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Activate,
-            recording,
+            staged,
             payload,
         }));
     }
-    owner.take_hook_panic_recorded();
+    owner.take_staged_lifecycle_panic();
 
     // Framework code between the two windows, never user code — a `BUG:`
     // here propagates uncontained (see `ChildHookPanic`'s doc). The
@@ -2476,16 +2561,17 @@ fn retake_inactive_global_key(
     attach_render_relocation(&mut relocation);
 
     // Containment window — Update: the retake's own `update`.
-    let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let node = tree
-            .get_mut(candidate_id)
-            .expect("BUG: a retaken candidate must still be live for its own update");
-        node.element_mut().update(view, owner);
-        node.set_key(view.key().map(ViewKey::clone_key));
-    }));
+    let node = tree
+        .get_mut(candidate_id)
+        .expect("BUG: a retaken candidate must still be live for its own update");
+    let update_result = {
+        let element = node.element_mut();
+        std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
+    };
 
     match update_result {
         Ok(()) => {
+            node.set_key(stored_key);
             tracing::debug!(
                 candidate = ?candidate_id,
                 new_parent = ?new_parent,
@@ -2522,7 +2608,7 @@ fn retake_inactive_global_key(
         Err(payload) => Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Update,
-            recording: crate::owner::HookPanicRecording::Unrecorded,
+            staged: None,
             payload,
         })),
     }
@@ -2573,6 +2659,9 @@ fn retake_active_global_key(
     if !relocation.frontier.is_empty() && !tree.is_reconciling_parent(new_parent) {
         return None;
     }
+    // Clone caller-controlled key data before displacement bookkeeping or
+    // donor/render-tree mutation begins.
+    let stored_key = view.key().map(ViewKey::clone_key);
 
     // Past the preflight the graft is going to happen. It pulls this child
     // out from under a parent that is still live, which is a legitimate
@@ -2648,21 +2737,21 @@ fn retake_active_global_key(
 
     // Containment window — Activate: reactivate the whole subtree alone. A descendant's own
     // `ViewState::activate` can panic here — a behavior that catches its
-    // own (see `StatefulBehavior::on_activate`) records it under its own
+    // own (see `StatefulBehavior::on_activate`) stages it under its own
     // identity and re-raises, so this still observes the unwind.
-    owner.arm_hook_panic_recording();
+    owner.arm_lifecycle_panic_handoff();
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
     })) {
-        let recording = owner.take_hook_panic_recorded();
+        let staged = owner.take_staged_lifecycle_panic();
         return Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Activate,
-            recording,
+            staged,
             payload,
         }));
     }
-    owner.take_hook_panic_recorded();
+    owner.take_staged_lifecycle_panic();
 
     // Framework code between the two windows, never user code — a `BUG:`
     // here propagates uncontained (see `ChildHookPanic`'s doc).
@@ -2677,16 +2766,17 @@ fn retake_active_global_key(
     attach_render_relocation(&mut relocation);
 
     // Containment window — Update: the retake's own `update`.
-    let update_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let node = tree
-            .get_mut(candidate_id)
-            .expect("BUG: a retaken candidate must still be live for its own update");
-        node.element_mut().update(view, owner);
-        node.set_key(view.key().map(ViewKey::clone_key));
-    }));
+    let node = tree
+        .get_mut(candidate_id)
+        .expect("BUG: a retaken candidate must still be live for its own update");
+    let update_result = {
+        let element = node.element_mut();
+        std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
+    };
 
     match update_result {
         Ok(()) => {
+            node.set_key(stored_key);
             tracing::debug!(
                 candidate = ?candidate_id,
                 from_parent = ?from_parent,
@@ -2717,7 +2807,7 @@ fn retake_active_global_key(
         Err(payload) => Some(Err(ChildHookPanic {
             inserted: Some(inserted),
             hook: LifecycleHook::Update,
-            recording: crate::owner::HookPanicRecording::Unrecorded,
+            staged: None,
             payload,
         })),
     }
@@ -2736,6 +2826,15 @@ impl std::fmt::Debug for ElementTree {
 mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
+
+    #[cfg(test)]
+    #[path = "../activation_recovery_tests.rs"]
+    mod activation_recovery_tests;
+    #[path = "replace_child_with_tests.rs"]
+    mod replace_child_with_tests;
+    #[cfg(test)]
+    #[path = "../update_region_tests.rs"]
+    mod update_region_tests;
 
     use crate::{
         BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, GlobalKey,
@@ -4330,15 +4429,19 @@ mod tests {
         });
 
         let _guard = tree.begin_reconcile(destination);
-        let moved = tree.insert_during_reconcile(
+        let moved = tree.mount_or_substitute(
             &keyed,
             destination,
             1,
             &mut owner.element_owner_mut(),
-            &[prefix],
-            &[Some(suffix)],
+            ProvisionalOrder::during_reconcile(&[prefix], &[Some(suffix)]),
+            "retaking child during reconcile test",
         );
         assert_eq!(moved, candidate);
+        assert!(
+            owner.take_recovered_panics().is_empty(),
+            "a successful retake records no recovered panic"
+        );
         assert!(
             !tree
                 .get(donor)
@@ -4415,14 +4518,16 @@ mod tests {
 
         armed.set(true);
         let _reconcile_guard = tree.begin_reconcile(destination);
-        let substitute = tree.mount_or_substitute(
-            &keyed,
-            destination,
-            0,
-            &mut owner.element_owner_mut(),
-            ProvisionalOrder::NONE,
-            "actively retaking test child",
-        );
+        let (substitute, captured_log) = flui_testing::log_capture::capture(|| {
+            tree.mount_or_substitute(
+                &keyed,
+                destination,
+                0,
+                &mut owner.element_owner_mut(),
+                ProvisionalOrder::NONE,
+                "actively retaking test child",
+            )
+        });
 
         assert_ne!(substitute, candidate);
         assert!(
@@ -4453,6 +4558,15 @@ mod tests {
                 ..
             } if element == candidate
         ));
+        assert_eq!(
+            captured_log.count_containing("recovery transaction pending"),
+            1
+        );
+        assert_eq!(
+            captured_log.count_containing("lifecycle hook panicked; contained"),
+            0,
+            "committing a staged record must not log it twice: {captured_log}"
+        );
     }
 
     #[test]

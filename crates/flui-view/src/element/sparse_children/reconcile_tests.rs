@@ -359,11 +359,17 @@ fn a_declined_index_is_reported_and_its_resident_evicted() {
 /// wrapped keyless: the recovered item may never join key matching.
 #[test]
 fn a_keyed_custom_error_view_is_recovered_unkeyed() {
+    const TEST_NAME: &str =
+        "element::sparse_children::reconcile_tests::a_keyed_custom_error_view_is_recovered_unkeyed";
+    if crate::view::isolate_error_view_builder_test(TEST_NAME) {
+        return;
+    }
     use crate::view::{FlutterError, clear_error_view_builder, set_error_view_builder};
     fn keyed_error_view(_error: &FlutterError) -> Box<dyn View> {
         Box::new(KeyedBox::new(7))
     }
-    // The factory is process-global; this test owns it for its duration.
+    // The factory is process-global; the helper above gives this mutation its
+    // own test process rather than relying on a partial module-local lock.
     set_error_view_builder(keyed_error_view);
     let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|_| panic!("boom"));
     let recovered = build_item_or_error(&*builder, 0).expect("an error view");
@@ -511,7 +517,7 @@ fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
     assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Mount);
     // A window-level record, not a behavior-level one:
     // `RenderBehavior::on_mount` does not catch/record its own panic
-    // (unlike `StatefulBehavior::on_activate`), so `hook_panic_recorded`
+    // (unlike `StatefulBehavior::on_activate`), so the staged handoff
     // stays unset and `mount_or_substitute` pushes this `Substituted`
     // record itself.
     match recovered_panics[0].at {
