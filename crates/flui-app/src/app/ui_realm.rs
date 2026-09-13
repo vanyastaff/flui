@@ -9178,7 +9178,7 @@ mod tests {
         use super::*;
 
         #[derive(Clone, Default)]
-        struct FrameEventCapture(Arc<StdMutex<Vec<(String, String)>>>);
+        struct FrameEventCapture(Arc<StdMutex<Vec<Vec<(String, String)>>>>);
 
         struct FrameFieldVisitor<'a>(&'a mut Vec<(String, String)>);
 
@@ -9213,7 +9213,7 @@ mod tests {
                 self.0
                     .lock()
                     .expect("BUG: frame capture is locked only by this test")
-                    .extend(fields);
+                    .push(fields);
             }
         }
 
@@ -10434,11 +10434,19 @@ mod tests {
                 assert!(realm.render_frame_entered(&mut backend));
             });
 
-            let fields = capture
+            let events = capture
                 .0
                 .lock()
                 .expect("BUG: frame capture is locked only by this test")
                 .clone();
+            let fields = events
+                .iter()
+                .find(|fields| {
+                    fields
+                        .iter()
+                        .any(|(field, value)| field == "event" && value == "frame_telemetry")
+                })
+                .expect("the successful submit must emit one frame_telemetry event");
             let field = |name: &str| {
                 fields
                     .iter()
