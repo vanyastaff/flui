@@ -123,10 +123,13 @@ impl FrameFailureDetail {
         self.materialize(|| error.to_string().into_boxed_str())
     }
 
-    /// Apply the retention policy to an already-owned recovered panic
-    /// message without formatting the surrounding `FlutterError`.
-    pub(crate) fn recovered_text(self, message: String) -> PanicText {
-        self.materialize(|| message.into_boxed_str())
+    /// Apply the retention policy to exact recovered-payload provenance.
+    /// A non-string payload stays redacted even under `Verbatim`.
+    pub(crate) fn recovered_text(self, payload_text: Option<Box<str>>) -> PanicText {
+        let Some(payload_text) = payload_text else {
+            return PanicText::Redacted;
+        };
+        self.materialize(|| payload_text)
     }
 
     /// Convert one lower-level recovery record without formatting its
@@ -136,7 +139,7 @@ impl FrameFailureDetail {
             at,
             view_type_id,
             hook,
-            error,
+            payload_text,
             internal_invariant,
             ..
         } = recovered;
@@ -144,7 +147,7 @@ impl FrameFailureDetail {
             at,
             view_type_id,
             hook,
-            error.message,
+            payload_text,
             internal_invariant,
         )
     }
@@ -156,14 +159,14 @@ impl FrameFailureDetail {
         at: RecoveredAt,
         view_type_id: TypeId,
         hook: LifecycleHook,
-        message: String,
+        payload_text: Option<Box<str>>,
         internal_invariant: bool,
     ) -> FrameFailureKind {
         FrameFailureKind::RecoveredPanic {
             at,
             view_type_id,
             hook,
-            message: self.recovered_text(message),
+            message: self.recovered_text(payload_text),
             internal_invariant,
         }
     }
@@ -262,8 +265,9 @@ pub enum FrameFailureKind {
     Pipeline {
         /// The pipeline's own typed error. The realm applies
         /// [`FrameFailureDetail`] only when formatting this error for
-        /// `tracing`; a registered handler retains the typed value and can
-        /// inspect its variants without rendering private text.
+        /// `tracing`; a registered handler retains the typed value. Its
+        /// fields and `Debug` output may contain sensitive text, so handler
+        /// authors own that exposure.
         error: RenderError,
     },
     /// A lifecycle-hook panic recovered at a narrower per-child boundary.
@@ -278,7 +282,9 @@ pub enum FrameFailureKind {
         view_type_id: TypeId,
         /// The lifecycle hook that panicked.
         hook: LifecycleHook,
-        /// The recovered panic's message after applying the realm policy.
+        /// The recovered string payload after applying the realm policy.
+        /// A non-string payload is [`PanicText::Redacted`] under every policy;
+        /// the lower-level synthesized diagnostic fallback is not forwarded.
         message: PanicText,
         /// Classification computed from the raw payload at the recovery seam.
         internal_invariant: bool,

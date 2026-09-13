@@ -231,7 +231,11 @@ boundary nor unregisters the handler, and the same report is not retried.
 **Privacy:** `FrameFailureDetail` defaults to `Verbatim` in debug builds and
 `Redacted` in release builds; an explicit `AppConfig` override is independent
 of `DiagnosticsProfile`. The raw panic payload is classified for the `BUG:`
-invariant prefix before policy materialization. Under `Redacted`, panic text is
+invariant prefix before policy materialization. A recovered record separately
+stores `payload_text: Option<Box<str>>`: `Some` only preserves an actual string
+payload, while its display-facing `FlutterError` may keep the existing
+synthetic fallback for a non-string payload. The app consumes that provenance,
+never the diagnostic fallback. Under `Redacted`, panic text is
 neither retained nor formatted; non-string payloads remain redacted even under
 `Verbatim`. Segment-panic and recovered-panic reports therefore carry the
 policy-filtered `PanicText`. For pipeline failures, the policy controls only

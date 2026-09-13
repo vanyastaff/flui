@@ -2687,7 +2687,7 @@ contains = "pub enum FrameFailureKind"
 classification = "stable-candidate"
 thread_affinity = "plain report value; delivered synchronously on the UiRealm owner thread"
 owner = "typed presentation-attempt failure and contained-recovery reporting"
-failure_semantics = "SegmentPanic and Pipeline are FrameDropped terminal reports; RecoveredPanic is a Contained report and does not itself arm retry or change the dropped-frame streak"
+failure_semantics = "SegmentPanic and Pipeline are FrameDropped terminal reports; RecoveredPanic is a Contained report and does not itself arm retry or change the dropped-frame streak; recovered non-string payloads remain redacted even under explicit Verbatim detail"
 consumers = ["AppConfig FrameFailureHandler callbacks", "flui-app tracing adapter"]
 owner_issue = 561
 

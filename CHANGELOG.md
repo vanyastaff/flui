@@ -18,7 +18,10 @@ file records the repo-consumer-visible summary.
   `LifecycleHook` record types. `BuildOwner::take_recovered_panics` and
   `WidgetsBinding::take_recovered_panics` are explicit `#[must_use]` drains;
   records name the panicking element, the mounted substitute, or a lazy
-  delegate without overloading one id field with multiple meanings. Undrained
+  delegate without overloading one id field with multiple meanings. Exact
+  string-payload provenance is kept separately from the display-facing
+  `FlutterError`; a non-string payload therefore remains redacted in an app
+  report even when the embedder explicitly selects verbatim detail. Undrained
   records are discarded with one warning at the next frame start, bounding
   the producer even before a host forwards the diagnostics.
 - **Presentation-scoped frame-failure reporting and privacy controls** (#561):

@@ -116,6 +116,26 @@ impl View for PanicsOnceOnBuild {
 }
 
 #[derive(Clone)]
+struct PanicsOnceWithNonStringPayload {
+    should_panic: Rc<Cell<bool>>,
+}
+
+impl StatelessView for PanicsOnceWithNonStringPayload {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        if self.should_panic.replace(false) {
+            std::panic::panic_any(41_u8);
+        }
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+impl View for PanicsOnceWithNonStringPayload {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+#[derive(Clone)]
 struct RecordsElementThenPanicsOnBuild {
     should_panic: Rc<Cell<bool>>,
     observed_element_id: Rc<Cell<Option<ElementId>>>,
@@ -195,7 +215,7 @@ fn converter_preserves_every_hook_attribution_and_input_order() {
                 location,
                 TypeId::of::<PanicsOnceOnBuild>(),
                 *hook,
-                format!("message-{index}"),
+                Some(format!("message-{index}").into_boxed_str()),
                 index % 2 == 0,
             )
         })
@@ -226,20 +246,24 @@ fn converter_preserves_every_hook_attribution_and_input_order() {
 #[test]
 fn recovered_message_policy_is_exact_and_never_carries_error_details() {
     let location = real_recovery_location();
-    let convert = |detail: FrameFailureDetail, message: String| {
+    let convert = |detail: FrameFailureDetail, payload_text: Option<Box<str>>| {
         detail.recovered_panic_kind_from_parts(
             location,
             TypeId::of::<PanicsOnceOnBuild>(),
             LifecycleHook::Build,
-            message,
+            payload_text,
             false,
         )
     };
     let verbatim = convert(
         FrameFailureDetail::Verbatim,
-        "ошибка\0with unicode".to_owned(),
+        Some("ошибка\0with unicode".into()),
     );
-    let redacted = convert(FrameFailureDetail::Redacted, "must-not-survive".to_owned());
+    let redacted = convert(
+        FrameFailureDetail::Redacted,
+        Some("must-not-survive".into()),
+    );
+    let non_string = convert(FrameFailureDetail::Verbatim, None);
     let FrameFailureKind::RecoveredPanic { message, .. } = verbatim else {
         panic!("expected recovered panic")
     };
@@ -249,6 +273,10 @@ fn recovered_message_policy_is_exact_and_never_carries_error_details() {
     };
     assert_eq!(message, PanicText::Redacted);
     assert!(!format!("{message:?}").contains("must-not-survive"));
+    let FrameFailureKind::RecoveredPanic { message, .. } = non_string else {
+        panic!("expected recovered panic")
+    };
+    assert_eq!(message, PanicText::Redacted);
 }
 
 #[test]
@@ -280,6 +308,57 @@ fn real_build_recovery_is_reported_once_in_the_same_attempt() {
         }
         other => panic!("expected recovered build panic, got {other:?}"),
     }
+}
+
+#[test]
+fn explicit_verbatim_keeps_a_non_string_lifecycle_payload_redacted() {
+    let realm = UiRealm::for_test();
+    realm.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+    let observed = install_collecting_handler(&realm);
+    realm
+        .attach_root_widget(&PanicsOnceWithNonStringPayload {
+            should_panic: Rc::new(Cell::new(true)),
+        })
+        .expect("root attaches");
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(render_attempt(&realm, &mut backend));
+
+    let observed = observed.lock().expect("failure collector mutex");
+    assert_eq!(observed.len(), 1, "the recovery is delivered exactly once");
+    assert_eq!(observed[0].disposition, FailureDisposition::Contained);
+    let ObservedKind::Recovered {
+        hook,
+        message,
+        internal_invariant,
+        ..
+    } = &observed[0].kind
+    else {
+        panic!("expected recovered lifecycle panic")
+    };
+    assert_eq!(*hook, LifecycleHook::Build);
+    assert_eq!(message, &PanicText::Redacted);
+    assert!(!internal_invariant);
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn release_default_keeps_a_non_string_lifecycle_payload_redacted() {
+    let realm = UiRealm::for_test();
+    let observed = install_collecting_handler(&realm);
+    realm
+        .attach_root_widget(&PanicsOnceWithNonStringPayload {
+            should_panic: Rc::new(Cell::new(true)),
+        })
+        .expect("root attaches");
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(render_attempt(&realm, &mut backend));
+
+    let observed = observed.lock().expect("failure collector mutex");
+    assert_eq!(observed.len(), 1, "the recovery is delivered exactly once");
+    let ObservedKind::Recovered { message, .. } = &observed[0].kind else {
+        panic!("expected recovered lifecycle panic")
+    };
+    assert_eq!(message, &PanicText::Redacted);
 }
 
 #[test]
