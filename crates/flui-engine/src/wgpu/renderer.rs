@@ -611,7 +611,7 @@ impl SurfaceAcquireBackend for Renderer {
         // Under `Fifo` with a frame latency of 1 this is where the vsync
         // block lands (ADR-0045 decision 3), so its duration is the one
         // number that says whether the display is pacing this thread.
-        let acquire_started = std::time::Instant::now();
+        let acquire_started = crate::frame_timing::now();
         let acquired = surface.get_current_texture();
         let outcome = match &acquired {
             wgpu::CurrentSurfaceTexture::Success(_) => "success",
@@ -1682,7 +1682,7 @@ impl Renderer {
                 "platform notified before present"
             );
         }
-        let present_started = std::time::Instant::now();
+        let present_started = crate::frame_timing::now();
         self.queue.present(output);
         let present_us = present_started.elapsed().as_micros() as u64;
 

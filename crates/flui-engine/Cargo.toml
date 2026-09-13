@@ -77,6 +77,10 @@ parking_lot = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Portable Instant for GPU-path diagnostic spans (issue #1045). Same pin the
+# foundation clock and the app runner already use — std::time::Instant panics
+# on wasm32-unknown-unknown before surface acquire/present can complete.
+web-time = { workspace = true }
 # Raster mailbox + dedicated ack channel — bounded, typed
 # backpressure, following the render invalidation channel's precedent.
 crossbeam-channel = { workspace = true }
@@ -139,6 +143,12 @@ image = { workspace = true }
 # crate/version flui-types already uses for its unit-mixing compile-fail
 # suite (`crates/flui-types/tests/unit_mixing_compile_fail.rs`).
 trybuild = { workspace = true }
+
+# Executing wasm32 tests for the frame-timing helper (issue #1045). Pinned
+# exactly like flui-foundation / flui-app: 0.3.77 pairs with the locked
+# wasm-bindgen 0.2.127; an unpinned `"0.3"` would bump the workspace lock.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.77"
 
 [[bench]]
 name = "render_throughput"
