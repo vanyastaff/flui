@@ -3282,6 +3282,16 @@ impl UiRealm {
                 self.request_redraw_for(presentation);
             }
             PlatformInput::Pointer(pointer_event) => {
+                let should_hold_pointer = presentation.frame_commit_state()
+                    != FrameCommitState::Committed
+                    || !presentation.held_pointer_input().borrow().is_empty();
+                if should_hold_pointer {
+                    presentation
+                        .held_pointer_input()
+                        .borrow_mut()
+                        .append(pointer_event);
+                    return;
+                }
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
                 let routing_panic = catch_unwind(AssertUnwindSafe(|| {
@@ -3359,6 +3369,7 @@ impl UiRealm {
             );
             return;
         };
+        presentation.held_pointer_input().borrow_mut().drop_hovers();
         presentation.gestures().handle_pointer_left_window();
         self.request_redraw_for(presentation);
     }
@@ -3640,6 +3651,7 @@ impl UiRealm {
                 realm.focus_coordinator.note_focus_gained(surviving);
             }
             // Steps 2 + 3, composite (minus `id` itself) + capabilities active.
+            presentation.held_pointer_input().borrow_mut().clear();
             presentation.close();
             true
         });
@@ -6008,6 +6020,19 @@ mod tests {
                 .enter(|realm| realm.attach_root_widget_with_size(&root, 100.0, 100.0))
                 .expect("attach succeeds");
             let _ = realm.draw_frame(test_constraints());
+            realm.presentations.primary().commit_tree_revision();
+            assert_eq!(
+                realm.presentations.primary().frame_commit_state(),
+                FrameCommitState::Committed
+            );
+            assert!(
+                realm
+                    .presentations
+                    .primary()
+                    .held_pointer_input()
+                    .borrow()
+                    .is_empty()
+            );
 
             // Production input arrives inside the realm (runner.rs's
             // PlatformToUi dispatch enters it before calling handle_input),
@@ -6068,6 +6093,19 @@ mod tests {
                 .attach_root_widget(&root)
                 .expect("a fresh realm must attach the detector tree");
             let _ = realm.draw_frame(test_constraints());
+            realm.presentations.primary().commit_tree_revision();
+            assert_eq!(
+                realm.presentations.primary().frame_commit_state(),
+                FrameCommitState::Committed
+            );
+            assert!(
+                realm
+                    .presentations
+                    .primary()
+                    .held_pointer_input()
+                    .borrow()
+                    .is_empty()
+            );
 
             let position = Offset::new(Pixels(10.0), Pixels(10.0));
             let down = make_down_event(position, PointerType::Touch);
@@ -6259,6 +6297,19 @@ mod tests {
                 .expect("attach succeeds");
             let constraints = test_constraints();
             let _ = realm.draw_frame(constraints);
+            realm.presentations.primary().commit_tree_revision();
+            assert_eq!(
+                realm.presentations.primary().frame_commit_state(),
+                FrameCommitState::Committed
+            );
+            assert!(
+                realm
+                    .presentations
+                    .primary()
+                    .held_pointer_input()
+                    .borrow()
+                    .is_empty()
+            );
 
             // Contact down — and nothing else, ever after. Production input
             // arrives inside the realm (runner.rs's RealmEvent dispatch

@@ -71,13 +71,6 @@ impl HeldPointerQueue {
     }
 
     /// Admit one event without ever exposing more than the fixed capacity.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "production routing adopts this independently reviewed bounded queue in the following change"
-        )
-    )]
     pub(crate) fn append(&mut self, event: PointerEvent) {
         let pointer_id = flui_interaction::events::extract_pointer_id(&event);
         let motion_class = Self::motion_class(&event);
@@ -156,13 +149,6 @@ impl HeldPointerQueue {
     }
 
     /// Remove hover motion only, retaining every contact epoch intact.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "window-leave routing adopts this independently reviewed bounded queue in the following change"
-        )
-    )]
     pub(crate) fn drop_hovers(&mut self) {
         let before = self.events.len();
         self.events
@@ -176,8 +162,26 @@ impl HeldPointerQueue {
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.total_len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.total_len() == 0
+    }
+
+    pub(crate) fn clear(&mut self) {
+        let dropped = self.total_len();
+        self.events.clear();
+        self.replay_reserved = 0;
+        self.replay_tail_open_pointers.clear();
+        self.replay_dispatched_open_pointers.clear();
+        self.replay_supersessions.clear();
+        self.replay_in_flight = false;
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(dropped);
+        if dropped != 0 {
+            self.trace_counts("dropped held pointer input", dropped);
+        }
     }
 
     #[cfg(test)]
@@ -590,11 +594,13 @@ impl Iterator for HeldPointerReplay<'_> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.remaining.len();
-        (remaining, Some(remaining))
+        let lower_bound = match self.queue.try_borrow() {
+            Ok(queue) if queue.replay_supersessions.is_empty() => remaining,
+            Ok(_) | Err(_) => 0,
+        };
+        (lower_bound, Some(remaining))
     }
 }
-
-impl ExactSizeIterator for HeldPointerReplay<'_> {}
 
 impl Drop for HeldPointerReplay<'_> {
     fn drop(&mut self) {
@@ -1201,5 +1207,21 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![second, reentrant]);
         assert!(!queue.borrow().is_replay_in_flight());
+    }
+
+    #[test]
+    fn replay_size_hint_is_conservative_while_reentrant_supersession_is_pending() {
+        let queue = queue();
+        let id = pointer(2);
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 1.0));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        queue.borrow_mut().append(down(id));
+
+        assert_eq!(replay.size_hint(), (0, Some(1)));
+        assert!(replay.next().is_none());
+        replay.complete();
     }
 }

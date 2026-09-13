@@ -689,10 +689,6 @@ impl PresentationState {
 
     /// The bounded queue used while this presentation has no committed tree.
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "the state ships before its production routing consumer so the queue invariant can be reviewed independently"
-    )]
     pub(crate) fn held_pointer_input(&self) -> &RefCell<HeldPointerQueue> {
         &self.held_pointer_input
     }
