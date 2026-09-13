@@ -158,6 +158,12 @@ pub mod raster_options;
 /// deterministic face set needs them without the wgpu stack.
 pub mod fonts;
 
+/// Portable monotonic timestamps for GPU-path diagnostic spans.
+/// Acquire/present timers must not panic on wasm32 before the wgpu backend is
+/// even asked for a surface texture (issue #1045).
+#[cfg(feature = "wgpu-backend")]
+pub(crate) mod frame_timing;
+
 // ============================================================================
 // BACKENDS
 // ============================================================================
