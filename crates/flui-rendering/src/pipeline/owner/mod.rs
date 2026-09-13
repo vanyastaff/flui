@@ -259,6 +259,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
 
+    /// One-shot semantics failure injected after paint by cross-crate frame
+    /// integration tests. Absent from production builds.
+    #[cfg(any(test, feature = "testing"))]
+    semantics_error_once_for_test: Option<crate::error::RenderError>,
+
     /// Child-build requests accumulated during the most recent layout pass
     /// by request-strategy slivers.  Each entry is `(sliver_id,
     /// logical_index)`.  The binding layer drains this via
@@ -345,6 +350,8 @@ where
         dirty_rx: from.dirty_rx,
         #[cfg(any(test, feature = "testing"))]
         parent_data_seeds: from.parent_data_seeds,
+        #[cfg(any(test, feature = "testing"))]
+        semantics_error_once_for_test: from.semantics_error_once_for_test,
         pending_child_requests: from.pending_child_requests,
         pending_retain_bands: from.pending_retain_bands,
         _phase: PhantomData,

@@ -3,6 +3,16 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex as StdMutex};
 
+use flui_layer::LayerLink;
+use flui_rendering::{
+    context::{BoxLayoutContext, PaintCx},
+    error::RenderError,
+    parent_data::BoxParentData,
+    prelude::Leaf,
+    protocol::BoxProtocol,
+    traits::{RenderBox, RenderObject},
+};
+use flui_types::{Offset, Size, geometry::px, painting::Alignment};
 use flui_widgets::SizedBox;
 
 use super::{SegmentPhase, UiRealm};
@@ -42,6 +52,101 @@ fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> TestRasterBackend
             .push(format!("{:?}", scene.layer_tree()));
         Ok(true)
     })
+}
+
+/// Root whose paint commits a non-empty linked leader/follower registry.
+#[derive(Debug)]
+struct LinkedPaintBox {
+    link: LayerLink,
+}
+
+impl flui_foundation::Diagnosticable for LinkedPaintBox {}
+
+impl RenderBox for LinkedPaintBox {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+        ctx.constraints().constrain(Size::new(px(20.0), px(20.0)))
+    }
+
+    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        let size = ctx.size();
+        ctx.with_leader(self.link, size, |ctx| {
+            ctx.with_follower(
+                self.link,
+                size,
+                Offset::ZERO,
+                true,
+                Alignment::TOP_LEFT,
+                Alignment::TOP_LEFT,
+                |_| {},
+            );
+        });
+    }
+}
+
+fn mount_linked_render_root() -> UiRealm {
+    let realm = UiRealm::for_test();
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root_id = owner.insert(Box::new(LinkedPaintBox {
+            link: LayerLink::new(),
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(root_id));
+        owner.set_semantics_enabled(true);
+    });
+    realm
+}
+
+/// A semantics error happens after paint has committed both frame artifacts.
+/// The realm must retain that pair and submit it intact on its automatic retry.
+#[test]
+fn semantics_failure_retry_submits_the_retained_non_empty_link_registry() {
+    let realm = mount_linked_render_root();
+    realm.pipeline_for_test().with_mut(|owner| {
+        owner.fail_next_semantics_after_paint_for_test(RenderError::semantics(
+            "intentional transient semantics failure",
+        ));
+    });
+
+    let submitted_link_counts = Arc::new(StdMutex::new(Vec::new()));
+    let captured_counts = Arc::clone(&submitted_link_counts);
+    let mut backend = TestRasterBackend::new(move |_, scene| {
+        captured_counts
+            .lock()
+            .expect("link-count capture mutex")
+            .push((
+                scene.link_registry().leader_count(),
+                scene.link_registry().follower_count(),
+            ));
+        Ok(true)
+    });
+
+    assert!(
+        !realm.render_frame_entered(&mut backend),
+        "the semantics failure must prevent submission"
+    );
+    assert_eq!(backend.render_scene_calls, 0);
+    assert!(realm.needs_redraw(), "the failed attempt must arm a retry");
+
+    let retry_presented = realm.render_frame_entered(&mut backend);
+    assert!(
+        retry_presented,
+        "the automatic retry must submit the retained painted frame; phase={:?}, calls={}, \
+         needs_redraw={}, has_pending_work={}",
+        realm.presentations.primary().segment_phase(),
+        backend.render_scene_calls,
+        realm.needs_redraw(),
+        realm.has_pending_work(),
+    );
+    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(
+        *submitted_link_counts
+            .lock()
+            .expect("link-count capture mutex"),
+        vec![(1, 1)],
+        "the submitted scene must carry the retained frame's leader and follower"
+    );
 }
 
 /// A panic after the pipeline has consumed paint dirtiness must re-dirty
