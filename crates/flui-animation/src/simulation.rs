@@ -134,11 +134,15 @@ impl SpringDescription {
     /// Creates a spring with explicit mass, stiffness, and damping.
     ///
     /// # Panics
-    /// Panics if mass or stiffness is not positive, or if damping is negative.
+    /// Panics if mass or stiffness is not finite and positive, or if damping is
+    /// not finite and non-negative (`NaN` / `±Inf` are rejected).
     #[must_use]
     pub fn new(mass: f32, stiffness: f32, damping: f32) -> Self {
+        assert!(mass.is_finite(), "Mass must be finite");
         assert!(mass > 0.0, "Mass must be positive");
+        assert!(stiffness.is_finite(), "Stiffness must be finite");
         assert!(stiffness > 0.0, "Stiffness must be positive");
+        assert!(damping.is_finite(), "Damping must be finite");
         assert!(damping >= 0.0, "Damping must be non-negative");
         Self {
             mass,
@@ -155,11 +159,15 @@ impl SpringDescription {
     /// - `ratio < 1.0`: underdamped (oscillates before settling)
     ///
     /// # Panics
-    /// Panics if mass or stiffness is not positive, or if ratio is negative.
+    /// Panics if mass or stiffness is not finite and positive, or if ratio is
+    /// not finite and non-negative (`NaN` / `±Inf` are rejected).
     #[must_use]
     pub fn with_damping_ratio(mass: f32, stiffness: f32, ratio: f32) -> Self {
+        assert!(mass.is_finite(), "Mass must be finite");
         assert!(mass > 0.0, "Mass must be positive");
+        assert!(stiffness.is_finite(), "Stiffness must be finite");
         assert!(stiffness > 0.0, "Stiffness must be positive");
+        assert!(ratio.is_finite(), "Damping ratio must be finite");
         assert!(ratio >= 0.0, "Damping ratio must be non-negative");
         let damping = ratio * 2.0 * (mass * stiffness).sqrt();
         Self {
@@ -259,16 +267,46 @@ impl SpringDescription {
     }
 
     /// Returns the type of spring based on damping.
+    ///
+    /// Classification uses `f64` with a small relative band around critical
+    /// damping so `f32` parameter round-trip does not mis-bucket near-critical
+    /// springs.
     #[must_use]
     pub fn spring_type(&self) -> SpringType {
-        let discriminant = self.damping * self.damping - 4.0 * self.mass * self.stiffness;
-        if discriminant > 0.0 {
-            SpringType::Overdamped
-        } else if discriminant < 0.0 {
-            SpringType::Underdamped
-        } else {
-            SpringType::CriticallyDamped
-        }
+        spring_regime(*self)
+    }
+}
+
+/// `c² - 4mk` in `f64`. Internal analytic constants need this precision so
+/// extreme but finite springs keep a usable slow root (see [`OverdampedSolution`]).
+#[inline]
+fn spring_discriminant(spring: SpringDescription) -> f64 {
+    let mass = f64::from(spring.mass);
+    let stiffness = f64::from(spring.stiffness);
+    let damping = f64::from(spring.damping);
+    damping * damping - 4.0 * mass * stiffness
+}
+
+/// Relative band around `c² ≈ 4mk` treated as critically damped.
+///
+/// Public spring parameters are `f32`, so `with_damping_ratio(..., 1.0)` stores a
+/// rounded damping that is not exactly `2√(mk)` when re-expanded in `f64`. Without
+/// this band, those springs would flip to under-/over-damped and jump between
+/// analytic forms.
+const CRITICAL_DISCRIMINANT_REL_EPS: f64 = 1e-6;
+
+#[inline]
+fn spring_regime(spring: SpringDescription) -> SpringType {
+    let mass = f64::from(spring.mass);
+    let stiffness = f64::from(spring.stiffness);
+    let cmk = 4.0 * mass * stiffness;
+    let discriminant = spring_discriminant(spring);
+    if discriminant.abs() <= cmk * CRITICAL_DISCRIMINANT_REL_EPS {
+        SpringType::CriticallyDamped
+    } else if discriminant > 0.0 {
+        SpringType::Overdamped
+    } else {
+        SpringType::Underdamped
     }
 }
 
@@ -391,26 +429,22 @@ enum SpringSolution {
 
 impl SpringSolution {
     fn new(spring: SpringDescription, initial_position: f32, initial_velocity: f32) -> Self {
-        let discriminant = spring.damping * spring.damping - 4.0 * spring.mass * spring.stiffness;
-
-        if discriminant > 0.0 {
-            SpringSolution::Overdamped(OverdampedSolution::new(
+        match spring_regime(spring) {
+            SpringType::Overdamped => SpringSolution::Overdamped(OverdampedSolution::new(
                 spring,
                 initial_position,
                 initial_velocity,
-            ))
-        } else if discriminant < 0.0 {
-            SpringSolution::Underdamped(UnderdampedSolution::new(
+            )),
+            SpringType::Underdamped => SpringSolution::Underdamped(UnderdampedSolution::new(
                 spring,
                 initial_position,
                 initial_velocity,
-            ))
-        } else {
-            SpringSolution::Critical(CriticalSolution::new(
+            )),
+            SpringType::CriticallyDamped => SpringSolution::Critical(CriticalSolution::new(
                 spring,
                 initial_position,
                 initial_velocity,
-            ))
+            )),
         }
     }
 
@@ -440,88 +474,130 @@ impl SpringSolution {
 }
 
 /// Critically damped spring solution.
+///
+/// Analytic constants are `f64` so samples stay continuous with the neighboring
+/// over-/under-damped regimes when public parameters are stored as `f32`.
 #[derive(Debug, Clone)]
 struct CriticalSolution {
-    r: f32,
-    c1: f32,
-    c2: f32,
+    r: f64,
+    c1: f64,
+    c2: f64,
 }
 
 impl CriticalSolution {
     fn new(spring: SpringDescription, distance: f32, velocity: f32) -> Self {
-        let r = -spring.damping / (2.0 * spring.mass);
+        let mass = f64::from(spring.mass);
+        let damping = f64::from(spring.damping);
+        let distance = f64::from(distance);
+        let velocity = f64::from(velocity);
+        let r = -damping / (2.0 * mass);
         let c1 = distance;
         let c2 = velocity - (r * distance);
         Self { r, c1, c2 }
     }
 
     fn x(&self, time: f32) -> f32 {
-        (self.c1 + self.c2 * time) * (self.r * time).exp()
+        let time = f64::from(time);
+        let x = (self.c1 + self.c2 * time) * (self.r * time).exp();
+        x as f32
     }
 
     fn dx(&self, time: f32) -> f32 {
+        let time = f64::from(time);
         let power = (self.r * time).exp();
-        self.r * (self.c1 + self.c2 * time) * power + self.c2 * power
+        let dx = self.r * (self.c1 + self.c2 * time) * power + self.c2 * power;
+        dx as f32
     }
 }
 
 /// Overdamped spring solution.
+///
+/// Roots and coefficients are computed in `f64`. The slow root uses Vieta's
+/// product relation (`r1·r2 = k/m`) instead of `-c + √(c²-4mk)`, which cancels
+/// to exactly `0` in `f32` for heavy damping (e.g. mass=1, stiffness=1,
+/// damping=10000) and leaves the simulation stuck away from the target.
 #[derive(Debug, Clone)]
 struct OverdampedSolution {
-    r1: f32,
-    r2: f32,
-    c1: f32,
-    c2: f32,
+    r1: f64,
+    r2: f64,
+    c1: f64,
+    c2: f64,
 }
 
 impl OverdampedSolution {
     fn new(spring: SpringDescription, distance: f32, velocity: f32) -> Self {
-        let cmk = spring.damping * spring.damping - 4.0 * spring.mass * spring.stiffness;
-        let r1 = (-spring.damping - cmk.sqrt()) / (2.0 * spring.mass);
-        let r2 = (-spring.damping + cmk.sqrt()) / (2.0 * spring.mass);
+        let mass = f64::from(spring.mass);
+        let stiffness = f64::from(spring.stiffness);
+        let damping = f64::from(spring.damping);
+        let distance = f64::from(distance);
+        let velocity = f64::from(velocity);
+
+        let cmk = damping * damping - 4.0 * mass * stiffness;
+        // Fast (more negative) root: both terms share sign, so no cancellation.
+        let r1 = (-damping - cmk.sqrt()) / (2.0 * mass);
+        // Slow root via Vieta — stable when `√(c²-4mk)` ≈ `c`.
+        let r2 = (stiffness / mass) / r1;
         let c2 = (velocity - r1 * distance) / (r2 - r1);
         let c1 = distance - c2;
         Self { r1, r2, c1, c2 }
     }
 
     fn x(&self, time: f32) -> f32 {
-        self.c1 * (self.r1 * time).exp() + self.c2 * (self.r2 * time).exp()
+        let time = f64::from(time);
+        let x = self.c1 * (self.r1 * time).exp() + self.c2 * (self.r2 * time).exp();
+        x as f32
     }
 
     fn dx(&self, time: f32) -> f32 {
-        self.c1 * self.r1 * (self.r1 * time).exp() + self.c2 * self.r2 * (self.r2 * time).exp()
+        let time = f64::from(time);
+        let dx =
+            self.c1 * self.r1 * (self.r1 * time).exp() + self.c2 * self.r2 * (self.r2 * time).exp();
+        dx as f32
     }
 }
 
 /// Underdamped spring solution.
+///
+/// Analytic constants are `f64` for the same continuity reasons as
+/// [`CriticalSolution`] / [`OverdampedSolution`].
 #[derive(Debug, Clone)]
 struct UnderdampedSolution {
-    w: f32,
-    r: f32,
-    c1: f32,
-    c2: f32,
+    w: f64,
+    r: f64,
+    c1: f64,
+    c2: f64,
 }
 
 impl UnderdampedSolution {
     fn new(spring: SpringDescription, distance: f32, velocity: f32) -> Self {
-        let w = (4.0 * spring.mass * spring.stiffness - spring.damping * spring.damping).sqrt()
-            / (2.0 * spring.mass);
-        let r = -(spring.damping / (2.0 * spring.mass));
+        let mass = f64::from(spring.mass);
+        let stiffness = f64::from(spring.stiffness);
+        let damping = f64::from(spring.damping);
+        let distance = f64::from(distance);
+        let velocity = f64::from(velocity);
+
+        let w = (4.0 * mass * stiffness - damping * damping).sqrt() / (2.0 * mass);
+        let r = -(damping / (2.0 * mass));
         let c1 = distance;
         let c2 = (velocity - r * distance) / w;
         Self { w, r, c1, c2 }
     }
 
     fn x(&self, time: f32) -> f32 {
-        (self.r * time).exp() * (self.c1 * (self.w * time).cos() + self.c2 * (self.w * time).sin())
+        let time = f64::from(time);
+        let x = (self.r * time).exp()
+            * (self.c1 * (self.w * time).cos() + self.c2 * (self.w * time).sin());
+        x as f32
     }
 
     fn dx(&self, time: f32) -> f32 {
+        let time = f64::from(time);
         let power = (self.r * time).exp();
         let cosine = (self.w * time).cos();
         let sine = (self.w * time).sin();
-        power * (self.c2 * self.w * cosine - self.c1 * self.w * sine)
-            + self.r * power * (self.c2 * sine + self.c1 * cosine)
+        let dx = power * (self.c2 * self.w * cosine - self.c1 * self.w * sine)
+            + self.r * power * (self.c2 * sine + self.c1 * cosine);
+        dx as f32
     }
 }
 
@@ -1120,5 +1196,235 @@ mod tests {
         let bouncy = SpringDescription::with_duration_and_bounce(0.5, 0.5);
         // Should be underdamped
         assert!(bouncy.damping_ratio() < 1.0);
+    }
+
+    /// Heavy over-damping where `f32` cancels the slow root to exactly 0.
+    #[test]
+    fn extreme_overdamped_spring_settles_toward_target() {
+        let spring = SpringDescription::new(1.0, 1.0, 10_000.0);
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        assert_eq!(sim.spring_type(), SpringType::Overdamped);
+
+        assert!((sim.x(0.0) - 0.0).abs() < 1e-6, "x(0)={}", sim.x(0.0));
+        assert!((sim.dx(0.0) - 0.0).abs() < 1e-6, "dx(0)={}", sim.dx(0.0));
+
+        // Must move toward the target (the cancelled-root bug stayed at 0 forever).
+        // Slow-root time constant is ~1/|r2| ≈ 10_000 s, so t=1000 is still early.
+        let mid = sim.x(1_000.0);
+        assert!(
+            mid > 0.05 && mid < 0.2,
+            "expected slow approach, got x(1000)={mid}"
+        );
+        assert!(
+            sim.x(10_000.0) > mid,
+            "position must keep advancing toward the target"
+        );
+
+        let late = sim.x(100_000.0);
+        assert!(
+            (late - 1.0).abs() < Tolerance::DEFAULT.distance,
+            "expected near target, got x(100000)={late}"
+        );
+        assert!(
+            sim.is_done(100_000.0),
+            "extreme overdamped spring must report done by t=100000; \
+             x={} dx={}",
+            sim.x(100_000.0),
+            sim.dx(100_000.0)
+        );
+    }
+
+    #[test]
+    fn spring_regimes_preserve_initial_conditions_and_settle() {
+        let cases = [
+            (
+                "critical",
+                SpringDescription::with_damping_ratio(1.0, 500.0, 1.0),
+                SpringType::CriticallyDamped,
+            ),
+            (
+                "underdamped",
+                SpringDescription::with_damping_ratio(1.0, 500.0, 0.5),
+                SpringType::Underdamped,
+            ),
+            (
+                "overdamped",
+                SpringDescription::with_damping_ratio(1.0, 500.0, 2.0),
+                SpringType::Overdamped,
+            ),
+            (
+                "near_critical_over",
+                SpringDescription::with_damping_ratio(1.0, 500.0, 1.001),
+                SpringType::Overdamped,
+            ),
+            (
+                "near_critical_under",
+                SpringDescription::with_damping_ratio(1.0, 500.0, 0.999),
+                SpringType::Underdamped,
+            ),
+        ];
+
+        for (label, spring, expected_type) in cases {
+            let start = 0.25_f32;
+            let end = 1.0_f32;
+            let velocity = 2.5_f32;
+            let sim = SpringSimulation::new(spring, start, end, velocity);
+            assert_eq!(
+                sim.spring_type(),
+                expected_type,
+                "{label}: unexpected spring type"
+            );
+            assert!(
+                (sim.x(0.0) - start).abs() < 1e-5,
+                "{label}: x(0)={} expected {start}",
+                sim.x(0.0)
+            );
+            assert!(
+                (sim.dx(0.0) - velocity).abs() < 1e-4,
+                "{label}: dx(0)={} expected {velocity}",
+                sim.dx(0.0)
+            );
+
+            // Analytic derivative should agree with a central finite difference.
+            for t in [0.05_f32, 0.2] {
+                let h = 1e-4_f32;
+                let dx = sim.dx(t);
+                let fd = (sim.x(t + h) - sim.x(t - h)) / (2.0 * h);
+                let tol = (1e-3 * (1.0 + dx.abs())).max(5e-3);
+                assert!(
+                    (fd - dx).abs() < tol,
+                    "{label}: dx({t})={dx} vs fd={fd} (tol={tol})"
+                );
+            }
+
+            assert!(
+                sim.is_done(10.0),
+                "{label}: should settle by t=10; x={} dx={}",
+                sim.x(10.0),
+                sim.dx(10.0)
+            );
+        }
+    }
+
+    #[test]
+    fn near_critical_regimes_are_continuous_at_t0() {
+        // Crossing the critical boundary must not jump the initial sample.
+        let start = 0.0_f32;
+        let end = 1.0_f32;
+        let velocity = 0.0_f32;
+        let critical = SpringSimulation::new(
+            SpringDescription::with_damping_ratio(1.0, 500.0, 1.0),
+            start,
+            end,
+            velocity,
+        );
+        let slightly_over = SpringSimulation::new(
+            SpringDescription::with_damping_ratio(1.0, 500.0, 1.000_1),
+            start,
+            end,
+            velocity,
+        );
+        let slightly_under = SpringSimulation::new(
+            SpringDescription::with_damping_ratio(1.0, 500.0, 0.999_9),
+            start,
+            end,
+            velocity,
+        );
+
+        for t in [0.0_f32, 0.01, 0.05, 0.1] {
+            let xc = critical.x(t);
+            assert!(
+                (slightly_over.x(t) - xc).abs() < 1e-3,
+                "over vs critical at t={t}: {} vs {xc}",
+                slightly_over.x(t)
+            );
+            assert!(
+                (slightly_under.x(t) - xc).abs() < 1e-3,
+                "under vs critical at t={t}: {} vs {xc}",
+                slightly_under.x(t)
+            );
+        }
+    }
+
+    /// Mirrors `controller::default_fling_spring`. The critical band is
+    /// load-bearing: without it, f64 promotion of ratio `1.0` at k=500 would
+    /// classify as underdamped and `fling_with` would reject the default spring.
+    #[test]
+    fn default_fling_spring_shape_is_not_underdamped_and_settles() {
+        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 10.0).with_snap_to_end(true);
+        assert_ne!(
+            sim.spring_type(),
+            SpringType::Underdamped,
+            "default fling spring must remain acceptable to fling_with"
+        );
+        assert_eq!(sim.spring_type(), SpringType::CriticallyDamped);
+        assert!(
+            sim.is_done(2.0),
+            "fling spring must settle; x={} dx={}",
+            sim.x(2.0),
+            sim.dx(2.0)
+        );
+    }
+
+    #[test]
+    fn scroll_spring_wrapper_settles() {
+        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+        let sim = ScrollSpringSimulation::new(spring, 0.0, 100.0, 50.0);
+        assert!((sim.x(0.0) - 0.0).abs() < 1e-5, "x(0)={}", sim.x(0.0));
+        assert!(
+            sim.is_done(2.0),
+            "scroll spring wrapper must settle; x={} dx={}",
+            sim.x(2.0),
+            sim.dx(2.0)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Mass must be positive")]
+    fn spring_description_rejects_non_positive_mass() {
+        let _ = SpringDescription::new(0.0, 1.0, 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Stiffness must be positive")]
+    fn spring_description_rejects_non_positive_stiffness() {
+        let _ = SpringDescription::new(1.0, 0.0, 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Damping must be non-negative")]
+    fn spring_description_rejects_negative_damping() {
+        let _ = SpringDescription::new(1.0, 1.0, -1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Mass must be finite")]
+    fn spring_description_rejects_infinite_mass() {
+        let _ = SpringDescription::new(f32::INFINITY, 1.0, 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Stiffness must be finite")]
+    fn spring_description_rejects_nan_stiffness() {
+        let _ = SpringDescription::new(1.0, f32::NAN, 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Damping must be finite")]
+    fn spring_description_rejects_infinite_damping() {
+        let _ = SpringDescription::new(1.0, 1.0, f32::INFINITY);
+    }
+
+    #[test]
+    #[should_panic(expected = "Damping ratio must be non-negative")]
+    fn with_damping_ratio_rejects_negative_ratio() {
+        let _ = SpringDescription::with_damping_ratio(1.0, 500.0, -0.1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Damping ratio must be finite")]
+    fn with_damping_ratio_rejects_infinite_ratio() {
+        let _ = SpringDescription::with_damping_ratio(1.0, 500.0, f32::INFINITY);
     }
 }
