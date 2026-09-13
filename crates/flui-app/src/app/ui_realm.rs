@@ -83,11 +83,10 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 /// land on the active one, matching a real OS's single-keyboard-focus model
 /// rather than trusting the per-event address.
 ///
-/// Defaults to the realm's initial presentation, so single-presentation
-/// production topology (today's only shipped shape) observes no behavior
-/// change: focus starts exactly where it always did, and only moves once a
-/// genuine `WindowFocus(true)` event names a different, currently-hosted
-/// presentation.
+/// Defaults to the realm's initial presentation. A realm may host N resident
+/// presentations, so focus starts on the primary and moves only once a
+/// genuine `WindowFocus(true)` event names a different live forest member;
+/// secondary widget content and frame submission remain unwired.
 struct FocusCoordinator {
     active: Cell<PresentationId>,
 }
@@ -1929,9 +1928,10 @@ impl UiRealm {
     /// [`FrameClock::record_compositor_tick`](flui_scheduler::FrameClock::record_compositor_tick)
     /// for what this feeds — pacing-feedback bookkeeping ONLY; this marks
     /// no demand of its own (see that method's own doc for why that was
-    /// tried and reverted). Single-presentation-addressed for the same
-    /// reason [`Self::vsync`] is — production topology's current ratchet
-    /// is exactly one presentation per realm.
+    /// tried and reverted). This remains primary-addressed because the
+    /// canonical backend frame callback is not presentation-addressed yet;
+    /// a realm may already hold N resident presentations, but secondary
+    /// widget content and frame submission remain unwired.
     #[cfg_attr(
         all(
             any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
@@ -3612,10 +3612,10 @@ impl UiRealm {
 
 impl Drop for UiRealm {
     fn drop(&mut self) {
-        // Every presentation this realm hosts closes when the realm drops —
-        // production topology is exactly one until the forest's ratchet
-        // lifts, but this loop is already correct for N: nothing here
-        // assumes `len() == 1`.
+        // Every live presentation this realm hosts closes when the realm
+        // drops. The forest supports N resident presentations, and addressed
+        // close may already have removed any subset of siblings before this
+        // whole-realm teardown runs.
         //
         // Deliberately NOT wrapped in `enter()`: this runs during `Drop`,
         // which can itself run during thread-local destruction (e.g. a
@@ -7397,13 +7397,9 @@ mod tests {
             // Drop (each PresentationState transitions to Closed on its own
             // drop -- see PresentationState::close/Drop); nothing left to
             // assert on here beyond "this did not panic", since the values
-            // themselves are gone. Proving that closing ONE presentation
-            // structurally cannot disturb a SURVIVING sibling's own layer
-            // tree needs an addressed per-presentation teardown path (close
-            // exactly one member, keep the rest running) that this slice
-            // does not add -- production topology never removes a single
-            // member from a live forest today, it only ever drops the whole
-            // realm, which is what this test actually exercises.
+            // themselves are gone. This test covers whole-realm teardown;
+            // the addressed close path separately removes exactly one live
+            // forest member while preserving its surviving siblings.
         }
 
         fn segment_constraints() -> BoxConstraints {
@@ -10106,11 +10102,11 @@ mod tests {
         }
 
         /// `UiRealm::next_wake`'s own min-over-presentations level,
-        /// discriminated -- production topology is exactly one realm
-        /// hosting N presentations, so this is the level a cross-realm-only
-        /// mutant test cannot see. Two presentations of ONE realm, a far
-        /// deadline on the primary and a near one on the secondary: the
-        /// aggregate must reflect the near one regardless of which
+        /// discriminated. A realm supports N resident presentations even
+        /// though secondary widget content and frame submission remain
+        /// unwired, so a cross-realm-only mutant test cannot see this level.
+        /// With a far deadline on the primary and a near one on a secondary,
+        /// the aggregate must reflect the near one regardless of which
         /// presentation is primary.
         #[test]
         fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm() {
