@@ -2608,7 +2608,10 @@ mod tests {
 
     #[cfg(test)]
     mod lifecycle_recovery_tests {
-        include!("build_owner/lifecycle_recovery_tests.rs");
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/build_owner_lifecycle_recovery.rs"
+        ));
     }
 
     #[test]
