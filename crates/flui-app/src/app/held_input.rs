@@ -94,16 +94,16 @@ impl HeldPointerQueue {
         }
 
         if matches!(event, PointerEvent::Down(_)) {
-            let replay_supersession = if self.replay_in_flight
-                && self.replay_dispatched_open_pointers.contains(&pointer_id)
-            {
-                Some(ReplaySupersession::DispatchedOpen(pointer_id))
-            } else if self.replay_in_flight && self.replay_tail_open_pointers.contains(&pointer_id)
-            {
-                Some(ReplaySupersession::FinalUndispatched(pointer_id))
-            } else {
-                None
-            };
+            let replay_supersession =
+                if self.replay_in_flight && self.replay_tail_open_pointers.contains(&pointer_id) {
+                    Some(ReplaySupersession::FinalUndispatched(pointer_id))
+                } else if self.replay_in_flight
+                    && self.replay_dispatched_open_pointers.contains(&pointer_id)
+                {
+                    Some(ReplaySupersession::DispatchedOpen(pointer_id))
+                } else {
+                    None
+                };
             if replay_supersession.is_some() || self.has_open_epoch(pointer_id) {
                 self.remove_open_epoch(pointer_id);
                 if let Some(replay_supersession) = replay_supersession
@@ -205,7 +205,8 @@ impl HeldPointerQueue {
     }
 
     fn has_open_epoch(&self, pointer_id: PointerId) -> bool {
-        let mut is_open = self.replay_tail_open_pointers.contains(&pointer_id);
+        let mut is_open = self.replay_tail_open_pointers.contains(&pointer_id)
+            || self.replay_dispatched_open_pointers.contains(&pointer_id);
         for event in &self.events {
             if flui_interaction::events::extract_pointer_id(event) != pointer_id {
                 continue;
@@ -558,10 +559,20 @@ impl Iterator for HeldPointerReplay<'_> {
         let event = self.remaining.pop_front();
         if let Some(event) = &event {
             let pointer_id = flui_interaction::events::extract_pointer_id(event);
+            let final_open_down_remains = matches!(event, PointerEvent::Down(_))
+                && self.remaining.iter().any(|remaining| {
+                    matches!(remaining, PointerEvent::Down(_))
+                        && flui_interaction::events::extract_pointer_id(remaining) == pointer_id
+                });
             let mut queue = self.queue.borrow_mut();
             queue.replay_reserved = queue.replay_reserved.saturating_sub(1);
             match event {
                 PointerEvent::Down(_) => {
+                    if !final_open_down_remains {
+                        queue
+                            .replay_tail_open_pointers
+                            .retain(|open| *open != pointer_id);
+                    }
                     if !queue.replay_dispatched_open_pointers.contains(&pointer_id) {
                         queue.replay_dispatched_open_pointers.push(pointer_id);
                     }
@@ -1079,6 +1090,90 @@ mod tests {
         assert_eq!(restored_ids, vec![dispatched, superseded]);
         assert!(matches!(restored[0], PointerEvent::Cancel(_)));
         assert!(matches!(restored[1], PointerEvent::Down(_)));
+    }
+
+    #[test]
+    fn reentrant_down_prefers_the_final_undispatched_epoch_over_a_dispatched_open_epoch() {
+        let queue = queue();
+        let repeated = pointer(2);
+        let interleaved = pointer(3);
+        queue.borrow_mut().append(down(repeated));
+        queue.borrow_mut().append(down(interleaved));
+        queue.borrow_mut().append(up(repeated));
+        queue.borrow_mut().append(down(repeated));
+        queue.borrow_mut().append(contact_move(repeated, 4.0));
+        queue.borrow_mut().append(up(interleaved));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert_eq!(
+            replay
+                .next()
+                .as_ref()
+                .map(flui_interaction::events::extract_pointer_id),
+            Some(repeated)
+        );
+        queue.borrow_mut().append(down(repeated));
+        let remainder: Vec<_> = replay.by_ref().collect();
+        replay.complete();
+
+        let replayed_ids: Vec<_> = remainder
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(replayed_ids, vec![interleaved, repeated, interleaved]);
+        assert_eq!(positions(&remainder), vec![0.0, 9.0, 9.0]);
+        assert!(matches!(remainder[0], PointerEvent::Down(_)));
+        assert!(matches!(remainder[1], PointerEvent::Up(_)));
+        assert!(matches!(remainder[2], PointerEvent::Up(_)));
+
+        let queued_behind = drain(&queue);
+        assert_eq!(queued_behind.len(), 1);
+        assert!(matches!(queued_behind[0], PointerEvent::Down(_)));
+        assert_eq!(
+            flui_interaction::events::extract_pointer_id(&queued_behind[0]),
+            repeated
+        );
+    }
+
+    #[test]
+    fn abort_prefers_the_final_undispatched_epoch_and_restores_completed_input_first() {
+        let queue = queue();
+        let repeated = pointer(2);
+        let interleaved = pointer(3);
+        queue.borrow_mut().append(down(repeated));
+        queue.borrow_mut().append(down(interleaved));
+        queue.borrow_mut().append(cancel(repeated));
+        queue.borrow_mut().append(down(repeated));
+        queue.borrow_mut().append(contact_move(repeated, 4.0));
+        queue.borrow_mut().append(cancel(interleaved));
+
+        {
+            let mut replay =
+                HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+            assert_eq!(
+                replay
+                    .next()
+                    .as_ref()
+                    .map(flui_interaction::events::extract_pointer_id),
+                Some(repeated)
+            );
+            queue.borrow_mut().append(down(repeated));
+        }
+
+        let restored = drain(&queue);
+        let restored_ids: Vec<_> = restored
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(
+            restored_ids,
+            vec![interleaved, repeated, interleaved, repeated]
+        );
+        assert_eq!(positions(&restored), vec![0.0, 0.0, 0.0, 0.0]);
+        assert!(matches!(restored[0], PointerEvent::Down(_)));
+        assert!(matches!(restored[1], PointerEvent::Cancel(_)));
+        assert!(matches!(restored[2], PointerEvent::Cancel(_)));
+        assert!(matches!(restored[3], PointerEvent::Down(_)));
     }
 
     #[test]
