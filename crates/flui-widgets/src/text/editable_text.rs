@@ -3397,6 +3397,36 @@ mod tests {
         );
     }
 
+    /// Inactive empty `Preedit` through the attached client must not delete
+    /// a committed selection — the production path that X11 Start uses
+    /// (`ImeEvent` → `apply_ime_event` → `set_composing_text`).
+    #[test]
+    fn empty_preedit_with_no_composition_preserves_selection_through_attached_client() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(0, 5);
+        let (mut harness, focus_node) =
+            mount_ime_field(controller.clone(), "inactive empty preedit");
+        harness.enter_owner_scope(|| {
+            focus_node.request_focus();
+        });
+        harness.tick();
+
+        dispatch_ime(
+            &harness,
+            &flui_types::ImeEvent::Preedit {
+                text: String::new(),
+                cursor: None,
+            },
+        );
+        harness.tick();
+
+        assert_eq!(controller.text(), "hello world");
+        assert_eq!(controller.selection(), 0..5);
+        assert_eq!(controller.caret_byte_offset(), 5);
+        assert!(!controller.is_composing());
+        assert!(composing_rect(&harness).is_none());
+    }
+
     /// The gating contract: an unfocused field must not keep passing a
     /// still-active composing range to the render view, even though blur
     /// does not itself end the composition (only detaches the IME client —
