@@ -3310,10 +3310,13 @@ impl UiRealm {
                     != FrameCommitState::Committed
                     || !presentation.held_pointer_input().borrow().is_empty();
                 if should_hold_pointer {
+                    let pointer_id = flui_interaction::events::extract_pointer_id(&pointer_event);
+                    let has_active_contact_sequence =
+                        presentation.gestures().has_hit_test(pointer_id);
                     presentation
                         .held_pointer_input()
                         .borrow_mut()
-                        .append(pointer_event);
+                        .append_with_active_contact(pointer_event, has_active_contact_sequence);
                     return;
                 }
                 let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);

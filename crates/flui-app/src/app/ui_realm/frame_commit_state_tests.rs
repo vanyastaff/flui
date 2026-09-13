@@ -480,6 +480,72 @@ fn pointer_input_is_held_while_the_target_presentation_is_uncommitted() {
 }
 
 #[test]
+fn held_terminal_event_for_an_already_active_pointer_releases_the_cached_route_after_commit() {
+    let (realm, hits) = mount_hit_counting_root();
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(101).expect("test pointer id is nonzero");
+
+    realm.handle_input_addressed(
+        primary.id(),
+        PlatformInput::Pointer(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        )),
+    );
+    assert_eq!(primary.gestures().active_pointer_count(), 1);
+    let hits_after_down = hits.load(Ordering::Relaxed);
+
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
+    assert!(!realm.render_frame_entered(&mut failed_backend));
+    assert!(matches!(
+        primary.frame_commit_state(),
+        FrameCommitState::Uncommitted { .. }
+    ));
+
+    realm.handle_input_addressed(
+        primary.id(),
+        PlatformInput::Pointer(make_up_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        )),
+    );
+
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        hits_after_down,
+        "the held terminal event must not re-hit-test while the frame is uncommitted"
+    );
+    assert_eq!(
+        primary.gestures().active_pointer_count(),
+        1,
+        "the active route must stay live until the held terminal event replays"
+    );
+    assert_eq!(primary.held_pointer_input().borrow().len(), 1);
+
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+    assert!(realm.render_frame_entered(&mut backend));
+    assert_eq!(primary.held_pointer_input().borrow().len(), 0);
+    assert_eq!(
+        primary.gestures().active_pointer_count(),
+        0,
+        "the replayed Up must run through the normal terminal route and release the cached hit path"
+    );
+}
+
+#[test]
 fn a_nonempty_held_queue_keeps_later_pointer_input_held_after_commit() {
     let (realm, hits) = mount_hit_counting_root();
     let mut backend = TestRasterBackend::always_presents();
