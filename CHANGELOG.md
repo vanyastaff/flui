@@ -688,6 +688,11 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **Held pointer terminal replay after an active `Down`** (#561): pointer
+  `Move`/`Up`/`Cancel` events that arrive during an uncommitted-frame window
+  now queue even when their matching `Down` was already dispatched before the
+  failed frame. The replayed terminal event releases the cached gesture route
+  instead of leaving recognizers stuck pressed.
 - **Presentation-local retry and frame-commit accounting** (#561): a failed
   presentation retains its last submitted scene, cannot have its retry
   cancelled by a clean sibling later in the same pump, and remains

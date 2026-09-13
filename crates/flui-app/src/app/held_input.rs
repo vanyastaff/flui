@@ -49,6 +49,8 @@ pub(crate) struct HeldPointerQueue {
     replay_tail_open_pointers: Vec<PointerId>,
     replay_dispatched_open_pointers: Vec<PointerId>,
     replay_supersessions: Vec<ReplaySupersession>,
+    active_route_terminal_pointers: Vec<PointerId>,
+    replay_active_route_terminal_pointers: Vec<PointerId>,
     replay_discard_remaining: bool,
     saturation_warned: bool,
     saturation_episodes: usize,
@@ -65,6 +67,8 @@ impl HeldPointerQueue {
             replay_tail_open_pointers: Vec::new(),
             replay_dispatched_open_pointers: Vec::new(),
             replay_supersessions: Vec::new(),
+            active_route_terminal_pointers: Vec::new(),
+            replay_active_route_terminal_pointers: Vec::new(),
             replay_discard_remaining: false,
             saturation_warned: false,
             saturation_episodes: 0,
@@ -73,17 +77,29 @@ impl HeldPointerQueue {
     }
 
     /// Admit one event without ever exposing more than the fixed capacity.
+    #[cfg(test)]
     pub(crate) fn append(&mut self, event: PointerEvent) {
+        self.append_with_active_contact(event, false);
+    }
+
+    /// Admit one event whose pointer may already have a live gesture route.
+    pub(crate) fn append_with_active_contact(
+        &mut self,
+        event: PointerEvent,
+        has_active_contact_sequence: bool,
+    ) {
         let pointer_id = flui_interaction::events::extract_pointer_id(&event);
         let motion_class = Self::motion_class(&event);
+        let has_queued_open_epoch = self.has_open_epoch(pointer_id);
+        let has_active_route_open = has_active_contact_sequence
+            && !self.has_active_route_terminal_after_latest_down(pointer_id);
+        let has_open_epoch = has_queued_open_epoch || has_active_route_open;
 
-        if matches!(motion_class, Some(MotionClass::Contact)) && !self.has_open_epoch(pointer_id) {
+        if matches!(motion_class, Some(MotionClass::Contact)) && !has_open_epoch {
             self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
             return;
         }
-        if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
-            && !self.has_open_epoch(pointer_id)
-        {
+        if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) && !has_open_epoch {
             self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
             return;
         }
@@ -122,7 +138,15 @@ impl HeldPointerQueue {
         }
 
         let is_terminal = matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_));
-        if !is_terminal && !self.make_room_for_one() {
+        let needs_active_terminal_room = is_terminal && has_active_route_open;
+        let has_room = if needs_active_terminal_room {
+            self.make_room_for_active_route_terminal(pointer_id)
+        } else if is_terminal {
+            true
+        } else {
+            self.make_room_for_one()
+        };
+        if !has_room {
             self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
             self.note_saturation(
                 self.total_len()
@@ -133,6 +157,9 @@ impl HeldPointerQueue {
         }
 
         self.events.push_back(event);
+        if is_terminal && has_active_route_open {
+            self.record_active_route_terminal(pointer_id);
+        }
         while self.total_len() > HELD_POINTER_CAPACITY {
             let over_capacity = self.total_len().saturating_sub(HELD_POINTER_CAPACITY);
             let removed = self.evict_oldest_complete_sequence();
@@ -179,6 +206,8 @@ impl HeldPointerQueue {
         self.replay_tail_open_pointers.clear();
         self.replay_dispatched_open_pointers.clear();
         self.replay_supersessions.clear();
+        self.active_route_terminal_pointers.clear();
+        self.replay_active_route_terminal_pointers.clear();
         self.replay_discard_remaining = self.replay_in_flight;
         self.counters.dropped_events = self.counters.dropped_events.saturating_add(dropped);
         if dropped != 0 {
@@ -264,11 +293,27 @@ impl HeldPointerQueue {
         let removed = before.saturating_sub(self.events.len());
         self.counters.dropped_events = self.counters.dropped_events.saturating_add(removed);
         self.counters.dropped_sequences = self.counters.dropped_sequences.saturating_add(1);
+        self.retain_recorded_active_route_terminals();
     }
 
     fn make_room_for_one(&mut self) -> bool {
         while self.total_len() >= HELD_POINTER_CAPACITY {
             if !self.evict_oldest_complete_sequence() {
+                return false;
+            }
+            self.note_saturation(1);
+        }
+        true
+    }
+
+    fn make_room_for_active_route_terminal(&mut self, pointer_id: PointerId) -> bool {
+        while self.total_len() >= HELD_POINTER_CAPACITY {
+            let evicted = self.evict_oldest_complete_sequence()
+                || self.evict_oldest_hover()
+                || self.evict_oldest_contact_motion(pointer_id)
+                || self.evict_oldest_discrete()
+                || self.evict_oldest_incomplete_sequence();
+            if !evicted {
                 return false;
             }
             self.note_saturation(1);
@@ -290,6 +335,9 @@ impl HeldPointerQueue {
                 match candidate {
                     PointerEvent::Down(_) => break,
                     PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
+                        if self.must_keep_protected_terminal_at(pointer_id, end) {
+                            break;
+                        }
                         victim = Some((pointer_id, start, end));
                         break;
                     }
@@ -316,6 +364,268 @@ impl HeldPointerQueue {
         let removed = before.saturating_sub(self.events.len());
         self.counters.dropped_events = self.counters.dropped_events.saturating_add(removed);
         self.counters.dropped_sequences = self.counters.dropped_sequences.saturating_add(1);
+        self.retain_recorded_active_route_terminals();
+        true
+    }
+
+    fn evict_oldest_discrete(&mut self) -> bool {
+        let Some(index) = self.events.iter().position(|event| {
+            !matches!(
+                event,
+                PointerEvent::Down(_)
+                    | PointerEvent::Move(_)
+                    | PointerEvent::Up(_)
+                    | PointerEvent::Cancel(_)
+            )
+        }) else {
+            return false;
+        };
+        let _ = self.events.remove(index);
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
+        true
+    }
+
+    fn evict_oldest_hover(&mut self) -> bool {
+        let Some(index) = self
+            .events
+            .iter()
+            .position(|event| Self::motion_class(event) == Some(MotionClass::Hover))
+        else {
+            return false;
+        };
+        let _ = self.events.remove(index);
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
+        true
+    }
+
+    fn evict_oldest_contact_motion(&mut self, pointer_id: PointerId) -> bool {
+        let Some(index) = self.events.iter().position(|event| {
+            flui_interaction::events::extract_pointer_id(event) == pointer_id
+                && Self::motion_class(event) == Some(MotionClass::Contact)
+        }) else {
+            return false;
+        };
+        let _ = self.events.remove(index);
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
+        true
+    }
+
+    fn protected_terminal_count(&self, pointer_id: PointerId) -> usize {
+        self.active_route_terminal_pointers
+            .iter()
+            .filter(|protected| **protected == pointer_id)
+            .count()
+    }
+
+    fn is_protected_terminal_at(&self, pointer_id: PointerId, terminal_index: usize) -> bool {
+        let protected_terminal_count = self.protected_terminal_count(pointer_id);
+        let total_terminal_count = self
+            .events
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
+        let mut terminal_count = 0usize;
+        for (index, event) in self.events.iter().enumerate() {
+            if flui_interaction::events::extract_pointer_id(event) == pointer_id
+                && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            {
+                terminal_count = terminal_count.saturating_add(1);
+            }
+            if index == terminal_index {
+                return total_terminal_count.saturating_sub(terminal_count)
+                    < protected_terminal_count;
+            }
+        }
+        false
+    }
+
+    fn must_keep_protected_terminal_at(
+        &self,
+        pointer_id: PointerId,
+        terminal_index: usize,
+    ) -> bool {
+        if !self.is_protected_terminal_at(pointer_id, terminal_index) {
+            return false;
+        }
+        self.protected_terminal_suffix_count(pointer_id, terminal_index) == 1
+    }
+
+    fn protected_terminal_suffix_count(
+        &self,
+        pointer_id: PointerId,
+        terminal_index: usize,
+    ) -> usize {
+        let protected_terminal_count = self.protected_terminal_count(pointer_id);
+        let total_terminal_count = self
+            .events
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
+        let mut terminal_count = 0usize;
+        let mut protected_suffix_count = 0usize;
+        for (index, event) in self.events.iter().enumerate() {
+            if flui_interaction::events::extract_pointer_id(event) == pointer_id
+                && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            {
+                terminal_count = terminal_count.saturating_add(1);
+                if index >= terminal_index
+                    && total_terminal_count.saturating_sub(terminal_count)
+                        < protected_terminal_count
+                {
+                    protected_suffix_count = protected_suffix_count.saturating_add(1);
+                }
+            }
+        }
+        protected_suffix_count
+    }
+
+    fn has_active_route_terminal_after_latest_down(&self, pointer_id: PointerId) -> bool {
+        let protected_terminal_count = self.protected_terminal_count(pointer_id);
+        let total_terminal_count = self
+            .events
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
+        let mut terminal_count = 0usize;
+        let mut has_protected_terminal_after_latest_down = self
+            .replay_active_route_terminal_pointers
+            .contains(&pointer_id);
+        for event in &self.events {
+            if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+                continue;
+            }
+            match event {
+                PointerEvent::Down(_) => has_protected_terminal_after_latest_down = false,
+                PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
+                    terminal_count = terminal_count.saturating_add(1);
+                    has_protected_terminal_after_latest_down = total_terminal_count
+                        .saturating_sub(terminal_count)
+                        < protected_terminal_count;
+                }
+                _ => {}
+            }
+        }
+        has_protected_terminal_after_latest_down
+    }
+
+    fn record_active_route_terminal(&mut self, pointer_id: PointerId) {
+        self.active_route_terminal_pointers.push(pointer_id);
+    }
+
+    fn retain_recorded_active_route_terminals(&mut self) {
+        let mut retained_pointers = Vec::new();
+        for pointer_id in &self.active_route_terminal_pointers {
+            let retained_count = retained_pointers
+                .iter()
+                .filter(|retained| *retained == pointer_id)
+                .count();
+            let terminal_count = self
+                .events
+                .iter()
+                .filter(|event| {
+                    flui_interaction::events::extract_pointer_id(event) == *pointer_id
+                        && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+                })
+                .count();
+            if retained_count < terminal_count {
+                retained_pointers.push(*pointer_id);
+            }
+        }
+        self.active_route_terminal_pointers = retained_pointers;
+    }
+
+    fn retain_replay_active_route_terminals(&mut self, replay_events: &VecDeque<PointerEvent>) {
+        let mut retained_pointers = Vec::new();
+        for pointer_id in &self.replay_active_route_terminal_pointers {
+            let retained_count = retained_pointers
+                .iter()
+                .filter(|retained| *retained == pointer_id)
+                .count();
+            let terminal_count = replay_events
+                .iter()
+                .filter(|event| {
+                    flui_interaction::events::extract_pointer_id(event) == *pointer_id
+                        && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+                })
+                .count();
+            if retained_count < terminal_count {
+                retained_pointers.push(*pointer_id);
+            }
+        }
+        self.replay_active_route_terminal_pointers = retained_pointers;
+    }
+
+    fn remove_replay_active_route_terminal(
+        &mut self,
+        pointer_id: PointerId,
+        replay_events_after_dispatch: &VecDeque<PointerEvent>,
+    ) {
+        let protected_terminal_count = self
+            .replay_active_route_terminal_pointers
+            .iter()
+            .filter(|protected| **protected == pointer_id)
+            .count();
+        let remaining_terminal_count = replay_events_after_dispatch
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
+        if remaining_terminal_count >= protected_terminal_count {
+            return;
+        }
+        if let Some(index) = self
+            .replay_active_route_terminal_pointers
+            .iter()
+            .position(|protected| *protected == pointer_id)
+        {
+            let _ = self.replay_active_route_terminal_pointers.remove(index);
+        }
+    }
+
+    fn evict_oldest_incomplete_sequence(&mut self) -> bool {
+        let mut open_epochs = Vec::new();
+        for (index, event) in self.events.iter().enumerate() {
+            let pointer_id = flui_interaction::events::extract_pointer_id(event);
+            match event {
+                PointerEvent::Down(_) => {
+                    open_epochs.retain(|(open_pointer, _)| *open_pointer != pointer_id);
+                    open_epochs.push((pointer_id, index));
+                }
+                PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
+                    open_epochs.retain(|(open_pointer, _)| *open_pointer != pointer_id);
+                }
+                _ => {}
+            }
+        }
+        let Some((pointer_id, start)) = open_epochs.into_iter().min_by_key(|(_, start)| *start)
+        else {
+            return false;
+        };
+        let before = self.events.len();
+        self.events = std::mem::take(&mut self.events)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                let belongs_to_victim = index >= start
+                    && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                (!belongs_to_victim).then_some(event)
+            })
+            .collect();
+        let removed = before.saturating_sub(self.events.len());
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(removed);
+        self.counters.dropped_sequences = self.counters.dropped_sequences.saturating_add(1);
+        self.retain_recorded_active_route_terminals();
         true
     }
 
@@ -367,8 +677,14 @@ impl HeldPointerQueue {
             restored,
         );
         if completed {
+            self.replay_active_route_terminal_pointers.clear();
+            self.retain_recorded_active_route_terminals();
             self.saturation_warned = false;
             self.counters = QueueCounters::default();
+        } else {
+            self.active_route_terminal_pointers
+                .append(&mut self.replay_active_route_terminal_pointers);
+            self.retain_recorded_active_route_terminals();
         }
         debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
     }
@@ -379,6 +695,8 @@ impl HeldPointerQueue {
         self.replay_tail_open_pointers.clear();
         self.replay_dispatched_open_pointers.clear();
         self.replay_supersessions.clear();
+        self.active_route_terminal_pointers.clear();
+        self.replay_active_route_terminal_pointers.clear();
         self.replay_discard_remaining = false;
         self.trace_counts("discarded cleared held pointer replay", discarded);
         debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
@@ -408,6 +726,8 @@ impl<'a> HeldPointerReplay<'a> {
             let remaining = std::mem::take(&mut queue.events);
             queue.replay_in_flight = true;
             queue.replay_reserved = remaining.len();
+            queue.replay_active_route_terminal_pointers =
+                std::mem::take(&mut queue.active_route_terminal_pointers);
             for event in &remaining {
                 let pointer_id = flui_interaction::events::extract_pointer_id(event);
                 match event {
@@ -543,6 +863,7 @@ impl<'a> HeldPointerReplay<'a> {
 
         let mut queue = self.queue.borrow_mut();
         queue.replay_reserved = queue.replay_reserved.saturating_sub(removed_events);
+        queue.retain_replay_active_route_terminals(&self.remaining);
         queue.counters.dropped_events =
             queue.counters.dropped_events.saturating_add(removed_events);
         queue.counters.dropped_sequences = queue
@@ -585,6 +906,9 @@ impl Iterator for HeldPointerReplay<'_> {
                     .replay_dispatched_open_pointers
                     .retain(|open| *open != pointer_id),
                 _ => {}
+            }
+            if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
+                queue.remove_replay_active_route_terminal(pointer_id, &self.remaining);
             }
         } else {
             self.complete_inner();
@@ -824,6 +1148,310 @@ mod tests {
         queue.borrow_mut().append(up(id));
         queue.borrow_mut().append(cancel(id));
         assert!(drain(&queue).is_empty());
+    }
+
+    #[test]
+    fn active_contact_followups_without_a_queued_down_are_preserved() {
+        let queue = queue();
+        let id = pointer(2);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(contact_move(id, 1.0), true);
+        queue.borrow_mut().append_with_active_contact(up(id), true);
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], PointerEvent::Move(_)));
+        assert!(matches!(events[1], PointerEvent::Up(_)));
+    }
+
+    #[test]
+    fn active_route_terminal_survives_when_incomplete_epochs_fill_capacity() {
+        let queue = queue();
+        for raw in 1..=HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+        let active_route = pointer(HELD_POINTER_CAPACITY as u64 + 1);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == active_route
+        }));
+        assert!(
+            !events
+                .iter()
+                .any(|event| flui_interaction::events::extract_pointer_id(event) == pointer(1))
+        );
+    }
+
+    #[test]
+    fn active_route_terminal_survives_after_queued_repeated_down_at_capacity() {
+        let queue = queue();
+        let active_route = pointer(1);
+        queue.borrow_mut().append(down(active_route));
+        for raw in 2..=HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == active_route
+        }));
+        assert!(
+            !events
+                .iter()
+                .any(
+                    |event| flui_interaction::events::extract_pointer_id(event) == active_route
+                        && matches!(event, PointerEvent::Down(_))
+                )
+        );
+    }
+
+    #[test]
+    fn active_route_terminal_stays_protected_when_later_input_fills_capacity() {
+        let queue = queue();
+        let active_route = pointer(1);
+        queue.borrow_mut().append(down(active_route));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+        for raw in 2..=HELD_POINTER_CAPACITY as u64 + 1 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == active_route
+        }));
+    }
+
+    #[test]
+    fn active_route_fallback_closes_after_terminal_is_queued() {
+        let queue = queue();
+        let active_route = pointer(1);
+        queue.borrow_mut().append(down(active_route));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(contact_move(active_route, 1.0), true);
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, PointerEvent::Move(_)))
+        );
+    }
+
+    #[test]
+    fn completed_replay_keeps_reentrant_active_terminal_protected() {
+        let queue = queue();
+        let active_route = pointer(1);
+        queue.borrow_mut().append(down(active_route));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+        assert!(replay.next().is_none());
+        queue
+            .borrow_mut()
+            .append_with_active_contact(contact_move(active_route, 1.0), true);
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], PointerEvent::Up(_)));
+        assert_eq!(
+            flui_interaction::events::extract_pointer_id(&events[0]),
+            active_route
+        );
+    }
+
+    #[test]
+    fn reentrant_active_route_terminal_evicts_queued_contact_motion() {
+        let queue = queue();
+        let active_route = pointer(1);
+        queue.borrow_mut().append(down(active_route));
+        for raw in 2..=HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(hover(pointer(raw), 1.0));
+        }
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(contact_move(active_route, 1.0), true);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+        replay.for_each(drop);
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], PointerEvent::Up(_)));
+        assert_eq!(
+            flui_interaction::events::extract_pointer_id(&events[0]),
+            active_route
+        );
+    }
+
+    #[test]
+    fn reused_pointer_id_gets_a_fresh_protected_terminal_epoch() {
+        let queue = queue();
+        let reused = pointer(1);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(reused), true);
+        queue.borrow_mut().append(down(reused));
+        for raw in 2..HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(hover(pointer(raw), 1.0));
+        }
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(reused), true);
+
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        let events = drain(&queue);
+        let reused_events: Vec<_> = events
+            .iter()
+            .filter(|event| flui_interaction::events::extract_pointer_id(event) == reused)
+            .collect();
+        assert_eq!(reused_events.len(), 3);
+        assert!(matches!(reused_events[0], PointerEvent::Up(_)));
+        assert!(matches!(reused_events[1], PointerEvent::Down(_)));
+        assert!(matches!(reused_events[2], PointerEvent::Up(_)));
+    }
+
+    #[test]
+    fn active_route_terminal_waiting_in_replay_closes_the_fallback() {
+        let queue = queue();
+        let unrelated = pointer(1);
+        let active_route = pointer(2);
+        queue.borrow_mut().append(hover(unrelated, 1.0));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Move(_))));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(contact_move(active_route, 2.0), true);
+        replay.for_each(drop);
+
+        assert!(drain(&queue).is_empty());
+    }
+
+    #[test]
+    fn older_unprotected_terminal_does_not_clear_replay_active_terminal_marker() {
+        let queue = queue();
+        let active_route = pointer(1);
+        queue.borrow_mut().append(down(active_route));
+        queue.borrow_mut().append(up(active_route));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        assert!(matches!(replay.next(), Some(PointerEvent::Up(_))));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(contact_move(active_route, 2.0), true);
+        replay.for_each(drop);
+
+        assert!(drain(&queue).is_empty());
+    }
+
+    #[test]
+    fn active_route_terminal_evicts_hover_backlog_at_capacity() {
+        let queue = queue();
+        for raw in 1..=HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(hover(pointer(raw), 1.0));
+        }
+        let active_route = pointer(HELD_POINTER_CAPACITY as u64 + 1);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(cancel(active_route), true);
+
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Cancel(_))
+                && flui_interaction::events::extract_pointer_id(event) == active_route
+        }));
+        assert!(
+            !events
+                .iter()
+                .any(|event| flui_interaction::events::extract_pointer_id(event) == pointer(1))
+        );
+    }
+
+    #[test]
+    fn active_route_terminal_evicts_discrete_backlog_at_capacity() {
+        let queue = queue();
+        for raw in 1..=HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(enter(pointer(raw)));
+        }
+        let active_route = pointer(HELD_POINTER_CAPACITY as u64 + 1);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == active_route
+        }));
+        assert!(
+            !events
+                .iter()
+                .any(|event| flui_interaction::events::extract_pointer_id(event) == pointer(1))
+        );
+    }
+
+    #[test]
+    fn redundant_reused_pointer_epochs_do_not_block_another_active_terminal() {
+        let queue = queue();
+        let reused = pointer(1);
+        for _ in 0..HELD_POINTER_CAPACITY / 2 {
+            queue.borrow_mut().append(down(reused));
+            queue
+                .borrow_mut()
+                .append_with_active_contact(up(reused), true);
+        }
+
+        let second_active_route = pointer(2);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(second_active_route), true);
+
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == second_active_route
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == reused
+        }));
     }
 
     #[test]
