@@ -2607,8 +2607,9 @@ mod tests {
     }
 
     #[cfg(test)]
-    #[path = "../lifecycle_recovery_tests.rs"]
-    mod lifecycle_recovery_tests;
+    mod lifecycle_recovery_tests {
+        include!("build_owner/lifecycle_recovery_tests.rs");
+    }
 
     #[test]
     fn test_build_owner_creation() {
