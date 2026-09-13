@@ -39,6 +39,7 @@ use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
 use web_time::{Duration, Instant};
 
 use super::SegmentPhase;
+use super::epoch::{FrameCommitState, TreeRevision};
 use super::semantics_host::SemanticsHost;
 use crate::bindings::RenderingFlutterBinding;
 
@@ -254,6 +255,10 @@ pub(crate) struct PresentationState {
     /// `None` here, never a stale span latched by an earlier pump this
     /// presentation was the one to produce.
     last_segment_span: Cell<Option<(Instant, Instant)>>,
+    /// Latest terminal (`Painted` or `Errored`) tree revision.
+    tree_revision: Cell<TreeRevision>,
+    /// Latest tree revision acknowledged by a successful submit verdict.
+    presented_revision: Cell<TreeRevision>,
     /// How many frames IN A ROW have failed for this presentation — the
     /// `consecutive_failures` field of every
     /// [`FrameFailureReport`](super::frame_failure::FrameFailureReport)
@@ -556,6 +561,8 @@ impl PresentationState {
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
+            tree_revision: Cell::new(TreeRevision::ZERO),
+            presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
@@ -617,6 +624,8 @@ impl PresentationState {
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
+            tree_revision: Cell::new(TreeRevision::ZERO),
+            presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
@@ -977,6 +986,45 @@ impl PresentationState {
     /// fresh streak. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn reset_frame_failure_streak(&self) {
         self.frame_failure_streak.set(0);
+    }
+
+    /// Advance after one terminal frame result (`Painted` or `Errored`).
+    pub(crate) fn advance_tree_revision(&self) {
+        self.tree_revision.set(self.tree_revision.get().next());
+    }
+
+    /// Acknowledge every terminal tree revision through the current one.
+    ///
+    /// This method is the single commit point where input replay attaches:
+    /// callers invoke it only after a painted frame receives a successful
+    /// submit classification.
+    pub(crate) fn commit_tree_revision(&self) {
+        self.presented_revision.set(self.tree_revision.get());
+    }
+
+    /// Whether the current terminal tree state has been acknowledged.
+    #[must_use]
+    pub(crate) fn frame_commit_state(&self) -> FrameCommitState {
+        let tree_revision = self.tree_revision.get();
+        let presented_revision = self.presented_revision.get();
+        assert!(
+            presented_revision <= tree_revision,
+            "BUG: presented tree revision exceeds terminal tree revision"
+        );
+        if presented_revision == tree_revision {
+            FrameCommitState::Committed
+        } else {
+            FrameCommitState::Uncommitted {
+                since: presented_revision.next(),
+            }
+        }
+    }
+
+    /// Current `(tree, presented)` revisions. Test-only transition oracle.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn revision_pair(&self) -> (TreeRevision, TreeRevision) {
+        (self.tree_revision.get(), self.presented_revision.get())
     }
 
     /// Install (or clear) the segment fault-injection probe. See

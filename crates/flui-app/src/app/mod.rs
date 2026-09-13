@@ -14,6 +14,7 @@
 pub(crate) mod close_request;
 mod config;
 pub mod direct;
+mod epoch;
 pub(crate) mod execution;
 mod frame_failure;
 pub(crate) mod hot_reload;

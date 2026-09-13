@@ -57,6 +57,7 @@ use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
 #[cfg(test)]
 use parking_lot::RwLock;
 
+use super::epoch::FrameCommitState;
 use super::frame_failure::{
     FrameFailureHandler, FrameFailureKind, FrameFailureReport, SegmentPhase,
 };
@@ -2453,6 +2454,12 @@ impl UiRealm {
                     FramePaintOutcome::Errored
                 }
             };
+            if matches!(
+                &result,
+                FramePaintOutcome::Painted(_) | FramePaintOutcome::Errored
+            ) {
+                presentation.advance_tree_revision();
+            }
             // Telemetry: remember this segment's span so `render_frame_entered`
             // (this method's own caller, which decides whether/how to submit)
             // can attach it to a `FrameSnapshot` at its own submit point --
@@ -2583,6 +2590,18 @@ impl UiRealm {
         }
     }
 
+    /// Commit a painted presentation after the sink accepts its scene.
+    ///
+    /// Kept as one named realm-level transition so pointer replay can attach
+    /// to the exact acknowledgement point without duplicating submit arms.
+    fn commit_painted_frame(&self, presentation: &PresentationState) {
+        debug_assert!(
+            self.presentations.get(presentation.id()).is_some(),
+            "commit target must belong to this realm"
+        );
+        presentation.commit_tree_revision();
+    }
+
     /// Render while the platform dispatcher already owns the realm entry.
     /// This keeps scheduler callbacks and the full build/layout/paint/raster
     /// transaction under one activation instead of creating a nested scope.
@@ -2680,34 +2699,6 @@ impl UiRealm {
             .get(producer_id)
             .unwrap_or_else(|| self.presentations.primary());
 
-        // Stationary-device re-hit-test — gated on NO segment having
-        // failed this pump (`any_failed` covers every presentation, not
-        // just the last producer: the probe below hit-tests the PRIMARY's
-        // tree, which may be exactly the presentation that failed while a
-        // sibling produced cleanly). This ambient re-probe exists to
-        // re-read hover targets against the freshly laid-out tree; a
-        // failed frame's tree is not that — it can mix freshly committed
-        // subtree geometry with retained pre-failure geometry (the failed
-        // node keeps its old geometry and its NEEDS_LAYOUT mark). Skipping
-        // keeps the mouse tracker on the last cleanly committed version
-        // instead of actively probing a known-inconsistent one; the armed
-        // retry's next successful frame re-probes as usual. (Pointer
-        // EVENTS that arrive before that retry still hit-test the live
-        // tree — that residual gap is named in ADR-0048's consistency
-        // audit, not silently claimed closed here.)
-        if !any_failed {
-            self.gestures()
-                .mouse_tracker()
-                .update_all_devices(|position| {
-                    let mut result = flui_interaction::routing::HitTestResult::new();
-                    self.presentations.primary().renderer().hit_test_in_view(
-                        &mut result,
-                        position,
-                        0,
-                    );
-                    result
-                });
-        }
         // The submit gate: withheld while the PRODUCER's own first frame is
         // deferred -- see this method's own doc for why this is a SEPARATE
         // check from `draw_frame_entered`'s segment gate, not a redundant
@@ -2770,6 +2761,7 @@ impl UiRealm {
             let submit_at = producer.clock().now();
             match render_verdict {
                 SubmitVerdict::Presented => {
+                    self.commit_painted_frame(producer);
                     presented = true;
                     producer.record_frame_rendered();
                     Self::record_submit_telemetry(
@@ -2785,6 +2777,7 @@ impl UiRealm {
                     );
                 }
                 SubmitVerdict::NoPresent => {
+                    self.commit_painted_frame(producer);
                     tracing::trace!(
                         frame = frame_number,
                         "Frame skipped: no damage or surface occluded (no present)"
@@ -2882,6 +2875,26 @@ impl UiRealm {
                     tracing::error!("Render error (non-recoverable this frame)");
                 }
             }
+        }
+
+        // Ambient hover derivations belong to the primary presentation and
+        // may be refreshed only from a tree whose latest terminal revision
+        // has been acknowledged. This runs after submit classification so a
+        // just-painted primary can become committed in this same pump. A
+        // secondary failure does not suppress a still-committed primary;
+        // conversely, a primary failure holds its prior hover derivation.
+        if self.presentations.primary().frame_commit_state() == FrameCommitState::Committed {
+            self.gestures()
+                .mouse_tracker()
+                .update_all_devices(|position| {
+                    let mut result = flui_interaction::routing::HitTestResult::new();
+                    self.presentations.primary().renderer().hit_test_in_view(
+                        &mut result,
+                        position,
+                        0,
+                    );
+                    result
+                });
         }
 
         if retry_needed {
@@ -3607,6 +3620,10 @@ impl Drop for UiRealm {
 #[cfg(test)]
 #[path = "ui_realm/frame_failure_phase_tests.rs"]
 mod frame_failure_phase_tests;
+
+#[cfg(test)]
+#[path = "ui_realm/frame_commit_state_tests.rs"]
+mod frame_commit_state_tests;
 
 #[cfg(test)]
 mod tests {
@@ -8915,86 +8932,7 @@ mod tests {
         /// that residual gap is named in ADR-0048, not claimed closed.)
         #[test]
         fn a_failed_pump_skips_the_stationary_device_re_hit_test() {
-            use std::sync::atomic::AtomicU32;
-
-            use flui_rendering::prelude::{
-                BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox,
-            };
-
-            #[derive(Debug)]
-            struct HitCountingBox {
-                hits: Arc<AtomicU32>,
-            }
-            impl flui_foundation::Diagnosticable for HitCountingBox {}
-            impl RenderBox for HitCountingBox {
-                type Arity = Leaf;
-                type ParentData = BoxParentData;
-                fn perform_layout(
-                    &mut self,
-                    _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
-                ) -> flui_types::Size {
-                    flui_types::Size::new(px(100.0), px(100.0))
-                }
-                fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
-                fn hit_test(
-                    &self,
-                    ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Leaf, BoxParentData>,
-                ) -> bool {
-                    self.hits.fetch_add(1, Ordering::Relaxed);
-                    ctx.is_within_own_size()
-                }
-            }
-
-            /// Mounts `HitCountingBox` through the real attach path so the
-            /// production `RootRenderView` wiring (which `hit_test_in_view`
-            /// resolves through) is present.
-            #[derive(Clone)]
-            struct HitCountingView {
-                hits: Arc<AtomicU32>,
-            }
-
-            impl flui_view::RenderView for HitCountingView {
-                type Protocol = flui_rendering::protocol::BoxProtocol;
-                type RenderObject = HitCountingBox;
-
-                fn create_render_object(
-                    &self,
-                    _ctx: &flui_view::RenderObjectContext<'_>,
-                ) -> Self::RenderObject {
-                    HitCountingBox {
-                        hits: Arc::clone(&self.hits),
-                    }
-                }
-
-                fn update_render_object(
-                    &self,
-                    _ctx: &flui_view::RenderObjectContext<'_>,
-                    _render_object: &mut Self::RenderObject,
-                ) -> flui_rendering::RenderUpdateImpact {
-                    flui_rendering::RenderUpdateImpact::NONE
-                }
-            }
-
-            impl flui_view::View for HitCountingView {
-                fn create_element(&self) -> flui_view::element::ElementKind {
-                    flui_view::element::ElementKind::render_variable(self)
-                }
-            }
-
-            let realm = UiRealm::for_test();
-            let hits = Arc::new(AtomicU32::new(0));
-            realm
-                .attach_root_widget(&HitCountingView {
-                    hits: Arc::clone(&hits),
-                })
-                .expect("attaches");
-            // A tracked stationary mouse inside the root's bounds — the
-            // device the post-frame re-probe iterates.
-            realm.gestures().mouse_tracker().add_device(
-                0,
-                flui_interaction::events::PointerType::Mouse,
-                flui_types::geometry::Offset::new(px(10.0), px(10.0)),
-            );
+            let (realm, hits) = super::super::frame_commit_state_tests::mount_hit_counting_root();
 
             let mut backend = TestRasterBackend::always_presents();
             let _ = realm.render_frame_entered(&mut backend);
