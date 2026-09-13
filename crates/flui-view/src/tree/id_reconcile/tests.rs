@@ -1053,7 +1053,7 @@ mod emission {
     /// same slot but distinct dispositions.
     #[test]
     #[serial]
-    fn emits_unmount_then_mount_on_type_change() {
+    fn emits_unmount_and_mount_on_type_change() {
         let (mut tree, mut owner, root) = fixture();
         seed(&mut tree, &mut owner, root, &plain_views(&[1]));
 
