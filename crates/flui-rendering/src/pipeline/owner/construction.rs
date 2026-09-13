@@ -158,9 +158,11 @@ impl PipelineOwner<Idle> {
     ///
     /// If any phase returns [`crate::error::RenderError`] (most notably
     /// [`crate::error::RenderError::Poisoned`] from a panicking render
-    /// object), the in-flight frame is dropped, the owner is returned at
-    /// [`Idle`] (no in-flight layer tree), and the second element of the
-    /// tuple is `Err(...)`. The owner is **always** usable for a
+    /// object), the owner is returned at [`Idle`] and the second element of
+    /// the tuple is `Err(...)`. A paint tree already committed before a
+    /// semantics error remains in the owner's `last_layer_tree`; it is not
+    /// returned from this failed call, but a retry can repaint or submit the
+    /// retained visual result. The owner is **always** usable for a
     /// subsequent frame on the success and error paths alike.
     #[must_use = "dropping the returned PipelineOwner<Idle> discards the pipeline handle; thread it back into the next frame"]
     pub fn run_frame(
@@ -197,9 +199,9 @@ impl PipelineOwner<Idle> {
         if let Err(e) = owner.run_semantics() {
             // Semantics phase has no `into_idle` because the transition
             // to <Idle> goes via `finish`. Use `finish` to recover the
-            // owner for the error path -- the layer tree from the paint
-            // phase is discarded on error to keep the invariant "Err =>
-            // no layer tree".
+            // owner for the error path. The painted tree remains in
+            // `last_layer_tree`; this failed call returns no tree, while a
+            // retry can reuse the retained visual result.
             return (owner.finish(), Err(e));
         }
 

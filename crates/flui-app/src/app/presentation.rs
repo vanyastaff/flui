@@ -38,6 +38,7 @@ use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
 use web_time::{Duration, Instant};
 
+use super::SegmentPhase;
 use super::semantics_host::SemanticsHost;
 use crate::bindings::RenderingFlutterBinding;
 
@@ -131,6 +132,13 @@ pub(crate) enum PresentationLifecycle {
     Closing,
     /// Owner-local resources have been released.
     Closed,
+}
+
+/// Phase-addressed frame fault injection used by the containment tests.
+#[cfg(test)]
+struct SegmentProbe {
+    phase: SegmentPhase,
+    callback: Box<dyn Fn()>,
 }
 
 /// Direct owner of mutable UI state scoped to one presentation.
@@ -255,18 +263,16 @@ pub(crate) struct PresentationState {
     /// completes without failing. Presentation-local on purpose: one
     /// window's failure streak must never color a sibling's reports.
     frame_failure_streak: Cell<u32>,
-    /// Test-only fault injection: when set, runs at the top of this
-    /// presentation's build+layout+paint segment (`UiRealm::
-    /// draw_frame_for_presentation`), where a panic it raises escapes
-    /// every inner recovery layer and reaches the realm's per-presentation
-    /// `catch_unwind` boundary — the controllable stand-in for real escape
-    /// paths (e.g. a child's `RenderView::create_render_object` panicking
-    /// on the dense reconciler, which has not yet adopted the per-child
-    /// containment windows `ElementTree::mount_or_substitute` /
-    /// `update_or_substitute` give the sparse path) that are hard to
-    /// re-trigger repeatedly.
+    /// Last frame segment entered for this presentation. Written before the
+    /// segment's probe and work so the value remains unwind-correct.
+    segment_phase: Cell<SegmentPhase>,
+    /// Test-only fault injection addressed to one [`SegmentPhase`]. It runs
+    /// immediately after that phase is stored and before its matching work,
+    /// so a panic reaches the realm's per-presentation `catch_unwind` with
+    /// accurate attribution. The closure stays installed across retries and
+    /// must arrange its own one-shot behavior when a clean retry is expected.
     #[cfg(test)]
-    segment_probe: RefCell<Option<Box<dyn Fn()>>>,
+    segment_probe: RefCell<Option<SegmentProbe>>,
     /// Test-only oracle: how many times this presentation's own
     /// build+layout+paint segment actually ran (`UiRealm::
     /// draw_frame_for_presentation`), regardless of whether anything was
@@ -551,6 +557,7 @@ impl PresentationState {
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
             frame_failure_streak: Cell::new(0),
+            segment_phase: Cell::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
             #[cfg(test)]
@@ -611,6 +618,7 @@ impl PresentationState {
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
             frame_failure_streak: Cell::new(0),
+            segment_phase: Cell::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
             #[cfg(test)]
@@ -974,21 +982,29 @@ impl PresentationState {
     /// Install (or clear) the segment fault-injection probe. See
     /// [`Self::segment_probe`]'s field doc.
     #[cfg(test)]
-    pub(crate) fn set_segment_probe(&self, probe: Option<Box<dyn Fn()>>) {
-        *self.segment_probe.borrow_mut() = probe;
+    pub(crate) fn set_segment_probe(&self, phase: SegmentPhase, probe: Option<Box<dyn Fn()>>) {
+        *self.segment_probe.borrow_mut() = probe.map(|callback| SegmentProbe { phase, callback });
     }
 
-    /// Run the installed segment probe, if any. Called from the top of
-    /// `UiRealm::draw_frame_for_presentation`, under a short immutable
-    /// borrow of the probe slot — a probe must not call
-    /// [`Self::set_segment_probe`] from inside itself. A panicking probe
-    /// releases the borrow during unwind, so the boundary's retry pump can
-    /// run (and re-panic) it again.
-    #[cfg(test)]
-    pub(crate) fn run_segment_probe(&self) {
-        if let Some(probe) = self.segment_probe.borrow().as_ref() {
-            probe();
+    /// Enter a frame segment, then run its installed test probe, if any.
+    ///
+    /// The phase write deliberately precedes the probe and has no restoring
+    /// guard: if either the probe or segment work unwinds, the last-entered
+    /// phase remains available to the presentation-level catch.
+    pub(crate) fn enter_segment_phase(&self, phase: SegmentPhase) {
+        self.segment_phase.set(phase);
+        #[cfg(test)]
+        if let Some(probe) = self.segment_probe.borrow().as_ref()
+            && probe.phase == phase
+        {
+            (probe.callback)();
         }
+    }
+
+    /// Last frame segment entered by this presentation.
+    #[must_use]
+    pub(crate) fn segment_phase(&self) -> SegmentPhase {
+        self.segment_phase.get()
     }
 
     /// Record that this presentation's build+layout+paint segment ran. See

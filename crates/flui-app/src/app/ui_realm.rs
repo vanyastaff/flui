@@ -57,7 +57,9 @@ use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
 #[cfg(test)]
 use parking_lot::RwLock;
 
-use super::frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};
+use super::frame_failure::{
+    FrameFailureHandler, FrameFailureKind, FrameFailureReport, SegmentPhase,
+};
 use super::presentation::{PresentationState, RealmCapabilities};
 use super::presentation_forest::PresentationForest;
 use super::runtime::RealmServices;
@@ -1677,7 +1679,7 @@ impl UiRealm {
     /// Forces `presentation` to repaint on its next pump segment even
     /// though nothing in its widget tree itself changed — for a
     /// renderer-side reason the build/layout/paint pipeline has no way to
-    /// observe on its own. Two production callers today, each resolving
+    /// observe on its own. Three production callers today, each resolving
     /// `presentation` from what only THAT caller knows:
     ///
     /// - [`Self::mark_primary_needs_full_repaint`] (below), for the
@@ -1698,6 +1700,11 @@ impl UiRealm {
     ///   that call's own `producer`, NEVER `primary()` unconditionally
     ///   (that method's own doc, at the `producer` binding, explains why
     ///   the two can differ).
+    /// - The per-presentation unwind boundary, when a panic escapes after a
+    ///   successful pipeline in [`SegmentPhase::Tail`] or
+    ///   [`SegmentPhase::Scene`]. That catch still holds the exact failed
+    ///   presentation, so it re-dirties it immediately instead of asking
+    ///   pump-wide producer selection to infer attribution later.
     ///
     /// [`Self::request_redraw_for`] ALONE is necessary but not sufficient
     /// for either: it opens `draw_frame_entered`'s per-presentation segment
@@ -1733,11 +1740,11 @@ impl UiRealm {
     /// device-recovery caller was the first real (non-test) one, and it
     /// takes the lighter one.
     ///
-    /// Deliberately NOT extended to [`Self::render_frame_entered`]'s
-    /// `FramePaintOutcome::Errored` outcome (a build/layout/paint failure
-    /// inside the pipeline itself, distinct from the three submit failures
-    /// above) — see that method's own comment at its `retry_needs_repaint`
-    /// binding for why the reasoning above does not transfer to that case.
+    /// Deliberately NOT extended to a structured pipeline error or to a
+    /// boundary panic in Build, Finalize, or Pipeline: those paths have not
+    /// successfully consumed the whole pipeline into a scene. The
+    /// post-pipeline Tail/Scene distinction above is what makes repainting a
+    /// correct retry premise rather than an indiscriminate fallback.
     ///
     /// No longer wasm-dead-code (this method used to carry a
     /// `#[cfg_attr(target_arch = "wasm32", expect(dead_code, ...))]` when it
@@ -2420,6 +2427,15 @@ impl UiRealm {
                     outcome
                 }
                 Err(payload) => {
+                    let failed_phase = presentation.segment_phase();
+                    if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
+                        // The pipeline already consumed this presentation's
+                        // paint dirtiness before either post-pipeline segment
+                        // began. Re-dirty the exact failed presentation here,
+                        // while its identity is still local to this catch;
+                        // a later clean sibling must not steal attribution.
+                        self.mark_needs_full_repaint_for(presentation);
+                    }
                     let message = payload_text(&*payload).map(Box::<str>::from);
                     // `docs/PANIC-POLICY.md`'s convention: a `BUG:`-prefixed
                     // payload asserts a violated FRAMEWORK invariant.
@@ -2489,12 +2505,10 @@ impl UiRealm {
         presentation: &PresentationState,
         constraints: BoxConstraints,
     ) -> FramePaintOutcome {
+        presentation.enter_segment_phase(SegmentPhase::Build);
+
         #[cfg(test)]
         presentation.record_flush();
-        // Test-only fault injection for the frame-transaction boundary —
-        // see `PresentationState::segment_probe`'s field doc.
-        #[cfg(test)]
-        presentation.run_segment_probe();
 
         // Phase 1: enter the widget frame unconditionally. `draw_frame`
         // already skips `build_scope` when nothing is dirty, but its frame
@@ -2503,38 +2517,40 @@ impl UiRealm {
         // cleanup: lazy child service below can produce records after the
         // preceding frame's build phase, leaving no pending build to make a
         // conditional call here run on the next frame.
-        presentation.widgets().draw_frame();
+        presentation.widgets().draw_frame_with_before_finalize(|| {
+            presentation.enter_segment_phase(SegmentPhase::Finalize);
+        });
 
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
         // typestate-driven orchestrator.
-        let mut pipeline_errored = false;
-        let (layer_tree, link_registry) = {
-            presentation
-                .renderer()
-                .root_pipeline_owner()
-                .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
-            let result = presentation
-                .widgets()
-                .run_frame_with_layout_builders(presentation.pipeline());
-            let link_registry = presentation
-                .renderer()
-                .root_pipeline_owner()
-                .with_mut(PipelineOwner::take_link_registry);
-            match result {
-                Ok(layer_tree) => (layer_tree, link_registry),
-                Err(e) => {
-                    // Streak bump + error-level tracing + typed embedder
-                    // delivery in one place — the same route a caught
-                    // segment panic takes at the boundary above.
-                    self.report_frame_failure(
-                        presentation,
-                        FrameFailureKind::Pipeline { error: e },
-                    );
-                    pipeline_errored = true;
-                    (None, link_registry)
-                }
+        presentation.enter_segment_phase(SegmentPhase::Pipeline);
+        presentation
+            .renderer()
+            .root_pipeline_owner()
+            .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
+        let layer_tree = match presentation
+            .widgets()
+            .run_frame_with_layout_builders(presentation.pipeline())
+        {
+            Ok(layer_tree) => layer_tree,
+            Err(error) => {
+                // Clear any registry produced before the structured error;
+                // this cleanup remains part of Pipeline, not the successful
+                // post-pipeline tail.
+                presentation
+                    .renderer()
+                    .root_pipeline_owner()
+                    .with_mut(PipelineOwner::take_link_registry);
+                self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
+                return FramePaintOutcome::Errored;
             }
         };
+
+        presentation.enter_segment_phase(SegmentPhase::Tail);
+        let link_registry = presentation
+            .renderer()
+            .root_pipeline_owner()
+            .with_mut(PipelineOwner::take_link_registry);
 
         // Production<->headless convergence point: the lazy-sliver safety net.
         // The fixpoint above already serviced child requests between its
@@ -2550,6 +2566,7 @@ impl UiRealm {
         let frame_number = presentation.frames_rendered() + 1;
 
         if let Some(mut layer_tree) = layer_tree {
+            presentation.enter_segment_phase(SegmentPhase::Scene);
             presentation.attach_performance_overlay(&mut layer_tree);
 
             let root = layer_tree.root();
@@ -2563,8 +2580,6 @@ impl UiRealm {
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
             FramePaintOutcome::Painted(scene)
-        } else if pipeline_errored {
-            FramePaintOutcome::Errored
         } else {
             FramePaintOutcome::Idle
         }
@@ -2584,7 +2599,7 @@ impl UiRealm {
     /// whose owner boundary could not finish (e.g. after a panic); flush
     /// coalesced pointer moves; draw the frame ([`Self::draw_frame_entered`]);
     /// re-hit-test stationary pointing devices against the freshly laid-out
-    /// tree; then, gated by the primary presentation's own
+    /// tree; then, gated by the actual producer presentation's own
     /// `FrameClock::is_deferred`, mark full-repaint damage and hand the
     /// scene to `renderer.render_scene`. This submit gate is DELIBERATELY
     /// separate from `draw_frame_entered`'s own segment gate: first-frame
@@ -2598,11 +2613,13 @@ impl UiRealm {
     /// and a pipeline `Errored` outcome all count as a dropped (not
     /// settled) frame, arming a retry via [`Self::wake_frame`] instead of
     /// [`Self::mark_rendered`]'s idle-clear — but only the submit-failure
-    /// verdicts (`SurfaceStale`/`DeviceLost`) additionally re-dirty the
-    /// pipeline via [`Self::mark_needs_full_repaint_for`]; see the
-    /// `retry_needs_repaint` binding below for why a pipeline `Errored`
-    /// outcome (and a generic `Failed` submit) does not get the same
-    /// treatment.
+    /// verdicts (`SurfaceStale`/`DeviceLost`) additionally set the local
+    /// `retry_needs_repaint` flag. A Tail/Scene panic also consumed the
+    /// pipeline, but its per-presentation catch immediately re-dirties the
+    /// exact failed presentation before a later sibling can become the
+    /// pump's producer. A structured pipeline error and a generic `Failed`
+    /// submit do neither; they did not produce a reusable scene or are not
+    /// retried, respectively.
     #[tracing::instrument(level = "debug", skip_all)]
     #[cfg_attr(
         all(not(target_arch = "wasm32"), not(test)),
@@ -2708,21 +2725,14 @@ impl UiRealm {
         // presentation's retry needs (and on a pump whose failure consumed
         // its build-dirty state, nothing else would ever reopen the gate).
         let mut retry_needed = any_failed;
-        // Tracks a NARROWER condition than `retry_needed`: whether the
-        // eventual retry also needs [`Self::mark_needs_full_repaint_for`]
-        // to have something to redo. Only the submit-failure arms below
-        // (`SurfaceStale`/`DeviceLost`) set this —
-        // deliberately NOT `errored` (a `FramePaintOutcome::Errored`
-        // outcome, i.e. `run_frame_with_layout_builders` itself returned
-        // `Err`): on that path `render_scene` is never called at all, so
-        // the repaint-mark's own justification ("the frame had already
-        // consumed the pipeline's dirty state producing the scene it tried
-        // to submit") is simply false there — nothing was produced to
-        // submit. Marking `mark_needs_paint` also could not even address a
-        // BUILD/LAYOUT failure (paint alone does not redo either), so it
-        // would add a repaint with no plausible fix-the-retry effect while
-        // still paying its cost every wake. That arm keeps its PRE-#637
-        // behavior unchanged: `wake_frame()` only, same as `main`.
+        // Tracks a NARROWER condition than `retry_needed`: whether a SUBMIT
+        // failure consumed the scene and therefore needs
+        // [`Self::mark_needs_full_repaint_for`] before a later retry. A
+        // post-pipeline Tail/Scene panic has already re-dirtied the exact
+        // failed presentation in the per-presentation catch; it never sets
+        // this pump-local flag. A structured pipeline error, or a panic in
+        // Build/Finalize/Pipeline, has not successfully produced a scene and
+        // likewise does not use this submit-specific flag.
         let mut retry_needs_repaint = false;
         use super::raster_lane::SubmitVerdict;
         if should_send
@@ -2886,9 +2896,9 @@ impl UiRealm {
             // `mark_rendered()` clears the flag having never reached
             // `render_scene`: one no-op frame, then the retry silently parks.
             //
-            // `retry_needs_repaint` (set only by the submit-failure arms
-            // above, never by a pipeline `Errored` outcome — see that
-            // binding's own comment) gates
+            // `retry_needs_repaint` (set only by the submit-failure arms;
+            // post-pipeline segment panics were already re-dirtied at their
+            // exact per-presentation catch) gates
             // [`Self::mark_needs_full_repaint_for`], the same fix #630
             // already established for the pre-frame device-recovery-success
             // arm (`runner.rs`'s `render_frame_with_device_recovery`) —
@@ -8613,15 +8623,15 @@ mod tests {
             // the clean retry also proves the presentation can make progress.
             let probe_armed = Rc::new(Cell::new(true));
             let armed = Rc::clone(&probe_armed);
-            realm
-                .presentations
-                .primary()
-                .set_segment_probe(Some(Box::new(move || {
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Build,
+                Some(Box::new(move || {
                     assert!(
                         !armed.replace(false),
                         "segment probe — intentional test panic"
                     );
-                })));
+                })),
+            );
             realm.request_redraw();
             // Give B real work too, so this same pump proves B's segment
             // still runs AFTER A's failure (A is primary and iterates
@@ -8755,12 +8765,12 @@ mod tests {
             // Inject a segment failure and give the presentation demand so
             // its segment genuinely runs (a skipped segment would prove
             // nothing).
-            realm
-                .presentations
-                .primary()
-                .set_segment_probe(Some(Box::new(|| {
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Build,
+                Some(Box::new(|| {
                     panic!("segment probe — intentional test panic");
-                })));
+                })),
+            );
             realm.request_redraw();
             realm.mark_rendered();
 
@@ -8778,6 +8788,218 @@ mod tests {
             );
         }
 
+        /// AC8: a panic after the pipeline has consumed paint dirtiness must
+        /// re-dirty that exact presentation at the containment boundary. A
+        /// wake alone opens the segment gate but gives the pipeline nothing
+        /// to reproduce, so the retry would otherwise settle as `Idle`.
+        #[test]
+        fn a_tail_panic_repaints_and_presents_on_the_automatic_retry() {
+            fn mount() -> UiRealm {
+                let realm = UiRealm::for_test();
+                realm
+                    .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                    .expect("root attaches");
+                realm
+            }
+
+            fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> TestRasterBackend {
+                TestRasterBackend::new(move |_, scene| {
+                    submitted
+                        .lock()
+                        .expect("scene capture mutex")
+                        .push(format!("{:?}", scene.layer_tree()));
+                    Ok(true)
+                })
+            }
+
+            let realm = mount();
+            let probe_armed = Rc::new(Cell::new(true));
+            let armed = Rc::clone(&probe_armed);
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Tail,
+                Some(Box::new(move || {
+                    assert!(
+                        !armed.replace(false),
+                        "tail probe — intentional one-shot panic"
+                    );
+                })),
+            );
+            let submitted = Arc::new(StdMutex::new(Vec::new()));
+            let mut backend = capturing_backend(Arc::clone(&submitted));
+
+            let first_presented = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("the Tail panic must be contained");
+            assert!(!first_presented, "the failed attempt must not present");
+            assert_eq!(backend.render_scene_calls, 0);
+            assert_eq!(realm.frames_rendered(), 0);
+            assert_eq!(
+                realm.presentations.primary().segment_phase(),
+                SegmentPhase::Tail,
+                "the last-entered phase must survive unwind"
+            );
+            assert!(realm.needs_redraw(), "the failure must arm a retry");
+
+            let second_presented = realm.render_frame_entered(&mut backend);
+            assert!(
+                second_presented,
+                "the automatic retry must repaint and present without external dirtiness"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+            assert_eq!(realm.frames_rendered(), 1);
+            assert_eq!(
+                realm.presentations.primary().segment_phase(),
+                SegmentPhase::Scene
+            );
+
+            let fresh = mount();
+            let expected = Arc::new(StdMutex::new(Vec::new()));
+            let mut fresh_backend = capturing_backend(Arc::clone(&expected));
+            assert!(fresh.render_frame_entered(&mut fresh_backend));
+            assert_eq!(
+                *submitted.lock().expect("scene capture mutex"),
+                *expected.lock().expect("fresh scene capture mutex"),
+                "the retried scene must equal an identical fresh realm's scene"
+            );
+        }
+
+        /// Every segment publishes its identity before either its probe or
+        /// work begins. The value survives unwind, and a clean retry can
+        /// progress through Scene without test-side repair.
+        #[test]
+        fn every_segment_phase_survives_unwind_and_retries_to_scene() {
+            let phases = [
+                SegmentPhase::Build,
+                SegmentPhase::Finalize,
+                SegmentPhase::Pipeline,
+                SegmentPhase::Tail,
+                SegmentPhase::Scene,
+            ];
+
+            for phase in phases {
+                let realm = UiRealm::for_test();
+                realm
+                    .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                    .expect("root attaches");
+                let probe_armed = Rc::new(Cell::new(true));
+                let armed = Rc::clone(&probe_armed);
+                realm.presentations.primary().set_segment_probe(
+                    phase,
+                    Some(Box::new(move || {
+                        assert!(
+                            !armed.replace(false),
+                            "phase probe — intentional one-shot panic"
+                        );
+                    })),
+                );
+                let mut backend = TestRasterBackend::always_presents();
+
+                let first_presented = with_quiet_panics(|| {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        realm.render_frame_entered(&mut backend)
+                    }))
+                })
+                .expect("the phase panic must be contained");
+                assert!(!first_presented, "{phase:?} failure must not present");
+                assert_eq!(
+                    realm.presentations.primary().segment_phase(),
+                    phase,
+                    "the unwound phase must remain stored"
+                );
+
+                assert!(
+                    realm.render_frame_entered(&mut backend),
+                    "{phase:?} must recover on the automatic retry"
+                );
+                assert_eq!(
+                    realm.presentations.primary().segment_phase(),
+                    SegmentPhase::Scene,
+                    "a clean retry must reach Scene"
+                );
+            }
+        }
+
+        /// Exact-addressing discriminator: a later sibling may become the
+        /// pump's producer after A fails, but must not receive A's repaint.
+        #[test]
+        fn a_tail_failure_repaints_a_even_when_later_b_paints_in_the_same_pump() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+            realm
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                .expect("A attaches");
+            realm
+                .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
+                .expect("B attaches");
+
+            let probe_armed = Rc::new(Cell::new(true));
+            let armed = Rc::clone(&probe_armed);
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Tail,
+                Some(Box::new(move || {
+                    assert!(
+                        !armed.replace(false),
+                        "A Tail probe — intentional one-shot panic"
+                    );
+                })),
+            );
+            let mut backend = TestRasterBackend::always_presents();
+
+            assert!(
+                with_quiet_panics(|| {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        realm.render_frame_entered(&mut backend)
+                    }))
+                })
+                .expect("A's Tail panic must be contained"),
+                "later B must still paint and present in the failing pump"
+            );
+            assert_eq!(backend.render_scene_calls, 1, "only B submits in pump 1");
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .frames_rendered(),
+                0
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .frames_rendered(),
+                1
+            );
+
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "A must repaint and present on the automatic retry"
+            );
+            assert_eq!(backend.render_scene_calls, 2, "pump 2 submits only A");
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .frames_rendered(),
+                1
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .frames_rendered(),
+                1,
+                "B must not receive A's repaint mark"
+            );
+        }
+
         /// The consecutive-failure streak counts uninterrupted failures and
         /// resets on the next cleanly completed segment — the field an
         /// embedder keys escalation off.
@@ -8792,12 +9014,12 @@ mod tests {
 
             let probe_armed = Rc::new(Cell::new(true));
             let armed = Rc::clone(&probe_armed);
-            realm
-                .presentations
-                .primary()
-                .set_segment_probe(Some(Box::new(move || {
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Build,
+                Some(Box::new(move || {
                     assert!(!armed.get(), "segment probe — intentional test panic");
-                })));
+                })),
+            );
 
             let pump = |realm: &UiRealm, backend: &mut TestRasterBackend| {
                 realm.request_redraw();
@@ -8992,12 +9214,12 @@ mod tests {
                 "precondition: a clean pump re-hit-tests the tracked stationary device"
             );
 
-            realm
-                .presentations
-                .primary()
-                .set_segment_probe(Some(Box::new(|| {
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Build,
+                Some(Box::new(|| {
                     panic!("segment probe — intentional test panic");
-                })));
+                })),
+            );
             realm.request_redraw();
             let _ = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
@@ -9023,12 +9245,12 @@ mod tests {
                 .attach_root_widget(&SizedBox::new(10.0, 10.0))
                 .expect("attaches");
             let seen = install_collecting_handler(&realm);
-            realm
-                .presentations
-                .primary()
-                .set_segment_probe(Some(Box::new(|| {
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Build,
+                Some(Box::new(|| {
                     panic!("BUG: intentional invariant-violation payload for this test");
-                })));
+                })),
+            );
             realm.request_redraw();
 
             let mut backend = TestRasterBackend::always_presents();
@@ -9096,12 +9318,12 @@ mod tests {
             // A (primary, iterated FIRST) fails; B has real work, so this
             // same pump proves B's segment still ran after both A's
             // failure AND the handler's own panic during its delivery.
-            realm
-                .presentations
-                .primary()
-                .set_segment_probe(Some(Box::new(|| {
+            realm.presentations.primary().set_segment_probe(
+                SegmentPhase::Build,
+                Some(Box::new(|| {
                     panic!("segment probe — intentional test panic");
-                })));
+                })),
+            );
             realm.request_redraw();
             realm.enter(|realm| {
                 let b = realm.presentations.get(b_id).expect("B installed");

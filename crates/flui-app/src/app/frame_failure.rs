@@ -22,6 +22,27 @@
 use flui_foundation::PresentationAddress;
 use flui_rendering::RenderError;
 
+/// The last frame segment entered for one presentation.
+///
+/// A presentation stores this value before it runs the corresponding work.
+/// If that work unwinds, the value therefore identifies the segment that
+/// failed instead of being restored to an earlier phase. The next attempted
+/// frame starts again at [`Self::Build`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SegmentPhase {
+    /// Widget-tree build work, including frame-entry bookkeeping.
+    Build,
+    /// Inactive-element finalization immediately after the build drain.
+    Finalize,
+    /// Layout, compositing, paint, and semantics pipeline orchestration.
+    Pipeline,
+    /// Post-pipeline link extraction and lazy-child service work.
+    Tail,
+    /// Performance-overlay attachment and scene construction.
+    Scene,
+}
+
 /// Why one presentation's frame failed.
 ///
 /// Mirrors the failure taxonomy of issue #561: structured pipeline errors

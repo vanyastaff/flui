@@ -1145,6 +1145,24 @@ impl WidgetsBinding {
     /// In debug mode, panics if called while already building dirty elements
     /// (to catch accidental frame scheduling during build).
     pub fn draw_frame(&self) {
+        self.draw_frame_impl(|| {});
+    }
+
+    /// Pump a widget frame and invoke `before_finalize` at the exact boundary
+    /// between the build drain and inactive-element finalization.
+    ///
+    /// This is an internal composition seam for the application frame driver.
+    /// The callback runs while the binding's inner write guard and debug
+    /// building-flag guard remain active. It must be short and non-reentrant;
+    /// calling back into this binding would try to reacquire the same write
+    /// guard and deadlock. Ordinary users should call [`Self::draw_frame`].
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "runtime-internals"))]
+    pub fn draw_frame_with_before_finalize(&self, before_finalize: impl FnOnce()) {
+        self.draw_frame_impl(before_finalize);
+    }
+
+    fn draw_frame_impl(&self, before_finalize: impl FnOnce()) {
         let mut inner = self.inner.write();
 
         #[cfg(debug_assertions)]
@@ -1208,6 +1226,8 @@ impl WidgetsBinding {
 
         // Note: Layout and paint phases would be called here via super.draw_frame()
         // in a full implementation with RendererBinding
+
+        before_finalize();
 
         // Finalization phase: unmount inactive elements
         {
