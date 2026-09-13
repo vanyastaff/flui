@@ -14,6 +14,20 @@ enum MotionClass {
     Hover,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplaySupersession {
+    DispatchedOpen(PointerId),
+    FinalUndispatched(PointerId),
+}
+
+impl ReplaySupersession {
+    fn pointer_id(self) -> PointerId {
+        match self {
+            Self::DispatchedOpen(pointer_id) | Self::FinalUndispatched(pointer_id) => pointer_id,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct QueueCounters {
     coalesced_events: usize,
@@ -34,7 +48,7 @@ pub(crate) struct HeldPointerQueue {
     replay_reserved: usize,
     replay_tail_open_pointers: Vec<PointerId>,
     replay_dispatched_open_pointers: Vec<PointerId>,
-    replay_superseded_pointers: Vec<PointerId>,
+    replay_supersessions: Vec<ReplaySupersession>,
     saturation_warned: bool,
     saturation_episodes: usize,
     counters: QueueCounters,
@@ -49,7 +63,7 @@ impl HeldPointerQueue {
             replay_reserved: 0,
             replay_tail_open_pointers: Vec::new(),
             replay_dispatched_open_pointers: Vec::new(),
-            replay_superseded_pointers: Vec::new(),
+            replay_supersessions: Vec::new(),
             saturation_warned: false,
             saturation_episodes: 0,
             counters: QueueCounters::default(),
@@ -80,12 +94,25 @@ impl HeldPointerQueue {
         }
 
         if matches!(event, PointerEvent::Down(_)) {
-            let supersedes_replay =
-                self.replay_in_flight && self.replay_dispatched_open_pointers.contains(&pointer_id);
-            if supersedes_replay || self.has_open_epoch(pointer_id) {
+            let replay_supersession = if self.replay_in_flight
+                && self.replay_dispatched_open_pointers.contains(&pointer_id)
+            {
+                Some(ReplaySupersession::DispatchedOpen(pointer_id))
+            } else if self.replay_in_flight && self.replay_tail_open_pointers.contains(&pointer_id)
+            {
+                Some(ReplaySupersession::FinalUndispatched(pointer_id))
+            } else {
+                None
+            };
+            if replay_supersession.is_some() || self.has_open_epoch(pointer_id) {
                 self.remove_open_epoch(pointer_id);
-                if supersedes_replay && !self.replay_superseded_pointers.contains(&pointer_id) {
-                    self.replay_superseded_pointers.push(pointer_id);
+                if let Some(replay_supersession) = replay_supersession
+                    && !self
+                        .replay_supersessions
+                        .iter()
+                        .any(|queued| queued.pointer_id() == pointer_id)
+                {
+                    self.replay_supersessions.push(replay_supersession);
                 }
             }
         }
@@ -322,7 +349,7 @@ impl HeldPointerQueue {
         self.replay_reserved = 0;
         self.replay_tail_open_pointers.clear();
         self.replay_dispatched_open_pointers.clear();
-        self.replay_superseded_pointers.clear();
+        self.replay_supersessions.clear();
         self.trace_counts(
             if completed {
                 "drained held pointer input"
@@ -435,37 +462,81 @@ impl<'a> HeldPointerReplay<'a> {
         )
     )]
     fn discard_superseded_suffixes(&mut self) {
-        let superseded = {
+        let supersessions = {
             let mut queue = self.queue.borrow_mut();
-            std::mem::take(&mut queue.replay_superseded_pointers)
+            std::mem::take(&mut queue.replay_supersessions)
         };
-        if superseded.is_empty() {
+        if supersessions.is_empty() {
             return;
         }
 
         let mut removed_events = 0usize;
         let mut removed_sequences = 0usize;
-        for pointer_id in superseded {
-            let mut removing_epoch = true;
+        for supersession in supersessions {
+            let pointer_id = supersession.pointer_id();
             let before = self.remaining.len();
-            self.remaining = std::mem::take(&mut self.remaining)
-                .into_iter()
-                .filter_map(|event| {
-                    if flui_interaction::events::extract_pointer_id(&event) != pointer_id {
-                        return Some(event);
-                    }
-                    if removing_epoch {
-                        if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
-                            removing_epoch = false;
+            let clears_tail_open = match supersession {
+                ReplaySupersession::DispatchedOpen(_) => {
+                    let mut removing_epoch = true;
+                    self.remaining = std::mem::take(&mut self.remaining)
+                        .into_iter()
+                        .filter_map(|event| {
+                            if flui_interaction::events::extract_pointer_id(&event) != pointer_id {
+                                return Some(event);
+                            }
+                            if removing_epoch {
+                                if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
+                                    removing_epoch = false;
+                                }
+                                return None;
+                            }
+                            Some(event)
+                        })
+                        .collect();
+                    removing_epoch
+                }
+                ReplaySupersession::FinalUndispatched(_) => {
+                    let mut open_start = None;
+                    for (index, event) in self.remaining.iter().enumerate() {
+                        if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+                            continue;
                         }
-                        return None;
+                        match event {
+                            PointerEvent::Down(_) => open_start = Some(index),
+                            PointerEvent::Up(_) | PointerEvent::Cancel(_) => open_start = None,
+                            _ => {}
+                        }
                     }
-                    Some(event)
-                })
-                .collect();
+                    if let Some(open_start) = open_start {
+                        self.remaining = std::mem::take(&mut self.remaining)
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(|(index, event)| {
+                                let belongs_to_final_open_epoch = index >= open_start
+                                    && flui_interaction::events::extract_pointer_id(&event)
+                                        == pointer_id;
+                                (!belongs_to_final_open_epoch).then_some(event)
+                            })
+                            .collect();
+                    }
+                    true
+                }
+            };
             let removed = before.saturating_sub(self.remaining.len());
             removed_events = removed_events.saturating_add(removed);
             removed_sequences = removed_sequences.saturating_add(usize::from(removed != 0));
+
+            let mut queue = self.queue.borrow_mut();
+            if matches!(supersession, ReplaySupersession::DispatchedOpen(_)) {
+                queue
+                    .replay_dispatched_open_pointers
+                    .retain(|open| *open != pointer_id);
+            }
+            if clears_tail_open {
+                queue
+                    .replay_tail_open_pointers
+                    .retain(|open| *open != pointer_id);
+            }
         }
 
         let mut queue = self.queue.borrow_mut();
@@ -938,6 +1009,76 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![id, interleaved]);
         assert_eq!(positions(&remainder), vec![2.0, 0.0]);
+    }
+
+    #[test]
+    fn reentrant_down_supersedes_a_wholly_undispatched_open_replay_epoch() {
+        let queue = queue();
+        let dispatched = pointer(2);
+        let superseded = pointer(3);
+        queue.borrow_mut().append(down(dispatched));
+        queue.borrow_mut().append(down(superseded));
+        queue.borrow_mut().append(contact_move(superseded, 4.0));
+        queue.borrow_mut().append(up(dispatched));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert_eq!(
+            replay
+                .next()
+                .as_ref()
+                .map(flui_interaction::events::extract_pointer_id),
+            Some(dispatched)
+        );
+        queue.borrow_mut().append(down(superseded));
+        let remainder: Vec<_> = replay.by_ref().collect();
+        replay.complete();
+
+        assert_eq!(remainder.len(), 1);
+        assert!(matches!(remainder[0], PointerEvent::Up(_)));
+        assert_eq!(
+            flui_interaction::events::extract_pointer_id(&remainder[0]),
+            dispatched
+        );
+        let queued_behind = drain(&queue);
+        assert_eq!(queued_behind.len(), 1);
+        assert!(matches!(queued_behind[0], PointerEvent::Down(_)));
+        assert_eq!(
+            flui_interaction::events::extract_pointer_id(&queued_behind[0]),
+            superseded
+        );
+    }
+
+    #[test]
+    fn abort_after_undispatched_epoch_supersession_restores_interleaving_before_new_down() {
+        let queue = queue();
+        let dispatched = pointer(2);
+        let superseded = pointer(3);
+        queue.borrow_mut().append(down(dispatched));
+        queue.borrow_mut().append(down(superseded));
+        queue.borrow_mut().append(contact_move(superseded, 4.0));
+        queue.borrow_mut().append(cancel(dispatched));
+
+        {
+            let mut replay =
+                HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+            assert_eq!(
+                replay
+                    .next()
+                    .as_ref()
+                    .map(flui_interaction::events::extract_pointer_id),
+                Some(dispatched)
+            );
+            queue.borrow_mut().append(down(superseded));
+        }
+
+        let restored = drain(&queue);
+        let restored_ids: Vec<_> = restored
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(restored_ids, vec![dispatched, superseded]);
+        assert!(matches!(restored[0], PointerEvent::Cancel(_)));
+        assert!(matches!(restored[1], PointerEvent::Down(_)));
     }
 
     #[test]
