@@ -165,19 +165,20 @@ pub struct AppConfig {
     /// [`HostExecutors`]'s own doc for the contract layered on top.
     pub executors: Option<HostExecutors>,
 
-    /// Optional embedder callback receiving every contained frame failure
-    /// (issue #561's typed error route). `None` (the default): failures
-    /// are still contained and surfaced through `tracing`; only the typed
+    /// Optional embedder callback receiving every terminal frame failure and
+    /// contained lifecycle recovery (issue #561's typed report route). `None`
+    /// (the default): both remain surfaced through `tracing`; only typed
     /// delivery is skipped. See [`FrameFailureHandler`]'s own doc for the
     /// re-entrancy contract the callback must honor.
     pub frame_failure_handler: Option<FrameFailureHandler>,
 
-    /// Controls whether typed segment-panic reports retain string payloads
-    /// and whether FLUI-owned pipeline tracing materializes error text. Debug
-    /// builds default to [`FrameFailureDetail::Verbatim`]; release builds
-    /// default to [`FrameFailureDetail::Redacted`]. This is independent of
-    /// [`Self::diagnostics_profile`], so changing the broader logging profile
-    /// never silently changes the data retained in typed panic reports.
+    /// Controls whether typed segment-panic and recovered-panic reports retain
+    /// string payloads, and whether FLUI-owned pipeline tracing materializes
+    /// error text. Debug builds default to [`FrameFailureDetail::Verbatim`];
+    /// release builds default to [`FrameFailureDetail::Redacted`]. This is
+    /// independent of [`Self::diagnostics_profile`], so changing the broader
+    /// logging profile never silently changes the data retained in typed panic
+    /// reports.
     /// This does not sanitize a handler's `FrameFailureReport` `Debug` output
     /// or its typed pipeline `RenderError`; handlers must treat those as
     /// potentially sensitive.

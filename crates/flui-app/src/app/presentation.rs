@@ -259,14 +259,15 @@ pub(crate) struct PresentationState {
     tree_revision: Cell<TreeRevision>,
     /// Latest tree revision acknowledged by a successful submit verdict.
     presented_revision: Cell<TreeRevision>,
-    /// How many frames IN A ROW have failed for this presentation — the
+    /// Consecutive dropped-frame count for this presentation — the
     /// `consecutive_failures` field of every
     /// [`FrameFailureReport`](super::frame_failure::FrameFailureReport)
-    /// this presentation's failures produce. Incremented by `UiRealm::
-    /// report_frame_failure` (both the structured-pipeline-error and the
-    /// caught-segment-panic routes), reset by the next segment that
-    /// completes without failing. Presentation-local on purpose: one
-    /// window's failure streak must never color a sibling's reports.
+    /// this presentation produces. A terminal pipeline error or escaped
+    /// segment panic increments it. A contained lifecycle recovery reports
+    /// the current value but neither increments nor resets it. The next
+    /// segment that completes without a terminal failure resets it only after
+    /// that attempt's contained reports are delivered. Presentation-local on
+    /// purpose: one window's streak must never color a sibling's reports.
     frame_failure_streak: Cell<u32>,
     /// Last frame segment entered for this presentation. Written before the
     /// segment's probe and work so the value remains unwind-correct.
@@ -974,7 +975,7 @@ impl PresentationState {
         false
     }
 
-    /// Record one more consecutive frame failure and return the new streak
+    /// Record one more consecutive dropped frame and return the new streak
     /// length. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn note_frame_failure(&self) -> u32 {
         let streak = self.frame_failure_streak.get().saturating_add(1);
@@ -987,8 +988,8 @@ impl PresentationState {
         self.frame_failure_streak.get()
     }
 
-    /// A segment completed without failing; the next failure starts a
-    /// fresh streak. See [`Self::frame_failure_streak`]'s field doc.
+    /// A segment completed without a terminal failure; the next dropped frame
+    /// starts a fresh streak. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn reset_frame_failure_streak(&self) {
         self.frame_failure_streak.set(0);
     }

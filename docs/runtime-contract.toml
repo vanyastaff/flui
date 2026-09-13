@@ -2679,6 +2679,19 @@ owner_issue = 556
 notes = "The type survives; its field set must become fully effective or shrink (the effective-configuration contract)."
 
 [[surface]]
+path = "flui_app::FrameFailureKind"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/frame_failure.rs"
+contains = "pub enum FrameFailureKind"
+classification = "stable-candidate"
+thread_affinity = "plain report value; delivered synchronously on the UiRealm owner thread"
+owner = "typed presentation-attempt failure and contained-recovery reporting"
+failure_semantics = "SegmentPanic and Pipeline are FrameDropped terminal reports; RecoveredPanic is a Contained report and does not itself arm retry or change the dropped-frame streak"
+consumers = ["AppConfig FrameFailureHandler callbacks", "flui-app tracing adapter"]
+owner_issue = 561
+
+[[surface]]
 path = "flui_app::bindings re-export bundle (UpdateScheduler, PipelineOwner, PipelineCell, GestureBinding, WidgetsBinding, PaintingBinding, RenderingFlutterBinding)"
 crate = "flui-app"
 kind = "re-export"

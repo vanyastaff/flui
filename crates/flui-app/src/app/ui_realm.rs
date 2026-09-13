@@ -554,11 +554,12 @@ impl std::fmt::Debug for UiRealm {
     }
 }
 
-/// Outcome of one build+layout+paint pass, distinguishing "nothing was
-/// dirty" from "the pipeline failed" — both produce no layer tree, but only
-/// the latter must force a retry rather than being treated as a settled,
-/// up-to-date frame (see [`UiRealm::render_frame_entered`]'s retry gate).
-/// Moved here from the retired `AppBinding`.
+/// Outcome of one complete presentation segment, from build through
+/// finalization, pipeline work, post-pipeline tail, and scene construction.
+/// `Idle` and `Errored` both produce no scene to submit, but only `Errored`
+/// forces a retry rather than being treated as a clean segment (see
+/// [`UiRealm::render_frame_entered`]'s retry gate). Moved here from the retired
+/// `AppBinding`.
 enum FramePaintOutcome {
     /// A fresh layer tree was painted and turned into a `Scene`. Holds
     /// `Scene` by value, not `Arc<Scene>`: the sole reader (the frame
@@ -575,9 +576,9 @@ enum FramePaintOutcome {
     Painted(Scene),
     /// Nothing was dirty this frame; no new content to composite.
     Idle,
-    /// The build/layout/paint transaction failed (e.g. a render object
-    /// panicked and was caught by `catch_unwind`); the frame was dropped and
-    /// must be retried.
+    /// The complete segment failed: a structured pipeline error, or a panic
+    /// escaped from Build, Finalize, Pipeline, Tail, or Scene and was caught by
+    /// the presentation boundary. The frame was dropped and must be retried.
     Errored,
 }
 
