@@ -10,7 +10,8 @@ use tracing_subscriber::{Layer, Registry};
 
 use super::UiRealm;
 use crate::app::frame_failure::{
-    FrameFailureDetail, FrameFailureHandler, FrameFailureKind, PanicText, SegmentPhase,
+    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind, PanicText,
+    SegmentPhase,
 };
 use crate::app::raster_test_support::TestRasterBackend;
 
@@ -70,6 +71,7 @@ fn capture_pipeline_failure(detail: FrameFailureDetail) -> (Vec<String>, bool) {
     tracing::subscriber::with_default(subscriber, || {
         realm.report_frame_failure(
             realm.presentations.primary(),
+            FailureDisposition::FrameDropped,
             FrameFailureKind::Pipeline {
                 error: flui_rendering::RenderError::semantics(SENTINEL),
             },

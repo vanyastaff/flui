@@ -1,14 +1,11 @@
 //! Typed frame-failure reporting — the embedder-visible half of the
 //! presentation-frame transaction boundary (ADR-0048).
 //!
-//! A frame produced for one presentation can fail two ways: the pipeline
-//! returns a structured [`flui_rendering::RenderError`], or a panic escapes
-//! the presentation's build/layout/paint segment and is caught at the
-//! realm's per-presentation `catch_unwind` boundary. Either way the frame
-//! is dropped for that presentation only — sibling presentations in the
-//! same realm, and every other realm, keep pumping — and the failure is
-//! surfaced here as a [`FrameFailureReport`] instead of being a silent
-//! skip: `tracing` carries the structured diagnostics, and an embedder
+//! A frame attempt can fail terminally when the pipeline returns a structured
+//! [`flui_rendering::RenderError`] or a panic escapes its outer segment. A
+//! narrower lifecycle boundary can instead recover and let the attempt
+//! continue. Both outcomes surface as a [`FrameFailureReport`] instead of a
+//! silent skip: `tracing` carries the structured diagnostics, and an embedder
 //! that registered a [`FrameFailureHandler`] via
 //! [`AppConfig::with_frame_failure_handler`](crate::AppConfig::with_frame_failure_handler)
 //! receives the typed report synchronously on the UI thread.
@@ -19,12 +16,13 @@
 //! window's frame failed and decide its own recovery (ignore and let the
 //! armed retry run, close the window, or restart the app).
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::fmt;
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::{is_internal_invariant, payload_text};
 use flui_rendering::RenderError;
+use flui_view::{LifecycleHook, RecoveredAt, RecoveredPanic as ViewRecoveredPanic};
 
 /// Panic text made safe for the application's selected diagnostics policy.
 ///
@@ -122,6 +120,62 @@ impl FrameFailureDetail {
     pub(crate) fn pipeline_text(self, error: &RenderError) -> PanicText {
         self.materialize(|| error.to_string().into_boxed_str())
     }
+
+    /// Apply the retention policy to an already-owned recovered panic
+    /// message without formatting the surrounding `FlutterError`.
+    pub(crate) fn recovered_text(self, message: String) -> PanicText {
+        self.materialize(|| message.into_boxed_str())
+    }
+
+    /// Convert one lower-level recovery record without formatting its
+    /// `FlutterError` or reconsidering its raw-payload classification.
+    pub(crate) fn recovered_panic_kind(self, recovered: ViewRecoveredPanic) -> FrameFailureKind {
+        let ViewRecoveredPanic {
+            at,
+            view_type_id,
+            hook,
+            error,
+            internal_invariant,
+            ..
+        } = recovered;
+        self.recovered_panic_kind_from_parts(
+            at,
+            view_type_id,
+            hook,
+            error.message,
+            internal_invariant,
+        )
+    }
+
+    /// Pure conversion seam shared by production ownership transfer and the
+    /// exhaustive hook/attribution table tests.
+    pub(crate) fn recovered_panic_kind_from_parts(
+        self,
+        at: RecoveredAt,
+        view_type_id: TypeId,
+        hook: LifecycleHook,
+        message: String,
+        internal_invariant: bool,
+    ) -> FrameFailureKind {
+        FrameFailureKind::RecoveredPanic {
+            at,
+            view_type_id,
+            hook,
+            message: self.recovered_text(message),
+            internal_invariant,
+        }
+    }
+}
+
+/// Whether a failure discarded the presentation frame or was recovered
+/// inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FailureDisposition {
+    /// The presentation produced no frame and must retry.
+    FrameDropped,
+    /// A narrower lifecycle boundary recovered and the frame may continue.
+    Contained,
 }
 
 /// The last frame segment entered for one presentation.
@@ -192,15 +246,29 @@ pub enum FrameFailureKind {
         /// inspect its variants without rendering private text.
         error: RenderError,
     },
+    /// A lifecycle-hook panic recovered at a narrower per-child boundary.
+    #[non_exhaustive]
+    RecoveredPanic {
+        /// Where the hook was attributed and what substitution occurred.
+        at: RecoveredAt,
+        /// `TypeId` of the view associated with the failed hook.
+        view_type_id: TypeId,
+        /// The lifecycle hook that panicked.
+        hook: LifecycleHook,
+        /// The recovered panic's message after applying the realm policy.
+        message: PanicText,
+        /// Classification computed from the raw payload at the recovery seam.
+        internal_invariant: bool,
+    },
 }
 
-/// One contained frame failure, addressed to the presentation whose frame
-/// was dropped.
+/// One addressed frame failure or contained lifecycle recovery.
 ///
 /// Delivered to the registered [`FrameFailureHandler`] (if any) and
-/// mirrored into `tracing` at error level. The last successfully
-/// presented frame for this presentation stays on screen — a failed frame
-/// never submits a blank or partial scene in its place.
+/// mirrored into `tracing` at error level. A [`FailureDisposition::FrameDropped`]
+/// report never submits a blank or partial scene in place of the last
+/// successful frame. [`FailureDisposition::Contained`] records an inner
+/// recovery and does not imply that the surrounding frame was dropped.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FrameFailureReport {
@@ -209,11 +277,13 @@ pub struct FrameFailureReport {
     pub address: PresentationAddress,
     /// What failed.
     pub kind: FrameFailureKind,
-    /// How many frames in a row have now failed for this presentation
-    /// (`1` for the first failure; reset by the next cleanly completed
-    /// segment). An embedder can key its own escalation off this — e.g.
-    /// tear the window down once the count shows the armed retry is not
-    /// recovering.
+    /// Whether this report dropped the frame or describes an inner recovery.
+    pub disposition: FailureDisposition,
+    /// Consecutive [`FailureDisposition::FrameDropped`] count for this
+    /// presentation. A [`FailureDisposition::Contained`] report exposes the
+    /// current count but neither increments nor resets it; only a terminal
+    /// clean outcome resets the streak after contained reports are delivered.
+    /// An embedder can key its own escalation off this value.
     pub consecutive_failures: u32,
 }
 

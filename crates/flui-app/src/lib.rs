@@ -77,8 +77,8 @@ pub use app::{
 // contained to its own presentation; these types are how the embedder hears
 // about it.
 pub use app::{
-    FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, PanicText,
-    SegmentPhase,
+    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SegmentPhase,
 };
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery

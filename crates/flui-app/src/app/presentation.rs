@@ -982,6 +982,11 @@ impl PresentationState {
         streak
     }
 
+    /// Current consecutive frame-drop count without changing it.
+    pub(crate) fn frame_failure_streak(&self) -> u32 {
+        self.frame_failure_streak.get()
+    }
+
     /// A segment completed without failing; the next failure starts a
     /// fresh streak. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn reset_frame_failure_streak(&self) {

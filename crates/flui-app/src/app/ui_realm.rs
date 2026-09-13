@@ -58,7 +58,8 @@ use parking_lot::RwLock;
 
 use super::epoch::FrameCommitState;
 use super::frame_failure::{
-    FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, SegmentPhase,
+    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    FrameFailureReport, SegmentPhase,
 };
 use super::presentation::{PresentationState, RealmCapabilities};
 use super::presentation_forest::PresentationForest;
@@ -927,10 +928,12 @@ impl UiRealm {
         self.frame_failure_detail.get()
     }
 
-    /// Surface one contained frame failure for `presentation`: bump its
-    /// consecutive-failure streak, emit the structured `tracing` record,
-    /// and deliver the typed [`FrameFailureReport`] to the registered
-    /// handler (if any).
+    /// Surface one frame-failure report for `presentation` through tracing
+    /// and the registered handler (if any).
+    ///
+    /// A dropped frame increments the presentation's consecutive-failure
+    /// streak. An inner contained recovery exposes the current streak but
+    /// leaves it unchanged.
     ///
     /// Both panic text and the text rendering of a pipeline error pass
     /// through this realm's [`FrameFailureDetail`] policy before tracing.
@@ -942,14 +945,23 @@ impl UiRealm {
     /// borrow is held while embedder code runs; see
     /// [`FrameFailureHandler`]'s doc for the re-entrancy contract it must
     /// still honor (it runs mid-frame, inside the pump).
-    fn report_frame_failure(&self, presentation: &PresentationState, kind: FrameFailureKind) {
-        let consecutive_failures = presentation.note_frame_failure();
+    fn report_frame_failure(
+        &self,
+        presentation: &PresentationState,
+        disposition: FailureDisposition,
+        kind: FrameFailureKind,
+    ) {
+        let consecutive_failures = match disposition {
+            FailureDisposition::FrameDropped => presentation.note_frame_failure(),
+            FailureDisposition::Contained => presentation.frame_failure_streak(),
+        };
         let report = FrameFailureReport {
             address: flui_foundation::PresentationAddress {
                 realm_id: self.realm_id,
                 presentation_id: presentation.id(),
             },
             kind,
+            disposition,
             consecutive_failures,
         };
         match &report.kind {
@@ -982,6 +994,26 @@ impl UiRealm {
                      siblings keep framing, last presented frame is retained"
                 );
             }
+            FrameFailureKind::RecoveredPanic {
+                at,
+                view_type_id,
+                hook,
+                message,
+                internal_invariant,
+            } => {
+                tracing::error!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        report.address.presentation_id.as_u64(),
+                    realm_id = report.address.realm_id.as_u64(),
+                    consecutive_failures,
+                    internal_invariant,
+                    ?at,
+                    ?view_type_id,
+                    ?hook,
+                    panic_message = %message,
+                    "lifecycle panic contained; frame continued for this presentation"
+                );
+            }
         }
         let handler = self.frame_failure_handler.borrow().clone();
         if let Some(handler) = handler {
@@ -1005,11 +1037,9 @@ impl UiRealm {
             // future delivery is individually contained (one call per
             // report, never a retry loop), and a transiently-broken
             // handler keeps receiving reports once it stops panicking.
-            // Automatic disarming after repeated handler panics was
-            // considered and rejected for this slice: it would silently
-            // cut off the embedder's failure feed on the strength of a
-            // heuristic, which is the "silent skip" shape this route
-            // exists to avoid.
+            // Automatic disarming would silently cut off the embedder's
+            // failure feed on the strength of a heuristic, which is the
+            // "silent skip" shape this route exists to avoid.
             if catch_unwind(AssertUnwindSafe(|| handler.call(&report))).is_err() {
                 tracing::error!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } =
@@ -2429,18 +2459,36 @@ impl UiRealm {
             // NOT re-established by unwinding is named honestly in
             // ADR-0048's consistency audit; nothing here claims full
             // transactionality of mid-segment mutations.
-            let result = match catch_unwind(AssertUnwindSafe(|| {
-                self.draw_frame_for_presentation(presentation, constraints)
-            })) {
-                Ok(outcome) => {
-                    if !matches!(outcome, FramePaintOutcome::Errored) {
-                        // The segment completed without failing (Painted or
-                        // a clean Idle): the next failure starts a fresh
-                        // streak. An Errored outcome already bumped the
-                        // streak inside `draw_frame_for_presentation`.
-                        presentation.reset_frame_failure_streak();
-                    }
+            let attempt = catch_unwind(AssertUnwindSafe(|| {
+                Self::draw_frame_for_presentation(presentation, constraints)
+            }));
+
+            // Drain exactly once after the entire attempt, outside the
+            // catch. This includes recoveries produced by the layout
+            // fixpoint and post-pipeline lazy service, even when later tail
+            // or scene work unwinds. Vec order is the recovery order.
+            for recovered in presentation.widgets().take_recovered_panics() {
+                let kind = self
+                    .frame_failure_detail
+                    .get()
+                    .recovered_panic_kind(recovered);
+                self.report_frame_failure(presentation, FailureDisposition::Contained, kind);
+            }
+
+            let result = match attempt {
+                Ok(Ok(outcome)) => {
+                    // A terminal clean result resets only after every
+                    // contained report from this attempt was delivered.
+                    presentation.reset_frame_failure_streak();
                     outcome
+                }
+                Ok(Err(error)) => {
+                    self.report_frame_failure(
+                        presentation,
+                        FailureDisposition::FrameDropped,
+                        FrameFailureKind::Pipeline { error },
+                    );
+                    FramePaintOutcome::Errored
                 }
                 Err(payload) => {
                     let failed_phase = presentation.segment_phase();
@@ -2459,6 +2507,7 @@ impl UiRealm {
                         self.frame_failure_detail.get().panic_text(&*payload);
                     self.report_frame_failure(
                         presentation,
+                        FailureDisposition::FrameDropped,
                         FrameFailureKind::SegmentPanic {
                             message,
                             phase: failed_phase,
@@ -2530,10 +2579,9 @@ impl UiRealm {
     /// (skip here, `Idle` there — same outcome, cheaper), or either finds
     /// real work and the segment runs exactly as it always did.
     fn draw_frame_for_presentation(
-        &self,
         presentation: &PresentationState,
         constraints: BoxConstraints,
-    ) -> FramePaintOutcome {
+    ) -> Result<FramePaintOutcome, flui_rendering::RenderError> {
         presentation.enter_segment_phase(SegmentPhase::Build);
 
         #[cfg(test)]
@@ -2568,8 +2616,7 @@ impl UiRealm {
                 // as one pair before semantics runs. A semantics error must
                 // retain both so the retry cannot combine a retained tree
                 // with an empty or newer registry.
-                self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
-                return FramePaintOutcome::Errored;
+                return Err(error);
             }
         };
 
@@ -2606,9 +2653,9 @@ impl UiRealm {
             );
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
-            FramePaintOutcome::Painted(scene)
+            Ok(FramePaintOutcome::Painted(scene))
         } else {
-            FramePaintOutcome::Idle
+            Ok(FramePaintOutcome::Idle)
         }
     }
 
@@ -3659,6 +3706,10 @@ mod frame_commit_state_tests;
 #[cfg(test)]
 #[path = "ui_realm/frame_failure_detail_tests.rs"]
 mod frame_failure_detail_tests;
+
+#[cfg(test)]
+#[path = "ui_realm/frame_failure_recovery_tests.rs"]
+mod frame_failure_recovery_tests;
 
 #[cfg(test)]
 mod tests {
@@ -8427,12 +8478,13 @@ mod tests {
             let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
             let b_layer_tree_before = realm.enter(|realm| {
                 let b = realm.presentations.get(b_id).expect("B installed");
-                match realm.draw_frame_for_presentation(b, constraints) {
-                    FramePaintOutcome::Painted(scene) => format!("{:?}", scene.layer_tree()),
-                    FramePaintOutcome::Idle => panic!("B's first frame must paint, got Idle"),
-                    FramePaintOutcome::Errored => {
-                        panic!("B's first frame must paint, got Errored")
+                match UiRealm::draw_frame_for_presentation(b, constraints) {
+                    Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.layer_tree()),
+                    Ok(FramePaintOutcome::Idle) => panic!("B's first frame must paint, got Idle"),
+                    Ok(FramePaintOutcome::Errored) => {
+                        panic!("draw_frame_for_presentation never returns Ok(Errored)")
                     }
+                    Err(error) => panic!("B's first frame failed: {error}"),
                 }
             });
 
@@ -8457,14 +8509,15 @@ mod tests {
                         owner.mark_needs_paint(root_id);
                     }
                 });
-                match realm.draw_frame_for_presentation(b, constraints) {
-                    FramePaintOutcome::Painted(scene) => format!("{:?}", scene.layer_tree()),
-                    FramePaintOutcome::Idle => {
+                match UiRealm::draw_frame_for_presentation(b, constraints) {
+                    Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.layer_tree()),
+                    Ok(FramePaintOutcome::Idle) => {
                         panic!("B's post-A-close frame must still paint, got Idle")
                     }
-                    FramePaintOutcome::Errored => {
-                        panic!("B's post-A-close frame must still paint, got Errored")
+                    Ok(FramePaintOutcome::Errored) => {
+                        panic!("draw_frame_for_presentation never returns Ok(Errored)")
                     }
+                    Err(error) => panic!("B's post-A-close frame failed: {error}"),
                 }
             });
 
@@ -8549,6 +8602,7 @@ mod tests {
         struct SeenFailure {
             presentation: PresentationId,
             realm: RealmId,
+            disposition: FailureDisposition,
             consecutive: u32,
             kind: SeenKind,
         }
@@ -8562,6 +8616,9 @@ mod tests {
             },
             Pipeline {
                 error: String,
+            },
+            RecoveredPanic {
+                hook: flui_view::LifecycleHook,
             },
         }
 
@@ -8582,10 +8639,14 @@ mod tests {
                     FrameFailureKind::Pipeline { error } => SeenKind::Pipeline {
                         error: error.to_string(),
                     },
+                    FrameFailureKind::RecoveredPanic { hook, .. } => {
+                        SeenKind::RecoveredPanic { hook: *hook }
+                    }
                 };
                 sink.lock().expect("handler mutex").push(SeenFailure {
                     presentation: report.address.presentation_id,
                     realm: report.address.realm_id,
+                    disposition: report.disposition,
                     consecutive: report.consecutive_failures,
                     kind,
                 });
@@ -8738,6 +8799,7 @@ mod tests {
                 assert_eq!(seen.len(), 1, "exactly one failure report: {seen:?}");
                 assert_eq!(seen[0].presentation, a_id, "the report must name A");
                 assert_eq!(seen[0].realm, realm.realm_id());
+                assert_eq!(seen[0].disposition, FailureDisposition::FrameDropped);
                 assert_eq!(seen[0].consecutive, 1);
                 match &seen[0].kind {
                     SeenKind::SegmentPanic {
@@ -8770,9 +8832,7 @@ mod tests {
                             "an application panic carries no BUG: prefix"
                         );
                     }
-                    other @ SeenKind::Pipeline { .. } => {
-                        panic!("expected SegmentPanic, got {other:?}")
-                    }
+                    other => panic!("expected SegmentPanic, got {other:?}"),
                 }
             }
 
@@ -8937,6 +8997,7 @@ mod tests {
             let seen = seen.lock().expect("mutex");
             assert_eq!(seen.len(), 1, "one pipeline failure report: {seen:?}");
             assert_eq!(seen[0].presentation, realm.presentation_id());
+            assert_eq!(seen[0].disposition, FailureDisposition::FrameDropped);
             assert_eq!(seen[0].consecutive, 1);
             match &seen[0].kind {
                 SeenKind::Pipeline { error } => {
@@ -8945,7 +9006,7 @@ mod tests {
                         "the typed report must carry the pipeline's own error; got {error:?}"
                     );
                 }
-                other @ SeenKind::SegmentPanic { .. } => panic!("expected Pipeline, got {other:?}"),
+                other => panic!("expected Pipeline, got {other:?}"),
             }
         }
 
@@ -9049,7 +9110,7 @@ mod tests {
                         "a BUG:-prefixed payload must be classified as an internal invariant"
                     );
                 }
-                other @ SeenKind::Pipeline { .. } => panic!("expected SegmentPanic, got {other:?}"),
+                other => panic!("expected SegmentPanic, got {other:?}"),
             }
         }
 
@@ -9171,6 +9232,7 @@ mod tests {
                 sink.lock().expect("mutex").push(match &report.kind {
                     FrameFailureKind::SegmentPanic { .. } => "segment_panic",
                     FrameFailureKind::Pipeline { .. } => "pipeline",
+                    FrameFailureKind::RecoveredPanic { .. } => "recovered_panic",
                 });
                 panic!("FrameFailureHandler — intentional embedder-bug test panic");
             })));
