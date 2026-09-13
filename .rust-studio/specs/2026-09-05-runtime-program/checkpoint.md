@@ -11,12 +11,14 @@ unit boundary; read it back against the code before trusting any line.
   dominant defect class — see `AGENTS.md` §Definition of Done), then the
   Runtime.1 ladder (#559 raster lane → #560 host-driven runtime → #561
   transactional recovery), then measurement.
-- The 2026-08-01 runtime study's "critical contradictions" 1–7 are closed on
-  `main` (#551–#556 shipped). In the live remainder, #557 executors are
-  shipped, #558 lifecycles remain partially open, #559 raster lane is
-  inline-adopted but not yet threaded (see Next units), #561 transactional
-  recovery is closed on `main` by PRs #1024–#1033, and platform verification
-  for Win32/AppKit is still type-check-only — #653/#654.
+- The 2026-08-01 runtime study's "critical contradictions" 1–7 are no longer
+  blocking the Linux-shipped path on `main`: #552–#556 shipped, #557 executors
+  shipped, and #551's owner-capability/proxy-command slices are shipped while
+  its Android-gated slice 3 remains open in the issue. In the live remainder,
+  #558 lifecycles remain partially open, #559 raster lane is inline-adopted but
+  not yet threaded (see Next units), #561 transactional recovery is closed on
+  `main` by PRs #1024–#1033, and platform verification for Win32/AppKit is
+  still type-check-only — #653/#654.
 
 ## Unit 1 — #919 programmatic close never exits (MERGED — PR #922, main 59290266)
 
