@@ -35,7 +35,7 @@ use flui_semantics::{
     semantics_action_for,
 };
 use flui_types::HapticFeedback;
-use flui_view::{GlobalKeyScope, WidgetsBinding};
+use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
 use web_time::{Duration, Instant};
 
 use super::SegmentPhase;
@@ -265,7 +265,7 @@ pub(crate) struct PresentationState {
     frame_failure_streak: Cell<u32>,
     /// Last frame segment entered for this presentation. Written before the
     /// segment's probe and work so the value remains unwind-correct.
-    segment_phase: Cell<SegmentPhase>,
+    segment_phase: FramePhaseMarker<SegmentPhase>,
     /// Test-only fault injection addressed to one [`SegmentPhase`]. It runs
     /// immediately after that phase is stored and before its matching work,
     /// so a panic reaches the realm's per-presentation `catch_unwind` with
@@ -557,7 +557,7 @@ impl PresentationState {
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
             frame_failure_streak: Cell::new(0),
-            segment_phase: Cell::new(SegmentPhase::Build),
+            segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
             #[cfg(test)]
@@ -618,7 +618,7 @@ impl PresentationState {
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
             frame_failure_streak: Cell::new(0),
-            segment_phase: Cell::new(SegmentPhase::Build),
+            segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
             #[cfg(test)]
@@ -986,6 +986,12 @@ impl PresentationState {
         *self.segment_probe.borrow_mut() = probe.map(|callback| SegmentProbe { phase, callback });
     }
 
+    /// Arm the data-only one-shot fault at the build-to-finalize boundary.
+    #[cfg(test)]
+    pub(crate) fn arm_finalize_phase_panic(&self) {
+        self.segment_phase.arm_test_panic_once();
+    }
+
     /// Enter a frame segment, then run its installed test probe, if any.
     ///
     /// The phase write deliberately precedes the probe and has no restoring
@@ -1005,6 +1011,13 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn segment_phase(&self) -> SegmentPhase {
         self.segment_phase.get()
+    }
+
+    /// Data-only marker passed to the widget binding at the exact
+    /// build-to-finalize boundary.
+    #[must_use]
+    pub(crate) fn segment_phase_marker(&self) -> &FramePhaseMarker<SegmentPhase> {
+        &self.segment_phase
     }
 
     /// Record that this presentation's build+layout+paint segment ran. See

@@ -1679,8 +1679,8 @@ impl UiRealm {
     /// Forces `presentation` to repaint on its next pump segment even
     /// though nothing in its widget tree itself changed — for a
     /// renderer-side reason the build/layout/paint pipeline has no way to
-    /// observe on its own. Three production callers today, each resolving
-    /// `presentation` from what only THAT caller knows:
+    /// observe on its own. Every caller resolves `presentation` from the
+    /// failure or recovery event it alone owns:
     ///
     /// - [`Self::mark_primary_needs_full_repaint`] (below), for the
     ///   pre-frame GPU device-recovery path (`runner.rs`'s
@@ -2517,9 +2517,10 @@ impl UiRealm {
         // cleanup: lazy child service below can produce records after the
         // preceding frame's build phase, leaving no pending build to make a
         // conditional call here run on the next frame.
-        presentation.widgets().draw_frame_with_before_finalize(|| {
-            presentation.enter_segment_phase(SegmentPhase::Finalize);
-        });
+        presentation.widgets().draw_frame_with_phase_marker(
+            presentation.segment_phase_marker(),
+            SegmentPhase::Finalize,
+        );
 
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
         // typestate-driven orchestrator.
@@ -2534,13 +2535,10 @@ impl UiRealm {
         {
             Ok(layer_tree) => layer_tree,
             Err(error) => {
-                // Clear any registry produced before the structured error;
-                // this cleanup remains part of Pipeline, not the successful
-                // post-pipeline tail.
-                presentation
-                    .renderer()
-                    .root_pipeline_owner()
-                    .with_mut(PipelineOwner::take_link_registry);
+                // Paint commits the layer tree and leader/follower registry
+                // as one pair before semantics runs. A semantics error must
+                // retain both so the retry cannot combine a retained tree
+                // with an empty or newer registry.
                 self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
                 return FramePaintOutcome::Errored;
             }
@@ -3605,6 +3603,10 @@ impl Drop for UiRealm {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ui_realm/frame_failure_phase_tests.rs"]
+mod frame_failure_phase_tests;
 
 #[cfg(test)]
 mod tests {
@@ -8785,218 +8787,6 @@ mod tests {
                 backend.render_scene_calls, 1,
                 "the failed frame must not reach render_scene at all — retention means \
                  the previous submission stands, not that a zero/blank scene replaced it"
-            );
-        }
-
-        /// AC8: a panic after the pipeline has consumed paint dirtiness must
-        /// re-dirty that exact presentation at the containment boundary. A
-        /// wake alone opens the segment gate but gives the pipeline nothing
-        /// to reproduce, so the retry would otherwise settle as `Idle`.
-        #[test]
-        fn a_tail_panic_repaints_and_presents_on_the_automatic_retry() {
-            fn mount() -> UiRealm {
-                let realm = UiRealm::for_test();
-                realm
-                    .attach_root_widget(&SizedBox::new(10.0, 10.0))
-                    .expect("root attaches");
-                realm
-            }
-
-            fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> TestRasterBackend {
-                TestRasterBackend::new(move |_, scene| {
-                    submitted
-                        .lock()
-                        .expect("scene capture mutex")
-                        .push(format!("{:?}", scene.layer_tree()));
-                    Ok(true)
-                })
-            }
-
-            let realm = mount();
-            let probe_armed = Rc::new(Cell::new(true));
-            let armed = Rc::clone(&probe_armed);
-            realm.presentations.primary().set_segment_probe(
-                SegmentPhase::Tail,
-                Some(Box::new(move || {
-                    assert!(
-                        !armed.replace(false),
-                        "tail probe — intentional one-shot panic"
-                    );
-                })),
-            );
-            let submitted = Arc::new(StdMutex::new(Vec::new()));
-            let mut backend = capturing_backend(Arc::clone(&submitted));
-
-            let first_presented = with_quiet_panics(|| {
-                catch_unwind(AssertUnwindSafe(|| {
-                    realm.render_frame_entered(&mut backend)
-                }))
-            })
-            .expect("the Tail panic must be contained");
-            assert!(!first_presented, "the failed attempt must not present");
-            assert_eq!(backend.render_scene_calls, 0);
-            assert_eq!(realm.frames_rendered(), 0);
-            assert_eq!(
-                realm.presentations.primary().segment_phase(),
-                SegmentPhase::Tail,
-                "the last-entered phase must survive unwind"
-            );
-            assert!(realm.needs_redraw(), "the failure must arm a retry");
-
-            let second_presented = realm.render_frame_entered(&mut backend);
-            assert!(
-                second_presented,
-                "the automatic retry must repaint and present without external dirtiness"
-            );
-            assert_eq!(backend.render_scene_calls, 1);
-            assert_eq!(realm.frames_rendered(), 1);
-            assert_eq!(
-                realm.presentations.primary().segment_phase(),
-                SegmentPhase::Scene
-            );
-
-            let fresh = mount();
-            let expected = Arc::new(StdMutex::new(Vec::new()));
-            let mut fresh_backend = capturing_backend(Arc::clone(&expected));
-            assert!(fresh.render_frame_entered(&mut fresh_backend));
-            assert_eq!(
-                *submitted.lock().expect("scene capture mutex"),
-                *expected.lock().expect("fresh scene capture mutex"),
-                "the retried scene must equal an identical fresh realm's scene"
-            );
-        }
-
-        /// Every segment publishes its identity before either its probe or
-        /// work begins. The value survives unwind, and a clean retry can
-        /// progress through Scene without test-side repair.
-        #[test]
-        fn every_segment_phase_survives_unwind_and_retries_to_scene() {
-            let phases = [
-                SegmentPhase::Build,
-                SegmentPhase::Finalize,
-                SegmentPhase::Pipeline,
-                SegmentPhase::Tail,
-                SegmentPhase::Scene,
-            ];
-
-            for phase in phases {
-                let realm = UiRealm::for_test();
-                realm
-                    .attach_root_widget(&SizedBox::new(10.0, 10.0))
-                    .expect("root attaches");
-                let probe_armed = Rc::new(Cell::new(true));
-                let armed = Rc::clone(&probe_armed);
-                realm.presentations.primary().set_segment_probe(
-                    phase,
-                    Some(Box::new(move || {
-                        assert!(
-                            !armed.replace(false),
-                            "phase probe — intentional one-shot panic"
-                        );
-                    })),
-                );
-                let mut backend = TestRasterBackend::always_presents();
-
-                let first_presented = with_quiet_panics(|| {
-                    catch_unwind(AssertUnwindSafe(|| {
-                        realm.render_frame_entered(&mut backend)
-                    }))
-                })
-                .expect("the phase panic must be contained");
-                assert!(!first_presented, "{phase:?} failure must not present");
-                assert_eq!(
-                    realm.presentations.primary().segment_phase(),
-                    phase,
-                    "the unwound phase must remain stored"
-                );
-
-                assert!(
-                    realm.render_frame_entered(&mut backend),
-                    "{phase:?} must recover on the automatic retry"
-                );
-                assert_eq!(
-                    realm.presentations.primary().segment_phase(),
-                    SegmentPhase::Scene,
-                    "a clean retry must reach Scene"
-                );
-            }
-        }
-
-        /// Exact-addressing discriminator: a later sibling may become the
-        /// pump's producer after A fails, but must not receive A's repaint.
-        #[test]
-        fn a_tail_failure_repaints_a_even_when_later_b_paints_in_the_same_pump() {
-            let mut realm = UiRealm::for_test();
-            let a_id = realm.presentation_id();
-            let b_id = realm.install_second_presentation_for_test();
-            realm
-                .attach_root_widget(&SizedBox::new(10.0, 10.0))
-                .expect("A attaches");
-            realm
-                .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
-                .expect("B attaches");
-
-            let probe_armed = Rc::new(Cell::new(true));
-            let armed = Rc::clone(&probe_armed);
-            realm.presentations.primary().set_segment_probe(
-                SegmentPhase::Tail,
-                Some(Box::new(move || {
-                    assert!(
-                        !armed.replace(false),
-                        "A Tail probe — intentional one-shot panic"
-                    );
-                })),
-            );
-            let mut backend = TestRasterBackend::always_presents();
-
-            assert!(
-                with_quiet_panics(|| {
-                    catch_unwind(AssertUnwindSafe(|| {
-                        realm.render_frame_entered(&mut backend)
-                    }))
-                })
-                .expect("A's Tail panic must be contained"),
-                "later B must still paint and present in the failing pump"
-            );
-            assert_eq!(backend.render_scene_calls, 1, "only B submits in pump 1");
-            assert_eq!(
-                realm
-                    .presentations
-                    .get(a_id)
-                    .expect("A installed")
-                    .frames_rendered(),
-                0
-            );
-            assert_eq!(
-                realm
-                    .presentations
-                    .get(b_id)
-                    .expect("B installed")
-                    .frames_rendered(),
-                1
-            );
-
-            assert!(
-                realm.render_frame_entered(&mut backend),
-                "A must repaint and present on the automatic retry"
-            );
-            assert_eq!(backend.render_scene_calls, 2, "pump 2 submits only A");
-            assert_eq!(
-                realm
-                    .presentations
-                    .get(a_id)
-                    .expect("A installed")
-                    .frames_rendered(),
-                1
-            );
-            assert_eq!(
-                realm
-                    .presentations
-                    .get(b_id)
-                    .expect("B installed")
-                    .frames_rendered(),
-                1,
-                "B must not receive A's repaint mark"
             );
         }
 

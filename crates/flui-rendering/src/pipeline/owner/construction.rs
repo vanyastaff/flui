@@ -166,7 +166,30 @@ impl PipelineOwner<Idle> {
     /// subsequent frame on the success and error paths alike.
     #[must_use = "dropping the returned PipelineOwner<Idle> discards the pipeline handle; thread it back into the next frame"]
     pub fn run_frame(
+        self,
+    ) -> (
+        PipelineOwner<Idle>,
+        crate::error::RenderResult<Option<LayerTree>>,
+    ) {
+        self.run_frame_impl(None)
+    }
+
+    /// Run a frame whose semantics phase returns the supplied error after
+    /// paint has completed. Narrow same-module regression seam.
+    #[cfg(test)]
+    fn run_frame_with_semantics_error_for_test(
+        self,
+        error: crate::error::RenderError,
+    ) -> (
+        PipelineOwner<Idle>,
+        crate::error::RenderResult<Option<LayerTree>>,
+    ) {
+        self.run_frame_impl(Some(error))
+    }
+
+    fn run_frame_impl(
         mut self,
+        semantics_error_for_test: Option<crate::error::RenderError>,
     ) -> (
         PipelineOwner<Idle>,
         crate::error::RenderResult<Option<LayerTree>>,
@@ -196,7 +219,11 @@ impl PipelineOwner<Idle> {
 
         // Semantics
         let mut owner = owner.into_semantics();
-        if let Err(e) = owner.run_semantics() {
+        let semantics_result = match semantics_error_for_test {
+            Some(error) => Err(error),
+            None => owner.run_semantics(),
+        };
+        if let Err(e) = semantics_result {
             // Semantics phase has no `into_idle` because the transition
             // to <Idle> goes via `finish`. Use `finish` to recover the
             // owner for the error path. The painted tree remains in
@@ -207,5 +234,96 @@ impl PipelineOwner<Idle> {
 
         let layer_tree = owner.take_layer_tree();
         (owner.finish(), Ok(layer_tree))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_layer::LayerLink;
+    use flui_tree::Leaf;
+    use flui_types::{Offset, Size, geometry::px, painting::Alignment};
+
+    use super::*;
+    use crate::{
+        constraints::BoxConstraints,
+        context::{BoxLayoutContext, PaintCx},
+        parent_data::BoxParentData,
+        protocol::BoxProtocol,
+        traits::{RenderBox, RenderObject},
+    };
+
+    /// Leaf whose paint commits a non-empty, linked leader/follower pair.
+    #[derive(Debug)]
+    struct LinkedPaintBox {
+        link: LayerLink,
+    }
+
+    impl flui_foundation::Diagnosticable for LinkedPaintBox {}
+
+    impl RenderBox for LinkedPaintBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(Size::new(px(20.0), px(20.0)))
+        }
+
+        fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+            let size = ctx.size();
+            ctx.with_leader(self.link, size, |ctx| {
+                ctx.with_follower(
+                    self.link,
+                    size,
+                    Offset::ZERO,
+                    true,
+                    Alignment::TOP_LEFT,
+                    Alignment::TOP_LEFT,
+                    |_| {},
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn semantics_error_retains_the_painted_tree_and_its_non_empty_link_registry() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.insert(Box::new(LinkedPaintBox {
+            link: LayerLink::new(),
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(20.0), px(20.0)))));
+
+        let (owner, result) = owner.run_frame_with_semantics_error_for_test(
+            crate::error::RenderError::semantics("intentional transient test error"),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::RenderError::SemanticsError { .. })
+            ),
+            "the injected error must escape from the semantics stage"
+        );
+        let retained_tree = format!(
+            "{:?}",
+            owner
+                .layer_tree()
+                .expect("painted tree must survive semantics failure")
+        );
+        let retained_registry = owner
+            .link_registry()
+            .expect("painted link registry must survive semantics failure");
+        assert_eq!(retained_registry.leader_count(), 1);
+        assert_eq!(retained_registry.follower_count(), 1);
+
+        let (mut owner, retry) = owner.run_frame();
+        let retried_tree = retry
+            .expect("the retry must complete")
+            .expect("the retained painted tree must be returned");
+        let retried_registry = owner
+            .take_link_registry()
+            .expect("the matching retained registry must be returned");
+        assert_eq!(format!("{retried_tree:?}"), retained_tree);
+        assert_eq!(retried_registry.leader_count(), 1);
+        assert_eq!(retried_registry.follower_count(), 1);
     }
 }
