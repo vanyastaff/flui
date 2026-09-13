@@ -12,11 +12,11 @@ unit boundary; read it back against the code before trusting any line.
   Runtime.1 ladder (#559 raster lane → #560 host-driven runtime → #561
   transactional recovery), then measurement.
 - The 2026-08-01 runtime study's "critical contradictions" 1–7 are closed on
-  `main` (#551–#556 shipped); 8–12 are the live remainder (#557 executors
-  partially, #558 lifecycles partially, #559 raster lane inline-adopted but not yet
-  threaded (see Next units),
-  #561 recovery not started, platform verification for Win32/AppKit still
-  type-check-only — #653/#654).
+  `main` (#551–#556 shipped). In the live remainder, #557 executors are
+  shipped, #558 lifecycles remain partially open, #559 raster lane is
+  inline-adopted but not yet threaded (see Next units), #561 transactional
+  recovery is closed on `main` by PRs #1024–#1033, and platform verification
+  for Win32/AppKit is still type-check-only — #653/#654.
 
 ## Unit 1 — #919 programmatic close never exits (MERGED — PR #922, main 59290266)
 
@@ -155,8 +155,14 @@ controlled reproduction exists:
    `raster-pacing-baseline-precedes-async-surface-acquire` and
    `raster-wake-relay-precedes-thread-spawn` (both `partial`) — the baseline
    measurement on the serial lane, then the wake relay, then the thread.
-2. #561 — transactional frame-failure containment (last-known-good commit
-   boundary, per the runtime study §12).
+2. ~~#561 — transactional frame-failure containment~~ — **DONE, PRs
+   #1024–#1033.** The retained scope is closed: per-child build/reconcile and
+   removal-hook containment, last-good retry/commit state, held pointer input
+   until commit, profile-aware panic text, and the last-good-vs-zero rendering
+   fixture are all verified in
+   `.rust-studio/specs/561-transactional-frame-failure/verify-report.md`.
+   Residuals deliberately filed out of #561 are tracked as #1031 (semantics
+   candidate/commit) and #1032 (paint poison budget).
 3. Baseline measurements (p50/p95/p99 frame time, input-to-present, idle
    wakeups) on the six workloads named in the mandate, before any
    optimisation claim.
