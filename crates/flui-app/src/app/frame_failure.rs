@@ -19,8 +19,104 @@
 //! window's frame failed and decide its own recovery (ignore and let the
 //! armed retry run, close the window, or restart the app).
 
+use std::any::Any;
+use std::fmt;
+
 use flui_foundation::PresentationAddress;
+use flui_foundation::panic::{is_internal_invariant, payload_text};
 use flui_rendering::RenderError;
+
+/// Panic text made safe for the application's selected diagnostics policy.
+///
+/// `Verbatim` retains the exact string supplied by the panic site. `Redacted`
+/// retains no source text and formats as [`flui_log::REDACTED_VALUE`].
+///
+/// # Examples
+///
+/// ```
+/// use flui_app::PanicText;
+///
+/// assert_eq!(PanicText::Verbatim("boom".into()).to_string(), "boom");
+/// assert_eq!(PanicText::Redacted.to_string(), flui_log::REDACTED_VALUE);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PanicText {
+    /// The source text is retained exactly.
+    Verbatim(Box<str>),
+    /// The source text is not retained.
+    Redacted,
+}
+
+impl fmt::Display for PanicText {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Verbatim(message) => formatter.write_str(message),
+            Self::Redacted => formatter.write_str(flui_log::REDACTED_VALUE),
+        }
+    }
+}
+
+/// How much source detail frame-failure diagnostics retain.
+///
+/// This policy applies both to escaped panic payloads and to the text form
+/// of typed pipeline errors. The typed [`RenderError`] itself remains in a
+/// [`FrameFailureReport`] so a registered handler can inspect its variants
+/// even when text diagnostics are redacted.
+///
+/// # Examples
+///
+/// ```
+/// use flui_app::{AppConfig, FrameFailureDetail};
+///
+/// let config = AppConfig::new().with_frame_failure_detail(FrameFailureDetail::Redacted);
+/// assert_eq!(config.frame_failure_detail, FrameFailureDetail::Redacted);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FrameFailureDetail {
+    /// Retain no unstructured failure text.
+    Redacted,
+    /// Retain the source failure text verbatim.
+    Verbatim,
+}
+
+impl Default for FrameFailureDetail {
+    fn default() -> Self {
+        if cfg!(debug_assertions) {
+            Self::Verbatim
+        } else {
+            Self::Redacted
+        }
+    }
+}
+
+impl FrameFailureDetail {
+    /// Materialize text only for a policy that is allowed to retain it.
+    fn materialize(self, verbatim: impl FnOnce() -> Box<str>) -> PanicText {
+        match self {
+            Self::Redacted => PanicText::Redacted,
+            Self::Verbatim => PanicText::Verbatim(verbatim()),
+        }
+    }
+
+    /// Classify a raw panic payload before applying the retention policy.
+    pub(crate) fn panic_text(self, payload: &(dyn Any + Send)) -> (PanicText, bool) {
+        let Some(raw_message) = payload_text(payload) else {
+            return (PanicText::Redacted, false);
+        };
+        let internal_invariant = is_internal_invariant(raw_message);
+        (
+            self.materialize(|| Box::<str>::from(raw_message)),
+            internal_invariant,
+        )
+    }
+
+    /// Apply the same retention policy to a typed pipeline error's text.
+    pub(crate) fn pipeline_text(self, error: &RenderError) -> PanicText {
+        self.materialize(|| error.to_string().into_boxed_str())
+    }
+}
 
 /// The last frame segment entered for one presentation.
 ///
@@ -60,16 +156,16 @@ pub enum FrameFailureKind {
     /// `RenderError::Poisoned` wrapper) did not apply, e.g. a panicking
     /// `ViewState::dispose` during tree finalization.
     SegmentPanic {
-        /// The panic payload rendered to text, when the payload was a
-        /// string (`panic!("…")`); `None` for non-string payloads.
+        /// The panic payload text allowed by the configured
+        /// [`FrameFailureDetail`] policy.
         ///
-        /// May contain anything user code interpolated into its panic
-        /// message. The `tracing` emission of this value is a plain
-        /// string field, which FLUI's device sinks redact by default
-        /// (see `flui-log`'s private-by-default field classification);
-        /// an embedder handler receives it verbatim and owns its further
-        /// handling.
-        message: Option<Box<str>>,
+        /// [`PanicText::Redacted`] retains no raw payload. A registered
+        /// handler receives this same policy-filtered value; selecting
+        /// [`FrameFailureDetail::Verbatim`] is the explicit opt-in to retain
+        /// and deliver string payloads.
+        message: PanicText,
+        /// The last frame segment entered before the panic escaped.
+        phase: SegmentPhase,
         /// Whether the payload carries the `BUG:` prefix of
         /// `docs/PANIC-POLICY.md`'s invariant convention — a framework
         /// invariant violation rather than an application-code failure.
@@ -83,7 +179,10 @@ pub enum FrameFailureKind {
     /// failed node's dirty state is retained by the pipeline for the
     /// armed retry.
     Pipeline {
-        /// The pipeline's own typed error.
+        /// The pipeline's own typed error. The realm applies
+        /// [`FrameFailureDetail`] only when formatting this error for
+        /// `tracing`; a registered handler retains the typed value and can
+        /// inspect its variants without rendering private text.
         error: RenderError,
     },
 }
@@ -147,5 +246,69 @@ impl std::fmt::Debug for FrameFailureHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The wrapped closure is opaque; identity is all Debug can say.
         f.debug_tuple("FrameFailureHandler").finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{FrameFailureDetail, PanicText};
+
+    #[test]
+    fn panic_text_display_obeys_the_selected_detail() {
+        assert_eq!(
+            PanicText::Verbatim("panic detail".into()).to_string(),
+            "panic detail"
+        );
+        assert_eq!(PanicText::Redacted.to_string(), flui_log::REDACTED_VALUE);
+    }
+
+    #[test]
+    fn frame_failure_detail_default_matches_the_build_profile() {
+        let expected = if cfg!(debug_assertions) {
+            FrameFailureDetail::Verbatim
+        } else {
+            FrameFailureDetail::Redacted
+        };
+        assert_eq!(FrameFailureDetail::default(), expected);
+    }
+
+    #[test]
+    fn pipeline_text_uses_the_same_privacy_gate_as_panics() {
+        const SENTINEL: &str = "private-pipeline-sentinel";
+        let error = flui_rendering::RenderError::semantics(SENTINEL);
+
+        let redacted = FrameFailureDetail::Redacted.pipeline_text(&error);
+        assert_eq!(redacted, PanicText::Redacted);
+        assert_eq!(redacted.to_string(), flui_log::REDACTED_VALUE);
+        assert!(!redacted.to_string().contains(SENTINEL));
+
+        let verbatim = FrameFailureDetail::Verbatim.pipeline_text(&error);
+        assert!(
+            verbatim.to_string().contains(SENTINEL),
+            "verbatim pipeline diagnostics must retain the source error"
+        );
+    }
+
+    #[test]
+    fn redacted_policy_never_evaluates_the_text_materializer() {
+        let calls = AtomicUsize::new(0);
+        let text = FrameFailureDetail::Redacted.materialize(|| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Box::<str>::from("must not be retained")
+        });
+
+        assert_eq!(text, PanicText::Redacted);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn non_string_panic_payload_is_never_presented_as_invented_text() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(7_u32);
+        let (text, internal_invariant) = FrameFailureDetail::Verbatim.panic_text(payload.as_ref());
+
+        assert_eq!(text, PanicText::Redacted);
+        assert!(!internal_invariant);
     }
 }

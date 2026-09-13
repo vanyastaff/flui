@@ -1604,9 +1604,9 @@ mod realm_dispatch_tests {
     use super::super::secondary_window::{open_secondary_window, open_secondary_window_impl};
     use super::super::{install_close_request_wiring, request_presentation_close};
     use super::*;
-    use crate::app::AppConfig;
     use crate::app::raster_test_support::TestRasterBackend;
     use crate::app::runtime::{ExitPolicy, WindowPolicy};
+    use crate::app::{AppConfig, FrameFailureDetail};
 
     static_assertions::assert_impl_all!(PlatformToUi: Send);
 
@@ -3663,13 +3663,26 @@ mod realm_dispatch_tests {
         let (dispatcher_a, window_a, quit_calls, _clear_guard) =
             install_realm_a_with_exit_policy_and_quit_counter();
 
+        let config = AppConfig::default().with_frame_failure_detail(FrameFailureDetail::Redacted);
         let (dispatcher_b, window_b) =
-            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+            open_secondary_window_impl(config, WindowPolicy::SeparateRealms)
                 .expect("WindowPolicy::SeparateRealms must install a second realm cleanly")
                 .expect("headless open_window is always Ready, never Pending");
         assert_ne!(
             dispatcher_a.address.realm_id, dispatcher_b.address.realm_id,
             "SeparateRealms must install a genuinely distinct realm"
+        );
+        assert_eq!(
+            APP_RUNTIME.with(|slot| {
+                slot.borrow()
+                    .realms
+                    .get(&dispatcher_b.address.realm_id)
+                    .and_then(|realm_slot| realm_slot.realm.as_ref())
+                    .expect("secondary realm installed")
+                    .frame_failure_detail_for_test()
+            }),
+            FrameFailureDetail::Redacted,
+            "the Ready arm must carry the secondary config's detail policy into its new realm"
         );
 
         // Close A first, through its OWN real on_close (siblings survive)
@@ -3718,8 +3731,16 @@ mod realm_dispatch_tests {
         let (dispatcher_a, window_a, quit_calls, _clear_guard) =
             install_realm_a_with_exit_policy_and_quit_counter();
 
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(|realm| {
+                realm.set_frame_failure_detail(FrameFailureDetail::Redacted);
+            })),
+        )
+        .expect("primary realm accepts its detail policy");
+
         let (dispatcher_b, window_b) = open_secondary_window_impl(
-            AppConfig::default(),
+            AppConfig::default().with_frame_failure_detail(FrameFailureDetail::Verbatim),
             WindowPolicy::SharedRealm,
         )
         .expect("WindowPolicy::SharedRealm must install a second presentation into realm A cleanly")
@@ -3727,6 +3748,18 @@ mod realm_dispatch_tests {
         assert_eq!(
             dispatcher_a.address.realm_id, dispatcher_b.address.realm_id,
             "SharedRealm must route into the SAME realm as the primary"
+        );
+        assert_eq!(
+            APP_RUNTIME.with(|slot| {
+                slot.borrow()
+                    .realms
+                    .get(&dispatcher_a.address.realm_id)
+                    .and_then(|realm_slot| realm_slot.realm.as_ref())
+                    .expect("shared realm remains installed")
+                    .frame_failure_detail_for_test()
+            }),
+            FrameFailureDetail::Redacted,
+            "a secondary SharedRealm config must not override the existing realm policy"
         );
 
         // Close B (a live non-sole presentation) through its own real
@@ -3909,9 +3942,11 @@ mod realm_dispatch_tests {
             // Window B: the real subject of this test. `open_secondary_window`
             // must accept the Pending arm and return `None` instead of either
             // erroring or assuming `Ready`.
-            let opened =
-                open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
-                    .expect("the Pending arm must be accepted, not treated as an error");
+            let opened = open_secondary_window_impl(
+                AppConfig::default().with_frame_failure_detail(FrameFailureDetail::Redacted),
+                WindowPolicy::SeparateRealms,
+            )
+            .expect("the Pending arm must be accepted, not treated as an error");
             assert!(
                 opened.is_none(),
                 "a Pending open must return None -- the install completes asynchronously, \
@@ -3965,6 +4000,18 @@ mod realm_dispatch_tests {
             assert_ne!(
                 dispatcher_a.address.realm_id, dispatcher_b.address.realm_id,
                 "WindowPolicy::SeparateRealms must install a genuinely distinct realm"
+            );
+            assert_eq!(
+                APP_RUNTIME.with(|slot| {
+                    slot.borrow()
+                        .realms
+                        .get(&dispatcher_b.address.realm_id)
+                        .and_then(|realm_slot| realm_slot.realm.as_ref())
+                        .expect("pending completion installed the secondary realm")
+                        .frame_failure_detail_for_test()
+                }),
+                FrameFailureDetail::Redacted,
+                "the Pending arm must retain the requested detail policy until installation"
             );
 
             // Close B through a REAL platform close (`resolve_next`'s own

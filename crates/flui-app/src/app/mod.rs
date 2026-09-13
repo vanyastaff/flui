@@ -43,7 +43,10 @@ pub use execution::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
-pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport, SegmentPhase};
+pub use frame_failure::{
+    FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, PanicText,
+    SegmentPhase,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,

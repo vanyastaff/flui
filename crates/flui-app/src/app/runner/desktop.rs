@@ -205,6 +205,7 @@ where
         // per presentation either way; this only adds the embedder's
         // delivery.
         ui_realm.set_frame_failure_handler(config.frame_failure_handler.clone());
+        ui_realm.set_frame_failure_detail(config.frame_failure_detail);
 
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {

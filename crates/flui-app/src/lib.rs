@@ -76,7 +76,10 @@ pub use app::{
 // presentation-frame transaction boundary (ADR-0048). A failed frame is
 // contained to its own presentation; these types are how the embedder hears
 // about it.
-pub use app::{FrameFailureHandler, FrameFailureKind, FrameFailureReport, SegmentPhase};
+pub use app::{
+    FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, PanicText,
+    SegmentPhase,
+};
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).

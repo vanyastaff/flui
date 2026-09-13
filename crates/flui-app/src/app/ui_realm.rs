@@ -36,7 +36,6 @@ use flui_animation::Vsync;
 #[cfg(test)]
 use flui_engine::EngineError;
 use flui_engine::RasterBackend;
-use flui_foundation::panic::{is_internal_invariant, payload_text};
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::{FocusManager, GestureBinding, InteractionLane};
 use flui_layer::Scene;
@@ -59,7 +58,7 @@ use parking_lot::RwLock;
 
 use super::epoch::FrameCommitState;
 use super::frame_failure::{
-    FrameFailureHandler, FrameFailureKind, FrameFailureReport, SegmentPhase,
+    FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, SegmentPhase,
 };
 use super::presentation::{PresentationState, RealmCapabilities};
 use super::presentation_forest::PresentationForest;
@@ -530,6 +529,10 @@ pub(crate) struct UiRealm {
     /// never process-global; cloned out of the cell before every delivery
     /// so the callback runs with no realm borrow held.
     frame_failure_handler: RefCell<Option<FrameFailureHandler>>,
+    /// Realm-scoped policy for retaining unstructured frame-failure text.
+    /// Set once by the runner from `AppConfig`; a shared-realm secondary
+    /// presentation inherits this existing realm policy.
+    frame_failure_detail: Cell<FrameFailureDetail>,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
     _owner_affine: PhantomData<*const ()>,
@@ -854,6 +857,7 @@ impl UiRealm {
             redraw_pending,
             scheduler,
             frame_failure_handler: RefCell::new(None),
+            frame_failure_detail: Cell::new(FrameFailureDetail::default()),
             _owner_affine: PhantomData,
         })
     }
@@ -913,17 +917,26 @@ impl UiRealm {
         *self.frame_failure_handler.borrow_mut() = handler;
     }
 
+    /// Install the realm-scoped frame-failure text-retention policy.
+    pub(crate) fn set_frame_failure_detail(&self, detail: FrameFailureDetail) {
+        self.frame_failure_detail.set(detail);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn frame_failure_detail_for_test(&self) -> FrameFailureDetail {
+        self.frame_failure_detail.get()
+    }
+
     /// Surface one contained frame failure for `presentation`: bump its
     /// consecutive-failure streak, emit the structured `tracing` record,
     /// and deliver the typed [`FrameFailureReport`] to the registered
     /// handler (if any).
     ///
-    /// The `panic_message` field is a plain string field on purpose:
-    /// FLUI's device sinks classify string fields private-by-default (see
-    /// `flui-log`), so a panic message that interpolated user data does
-    /// not reach OS log stores unredacted, while the developer console
-    /// still shows it. The handler receives the full report verbatim —
-    /// registering one is the embedder's opt-in.
+    /// Both panic text and the text rendering of a pipeline error pass
+    /// through this realm's [`FrameFailureDetail`] policy before tracing.
+    /// The handler receives the same policy-filtered panic text, but retains
+    /// the typed [`flui_rendering::RenderError`] and can inspect its variants
+    /// without formatting it.
     ///
     /// The handler is cloned out of its cell before the call so no realm
     /// borrow is held while embedder code runs; see
@@ -942,6 +955,7 @@ impl UiRealm {
         match &report.kind {
             FrameFailureKind::SegmentPanic {
                 message,
+                phase,
                 internal_invariant,
             } => {
                 tracing::error!(
@@ -950,18 +964,20 @@ impl UiRealm {
                     realm_id = report.address.realm_id.as_u64(),
                     consecutive_failures,
                     internal_invariant,
-                    panic_message = message.as_deref().unwrap_or("<non-string panic payload>"),
+                    phase = ?phase,
+                    panic_message = %message,
                     "frame segment panicked; frame dropped for this presentation only — \
                      siblings keep framing, last presented frame is retained"
                 );
             }
             FrameFailureKind::Pipeline { error } => {
+                let error_text = self.frame_failure_detail.get().pipeline_text(error);
                 tracing::error!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } =
                         report.address.presentation_id.as_u64(),
                     realm_id = report.address.realm_id.as_u64(),
                     consecutive_failures,
-                    error = %error,
+                    error = %error_text,
                     "frame pipeline failed; frame dropped for this presentation only — \
                      siblings keep framing, last presented frame is retained"
                 );
@@ -2436,17 +2452,16 @@ impl UiRealm {
                         // a later clean sibling must not steal attribution.
                         self.mark_needs_full_repaint_for(presentation);
                     }
-                    let message = payload_text(&*payload).map(Box::<str>::from);
-                    // `docs/PANIC-POLICY.md`'s convention: a `BUG:`-prefixed
-                    // payload asserts a violated FRAMEWORK invariant.
-                    // Contained all the same (siblings must keep framing),
-                    // but reported as what it is instead of being blended
-                    // into application-code failures.
-                    let internal_invariant = message.as_deref().is_some_and(is_internal_invariant);
+                    // Classify against the borrowed raw payload before the
+                    // configured privacy policy decides whether any source
+                    // text may be retained.
+                    let (message, internal_invariant) =
+                        self.frame_failure_detail.get().panic_text(&*payload);
                     self.report_frame_failure(
                         presentation,
                         FrameFailureKind::SegmentPanic {
                             message,
+                            phase: failed_phase,
                             internal_invariant,
                         },
                     );
@@ -8515,11 +8530,19 @@ mod tests {
     // ========================================================================
     mod frame_failure_containment {
         use std::sync::Mutex as StdMutex;
+        use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 
         use flui_widgets::SizedBox;
+        use tracing::field::{Field, Visit};
+        use tracing::{Event, Subscriber};
+        use tracing_subscriber::layer::{Context, SubscriberExt as _};
+        use tracing_subscriber::registry::LookupSpan;
+        use tracing_subscriber::{Layer as TracingLayer, Registry};
 
         use super::*;
-        use crate::app::frame_failure::{FrameFailureHandler, FrameFailureKind};
+        use crate::app::frame_failure::{
+            FrameFailureDetail, FrameFailureHandler, FrameFailureKind, PanicText,
+        };
 
         /// Failure reports collected through the real registered-handler
         /// route — the same `FrameFailureHandler` an embedder registers via
@@ -8537,7 +8560,8 @@ mod tests {
         #[derive(Debug, Clone, PartialEq)]
         enum SeenKind {
             SegmentPanic {
-                message: Option<String>,
+                message: PanicText,
+                phase: SegmentPhase,
                 internal_invariant: bool,
             },
             Pipeline {
@@ -8552,9 +8576,11 @@ mod tests {
                 let kind = match &report.kind {
                     FrameFailureKind::SegmentPanic {
                         message,
+                        phase,
                         internal_invariant,
                     } => SeenKind::SegmentPanic {
-                        message: message.as_deref().map(str::to_owned),
+                        message: message.clone(),
+                        phase: *phase,
                         internal_invariant: *internal_invariant,
                     },
                     FrameFailureKind::Pipeline { error } => SeenKind::Pipeline {
@@ -8594,6 +8620,141 @@ mod tests {
             let _restore = HookRestore(Some(std::panic::take_hook()));
             std::panic::set_hook(Box::new(|_| {}));
             f()
+        }
+
+        #[derive(Clone)]
+        struct ErrorFieldLayer {
+            values: Arc<StdMutex<Vec<String>>>,
+        }
+
+        struct ErrorFieldVisitor<'a> {
+            values: &'a Arc<StdMutex<Vec<String>>>,
+        }
+
+        impl Visit for ErrorFieldVisitor<'_> {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "error" {
+                    self.values
+                        .lock()
+                        .expect("trace field mutex")
+                        .push(format!("{value:?}"));
+                }
+            }
+        }
+
+        impl<S> TracingLayer<S> for ErrorFieldLayer
+        where
+            S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+        {
+            fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+                event.record(&mut ErrorFieldVisitor {
+                    values: &self.values,
+                });
+            }
+        }
+
+        fn capture_pipeline_failure(detail: FrameFailureDetail) -> (Vec<String>, bool) {
+            const SENTINEL: &str = "private-pipeline-report-sentinel";
+
+            let realm = UiRealm::for_test();
+            realm.set_frame_failure_detail(detail);
+            let handler_saw_typed_error = Arc::new(StdAtomicBool::new(false));
+            let handler_saw_typed_error_for_callback = Arc::clone(&handler_saw_typed_error);
+            realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+                let FrameFailureKind::Pipeline {
+                    error: flui_rendering::RenderError::SemanticsError { message },
+                } = &report.kind
+                else {
+                    panic!("handler must receive the typed semantics error");
+                };
+                assert_eq!(message.as_ref(), SENTINEL);
+                handler_saw_typed_error_for_callback.store(true, StdOrdering::Relaxed);
+            })));
+
+            let values = Arc::new(StdMutex::new(Vec::new()));
+            let subscriber = Registry::default().with(ErrorFieldLayer {
+                values: Arc::clone(&values),
+            });
+            tracing::subscriber::with_default(subscriber, || {
+                realm.report_frame_failure(
+                    realm.presentations.primary(),
+                    FrameFailureKind::Pipeline {
+                        error: flui_rendering::RenderError::semantics(SENTINEL),
+                    },
+                );
+            });
+
+            let values = Arc::try_unwrap(values)
+                .expect("trace layer released after with_default")
+                .into_inner()
+                .expect("trace field mutex");
+            (values, handler_saw_typed_error.load(StdOrdering::Relaxed))
+        }
+
+        #[test]
+        fn pipeline_trace_obeys_detail_policy_while_handler_keeps_the_typed_error() {
+            let (redacted_fields, redacted_handler_typed) =
+                capture_pipeline_failure(FrameFailureDetail::Redacted);
+            assert_eq!(redacted_fields, [flui_log::REDACTED_VALUE]);
+            assert!(redacted_handler_typed);
+
+            let (verbatim_fields, verbatim_handler_typed) =
+                capture_pipeline_failure(FrameFailureDetail::Verbatim);
+            assert_eq!(verbatim_fields.len(), 1);
+            assert!(
+                verbatim_fields[0].contains("private-pipeline-report-sentinel"),
+                "verbatim tracing must retain the pipeline error: {verbatim_fields:?}"
+            );
+            assert!(verbatim_handler_typed);
+        }
+
+        #[test]
+        fn explicit_segment_detail_is_profile_independent_and_classifies_before_redaction() {
+            let cases = [
+                (
+                    FrameFailureDetail::Redacted,
+                    "BUG: private-redacted-panic-sentinel",
+                    PanicText::Redacted,
+                    true,
+                ),
+                (
+                    FrameFailureDetail::Verbatim,
+                    "private-verbatim-panic-sentinel",
+                    PanicText::Verbatim("private-verbatim-panic-sentinel".into()),
+                    false,
+                ),
+            ];
+
+            for (detail, payload, expected_text, expected_internal_invariant) in cases {
+                let realm = UiRealm::for_test();
+                realm.set_frame_failure_detail(detail);
+                realm
+                    .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                    .expect("attaches");
+                let seen = install_collecting_handler(&realm);
+                realm.presentations.primary().set_segment_probe(
+                    SegmentPhase::Build,
+                    Some(Box::new(move || panic!("{payload}"))),
+                );
+                realm.request_redraw();
+
+                let mut backend = TestRasterBackend::always_presents();
+                with_quiet_panics(|| realm.render_frame_entered(&mut backend));
+
+                let seen = seen.lock().expect("failure capture mutex");
+                assert_eq!(seen.len(), 1);
+                let SeenKind::SegmentPanic {
+                    message,
+                    phase,
+                    internal_invariant,
+                } = &seen[0].kind
+                else {
+                    panic!("segment probe must report SegmentPanic");
+                };
+                assert_eq!(message, &expected_text);
+                assert_eq!(*phase, SegmentPhase::Build);
+                assert_eq!(*internal_invariant, expected_internal_invariant);
+            }
         }
 
         // ====================================================================
@@ -8720,15 +8881,29 @@ mod tests {
                 match &seen[0].kind {
                     SeenKind::SegmentPanic {
                         message,
+                        phase,
                         internal_invariant,
                     } => {
-                        assert!(
-                            message
-                                .as_deref()
-                                .is_some_and(|m| m.contains("segment probe")),
-                            "causal detail (the panic message) must reach the report; got \
-                             {message:?}"
+                        #[cfg(debug_assertions)]
+                        {
+                            let PanicText::Verbatim(message) = message else {
+                                panic!(
+                                    "debug-default report must retain the panic text: {message:?}"
+                                );
+                            };
+                            assert!(
+                                message.contains("segment probe"),
+                                "causal detail (the panic message) must reach the report; got \
+                                 {message:?}"
+                            );
+                        }
+                        #[cfg(not(debug_assertions))]
+                        assert_eq!(
+                            message,
+                            &PanicText::Redacted,
+                            "release-default reports must retain no panic text"
                         );
+                        assert_eq!(*phase, SegmentPhase::Build);
                         assert!(
                             !internal_invariant,
                             "an application panic carries no BUG: prefix"
@@ -9177,10 +9352,13 @@ mod tests {
 
         use super::*;
 
-        #[derive(Clone, Default)]
-        struct FrameEventCapture(Arc<StdMutex<Vec<Vec<(String, String)>>>>);
+        type RecordedFields = Vec<(String, String)>;
+        type RecordedEvents = Vec<RecordedFields>;
 
-        struct FrameFieldVisitor<'a>(&'a mut Vec<(String, String)>);
+        #[derive(Clone, Default)]
+        struct FrameEventCapture(Arc<StdMutex<RecordedEvents>>);
+
+        struct FrameFieldVisitor<'a>(&'a mut RecordedFields);
 
         impl Visit for FrameFieldVisitor<'_> {
             fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {

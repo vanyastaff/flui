@@ -41,13 +41,13 @@ use super::realm_dispatch::{
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use crate::app::AppConfig;
+use crate::app::runtime::WindowPolicy;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use crate::app::runtime::WindowPolicy;
+use crate::app::{AppConfig, FrameFailureDetail};
 
 // ============================================================================
 // Multi-window embedder seam (issue #555's `WindowPolicy`)
@@ -202,9 +202,10 @@ pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow:
 ))]
 /// One `Pending`-arm window whose open resolved, waiting for
 /// [`finish_open_secondary_window`]: the policy that governs it, the native
-/// window itself, and the close-request handler its caller's `AppConfig`
-/// carried (threaded through so a secondary window can refuse its own close
-/// exactly as the primary can).
+/// window itself, and the close-request handler plus frame-failure detail
+/// policy its caller's `AppConfig` carried. The detail policy is consumed
+/// only when `SeparateRealms` constructs a new realm; `SharedRealm` inherits
+/// the already-hosted realm's policy.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -214,6 +215,7 @@ type PendingCompletion = (
     WindowPolicy,
     Arc<dyn flui_platform::traits::PlatformWindow>,
     Option<CloseRequestHandler>,
+    FrameFailureDetail,
 );
 
 thread_local! {
@@ -281,8 +283,13 @@ thread_local! {
 pub(super) fn drain_pending_secondary_window_completions() {
     let pending =
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
-    for (policy, window, close_request_handler) in pending {
-        if let Err(error) = finish_open_secondary_window(policy, window, close_request_handler) {
+    for (policy, window, close_request_handler, frame_failure_detail) in pending {
+        if let Err(error) = finish_open_secondary_window(
+            policy,
+            window,
+            close_request_handler,
+            frame_failure_detail,
+        ) {
             tracing::error!(
                 ?policy,
                 %error,
@@ -340,15 +347,19 @@ pub(super) fn open_secondary_window_impl(
         })?;
 
     match open {
-        WindowOpen::Ready(window) => {
-            finish_open_secondary_window(policy, window, config.close_request_handler.clone())
-                .map(Some)
-        }
+        WindowOpen::Ready(window) => finish_open_secondary_window(
+            policy,
+            window,
+            config.close_request_handler.clone(),
+            config.frame_failure_detail,
+        )
+        .map(Some),
         WindowOpen::Pending(pending) => {
             spawn_pending_secondary_window_completion(
                 policy,
                 pending,
                 config.close_request_handler.clone(),
+                config.frame_failure_detail,
             )?;
             Ok(None)
         }
@@ -376,7 +387,8 @@ pub(super) fn open_secondary_window_impl(
 /// async task completes through.
 ///
 /// The spawned future itself never calls [`finish_open_secondary_window`]
-/// directly on success — it only enqueues `(policy, window)` onto
+/// directly on success — it only enqueues the policy, window, and deferred
+/// configuration onto
 /// [`PENDING_SECONDARY_WINDOW_COMPLETIONS`]. `UpdateScheduler::drive_async_tasks`
 /// (which polls this future to completion) always runs from INSIDE a
 /// dispatched `RealmTask::Frame`, so `dispatched_realm_id` is `Some` for the
@@ -416,6 +428,7 @@ fn spawn_pending_secondary_window_completion(
     policy: WindowPolicy,
     pending: flui_platform::PendingWindow,
     close_request_handler: Option<CloseRequestHandler>,
+    frame_failure_detail: FrameFailureDetail,
 ) -> anyhow::Result<()> {
     let driver = APP_RUNTIME
         .with(|slot| {
@@ -441,9 +454,12 @@ fn spawn_pending_secondary_window_completion(
                 // directly here -- see this function's own doc for why
                 // (this poll always runs mid-dispatch).
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
-                    queue
-                        .borrow_mut()
-                        .push((policy, window, close_request_handler));
+                    queue.borrow_mut().push((
+                        policy,
+                        window,
+                        close_request_handler,
+                        frame_failure_detail,
+                    ));
                 });
             }
             Err(error) => {
@@ -486,6 +502,7 @@ fn finish_open_secondary_window(
     policy: WindowPolicy,
     window: Arc<dyn flui_platform::traits::PlatformWindow>,
     close_request_handler: Option<CloseRequestHandler>,
+    frame_failure_detail: FrameFailureDetail,
 ) -> anyhow::Result<(
     RealmDispatcher,
     Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -494,6 +511,9 @@ fn finish_open_secondary_window(
 
     let realm_dispatch = match policy {
         WindowPolicy::SharedRealm => {
+            // Failure detail is realm-scoped. A secondary presentation
+            // inherits the already-hosted realm's policy; its window config
+            // must not mutate that policy for existing siblings.
             let shared_with = APP_RUNTIME
                 .with(|slot| {
                     let state = slot.borrow();
@@ -526,11 +546,12 @@ fn finish_open_secondary_window(
             .map_err(|error| {
                 anyhow::anyhow!(error).context("secondary UiRealm construction failed")
             })?;
-            // NOT wired to a frame-failure handler: `finish_open_secondary_window`
-            // never sees the primary `AppConfig` (its `config` parameter
-            // upstream carries only window shape), so this secondary
-            // realm's failures surface through `tracing` alone. Part of
-            // issue #561's remaining work, named in ADR-0048.
+            ui_realm.set_frame_failure_detail(frame_failure_detail);
+            // Deliberately NOT wired to a frame-failure handler in this
+            // slice: only the detail policy is threaded through. This
+            // secondary realm's failures therefore surface through
+            // `tracing` alone until the report-side routing grows an
+            // explicit secondary-realm handler contract.
             install_realm_alongside(ui_realm, &window).map_err(|error| {
                 anyhow::anyhow!(error).context("installing the secondary realm failed")
             })?

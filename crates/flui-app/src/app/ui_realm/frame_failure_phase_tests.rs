@@ -15,7 +15,7 @@ use flui_rendering::{
 use flui_types::{Offset, Size, geometry::px, painting::Alignment};
 use flui_widgets::SizedBox;
 
-use super::{SegmentPhase, UiRealm};
+use super::{FrameFailureHandler, FrameFailureKind, SegmentPhase, UiRealm};
 use crate::app::raster_test_support::TestRasterBackend;
 
 fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
@@ -222,6 +222,17 @@ fn every_segment_phase_survives_unwind_and_retries_to_scene() {
 
     for phase in phases {
         let realm = mount();
+        let reported_phases = Arc::new(StdMutex::new(Vec::new()));
+        let reported_phases_for_handler = Arc::clone(&reported_phases);
+        realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+            let FrameFailureKind::SegmentPanic { phase, .. } = &report.kind else {
+                panic!("phase probe must produce a SegmentPanic report");
+            };
+            reported_phases_for_handler
+                .lock()
+                .expect("reported-phase mutex")
+                .push(*phase);
+        })));
         let probe_armed = Rc::new(Cell::new(true));
         let armed = Rc::clone(&probe_armed);
         if phase == SegmentPhase::Finalize {
@@ -250,6 +261,11 @@ fn every_segment_phase_survives_unwind_and_retries_to_scene() {
             realm.presentations.primary().segment_phase(),
             phase,
             "the unwound phase must remain stored"
+        );
+        assert_eq!(
+            *reported_phases.lock().expect("reported-phase mutex"),
+            vec![phase],
+            "the typed report must carry the exact unwound phase"
         );
 
         assert!(
