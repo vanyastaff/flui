@@ -335,7 +335,7 @@ impl HeldPointerQueue {
                 match candidate {
                     PointerEvent::Down(_) => break,
                     PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
-                        if self.is_protected_terminal_at(pointer_id, end) {
+                        if self.must_keep_protected_terminal_at(pointer_id, end) {
                             break;
                         }
                         victim = Some((pointer_id, start, end));
@@ -440,6 +440,49 @@ impl HeldPointerQueue {
             }
         }
         false
+    }
+
+    fn must_keep_protected_terminal_at(
+        &self,
+        pointer_id: PointerId,
+        terminal_index: usize,
+    ) -> bool {
+        if !self.is_protected_terminal_at(pointer_id, terminal_index) {
+            return false;
+        }
+        self.protected_terminal_suffix_count(pointer_id, terminal_index) == 1
+    }
+
+    fn protected_terminal_suffix_count(
+        &self,
+        pointer_id: PointerId,
+        terminal_index: usize,
+    ) -> usize {
+        let protected_terminal_count = self.protected_terminal_count(pointer_id);
+        let total_terminal_count = self
+            .events
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
+        let mut terminal_count = 0usize;
+        let mut protected_suffix_count = 0usize;
+        for (index, event) in self.events.iter().enumerate() {
+            if flui_interaction::events::extract_pointer_id(event) == pointer_id
+                && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            {
+                terminal_count = terminal_count.saturating_add(1);
+                if index >= terminal_index
+                    && total_terminal_count.saturating_sub(terminal_count)
+                        < protected_terminal_count
+                {
+                    protected_suffix_count = protected_suffix_count.saturating_add(1);
+                }
+            }
+        }
+        protected_suffix_count
     }
 
     fn has_active_route_terminal_after_latest_down(&self, pointer_id: PointerId) -> bool {
@@ -1382,6 +1425,33 @@ mod tests {
                 .iter()
                 .any(|event| flui_interaction::events::extract_pointer_id(event) == pointer(1))
         );
+    }
+
+    #[test]
+    fn redundant_reused_pointer_epochs_do_not_block_another_active_terminal() {
+        let queue = queue();
+        let reused = pointer(1);
+        for _ in 0..HELD_POINTER_CAPACITY / 2 {
+            queue.borrow_mut().append(down(reused));
+            queue
+                .borrow_mut()
+                .append_with_active_contact(up(reused), true);
+        }
+
+        let second_active_route = pointer(2);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(second_active_route), true);
+
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == second_active_route
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
+                && flui_interaction::events::extract_pointer_id(event) == reused
+        }));
     }
 
     #[test]
