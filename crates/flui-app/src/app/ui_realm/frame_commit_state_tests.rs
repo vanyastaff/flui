@@ -11,6 +11,7 @@ use flui_engine::EngineError;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
+    make_move_event_for_id,
 };
 use flui_platform::traits::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
@@ -544,5 +545,122 @@ fn closing_a_presentation_drops_held_pointer_input_without_synthesizing_cancel()
         routed_events.get(),
         0,
         "closing a presentation must drop held input without synthesizing a routed Cancel"
+    );
+}
+
+#[test]
+fn presented_commit_replays_held_pointer_input_after_current_frame_telemetry() {
+    let realm = mount_box();
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+
+    assert!(
+        primary.held_pointer_input().borrow().is_empty(),
+        "a committed presented frame must drain held pointer input"
+    );
+    assert!(
+        realm.needs_redraw(),
+        "replayed pointer input must wake the next pump after mark_rendered cleared this one"
+    );
+    let snapshots = primary.clock().frames_since(None);
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0].latencies().count(),
+        0,
+        "held input replayed after the commit must not be attributed to the frame already presented"
+    );
+}
+
+#[test]
+fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
+    let realm = mount_box();
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_move_event_for_id(
+            pointer,
+            Offset::new(px(11.0), px(11.0)),
+            PointerType::Touch,
+        ));
+
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+
+    assert_eq!(
+        primary.gestures().pending_move_count(),
+        1,
+        "a replayed Move must use the normal GestureBinding coalesced-move path"
+    );
+    assert!(
+        realm.needs_redraw(),
+        "the pending replayed Move needs a pump"
+    );
+
+    let _ = realm.render_frame_entered(&mut backend);
+    assert_eq!(
+        primary.gestures().pending_move_count(),
+        0,
+        "the next pump must flush the replayed pending Move"
+    );
+}
+
+#[test]
+fn no_present_commit_also_replays_held_pointer_input() {
+    let realm = mount_box();
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_move_event_for_id(
+            pointer,
+            Offset::new(px(11.0), px(11.0)),
+            PointerType::Touch,
+        ));
+
+    let mut backend = TestRasterBackend::single_shot(Ok(false));
+    assert!(!realm.render_frame_entered(&mut backend));
+
+    assert!(
+        primary.held_pointer_input().borrow().is_empty(),
+        "NoPresent still acknowledges the tree and must drain held input"
+    );
+    assert_eq!(
+        primary.gestures().pending_move_count(),
+        1,
+        "NoPresent replay must use the same pointer dispatch path as Presented replay"
+    );
+    assert!(
+        realm.needs_redraw(),
+        "NoPresent replay must wake a follow-up pump"
     );
 }

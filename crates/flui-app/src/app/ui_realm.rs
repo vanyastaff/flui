@@ -37,7 +37,7 @@ use flui_animation::Vsync;
 use flui_engine::EngineError;
 use flui_engine::RasterBackend;
 use flui_foundation::{PresentationId, RealmId};
-use flui_interaction::{FocusManager, GestureBinding, InteractionLane};
+use flui_interaction::{FocusManager, GestureBinding, InteractionLane, PointerEvent};
 use flui_layer::Scene;
 #[cfg(test)]
 use flui_platform::traits::PlatformTextInput;
@@ -61,6 +61,7 @@ use super::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, SegmentPhase,
 };
+use super::held_input::HeldPointerReplay;
 use super::presentation::{PresentationState, RealmCapabilities};
 use super::presentation_forest::PresentationForest;
 use super::runtime::RealmServices;
@@ -2652,9 +2653,6 @@ impl UiRealm {
     }
 
     /// Commit a painted presentation after the sink accepts its scene.
-    ///
-    /// Kept as one named realm-level transition so pointer replay can attach
-    /// to the exact acknowledgement point without duplicating submit arms.
     fn commit_painted_frame(&self, presentation: &PresentationState) {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),
@@ -2669,6 +2667,25 @@ impl UiRealm {
             presented_revision = committed_revision.as_u64(),
             "Presentation tree revision committed"
         );
+    }
+
+    fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
+        let Some(mut replay) = HeldPointerReplay::begin(presentation.held_pointer_input()) else {
+            return;
+        };
+        let mut replayed = 0usize;
+        for pointer_event in replay.by_ref() {
+            let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
+            replayed = replayed.saturating_add(1);
+            if let Err(payload) = dispatch {
+                self.request_redraw_for(presentation);
+                resume_unwind(payload);
+            }
+        }
+        replay.complete();
+        if replayed != 0 {
+            self.request_redraw_for(presentation);
+        }
     }
 
     /// Render while the platform dispatcher already owns the realm entry.
@@ -2793,6 +2810,7 @@ impl UiRealm {
         // Build/Finalize/Pipeline, has not successfully produced a scene and
         // likewise does not use this submit-specific flag.
         let mut retry_needs_repaint = false;
+        let mut replay_committed_input = false;
         use super::raster_lane::SubmitVerdict;
         if should_send
             && let FramePaintOutcome::Painted(scene) = outcome
@@ -2845,6 +2863,7 @@ impl UiRealm {
                         total = producer.frames_rendered(),
                         "Frame rendered successfully"
                     );
+                    replay_committed_input = true;
                 }
                 SubmitVerdict::NoPresent => {
                     self.commit_painted_frame(producer);
@@ -2852,6 +2871,7 @@ impl UiRealm {
                         frame = frame_number,
                         "Frame skipped: no damage or surface occluded (no present)"
                     );
+                    replay_committed_input = true;
                 }
                 SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
@@ -3021,6 +3041,10 @@ impl UiRealm {
             self.wake_frame();
         } else {
             self.mark_rendered();
+        }
+
+        if replay_committed_input {
+            self.replay_committed_held_pointer_input(producer);
         }
 
         // Animation continuation wake — deliberately placed AFTER
@@ -3292,38 +3316,9 @@ impl UiRealm {
                         .append(pointer_event);
                     return;
                 }
-                let clock = presentation.clock();
-                clock.stamp_input_epoch(clock.now());
-                let routing_panic = catch_unwind(AssertUnwindSafe(|| {
-                    presentation
-                        .gestures()
-                        .handle_pointer_event(&pointer_event, |position| {
-                            let mut result = flui_interaction::routing::HitTestResult::new();
-                            let offset = flui_types::Offset::new(position.dx, position.dy);
-                            presentation
-                                .renderer()
-                                .hit_test_in_view(&mut result, offset, 0);
-                            if !result.is_empty() {
-                                tracing::debug!(hits = result.len(), "Hit test found targets");
-                            }
-                            result
-                        });
-                }))
-                .err();
-                let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
-                    presentation.gestures().drain_deferred_arena_resolutions();
-                }))
-                .err();
-
-                let mut first_panic = None;
-                preserve_first_input_panic(&mut first_panic, routing_panic, "pointer routing");
-                preserve_first_input_panic(
-                    &mut first_panic,
-                    deferred_panic,
-                    "deferred arena resolution",
-                );
+                let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
                 self.request_redraw_for(presentation);
-                if let Some(payload) = first_panic {
+                if let Err(payload) = dispatch {
                     resume_unwind(payload);
                 }
             }
@@ -3344,6 +3339,46 @@ impl UiRealm {
                     "drag-and-drop input received; realm routing not implemented yet, dropping"
                 );
             }
+        }
+    }
+
+    fn dispatch_pointer_event_entered(
+        presentation: &PresentationState,
+        pointer_event: &PointerEvent,
+    ) -> Result<(), Box<dyn std::any::Any + Send>> {
+        let clock = presentation.clock();
+        clock.stamp_input_epoch(clock.now());
+        let routing_panic = catch_unwind(AssertUnwindSafe(|| {
+            presentation
+                .gestures()
+                .handle_pointer_event(pointer_event, |position| {
+                    let mut result = flui_interaction::routing::HitTestResult::new();
+                    let offset = flui_types::Offset::new(position.dx, position.dy);
+                    presentation
+                        .renderer()
+                        .hit_test_in_view(&mut result, offset, 0);
+                    if !result.is_empty() {
+                        tracing::debug!(hits = result.len(), "Hit test found targets");
+                    }
+                    result
+                });
+        }))
+        .err();
+        let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
+            presentation.gestures().drain_deferred_arena_resolutions();
+        }))
+        .err();
+
+        let mut first_panic = None;
+        preserve_first_input_panic(&mut first_panic, routing_panic, "pointer routing");
+        preserve_first_input_panic(
+            &mut first_panic,
+            deferred_panic,
+            "deferred arena resolution",
+        );
+        match first_panic {
+            Some(payload) => Err(payload),
+            None => Ok(()),
         }
     }
 

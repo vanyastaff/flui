@@ -373,13 +373,6 @@ impl HeldPointerQueue {
         debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "close-time clearing adopts this replay cancellation path before commit replay is wired"
-        )
-    )]
     fn finish_cleared_replay(&mut self, discarded: usize) {
         self.replay_in_flight = false;
         self.replay_reserved = 0;
@@ -398,13 +391,6 @@ impl HeldPointerQueue {
 /// reentrantly. Dropping an unfinished batch places its suffix ahead of that
 /// newly queued input and clears the in-flight state.
 #[must_use = "dropping an unconsumed replay batch restores its remaining input"]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "frame commit replay adopts this panic-safe detached batch in the following change"
-    )
-)]
 pub(crate) struct HeldPointerReplay<'a> {
     queue: &'a RefCell<HeldPointerQueue>,
     remaining: VecDeque<PointerEvent>,
@@ -413,13 +399,6 @@ pub(crate) struct HeldPointerReplay<'a> {
 }
 
 impl<'a> HeldPointerReplay<'a> {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "frame commit replay adopts this panic-safe detached batch in the following change"
-        )
-    )]
     pub(crate) fn begin(queue: &'a RefCell<HeldPointerQueue>) -> Option<Self> {
         let remaining = {
             let mut queue = queue.borrow_mut();
@@ -455,13 +434,6 @@ impl<'a> HeldPointerReplay<'a> {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "frame commit replay adopts this explicit successful-completion path in the following change"
-        )
-    )]
     pub(crate) fn complete(mut self) {
         if self.remaining.is_empty() {
             self.complete_inner();
@@ -478,13 +450,6 @@ impl<'a> HeldPointerReplay<'a> {
         self.completed = true;
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "close-time clearing adopts this replay cancellation path before commit replay is wired"
-        )
-    )]
     fn discard_remaining_if_cleared(&mut self) -> bool {
         if !self.queue.borrow().replay_discard_remaining {
             return false;
@@ -498,13 +463,6 @@ impl<'a> HeldPointerReplay<'a> {
 
     /// Apply replay-time repeated-Down requests before exposing another old
     /// event. The request list and every scan are bounded by the queue cap.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "frame commit replay adopts this bounded supersession step in the following change"
-        )
-    )]
     fn discard_superseded_suffixes(&mut self) {
         let supersessions = {
             let mut queue = self.queue.borrow_mut();
