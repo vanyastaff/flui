@@ -1,6 +1,6 @@
 # Spec: transactional, presentation-local frame failure containment (the remainder of #561)
 
-- **Status:** Draft v4 (v3/v4 fold in the corrections from the task decomposition — `tasks.md` §Notes and decisions D1–D13; approach A′ chosen at the gate on 2026-09-11 with three user answers — see `intent.md` §User amendments; v2 folds in three review findings on PR #1023: the geometry shadow cannot reproduce hit-test topology → held input; `Idle` never acknowledges the commit bit; seam (c) covers every removal-path hook)
+- **Status:** Done (PRs #1024-#1030 merged; follow-ups #1031 and #1032 filed; verified in [`verify-report.md`](verify-report.md))
 - **Slug:** `561-transactional-frame-failure`   ·   **Date:** `2026-09-11`   ·   **Owner:** `chief-architect` (design), flui-view / flui-app / flui-rendering leads per PR
 - **Governing ADR:** `docs/adr/ADR-0048-frame-transaction-boundary.md` — **amended**, not replaced (the intent says extend); ADR-0027 (presentation-local), ADR-0062 (the paint queue is the cross-pass record), ADR-0054 decision 2 (`GEOMETRY_DEGRADED` sticky stand-in flag)
 
