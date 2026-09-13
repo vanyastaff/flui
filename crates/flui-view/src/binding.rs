@@ -49,6 +49,8 @@
 //! binding.draw_frame();
 //! ```
 
+#[cfg(any(test, feature = "runtime-internals"))]
+use std::cell::Cell;
 use std::{
     future::Future,
     pin::Pin,
@@ -381,6 +383,70 @@ pub trait WidgetsBindingObserver {
 /// consolidated onto the scheduler's copy (ADR-0035) since it is the one
 /// tied to real frame-scheduling behavior (`frames_enabled`).
 pub use flui_scheduler::AppLifecycleState;
+
+/// Data-only phase cell shared with an internal frame composition driver.
+///
+/// This type exists only for runtime composition and tests. It lets the
+/// widget binding stamp an externally-owned `Copy` phase value at its exact
+/// build-to-finalize boundary without invoking foreign code while the
+/// binding's inner write guard is held.
+#[doc(hidden)]
+#[cfg(any(test, feature = "runtime-internals"))]
+#[derive(Debug)]
+pub struct FramePhaseMarker<T: Copy> {
+    phase: Cell<T>,
+    /// Data-only fault injection for downstream test-utils consumers.
+    /// Consumed at the next build-to-finalize boundary.
+    #[cfg(any(test, feature = "test-utils"))]
+    panic_once_at_boundary: Cell<bool>,
+}
+
+#[cfg(any(test, feature = "runtime-internals"))]
+impl<T: Copy> FramePhaseMarker<T> {
+    /// Create a marker with its initial phase.
+    #[doc(hidden)]
+    pub fn new(initial_phase: T) -> Self {
+        Self {
+            phase: Cell::new(initial_phase),
+            #[cfg(any(test, feature = "test-utils"))]
+            panic_once_at_boundary: Cell::new(false),
+        }
+    }
+
+    /// Store the phase that is about to run.
+    #[doc(hidden)]
+    pub fn set(&self, phase: T) {
+        self.phase.set(phase);
+    }
+
+    fn set_at_frame_boundary(&self, phase: T) {
+        self.phase.set(phase);
+        #[cfg(any(test, feature = "test-utils"))]
+        let should_panic = self.panic_once_at_boundary.replace(false);
+        #[cfg(any(test, feature = "test-utils"))]
+        assert!(
+            !should_panic,
+            "frame phase marker — intentional one-shot test panic"
+        );
+    }
+
+    /// Read the last phase stored.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn get(&self) -> T {
+        self.phase.get()
+    }
+
+    /// Arm a fixed one-shot panic at the next build-to-finalize boundary.
+    ///
+    /// This is a data-only runtime test seam: it stores only a phase value
+    /// and never accepts executable code across the widget binding's lock.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn arm_test_panic_once(&self) {
+        self.panic_once_at_boundary.set(true);
+    }
+}
 
 /// The owner-local binding for one widgets layer.
 ///
@@ -1145,6 +1211,28 @@ impl WidgetsBinding {
     /// In debug mode, panics if called while already building dirty elements
     /// (to catch accidental frame scheduling during build).
     pub fn draw_frame(&self) {
+        self.draw_frame_impl(|| {});
+    }
+
+    /// Pump a widget frame and stamp `finalize_phase` at the exact boundary
+    /// between the build drain and inactive-element finalization.
+    ///
+    /// This is an internal composition seam for the application frame driver.
+    /// Only a [`FramePhaseMarker`] write occurs while the binding's inner
+    /// write guard and debug building-flag guard remain active; no external
+    /// executable callback crosses that lock boundary. Ordinary users should
+    /// call [`Self::draw_frame`].
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "runtime-internals"))]
+    pub fn draw_frame_with_phase_marker<T: Copy>(
+        &self,
+        marker: &FramePhaseMarker<T>,
+        finalize_phase: T,
+    ) {
+        self.draw_frame_impl(|| marker.set_at_frame_boundary(finalize_phase));
+    }
+
+    fn draw_frame_impl(&self, before_finalize: impl FnOnce()) {
         let mut inner = self.inner.write();
 
         #[cfg(debug_assertions)]
@@ -1208,6 +1296,8 @@ impl WidgetsBinding {
 
         // Note: Layout and paint phases would be called here via super.draw_frame()
         // in a full implementation with RendererBinding
+
+        before_finalize();
 
         // Finalization phase: unmount inactive elements
         {

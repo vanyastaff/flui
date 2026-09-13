@@ -62,6 +62,41 @@ struct HostView {
     child: PanicBuildView,
 }
 
+#[derive(Clone)]
+struct NonStringPanicBuildView {
+    should_panic: bool,
+}
+
+impl StatelessView for NonStringPanicBuildView {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        if self.should_panic {
+            std::panic::panic_any(41_u8);
+        }
+        ErrorView::new("unreachable")
+    }
+}
+
+impl View for NonStringPanicBuildView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+#[derive(Clone)]
+struct NonStringPanicHostView;
+
+impl StatelessView for NonStringPanicHostView {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        NonStringPanicBuildView { should_panic: true }
+    }
+}
+
+impl View for NonStringPanicHostView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
 impl StatelessView for HostView {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         self.child.clone().boxed()
@@ -138,6 +173,11 @@ fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook() {
         panic.at
     );
     assert_eq!(panic.view_type_id, TypeId::of::<PanicBuildView>());
+    assert_eq!(
+        panic.payload_text.as_deref(),
+        Some("injected build panic"),
+        "string payload provenance must remain exact"
+    );
     assert!(
         !panic.internal_invariant,
         "an ordinary panic message is not a BUG: internal invariant"
@@ -153,6 +193,27 @@ fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook() {
         owner.take_recovered_panics().is_empty(),
         "take_recovered_panics must drain, not merely peek"
     );
+}
+
+#[test]
+fn a_non_string_build_panic_keeps_diagnostic_fallback_separate_from_payload_provenance() {
+    let (_tree, mut owner, _root_id) = mount_and_build(&NonStringPanicHostView);
+
+    let mut recovered = owner.take_recovered_panics();
+    assert_eq!(recovered.len(), 1, "exactly one panic must be recorded");
+    let panic = recovered.remove(0);
+    assert_eq!(panic.hook, LifecycleHook::Build);
+    assert_eq!(panic.view_type_id, TypeId::of::<NonStringPanicBuildView>());
+    assert_eq!(panic.payload_text, None);
+    assert_eq!(
+        panic.error.message,
+        "panic during build (non-string payload)"
+    );
+    assert_eq!(
+        panic.error.details.as_deref(),
+        Some("building StatelessElement")
+    );
+    assert!(!panic.internal_invariant);
 }
 
 // ============================================================================

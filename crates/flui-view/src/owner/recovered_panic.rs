@@ -249,19 +249,25 @@ pub struct RecoveredPanic {
     pub view_type_id: TypeId,
     /// Which lifecycle hook was running when the panic happened.
     pub hook: LifecycleHook,
-    /// The caught panic, converted to a [`FlutterError`]. `error.message`
-    /// is the user's panic payload text — a consumer forwarding this
-    /// report may redact it; `error.details` is the framework's own
-    /// breadcrumb (which hook, which behavior) and never carries user
-    /// data.
+    /// Exact text provenance from the caught panic payload.
+    ///
+    /// `Some` is present only when the payload itself was a `&'static str`
+    /// or `String`. `None` means the payload was non-string; consumers must
+    /// not infer payload text from [`Self::error`]'s synthesized diagnostic
+    /// fallback.
+    pub payload_text: Option<Box<str>>,
+    /// Display-facing diagnostic for the caught panic. Its `message` may be
+    /// the actual string payload or the framework's synthesized non-string
+    /// fallback; `details` is the framework breadcrumb describing the hook
+    /// context. Consumers that need exact payload provenance use
+    /// [`Self::payload_text`].
     pub error: FlutterError,
     /// Whether the payload text started with `BUG:` — FLUI's own
     /// internal-invariant convention (`docs/PANIC-POLICY.md`). Computed
     /// while constructing the record from the raw payload, before any
-    /// consumer has a chance to redact
-    /// `error.message`: a release build that redacts the message must
-    /// still classify correctly, so classification cannot depend on the
-    /// message surviving intact.
+    /// consumer has a chance to redact [`Self::payload_text`]: a release
+    /// build that redacts the payload must still classify correctly, so
+    /// classification cannot depend on the text surviving intact.
     ///
     /// This field **classifies only** — a `BUG:`-prefixed panic inside a
     /// containment window is still contained, exactly like any other; it
@@ -299,13 +305,9 @@ impl RecoveredPanic {
         payload: &(dyn Any + Send),
         context: impl Into<String>,
     ) -> Self {
-        Self::with_error(
-            at,
-            view_type_id,
-            hook,
-            payload,
-            FlutterError::from_panic(payload, context),
-        )
+        let source_payload_text = payload_text(payload);
+        let error = FlutterError::from_payload_text(source_payload_text, context);
+        Self::with_payload_text(at, view_type_id, hook, source_payload_text, error)
     }
 
     /// Build a [`RecoveredPanic`] from a panic payload and an
@@ -322,11 +324,22 @@ impl RecoveredPanic {
         payload: &(dyn Any + Send),
         error: FlutterError,
     ) -> Self {
+        Self::with_payload_text(at, view_type_id, hook, payload_text(payload), error)
+    }
+
+    fn with_payload_text(
+        at: RecoveredAt,
+        view_type_id: TypeId,
+        hook: LifecycleHook,
+        source_payload_text: Option<&str>,
+        error: FlutterError,
+    ) -> Self {
         Self {
             at,
             view_type_id,
             hook,
-            internal_invariant: payload_text(payload).is_some_and(is_internal_invariant),
+            payload_text: source_payload_text.map(Box::<str>::from),
+            internal_invariant: source_payload_text.is_some_and(is_internal_invariant),
             error,
         }
     }

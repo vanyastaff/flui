@@ -46,7 +46,7 @@ A frame that fails part-way is contained to its presentation and reported, but w
 
 ## What "fixed" looks like
 
-After a failed frame, everything that reads frame state — layout, hit test, paint, semantics — sees the same committed version (the last good one) until a later frame commits a new one; a failed subtree never leaves a half-applied mutation behind; a test exists that turns red when the poisoning step is removed and tells last-good retention apart from a zero-value stand-in; and a `FrameFailureReport` reaching an embedder in production carries nothing sensitive by default.
+After a failed frame, layout, hit test, and paint see the same committed version (the last good one) until a later frame commits a new one; semantics candidate/publish remains a documented residual, with the last published semantics version standing on failure. A failed subtree never leaves a half-applied mutation behind; a test exists that turns red when the poisoning step is removed and tells last-good retention apart from a zero-value stand-in; and panic payload text in a `FrameFailureReport` is filtered before handler delivery by a profile-aware policy. A pipeline report deliberately retains its typed `RenderError`, which may contain sensitive text and remains the handler author's responsibility.
 
 ## Who feels it
 
@@ -64,7 +64,9 @@ Framework users whose app hits a build/layout panic in one subtree and keeps run
 
 - Not the secondary-window handler wiring (blocked; sequence after secondary-window rendering).
 - Not a change to what a successful frame produces.
-- Not the log sink's privacy (flui-log is private-by-default since #572/#784) — only what the report handed to an embedder carries.
+- Not global sanitization of logs or typed reports. This unit filters panic
+  payload text before handler delivery and FLUI-owned pipeline trace formatting;
+  a handler still receives the typed `RenderError` and owns its exposure.
 - Not a new retry policy; the retry/last-good mechanism in ADR-0048 stands.
 
 ---
@@ -83,5 +85,6 @@ Framework users whose app hits a build/layout panic in one subtree and keeps run
 | Date | What changed | Why it surfaced only now |
 |------|--------------|--------------------------|
 | 2026-09-11 | "What 'fixed' looks like" — *semantics* leaves the "one committed version" set for this unit; the criterion's a11y half is filed with the threaded raster lane (ADR-0045 successor). | Exploration showed `run_frame` orders layout → paint → semantics, so a layout/paint failure never publishes semantics; a11y can lead the screen only after a scene-submit failure (one pump), and the candidate/commit split burns two consumed side effects in `SemanticsOwner::flush`. The user chose to file it out. |
+| 2026-09-13 | "Production output avoids sensitive data by default" is narrowed to the surfaces this unit can guarantee: panic payload text is filtered before typed delivery and FLUI-owned pipeline tracing obeys the same policy. | Review found that `Pipeline { error: RenderError }` intentionally preserves a typed error for handlers, so its `Debug` or handler-owned formatting may expose raw text and cannot truthfully satisfy a blanket report-sanitization promise. |
 | 2026-09-11 | Added to "What's wrong today": an `Errored` tail after a painted `run_frame` never arms a repaint, so the retry parks `Idle` with the screen at N-1 and the tree at N — a real defect found while exploring, taken into this unit in G2b's place. | It is the same "retry never re-presents" root cause behind the mixed-version symptoms; ADR-0048's "quiescent ending" documented it as accepted without seeing that the tree had advanced. |
 | 2026-09-11 | "A failed subtree cannot partially commit" is narrowed to panics OUTSIDE `build()` — user `build()` panics are already contained per element (ErrorView substitution, Flutter parity). | The scout found `behavior_commons::build_or_recover`; the audit's "mixed-version" wording predates that landing. |

@@ -41,7 +41,7 @@ PresentationState (per-window, private to flui-app)
 AppRuntime (loop-scoped composition root)
     ├── SharedEngineServices        — painting/accessibility, resolved once per owner thread
     ├── frame-wake + platform clipboard
-    └── the single realm slot (RealmId-keyed; real 1..N hosting is issue #555)
+    └── RealmRegistry               — any number of RealmId-keyed realms
 ```
 
 - **Entry points** — `run_app` / `run_app_with_config` bootstrap a platform
@@ -79,16 +79,19 @@ Singleton retirement is complete: `WidgetsBinding`, `GestureBinding`,
 `RenderingFlutterBinding`, `UpdateScheduler`, and GlobalKey identity are all
 realm-owned now — `AppBinding` is deleted, not slimmed, and no test needs a
 serialization guard against shared binding state any more (each test
-constructs its own independent realm). What remains is *hosting* debt, not
-singleton debt: `AppRuntime` hosts exactly one realm per owner thread behind
-a `RealmId`-keyed accessor (issue #555 grows that into real 1..N hosting once
-the element forest lets a realm host multiple presentations); logical
-scheduling (`UpdateScheduler`), physical pacing (a future per-presentation
-`FrameClock`), and raster scheduling still split apart across issue #556's
-remaining slices; and the production runners don't yet adopt the `RasterOwner`
-mailbox protocol (issue #559). Gesture state is realm-owned but intentionally
-models one presentation per realm; it moves to `PresentationRuntime` only
-when a second real presentation consumer exists.
+constructs its own independent realm). `AppRuntime` now hosts any number of
+`RealmId`-keyed realms, and each `UiRealm` owns an insertion-ordered
+presentation forest. `WindowPolicy::SeparateRealms` installs a new realm for a
+secondary window; `WindowPolicy::SharedRealm` installs another presentation in
+the first hosted realm. The remaining hosting gap is content and rendering:
+`open_secondary_window` mounts no root widget, constructs no GPU renderer, and
+registers no frame callback for the new window. Production multi-presentation
+rendering therefore still needs per-window frame pumps, constraints, sinks,
+and submit routing, plus root attachment to a non-primary presentation; that
+work remains with issue #559. Logical scheduling (`UpdateScheduler`), physical
+pacing, and raster scheduling also remain split across issue #556's remaining
+slices. Gesture state is realm-owned but intentionally models one presentation
+per realm until that second real presentation consumer exists.
 
 ## Documentation
 

@@ -73,10 +73,13 @@ pub use app::{
     service_events,
 };
 // Typed frame-failure route (issue #561): the embedder-visible half of the
-// presentation-frame transaction boundary (ADR-0048). A failed frame is
-// contained to its own presentation; these types are how the embedder hears
-// about it.
-pub use app::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};
+// presentation-frame transaction boundary (ADR-0048). Terminal failures drop
+// only their presentation's frame; narrower lifecycle failures can be
+// contained while the frame continues. These types report both outcomes.
+pub use app::{
+    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SegmentPhase,
+};
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).

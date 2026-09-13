@@ -72,7 +72,7 @@ child without claiming that arbitrary framework panics are recoverable.
 
 ### The seam: per-presentation `catch_unwind` in `draw_frame_entered`
 
-Each presentation's build+layout+paint segment
+Each presentation's complete segment
 (`draw_frame_for_presentation`) runs inside
 `catch_unwind(AssertUnwindSafe(..))`. A caught payload becomes
 `FramePaintOutcome::Errored` for that presentation only; the loop continues to
@@ -192,70 +192,116 @@ observable recovery floor and narrows several blast radii:
 
 Every recovery described above that has an attributable element, substitute,
 or lazy host enters a frame-scoped `RecoveredPanic` queue, except the explicitly
-unreported count probes. A host may drain it after the build segment; otherwise
-the next frame entry discards the stale records with one aggregate warning.
-Every produced presentation segment enters `WidgetsBinding::draw_frame` for
-this expiry even when the
-widget tree has no pending builds; the build drain itself stays conditional.
-Thus a record produced by late lazy-child service is still bounded when the
-next frame carries only pipeline work, even when no host forwarding consumer
-is installed.
+unreported count probes. `UiRealm` takes that queue exactly once after the
+entire presentation attempt and outside its `catch_unwind`. The timing includes
+the layout fixpoint and late post-pipeline lazy service, and still drains
+recoveries if later Tail or Scene work unwinds. Records are delivered in queue
+order before any terminal report for that attempt. Every produced presentation
+segment enters `WidgetsBinding::draw_frame` even when the widget tree has no
+pending builds; if no host drains a stale record, the next frame entry discards
+it with one aggregate warning.
 
 ### Failure classification and the typed route
 
 `crates/flui-app/src/app/frame_failure.rs`:
 
-- `FrameFailureKind::Pipeline { error: RenderError }` — structured failures
-  (caller validation, recoverable subtree, backend), keeping their typed shape.
-- `FrameFailureKind::SegmentPanic { message, internal_invariant }` — escaped
-  panics caught at the boundary. `internal_invariant` is true when the payload
-  carries the panic policy's `BUG:` prefix: a framework invariant violation is
-  *classified and named loudly* (distinct error-level message field), but still
-  contained — an end user's sibling windows surviving is worth more than an
-  abort, and the report is the loud part.
-- `FrameFailureReport { address: PresentationAddress, kind,
-  consecutive_failures }` — ownership identity via the generational address
-  (#552), plus a per-presentation consecutive-failure streak (reset by the next
-  cleanly completed segment) an embedder can key escalation off.
+- `FrameFailureKind::Pipeline { error: RenderError }` is a terminal
+  `FrameDropped` report for a structured pipeline failure. The handler keeps
+  the typed error.
+- `FrameFailureKind::SegmentPanic { message, phase, internal_invariant }` is a
+  terminal `FrameDropped` report for a panic escaping Build, Finalize,
+  Pipeline, Tail, or Scene. `phase` is written before the matching work.
+- `FrameFailureKind::RecoveredPanic { at, view_type_id, hook, message,
+  internal_invariant }` is a `Contained` report for a narrower lifecycle
+  recovery. It does not by itself drop the surrounding frame or arm a retry.
+- `FrameFailureReport { address, kind, disposition, consecutive_failures }`
+  carries the generational presentation address (#552). The streak counts
+  consecutive `FrameDropped` reports only. A `Contained` report exposes the
+  current streak but neither increments nor resets it; a terminally clean
+  attempt resets the streak after that attempt's contained reports have been
+  delivered.
 
-Both kinds route through one `UiRealm::report_frame_failure`: streak bump →
-structured `tracing::error!` → `FrameFailureHandler` delivery (registered via
-`AppConfig::with_frame_failure_handler`, wired realm-scoped by each backend's
-bootstrap — never a process-global hook). The handler runs synchronously
-mid-pump with no realm borrow held; its contract (lightweight, no re-entry
-into FLUI APIs) is on its rustdoc.
+Disposition is derived privately from `FrameFailureKind`, so an impossible
+kind/disposition pair cannot enter the delivery path. Each report is traced
+before synchronous `FrameFailureHandler` delivery. The handler is cloned out
+before invocation, no realm borrow is held while embedder code runs, and a
+handler panic is caught at the delivery site. It neither escapes the frame
+boundary nor unregisters the handler, and the same report is not retried.
 
-**Privacy:** the panic message is emitted as a plain string `tracing` field
-(`panic_message`), which FLUI's device sinks redact by default (`flui-log`'s
-private-by-default classification) — so a message that interpolated user data
-does not reach OS log stores unredacted, while the developer console still
-shows it. The typed report carries it verbatim; registering a handler is the
-embedder's opt-in.
+**Privacy:** `FrameFailureDetail` defaults to `Verbatim` in debug builds and
+`Redacted` in release builds; an explicit `AppConfig` override is independent
+of `DiagnosticsProfile`. The raw panic payload is classified for the `BUG:`
+invariant prefix before policy materialization. A recovered record separately
+stores `payload_text: Option<Box<str>>`: `Some` only preserves an actual string
+payload, while its display-facing `FlutterError` may keep the existing
+synthetic fallback for a non-string payload. The app consumes that provenance,
+never the diagnostic fallback. Under `Redacted`, panic text is
+neither retained nor formatted; non-string payloads remain redacted even under
+`Verbatim`. Segment-panic and recovered-panic reports therefore carry the
+policy-filtered `PanicText`. For pipeline failures, the policy controls only
+the text FLUI itself formats into its tracing event: a handler still receives
+the original typed `RenderError`, and formatting that error or the report's
+`Debug` representation may expose sensitive text. Handler authors own that
+boundary.
+
+This guarantee covers FLUI-owned app tracing, not arbitrary custom subscriber
+formatting and not lower-level `flui-view` recovery traces. It is not a global
+sanitizer. Desktop, web, and Android bootstrap apply both handler and detail
+policy to their initial realm. A `SeparateRealms` secondary carries its detail
+policy through both the Ready and Pending completion paths; its handler remains
+unset while secondary windows have no production content/render path. A
+`SharedRealm` secondary inherits the existing realm's detail policy and handler;
+the supplied secondary config does not override either for existing siblings.
 
 ### Retry and last-good retention
 
-- A failed frame **submits nothing**: `render_scene` is reached only by a
+- A failed segment **submits nothing**: `render_scene` is reached only by a
   `Painted` outcome, so the surface keeps presenting the last successfully
   submitted frame. There is no zero-size, empty, or placeholder scene on the
   failure path — retention is structural, not synthesized.
-- `draw_frame_entered` now returns an explicit **`any_failed`** bit covering
-  every segment in the pump, and `render_frame_entered` arms the retry
-  (`wake_frame()`, no `mark_rendered()`) off that bit — not off the last
-  producer's outcome. The retry re-attempts from the pipeline's retained dirty
-  marks. A retry whose failure consumed its build-dirty state may find nothing
-  dirty and park with the last-good frame on screen; the failure was already
-  surfaced, and that quiescent ending is documented rather than papered over.
+- A Tail or Scene panic occurs after the pipeline consumed paint dirtiness.
+  Its catch re-dirties the exact failed presentation before a later sibling can
+  become the pump's producer. Build, Finalize, and Pipeline failures do not use
+  this full-repaint arm; they rely on their owning recovery/dirty state and may
+  park cleanly if no such work remains.
+- Paint commits the candidate layer tree and leader/follower link registry as
+  one pair before semantics runs. A semantics error retains that matched pair,
+  so retry cannot combine one tree with an empty or newer registry; the last
+  published semantics tree remains in effect.
+- `draw_frame_entered` returns an explicit **`any_failed`** bit covering every
+  presentation segment in the pump. It only keeps the later wake decision from
+  settling: it does not choose a repaint target. `render_frame_entered` arms a
+  retry (`wake_frame()`, no `mark_rendered()`) from that bit rather than from
+  the last producer's outcome.
+- `TreeRevision` advances on each terminal `Painted` or `Errored` segment, but
+  not on `Idle`. `FrameCommitState` becomes committed only when a `Painted`
+  revision receives `Presented` or `NoPresent`; both verdicts acknowledge every
+  revision through the current one. A deferred painted frame, `Errored`,
+  `SurfaceStale`, `DeviceLost`, and `Failed` remain uncommitted. `Idle` neither
+  advances nor acknowledges a revision.
+- Submit verdicts have distinct retry effects. `SurfaceStale` and `DeviceLost`
+  retain input telemetry, arm a wake, and request a full repaint of the actual
+  producer. `Failed` drains telemetry and does not retry. `Presented` drains
+  telemetry and commits; `NoPresent` commits without draining pending input
+  epochs because no backend present occurred. Segment failures arm only the
+  wake, except for the exact Tail/Scene repaint rule above.
+- A retry whose terminal failure consumed its dirty state may run a clean
+  `Idle`, reset the failure streak, and clear the wake. It does **not** repair
+  the absent commit: the presentation remains `Uncommitted` with the last-good
+  frame on screen until a later painted revision receives an accepted submit
+  verdict.
 - A deterministic failure that keeps re-dirtying therefore retries at the
   runner's fallback pace with a caught, reported failure each time — the same
   accepted steady state as a permanently failing surface submit (see
   `render_frame_entered`'s `SurfaceValidation` arm). Automatic suspension
-  ("halt this presentation after N consecutive failures") is deliberately NOT
-  in this slice: it needs its own wake-predicate exclusions to avoid a
+  ("halt this presentation after N consecutive failures") is deliberately
+  absent: it needs its own wake-predicate exclusions to avoid a
   busy-spin, and the embedder already gets `consecutive_failures` to make that
   call itself. Automatic suspension is a separate scheduling-policy decision.
-- The post-frame stationary-device re-hit-test is skipped on any pump with a
-  failed segment: hover state holds the last cleanly committed version instead
-  of actively probing a mid-commit tree.
+- The primary presentation's stationary-device re-hit-test runs after submit
+  classification only when that primary's own `FrameCommitState` is
+  `Committed`. A secondary failure therefore does not freeze a committed
+  primary, while an uncommitted primary holds its previous hover derivation.
 
 ### Measured cost of the build-side seams
 
@@ -299,6 +345,15 @@ Honestly named, per the issue's "transactional" acceptance criterion:
   "recursive draw_frame" assert.
 - First-frame latch, segment-span telemetry, submit gating: all keyed off the
   `Errored` outcome exactly as the pipeline-error path always was.
+- Recovered records are drained once after the complete attempt, in production
+  queue order, before a terminal report. Contained recovery does not alter the
+  dropped-frame streak, retry bit, or sibling failure accounting.
+- Paint's layer tree and leader/follower link registry remain a matched pair
+  across a semantics failure, and Tail/Scene failure re-dirties the exact
+  affected presentation.
+- `TreeRevision`/`FrameCommitState` distinguish a terminal tree attempt from a
+  submit acknowledgement; ambient primary hover refreshes only after the
+  submit verdict leaves that primary committed.
 
 **Not covered by these local repairs:**
 
@@ -329,31 +384,42 @@ Honestly named, per the issue's "transactional" acceptance criterion:
   substitute on successive parent rebuilds, producing one recovery per pass.
 - Mid-segment work outside these seams is not rolled back globally. The next
   frame proceeds from the locally repaired or last retained state.
-- **Pointer events arriving before the retry still hit-test the live tree** —
-  only the pump's own ambient re-probe is gated. One committed hit-test
-  version per frame needs snapshotted/versioned geometry, out of scope here.
+- **Pointer events arriving while a presentation is `Uncommitted` still
+  dispatch against the live tree.** `TreeRevision` gates the pump's ambient
+  hover re-probe only; holding and replaying addressed pointer input at the
+  commit transition remains follow-on work under #561 and is not claimed here.
 - **The realm-level pre-phase is outside the boundary:** vsync ticker
   callbacks (which can run user animation listeners) and gesture-deadline
   ticks run before the per-presentation loop; a panic there still escapes to
   the runner.
-- **Semantics:** flushed inside the segment, so a semantics panic is contained,
-  but a failed frame's semantics are simply not published (last published
-  version stands) — no candidate/validate/publish transaction yet.
-- **Secondary-realm windows** (`open_secondary_window` under
-  `SeparateRealms`) get containment and tracing but no handler wiring — the
-  deferred-completion plumbing does not carry the primary `AppConfig`.
+- **Semantics:** a failed frame does not publish a new semantics update; the
+  last published version stands. Layer-tree/link-registry pair retention is
+  narrower than a full candidate/validate/publish semantics transaction.
+- **Production multi-paintable routing:** `render_frame_entered` still owns one
+  constraints set, one sink, and only the last produced scene. Secondary
+  windows remain contentless until #559 adds per-presentation constraints,
+  sinks, and submit routing.
+- **Secondary handler wiring:** a new `SeparateRealms` realm receives the
+  secondary config's detail policy through Ready and Pending completion but no
+  failure handler. That handler decision is blocked on the same #559
+  production secondary rendering contract. `SharedRealm` already uses the
+  existing realm's handler and intentionally refuses a per-window override.
 
 ## Consequences
 
-- One window's frame bug no longer kills a multi-window process. The bounded
-  build-side seams keep a recoverable child or removal-hook failure inside its
-  element tree; an escape still leaves sibling presentations framing in the
-  same pump, and other realms are untouched.
+- One window's terminal frame bug no longer kills a multi-window process. An
+  escape drops and retries only that presentation's frame; sibling
+  presentations continue in the same pump and other realms are untouched.
+- A locally recovered lifecycle panic produces a `Contained` report without
+  dropping the frame or arming retry. A deterministic recovery can therefore
+  produce a report storm even while frames keep presenting; embedders that
+  forward reports own throttling or deduplication.
 - Embedders get a typed, addressed failure feed with streak accounting;
   `tracing` alone is no longer the only witness.
-- A permanently failing presentation costs a contained panic per fallback-pace
-  wake until the embedder acts or the dirty state parks — accepted for this
-  slice, escalation policy deferred as above.
-- `FramePaintOutcome` stays a unit-variant enum; failure detail travels the
-  report route, not the outcome value, so submit/telemetry matching is
-  untouched.
+- A permanently failing terminal path costs a caught, reported failure per
+  fallback-paced retry until the embedder acts or the dirty state parks.
+  Automatic suspension remains a separate scheduling-policy decision.
+- `FramePaintOutcome::Errored` represents failure anywhere in the complete
+  Build/Finalize/Pipeline/Tail/Scene segment. Failure detail travels the typed
+  report route rather than the outcome value, keeping submit/telemetry
+  matching independent of diagnostic payloads.

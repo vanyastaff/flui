@@ -60,6 +60,8 @@ impl PipelineOwner<Idle> {
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
+            #[cfg(any(test, feature = "testing"))]
+            semantics_error_once_for_test: None,
             pending_child_requests: Vec::new(),
             pending_retain_bands: Vec::new(),
             _phase: PhantomData,
@@ -73,6 +75,17 @@ impl PipelineOwner<Idle> {
     #[cfg(any(test, feature = "testing"))]
     pub fn seed_parent_data(&mut self, child_id: flui_foundation::RenderId, seed: ParentDataSeed) {
         self.parent_data_seeds.insert(child_id, seed);
+    }
+
+    /// Fail the next frame's semantics stage after paint has committed.
+    ///
+    /// This one-shot integration-test seam is absent from production builds.
+    /// It exists so upper-layer frame drivers can verify how they consume a
+    /// painted tree and its leader/follower registry when semantics fails.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "testing"))]
+    pub fn fail_next_semantics_after_paint_for_test(&mut self, error: crate::error::RenderError) {
+        self.semantics_error_once_for_test = Some(error);
     }
 
     /// Creates a new pipeline owner with callbacks in the [`Idle`] phase.
@@ -124,6 +137,8 @@ impl PipelineOwner<Idle> {
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
+            #[cfg(any(test, feature = "testing"))]
+            semantics_error_once_for_test: None,
             pending_child_requests: Vec::new(),
             pending_retain_bands: Vec::new(),
             _phase: PhantomData,
@@ -158,12 +173,23 @@ impl PipelineOwner<Idle> {
     ///
     /// If any phase returns [`crate::error::RenderError`] (most notably
     /// [`crate::error::RenderError::Poisoned`] from a panicking render
-    /// object), the in-flight frame is dropped, the owner is returned at
-    /// [`Idle`] (no in-flight layer tree), and the second element of the
-    /// tuple is `Err(...)`. The owner is **always** usable for a
+    /// object), the owner is returned at [`Idle`] and the second element of
+    /// the tuple is `Err(...)`. A paint tree already committed before a
+    /// semantics error remains in the owner's `last_layer_tree`; it is not
+    /// returned from this failed call, but a retry can repaint or submit the
+    /// retained visual result. The owner is **always** usable for a
     /// subsequent frame on the success and error paths alike.
     #[must_use = "dropping the returned PipelineOwner<Idle> discards the pipeline handle; thread it back into the next frame"]
     pub fn run_frame(
+        self,
+    ) -> (
+        PipelineOwner<Idle>,
+        crate::error::RenderResult<Option<LayerTree>>,
+    ) {
+        self.run_frame_impl()
+    }
+
+    fn run_frame_impl(
         mut self,
     ) -> (
         PipelineOwner<Idle>,
@@ -194,12 +220,19 @@ impl PipelineOwner<Idle> {
 
         // Semantics
         let mut owner = owner.into_semantics();
-        if let Err(e) = owner.run_semantics() {
+        #[cfg(any(test, feature = "testing"))]
+        let semantics_result = match owner.semantics_error_once_for_test.take() {
+            Some(error) => Err(error),
+            None => owner.run_semantics(),
+        };
+        #[cfg(not(any(test, feature = "testing")))]
+        let semantics_result = owner.run_semantics();
+        if let Err(e) = semantics_result {
             // Semantics phase has no `into_idle` because the transition
             // to <Idle> goes via `finish`. Use `finish` to recover the
-            // owner for the error path -- the layer tree from the paint
-            // phase is discarded on error to keep the invariant "Err =>
-            // no layer tree".
+            // owner for the error path. The painted tree remains in
+            // `last_layer_tree`; this failed call returns no tree, while a
+            // retry can reuse the retained visual result.
             return (owner.finish(), Err(e));
         }
 

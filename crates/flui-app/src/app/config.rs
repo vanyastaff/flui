@@ -9,7 +9,7 @@ use flui_types::{Size, geometry::px};
 #[cfg(not(target_os = "ios"))]
 use super::close_request::CloseRequestHandler;
 use super::execution::HostExecutors;
-use super::frame_failure::FrameFailureHandler;
+use super::frame_failure::{FrameFailureDetail, FrameFailureHandler};
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
 #[cfg(not(target_os = "ios"))]
@@ -67,6 +67,7 @@ impl Default for DiagnosticsProfile {
 ///     .with_resizable(true);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AppConfig {
     /// Process-level application identity used by native diagnostics sinks.
     ///
@@ -164,12 +165,24 @@ pub struct AppConfig {
     /// [`HostExecutors`]'s own doc for the contract layered on top.
     pub executors: Option<HostExecutors>,
 
-    /// Optional embedder callback receiving every contained frame failure
-    /// (issue #561's typed error route). `None` (the default): failures
-    /// are still contained and surfaced through `tracing`; only the typed
+    /// Optional embedder callback receiving every terminal frame failure and
+    /// contained lifecycle recovery (issue #561's typed report route). `None`
+    /// (the default): both remain surfaced through `tracing`; only typed
     /// delivery is skipped. See [`FrameFailureHandler`]'s own doc for the
     /// re-entrancy contract the callback must honor.
     pub frame_failure_handler: Option<FrameFailureHandler>,
+
+    /// Controls whether typed segment-panic and recovered-panic reports retain
+    /// string payloads, and whether FLUI-owned pipeline tracing materializes
+    /// error text. Debug builds default to [`FrameFailureDetail::Verbatim`];
+    /// release builds default to [`FrameFailureDetail::Redacted`]. This is
+    /// independent of [`Self::diagnostics_profile`], so changing the broader
+    /// logging profile never silently changes the data retained in typed panic
+    /// reports.
+    /// This does not sanitize a handler's `FrameFailureReport` `Debug` output
+    /// or its typed pipeline `RenderError`; handlers must treat those as
+    /// potentially sensitive.
+    pub frame_failure_detail: FrameFailureDetail,
 
     /// Optional per-window close-request veto (issue #558): asked, for
     /// each window opened with this config, whether that window may
@@ -232,6 +245,7 @@ impl Default for AppConfig {
             exit_policy: ExitPolicy::default(),
             executors: None,
             frame_failure_handler: None,
+            frame_failure_detail: FrameFailureDetail::default(),
             #[cfg(not(target_os = "ios"))]
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -342,6 +356,13 @@ impl AppConfig {
         self
     }
 
+    /// Select how much unstructured text frame-failure diagnostics retain.
+    #[must_use]
+    pub fn with_frame_failure_detail(mut self, detail: FrameFailureDetail) -> Self {
+        self.frame_failure_detail = detail;
+        self
+    }
+
     /// Register a per-window close-request veto. See
     /// [`Self::close_request_handler`]'s doc for what it is asked and
     /// when, and [`CloseRequestHandler`]'s for the contract the callback
@@ -400,6 +421,19 @@ mod tests {
         assert_eq!(config.size.width, px(1024.0));
         assert_eq!(config.size.height, px(768.0));
         assert!(!config.resizable);
+    }
+
+    #[test]
+    fn frame_failure_detail_is_explicit_and_profile_independent() {
+        let config = AppConfig::new()
+            .with_frame_failure_detail(FrameFailureDetail::Redacted)
+            .with_diagnostics_profile(DiagnosticsProfile::Development);
+        assert_eq!(config.frame_failure_detail, FrameFailureDetail::Redacted);
+
+        let config = AppConfig::new()
+            .with_frame_failure_detail(FrameFailureDetail::Verbatim)
+            .with_diagnostics_profile(DiagnosticsProfile::Production);
+        assert_eq!(config.frame_failure_detail, FrameFailureDetail::Verbatim);
     }
 
     /// `with_service` appends in declaration order — the order the

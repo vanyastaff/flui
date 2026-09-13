@@ -18,9 +18,22 @@ file records the repo-consumer-visible summary.
   `LifecycleHook` record types. `BuildOwner::take_recovered_panics` and
   `WidgetsBinding::take_recovered_panics` are explicit `#[must_use]` drains;
   records name the panicking element, the mounted substitute, or a lazy
-  delegate without overloading one id field with multiple meanings. Undrained
+  delegate without overloading one id field with multiple meanings. Exact
+  string-payload provenance is kept separately from the display-facing
+  `FlutterError`; a non-string payload therefore remains redacted in an app
+  report even when the embedder explicitly selects verbatim detail. Undrained
   records are discarded with one warning at the next frame start, bounding
   the producer even before a host forwards the diagnostics.
+- **Presentation-scoped frame-failure reporting and privacy controls** (#561):
+  `flui-app` now exposes `FailureDisposition`, `FrameFailureDetail`,
+  `PanicText`, and `SegmentPhase`, and re-exports `RecoveredAt` and
+  `LifecycleHook` for handler-side matching. `FrameFailureHandler` receives
+  contained lifecycle recoveries with their exact attribution and escaped
+  segment panics with the phase that failed. Debug builds retain panic text by
+  default; release builds redact it unless
+  `AppConfig::with_frame_failure_detail(FrameFailureDetail::Verbatim)` opts in.
+  Pipeline trace text passes through the same policy while the typed
+  `RenderError` remains available to the handler.
 - **Layout-poison retention fixtures** (#561): `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero`
   and `a_leaf_that_never_committed_stands_in_with_zero` (`flui-rendering`'s `layout_poison` tests) tell a
   poisoned node's last committed geometry apart from the `Size::ZERO` stand-in, and go red when the poisoning
@@ -187,6 +200,14 @@ file records the repo-consumer-visible summary.
   `AnimatedBehavior<V>` no longer auto-implements `UnwindSafe` or `RefUnwindSafe`; callers that
   cross an unwind boundary must establish safety explicitly, as the framework's narrow
   containment windows do with `AssertUnwindSafe`.
+- **Breaking frame-failure API reshape** (#561):
+  `FrameFailureKind::SegmentPanic.message` changes from `Option<Box<str>>` to
+  `PanicText` and the variant gains `phase: SegmentPhase`; downstream matches
+  must adopt the new fields and use `..` for forward-compatible destructuring.
+  `FrameFailureReport` additionally exposes `disposition`, and the
+  non-exhaustive `FrameFailureKind` gains `RecoveredPanic` for lifecycle
+  failures repaired without dropping the frame. This is the active-development
+  equivalent of a `0.2.0` to `0.3.0` API change; no version or tag is cut here.
 - **`PaintEffects` — one value for a render object's own paint effects**
   (#996): `RenderBox`/`RenderSliver`/`RenderObject::paint_effects(size)`
   returns `PaintEffects { opacity, clip, transform }` with a fixed nesting
@@ -659,6 +680,13 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **Presentation-local retry and frame-commit accounting** (#561): a failed
+  presentation retains its last submitted scene, cannot have its retry
+  cancelled by a clean sibling later in the same pump, and remains
+  uncommitted until a painted frame is accepted as `Presented` or `NoPresent`.
+  Panics after pipeline work re-dirty only the failed presentation so the
+  automatic retry can repaint, while stationary-pointer re-hit-testing remains
+  available to a separately committed primary presentation.
 - **A programmatic `PlatformWindow::close()` on the winit backend now actually closes the
   window** (#919). It used to hide the window and fire `on_close` but never leave the backend's
   tracking map, against which the exit policy is consulted, so an application closing its own

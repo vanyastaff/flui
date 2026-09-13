@@ -35,9 +35,11 @@ use flui_semantics::{
     semantics_action_for,
 };
 use flui_types::HapticFeedback;
-use flui_view::{GlobalKeyScope, WidgetsBinding};
+use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
 use web_time::{Duration, Instant};
 
+use super::SegmentPhase;
+use super::epoch::{FrameCommitState, TreeRevision};
 use super::semantics_host::SemanticsHost;
 use crate::bindings::RenderingFlutterBinding;
 
@@ -131,6 +133,13 @@ pub(crate) enum PresentationLifecycle {
     Closing,
     /// Owner-local resources have been released.
     Closed,
+}
+
+/// Phase-addressed frame fault injection used by the containment tests.
+#[cfg(test)]
+struct SegmentProbe {
+    phase: SegmentPhase,
+    callback: Box<dyn Fn()>,
 }
 
 /// Direct owner of mutable UI state scoped to one presentation.
@@ -246,27 +255,30 @@ pub(crate) struct PresentationState {
     /// `None` here, never a stale span latched by an earlier pump this
     /// presentation was the one to produce.
     last_segment_span: Cell<Option<(Instant, Instant)>>,
-    /// How many frames IN A ROW have failed for this presentation — the
+    /// Latest terminal (`Painted` or `Errored`) tree revision.
+    tree_revision: Cell<TreeRevision>,
+    /// Latest tree revision acknowledged by a successful submit verdict.
+    presented_revision: Cell<TreeRevision>,
+    /// Consecutive dropped-frame count for this presentation — the
     /// `consecutive_failures` field of every
     /// [`FrameFailureReport`](super::frame_failure::FrameFailureReport)
-    /// this presentation's failures produce. Incremented by `UiRealm::
-    /// report_frame_failure` (both the structured-pipeline-error and the
-    /// caught-segment-panic routes), reset by the next segment that
-    /// completes without failing. Presentation-local on purpose: one
-    /// window's failure streak must never color a sibling's reports.
+    /// this presentation produces. A terminal pipeline error or escaped
+    /// segment panic increments it. A contained lifecycle recovery reports
+    /// the current value but neither increments nor resets it. The next
+    /// segment that completes without a terminal failure resets it only after
+    /// that attempt's contained reports are delivered. Presentation-local on
+    /// purpose: one window's streak must never color a sibling's reports.
     frame_failure_streak: Cell<u32>,
-    /// Test-only fault injection: when set, runs at the top of this
-    /// presentation's build+layout+paint segment (`UiRealm::
-    /// draw_frame_for_presentation`), where a panic it raises escapes
-    /// every inner recovery layer and reaches the realm's per-presentation
-    /// `catch_unwind` boundary — the controllable stand-in for real escape
-    /// paths (e.g. a child's `RenderView::create_render_object` panicking
-    /// on the dense reconciler, which has not yet adopted the per-child
-    /// containment windows `ElementTree::mount_or_substitute` /
-    /// `update_or_substitute` give the sparse path) that are hard to
-    /// re-trigger repeatedly.
+    /// Last frame segment entered for this presentation. Written before the
+    /// segment's probe and work so the value remains unwind-correct.
+    segment_phase: FramePhaseMarker<SegmentPhase>,
+    /// Test-only fault injection addressed to one [`SegmentPhase`]. It runs
+    /// immediately after that phase is stored and before its matching work,
+    /// so a panic reaches the realm's per-presentation `catch_unwind` with
+    /// accurate attribution. The closure stays installed across retries and
+    /// must arrange its own one-shot behavior when a clean retry is expected.
     #[cfg(test)]
-    segment_probe: RefCell<Option<Box<dyn Fn()>>>,
+    segment_probe: RefCell<Option<SegmentProbe>>,
     /// Test-only oracle: how many times this presentation's own
     /// build+layout+paint segment actually ran (`UiRealm::
     /// draw_frame_for_presentation`), regardless of whether anything was
@@ -550,7 +562,10 @@ impl PresentationState {
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
+            tree_revision: Cell::new(TreeRevision::ZERO),
+            presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
+            segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
             #[cfg(test)]
@@ -610,7 +625,10 @@ impl PresentationState {
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
+            tree_revision: Cell::new(TreeRevision::ZERO),
+            presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
+            segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
             #[cfg(test)]
@@ -957,7 +975,7 @@ impl PresentationState {
         false
     }
 
-    /// Record one more consecutive frame failure and return the new streak
+    /// Record one more consecutive dropped frame and return the new streak
     /// length. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn note_frame_failure(&self) -> u32 {
         let streak = self.frame_failure_streak.get().saturating_add(1);
@@ -965,30 +983,99 @@ impl PresentationState {
         streak
     }
 
-    /// A segment completed without failing; the next failure starts a
-    /// fresh streak. See [`Self::frame_failure_streak`]'s field doc.
+    /// Current consecutive frame-drop count without changing it.
+    pub(crate) fn frame_failure_streak(&self) -> u32 {
+        self.frame_failure_streak.get()
+    }
+
+    /// A segment completed without a terminal failure; the next dropped frame
+    /// starts a fresh streak. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn reset_frame_failure_streak(&self) {
         self.frame_failure_streak.set(0);
+    }
+
+    /// Advance after one terminal frame result (`Painted` or `Errored`).
+    pub(crate) fn advance_tree_revision(&self) -> TreeRevision {
+        let tree_revision = self.tree_revision.get().next();
+        self.tree_revision.set(tree_revision);
+        tree_revision
+    }
+
+    /// Acknowledge every terminal tree revision through the current one.
+    ///
+    /// This method is the single commit point where input replay attaches:
+    /// callers invoke it only after a painted frame receives a successful
+    /// submit classification.
+    pub(crate) fn commit_tree_revision(&self) -> TreeRevision {
+        let committed_revision = self.tree_revision.get();
+        self.presented_revision.set(committed_revision);
+        committed_revision
+    }
+
+    /// Whether the current terminal tree state has been acknowledged.
+    #[must_use]
+    pub(crate) fn frame_commit_state(&self) -> FrameCommitState {
+        let tree_revision = self.tree_revision.get();
+        let presented_revision = self.presented_revision.get();
+        assert!(
+            presented_revision <= tree_revision,
+            "BUG: presented tree revision exceeds terminal tree revision"
+        );
+        if presented_revision == tree_revision {
+            FrameCommitState::Committed
+        } else {
+            FrameCommitState::Uncommitted {
+                since: presented_revision.next(),
+            }
+        }
+    }
+
+    /// Current `(tree, presented)` revisions. Test-only transition oracle.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn revision_pair(&self) -> (TreeRevision, TreeRevision) {
+        (self.tree_revision.get(), self.presented_revision.get())
     }
 
     /// Install (or clear) the segment fault-injection probe. See
     /// [`Self::segment_probe`]'s field doc.
     #[cfg(test)]
-    pub(crate) fn set_segment_probe(&self, probe: Option<Box<dyn Fn()>>) {
-        *self.segment_probe.borrow_mut() = probe;
+    pub(crate) fn set_segment_probe(&self, phase: SegmentPhase, probe: Option<Box<dyn Fn()>>) {
+        *self.segment_probe.borrow_mut() = probe.map(|callback| SegmentProbe { phase, callback });
     }
 
-    /// Run the installed segment probe, if any. Called from the top of
-    /// `UiRealm::draw_frame_for_presentation`, under a short immutable
-    /// borrow of the probe slot — a probe must not call
-    /// [`Self::set_segment_probe`] from inside itself. A panicking probe
-    /// releases the borrow during unwind, so the boundary's retry pump can
-    /// run (and re-panic) it again.
+    /// Arm the data-only one-shot fault at the build-to-finalize boundary.
     #[cfg(test)]
-    pub(crate) fn run_segment_probe(&self) {
-        if let Some(probe) = self.segment_probe.borrow().as_ref() {
-            probe();
+    pub(crate) fn arm_finalize_phase_panic(&self) {
+        self.segment_phase.arm_test_panic_once();
+    }
+
+    /// Enter a frame segment, then run its installed test probe, if any.
+    ///
+    /// The phase write deliberately precedes the probe and has no restoring
+    /// guard: if either the probe or segment work unwinds, the last-entered
+    /// phase remains available to the presentation-level catch.
+    pub(crate) fn enter_segment_phase(&self, phase: SegmentPhase) {
+        self.segment_phase.set(phase);
+        #[cfg(test)]
+        if let Some(probe) = self.segment_probe.borrow().as_ref()
+            && probe.phase == phase
+        {
+            (probe.callback)();
         }
+    }
+
+    /// Last frame segment entered by this presentation.
+    #[must_use]
+    pub(crate) fn segment_phase(&self) -> SegmentPhase {
+        self.segment_phase.get()
+    }
+
+    /// Data-only marker passed to the widget binding at the exact
+    /// build-to-finalize boundary.
+    #[must_use]
+    pub(crate) fn segment_phase_marker(&self) -> &FramePhaseMarker<SegmentPhase> {
+        &self.segment_phase
     }
 
     /// Record that this presentation's build+layout+paint segment ran. See

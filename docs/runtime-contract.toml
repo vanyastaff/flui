@@ -96,7 +96,7 @@ declarations = [
     "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
     "pub use app::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
     "pub use app::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
-    "pub use app::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};",
+    "pub use app::{ FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SegmentPhase, };",
     "pub use app::{ExitPolicy, WindowPolicy};",
     "pub use app::{ CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse, request_presentation_close, };",
     "pub use app::open_secondary_window;",
@@ -116,13 +116,14 @@ declarations = [
     "pub use config::{AppConfig, DiagnosticsProfile};",
     "pub use direct::run_direct;",
     "pub use execution::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
-    "pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};",
+    "pub use frame_failure::{ FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, PanicText, SegmentPhase, };",
     "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
     "pub use runner::request_presentation_close;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
     "pub use runtime::{ExitPolicy, WindowPolicy};",
+    "pub use flui_view::{LifecycleHook, RecoveredAt};",
     "pub use flui_view::{RootRenderElement, RootRenderView};",
 ]
 
@@ -2676,6 +2677,19 @@ failure_semantics = "infallible builder; several fields are unwired or advisory 
 consumers = ["run_app_with_config", "run_direct", "examples"]
 owner_issue = 556
 notes = "The type survives; its field set must become fully effective or shrink (the effective-configuration contract)."
+
+[[surface]]
+path = "flui_app::FrameFailureKind"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/frame_failure.rs"
+contains = "pub enum FrameFailureKind"
+classification = "stable-candidate"
+thread_affinity = "plain report value; delivered synchronously on the UiRealm owner thread"
+owner = "typed presentation-attempt failure and contained-recovery reporting"
+failure_semantics = "SegmentPanic and Pipeline are FrameDropped terminal reports; RecoveredPanic is a Contained report and does not itself arm retry or change the dropped-frame streak; recovered non-string payloads remain redacted even under explicit Verbatim detail"
+consumers = ["AppConfig FrameFailureHandler callbacks", "flui-app tracing adapter"]
+owner_issue = 561
 
 [[surface]]
 path = "flui_app::bindings re-export bundle (UpdateScheduler, PipelineOwner, PipelineCell, GestureBinding, WidgetsBinding, PaintingBinding, RenderingFlutterBinding)"

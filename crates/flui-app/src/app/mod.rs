@@ -14,6 +14,7 @@
 pub(crate) mod close_request;
 mod config;
 pub mod direct;
+mod epoch;
 pub(crate) mod execution;
 mod frame_failure;
 pub(crate) mod hot_reload;
@@ -42,7 +43,10 @@ pub use execution::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
-pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};
+pub use frame_failure::{
+    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    FrameFailureReport, PanicText, SegmentPhase,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
@@ -65,4 +69,5 @@ pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_wi
 pub use runtime::{ExitPolicy, WindowPolicy};
 
 // Re-export RootRenderView and RootRenderElement from flui-view
+pub use flui_view::{LifecycleHook, RecoveredAt};
 pub use flui_view::{RootRenderElement, RootRenderView};

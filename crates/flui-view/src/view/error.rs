@@ -139,7 +139,17 @@ impl FlutterError {
     /// (`framework.dart:5823-5834`) funnels the caught exception through
     /// `_reportException` into `ErrorWidget.builder`.
     pub fn from_panic(payload: &(dyn std::any::Any + Send), context: impl Into<String>) -> Self {
-        let message = payload_text(payload).map_or_else(
+        Self::from_payload_text(payload_text(payload), context)
+    }
+
+    /// Build the same display diagnostic from text already extracted from a
+    /// panic payload. This lets a recovery record reuse one provenance read
+    /// for both its exact payload field and the display-facing error.
+    pub(crate) fn from_payload_text(
+        source_payload_text: Option<&str>,
+        context: impl Into<String>,
+    ) -> Self {
+        let message = source_payload_text.map_or_else(
             || "panic during build (non-string payload)".to_string(),
             str::to_owned,
         );
