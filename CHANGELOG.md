@@ -24,6 +24,14 @@ file records the repo-consumer-visible summary.
   report even when the embedder explicitly selects verbatim detail. Undrained
   records are discarded with one warning at the next frame start, bounding
   the producer even before a host forwards the diagnostics.
+- **Held pointer input across failed frame commits** (#561): `flui-app` now
+  queues addressed pointer events while a presentation is uncommitted, before
+  hit testing or input-epoch stamping, and replays them through the ordinary
+  pointer dispatch path after the next painted commit. This prevents a
+  pointer sequence arriving during frame-failure recovery from targeting a
+  tree that has not reached the screen; replay preserves event order and
+  committed-tree hit testing, while gesture velocity remains based on delivery
+  time.
 - **Presentation-scoped frame-failure reporting and privacy controls** (#561):
   `flui-app` now exposes `FailureDisposition`, `FrameFailureDetail`,
   `PanicText`, and `SegmentPhase`, and re-exports `RecoveredAt` and

@@ -354,6 +354,16 @@ Honestly named, per the issue's "transactional" acceptance criterion:
 - `TreeRevision`/`FrameCommitState` distinguish a terminal tree attempt from a
   submit acknowledgement; ambient primary hover refreshes only after the
   submit verdict leaves that primary committed.
+- Addressed pointer input now follows the same commit-state boundary. While
+  a presentation is `Uncommitted`, or while an earlier pointer event is already
+  held for that presentation, `UiRealm` queues pointer events before hit
+  testing, input-epoch stamping, or gesture dispatch. The queue replays only
+  after a `Painted` frame is committed by `Presented` or `NoPresent`, through
+  the same dispatch path live pointer input uses. This is the local analogue
+  of Flutter's event-locking queue, but applied to FLUI's frame-commit state:
+  Flutter may surface a mixed retained tree after a partial frame failure,
+  whereas FLUI treats "not committed to the screen" as not eligible for new
+  pointer hit tests.
 
 **Not covered by these local repairs:**
 
@@ -384,10 +394,16 @@ Honestly named, per the issue's "transactional" acceptance criterion:
   substitute on successive parent rebuilds, producing one recovery per pass.
 - Mid-segment work outside these seams is not rolled back globally. The next
   frame proceeds from the locally repaired or last retained state.
-- **Pointer events arriving while a presentation is `Uncommitted` still
-  dispatch against the live tree.** `TreeRevision` gates the pump's ambient
-  hover re-probe only; holding and replaying addressed pointer input at the
-  commit transition remains follow-on work under #561 and is not claimed here.
+- Held pointer replay preserves target correctness and event order, not
+  velocity reconstruction. Gesture recognizers currently sample from the arena
+  clock at delivery (`SystemClock` in production), and `PointerEventData`'s
+  original `time_stamp` is not plumbed into those recognizer samples. A burst
+  of held `Down`/`Move`/`Up` events therefore replays at the retry-delivery
+  instant and may degrade fling velocity after a failed frame. That is an
+  accepted cost of this local repair because the screen was frozen during the
+  failed interval; passing event timestamps into `flui-interaction` remains a
+  future compatibility improvement if replayed kinetic fidelity becomes a
+  user-visible requirement.
 - **The realm-level pre-phase is outside the boundary:** vsync ticker
   callbacks (which can run user animation listeners) and gesture-deadline
   ticks run before the per-presentation loop; a panic there still escapes to
