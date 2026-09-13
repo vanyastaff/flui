@@ -172,12 +172,15 @@ pub struct AppConfig {
     /// re-entrancy contract the callback must honor.
     pub frame_failure_handler: Option<FrameFailureHandler>,
 
-    /// Controls whether frame-failure diagnostics retain unstructured panic
-    /// and pipeline-error text. Debug builds default to
-    /// [`FrameFailureDetail::Verbatim`]; release builds default to
-    /// [`FrameFailureDetail::Redacted`]. This is independent of
+    /// Controls whether typed segment-panic reports retain string payloads
+    /// and whether FLUI-owned pipeline tracing materializes error text. Debug
+    /// builds default to [`FrameFailureDetail::Verbatim`]; release builds
+    /// default to [`FrameFailureDetail::Redacted`]. This is independent of
     /// [`Self::diagnostics_profile`], so changing the broader logging profile
-    /// never silently changes the data retained in typed failure reports.
+    /// never silently changes the data retained in typed panic reports.
+    /// This does not sanitize a handler's `FrameFailureReport` `Debug` output
+    /// or its typed pipeline `RenderError`; handlers must treat those as
+    /// potentially sensitive.
     pub frame_failure_detail: FrameFailureDetail,
 
     /// Optional per-window close-request veto (issue #558): asked, for

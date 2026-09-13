@@ -59,10 +59,16 @@ impl fmt::Display for PanicText {
 
 /// How much source detail frame-failure diagnostics retain.
 ///
-/// This policy applies both to escaped panic payloads and to the text form
-/// of typed pipeline errors. The typed [`RenderError`] itself remains in a
-/// [`FrameFailureReport`] so a registered handler can inspect its variants
-/// even when text diagnostics are redacted.
+/// This policy filters string panic payloads before they are retained in a
+/// typed [`FrameFailureReport`]. For pipeline failures it controls only the
+/// text that FLUI itself materializes for `tracing`; the report continues to
+/// carry the original typed [`RenderError`].
+///
+/// This is not a general sanitizer for a report. In particular,
+/// [`FrameFailureReport`]'s `Debug` output and the typed [`RenderError`] may
+/// expose source text even under [`Self::Redacted`]. Handler authors must
+/// treat reports as potentially sensitive and apply their own policy before
+/// formatting or forwarding them.
 ///
 /// # Examples
 ///
@@ -155,6 +161,7 @@ pub enum FrameFailureKind {
     /// (build-phase `ErrorView` substitution, the pipeline's
     /// `RenderError::Poisoned` wrapper) did not apply, e.g. a panicking
     /// `ViewState::dispose` during tree finalization.
+    #[non_exhaustive]
     SegmentPanic {
         /// The panic payload text allowed by the configured
         /// [`FrameFailureDetail`] policy.
