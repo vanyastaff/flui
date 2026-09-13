@@ -268,9 +268,10 @@ impl SpringDescription {
 
     /// Returns the type of spring based on damping.
     ///
-    /// Classification uses `f64` with a small relative band around critical
-    /// damping so `f32` parameter round-trip does not mis-bucket near-critical
-    /// springs.
+    /// Classification uses `f64`. The only round-trip correction is an exact
+    /// match against the `f32` damping that `with_damping_ratio(..., 1.0)`
+    /// stores (`2√(mk)` after `f32` arithmetic) — representable non-critical
+    /// ratios keep their true under-/over-damped regime.
     #[must_use]
     pub fn spring_type(&self) -> SpringType {
         spring_regime(*self)
@@ -287,26 +288,29 @@ fn spring_discriminant(spring: SpringDescription) -> f64 {
     damping * damping - 4.0 * mass * stiffness
 }
 
-/// Relative band around `c² ≈ 4mk` treated as critically damped.
-///
-/// Public spring parameters are `f32`, so `with_damping_ratio(..., 1.0)` stores a
-/// rounded damping that is not exactly `2√(mk)` when re-expanded in `f64`. Without
-/// this band, those springs would flip to under-/over-damped and jump between
-/// analytic forms.
-const CRITICAL_DISCRIMINANT_REL_EPS: f64 = 1e-6;
+/// `f32` critical damping `2√(mk)`, matching [`SpringDescription::with_damping_ratio`]
+/// at ratio `1.0`. Comparing against this exact bit pattern — not a relative
+/// band — preserves representable non-critical ratios while still snapping the
+/// ratio-`1.0` round-trip (whose `f64` discriminant is a tiny nonzero).
+#[inline]
+fn critical_damping_f32(mass: f32, stiffness: f32) -> f32 {
+    2.0 * (mass * stiffness).sqrt()
+}
 
 #[inline]
 fn spring_regime(spring: SpringDescription) -> SpringType {
-    let mass = f64::from(spring.mass);
-    let stiffness = f64::from(spring.stiffness);
-    let cmk = 4.0 * mass * stiffness;
+    // Snap only the exact `with_damping_ratio(..., 1.0)` bit pattern.
+    if spring.damping == critical_damping_f32(spring.mass, spring.stiffness) {
+        return SpringType::CriticallyDamped;
+    }
+
     let discriminant = spring_discriminant(spring);
-    if discriminant.abs() <= cmk * CRITICAL_DISCRIMINANT_REL_EPS {
-        SpringType::CriticallyDamped
-    } else if discriminant > 0.0 {
+    if discriminant > 0.0 {
         SpringType::Overdamped
-    } else {
+    } else if discriminant < 0.0 {
         SpringType::Underdamped
+    } else {
+        SpringType::CriticallyDamped
     }
 }
 
@@ -1346,8 +1350,8 @@ mod tests {
         }
     }
 
-    /// Mirrors `controller::default_fling_spring`. The critical band is
-    /// load-bearing: without it, f64 promotion of ratio `1.0` at k=500 would
+    /// Mirrors `controller::default_fling_spring`. The critical round-trip snap
+    /// is load-bearing: without it, f64 promotion of ratio `1.0` at k=500 would
     /// classify as underdamped and `fling_with` would reject the default spring.
     #[test]
     fn default_fling_spring_shape_is_not_underdamped_and_settles() {
@@ -1364,6 +1368,42 @@ mod tests {
             "fling spring must settle; x={} dx={}",
             sim.x(2.0),
             sim.dx(2.0)
+        );
+    }
+
+    /// Codex P2 on #1087: a fixed relative band around critical must not swallow
+    /// representable non-critical ratios. `0.9999999` stores a distinct `f32`
+    /// damping with a negative discriminant and must stay underdamped so
+    /// `fling_with` keeps rejecting it.
+    #[test]
+    fn representable_near_critical_underdamped_is_not_snapped_to_critical() {
+        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.999_999_9);
+        assert_ne!(
+            spring.damping,
+            SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).damping,
+            "fixture must use a distinct f32 damping from ratio=1.0"
+        );
+        assert_eq!(
+            spring.spring_type(),
+            SpringType::Underdamped,
+            "ratio < 1.0 with distinct f32 damping must stay underdamped"
+        );
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        assert_eq!(sim.spring_type(), SpringType::Underdamped);
+    }
+
+    #[test]
+    fn representable_near_critical_overdamped_is_not_snapped_to_critical() {
+        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.000_000_1);
+        assert_ne!(
+            spring.damping,
+            SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).damping,
+            "fixture must use a distinct f32 damping from ratio=1.0"
+        );
+        assert_eq!(
+            spring.spring_type(),
+            SpringType::Overdamped,
+            "ratio > 1.0 with distinct f32 damping must stay overdamped"
         );
     }
 
