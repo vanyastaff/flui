@@ -17,6 +17,7 @@ pub mod direct;
 mod epoch;
 pub(crate) mod execution;
 mod frame_failure;
+mod held_input;
 pub(crate) mod hot_reload;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lifecycle;

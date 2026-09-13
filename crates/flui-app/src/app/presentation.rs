@@ -40,6 +40,7 @@ use web_time::{Duration, Instant};
 
 use super::SegmentPhase;
 use super::epoch::{FrameCommitState, TreeRevision};
+use super::held_input::HeldPointerQueue;
 use super::semantics_host::SemanticsHost;
 use crate::bindings::RenderingFlutterBinding;
 
@@ -166,6 +167,10 @@ pub(crate) struct PresentationState {
     alive: Rc<()>,
     window: Weak<dyn PlatformWindow>,
     gestures: GestureBinding,
+    /// Pointer input retained while this presentation has no committed tree.
+    /// The queue is owner-thread-only and internally capped; replay detaches
+    /// its batch before invoking dispatch so callbacks may enqueue reentrantly.
+    held_pointer_input: RefCell<HeldPointerQueue>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
@@ -550,6 +555,7 @@ impl PresentationState {
             alive,
             window: Arc::downgrade(&window),
             gestures,
+            held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
             text_input,
             semantics,
@@ -613,6 +619,7 @@ impl PresentationState {
             alive,
             window: Arc::downgrade(&window),
             gestures,
+            held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
             text_input,
             semantics,
@@ -678,6 +685,16 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn gestures(&self) -> &GestureBinding {
         &self.gestures
+    }
+
+    /// The bounded queue used while this presentation has no committed tree.
+    #[must_use]
+    #[expect(
+        dead_code,
+        reason = "the state ships before its production routing consumer so the queue invariant can be reviewed independently"
+    )]
+    pub(crate) fn held_pointer_input(&self) -> &RefCell<HeldPointerQueue> {
+        &self.held_pointer_input
     }
 
     /// A clone of this presentation's own implicit-animation controller

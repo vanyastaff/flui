@@ -1,0 +1,736 @@
+//! Bounded pointer input retained while a presentation has no committed tree.
+
+use std::cell::RefCell;
+use std::collections::VecDeque;
+
+use flui_foundation::PresentationId;
+use flui_interaction::{PointerEvent, PointerId};
+
+pub(crate) const HELD_POINTER_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MotionClass {
+    Contact,
+    Hover,
+}
+
+#[derive(Debug, Default)]
+struct QueueCounters {
+    coalesced_events: usize,
+    dropped_events: usize,
+    dropped_sequences: usize,
+}
+
+/// Presentation-local pointer events waiting for a committed render tree.
+///
+/// Appends are amortized O(1). Coalescing, supersession, and safe eviction
+/// are O(n) average and O(n²) worst-case; `n` is always bounded by
+/// [`HELD_POINTER_CAPACITY`], so neither work nor storage can grow with an
+/// uncommitted-frame storm.
+pub(crate) struct HeldPointerQueue {
+    presentation_id: PresentationId,
+    events: VecDeque<PointerEvent>,
+    replay_in_flight: bool,
+    replay_reserved: usize,
+    replay_tail_open_pointers: Vec<PointerId>,
+    saturation_warned: bool,
+    saturation_episodes: usize,
+    counters: QueueCounters,
+}
+
+impl HeldPointerQueue {
+    pub(crate) fn new(presentation_id: PresentationId) -> Self {
+        Self {
+            presentation_id,
+            events: VecDeque::new(),
+            replay_in_flight: false,
+            replay_reserved: 0,
+            replay_tail_open_pointers: Vec::new(),
+            saturation_warned: false,
+            saturation_episodes: 0,
+            counters: QueueCounters::default(),
+        }
+    }
+
+    /// Admit one event without ever exposing more than the fixed capacity.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "production routing adopts this independently reviewed bounded queue in the following change"
+        )
+    )]
+    pub(crate) fn append(&mut self, event: PointerEvent) {
+        let pointer_id = flui_interaction::events::extract_pointer_id(&event);
+        let motion_class = Self::motion_class(&event);
+
+        if matches!(motion_class, Some(MotionClass::Contact)) && !self.has_open_epoch(pointer_id) {
+            self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
+            return;
+        }
+        if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            && !self.has_open_epoch(pointer_id)
+        {
+            self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
+            return;
+        }
+
+        if matches!(event, PointerEvent::Down(_)) && self.has_open_epoch(pointer_id) {
+            self.remove_open_epoch(pointer_id);
+        }
+
+        if let Some(class) = motion_class
+            && let Some(index) = self.coalescible_motion_index(pointer_id, class)
+        {
+            let _ = self.events.remove(index);
+            self.events.push_back(event);
+            self.counters.coalesced_events = self.counters.coalesced_events.saturating_add(1);
+            return;
+        }
+
+        let is_terminal = matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_));
+        if !is_terminal && !self.make_room_for_one() {
+            self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
+            self.note_saturation(
+                self.total_len()
+                    .saturating_add(1)
+                    .saturating_sub(HELD_POINTER_CAPACITY),
+            );
+            return;
+        }
+
+        self.events.push_back(event);
+        while self.total_len() > HELD_POINTER_CAPACITY {
+            let over_capacity = self.total_len().saturating_sub(HELD_POINTER_CAPACITY);
+            let removed = self.evict_oldest_complete_sequence();
+            debug_assert!(
+                removed,
+                "a terminal admitted above capacity completes an evictable pointer epoch"
+            );
+            if !removed {
+                let _ = self.events.pop_back();
+                self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
+                break;
+            }
+            self.note_saturation(over_capacity);
+        }
+        debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
+    }
+
+    /// Remove hover motion only, retaining every contact epoch intact.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "window-leave routing adopts this independently reviewed bounded queue in the following change"
+        )
+    )]
+    pub(crate) fn drop_hovers(&mut self) {
+        let before = self.events.len();
+        self.events
+            .retain(|event| Self::motion_class(event) != Some(MotionClass::Hover));
+        let dropped = before.saturating_sub(self.events.len());
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(dropped);
+        if dropped != 0 {
+            self.trace_counts("dropped held pointer hovers", dropped);
+        }
+        debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.total_len()
+    }
+
+    #[cfg(test)]
+    fn saturation_episodes(&self) -> usize {
+        self.saturation_episodes
+    }
+
+    #[cfg(test)]
+    fn is_replay_in_flight(&self) -> bool {
+        self.replay_in_flight
+    }
+
+    fn total_len(&self) -> usize {
+        self.events.len().saturating_add(self.replay_reserved)
+    }
+
+    fn motion_class(event: &PointerEvent) -> Option<MotionClass> {
+        match event {
+            PointerEvent::Move(update) if update.current.buttons.is_empty() => {
+                Some(MotionClass::Hover)
+            }
+            PointerEvent::Move(_) => Some(MotionClass::Contact),
+            _ => None,
+        }
+    }
+
+    fn has_open_epoch(&self, pointer_id: PointerId) -> bool {
+        let mut is_open = self.replay_tail_open_pointers.contains(&pointer_id);
+        for event in &self.events {
+            if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+                continue;
+            }
+            match event {
+                PointerEvent::Down(_) => is_open = true,
+                PointerEvent::Up(_) | PointerEvent::Cancel(_) => is_open = false,
+                _ => {}
+            }
+        }
+        is_open
+    }
+
+    fn coalescible_motion_index(&self, pointer_id: PointerId, class: MotionClass) -> Option<usize> {
+        let index = self.events.iter().rposition(|queued| {
+            flui_interaction::events::extract_pointer_id(queued) == pointer_id
+        })?;
+        if Self::motion_class(&self.events[index]) != Some(class) {
+            return None;
+        }
+        Some(index)
+    }
+
+    fn remove_open_epoch(&mut self, pointer_id: PointerId) {
+        let mut open_start = None;
+        for (index, event) in self.events.iter().enumerate() {
+            if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+                continue;
+            }
+            match event {
+                PointerEvent::Down(_) => open_start = Some(index),
+                PointerEvent::Up(_) | PointerEvent::Cancel(_) => open_start = None,
+                _ => {}
+            }
+        }
+        let Some(open_start) = open_start else {
+            return;
+        };
+        let before = self.events.len();
+        self.events = std::mem::take(&mut self.events)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                let belongs_to_superseded_epoch = index >= open_start
+                    && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                (!belongs_to_superseded_epoch).then_some(event)
+            })
+            .collect();
+        let removed = before.saturating_sub(self.events.len());
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(removed);
+        self.counters.dropped_sequences = self.counters.dropped_sequences.saturating_add(1);
+    }
+
+    fn make_room_for_one(&mut self) -> bool {
+        while self.total_len() >= HELD_POINTER_CAPACITY {
+            if !self.evict_oldest_complete_sequence() {
+                return false;
+            }
+            self.note_saturation(1);
+        }
+        true
+    }
+
+    fn evict_oldest_complete_sequence(&mut self) -> bool {
+        let mut victim = None;
+        for (start, event) in self.events.iter().enumerate() {
+            if !matches!(event, PointerEvent::Down(_)) {
+                continue;
+            }
+            let pointer_id = flui_interaction::events::extract_pointer_id(event);
+            for (end, candidate) in self.events.iter().enumerate().skip(start + 1) {
+                if flui_interaction::events::extract_pointer_id(candidate) != pointer_id {
+                    continue;
+                }
+                match candidate {
+                    PointerEvent::Down(_) => break,
+                    PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
+                        victim = Some((pointer_id, start, end));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if victim.is_some() {
+                break;
+            }
+        }
+        let Some((pointer_id, start, end)) = victim else {
+            return false;
+        };
+        let before = self.events.len();
+        self.events = std::mem::take(&mut self.events)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                let belongs_to_victim = (start..=end).contains(&index)
+                    && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                (!belongs_to_victim).then_some(event)
+            })
+            .collect();
+        let removed = before.saturating_sub(self.events.len());
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(removed);
+        self.counters.dropped_sequences = self.counters.dropped_sequences.saturating_add(1);
+        true
+    }
+
+    fn note_saturation(&mut self, over_capacity: usize) {
+        if self.saturation_warned {
+            return;
+        }
+        self.saturation_warned = true;
+        self.saturation_episodes = self.saturation_episodes.saturating_add(1);
+        tracing::warn!(
+            presentation_id = self.presentation_id.as_u64(),
+            capacity = HELD_POINTER_CAPACITY,
+            queued = self.total_len(),
+            over_capacity,
+            dropped_events = self.counters.dropped_events,
+            dropped_sequences = self.counters.dropped_sequences,
+            "held pointer input reached its defensive capacity"
+        );
+    }
+
+    fn trace_counts(&self, operation: &'static str, affected: usize) {
+        tracing::trace!(
+            presentation_id = self.presentation_id.as_u64(),
+            capacity = HELD_POINTER_CAPACITY,
+            queued = self.total_len(),
+            coalesced_events = self.counters.coalesced_events,
+            dropped_events = self.counters.dropped_events,
+            dropped_sequences = self.counters.dropped_sequences,
+            remaining = self.total_len(),
+            affected,
+            operation,
+            "held pointer queue operation"
+        );
+    }
+
+    fn finish_replay(&mut self, completed: bool, restored: usize) {
+        self.replay_in_flight = false;
+        self.replay_reserved = 0;
+        self.replay_tail_open_pointers.clear();
+        self.trace_counts(
+            if completed {
+                "drained held pointer input"
+            } else {
+                "restored aborted held pointer replay"
+            },
+            restored,
+        );
+        if completed {
+            self.saturation_warned = false;
+            self.counters = QueueCounters::default();
+        }
+        debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
+    }
+}
+
+/// Detached replay batch that restores its undispatched suffix on unwind.
+///
+/// No `RefMut` survives `next`, so a dispatch callback may enqueue input
+/// reentrantly. Dropping an unfinished batch places its suffix ahead of that
+/// newly queued input and clears the in-flight state.
+#[must_use = "dropping an unconsumed replay batch restores its remaining input"]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "frame commit replay adopts this panic-safe detached batch in the following change"
+    )
+)]
+pub(crate) struct HeldPointerReplay<'a> {
+    queue: &'a RefCell<HeldPointerQueue>,
+    remaining: VecDeque<PointerEvent>,
+    snapshot_events: usize,
+    completed: bool,
+}
+
+impl<'a> HeldPointerReplay<'a> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "frame commit replay adopts this panic-safe detached batch in the following change"
+        )
+    )]
+    pub(crate) fn begin(queue: &'a RefCell<HeldPointerQueue>) -> Option<Self> {
+        let remaining = {
+            let mut queue = queue.borrow_mut();
+            if queue.replay_in_flight {
+                return None;
+            }
+            let remaining = std::mem::take(&mut queue.events);
+            queue.replay_in_flight = true;
+            queue.replay_reserved = remaining.len();
+            for event in &remaining {
+                let pointer_id = flui_interaction::events::extract_pointer_id(event);
+                match event {
+                    PointerEvent::Down(_) => {
+                        if !queue.replay_tail_open_pointers.contains(&pointer_id) {
+                            queue.replay_tail_open_pointers.push(pointer_id);
+                        }
+                    }
+                    PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
+                        queue
+                            .replay_tail_open_pointers
+                            .retain(|open| *open != pointer_id);
+                    }
+                    _ => {}
+                }
+            }
+            remaining
+        };
+        Some(Self {
+            queue,
+            snapshot_events: remaining.len(),
+            remaining,
+            completed: false,
+        })
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "frame commit replay adopts this explicit successful-completion path in the following change"
+        )
+    )]
+    pub(crate) fn complete(mut self) {
+        if self.remaining.is_empty() {
+            self.complete_inner();
+        }
+    }
+
+    fn complete_inner(&mut self) {
+        if self.completed {
+            return;
+        }
+        self.queue
+            .borrow_mut()
+            .finish_replay(true, self.snapshot_events);
+        self.completed = true;
+    }
+}
+
+impl Iterator for HeldPointerReplay<'_> {
+    type Item = PointerEvent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let event = self.remaining.pop_front();
+        if event.is_some() {
+            let mut queue = self.queue.borrow_mut();
+            queue.replay_reserved = queue.replay_reserved.saturating_sub(1);
+        } else {
+            self.complete_inner();
+        }
+        event
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.remaining.len();
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for HeldPointerReplay<'_> {}
+
+impl Drop for HeldPointerReplay<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        if self.remaining.is_empty() {
+            self.complete_inner();
+            return;
+        }
+        let restored = self.remaining.len();
+        let mut queue = self.queue.borrow_mut();
+        let mut merged = std::mem::take(&mut self.remaining);
+        merged.append(&mut queue.events);
+        queue.events = merged;
+        queue.finish_replay(false, restored);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use flui_foundation::PresentationId;
+    use flui_interaction::events::pointer::{PointerButtons, PointerType};
+    use flui_interaction::events::{
+        PointerEventExt as _, make_cancel_event_for_id, make_down_event_for_id,
+        make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{PointerEvent, PointerId};
+    use flui_types::geometry::{Offset, Pixels};
+
+    use super::{HELD_POINTER_CAPACITY, HeldPointerQueue, HeldPointerReplay};
+
+    fn pointer(raw: u64) -> PointerId {
+        PointerId::new(raw).expect("test pointer ids are nonzero")
+    }
+
+    fn position(x: f32) -> Offset<Pixels> {
+        Offset::new(Pixels(x), Pixels(0.0))
+    }
+
+    fn down(pointer_id: PointerId) -> PointerEvent {
+        make_down_event_for_id(pointer_id, position(0.0), PointerType::Touch)
+    }
+
+    fn contact_move(pointer_id: PointerId, x: f32) -> PointerEvent {
+        make_move_event_for_id(pointer_id, position(x), PointerType::Touch)
+    }
+
+    fn hover(pointer_id: PointerId, x: f32) -> PointerEvent {
+        let mut event = make_move_event_for_id(pointer_id, position(x), PointerType::Mouse);
+        let PointerEvent::Move(update) = &mut event else {
+            unreachable!("the move helper always constructs PointerEvent::Move")
+        };
+        update.current.buttons = PointerButtons::new();
+        event
+    }
+
+    fn up(pointer_id: PointerId) -> PointerEvent {
+        make_up_event_for_id(pointer_id, position(9.0), PointerType::Touch)
+    }
+
+    fn cancel(pointer_id: PointerId) -> PointerEvent {
+        make_cancel_event_for_id(pointer_id, PointerType::Touch)
+    }
+
+    fn enter(pointer_id: PointerId) -> PointerEvent {
+        let PointerEvent::Cancel(info) = cancel(pointer_id) else {
+            unreachable!("the cancel helper always constructs PointerEvent::Cancel")
+        };
+        PointerEvent::Enter(info)
+    }
+
+    fn positions(events: &[PointerEvent]) -> Vec<f32> {
+        events
+            .iter()
+            .map(|event| event.position().dx.get())
+            .collect()
+    }
+
+    fn drain(queue: &RefCell<HeldPointerQueue>) -> Vec<PointerEvent> {
+        let mut replay = HeldPointerReplay::begin(queue).expect("no replay is already in flight");
+        let events = replay.by_ref().collect();
+        replay.complete();
+        events
+    }
+
+    fn queue() -> RefCell<HeldPointerQueue> {
+        RefCell::new(HeldPointerQueue::new(PresentationId::new(1)))
+    }
+
+    #[test]
+    fn latest_motion_moves_to_the_arrival_tail_across_interleaved_pointers() {
+        let queue = queue();
+        let first = pointer(2);
+        let second = pointer(3);
+        queue.borrow_mut().append(down(first));
+        queue.borrow_mut().append(down(second));
+        queue.borrow_mut().append(contact_move(first, 1.0));
+        queue.borrow_mut().append(contact_move(second, 2.0));
+        queue.borrow_mut().append(contact_move(first, 3.0));
+
+        let events = drain(&queue);
+        assert_eq!(positions(&events), vec![0.0, 0.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn hover_and_contact_motion_do_not_cross_class_or_discrete_barriers() {
+        let queue = queue();
+        let id = pointer(2);
+        queue.borrow_mut().append(hover(id, 1.0));
+        queue.borrow_mut().append(hover(id, 2.0));
+        queue.borrow_mut().append(enter(id));
+        queue.borrow_mut().append(hover(id, 3.0));
+        queue.borrow_mut().append(hover(id, 4.0));
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 5.0));
+        queue.borrow_mut().append(contact_move(id, 6.0));
+        queue.borrow_mut().append(up(id));
+        queue.borrow_mut().append(hover(id, 7.0));
+
+        let events = drain(&queue);
+        assert_eq!(positions(&events), vec![2.0, 0.0, 4.0, 0.0, 6.0, 9.0, 7.0]);
+    }
+
+    #[test]
+    fn oldest_complete_sequence_is_evicted_without_reordering_other_pointers() {
+        let queue = queue();
+        let victim = pointer(2);
+        queue.borrow_mut().append(down(victim));
+        for raw in 3..=HELD_POINTER_CAPACITY as u64 + 1 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+        queue.borrow_mut().append(up(victim));
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), HELD_POINTER_CAPACITY - 1);
+        assert!(
+            events
+                .iter()
+                .all(|event| { flui_interaction::events::extract_pointer_id(event) != victim })
+        );
+        let ids: Vec<_> = events
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn cancel_completes_an_evictable_sequence() {
+        let queue = queue();
+        let victim = pointer(2);
+        queue.borrow_mut().append(down(victim));
+        for raw in 3..=HELD_POINTER_CAPACITY as u64 + 1 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+        queue.borrow_mut().append(cancel(victim));
+
+        assert_eq!(drain(&queue).len(), HELD_POINTER_CAPACITY - 1);
+    }
+
+    #[test]
+    fn hard_cap_rejects_unique_incomplete_downs_at_sizes_1_32_and_256() {
+        let queue = queue();
+        for raw in 1..=HELD_POINTER_CAPACITY as u64 + 32 {
+            queue.borrow_mut().append(down(pointer(raw)));
+            assert!(queue.borrow().len() <= HELD_POINTER_CAPACITY);
+            if raw == 1 || raw == 32 || raw == HELD_POINTER_CAPACITY as u64 {
+                assert_eq!(queue.borrow().len(), raw as usize);
+            }
+        }
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        assert_eq!(queue.borrow().saturation_episodes(), 1);
+    }
+
+    #[test]
+    fn saturated_incomplete_epochs_wholly_reject_hover_and_discrete_events() {
+        let queue = queue();
+        for raw in 1..=HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+        let hover_id = pointer(400);
+        let discrete_id = pointer(401);
+        queue.borrow_mut().append(hover(hover_id, 4.0));
+        queue.borrow_mut().append(enter(discrete_id));
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), HELD_POINTER_CAPACITY);
+        assert!(events.iter().all(|event| {
+            let id = flui_interaction::events::extract_pointer_id(event);
+            id != hover_id && id != discrete_id
+        }));
+    }
+
+    #[test]
+    fn repeated_down_supersedes_the_whole_prior_open_epoch() {
+        let queue = queue();
+        let id = pointer(2);
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 1.0));
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 2.0));
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], PointerEvent::Down(_)));
+        assert_eq!(events[1].position().dx.get(), 2.0);
+    }
+
+    #[test]
+    fn orphan_contact_move_up_and_cancel_are_dropped() {
+        let queue = queue();
+        let id = pointer(2);
+        queue.borrow_mut().append(contact_move(id, 1.0));
+        queue.borrow_mut().append(up(id));
+        queue.borrow_mut().append(cancel(id));
+        assert!(drain(&queue).is_empty());
+    }
+
+    #[test]
+    fn dropping_hovers_preserves_complete_and_incomplete_contacts() {
+        let queue = queue();
+        let complete = pointer(2);
+        let incomplete = pointer(3);
+        queue.borrow_mut().append(hover(pointer(4), 1.0));
+        queue.borrow_mut().append(down(complete));
+        queue.borrow_mut().append(contact_move(complete, 2.0));
+        queue.borrow_mut().append(up(complete));
+        queue.borrow_mut().append(down(incomplete));
+        queue.borrow_mut().append(contact_move(incomplete, 3.0));
+        queue.borrow_mut().drop_hovers();
+
+        let events = drain(&queue);
+        assert_eq!(events.len(), 5);
+        assert!(events.iter().all(|event| !matches!(event, PointerEvent::Move(update) if update.current.buttons.is_empty())));
+    }
+
+    #[test]
+    fn completed_replay_preserves_queued_behind_input_and_rearms_warning() {
+        let queue = queue();
+        for raw in 1..=HELD_POINTER_CAPACITY as u64 + 1 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(replay.next().is_some());
+        queue.borrow_mut().append(hover(pointer(400), 4.0));
+        replay.for_each(drop);
+        assert_eq!(queue.borrow().len(), 1);
+        assert!(!queue.borrow().is_replay_in_flight());
+
+        for raw in 500..=500 + HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(down(pointer(raw)));
+        }
+        assert_eq!(queue.borrow().saturation_episodes(), 2);
+    }
+
+    #[test]
+    fn contact_followup_arriving_during_replay_queues_behind_its_down() {
+        let queue = queue();
+        let id = pointer(2);
+        queue.borrow_mut().append(down(id));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        queue.borrow_mut().append(contact_move(id, 5.0));
+        assert!(replay.next().is_none());
+
+        let events = drain(&queue);
+        assert_eq!(positions(&events), vec![5.0]);
+    }
+
+    #[test]
+    fn abort_replay_restores_undispatched_snapshot_before_reentrant_input() {
+        let queue = queue();
+        let first = pointer(2);
+        let second = pointer(3);
+        let reentrant = pointer(4);
+        queue.borrow_mut().append(down(first));
+        queue.borrow_mut().append(down(second));
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut replay =
+                HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+            assert!(replay.next().is_some());
+            queue.borrow_mut().append(down(reentrant));
+            panic!("injected replay dispatch panic");
+        }));
+        assert!(panic.is_err());
+
+        let events = drain(&queue);
+        let ids: Vec<_> = events
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(ids, vec![second, reentrant]);
+        assert!(!queue.borrow().is_replay_in_flight());
+    }
+}
