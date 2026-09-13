@@ -17,7 +17,7 @@ use std::any::Any;
 
 use flui_foundation::ElementId;
 
-use crate::owner::{HookPanicRecording, LifecycleHook, RecoveredAt, RecoveredPanic};
+use crate::owner::{LifecycleHook, RecoveredAt, RecoveredPanic, StagedRecoveredPanic};
 use crate::view::View;
 use crate::view::recovery_view_for;
 
@@ -55,12 +55,12 @@ pub(crate) struct ChildHookPanic {
     pub(crate) inserted: Option<InsertedChild>,
     /// Which lifecycle hook was running when the panic happened.
     pub(crate) hook: LifecycleHook,
-    /// Whether the innermost behavior catch already recorded this unwind.
+    /// Exact behavior-attributed diagnostic staged by the innermost catch.
     ///
     /// The immediate `activate_subtree` catch consumes the owner's transient
-    /// marker and carries the value here. Consequently no owner-global
-    /// `Recorded` state can outlive the unwind that created it.
-    pub(crate) recording: HookPanicRecording,
+    /// handoff and carries the owned token here. It is published only after
+    /// substitute mount succeeds; any earlier unwind drops it automatically.
+    pub(crate) staged: Option<StagedRecoveredPanic>,
     /// The caught panic payload, unconverted — the primitive builds the
     /// `FlutterError`/`RecoveredPanic` from it exactly once.
     pub(crate) payload: Box<dyn Any + Send>,
@@ -75,11 +75,11 @@ impl ElementTree {
     /// caught panic it undoes whatever the window had committed (discards
     /// an unannounced mint via [`discard_unannounced`](Self::discard_unannounced),
     /// finalizes a reactivated retake via [`remove_subtree`](Self::remove_subtree)),
-    /// records at most one [`RecoveredPanic`] through `owner` — skipped
-    /// when [`ChildHookPanic::recording`] reports an inner seam already
-    /// recorded this same panic under its own, more accurate identity — and
-    /// mounts the substitute unbounded at the same
-    /// `(parent, slot)` through the same insert path — a panicking
+    /// mounts the substitute unbounded at the same `(parent, slot)` through
+    /// the same insert path, then records at most one [`RecoveredPanic`]
+    /// through `owner`. A staged exact behavior record is committed only after
+    /// the substitute mounts; otherwise this window creates its own coarser
+    /// record after that same commit. A panicking
     /// substitute factory is deliberately left to propagate, naming a
     /// broken factory instead of hiding it.
     ///
@@ -110,7 +110,7 @@ impl ElementTree {
             Err(ChildHookPanic {
                 inserted,
                 hook,
-                recording,
+                staged,
                 payload,
             }) => {
                 let stranded = match inserted {
@@ -127,7 +127,7 @@ impl ElementTree {
 
                 // Build the FlutterError ONCE: it renders the substitute
                 // view below, and — when this window turns out to be the
-                // one recording the panic — is reused for the pushed
+                // one staging the panic — is reused for the committed
                 // record too (`RecoveredPanic::with_error`), never
                 // re-derived from the payload a second time.
                 let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
@@ -149,11 +149,12 @@ impl ElementTree {
                     });
 
                 // An inner seam (e.g. `StatefulBehavior::on_activate`)
-                // already recorded this exact panic under its own,
-                // accurate identity and re-raised it — this window's job
-                // is only the undo-and-substitute above, not a second,
-                // coarser record.
-                if recording == HookPanicRecording::Unrecorded {
+                // staged this exact panic under its own accurate identity
+                // and re-raised it. Commit that token only now that the
+                // undo-and-substitute transaction succeeded.
+                if let Some(staged) = staged {
+                    owner.commit_staged_lifecycle_panic(staged);
+                } else {
                     let panic = RecoveredPanic::with_error(
                         RecoveredAt::Substituted {
                             element: stranded,
@@ -187,9 +188,10 @@ impl ElementTree {
     /// rather than kept: a half-applied `update_render_object` can leave the
     /// render object carrying part of a new configuration that nothing
     /// marked dirty, so a silently stale subtree is the one outcome worse
-    /// than a visible error. At most one [`RecoveredPanic`] is pushed
-    /// through `owner` (see [`Self::mount_or_substitute`]'s doc on the
-    /// already-recorded skip); `context` becomes its `FlutterError`
+    /// than a visible error. At most one [`RecoveredPanic`] is published
+    /// through `owner`: an owned staged token is committed only after the
+    /// substitute mounts, otherwise this seam constructs the one coarser
+    /// record after that same commit. `context` becomes its `FlutterError`
     /// breadcrumb.
     #[must_use = "a substitute mount re-points whatever id the caller was tracking"]
     #[inline]
@@ -218,7 +220,7 @@ impl ElementTree {
         context: impl Into<String>,
         ChildHookPanic {
             hook,
-            recording,
+            staged,
             payload,
             ..
         }: ChildHookPanic,
@@ -251,7 +253,9 @@ impl ElementTree {
             )
             .unwrap_or_else(|substitute_panic| std::panic::resume_unwind(substitute_panic.payload));
 
-        if recording == HookPanicRecording::Unrecorded {
+        if let Some(staged) = staged {
+            owner.commit_staged_lifecycle_panic(staged);
+        } else {
             let panic = RecoveredPanic::with_error(
                 RecoveredAt::Substituted {
                     element: Some(id),

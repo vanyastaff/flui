@@ -32,7 +32,7 @@ use std::{
 
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, ErrorView, FlutterError, IntoView, Lifecycle,
-    StatefulView, StatelessView, View, ViewExt, ViewState, clear_error_view_builder,
+    RenderView, StatefulView, StatelessView, View, ViewExt, ViewState, clear_error_view_builder,
     set_error_view_builder,
 };
 
@@ -184,6 +184,39 @@ impl View for InitPanicView {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
+}
+
+#[derive(Clone)]
+struct RecoveryMountPanics;
+
+impl RenderView for RecoveryMountPanics {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = flui_objects::RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        panic!("configured recovery mount panic");
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl View for RecoveryMountPanics {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+fn recovery_mount_panics(_error: &FlutterError) -> Box<dyn View> {
+    Box::new(RecoveryMountPanics)
 }
 
 // ----------------------------------------------------------------------------
@@ -359,7 +392,7 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
         "the lifecycle unwind is logged exactly once while recovery is pending: {captured_log}"
     );
     assert_eq!(
-        captured_log.count_containing("contained and substituted"),
+        captured_log.count_containing("lifecycle hook panicked; contained"),
         0,
         "a failed recovery transaction must not claim successful substitution: {captured_log}"
     );
@@ -399,6 +432,78 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
             ..
         }
             if element == prior_failed
+    ));
+}
+
+#[test]
+fn lifecycle_recovery_mount_panic_does_not_publish_the_uncommitted_record() {
+    let _guard = acquire_builder_guard();
+    clear_error_view_builder();
+    let _reset = ErrorViewBuilderReset;
+    let failed_ids = std::sync::Arc::new(Mutex::new(Vec::new()));
+
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root = tree.mount_root_with_pipeline_owner(
+        &WrapperView {
+            child: InitPanicView {
+                failed_ids: std::sync::Arc::clone(&failed_ids),
+            },
+        },
+        Some(flui_rendering::pipeline::PipelineCell::new(
+            flui_rendering::pipeline::PipelineOwner::new(),
+        )),
+        &mut owner.element_owner_mut(),
+    );
+    owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+    let prior_failed = failed_ids.lock().unwrap()[0];
+
+    set_error_view_builder(recovery_mount_panics);
+    tree.update(
+        root,
+        &WrapperView {
+            child: InitPanicView {
+                failed_ids: std::sync::Arc::clone(&failed_ids),
+            },
+        },
+        &mut owner.element_owner_mut(),
+    );
+    tree.mark_needs_build(root);
+    owner.schedule_build_for(root, 0, flui_view::RebuildReason::ParentUpdate);
+
+    let (payload, captured_log) = flui_testing::log_capture::capture(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.build_scope(&mut tree);
+        }))
+        .expect_err("a recovery-view mount panic remains fatal")
+    });
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("configured recovery mount panic")
+    );
+    assert_eq!(
+        captured_log.count_containing("recovery transaction pending"),
+        1
+    );
+    assert_eq!(
+        captured_log.count_containing("lifecycle hook panicked; contained"),
+        0
+    );
+
+    let recovered = owner.take_recovered_panics();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "the failed recovery attempt must not publish its staged record"
+    );
+    assert!(matches!(
+        recovered[0].at,
+        flui_view::RecoveredAt::Element {
+            element,
+            parent: None,
+            ..
+        } if element == prior_failed
     ));
 }
 

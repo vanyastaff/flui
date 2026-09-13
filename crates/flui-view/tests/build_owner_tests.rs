@@ -632,7 +632,7 @@ fn test_build_owner_memory_size() {
     // own header stays 24 bytes regardless of what `RecoveredPanic` itself
     // grows to (its `element`/`parent` fields became one `RecoveredAt` enum
     // without changing this count). The paired
-    // typed `hook_panic_recorded` flag costs nothing extra because existing
+    // typed lifecycle-panic handoff costs nothing extra because existing
     // padding absorbs it.
     assert!(size < 632, "BuildOwner is too large: {size} bytes");
 }

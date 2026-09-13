@@ -943,9 +943,8 @@ fn direct_public_activate_panic_is_not_reported_as_recovered() {
         escaped.is_err(),
         "direct public activation remains unbounded"
     );
-    assert_eq!(
-        build_owner.hook_panic_recorded.get(),
-        None,
+    assert!(
+        build_owner.lifecycle_panic_handoff.take().is_disarmed(),
         "direct activation must leave the retake-only handoff disarmed"
     );
     assert!(
@@ -954,10 +953,10 @@ fn direct_public_activate_panic_is_not_reported_as_recovered() {
     );
 }
 
-/// A recorded activation unwind that escapes the public dense insertion
-/// path must disarm its transient handoff before the caller catches it.
+/// An activation unwind that escapes the public dense insertion path drops
+/// its uncommitted diagnostic and disarms before the caller catches it.
 ///
-/// CALIBRATION: removing the immediate `take_hook_panic_recorded` from the
+/// CALIBRATION: removing the immediate staged-handoff take from the
 /// active-retake `Activate` catch leaves the handoff armed, so the private
 /// `None` assertion below fails before the later bounded recovery begins.
 #[test]
@@ -1007,22 +1006,14 @@ fn public_dense_retake_disarms_recording_before_a_later_bounded_retake() {
         escaped.is_err(),
         "the public dense insertion path resumes the retake panic"
     );
-    assert_eq!(
-        build_owner.hook_panic_recorded.get(),
-        None,
+    assert!(
+        build_owner.lifecycle_panic_handoff.take().is_disarmed(),
         "the immediate retake catch must disarm the unwind-local handoff"
     );
-    let activation_records = build_owner.take_recovered_panics();
-    assert_eq!(activation_records.len(), 1, "the dense escape records once");
-    assert_eq!(activation_records[0].hook, crate::LifecycleHook::Activate);
-    assert!(matches!(
-        activation_records[0].at,
-        RecoveredAt::Element {
-            element,
-            parent: None,
-            ..
-        } if element == dense_candidate
-    ));
+    assert!(
+        build_owner.take_recovered_panics().is_empty(),
+        "an unbounded dense escape must drop its staged diagnostic"
+    );
 
     let bounded_item = GlobalKeyedPanicsOnActivate {
         key: GlobalKey::new(),
@@ -1074,7 +1065,7 @@ fn public_dense_retake_disarms_recording_before_a_later_bounded_retake() {
             .view_type_id(),
         std::any::TypeId::of::<crate::view::ErrorView>()
     );
-    assert_eq!(build_owner.hook_panic_recorded.get(), None);
+    assert!(build_owner.lifecycle_panic_handoff.take().is_disarmed());
 }
 
 /// The record names the DESCENDANT whose `activate` actually panicked,

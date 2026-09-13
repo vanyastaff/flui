@@ -99,17 +99,18 @@ when it can identify both the failed child and a valid local repair:
 1. **Stateful phase one.** `init_state` and
    `did_change_dependencies` are each caught at the behavior call, attributed
    to that exact element as
-   `RecoveredAt::Element { element, parent: None }`, and rethrown with a
-   transient recorded marker. The record captures behavior attribution only;
-   it does not claim that replacement committed. The immediate `BuildOwner`
-   catch first restores the element's slab slot, then consumes the marker. A
+   `RecoveredAt::Element { element, parent: None }`, and rethrown with an
+   owner-local staged token. The token captures behavior attribution only;
+   it does not publish a record or claim that replacement committed. The
+   immediate `BuildOwner` catch first restores the element's slab slot, then
+   takes ownership of the token. A
    parented element is finalized and replaced by an `ErrorView` at its own
    parent slot; topology and the later substitute mount establish the parent
    and outcome separately. Dirty and inherited-dependency state for the failed
    generation is removed; a scoped drain is repartitioned from a fresh
    live-scope snapshot and continues. If recovery-view construction panics,
-   the original element is preserved and requeued, and only this attempt's
-   staged record is truncated; earlier records remain. A root has no parent
+   the original element is preserved and requeued, and this attempt's owned
+   token is dropped; earlier committed records remain. A root has no parent
    slot to repair, so it is restored, requeued, and rethrown without a
    `RecoveredPanic` record. Ordinary `build` panics retain the existing
    behavior-level `ErrorView` recovery.
@@ -307,8 +308,8 @@ Honestly named, per the issue's "transactional" acceptance criterion:
   rejection, retake preflight, registry collision checks, and the framework
   relocation tails also remain outside the child windows.
 - For stateful phase-one recovery, a panic while constructing the configured
-  recovery view preserves and requeues the original element. It truncates only
-  this attempt's staged record and retains all earlier recovery records.
+  recovery view preserves and requeues the original element. It drops this
+  attempt's owned staged token and retains all earlier committed records.
 - In mount/update recovery the failed child has already been discarded or
   finalized before the recovery-view factory runs. Replacement creation,
   replacement mount, and any failure after destructive replacement begins

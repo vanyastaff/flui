@@ -355,7 +355,7 @@ fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues() {
     );
     owner.schedule_build_for(parent, 0, RebuildReason::InitialMount);
 
-    owner.build_scope(&mut tree);
+    let ((), captured_log) = flui_testing::log_capture::capture(|| owner.build_scope(&mut tree));
 
     let failed = failed_id.get().expect("init_state records its element id");
     let left = owner
@@ -414,6 +414,15 @@ fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues() {
         } if element == failed
     ));
     assert!(owner.take_recovered_panics().is_empty());
+    assert_eq!(
+        captured_log.count_containing("recovery transaction pending"),
+        1
+    );
+    assert_eq!(
+        captured_log.count_containing("lifecycle hook panicked; contained"),
+        0,
+        "committing a staged init_state record must not log twice: {captured_log}"
+    );
     assert_eq!(owner.dirty_count(), 0);
     assert_eq!(owner.pending_rebuild_reasons(replacement), None);
     owner.build_scope(&mut tree);

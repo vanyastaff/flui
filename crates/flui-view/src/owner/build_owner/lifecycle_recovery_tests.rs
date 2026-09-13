@@ -331,6 +331,6 @@ fn root_init_state_unwind_leaves_no_hook_recording_marker() {
         owner.build_scope(&mut tree);
     }));
     assert!(outcome.is_err());
-    assert_eq!(owner.hook_panic_recorded.get(), None);
+    assert!(owner.lifecycle_panic_handoff.take().is_disarmed());
     assert!(owner.take_recovered_panics().is_empty());
 }

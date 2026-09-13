@@ -1173,7 +1173,8 @@ mod did_change_dependencies_on_inherited_update {
         tree.mark_needs_build(sibling);
         owner.schedule_build_for(sibling, 2, RebuildReason::StateChange);
 
-        owner.build_scope(&mut tree);
+        let ((), captured_log) =
+            flui_testing::log_capture::capture(|| owner.build_scope(&mut tree));
 
         let children = tree.get(host).expect("host stays live").child_ids();
         assert_eq!(children.len(), 2);
@@ -1209,6 +1210,15 @@ mod did_change_dependencies_on_inherited_update {
             } if element == dep_id
         ));
         assert!(owner.take_recovered_panics().is_empty());
+        assert_eq!(
+            captured_log.count_containing("recovery transaction pending"),
+            1
+        );
+        assert_eq!(
+            captured_log.count_containing("lifecycle hook panicked; contained"),
+            0,
+            "committing a staged dependency record must not log twice: {captured_log}"
+        );
         assert_eq!(owner.dirty_count(), 0);
     }
 }

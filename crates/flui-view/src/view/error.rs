@@ -57,6 +57,33 @@ pub fn clear_error_view_builder() {
     }
 }
 
+/// Run a unit test that mutates [`ERROR_VIEW_BUILDER`] in a dedicated
+/// process, because unrelated lib tests cannot share a process-local guard.
+#[cfg(test)]
+pub(crate) fn isolate_error_view_builder_test(test_name: &str) -> bool {
+    const ISOLATED_TEST: &str = "FLUI_ISOLATED_ERROR_VIEW_BUILDER_TEST";
+    if std::env::var(ISOLATED_TEST).as_deref() == Ok(test_name) {
+        return false;
+    }
+
+    let output = std::process::Command::new(
+        std::env::current_exe().expect("the libtest executable must exist"),
+    )
+    .args([test_name, "--exact", "--nocapture"])
+    .env(ISOLATED_TEST, test_name)
+    .output()
+    .expect("the isolated libtest process must start");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success()
+            && stdout.contains("running 1 test")
+            && stdout.contains("test result: ok. 1 passed; 0 failed;"),
+        "isolated test process did not run exactly one passing test: {test_name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    true
+}
+
 /// Error details for framework errors.
 #[derive(Debug, Clone)]
 pub struct FlutterError {
@@ -275,6 +302,19 @@ impl View for UnkeyedRecovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isolated_builder_helper_rejects_an_unknown_test_name() {
+        let result = std::panic::catch_unwind(|| {
+            isolate_error_view_builder_test(
+                "view::error::tests::this_is_not_a_registered_libtest_name",
+            )
+        });
+        assert!(
+            result.is_err(),
+            "a successful zero-test subprocess would make isolation silently vacuous"
+        );
+    }
 
     #[test]
     fn test_error_view_creation() {

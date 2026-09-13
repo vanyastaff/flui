@@ -55,7 +55,9 @@ use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
-use super::recovered_panic::{HookPanicRecording, LifecycleHook, RecoveredAt, RecoveredPanic};
+use super::recovered_panic::{
+    LifecycleHook, LifecyclePanicHandoff, RecoveredAt, RecoveredPanic, StagedRecoveredPanic,
+};
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
 use crate::view::FlutterError;
 use flui_foundation::RebuildReasons;
@@ -189,23 +191,23 @@ pub struct ElementOwner<'a> {
     /// Lifecycle-hook panics caught by a per-child containment seam this
     /// frame. Committed records use [`Self::push_recovered_panic`]; armed
     /// behavior-level attribution is staged privately with one
-    /// transaction-neutral trace. A phase-one recovery-factory unwind
-    /// truncates that attempt before replacement without disturbing earlier
-    /// records; destructive recovery has no rollback promise. Drained by
+    /// transaction-neutral trace. The immediate outer catch owns that token
+    /// and publishes it only after recovery commits; an unwind before commit
+    /// drops it without disturbing earlier records. Destructive recovery has
+    /// no tree rollback promise. Drained by
     /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
     pub(crate) recovered_panics: &'a mut Vec<RecoveredPanic>,
 
-    /// Whether the innermost containment seam that caught the panic
-    /// currently unwinding has already pushed its [`RecoveredPanic`].
+    /// Owned handoff for behavior attribution in the one bounded lifecycle
+    /// window currently running.
     ///
-    /// A behavior that catches an armed user lifecycle panic records it with
+    /// A behavior that catches an armed user lifecycle panic stages it with
     /// its exact identity through [`Self::record_armed_lifecycle_panic`] and
     /// transitions this state before resuming the unwind. The immediate tree
-    /// seam consumes the marker before doing recovery work. Unbounded calls
-    /// never arm the cell and therefore neither record nor leave state behind.
-    /// The cell is transient unwind-local handoff state, never a pending
-    /// decision for a later recovery.
-    pub(crate) hook_panic_recorded: &'a Cell<Option<HookPanicRecording>>,
+    /// seam takes ownership before doing recovery work and commits it to the
+    /// public queue only after recovery succeeds. Unbounded calls never arm
+    /// the handoff and therefore neither record nor leave state behind.
+    pub(crate) lifecycle_panic_handoff: &'a Cell<LifecyclePanicHandoff>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
@@ -584,8 +586,8 @@ impl ElementOwner<'_> {
     // Panic containment
     // ========================================================================
 
-    /// Record a lifecycle-hook panic a containment seam has finished
-    /// substituting, and log it.
+    /// Record a lifecycle-hook panic after its containment seam has committed
+    /// its local recovery, and log it.
     ///
     /// Every containment seam funnels through here instead of logging
     /// separately: the `tracing::error!` below is this panic's ONE log
@@ -599,7 +601,7 @@ impl ElementOwner<'_> {
             hook = %panic.hook,
             internal_invariant = panic.internal_invariant,
             panic_message = %panic.error.message,
-            "lifecycle hook panicked; contained and substituted"
+            "lifecycle hook panicked; contained"
         );
         self.recovered_panics.push(panic);
     }
@@ -609,10 +611,9 @@ impl ElementOwner<'_> {
     ///
     /// The trace is deliberately transaction-neutral: the configurable error
     /// view factory and the replacement itself have not succeeded yet. The
-    /// containing seam either keeps this record after committing replacement
-    /// or removes only this attempt's record before propagating a factory
-    /// panic.
-    fn stage_recovered_panic(&mut self, panic: RecoveredPanic) {
+    /// containing seam either consumes this owned token after committing the
+    /// replacement or drops it before propagating a recovery failure.
+    fn stage_recovered_panic(panic: RecoveredPanic) -> StagedRecoveredPanic {
         tracing::error!(
             at = ?panic.at,
             hook = %panic.hook,
@@ -620,7 +621,7 @@ impl ElementOwner<'_> {
             panic_message = %panic.error.message,
             "lifecycle hook panicked; recovery transaction pending"
         );
-        self.recovered_panics.push(panic);
+        StagedRecoveredPanic::new(panic)
     }
 
     /// Record a lifecycle-hook panic whose subject is the panicking element
@@ -664,19 +665,17 @@ impl ElementOwner<'_> {
         ));
     }
 
-    /// Record a lifecycle panic only while its containing tree-level seam
-    /// owns the transient handoff, then transition that handoff from
-    /// `Unrecorded` to `Recorded`.
+    /// Stage a lifecycle panic only while its containing tree-level seam owns
+    /// the transient handoff.
     ///
     /// Keeping the gate and transition in this helper prevents a direct,
     /// unbounded lifecycle call from publishing a [`RecoveredPanic`] even
     /// when its caller catches the propagated unwind. If an inner behavior
-    /// already transitioned the handoff, an outer catch leaves its more
-    /// accurate record untouched. An armed call with `element == None` pushes
-    /// nothing and deliberately leaves the handoff `Unrecorded`, allowing the
-    /// outer seam to emit its coarser recovery record. The staged record's
-    /// single trace is transaction-neutral because the containing seam has
-    /// not yet committed its substitute.
+    /// already staged the handoff, an outer catch leaves its more accurate
+    /// record untouched. An armed call with `element == None` stages nothing,
+    /// allowing the outer seam to emit its coarser recovery record. The
+    /// staged record's single trace is transaction-neutral because the
+    /// containing seam has not yet committed its substitute.
     pub(crate) fn record_armed_lifecycle_panic(
         &mut self,
         element: Option<ElementId>,
@@ -685,13 +684,15 @@ impl ElementOwner<'_> {
         payload: &(dyn Any + Send),
         context: impl Into<String>,
     ) {
-        if self.hook_panic_recorded.get() != Some(HookPanicRecording::Unrecorded) {
+        let handoff = self.lifecycle_panic_handoff.take();
+        if !matches!(handoff, LifecyclePanicHandoff::Armed) {
+            self.lifecycle_panic_handoff.set(handoff);
             return;
         }
         let Some(element) = element else {
             return;
         };
-        self.stage_recovered_panic(RecoveredPanic::from_payload(
+        let staged = Self::stage_recovered_panic(RecoveredPanic::from_payload(
             RecoveredAt::Element {
                 element,
                 parent: None,
@@ -701,28 +702,35 @@ impl ElementOwner<'_> {
             payload,
             context,
         ));
-        self.hook_panic_recorded
-            .set(Some(HookPanicRecording::Recorded));
+        self.lifecycle_panic_handoff
+            .set(LifecyclePanicHandoff::Staged(staged));
     }
 
     /// Arm the unwind-local handoff immediately before a bounded lifecycle
     /// call. While disarmed, behavior-level records never mutate owner state,
-    /// so a direct lifecycle unwind cannot leak a marker even if its caller
+    /// so a direct lifecycle unwind cannot leak a handoff even if its caller
     /// catches it.
-    pub(crate) fn arm_hook_panic_recording(&self) {
-        debug_assert_eq!(
-            self.hook_panic_recorded.get(),
-            None,
+    pub(crate) fn arm_lifecycle_panic_handoff(&self) {
+        let handoff = self
+            .lifecycle_panic_handoff
+            .replace(LifecyclePanicHandoff::Armed);
+        debug_assert!(
+            handoff.is_disarmed(),
             "lifecycle panic handoffs must not be nested"
         );
-        self.hook_panic_recorded
-            .set(Some(HookPanicRecording::Unrecorded));
     }
 
-    /// Read and clear the recorded-panic marker at the immediate boundary of
-    /// the lifecycle unwind that owns it.
-    pub(crate) fn take_hook_panic_recorded(&self) -> HookPanicRecording {
-        self.hook_panic_recorded.take().unwrap_or_default()
+    /// Take and disarm the staged diagnostic at the immediate boundary of the
+    /// lifecycle unwind that owns it.
+    pub(crate) fn take_staged_lifecycle_panic(&self) -> Option<StagedRecoveredPanic> {
+        self.lifecycle_panic_handoff.take().into_staged()
+    }
+
+    /// Publish a staged behavior-attributed diagnostic after its containing
+    /// recovery transaction committed. The neutral trace was already emitted
+    /// while staging, so this consumes into the queue without logging again.
+    pub(crate) fn commit_staged_lifecycle_panic(&mut self, staged: StagedRecoveredPanic) {
+        self.recovered_panics.push(staged.into_recovered());
     }
 
     // ========================================================================
@@ -911,17 +919,13 @@ mod tests {
     }
 
     #[test]
-    fn hook_panic_recorded_round_trip() {
+    fn lifecycle_panic_handoff_stages_then_commits() {
         let mut owner = BuildOwner::new();
         let mut handle = owner.element_owner_mut();
         let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
         let element = ElementId::new(1);
 
-        assert_eq!(
-            handle.take_hook_panic_recorded(),
-            HookPanicRecording::Unrecorded,
-            "nothing marked the handoff yet"
-        );
+        assert!(handle.take_staged_lifecycle_panic().is_none());
 
         handle.record_armed_lifecycle_panic(
             Some(element),
@@ -930,17 +934,13 @@ mod tests {
             payload.as_ref(),
             "direct activation",
         );
-        assert_eq!(
-            handle.take_hook_panic_recorded(),
-            HookPanicRecording::Unrecorded,
-            "a direct unbounded activation cannot arm a persistent handoff"
-        );
+        assert!(handle.take_staged_lifecycle_panic().is_none());
         assert!(
             handle.recovered_panics.is_empty(),
             "an unbounded activation is not a recovered panic"
         );
 
-        handle.arm_hook_panic_recording();
+        handle.arm_lifecycle_panic_handoff();
         handle.record_armed_lifecycle_panic(
             None,
             TypeId::of::<()>(),
@@ -948,17 +948,13 @@ mod tests {
             payload.as_ref(),
             "bounded activation without an element id",
         );
-        assert_eq!(
-            handle.take_hook_panic_recorded(),
-            HookPanicRecording::Unrecorded,
-            "the outer retake must still emit the coarse recovery record"
-        );
+        assert!(handle.take_staged_lifecycle_panic().is_none());
         assert!(
             handle.recovered_panics.is_empty(),
             "an absent element id cannot produce an exact record"
         );
 
-        handle.arm_hook_panic_recording();
+        handle.arm_lifecycle_panic_handoff();
         handle.record_armed_lifecycle_panic(
             Some(element),
             TypeId::of::<()>(),
@@ -973,28 +969,20 @@ mod tests {
             payload.as_ref(),
             "outer behavior catch",
         );
-        assert_eq!(
-            handle.recovered_panics.len(),
-            1,
-            "a recorded handoff must preserve the first exact record"
+        assert!(
+            handle.recovered_panics.is_empty(),
+            "staging must not publish before the recovery transaction commits"
         );
-        assert_eq!(
-            handle.recovered_panics[0].element(),
-            Some(element),
-            "the inner panicking element remains the attribution target"
-        );
-        assert_eq!(
-            handle.take_hook_panic_recorded(),
-            HookPanicRecording::Recorded,
-            "an armed immediate catch receives the behavior-level record state"
-        );
+        let staged = handle
+            .take_staged_lifecycle_panic()
+            .expect("the armed catch must receive the exact staged record");
+        assert!(handle.recovered_panics.is_empty());
+        handle.commit_staged_lifecycle_panic(staged);
+        assert_eq!(handle.recovered_panics.len(), 1);
+        assert_eq!(handle.recovered_panics[0].element(), Some(element));
 
-        handle.arm_hook_panic_recording();
-        assert_eq!(
-            handle.take_hook_panic_recorded(),
-            HookPanicRecording::Unrecorded,
-            "a clean bounded activation disarms without reporting"
-        );
+        handle.arm_lifecycle_panic_handoff();
+        assert!(handle.take_staged_lifecycle_panic().is_none());
     }
 
     #[test]

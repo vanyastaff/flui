@@ -30,6 +30,8 @@ mod stateless;
 mod view;
 
 pub use animated::AnimatedView;
+#[cfg(test)]
+pub(crate) use error::isolate_error_view_builder_test;
 pub use error::{
     ErrorView, ErrorViewBuilder, FlutterError, clear_error_view_builder, set_error_view_builder,
 };
