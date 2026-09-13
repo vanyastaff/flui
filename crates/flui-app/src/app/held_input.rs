@@ -311,6 +311,7 @@ impl HeldPointerQueue {
             let evicted = self.evict_oldest_complete_sequence()
                 || self.evict_oldest_hover()
                 || self.evict_oldest_contact_motion(pointer_id)
+                || self.evict_oldest_discrete()
                 || self.evict_oldest_incomplete_sequence();
             if !evicted {
                 return false;
@@ -364,6 +365,23 @@ impl HeldPointerQueue {
         self.counters.dropped_events = self.counters.dropped_events.saturating_add(removed);
         self.counters.dropped_sequences = self.counters.dropped_sequences.saturating_add(1);
         self.retain_recorded_active_route_terminals();
+        true
+    }
+
+    fn evict_oldest_discrete(&mut self) -> bool {
+        let Some(index) = self.events.iter().position(|event| {
+            !matches!(
+                event,
+                PointerEvent::Down(_)
+                    | PointerEvent::Move(_)
+                    | PointerEvent::Up(_)
+                    | PointerEvent::Cancel(_)
+            )
+        }) else {
+            return false;
+        };
+        let _ = self.events.remove(index);
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
         true
     }
 
@@ -1274,6 +1292,30 @@ mod tests {
         let events = drain(&queue);
         assert!(events.iter().any(|event| {
             matches!(event, PointerEvent::Cancel(_))
+                && flui_interaction::events::extract_pointer_id(event) == active_route
+        }));
+        assert!(
+            !events
+                .iter()
+                .any(|event| flui_interaction::events::extract_pointer_id(event) == pointer(1))
+        );
+    }
+
+    #[test]
+    fn active_route_terminal_evicts_discrete_backlog_at_capacity() {
+        let queue = queue();
+        for raw in 1..=HELD_POINTER_CAPACITY as u64 {
+            queue.borrow_mut().append(enter(pointer(raw)));
+        }
+        let active_route = pointer(HELD_POINTER_CAPACITY as u64 + 1);
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+
+        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
+        let events = drain(&queue);
+        assert!(events.iter().any(|event| {
+            matches!(event, PointerEvent::Up(_))
                 && flui_interaction::events::extract_pointer_id(event) == active_route
         }));
         assert!(
