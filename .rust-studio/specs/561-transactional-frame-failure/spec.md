@@ -80,7 +80,7 @@ Active-dev workspace (0.2.0), breaking allowed. **flui-foundation:** `panic::{pa
 
 ## Acceptance criteria
 
-Each traces to intent's "What 'fixed' looks like" (as corrected): **F1** everything that reads frame state sees one committed version; **F2** a failed subtree never leaves a half-applied mutation; **F3** a test tells last-good retention from the zero stand-in and goes red without the poisoning step; **F4** panic payload text is policy-filtered before typed delivery, while typed pipeline errors retain their documented handler-owned exposure.
+Each traces to intent's "What 'fixed' looks like" (as corrected): **F1** layout, hit test, and paint see one committed version; **F2** a failed subtree never leaves a half-applied mutation; **F3** a test tells last-good retention from the zero stand-in and goes red without the poisoning step; **F4** panic payload text is policy-filtered before typed delivery, while typed pipeline errors retain their documented handler-owned exposure.
 
 - **AC1 (F2, `init_state`):** a child whose `init_state` panics is replaced by an `ErrorView` at its parent's slot in the same frame; `dispose()` is never called on that state; the frame is `Painted`; the parent's render-child count is unchanged; red before PR-2b (the panic propagates — the flipped pin).
 - **AC2 (F2, reconcile insert):** a `Row` of 10 children where child 7's `create_render_object` panics → one `ErrorElement` at slot 7, nine siblings intact and laid out, `child_ids` rewritten (no freed ids), the `TreeObserver`'s mount/unmount events pair, the parent's render-child count is 10; red before: the panic escapes.
