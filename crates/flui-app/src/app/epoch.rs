@@ -1,7 +1,5 @@
 //! Presentation-local tree revision and commit state.
 
-use std::fmt;
-
 /// Monotonic revision of terminal frame attempts for one presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TreeRevision(u64);
@@ -18,6 +16,11 @@ impl TreeRevision {
                 .expect("BUG: tree revision space exhausted"),
         )
     }
+
+    /// Numeric field value for crate-internal structured tracing.
+    pub(super) const fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
 /// Whether the presentation's current tree revision has been acknowledged
@@ -31,36 +34,4 @@ pub(crate) enum FrameCommitState {
         /// Earliest tree revision absent from the acknowledged frame.
         since: TreeRevision,
     },
-}
-
-/// Opaque observability snapshot of a presentation's revision state.
-pub(crate) struct FrameRevisionSnapshot {
-    tree_revision: TreeRevision,
-    presented_revision: TreeRevision,
-    commit_state: FrameCommitState,
-}
-
-impl fmt::Debug for FrameRevisionSnapshot {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("FrameRevisionSnapshot")
-            .field("tree_revision", &self.tree_revision)
-            .field("presented_revision", &self.presented_revision)
-            .field("commit_state", &self.commit_state)
-            .finish()
-    }
-}
-
-impl FrameRevisionSnapshot {
-    pub(super) fn new(
-        tree_revision: TreeRevision,
-        presented_revision: TreeRevision,
-        commit_state: FrameCommitState,
-    ) -> Self {
-        Self {
-            tree_revision,
-            presented_revision,
-            commit_state,
-        }
-    }
 }

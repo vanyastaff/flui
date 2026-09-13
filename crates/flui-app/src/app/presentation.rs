@@ -39,7 +39,7 @@ use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
 use web_time::{Duration, Instant};
 
 use super::SegmentPhase;
-use super::epoch::{FrameCommitState, FrameRevisionSnapshot, TreeRevision};
+use super::epoch::{FrameCommitState, TreeRevision};
 use super::semantics_host::SemanticsHost;
 use crate::bindings::RenderingFlutterBinding;
 
@@ -989,9 +989,10 @@ impl PresentationState {
     }
 
     /// Advance after one terminal frame result (`Painted` or `Errored`).
-    pub(crate) fn advance_tree_revision(&self) -> FrameRevisionSnapshot {
-        self.tree_revision.set(self.tree_revision.get().next());
-        self.frame_revision_snapshot()
+    pub(crate) fn advance_tree_revision(&self) -> TreeRevision {
+        let tree_revision = self.tree_revision.get().next();
+        self.tree_revision.set(tree_revision);
+        tree_revision
     }
 
     /// Acknowledge every terminal tree revision through the current one.
@@ -999,9 +1000,10 @@ impl PresentationState {
     /// This method is the single commit point where input replay attaches:
     /// callers invoke it only after a painted frame receives a successful
     /// submit classification.
-    pub(crate) fn commit_tree_revision(&self) -> FrameRevisionSnapshot {
-        self.presented_revision.set(self.tree_revision.get());
-        self.frame_revision_snapshot()
+    pub(crate) fn commit_tree_revision(&self) -> TreeRevision {
+        let committed_revision = self.tree_revision.get();
+        self.presented_revision.set(committed_revision);
+        committed_revision
     }
 
     /// Whether the current terminal tree state has been acknowledged.
@@ -1020,14 +1022,6 @@ impl PresentationState {
                 since: presented_revision.next(),
             }
         }
-    }
-
-    fn frame_revision_snapshot(&self) -> FrameRevisionSnapshot {
-        FrameRevisionSnapshot::new(
-            self.tree_revision.get(),
-            self.presented_revision.get(),
-            self.frame_commit_state(),
-        )
     }
 
     /// Current `(tree, presented)` revisions. Test-only transition oracle.

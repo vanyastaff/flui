@@ -2025,10 +2025,10 @@ impl UiRealm {
     /// Check if there is pending work in ANY presentation this realm hosts:
     /// a pending build, pending gesture motion/deadlines, or a dirty render
     /// node. The runner's wake gate (`needs_redraw() || has_pending_work()`)
-    /// reads this every frame. Production topology is exactly one
-    /// presentation, so this union is behaviorally identical to reading the
-    /// primary's own state directly; it generalizes to the isolation suite's
-    /// N>1 forests without needing a second code path.
+    /// reads this every frame. Production may host multiple presentations,
+    /// although secondary windows are contentless today, so the union must
+    /// remain presentation-wide rather than assuming the primary is the
+    /// realm's only source of pending work.
     pub(crate) fn has_pending_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
             presentation.has_pending_work()
@@ -2259,20 +2259,19 @@ impl UiRealm {
     /// backpressure aside — unwired in production today), independent of
     /// first-frame deferral, which never gates the segment (see
     /// `FrameClock`'s own module doc's `.flutter/` citation — deferral
-    /// withholds only the submit). Production topology is exactly one
-    /// presentation (`PresentationForest`'s ratchet), so this reduces to
-    /// exactly today's single unconditional segment; see
+    /// withholds only the submit). Production can host multiple
+    /// presentations, but secondary windows carry no widget content today,
+    /// so only the primary can produce painted output; see
     /// [`Self::draw_frame_for_presentation`]'s doc for the proof that the
     /// gate cannot skip a segment the old, ungated code would have run.
-    /// Returns the LAST presentation whose segment actually ran this pump,
-    /// paired with its outcome (matches today's single-presentation return
-    /// value exactly when only one presentation is mounted; with more than
-    /// one, `render_frame_entered`, this method's own caller, submits and
-    /// records telemetry against the RETURNED id, never an assumed
-    /// `primary()` — see that method's own doc for the misattribution bug
-    /// this addressing closes). A caller reading a SPECIFIC non-last
-    /// presentation's own render state still does so directly rather than
-    /// through this aggregate.
+    /// Returns the last presentation whose segment ran, paired with its
+    /// outcome. This aggregate is not a multi-surface submit contract: it
+    /// retains only one scene and receives one constraints set. Production
+    /// secondary windows are currently contentless, so at most one
+    /// presentation can paint in a pump. Supporting simultaneous paintable
+    /// presentations requires per-presentation constraints, sinks, and
+    /// submit routing under issue #559; callers must not treat the current
+    /// last-outcome tuple as last-scene-wins behavior.
     fn draw_frame_entered(
         &self,
         constraints: BoxConstraints,
@@ -2458,11 +2457,13 @@ impl UiRealm {
                 &result,
                 FramePaintOutcome::Painted(_) | FramePaintOutcome::Errored
             ) {
-                let revision = presentation.advance_tree_revision();
+                let tree_revision = presentation.advance_tree_revision();
                 tracing::trace!(
+                    target: "flui.frame",
+                    event = "tree_revision_advanced",
                     { flui_foundation::diagnostics::PRESENTATION_ID } =
                         presentation.id().as_u64(),
-                    revision = ?revision,
+                    tree_revision = tree_revision.as_u64(),
                     "Presentation tree revision advanced"
                 );
             }
@@ -2605,10 +2606,13 @@ impl UiRealm {
             self.presentations.get(presentation.id()).is_some(),
             "commit target must belong to this realm"
         );
-        let revision = presentation.commit_tree_revision();
+        let committed_revision = presentation.commit_tree_revision();
         tracing::trace!(
+            target: "flui.frame",
+            event = "tree_revision_committed",
             { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
-            revision = ?revision,
+            tree_revision = committed_revision.as_u64(),
+            presented_revision = committed_revision.as_u64(),
             "Presentation tree revision committed"
         );
     }
@@ -2697,16 +2701,15 @@ impl UiRealm {
         let constraints =
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
         let (producer_id, outcome, any_failed) = self.draw_frame_entered(constraints);
-        // The presentation whose segment actually produced `outcome` above —
-        // NEVER assumed to be `primary()`. On a pump where the primary
-        // skips (nothing dirty) and a secondary presentation produces (both
-        // reachable in production: `install_presentation_alongside` <-
-        // `open_secondary_window`), `primary()` and the real producer
-        // differ, and every decision below (the deferred-submit gate, the
-        // submit timestamp, frame accounting, telemetry) must be read from
-        // and recorded against the ACTUAL producer's own clock, not a
-        // sibling's — see `Self::record_submit_telemetry`'s own doc for the
-        // misattribution this addressing closes.
+        // The presentation whose segment produced `outcome` above is never
+        // inferred as `primary()`: test scaffolding can attach content to a
+        // secondary and exercises this attribution. Production secondary
+        // windows are contentless today, and simultaneous paintable
+        // presentations remain unsupported because this transaction has
+        // one constraints set, one sink, and retains only the last produced
+        // scene. Issue #559 must add per-presentation constraints, sinks,
+        // and submit routing before production secondary content is enabled;
+        // this producer lookup does not define last-scene-wins behavior.
         let producer = self
             .presentations
             .get(producer_id)
@@ -7091,10 +7094,11 @@ mod tests {
     // ========================================================================
     // Presentation forest — isolation suite (ADR-0043 §1)
     //
-    // Production topology is exactly one presentation per realm
-    // (`PresentationForest`'s `install` ratchet); these tests bypass it via
-    // `push_for_test` to exercise the composite `GlobalKey` registry and
-    // hot-reload fan-out against a genuine N=2 forest.
+    // Production can install multiple presentations, while attaching widget
+    // content to a secondary remains a test-only seam until issue #559 adds
+    // per-presentation frame submission. These tests exercise the composite
+    // `GlobalKey` registry and hot-reload fan-out against a genuine N=2
+    // forest.
     // ========================================================================
     mod presentation_forest_isolation {
         use super::*;
