@@ -677,9 +677,10 @@ watch-test crate="":
 #   just cross-typecheck  (windows + macos + android backends, type-check only)
 #   just deny             (advisories / bans / licenses / sources)
 #   just miri             (nightly UB check, narrow scope — see its comment)
-# Everything in `ci` except the test suites: ~2 minutes on a warm tree, and
-# what the pre-push hook runs. Every gate this repository lost time to
-# recently was caught by something in here, not by a test.
+# Everything in `ci` except the test suites: ~2 minutes on a warm tree. This is
+# what the pre-push hook runs for code/config changes; markdown-only pushes use
+# the hook's text fast path. Every gate this repository lost time to recently
+# was caught by something in here, not by a test.
 [group("ci")]
 [doc("Spell-check (typos) and TOML formatting (taplo) — the two CI gates with no cargo step")]
 text-check:
