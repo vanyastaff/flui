@@ -46,13 +46,22 @@ impl TextPainter {
             .text_direction
             .expect("TextPainter.text_direction must be set before layout");
 
-        let (metrics, layout) = self.compute_layout_metrics(text, min_width, max_width);
+        let (metrics, layout) =
+            self.compute_layout_metrics(text, min_width, max_width, LineOverflow::Enforce);
 
         // Precompute intrinsic widths (Parley-inspired: shape-once, query-many).
         // min_intrinsic = width at max_width=0 (widest unbreakable run)
         // max_intrinsic = width at max_width=∞ (single-line width)
-        let (min_metrics, _) = self.compute_layout_metrics(text, 0.0, 0.0);
-        let (max_metrics, _) = self.compute_layout_metrics(text, 0.0, f32::INFINITY);
+        // Both probes omit max_lines/ellipsis — truncating a zero-width layout
+        // can collapse visible text to an empty prefix (#1085).
+        let (min_metrics, _) =
+            self.compute_layout_metrics(text, 0.0, 0.0, LineOverflow::IgnoreForWidthIntrinsic);
+        let (max_metrics, _) = self.compute_layout_metrics(
+            text,
+            0.0,
+            f32::INFINITY,
+            LineOverflow::IgnoreForWidthIntrinsic,
+        );
 
         self.layout_cache = Some(TextLayoutCache {
             min_width,
@@ -69,11 +78,17 @@ impl TextPainter {
     }
 
     /// Computes layout metrics for the text using cosmic-text.
+    ///
+    /// [`LineOverflow::Enforce`] applies `max_lines` / ellipsis (committed
+    /// layout, dry size, height probes). [`LineOverflow::IgnoreForWidthIntrinsic`]
+    /// shapes without truncation so a zero-width wrap cannot erase visible
+    /// content under `max_lines` (#1085).
     fn compute_layout_metrics(
         &self,
         text: &InlineSpan,
         min_width: f32,
         max_width: f32,
+        line_overflow: LineOverflow,
     ) -> (LayoutMetrics, TextLayout) {
         let font_size = text
             .style()
@@ -99,7 +114,11 @@ impl TextPainter {
         // max_lines/ellipsis are ENFORCED by the shaper-level truncation:
         // size, line metrics, and painted glyphs all agree on the kept
         // lines (pre-fix the painter only *detected* the overflow and
-        // painted every line anyway).
+        // painted every line anyway). Intrinsic width probes skip this path.
+        let (max_lines, ellipsis) = match line_overflow {
+            LineOverflow::Enforce => (self.max_lines.map(|n| n as usize), self.ellipsis.as_deref()),
+            LineOverflow::IgnoreForWidthIntrinsic => (None, None),
+        };
         let layout = TextLayout::from_spans(
             spans,
             text.style(),
@@ -107,8 +126,8 @@ impl TextPainter {
             max_width_opt,
             None,
             direction,
-            self.max_lines.map(|n| n as usize),
-            self.ellipsis.as_deref(),
+            max_lines,
+            ellipsis,
         );
 
         let layout_result = layout.metrics();
@@ -230,12 +249,15 @@ impl TextPainter {
     //
     // Transient measurements that do NOT touch `layout_cache`, so a
     // parent may probe intrinsics without disturbing the painter's
-    // committed layout. Each re-shapes through `compute_layout_metrics`
-    // (the same path `layout` uses) at a probe width. Returns 0 when no
-    // text is set.
+    // committed layout. Width intrinsics reshape without max_lines /
+    // ellipsis; height / dry probes keep overflow so they match layout.
+    // Returns 0 when no text is set.
 
     /// The width the text wants with no line wrapping — its single-line
     /// width (Flutter `RenderParagraph.computeMaxIntrinsicWidth`).
+    ///
+    /// Ignores `max_lines` / ellipsis: those apply to laid-out / painted
+    /// output, not to the measurement of shaped content (#1085).
     ///
     /// Returns the precomputed value from the layout cache when available
     /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
@@ -248,13 +270,21 @@ impl TextPainter {
         let Some(text) = self.text.as_ref() else {
             return 0.0;
         };
-        let (metrics, _) = self.compute_layout_metrics(text, 0.0, f32::INFINITY);
+        let (metrics, _) = self.compute_layout_metrics(
+            text,
+            0.0,
+            f32::INFINITY,
+            LineOverflow::IgnoreForWidthIntrinsic,
+        );
         metrics.size.width.0
     }
 
     /// The narrowest width the text can take without overflowing — the
     /// width of its widest unbreakable run, found by wrapping at every
     /// opportunity (Flutter `RenderParagraph.computeMinIntrinsicWidth`).
+    ///
+    /// Ignores `max_lines` / ellipsis so a zero-width wrap probe cannot
+    /// truncate visible text to an empty prefix (#1085).
     ///
     /// Returns the precomputed value from the layout cache when available
     /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
@@ -267,7 +297,8 @@ impl TextPainter {
         let Some(text) = self.text.as_ref() else {
             return 0.0;
         };
-        let (metrics, _) = self.compute_layout_metrics(text, 0.0, 0.0);
+        let (metrics, _) =
+            self.compute_layout_metrics(text, 0.0, 0.0, LineOverflow::IgnoreForWidthIntrinsic);
         metrics.size.width.0
     }
 
@@ -283,7 +314,7 @@ impl TextPainter {
         // wanted, and a non-zero min only inflates the width field via
         // `width.max(min_width)` — an infinite `width` probe would otherwise
         // make that field infinite.
-        let (metrics, _) = self.compute_layout_metrics(text, 0.0, width);
+        let (metrics, _) = self.compute_layout_metrics(text, 0.0, width, LineOverflow::Enforce);
         metrics.size.height.0
     }
 
@@ -296,7 +327,8 @@ impl TextPainter {
         let Some(text) = self.text.as_ref() else {
             return Size::ZERO;
         };
-        let (metrics, _) = self.compute_layout_metrics(text, min_width, max_width);
+        let (metrics, _) =
+            self.compute_layout_metrics(text, min_width, max_width, LineOverflow::Enforce);
         metrics.size
     }
 
@@ -311,12 +343,23 @@ impl TextPainter {
         baseline: TextBaseline,
     ) -> Option<f32> {
         let text = self.text.as_ref()?;
-        let (metrics, _) = self.compute_layout_metrics(text, min_width, max_width);
+        let (metrics, _) =
+            self.compute_layout_metrics(text, min_width, max_width, LineOverflow::Enforce);
         Some(match baseline {
             TextBaseline::Alphabetic => metrics.alphabetic_baseline,
             TextBaseline::Ideographic => metrics.ideographic_baseline,
         })
     }
+}
+
+/// Whether line-count / ellipsis truncation runs during a metrics probe.
+///
+/// Width intrinsics deliberately skip truncation (#1085); layout and dry
+/// probes keep it so paint and measurement agree.
+#[derive(Clone, Copy, Debug)]
+enum LineOverflow {
+    Enforce,
+    IgnoreForWidthIntrinsic,
 }
 
 /// Flattens an [`InlineSpan`] tree into per-run `(text, merged style)`

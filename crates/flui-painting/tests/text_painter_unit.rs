@@ -187,3 +187,176 @@ fn painted_span_contributes_its_laid_out_box_to_display_list_bounds() {
     assert_eq!(bounds.width(), size.width);
     assert_eq!(bounds.height(), size.height);
 }
+
+/// `max_lines` must not erase min-content width on the zero-width intrinsic
+/// probe (#1085 / ARCHITECTURE mapping decision #10).
+#[test]
+fn max_lines_does_not_collapse_min_intrinsic_width() {
+    let phrase = "a WWWWWWWWWW";
+    let full = TextPainter::new()
+        .with_text(TextSpan::new(phrase))
+        .with_text_direction(TextDirection::Ltr);
+    let clipped = TextPainter::new()
+        .with_text(TextSpan::new(phrase))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1));
+
+    let full_min = full.min_intrinsic_width();
+    let full_max = full.max_intrinsic_width();
+    let clipped_min = clipped.min_intrinsic_width();
+    let clipped_max = clipped.max_intrinsic_width();
+
+    assert!(
+        full_min > 0.0,
+        "uncapped min intrinsic must be positive, got {full_min}"
+    );
+    assert!(
+        clipped_min > 0.0,
+        "max_lines must not collapse min intrinsic to zero, got {clipped_min}"
+    );
+    assert!(
+        clipped_min <= clipped_max,
+        "min-content {clipped_min} must be <= max-content {clipped_max}"
+    );
+    // Width intrinsics ignore max_lines, so capped and uncapped agree.
+    assert!(
+        (clipped_min - full_min).abs() < 0.01,
+        "capped min {clipped_min} must match uncapped min {full_min}"
+    );
+    assert!(
+        (clipped_max - full_max).abs() < 0.01,
+        "capped max {clipped_max} must match uncapped max {full_max}"
+    );
+
+    // Cached path after layout must match the uncached probe.
+    let mut laid_out = TextPainter::new()
+        .with_text(TextSpan::new(phrase))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1));
+    laid_out.layout(0.0, 200.0);
+    let cached_min = laid_out.min_intrinsic_width();
+    let cached_max = laid_out.max_intrinsic_width();
+    assert!(
+        (cached_min - clipped_min).abs() < 0.01,
+        "cached min {cached_min} must match uncached {clipped_min}"
+    );
+    assert!(
+        (cached_max - clipped_max).abs() < 0.01,
+        "cached max {cached_max} must match uncached {clipped_max}"
+    );
+}
+
+#[test]
+fn unbreakable_run_min_intrinsic_stays_positive_under_max_lines() {
+    // "W"*N may still soft-break between glyphs in cosmic-text; the
+    // contract under test is only that max_lines does not zero the probe.
+    let full = TextPainter::new()
+        .with_text(TextSpan::new("WWWWWWWWWW"))
+        .with_text_direction(TextDirection::Ltr);
+    let clipped = TextPainter::new()
+        .with_text(TextSpan::new("WWWWWWWWWW"))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1));
+    let full_min = full.min_intrinsic_width();
+    let clipped_min = clipped.min_intrinsic_width();
+    let clipped_max = clipped.max_intrinsic_width();
+    assert!(
+        clipped_min > 0.0,
+        "long run min intrinsic must be positive, got {clipped_min}"
+    );
+    assert!(clipped_min <= clipped_max);
+    assert!(
+        (clipped_min - full_min).abs() < 0.01,
+        "max_lines must not change min intrinsic for a long run: {clipped_min} vs {full_min}"
+    );
+}
+
+#[test]
+fn hard_newlines_keep_positive_width_intrinsics_under_max_lines() {
+    // Hard breaks would be truncated by max_lines=1 in committed layout, but
+    // width intrinsics still measure the full shaped content (#1085 contract).
+    let full = TextPainter::new()
+        .with_text(TextSpan::new("short\nWWWWWWWWWW\nmid"))
+        .with_text_direction(TextDirection::Ltr);
+    let clipped = TextPainter::new()
+        .with_text(TextSpan::new("short\nWWWWWWWWWW\nmid"))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1));
+
+    let full_min = full.min_intrinsic_width();
+    let clipped_min = clipped.min_intrinsic_width();
+    let clipped_max = clipped.max_intrinsic_width();
+    assert!(
+        clipped_min > 0.0,
+        "hard-newline min intrinsic must stay positive"
+    );
+    assert!(
+        (clipped_min - full_min).abs() < 0.01,
+        "max_lines must not change min intrinsic with hard newlines: {clipped_min} vs {full_min}"
+    );
+    assert!(clipped_min <= clipped_max);
+}
+
+#[test]
+fn max_lines_with_ellipsis_keeps_positive_min_intrinsic_and_still_truncates_layout() {
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::new(
+            "a soft wrapping phrase that exceeds one line under a narrow width",
+        ))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1))
+        .with_ellipsis(Some("…".to_string()));
+
+    let min = painter.min_intrinsic_width();
+    let max = painter.max_intrinsic_width();
+    assert!(
+        min > 0.0,
+        "ellipsis + max_lines must not zero min intrinsic, got {min}"
+    );
+    assert!(min <= max);
+
+    // Dry layout still enforces truncation — distinct from width intrinsics.
+    let dry = painter.dry_size(0.0, 40.0);
+    assert!(
+        dry.width.0 > 0.0 && dry.width.0 <= 40.0 + 0.01,
+        "dry layout under narrow width must stay within the constraint, got {}",
+        dry.width.0
+    );
+    assert!(
+        dry.width.0 + 0.01 < max,
+        "truncated dry width {} must be narrower than max intrinsic {max}",
+        dry.width.0
+    );
+
+    painter.layout(0.0, 40.0);
+    assert!(
+        painter.did_exceed_max_lines(),
+        "committed narrow layout must still enforce max_lines truncation"
+    );
+    // After layout, cached intrinsics must still ignore the truncation.
+    assert!(
+        (painter.min_intrinsic_width() - min).abs() < 0.01,
+        "layout must not rewrite min intrinsic from the truncating pass"
+    );
+}
+
+#[test]
+fn intrinsic_height_still_honors_max_lines() {
+    let phrase = "one two three four five six seven eight nine ten";
+    let uncapped = TextPainter::new()
+        .with_text(TextSpan::new(phrase))
+        .with_text_direction(TextDirection::Ltr);
+    let capped = TextPainter::new()
+        .with_text(TextSpan::new(phrase))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1));
+
+    let narrow = 40.0;
+    let tall = uncapped.intrinsic_height(narrow);
+    let short = capped.intrinsic_height(narrow);
+    assert!(tall > 0.0 && short > 0.0);
+    assert!(
+        short + 0.01 < tall,
+        "height probe must still apply max_lines: capped {short} vs uncapped {tall}"
+    );
+}
