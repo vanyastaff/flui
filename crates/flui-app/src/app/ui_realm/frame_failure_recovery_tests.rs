@@ -4,7 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use flui_foundation::PresentationAddress;
+use flui_foundation::{ElementId, PresentationAddress};
 use flui_types::Size;
 use flui_view::{IntoView, StatelessView, View, element::ElementKind};
 use flui_widgets::{Column, ListView, SizedBox};
@@ -110,6 +110,29 @@ impl StatelessView for PanicsOnceOnBuild {
 }
 
 impl View for PanicsOnceOnBuild {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+#[derive(Clone)]
+struct RecordsElementThenPanicsOnBuild {
+    should_panic: Rc<Cell<bool>>,
+    observed_element_id: Rc<Cell<Option<ElementId>>>,
+}
+
+impl StatelessView for RecordsElementThenPanicsOnBuild {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        self.observed_element_id.set(Some(ctx.element_id()));
+        assert!(
+            !self.should_panic.replace(false),
+            "BUG: production adapter classification"
+        );
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+impl View for RecordsElementThenPanicsOnBuild {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateless(self)
     }
@@ -264,10 +287,11 @@ fn real_bug_prefixed_recovery_preserves_classification_and_full_attribution() {
     let realm = UiRealm::for_test();
     realm.set_frame_failure_detail(FrameFailureDetail::Verbatim);
     let observed = install_collecting_handler(&realm);
+    let observed_element_id = Rc::new(Cell::new(None));
     realm
-        .attach_root_widget(&PanicsOnceOnBuild {
+        .attach_root_widget(&RecordsElementThenPanicsOnBuild {
             should_panic: Rc::new(Cell::new(true)),
-            message: "BUG: production adapter classification",
+            observed_element_id: Rc::clone(&observed_element_id),
         })
         .expect("root attaches");
     let mut backend = TestRasterBackend::always_presents();
@@ -289,15 +313,21 @@ fn real_bug_prefixed_recovery_preserves_classification_and_full_attribution() {
     else {
         panic!("expected recovered lifecycle panic")
     };
+    let panicking_element_id = observed_element_id
+        .get()
+        .expect("the panicking build records its own element id");
     assert!(matches!(
         at,
         RecoveredAt::Element {
             element,
             parent: None,
             ..
-        } if *element == flui_foundation::ElementId::new(15)
+        } if *element == panicking_element_id
     ));
-    assert_eq!(*view_type_id, TypeId::of::<PanicsOnceOnBuild>());
+    assert_eq!(
+        *view_type_id,
+        TypeId::of::<RecordsElementThenPanicsOnBuild>()
+    );
     assert_eq!(*hook, LifecycleHook::Build);
     assert_eq!(
         message,

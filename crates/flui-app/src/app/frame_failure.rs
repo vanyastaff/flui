@@ -171,6 +171,22 @@ impl FrameFailureDetail {
 
 /// Whether a failure discarded the presentation frame or was recovered
 /// inside it.
+///
+/// # Examples
+///
+/// ```
+/// use flui_app::FailureDisposition;
+///
+/// fn outcome(disposition: FailureDisposition) -> &'static str {
+///     match disposition {
+///         FailureDisposition::FrameDropped => "dropped",
+///         FailureDisposition::Contained => "contained",
+///         _ => "future disposition",
+///     }
+/// }
+///
+/// assert_eq!(outcome(FailureDisposition::Contained), "contained");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FailureDisposition {
@@ -201,13 +217,14 @@ pub enum SegmentPhase {
     Scene,
 }
 
-/// Why one presentation's frame failed.
+/// What happened during one presentation's frame attempt.
 ///
-/// Mirrors the failure taxonomy of issue #561: structured pipeline errors
-/// (caller validation, recoverable subtree, backend) keep their typed
-/// [`RenderError`] shape, while unstructured panics that escaped every
-/// inner recovery layer (per-element build recovery, the pipeline's own
-/// layout/paint `catch_unwind`) surface as [`Self::SegmentPanic`].
+/// Terminal structured pipeline errors (caller validation, recoverable
+/// subtree, backend) keep their typed [`RenderError`] shape. Unstructured
+/// panics that escape every inner recovery layer surface as
+/// [`Self::SegmentPanic`]. Lifecycle panics recovered by a narrower boundary
+/// surface as [`Self::RecoveredPanic`] while the surrounding attempt may
+/// continue.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FrameFailureKind {
@@ -251,7 +268,10 @@ pub enum FrameFailureKind {
     /// A lifecycle-hook panic recovered at a narrower per-child boundary.
     #[non_exhaustive]
     RecoveredPanic {
-        /// Where the hook was attributed and what substitution occurred.
+        /// Where the panic was attributed and recovery took place.
+        ///
+        /// A substitution outcome is present only when the specific
+        /// [`RecoveredAt`] variant records one.
         at: RecoveredAt,
         /// `TypeId` of the view associated with the failed hook.
         view_type_id: TypeId,
@@ -285,9 +305,9 @@ impl FrameFailureKind {
 #[non_exhaustive]
 pub struct FrameFailureReport {
     /// Ownership identity: which realm incarnation and which presentation
-    /// within it produced the failed frame.
+    /// within it produced this frame-attempt report.
     pub address: PresentationAddress,
-    /// What failed.
+    /// The terminal failure or contained recovery that produced this report.
     pub kind: FrameFailureKind,
     /// Whether this report dropped the frame or describes an inner recovery.
     pub disposition: FailureDisposition,
