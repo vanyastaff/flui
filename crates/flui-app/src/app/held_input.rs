@@ -33,7 +33,6 @@ pub(crate) struct HeldPointerQueue {
     replay_in_flight: bool,
     replay_reserved: usize,
     replay_tail_open_pointers: Vec<PointerId>,
-    replay_snapshot_down_pointers: Vec<PointerId>,
     replay_dispatched_open_pointers: Vec<PointerId>,
     replay_superseded_pointers: Vec<PointerId>,
     saturation_warned: bool,
@@ -49,7 +48,6 @@ impl HeldPointerQueue {
             replay_in_flight: false,
             replay_reserved: 0,
             replay_tail_open_pointers: Vec::new(),
-            replay_snapshot_down_pointers: Vec::new(),
             replay_dispatched_open_pointers: Vec::new(),
             replay_superseded_pointers: Vec::new(),
             saturation_warned: false,
@@ -83,7 +81,7 @@ impl HeldPointerQueue {
 
         if matches!(event, PointerEvent::Down(_)) {
             let supersedes_replay =
-                self.replay_in_flight && self.replay_snapshot_down_pointers.contains(&pointer_id);
+                self.replay_in_flight && self.replay_dispatched_open_pointers.contains(&pointer_id);
             if supersedes_replay || self.has_open_epoch(pointer_id) {
                 self.remove_open_epoch(pointer_id);
                 if supersedes_replay && !self.replay_superseded_pointers.contains(&pointer_id) {
@@ -323,7 +321,6 @@ impl HeldPointerQueue {
         self.replay_in_flight = false;
         self.replay_reserved = 0;
         self.replay_tail_open_pointers.clear();
-        self.replay_snapshot_down_pointers.clear();
         self.replay_dispatched_open_pointers.clear();
         self.replay_superseded_pointers.clear();
         self.trace_counts(
@@ -383,9 +380,6 @@ impl<'a> HeldPointerReplay<'a> {
                 let pointer_id = flui_interaction::events::extract_pointer_id(event);
                 match event {
                     PointerEvent::Down(_) => {
-                        if !queue.replay_snapshot_down_pointers.contains(&pointer_id) {
-                            queue.replay_snapshot_down_pointers.push(pointer_id);
-                        }
                         if !queue.replay_tail_open_pointers.contains(&pointer_id) {
                             queue.replay_tail_open_pointers.push(pointer_id);
                         }
@@ -452,11 +446,7 @@ impl<'a> HeldPointerReplay<'a> {
         let mut removed_events = 0usize;
         let mut removed_sequences = 0usize;
         for pointer_id in superseded {
-            let mut removing_epoch = self
-                .queue
-                .borrow()
-                .replay_dispatched_open_pointers
-                .contains(&pointer_id);
+            let mut removing_epoch = true;
             let before = self.remaining.len();
             self.remaining = std::mem::take(&mut self.remaining)
                 .into_iter()
@@ -468,10 +458,6 @@ impl<'a> HeldPointerReplay<'a> {
                         if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
                             removing_epoch = false;
                         }
-                        return None;
-                    }
-                    if matches!(event, PointerEvent::Down(_)) {
-                        removing_epoch = true;
                         return None;
                     }
                     Some(event)
@@ -807,12 +793,18 @@ mod tests {
         let superseded = pointer(2);
         let interleaved = pointer(3);
         queue.borrow_mut().append(down(superseded));
+        queue.borrow_mut().append(contact_move(superseded, 0.5));
+        queue.borrow_mut().append(up(superseded));
+        queue.borrow_mut().append(down(superseded));
         queue.borrow_mut().append(down(interleaved));
         queue.borrow_mut().append(contact_move(superseded, 1.0));
         queue.borrow_mut().append(contact_move(interleaved, 2.0));
         queue.borrow_mut().append(up(superseded));
 
         let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        assert!(matches!(replay.next(), Some(PointerEvent::Move(_))));
+        assert!(matches!(replay.next(), Some(PointerEvent::Up(_))));
         assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
         queue.borrow_mut().append(down(superseded));
         let remainder: Vec<_> = replay.by_ref().collect();
@@ -839,6 +831,9 @@ mod tests {
         let superseded = pointer(2);
         let interleaved = pointer(3);
         queue.borrow_mut().append(down(superseded));
+        queue.borrow_mut().append(contact_move(superseded, 0.5));
+        queue.borrow_mut().append(up(superseded));
+        queue.borrow_mut().append(down(superseded));
         queue.borrow_mut().append(down(interleaved));
         queue.borrow_mut().append(contact_move(superseded, 1.0));
         queue.borrow_mut().append(contact_move(interleaved, 2.0));
@@ -847,6 +842,9 @@ mod tests {
         {
             let mut replay =
                 HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+            assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+            assert!(matches!(replay.next(), Some(PointerEvent::Move(_))));
+            assert!(matches!(replay.next(), Some(PointerEvent::Up(_))));
             assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
             queue.borrow_mut().append(down(superseded));
         }
@@ -858,6 +856,88 @@ mod tests {
             .collect();
         assert_eq!(restored_ids, vec![interleaved, interleaved, superseded]);
         assert_eq!(positions(&restored), vec![0.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn replay_supersession_stops_at_the_current_epochs_terminal() {
+        let queue = queue();
+        let id = pointer(2);
+        let interleaved = pointer(3);
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 1.0));
+        queue.borrow_mut().append(up(id));
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 2.0));
+        queue.borrow_mut().append(up(id));
+        queue.borrow_mut().append(down(interleaved));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        queue.borrow_mut().append(down(id));
+        let remainder: Vec<_> = replay.by_ref().collect();
+        replay.complete();
+
+        let ids: Vec<_> = remainder
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(ids, vec![id, id, id, interleaved]);
+        assert_eq!(positions(&remainder), vec![0.0, 2.0, 9.0, 0.0]);
+    }
+
+    #[test]
+    fn abort_supersession_stops_at_the_current_epochs_terminal() {
+        let queue = queue();
+        let id = pointer(2);
+        let interleaved = pointer(3);
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(cancel(id));
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 2.0));
+        queue.borrow_mut().append(up(id));
+        queue.borrow_mut().append(down(interleaved));
+
+        {
+            let mut replay =
+                HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+            assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+            queue.borrow_mut().append(down(id));
+        }
+
+        let restored = drain(&queue);
+        let ids: Vec<_> = restored
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(ids, vec![id, id, id, interleaved, id]);
+        assert_eq!(positions(&restored), vec![0.0, 2.0, 9.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn reentrant_down_after_a_completed_only_epoch_discards_no_snapshot_event() {
+        let queue = queue();
+        let id = pointer(2);
+        let interleaved = pointer(3);
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 1.0));
+        queue.borrow_mut().append(up(id));
+        queue.borrow_mut().append(hover(id, 2.0));
+        queue.borrow_mut().append(down(interleaved));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        assert!(matches!(replay.next(), Some(PointerEvent::Move(_))));
+        assert!(matches!(replay.next(), Some(PointerEvent::Up(_))));
+        queue.borrow_mut().append(down(id));
+        let remainder: Vec<_> = replay.by_ref().collect();
+        replay.complete();
+
+        let ids: Vec<_> = remainder
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(ids, vec![id, interleaved]);
+        assert_eq!(positions(&remainder), vec![2.0, 0.0]);
     }
 
     #[test]
