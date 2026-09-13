@@ -52,8 +52,10 @@ impl TextPainter {
         // Precompute intrinsic widths (Parley-inspired: shape-once, query-many).
         // min_intrinsic = width at max_width=0 (widest unbreakable run)
         // max_intrinsic = width at max_width=∞ (single-line width)
-        // Both probes omit max_lines/ellipsis — truncating a zero-width layout
-        // can collapse visible text to an empty prefix (#1085).
+        // Both probes omit max_lines truncation — truncating a zero-width
+        // layout can collapse visible text to an empty prefix (#1085) — but
+        // still floor at the ellipsis width when truncation can leave only
+        // the ellipsis.
         let (min_metrics, _) =
             self.compute_layout_metrics(text, 0.0, 0.0, LineOverflow::IgnoreForWidthIntrinsic);
         let (max_metrics, _) = self.compute_layout_metrics(
@@ -62,6 +64,9 @@ impl TextPainter {
             f32::INFINITY,
             LineOverflow::IgnoreForWidthIntrinsic,
         );
+        let ellipsis_floor = self.ellipsis_width_floor(text);
+        let min_intrinsic_width = min_metrics.size.width.0.max(ellipsis_floor);
+        let max_intrinsic_width = max_metrics.size.width.0.max(ellipsis_floor);
 
         self.layout_cache = Some(TextLayoutCache {
             min_width,
@@ -72,8 +77,8 @@ impl TextPainter {
             did_exceed_max_lines: metrics.did_exceed_max_lines,
             paint_offset: metrics.paint_offset,
             layout,
-            min_intrinsic_width: min_metrics.size.width.0,
-            max_intrinsic_width: max_metrics.size.width.0,
+            min_intrinsic_width,
+            max_intrinsic_width,
         });
     }
 
@@ -81,8 +86,9 @@ impl TextPainter {
     ///
     /// [`LineOverflow::Enforce`] applies `max_lines` / ellipsis (committed
     /// layout, dry size, height probes). [`LineOverflow::IgnoreForWidthIntrinsic`]
-    /// shapes without truncation so a zero-width wrap cannot erase visible
-    /// content under `max_lines` (#1085).
+    /// shapes without line-count truncation so a zero-width wrap cannot erase
+    /// visible content under `max_lines` (#1085). Callers that need the
+    /// ellipsis as a width floor apply [`Self::ellipsis_width_floor`] on top.
     fn compute_layout_metrics(
         &self,
         text: &InlineSpan,
@@ -151,6 +157,39 @@ impl TextPainter {
         };
 
         (metrics, layout)
+    }
+
+    /// Shaped width of the configured ellipsis when `max_lines` can truncate.
+    ///
+    /// Truncating layouts may commit an ellipsis-only buffer once the text
+    /// prefix is exhausted, so width intrinsics must not report a value
+    /// narrower than that ellipsis even when line-count truncation is skipped
+    /// for the main probe (#1085 follow-up).
+    fn ellipsis_width_floor(&self, text: &InlineSpan) -> f32 {
+        let Some(ellipsis) = self.ellipsis.as_deref().filter(|e| !e.is_empty()) else {
+            return 0.0;
+        };
+        if self.max_lines.is_none_or(|n| n == 0) {
+            return 0.0;
+        }
+
+        let font_size = text
+            .style()
+            .and_then(|s| s.font_size.map(|f| f as f32))
+            .unwrap_or(DEFAULT_FONT_SIZE);
+        let scaled_font_size = font_size * self.text_scale_factor;
+        let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
+        let layout = TextLayout::from_spans(
+            vec![(ellipsis.to_string(), text.style().cloned())],
+            text.style(),
+            scaled_font_size,
+            None,
+            None,
+            direction,
+            None,
+            None,
+        );
+        layout.metrics().width
     }
 
     /// Computes the paint offset based on text alignment.
@@ -249,15 +288,18 @@ impl TextPainter {
     //
     // Transient measurements that do NOT touch `layout_cache`, so a
     // parent may probe intrinsics without disturbing the painter's
-    // committed layout. Width intrinsics reshape without max_lines /
-    // ellipsis; height / dry probes keep overflow so they match layout.
+    // committed layout. Width intrinsics reshape without max_lines
+    // truncation, then floor at the ellipsis width when truncation can
+    // leave only the ellipsis; height / dry probes keep full overflow.
     // Returns 0 when no text is set.
 
     /// The width the text wants with no line wrapping — its single-line
     /// width (Flutter `RenderParagraph.computeMaxIntrinsicWidth`).
     ///
-    /// Ignores `max_lines` / ellipsis: those apply to laid-out / painted
-    /// output, not to the measurement of shaped content (#1085).
+    /// Skips `max_lines` truncation so the probe measures shaped content
+    /// (#1085). When an ellipsis is configured with `max_lines`, the result
+    /// is floored at the ellipsis width so intrinsic sizing cannot under-
+    /// allocate a truncating layout.
     ///
     /// Returns the precomputed value from the layout cache when available
     /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
@@ -276,15 +318,18 @@ impl TextPainter {
             f32::INFINITY,
             LineOverflow::IgnoreForWidthIntrinsic,
         );
-        metrics.size.width.0
+        metrics.size.width.0.max(self.ellipsis_width_floor(text))
     }
 
     /// The narrowest width the text can take without overflowing — the
     /// width of its widest unbreakable run, found by wrapping at every
     /// opportunity (Flutter `RenderParagraph.computeMinIntrinsicWidth`).
     ///
-    /// Ignores `max_lines` / ellipsis so a zero-width wrap probe cannot
-    /// truncate visible text to an empty prefix (#1085).
+    /// Skips `max_lines` truncation so a zero-width wrap probe cannot
+    /// erase visible text (#1085). When an ellipsis is configured with
+    /// `max_lines`, the result is floored at the ellipsis width — truncating
+    /// layouts may commit an ellipsis-only buffer once the prefix is
+    /// exhausted.
     ///
     /// Returns the precomputed value from the layout cache when available
     /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
@@ -299,7 +344,7 @@ impl TextPainter {
         };
         let (metrics, _) =
             self.compute_layout_metrics(text, 0.0, 0.0, LineOverflow::IgnoreForWidthIntrinsic);
-        metrics.size.width.0
+        metrics.size.width.0.max(self.ellipsis_width_floor(text))
     }
 
     /// The height the text takes when laid out at `width` — both the min
