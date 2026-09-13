@@ -186,10 +186,11 @@ struct ComposingState {
 /// whole internal composing state, so the hidden-caret flag can never
 /// outlive the composition it describes.
 ///
-/// **`Preedit` with empty text is composition cancellation, not an
+/// **`Preedit` with empty text cancels an active composition; it is not an
 /// empty-but-active composition.** Winit signals a cancelled composition as
-/// `Preedit { text: "", cursor: None }` with no following `Commit`/`Disabled`
-/// — see [`Self::set_composing_text`]'s doc for the exact handling.
+/// `Preedit { text: "", cursor: None }` with no following `Commit`/`Disabled`.
+/// When no composition is active the same empty payload is inert (winit X11
+/// also emits it on IME Start) — see [`Self::set_composing_text`]'s doc.
 ///
 /// # DEFERRED (v1)
 ///
@@ -779,7 +780,7 @@ impl TextEditingController {
     /// the caret to the end of the composing region (both — hiding it is
     /// not a substitute for tracking where it logically sits).
     ///
-    /// # `text.is_empty()` is composition cancellation
+    /// # `text.is_empty()` is composition cancellation (when composing)
     ///
     /// Winit signals a cancelled composition as `Preedit { text: "", cursor:
     /// None }`, with **no** following `Commit`/`Disabled` event. Treating
@@ -789,9 +790,15 @@ impl TextEditingController {
     /// after, permanently suppressing `Key::Character` insertion for the
     /// rest of the focus session (the exact failure mode
     /// [`flui_types::ImeEvent`]'s suppression contract warns against). So an
-    /// empty `text` strips the existing composing slice (if any) the same
-    /// way [`Self::clear_composing`] does, and ends composition — `composing`
+    /// empty `text` strips the **existing** composing slice the same way
+    /// [`Self::clear_composing`] does, and ends composition — `composing`
     /// becomes `None`, not `Some` of an empty range.
+    ///
+    /// When **no** composition is active, empty `text` is a no-op: committed
+    /// text, selection, and caret stay unchanged, and listeners are not
+    /// notified. Winit's X11 path also emits empty `Preedit` on IME Start
+    /// (before any composing slice exists); that bookkeeping event must not
+    /// delete a committed selection.
     ///
     /// # Malformed input
     ///
@@ -800,34 +807,24 @@ impl TextEditingController {
     /// IME is untrusted platform input, not an internal invariant, so this
     /// never panics (`docs/PANIC-POLICY.md`).
     pub fn set_composing_text(&self, text: &str, cursor: Option<(usize, usize)>) {
-        {
+        let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let region = match guard.composing.as_ref() {
-                Some(state) => state.range.clone(),
-                // No composition yet: the preedit replaces the SELECTION, so
-                // starting to compose over selected text behaves the way
-                // typing over it does. Collapsed, this is the caret, which is
-                // what it always was.
-                None => guard.selection.range(),
-            };
-            // Defense in depth: every non-IME mutator already clears
-            // `composing` on a text edit (see `Self::insert_str`'s doc), so
-            // `region` should always already describe `guard.text` — this
-            // re-clamp is what makes a future mutator that forgets that rule
-            // degrade to wrong text instead of a `replace_range` panic.
-            let region = clamp_range_to_text(&region, &guard.text);
             if text.is_empty() {
-                // Composition cancel (see this method's doc) — strip the
-                // slice and END composition, never leave a `Some(empty
-                // range)` marker behind.
-                guard.text.replace_range(region.clone(), "");
-                guard.composing = None;
-                // Collapse unconditionally — a selection cannot survive the
-                // text under it being removed — while keeping the original
-                // `min` so a caret already before the region does not jump
-                // forward.
-                guard.selection = Selection::collapsed(guard.selection.caret.min(region.start));
+                // Empty preedit: clear only an owned composing span. Inactive
+                // empty is inert (see this method's doc) — same helper as
+                // `clear_composing`.
+                strip_active_composing(&mut guard)
             } else {
+                let region = match guard.composing.as_ref() {
+                    Some(state) => state.range.clone(),
+                    // No composition yet: the preedit replaces the SELECTION, so
+                    // starting to compose over selected text behaves the way
+                    // typing over it does. Collapsed, this is the caret, which is
+                    // what it always was.
+                    None => guard.selection.range(),
+                };
+                // Defense in depth — see the empty-branch comment above.
+                let region = clamp_range_to_text(&region, &guard.text);
                 guard.text.replace_range(region.clone(), text);
                 guard.composing = Some(ComposingState {
                     range: region.start..region.start + text.len(),
@@ -838,9 +835,12 @@ impl TextEditingController {
                     None => text.len(),
                 };
                 guard.selection = Selection::collapsed(region.start + caret_in_preedit);
+                true
             }
+        };
+        if changed {
+            self.notifier.notify_listeners();
         }
-        self.notifier.notify_listeners();
     }
 
     /// Apply an IME commit.
@@ -885,19 +885,7 @@ impl TextEditingController {
     pub fn clear_composing(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            match guard.composing.take() {
-                Some(state) => {
-                    // Defense in depth — see `set_composing_text`'s matching comment.
-                    let range = clamp_range_to_text(&state.range, &guard.text);
-                    guard.text.replace_range(range.clone(), "");
-                    // Collapsed for the same reason the cancel path in
-                    // `set_composing_text` collapses: the text a selection
-                    // spanned is gone.
-                    guard.selection = Selection::collapsed(guard.selection.caret.min(range.start));
-                    true
-                }
-                None => false,
-            }
+            strip_active_composing(&mut guard)
         };
         if changed {
             self.notifier.notify_listeners();
@@ -948,6 +936,33 @@ fn clear_caret_hidden(guard: &mut ControllerInner) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+/// Strip an active composing slice from `inner`, ending composition.
+///
+/// Returns whether anything changed. Shared by
+/// [`TextEditingController::clear_composing`] and the empty-preedit branch of
+/// [`TextEditingController::set_composing_text`] so the two cannot drift:
+/// inactive clear is always a no-op; active clear always strips the owned
+/// span and collapses the caret with the same `min` rule.
+fn strip_active_composing(inner: &mut ControllerInner) -> bool {
+    match inner.composing.take() {
+        Some(state) => {
+            // Defense in depth: every non-IME mutator already clears
+            // `composing` on a text edit (see `TextEditingController::insert_str`'s
+            // doc), so `range` should already describe `inner.text` — this
+            // re-clamp is what makes a future mutator that forgets that rule
+            // degrade to wrong text instead of a `replace_range` panic.
+            let range = clamp_range_to_text(&state.range, &inner.text);
+            inner.text.replace_range(range.clone(), "");
+            // Collapse unconditionally — a selection cannot survive the text
+            // under it being removed — while keeping the original `min` so a
+            // caret already before the region does not jump forward.
+            inner.selection = Selection::collapsed(inner.selection.caret.min(range.start));
+            true
+        }
+        None => false,
     }
 }
 
@@ -1731,6 +1746,188 @@ mod tests {
         // suppression-forever failure mode this fix closes.
         controller.insert_str("x");
         assert_eq!(controller.text(), "x");
+    }
+
+    /// Empty preedit with no active composition must not treat the committed
+    /// selection as a replace region. Winit's X11 path emits empty `Preedit`
+    /// on IME Start as well as cancel; deleting selected committed text on
+    /// that event is data loss.
+    ///
+    /// Red-check: restore the old "pick region before checking emptiness"
+    /// order in `set_composing_text` — this test fails with text `" world"`
+    /// and selection `0..0` instead of preserving `"hello world"` / `0..5`.
+    #[test]
+    fn empty_preedit_with_no_composition_preserves_committed_selection() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(0, 5);
+        assert!(!controller.is_composing());
+        assert_eq!(controller.selection(), 0..5);
+        assert_eq!(controller.caret_byte_offset(), 5);
+
+        controller.set_composing_text("", None);
+
+        assert_eq!(controller.text(), "hello world");
+        assert_eq!(controller.selection(), 0..5);
+        assert_eq!(controller.caret_byte_offset(), 5);
+        assert!(!controller.is_composing());
+    }
+
+    /// Inactive empty preedit is inert bookkeeping: no edit, no notify.
+    ///
+    /// Red-check: keep the always-notify tail on `set_composing_text` —
+    /// this test fails with `call_count == 1` after the empty preedit.
+    #[test]
+    fn empty_preedit_with_no_composition_does_not_notify() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let controller = TextEditingController::with_text("hello");
+        controller.set_selection(2, 2);
+        assert!(!controller.is_composing());
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+        controller.add_listener(Arc::new(move || {
+            count_clone.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        controller.set_composing_text("", None);
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
+        assert_eq!(controller.text(), "hello");
+        assert_eq!(controller.selection(), 2..2);
+    }
+
+    /// Backward selection (anchor after caret) must survive inactive empty
+    /// preedit the same way a forward selection does — `selection()` is
+    /// ascending, but the caret extent must stay at the low end.
+    #[test]
+    fn empty_preedit_with_no_composition_preserves_backward_selection() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(5, 0);
+        assert_eq!(controller.selection(), 0..5);
+        assert_eq!(controller.caret_byte_offset(), 0);
+        assert!(!controller.is_composing());
+
+        controller.set_composing_text("", None);
+
+        assert_eq!(controller.text(), "hello world");
+        assert_eq!(controller.selection(), 0..5);
+        assert_eq!(controller.caret_byte_offset(), 0);
+        assert!(!controller.is_composing());
+    }
+
+    /// Multi-byte committed selection must not be rewritten into a mid-char
+    /// collapse by an inactive empty preedit.
+    #[test]
+    fn empty_preedit_with_no_composition_preserves_unicode_selection() {
+        // "こんにちは" is 5 chars × 3 bytes = 15 bytes; select first two chars.
+        let controller = TextEditingController::with_text("こんにちは世界");
+        controller.set_selection(0, 6);
+        assert_eq!(controller.selection(), 0..6);
+        assert_eq!(controller.caret_byte_offset(), 6);
+
+        controller.set_composing_text("", None);
+
+        assert_eq!(controller.text(), "こんにちは世界");
+        assert_eq!(controller.selection(), 0..6);
+        assert_eq!(controller.caret_byte_offset(), 6);
+        assert!(!controller.is_composing());
+    }
+
+    /// Winit X11 emits empty Preedit on IME Start and again on End. Neither
+    /// may touch a preexisting committed selection when composition never
+    /// became active.
+    #[test]
+    fn x11_style_empty_start_then_empty_end_preserves_selection() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(0, 5);
+
+        controller.set_composing_text("", None); // Start
+        controller.set_composing_text("", None); // End
+
+        assert_eq!(controller.text(), "hello world");
+        assert_eq!(controller.selection(), 0..5);
+        assert_eq!(controller.caret_byte_offset(), 5);
+        assert!(!controller.is_composing());
+    }
+
+    /// Empty Start (inert) → non-empty Preedit (replaces selection once) →
+    /// empty clear (strips composing) → Commit (inserts at caret). The
+    /// committed replacement must appear exactly once — no leftover preedit
+    /// and no double-insert from the Start empty.
+    #[test]
+    fn empty_start_then_preedit_then_clear_then_commit_replaces_selection_once() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(0, 5);
+
+        controller.set_composing_text("", None); // X11 Start — inert
+        assert_eq!(controller.text(), "hello world");
+        assert_eq!(controller.selection(), 0..5);
+
+        controller.set_composing_text("nihao", Some((5, 5)));
+        assert_eq!(controller.text(), "nihao world");
+        assert!(controller.is_composing());
+        assert_eq!(controller.composing_range(), Some(0..5));
+
+        controller.set_composing_text("", None); // cancel composing
+        assert_eq!(controller.text(), " world");
+        assert!(!controller.is_composing());
+
+        controller.commit_text("你好");
+        assert_eq!(controller.text(), "你好 world");
+        assert!(!controller.is_composing());
+        assert_eq!(controller.caret_byte_offset(), "你好".len());
+    }
+
+    /// After an active cancel notifies once, further empty preedits stay
+    /// inert — no second mutation, no extra notify.
+    #[test]
+    fn repeated_empty_preedits_after_active_clear_are_inert() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let controller = TextEditingController::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+        controller.add_listener(Arc::new(move || {
+            count_clone.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        controller.set_composing_text("nihao", Some((5, 5)));
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+
+        controller.set_composing_text("", None);
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
+        assert_eq!(controller.text(), "");
+        assert!(!controller.is_composing());
+
+        controller.set_composing_text("", None);
+        controller.set_composing_text("", None);
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
+        assert_eq!(controller.text(), "");
+    }
+
+    /// Active empty cancel must notify exactly once (the notify gate is
+    /// shared with inactive no-op; without this pin only the inactive side
+    /// is covered).
+    #[test]
+    fn empty_preedit_active_cancel_notifies_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let controller = TextEditingController::with_text("Hi ");
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+        controller.add_listener(Arc::new(move || {
+            count_clone.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        controller.set_composing_text("wor", None);
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+        assert!(controller.caret_hidden_by_ime());
+
+        controller.set_composing_text("", None);
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
+        assert_eq!(controller.text(), "Hi ");
+        assert!(!controller.is_composing());
+        assert!(!controller.caret_hidden_by_ime());
     }
 
     /// Direct caret navigation takes the caret back from the IME: the

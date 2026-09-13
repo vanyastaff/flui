@@ -32,7 +32,7 @@ Auditing the fix surfaced a **pre-existing bug**, not a new one this ADR introdu
 
 ### 2. `Preedit("")` ends composition — the empty-preedit bug fix
 
-`set_composing_text` now branches on `text.is_empty()`: an empty preedit strips the existing composing slice (same replace-with-empty operation as before) but sets `composing = None`, not `Some(empty range)`. Composition ends; `is_composing()` returns `false`; plain typing works immediately. A regression test (`empty_preedit_ends_composition_instead_of_leaving_an_empty_active_region`, `controller.rs`) pins the full cycle: `Preedit("nihao") → Preedit("") → is_composing() == false`, then a typed character actually reaches the buffer.
+`set_composing_text` now branches on `text.is_empty()`: an empty preedit strips the **existing** composing slice (same replace-with-empty operation as before) but sets `composing = None`, not `Some(empty range)`. Composition ends; `is_composing()` returns `false`; plain typing works immediately. When no composition is active, empty preedit is a no-op (preserves committed text/selection, no notify) — winit X11 also emits empty `Preedit` on IME Start before any composing slice exists (#1054). A regression test (`empty_preedit_ends_composition_instead_of_leaving_an_empty_active_region`, `controller.rs`) pins the full active-cancel cycle: `Preedit("nihao") → Preedit("") → is_composing() == false`, then a typed character actually reaches the buffer; inactive cases are pinned beside it (`empty_preedit_with_no_composition_*`).
 
 ### 3. Caret-navigation restores caret visibility without ending composition
 

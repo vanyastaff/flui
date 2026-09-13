@@ -35,7 +35,7 @@
 /// `flui_widgets::TextEditingController::caret_hidden_by_ime` tracks this and
 /// the owning widget suppresses its painted caret accordingly (ADR-0033).
 ///
-/// # `Preedit` with an empty `text` is composition cancellation
+/// # `Preedit` with an empty `text` is composition cancellation (when composing)
 ///
 /// Winit signals a **cancelled** composition as `Preedit { text: "", cursor:
 /// None }`, with **no** following `Commit`/`Disabled` event. A client must
@@ -45,6 +45,11 @@
 /// empty preedit permanently suppresses `Key::Character` insertion for the
 /// rest of the focus session (see the suppression contract below), since
 /// nothing else ever tells it composition ended.
+///
+/// When **no** composition is active, empty `Preedit` is inert bookkeeping:
+/// committed text and selection must not change. Winit's X11 path also emits
+/// empty `Preedit` on IME Start (before any composing slice exists); that
+/// event must not delete a committed selection.
 ///
 /// # Suppression contract (documented here for the client authors that
 /// consume this vocabulary)
