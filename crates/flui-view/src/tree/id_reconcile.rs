@@ -20,9 +20,9 @@
 //! # Emitted dispositions
 //!
 //! Emitted directly by this module: `Reuse` (top scan, same slot),
-//! `Unmount` (keyless-middle drop and unclaimed-keyed drop, at the
-//! child's OLD slot), `Reorder`/`Reuse` (keyed claim, by old-slot vs
-//! new-slot), and `Reuse`/`Reorder` for the bottom slice (by
+//! `Unmount` (keyless-middle drop, unclaimed-keyed drop, or bounded update
+//! recovery, at the child's OLD slot), `Reorder`/`Reuse` (keyed claim, by
+//! old-slot vs new-slot), and `Reuse`/`Reorder` for the bottom slice (by
 //! `old_bottom == new_bottom`).
 //!
 //! The insert path delegates its event to
@@ -565,6 +565,17 @@ fn update_child(
     target_slot: usize,
     owner: &mut crate::ElementOwner<'_>,
 ) -> ElementId {
+    let (old_slot, old_view_type_id, old_key_hash) = {
+        let resident = tree
+            .get(id)
+            .expect("BUG: a reconcile update candidate must resolve before its bounded update");
+        (
+            resident.slot(),
+            resident.element().view_type_id(),
+            resident.element().current_key_hash(),
+        )
+    };
+
     // The bounded primitive's `try_update` re-clones the node's stored key
     // from the new view, keeping the keyed-match field in lock-step — mirrors
     // the box reconciler's per-update key re-clone.
@@ -588,6 +599,14 @@ fn update_child(
         && key.is_global_key()
     {
         owner.reserve_global_key(parent_id, id, key);
+    }
+    if now != id {
+        emit_event(&ReconcileEvent::unmount(
+            parent_id,
+            old_slot,
+            old_view_type_id,
+            old_key_hash,
+        ));
     }
     now
 }

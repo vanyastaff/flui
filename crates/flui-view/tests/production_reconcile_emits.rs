@@ -790,10 +790,11 @@ fn failed_activate_retake_production_reconcile_emits_substitute_without_reparent
     );
 }
 
-fn assert_failed_update_emits_only_final_slot(
+fn assert_failed_update_emits_unmount_and_final_substitute(
     events: &[flui_view::tree::test_utils::CollectedEvent],
     parent: ElementId,
-    slot: usize,
+    old_slot: usize,
+    final_slot: usize,
     failed_view_type_id: TypeId,
     failed_key_hash: u64,
 ) {
@@ -815,8 +816,22 @@ fn assert_failed_update_emits_only_final_slot(
         .collect();
     assert_eq!(
         error_mounts,
-        vec![(slot as u64, None)],
+        vec![(final_slot as u64, None)],
         "the parent's complete ErrorView Mount set must be exactly one unkeyed substitute at the final slot"
+    );
+    let failed_unmounts: Vec<_> = parent_events
+        .iter()
+        .filter(|event| {
+            event.kind == ReconcileEventKind::Unmount
+                && event.child_key == Some(failed_key_hash)
+                && event.view_type_id == format!("{failed_view_type_id:?}")
+        })
+        .map(|event| event.slot)
+        .collect();
+    assert_eq!(
+        failed_unmounts,
+        vec![old_slot as u64],
+        "the failed resident must emit exactly one Unmount at its old slot"
     );
     assert!(
         parent_events.iter().all(|event| {
@@ -831,7 +846,7 @@ fn assert_failed_update_emits_only_final_slot(
     );
     assert!(
         parent_events.iter().any(|event| {
-            event.slot != slot as u64
+            event.slot != final_slot as u64
                 && matches!(
                     event.kind,
                     ReconcileEventKind::Reuse
@@ -868,9 +883,10 @@ fn failed_phase_one_update_emits_substitute_without_stale_reuse() {
         );
     });
 
-    assert_failed_update_emits_only_final_slot(
+    assert_failed_update_emits_unmount_and_final_substitute(
         &events,
         parent,
+        PHASE_ONE_FAILED_SLOT,
         PHASE_ONE_FAILED_SLOT,
         TypeId::of::<DenseDidUpdateView>(),
         ValueKey::new(1_u32).key_hash(),
@@ -898,9 +914,10 @@ fn failed_phase_four_update_emits_substitute_without_stale_reorder() {
         );
     });
 
-    assert_failed_update_emits_only_final_slot(
+    assert_failed_update_emits_unmount_and_final_substitute(
         &events,
         parent,
+        3,
         1,
         TypeId::of::<DenseRenderUpdateLeaf>(),
         ValueKey::new(3_u32).key_hash(),
@@ -928,9 +945,10 @@ fn failed_phase_five_a_update_emits_substitute_without_stale_reorder() {
         );
     });
 
-    assert_failed_update_emits_only_final_slot(
+    assert_failed_update_emits_unmount_and_final_substitute(
         &events,
         parent,
+        9,
         10,
         TypeId::of::<DenseRenderUpdateLeaf>(),
         ValueKey::new(9_u32).key_hash(),
