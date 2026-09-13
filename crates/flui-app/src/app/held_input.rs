@@ -49,6 +49,7 @@ pub(crate) struct HeldPointerQueue {
     replay_tail_open_pointers: Vec<PointerId>,
     replay_dispatched_open_pointers: Vec<PointerId>,
     replay_supersessions: Vec<ReplaySupersession>,
+    replay_discard_remaining: bool,
     saturation_warned: bool,
     saturation_episodes: usize,
     counters: QueueCounters,
@@ -64,6 +65,7 @@ impl HeldPointerQueue {
             replay_tail_open_pointers: Vec::new(),
             replay_dispatched_open_pointers: Vec::new(),
             replay_supersessions: Vec::new(),
+            replay_discard_remaining: false,
             saturation_warned: false,
             saturation_episodes: 0,
             counters: QueueCounters::default(),
@@ -177,7 +179,7 @@ impl HeldPointerQueue {
         self.replay_tail_open_pointers.clear();
         self.replay_dispatched_open_pointers.clear();
         self.replay_supersessions.clear();
-        self.replay_in_flight = false;
+        self.replay_discard_remaining = self.replay_in_flight;
         self.counters.dropped_events = self.counters.dropped_events.saturating_add(dropped);
         if dropped != 0 {
             self.trace_counts("dropped held pointer input", dropped);
@@ -355,6 +357,7 @@ impl HeldPointerQueue {
         self.replay_tail_open_pointers.clear();
         self.replay_dispatched_open_pointers.clear();
         self.replay_supersessions.clear();
+        self.replay_discard_remaining = false;
         self.trace_counts(
             if completed {
                 "drained held pointer input"
@@ -367,6 +370,24 @@ impl HeldPointerQueue {
             self.saturation_warned = false;
             self.counters = QueueCounters::default();
         }
+        debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "close-time clearing adopts this replay cancellation path before commit replay is wired"
+        )
+    )]
+    fn finish_cleared_replay(&mut self, discarded: usize) {
+        self.replay_in_flight = false;
+        self.replay_reserved = 0;
+        self.replay_tail_open_pointers.clear();
+        self.replay_dispatched_open_pointers.clear();
+        self.replay_supersessions.clear();
+        self.replay_discard_remaining = false;
+        self.trace_counts("discarded cleared held pointer replay", discarded);
         debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
     }
 }
@@ -455,6 +476,24 @@ impl<'a> HeldPointerReplay<'a> {
             .borrow_mut()
             .finish_replay(true, self.snapshot_events);
         self.completed = true;
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "close-time clearing adopts this replay cancellation path before commit replay is wired"
+        )
+    )]
+    fn discard_remaining_if_cleared(&mut self) -> bool {
+        if !self.queue.borrow().replay_discard_remaining {
+            return false;
+        }
+        let discarded = self.remaining.len();
+        self.remaining.clear();
+        self.queue.borrow_mut().finish_cleared_replay(discarded);
+        self.completed = true;
+        true
     }
 
     /// Apply replay-time repeated-Down requests before exposing another old
@@ -559,6 +598,9 @@ impl Iterator for HeldPointerReplay<'_> {
     type Item = PointerEvent;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.discard_remaining_if_cleared() {
+            return None;
+        }
         self.discard_superseded_suffixes();
         let event = self.remaining.pop_front();
         if let Some(event) = &event {
@@ -609,6 +651,9 @@ impl Drop for HeldPointerReplay<'_> {
         }
         if self.remaining.is_empty() {
             self.complete_inner();
+            return;
+        }
+        if self.discard_remaining_if_cleared() {
             return;
         }
         self.discard_superseded_suffixes();
@@ -1223,5 +1268,23 @@ mod tests {
         assert_eq!(replay.size_hint(), (0, Some(1)));
         assert!(replay.next().is_none());
         replay.complete();
+    }
+
+    #[test]
+    fn clear_during_replay_prevents_drop_from_restoring_the_detached_suffix() {
+        let queue = queue();
+        let id = pointer(2);
+        queue.borrow_mut().append(down(id));
+        queue.borrow_mut().append(contact_move(id, 1.0));
+
+        {
+            let mut replay =
+                HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+            assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+            queue.borrow_mut().clear();
+        }
+
+        assert!(queue.borrow().is_empty());
+        assert!(drain(&queue).is_empty());
     }
 }

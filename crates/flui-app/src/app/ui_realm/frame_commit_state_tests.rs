@@ -8,7 +8,10 @@ use std::time::Duration;
 
 use flui_animation::AnimationController;
 use flui_engine::EngineError;
-use flui_interaction::events::{PointerButtons, PointerType, make_down_event, make_move_event};
+use flui_interaction::PointerId;
+use flui_interaction::events::{
+    PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
+};
 use flui_platform::traits::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
 use flui_types::{
@@ -505,5 +508,41 @@ fn window_leave_drops_held_hovers_but_retains_held_contact_sequences() {
         primary.held_pointer_input().borrow().len(),
         1,
         "window leave must only drop held hovers; contact epochs stay queued"
+    );
+}
+
+#[test]
+fn closing_a_presentation_drops_held_pointer_input_without_synthesizing_cancel() {
+    let mut realm = UiRealm::for_test();
+    let closing_id = realm.install_second_presentation_for_test();
+    let closing = realm
+        .presentations
+        .get(closing_id)
+        .expect("secondary presentation installed");
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    closing
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+    let routed_events = Rc::new(Cell::new(0));
+    let routed_events_from_cancel = Rc::clone(&routed_events);
+    let route: flui_interaction::routing::PointerRouteHandler = Rc::new(move |_| {
+        routed_events_from_cancel.set(routed_events_from_cancel.get() + 1);
+    });
+    closing
+        .gestures()
+        .pointer_router()
+        .add_route(pointer, route);
+
+    assert!(realm.close_presentation_entered(closing_id));
+
+    assert_eq!(
+        routed_events.get(),
+        0,
+        "closing a presentation must drop held input without synthesizing a routed Cancel"
     );
 }
