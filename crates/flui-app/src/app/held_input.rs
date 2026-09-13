@@ -418,6 +418,15 @@ impl HeldPointerQueue {
     }
 
     fn is_protected_terminal_at(&self, pointer_id: PointerId, terminal_index: usize) -> bool {
+        let protected_terminal_count = self.protected_terminal_count(pointer_id);
+        let total_terminal_count = self
+            .events
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
         let mut terminal_count = 0usize;
         for (index, event) in self.events.iter().enumerate() {
             if flui_interaction::events::extract_pointer_id(event) == pointer_id
@@ -426,7 +435,8 @@ impl HeldPointerQueue {
                 terminal_count = terminal_count.saturating_add(1);
             }
             if index == terminal_index {
-                return terminal_count <= self.protected_terminal_count(pointer_id);
+                return total_terminal_count.saturating_sub(terminal_count)
+                    < protected_terminal_count;
             }
         }
         false
@@ -434,6 +444,14 @@ impl HeldPointerQueue {
 
     fn has_active_route_terminal_after_latest_down(&self, pointer_id: PointerId) -> bool {
         let protected_terminal_count = self.protected_terminal_count(pointer_id);
+        let total_terminal_count = self
+            .events
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
         let mut terminal_count = 0usize;
         let mut has_protected_terminal_after_latest_down = self
             .replay_active_route_terminal_pointers
@@ -446,8 +464,9 @@ impl HeldPointerQueue {
                 PointerEvent::Down(_) => has_protected_terminal_after_latest_down = false,
                 PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
                     terminal_count = terminal_count.saturating_add(1);
-                    has_protected_terminal_after_latest_down =
-                        terminal_count <= protected_terminal_count;
+                    has_protected_terminal_after_latest_down = total_terminal_count
+                        .saturating_sub(terminal_count)
+                        < protected_terminal_count;
                 }
                 _ => {}
             }
@@ -502,7 +521,26 @@ impl HeldPointerQueue {
         self.replay_active_route_terminal_pointers = retained_pointers;
     }
 
-    fn remove_replay_active_route_terminal(&mut self, pointer_id: PointerId) {
+    fn remove_replay_active_route_terminal(
+        &mut self,
+        pointer_id: PointerId,
+        replay_events_after_dispatch: &VecDeque<PointerEvent>,
+    ) {
+        let protected_terminal_count = self
+            .replay_active_route_terminal_pointers
+            .iter()
+            .filter(|protected| **protected == pointer_id)
+            .count();
+        let remaining_terminal_count = replay_events_after_dispatch
+            .iter()
+            .filter(|event| {
+                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                    && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
+            })
+            .count();
+        if remaining_terminal_count >= protected_terminal_count {
+            return;
+        }
         if let Some(index) = self
             .replay_active_route_terminal_pointers
             .iter()
@@ -827,7 +865,7 @@ impl Iterator for HeldPointerReplay<'_> {
                 _ => {}
             }
             if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
-                queue.remove_replay_active_route_terminal(pointer_id);
+                queue.remove_replay_active_route_terminal(pointer_id, &self.remaining);
             }
         } else {
             self.complete_inner();
@@ -1269,6 +1307,27 @@ mod tests {
 
         let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
         assert!(matches!(replay.next(), Some(PointerEvent::Move(_))));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(contact_move(active_route, 2.0), true);
+        replay.for_each(drop);
+
+        assert!(drain(&queue).is_empty());
+    }
+
+    #[test]
+    fn older_unprotected_terminal_does_not_clear_replay_active_terminal_marker() {
+        let queue = queue();
+        let active_route = pointer(1);
+        queue.borrow_mut().append(down(active_route));
+        queue.borrow_mut().append(up(active_route));
+        queue
+            .borrow_mut()
+            .append_with_active_contact(up(active_route), true);
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        assert!(matches!(replay.next(), Some(PointerEvent::Up(_))));
         queue
             .borrow_mut()
             .append_with_active_contact(contact_move(active_route, 2.0), true);
