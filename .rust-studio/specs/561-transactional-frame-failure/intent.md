@@ -46,7 +46,7 @@ A frame that fails part-way is contained to its presentation and reported, but w
 
 ## What "fixed" looks like
 
-After a failed frame, everything that reads frame state — layout, hit test, paint, semantics — sees the same committed version (the last good one) until a later frame commits a new one; a failed subtree never leaves a half-applied mutation behind; a test exists that turns red when the poisoning step is removed and tells last-good retention apart from a zero-value stand-in; and panic payload text in a `FrameFailureReport` is filtered before handler delivery by a profile-aware policy. A pipeline report deliberately retains its typed `RenderError`, which may contain sensitive text and remains the handler author's responsibility.
+After a failed frame, layout, hit test, and paint see the same committed version (the last good one) until a later frame commits a new one; semantics candidate/publish remains a documented residual, with the last published semantics version standing on failure. A failed subtree never leaves a half-applied mutation behind; a test exists that turns red when the poisoning step is removed and tells last-good retention apart from a zero-value stand-in; and panic payload text in a `FrameFailureReport` is filtered before handler delivery by a profile-aware policy. A pipeline report deliberately retains its typed `RenderError`, which may contain sensitive text and remains the handler author's responsibility.
 
 ## Who feels it
 
