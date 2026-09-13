@@ -228,12 +228,13 @@ pub enum SegmentPhase {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FrameFailureKind {
-    /// A panic escaped the presentation's build/layout/paint segment and
-    /// was caught at the realm's frame-transaction boundary — the
-    /// last-resort seam, reached only when every inner containment layer
-    /// (build-phase `ErrorView` substitution, the pipeline's
-    /// `RenderError::Poisoned` wrapper) did not apply, e.g. a panicking
-    /// `ViewState::dispose` during tree finalization.
+    /// A panic escaped the presentation's complete
+    /// Build/Finalize/Pipeline/Tail/Scene segment and was caught at the
+    /// realm's frame-transaction boundary — the last-resort seam, reached
+    /// only when every narrower containment layer (build-phase `ErrorView`
+    /// substitution, the pipeline's `RenderError::Poisoned` wrapper) did not
+    /// apply, such as framework bookkeeping outside bounded child windows or
+    /// scene construction.
     #[non_exhaustive]
     SegmentPanic {
         /// The panic payload text allowed by the configured
