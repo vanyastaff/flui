@@ -2458,7 +2458,13 @@ impl UiRealm {
                 &result,
                 FramePaintOutcome::Painted(_) | FramePaintOutcome::Errored
             ) {
-                presentation.advance_tree_revision();
+                let revision = presentation.advance_tree_revision();
+                tracing::trace!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        presentation.id().as_u64(),
+                    revision = ?revision,
+                    "Presentation tree revision advanced"
+                );
             }
             // Telemetry: remember this segment's span so `render_frame_entered`
             // (this method's own caller, which decides whether/how to submit)
@@ -2599,7 +2605,12 @@ impl UiRealm {
             self.presentations.get(presentation.id()).is_some(),
             "commit target must belong to this realm"
         );
-        presentation.commit_tree_revision();
+        let revision = presentation.commit_tree_revision();
+        tracing::trace!(
+            { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
+            revision = ?revision,
+            "Presentation tree revision committed"
+        );
     }
 
     /// Render while the platform dispatcher already owns the realm entry.
@@ -2615,10 +2626,12 @@ impl UiRealm {
     /// Step by step: settle any lone arena member queued by an earlier event
     /// whose owner boundary could not finish (e.g. after a panic); flush
     /// coalesced pointer moves; draw the frame ([`Self::draw_frame_entered`]);
-    /// re-hit-test stationary pointing devices against the freshly laid-out
-    /// tree; then, gated by the actual producer presentation's own
-    /// `FrameClock::is_deferred`, mark full-repaint damage and hand the
-    /// scene to `renderer.render_scene`. This submit gate is DELIBERATELY
+    /// classify its result and, when the actual producer is not deferred,
+    /// submit a non-empty painted scene and commit an accepted verdict;
+    /// re-hit-test stationary pointing devices against the primary tree only
+    /// when that presentation is committed; then arm retry work or mark the
+    /// pump rendered as applicable. The producer's `FrameClock::is_deferred`
+    /// submit gate is DELIBERATELY
     /// separate from `draw_frame_entered`'s own segment gate: first-frame
     /// deferral withholds only the submit, never the build/layout/paint
     /// work (`.flutter/packages/flutter/lib/src/rendering/binding.dart:582-599`
