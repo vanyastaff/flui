@@ -8,12 +8,18 @@ use std::time::Duration;
 
 use flui_animation::AnimationController;
 use flui_engine::EngineError;
-use flui_interaction::events::PointerType;
+use flui_interaction::PointerId;
+use flui_interaction::events::{
+    PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
+    make_move_event_for_id, make_up_event_for_id,
+};
+use flui_platform::traits::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
 use flui_types::{
     Size,
     geometry::{Offset, px},
 };
+use flui_view::{BuildContext, IntoView, StatelessView};
 use flui_widgets::SizedBox;
 
 use super::{SegmentPhase, UiRealm};
@@ -118,8 +124,9 @@ impl flui_view::RenderView for HitCountingView {
     fn update_render_object(
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
+        render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
+        render_object.hits = Arc::clone(&self.hits);
         flui_rendering::RenderUpdateImpact::NONE
     }
 }
@@ -144,6 +151,30 @@ pub(super) fn mount_hit_counting_root() -> (UiRealm, Arc<AtomicU32>) {
         Offset::new(px(10.0), px(10.0)),
     );
     (realm, hits)
+}
+
+#[derive(Clone)]
+struct SwitchingPointerRoot {
+    show_b: Rc<Cell<bool>>,
+    a_hits: Arc<AtomicU32>,
+    b_hits: Arc<AtomicU32>,
+}
+
+impl flui_view::View for SwitchingPointerRoot {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for SwitchingPointerRoot {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let hits = if self.show_b.get() {
+            Arc::clone(&self.b_hits)
+        } else {
+            Arc::clone(&self.a_hits)
+        };
+        HitCountingView { hits }
+    }
 }
 
 #[test]
@@ -411,4 +442,382 @@ fn primary_failure_suppresses_its_ambient_reprobe() {
         FrameCommitState::Uncommitted { .. }
     ));
     assert_eq!(hits.load(Ordering::Relaxed), clean_hits);
+}
+
+#[test]
+fn pointer_input_is_held_while_the_target_presentation_is_uncommitted() {
+    let (realm, hits) = mount_hit_counting_root();
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+    let clean_hits = hits.load(Ordering::Relaxed);
+
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
+    assert!(!realm.render_frame_entered(&mut failed_backend));
+    assert!(matches!(
+        primary_state(&realm),
+        FrameCommitState::Uncommitted { .. }
+    ));
+
+    let primary = realm.presentations.primary();
+    let down = make_down_event(Offset::new(px(10.0), px(10.0)), PointerType::Mouse);
+    realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(down));
+
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        clean_hits,
+        "held pointer input must not hit-test against an uncommitted tree"
+    );
+    assert_eq!(
+        primary.held_pointer_input().borrow().len(),
+        1,
+        "the pointer event must be retained for the later commit replay"
+    );
+}
+
+#[test]
+fn a_nonempty_held_queue_keeps_later_pointer_input_held_after_commit() {
+    let (realm, hits) = mount_hit_counting_root();
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+    let clean_hits = hits.load(Ordering::Relaxed);
+
+    let primary = realm.presentations.primary();
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event(
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Mouse,
+        ));
+    assert_eq!(primary.frame_commit_state(), FrameCommitState::Committed);
+
+    let move_event = make_move_event(Offset::new(px(11.0), px(11.0)), PointerType::Mouse);
+    realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(move_event));
+
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        clean_hits,
+        "a queued replay backlog must keep subsequent pointer input out of live hit-testing"
+    );
+    assert_eq!(
+        primary.held_pointer_input().borrow().len(),
+        2,
+        "the later pointer event must queue behind the unreplayed backlog"
+    );
+}
+
+#[test]
+fn window_leave_drops_held_hovers_but_retains_held_contact_sequences() {
+    let realm = mount_box();
+    let primary = realm.presentations.primary();
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event(
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Mouse,
+        ));
+    let mut hover = make_move_event(Offset::new(px(11.0), px(11.0)), PointerType::Mouse);
+    let flui_interaction::PointerEvent::Move(update) = &mut hover else {
+        unreachable!("the move helper always constructs PointerEvent::Move")
+    };
+    update.current.buttons = PointerButtons::new();
+    primary.held_pointer_input().borrow_mut().append(hover);
+
+    realm.handle_window_hover_addressed(primary.id(), false);
+
+    assert_eq!(
+        primary.held_pointer_input().borrow().len(),
+        1,
+        "window leave must only drop held hovers; contact epochs stay queued"
+    );
+}
+
+#[test]
+fn closing_a_presentation_drops_held_pointer_input_without_synthesizing_cancel() {
+    let mut realm = UiRealm::for_test();
+    let closing_id = realm.install_second_presentation_for_test();
+    let closing = realm
+        .presentations
+        .get(closing_id)
+        .expect("secondary presentation installed");
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    closing
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+    let routed_events = Rc::new(Cell::new(0));
+    let routed_events_from_cancel = Rc::clone(&routed_events);
+    let route: flui_interaction::routing::PointerRouteHandler = Rc::new(move |_| {
+        routed_events_from_cancel.set(routed_events_from_cancel.get() + 1);
+    });
+    closing
+        .gestures()
+        .pointer_router()
+        .add_route(pointer, route);
+
+    assert!(realm.close_presentation_entered(closing_id));
+
+    assert_eq!(
+        routed_events.get(),
+        0,
+        "closing a presentation must drop held input without synthesizing a routed Cancel"
+    );
+}
+
+#[test]
+fn presented_commit_replays_held_pointer_input_after_current_frame_telemetry() {
+    let realm = mount_box();
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+
+    assert!(
+        primary.held_pointer_input().borrow().is_empty(),
+        "a committed presented frame must drain held pointer input"
+    );
+    assert!(
+        realm.needs_redraw(),
+        "replayed pointer input must wake the next pump after mark_rendered cleared this one"
+    );
+    let snapshots = primary.clock().frames_since(None);
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0].latencies().count(),
+        0,
+        "held input replayed after the commit must not be attributed to the frame already presented"
+    );
+}
+
+#[test]
+fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
+    let realm = mount_box();
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_move_event_for_id(
+            pointer,
+            Offset::new(px(11.0), px(11.0)),
+            PointerType::Touch,
+        ));
+
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+
+    assert_eq!(
+        primary.gestures().pending_move_count(),
+        1,
+        "a replayed Move must use the normal GestureBinding coalesced-move path"
+    );
+    assert!(
+        realm.needs_redraw(),
+        "the pending replayed Move needs a pump"
+    );
+
+    let _ = realm.render_frame_entered(&mut backend);
+    assert_eq!(
+        primary.gestures().pending_move_count(),
+        0,
+        "the next pump must flush the replayed pending Move"
+    );
+}
+
+#[test]
+fn no_present_commit_also_replays_held_pointer_input() {
+    let realm = mount_box();
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(42).expect("test pointer id is nonzero");
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        ));
+    primary
+        .held_pointer_input()
+        .borrow_mut()
+        .append(make_move_event_for_id(
+            pointer,
+            Offset::new(px(11.0), px(11.0)),
+            PointerType::Touch,
+        ));
+
+    let mut backend = TestRasterBackend::single_shot(Ok(false));
+    assert!(!realm.render_frame_entered(&mut backend));
+
+    assert!(
+        primary.held_pointer_input().borrow().is_empty(),
+        "NoPresent still acknowledges the tree and must drain held input"
+    );
+    assert_eq!(
+        primary.gestures().pending_move_count(),
+        1,
+        "NoPresent replay must use the same pointer dispatch path as Presented replay"
+    );
+    assert!(
+        realm.needs_redraw(),
+        "NoPresent replay must wake a follow-up pump"
+    );
+}
+
+#[test]
+fn failed_update_frame_holds_pointer_sequence_until_new_tree_commits() {
+    let show_b = Rc::new(Cell::new(false));
+    let a_hits = Arc::new(AtomicU32::new(0));
+    let b_hits = Arc::new(AtomicU32::new(0));
+    let root = SwitchingPointerRoot {
+        show_b: Rc::clone(&show_b),
+        a_hits: Arc::clone(&a_hits),
+        b_hits: Arc::clone(&b_hits),
+    };
+    let realm = UiRealm::for_test();
+    realm
+        .attach_root_widget(&root)
+        .expect("switching root attaches");
+
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+    assert_eq!(
+        realm.presentations.primary().frame_commit_state(),
+        FrameCommitState::Committed
+    );
+
+    show_b.set(true);
+    realm
+        .presentations
+        .primary()
+        .widgets()
+        .schedule_root_rebuild();
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
+    assert!(!realm.render_frame_entered(&mut failed_backend));
+    assert!(matches!(
+        realm.presentations.primary().frame_commit_state(),
+        FrameCommitState::Uncommitted { .. }
+    ));
+
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(99).expect("test pointer id is nonzero");
+    let down = make_down_event_for_id(pointer, Offset::new(px(10.0), px(10.0)), PointerType::Touch);
+    let move_event =
+        make_move_event_for_id(pointer, Offset::new(px(12.0), px(10.0)), PointerType::Touch);
+    let up = make_up_event_for_id(pointer, Offset::new(px(12.0), px(10.0)), PointerType::Touch);
+    realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(down));
+    realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(move_event));
+    realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(up));
+
+    assert_eq!(a_hits.load(Ordering::Relaxed), 0);
+    assert_eq!(b_hits.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        primary.gestures().active_pointer_count(),
+        0,
+        "held input must not create a live gesture sequence before a committed retry"
+    );
+    assert_eq!(
+        primary.held_pointer_input().borrow().len(),
+        3,
+        "the full contact sequence waits for the retry commit"
+    );
+
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+    assert!(realm.render_frame_entered(&mut backend));
+    assert_eq!(
+        primary.held_pointer_input().borrow().len(),
+        0,
+        "the successful retry commit must drain the held sequence"
+    );
+    assert_eq!(a_hits.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        b_hits.load(Ordering::Relaxed),
+        1,
+        "the replayed Down must hit-test against the new committed target"
+    );
+    assert_eq!(primary.gestures().active_pointer_count(), 0);
+}
+
+#[test]
+fn production_addressed_input_collapses_a_thousand_held_moves() {
+    let (realm, hits) = mount_hit_counting_root();
+    let mut backend = TestRasterBackend::always_presents();
+    assert!(realm.render_frame_entered(&mut backend));
+    let clean_hits = hits.load(Ordering::Relaxed);
+
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
+    assert!(!realm.render_frame_entered(&mut failed_backend));
+
+    let primary = realm.presentations.primary();
+    let pointer = PointerId::new(100).expect("test pointer id is nonzero");
+    realm.handle_input_addressed(
+        primary.id(),
+        PlatformInput::Pointer(make_down_event_for_id(
+            pointer,
+            Offset::new(px(10.0), px(10.0)),
+            PointerType::Touch,
+        )),
+    );
+    for step in 0..1000 {
+        realm.handle_input_addressed(
+            primary.id(),
+            PlatformInput::Pointer(make_move_event_for_id(
+                pointer,
+                Offset::new(px(11.0 + step as f32), px(10.0)),
+                PointerType::Touch,
+            )),
+        );
+    }
+
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        clean_hits,
+        "the storm must stay out of live hit-testing while the tree is uncommitted"
+    );
+    assert_eq!(
+        primary.held_pointer_input().borrow().len(),
+        2,
+        "1000 held Moves collapse to one Move behind the Down"
+    );
 }
