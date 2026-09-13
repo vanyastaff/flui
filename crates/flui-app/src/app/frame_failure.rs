@@ -13,8 +13,10 @@
 //! The report deliberately carries the presentation's own
 //! [`PresentationAddress`] — ownership identity, per issue #561's
 //! diagnostics criterion — so a multi-window embedder can tell *which*
-//! window's frame failed and decide its own recovery (ignore and let the
-//! armed retry run, close the window, or restart the app).
+//! window produced the report and decide its own response. A terminal drop
+//! arms the framework retry; a contained recovery does not. Repeated
+//! deterministic recoveries produce one report per occurrence and frame, so
+//! embedders that forward them own any throttling policy.
 
 use std::any::{Any, TypeId};
 use std::fmt;
@@ -262,6 +264,16 @@ pub enum FrameFailureKind {
     },
 }
 
+impl FrameFailureKind {
+    /// The only valid disposition for this kind of report.
+    pub(crate) fn disposition(&self) -> FailureDisposition {
+        match self {
+            Self::SegmentPanic { .. } | Self::Pipeline { .. } => FailureDisposition::FrameDropped,
+            Self::RecoveredPanic { .. } => FailureDisposition::Contained,
+        }
+    }
+}
+
 /// One addressed frame failure or contained lifecycle recovery.
 ///
 /// Delivered to the registered [`FrameFailureHandler`] (if any) and
@@ -292,10 +304,14 @@ pub struct FrameFailureReport {
 /// Register via
 /// [`AppConfig::with_frame_failure_handler`](crate::AppConfig::with_frame_failure_handler).
 /// Invoked synchronously on the UI thread, from inside the frame pump,
-/// immediately after the failure is contained. Keep it lightweight and
+/// after the presentation's complete frame attempt finishes and its recovery
+/// queue is drained. A frame with multiple recovered occurrences delivers
+/// one contained report for each, in recovery order. Keep it lightweight and
 /// re-entrancy-free: record/forward the report and return — do not call
 /// back into FLUI APIs (opening windows, attaching widgets) from inside
 /// the handler; the realm that produced the report is mid-frame.
+/// Embedders that forward repeated deterministic recoveries own any desired
+/// deduplication or throttling.
 ///
 /// A handler that itself panics is contained at the delivery site (its
 /// panic cannot re-enter the frame boundary or take down sibling

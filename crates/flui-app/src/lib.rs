@@ -73,9 +73,9 @@ pub use app::{
     service_events,
 };
 // Typed frame-failure route (issue #561): the embedder-visible half of the
-// presentation-frame transaction boundary (ADR-0048). A failed frame is
-// contained to its own presentation; these types are how the embedder hears
-// about it.
+// presentation-frame transaction boundary (ADR-0048). Terminal failures drop
+// only their presentation's frame; narrower lifecycle failures can be
+// contained while the frame continues. These types report both outcomes.
 pub use app::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SegmentPhase,

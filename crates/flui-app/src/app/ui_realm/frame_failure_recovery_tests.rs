@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use flui_foundation::PresentationAddress;
 use flui_types::Size;
 use flui_view::{IntoView, StatelessView, View, element::ElementKind};
-use flui_widgets::{ListView, SizedBox};
+use flui_widgets::{Column, ListView, SizedBox};
 
 use super::*;
 use crate::app::frame_failure::{FrameFailureHandler, FrameFailureKind, PanicText};
@@ -110,6 +110,30 @@ impl StatelessView for PanicsOnceOnBuild {
 }
 
 impl View for PanicsOnceOnBuild {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+#[derive(Clone)]
+struct TwoPanickingChildren;
+
+impl StatelessView for TwoPanickingChildren {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        Column::new((
+            PanicsOnceOnBuild {
+                should_panic: Rc::new(Cell::new(true)),
+                message: "first recovered child",
+            },
+            PanicsOnceOnBuild {
+                should_panic: Rc::new(Cell::new(true)),
+                message: "second recovered child",
+            },
+        ))
+    }
+}
+
+impl View for TwoPanickingChildren {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateless(self)
     }
@@ -233,6 +257,86 @@ fn real_build_recovery_is_reported_once_in_the_same_attempt() {
         }
         other => panic!("expected recovered build panic, got {other:?}"),
     }
+}
+
+#[test]
+fn real_bug_prefixed_recovery_preserves_classification_and_full_attribution() {
+    let realm = UiRealm::for_test();
+    realm.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+    let observed = install_collecting_handler(&realm);
+    realm
+        .attach_root_widget(&PanicsOnceOnBuild {
+            should_panic: Rc::new(Cell::new(true)),
+            message: "BUG: production adapter classification",
+        })
+        .expect("root attaches");
+    let mut backend = TestRasterBackend::always_presents();
+    let _presented = render_attempt(&realm, &mut backend);
+
+    let observed = observed.lock().expect("failure collector mutex");
+    assert_eq!(observed.len(), 1);
+    let failure = &observed[0];
+    assert_eq!(failure.address.realm_id, realm.realm_id());
+    assert_eq!(failure.address.presentation_id, realm.presentation_id());
+    assert_eq!(failure.disposition, FailureDisposition::Contained);
+    let ObservedKind::Recovered {
+        at,
+        view_type_id,
+        hook,
+        message,
+        internal_invariant,
+    } = &failure.kind
+    else {
+        panic!("expected recovered lifecycle panic")
+    };
+    assert!(matches!(
+        at,
+        RecoveredAt::Element {
+            element,
+            parent: None,
+            ..
+        } if *element == flui_foundation::ElementId::new(15)
+    ));
+    assert_eq!(*view_type_id, TypeId::of::<PanicsOnceOnBuild>());
+    assert_eq!(*hook, LifecycleHook::Build);
+    assert_eq!(
+        message,
+        &PanicText::Verbatim("BUG: production adapter classification".into())
+    );
+    assert!(*internal_invariant);
+}
+
+#[test]
+fn two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order() {
+    let realm = UiRealm::for_test();
+    realm.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+    let observed = install_collecting_handler(&realm);
+    realm
+        .attach_root_widget(&TwoPanickingChildren)
+        .expect("root attaches");
+    let mut backend = TestRasterBackend::always_presents();
+    let _presented = render_attempt(&realm, &mut backend);
+
+    let observed = observed.lock().expect("failure collector mutex");
+    let messages: Vec<_> = observed
+        .iter()
+        .map(|failure| match &failure.kind {
+            ObservedKind::Recovered { message, .. } => message.clone(),
+            other => panic!("expected only recovered reports, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        messages,
+        vec![
+            PanicText::Verbatim("first recovered child".into()),
+            PanicText::Verbatim("second recovered child".into()),
+        ]
+    );
+    assert!(
+        observed
+            .iter()
+            .all(|failure| failure.disposition == FailureDisposition::Contained)
+    );
 }
 
 #[test]

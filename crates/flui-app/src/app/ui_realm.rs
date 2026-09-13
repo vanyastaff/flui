@@ -945,12 +945,8 @@ impl UiRealm {
     /// borrow is held while embedder code runs; see
     /// [`FrameFailureHandler`]'s doc for the re-entrancy contract it must
     /// still honor (it runs mid-frame, inside the pump).
-    fn report_frame_failure(
-        &self,
-        presentation: &PresentationState,
-        disposition: FailureDisposition,
-        kind: FrameFailureKind,
-    ) {
+    fn report_frame_failure(&self, presentation: &PresentationState, kind: FrameFailureKind) {
+        let disposition = kind.disposition();
         let consecutive_failures = match disposition {
             FailureDisposition::FrameDropped => presentation.note_frame_failure(),
             FailureDisposition::Contained => presentation.frame_failure_streak(),
@@ -2472,7 +2468,7 @@ impl UiRealm {
                     .frame_failure_detail
                     .get()
                     .recovered_panic_kind(recovered);
-                self.report_frame_failure(presentation, FailureDisposition::Contained, kind);
+                self.report_frame_failure(presentation, kind);
             }
 
             let result = match attempt {
@@ -2483,11 +2479,7 @@ impl UiRealm {
                     outcome
                 }
                 Ok(Err(error)) => {
-                    self.report_frame_failure(
-                        presentation,
-                        FailureDisposition::FrameDropped,
-                        FrameFailureKind::Pipeline { error },
-                    );
+                    self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
                     FramePaintOutcome::Errored
                 }
                 Err(payload) => {
@@ -2507,7 +2499,6 @@ impl UiRealm {
                         self.frame_failure_detail.get().panic_text(&*payload);
                     self.report_frame_failure(
                         presentation,
-                        FailureDisposition::FrameDropped,
                         FrameFailureKind::SegmentPanic {
                             message,
                             phase: failed_phase,
