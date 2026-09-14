@@ -658,7 +658,7 @@ impl RenderNode {
         with_entry!(self, entry => entry.render_object().debug_name())
     }
 
-    /// [`TypeId`] of the parent-data type this node expects
+    /// [`std::any::TypeId`] of the parent-data type this node expects
     /// on each child — see [`RenderObject::child_parent_data_type_id`].
     #[inline]
     pub fn child_parent_data_type_id(&self) -> std::any::TypeId {
