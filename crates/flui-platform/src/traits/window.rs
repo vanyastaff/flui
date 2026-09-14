@@ -506,6 +506,38 @@ pub trait PlatformWindow: Send + Sync {
     /// Concrete platform windows (WindowsWindow, MacOSWindow) implement
     /// `raw_window_handle::HasWindowHandle` and delegate through this method.
     /// Headless windows return `HandleError::Unavailable`.
+    ///
+    /// # Contract: MUST answer `Unavailable` once the native window is gone
+    ///
+    /// [`raw_window_handle::HasWindowHandle`]'s own contract ties the
+    /// returned handle's validity to the borrow of `self` — winit's `impl
+    /// HasWindowHandle for Window` states it plainly in its own SAFETY
+    /// comment ("never deallocated while the window is alive"). An engine
+    /// holding a long-lived `Arc<dyn PlatformWindow>` (issue #1043) relies on
+    /// that: it re-queries this method on recovery rather than reusing a
+    /// handle captured earlier, and a stale `Ok` handed back for a destroyed
+    /// or suspended window is exactly the unsound escape that design closes.
+    /// So every implementor **must** return `Err(HandleError::Unavailable)`
+    /// once its native window is destroyed or suspended (Android between
+    /// `Paused` and `Resumed`) — never a handle whose pointee no longer
+    /// exists, or exists but is temporarily unusable.
+    ///
+    /// How each backend satisfies this:
+    /// - **winit** — delegates to the wrapped `winit::Window`, which owns the
+    ///   native window for as long as it is alive; there is no destroyed
+    ///   state to detect separately.
+    /// - **Win32** (`WindowsWindow`) — consults the pure `teardown_route`
+    ///   identity probe (`shared::hwnd_affinity`) and returns `Unavailable`
+    ///   for `AlreadyGone`/`StaleHandle` instead of handing out a handle
+    ///   wrapping a destroyed or recycled `HWND`.
+    /// - **AppKit** (`MacOSWindow`) — an explicit `closed` flag, set from the
+    ///   `windowWillClose:` delegate callback (and by `close()` itself, where
+    ///   that path can complete without the delegate firing).
+    /// - **Android** (`AndroidWindow`) — already conforms: `native_window()`
+    ///   answers `None` between `MainEvent::Pause` and the next
+    ///   `MainEvent::Resume`, and this method already maps that to
+    ///   `Unavailable`.
+    /// - **Headless** — always `Unavailable` (no native handle exists).
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
@@ -517,6 +549,10 @@ pub trait PlatformWindow: Send + Sync {
     /// Concrete platform windows (WindowsWindow, MacOSWindow) implement
     /// `raw_window_handle::HasDisplayHandle` and delegate through this method.
     /// Headless windows return `HandleError::Unavailable`.
+    ///
+    /// Same MUST as [`window_handle`](Self::window_handle):
+    /// `Err(HandleError::Unavailable)` once the native window is destroyed
+    /// or suspended, for the same reason and by the same per-backend means.
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {

@@ -733,6 +733,22 @@ impl WindowsPlatform {
                         // Dispatch Closed event to global handlers
                         ctx.dispatch_event(WindowEvent::Closed(ctx.window_id));
 
+                        // Release every remaining registered callback now,
+                        // while the HWND is still valid (Win32 only frees it
+                        // after this handler returns, at `WM_NCDESTROY`).
+                        // Without this, the frame callback registered via
+                        // `on_request_frame` — which in `flui-app`'s wiring
+                        // owns this window's GPU renderer, whose
+                        // `wgpu::Surface` was built from this window's raw
+                        // handles — stays pinned forever: window (through
+                        // its callback slots) → frame closure → raster lane
+                        // → renderer → surface → `Arc<WindowsWindow>`, a
+                        // cycle nothing else in this arm breaks. Calling it
+                        // here, before the swapchain-owning callback's
+                        // native window is gone, releases the surface while
+                        // it is still valid to destroy.
+                        ctx.callbacks.clear();
+
                         // Retire the context: clear the slot FIRST, so no
                         // new borrow can be minted (`with_window_context`
                         // and this function's own entry both refuse a null

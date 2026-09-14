@@ -9,6 +9,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_types::geometry::{Pixels, Size};
 use parking_lot::Mutex;
@@ -272,6 +273,19 @@ pub struct WindowCallbacks {
 
     event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
     should_close_dispatching: Mutex<bool>,
+
+    /// One-shot latch set by [`Self::clear`] before it takes any slot.
+    ///
+    /// Closes the #919-class hazard from the *other* direction: a callback
+    /// leased out via [`CallbackLease::take`] runs with its slot empty, so
+    /// a `clear()` that lands while a callback is out finds nothing to take
+    /// there — and without this flag, [`CallbackLease::drop`] would then
+    /// restore that callback into the slot `clear()` just emptied the
+    /// instant the leased call returns, resurrecting a callback (and
+    /// everything it owns — a frame closure, a renderer, a surface, the
+    /// window's own `Arc`) whose window no longer exists. Every lease reads
+    /// the flag on drop instead of restoring unconditionally.
+    cleared: AtomicBool,
 }
 
 enum WindowCallbackEvent {
@@ -362,16 +376,23 @@ impl Drop for BooleanDispatchGuard<'_> {
 }
 
 /// Temporarily removes one `FnMut` callback without holding its mutex while
-/// user code runs, then restores it even if that code unwinds.
+/// user code runs, then restores it even if that code unwinds — unless the
+/// window closed while the callback was out (see `cleared`'s doc), in which
+/// case it is dropped instead.
 struct CallbackLease<'a, T> {
     slot: &'a Mutex<Option<T>>,
+    cleared: &'a AtomicBool,
     callback: Option<T>,
 }
 
 impl<'a, T> CallbackLease<'a, T> {
-    fn take(slot: &'a Mutex<Option<T>>) -> Self {
+    fn take(slot: &'a Mutex<Option<T>>, cleared: &'a AtomicBool) -> Self {
         let callback = slot.lock().take();
-        Self { slot, callback }
+        Self {
+            slot,
+            cleared,
+            callback,
+        }
     }
 
     fn callback_mut(&mut self) -> Option<&mut T> {
@@ -384,6 +405,15 @@ impl<T> Drop for CallbackLease<'_, T> {
         let Some(callback) = self.callback.take() else {
             return;
         };
+        // `SeqCst`: this flag is a one-shot "the window is gone" latch that
+        // every lease on every slot reads, with no other synchronization
+        // tying a read here to the specific `clear()` write that set it —
+        // a weaker ordering would need per-slot reasoning this shared flag
+        // does not have. `clear()` and lease drops each happen a handful of
+        // times per window's lifetime, so the cost is immaterial.
+        if self.cleared.load(Ordering::SeqCst) {
+            return;
+        }
         let mut slot = self.slot.lock();
         if slot.is_none() {
             *slot = Some(callback);
@@ -407,6 +437,7 @@ impl WindowCallbacks {
             on_appearance_changed: Mutex::new(None),
             event_dispatch: Mutex::new(DispatchState::new()),
             should_close_dispatching: Mutex::new(false),
+            cleared: AtomicBool::new(false),
         }
     }
 
@@ -417,14 +448,23 @@ impl WindowCallbacks {
     /// frame callback owns the window's GPU renderer, whose `wgpu::Surface`
     /// was created from this window's raw handles and must therefore be
     /// destroyed while the native window is still alive (wgpu's
-    /// `SurfaceTargetUnsafe::RawHandle` validity contract). Backends call
-    /// this at window close, and `WinitWindow`'s `Drop` calls it as a
-    /// last-resort ordering guarantee, so that destruction order is pinned
-    /// deterministically instead of left to struct field order. Payloads
-    /// are collected first and dropped only after every slot's lock has
-    /// been released, since a callback's destructor may re-enter platform
-    /// code.
+    /// `SurfaceTargetUnsafe::RawHandle` validity contract). Three call
+    /// sites reach this at window close today: winit's
+    /// `complete_window_close` (the primary, in-loop path) plus
+    /// `WinitWindow::drop` (a last-resort guarantee for a window whose
+    /// final `Arc` unwinds anywhere else), Win32's `WM_DESTROY` arm, and
+    /// AppKit's `windowWillClose:` handler — so that destruction order is
+    /// pinned deterministically instead of left to struct field order.
+    /// Payloads are collected first and dropped only after every slot's
+    /// lock has been released, since a callback's destructor may re-enter
+    /// platform code.
     pub fn clear(&self) {
+        // Set BEFORE taking any slot: a callback leased out right now (its
+        // slot already empty, user code running) checks this flag when its
+        // lease drops, which happens strictly after this store — the only
+        // way to stop it from restoring itself into a slot this call is
+        // about to empty. See `CallbackLease::drop`.
+        self.cleared.store(true, Ordering::SeqCst);
         let dropped = (
             self.on_input.lock().take(),
             self.on_request_frame.lock().take(),
@@ -448,26 +488,26 @@ impl WindowCallbacks {
         while let Some(event) = drain.next() {
             match event {
                 WindowCallbackEvent::Input(event) => {
-                    let mut lease = CallbackLease::take(&self.on_input);
+                    let mut lease = CallbackLease::take(&self.on_input, &self.cleared);
                     let result = lease
                         .callback_mut()
                         .map_or_else(DispatchEventResult::default, |callback| callback(event));
                     input_result.get_or_insert(result);
                 }
                 WindowCallbackEvent::RequestFrame => {
-                    let mut lease = CallbackLease::take(&self.on_request_frame);
+                    let mut lease = CallbackLease::take(&self.on_request_frame, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback();
                     }
                 }
                 WindowCallbackEvent::Resize(size, scale_factor) => {
-                    let mut lease = CallbackLease::take(&self.on_resize);
+                    let mut lease = CallbackLease::take(&self.on_resize, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback(size, scale_factor);
                     }
                 }
                 WindowCallbackEvent::Moved => {
-                    let mut lease = CallbackLease::take(&self.on_moved);
+                    let mut lease = CallbackLease::take(&self.on_moved, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback();
                     }
@@ -479,25 +519,28 @@ impl WindowCallbacks {
                     }
                 }
                 WindowCallbackEvent::Active(is_active) => {
-                    let mut lease = CallbackLease::take(&self.on_active_status_change);
+                    let mut lease =
+                        CallbackLease::take(&self.on_active_status_change, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback(is_active);
                     }
                 }
                 WindowCallbackEvent::Visibility(is_visible) => {
-                    let mut lease = CallbackLease::take(&self.on_visibility_status_change);
+                    let mut lease =
+                        CallbackLease::take(&self.on_visibility_status_change, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback(is_visible);
                     }
                 }
                 WindowCallbackEvent::Hover(is_hovered) => {
-                    let mut lease = CallbackLease::take(&self.on_hover_status_change);
+                    let mut lease =
+                        CallbackLease::take(&self.on_hover_status_change, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback(is_hovered);
                     }
                 }
                 WindowCallbackEvent::AppearanceChanged => {
-                    let mut lease = CallbackLease::take(&self.on_appearance_changed);
+                    let mut lease = CallbackLease::take(&self.on_appearance_changed, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback();
                     }
@@ -579,7 +622,7 @@ impl WindowCallbacks {
         let _dispatch_guard = BooleanDispatchGuard {
             dispatching: &self.should_close_dispatching,
         };
-        let mut lease = CallbackLease::take(&self.on_should_close);
+        let mut lease = CallbackLease::take(&self.on_should_close, &self.cleared);
         if let Some(callback) = lease.callback_mut() {
             callback()
         } else {
@@ -739,5 +782,49 @@ impl std::fmt::Debug for WindowCallbacks {
                 &self.on_appearance_changed.lock().is_some(),
             )
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    /// The #919-class hazard from the other direction: `close()` requested
+    /// from inside a callback that is currently leased out. Without the
+    /// `cleared` latch, `CallbackLease::drop` would restore this very
+    /// callback into the slot `clear()` just emptied the instant this
+    /// closure returns — this test goes red if that latch is removed.
+    #[test]
+    fn close_from_inside_a_leased_callback_does_not_resurrect_it() {
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let inner = Arc::clone(&callbacks);
+        callbacks.on_should_close.lock().replace(Box::new(move || {
+            inner.clear();
+            true
+        }));
+
+        assert!(callbacks.dispatch_should_close());
+        assert!(
+            callbacks.on_should_close.lock().is_none(),
+            "a callback that clears its own window's callbacks from inside \
+             itself must not be resurrected by its own lease's Drop"
+        );
+    }
+
+    /// The ordinary case: a lease taken and dropped with no `clear()` in
+    /// between still restores its callback, so the new latch does not break
+    /// normal reentrant dispatch.
+    #[test]
+    fn a_lease_taken_before_any_clear_restores_normally() {
+        let callbacks = WindowCallbacks::new();
+        callbacks.on_should_close.lock().replace(Box::new(|| true));
+
+        assert!(callbacks.dispatch_should_close());
+        assert!(
+            callbacks.on_should_close.lock().is_some(),
+            "an ordinary dispatch outside any clear() must restore its callback"
+        );
     }
 }

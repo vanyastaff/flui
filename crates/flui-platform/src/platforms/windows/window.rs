@@ -1089,12 +1089,40 @@ impl PlatformWindow for WindowsWindow {
     }
 }
 
+/// Whether [`WindowsWindow`]'s [`HasWindowHandle::window_handle`] may hand
+/// out a handle for a window whose teardown routes to `route`.
+///
+/// Pure so it is testable without a live `HWND` (see
+/// [`crate::shared::hwnd_affinity::TeardownRoute`]): `DestroyDirect` and
+/// `PostClose` both describe a live window this wrapper still owns (they
+/// differ only in which thread may call `DestroyWindow` directly);
+/// `AlreadyGone` and `StaleHandle` both describe a window with nothing left
+/// to hand a caller — destroyed, or the OS recycled the `HWND` value for an
+/// unrelated window.
+#[must_use]
+fn handle_available(route: crate::shared::hwnd_affinity::TeardownRoute) -> bool {
+    use crate::shared::hwnd_affinity::TeardownRoute;
+    matches!(
+        route,
+        TeardownRoute::DestroyDirect | TeardownRoute::PostClose
+    )
+}
+
 // Implement raw-window-handle for wgpu integration
 impl HasWindowHandle for WindowsWindow {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use std::num::NonZeroIsize;
+
+        // Refuse a destroyed or recycled `HWND` up front — the same
+        // identity probe `close()` uses to route teardown, reused here so a
+        // caller that re-queries this method (issue #1043's recovery path,
+        // which holds an `Arc<dyn PlatformWindow>` rather than a saved
+        // handle) never receives a handle whose pointee no longer exists.
+        if !handle_available(super::platform::teardown_route(self.hwnd, self.context)) {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
 
         let hwnd_value = self.hwnd.0 as isize;
         let mut handle = Win32WindowHandle::new(
@@ -1112,20 +1140,65 @@ impl HasWindowHandle for WindowsWindow {
 
         // SAFETY: `raw_window_handle::WindowHandle::borrow_raw`'s contract
         // requires the wrapped handle to stay valid for the returned
-        // `WindowHandle`'s lifetime. The `'_` this function returns only
-        // ties to `&self` — i.e. to the `Arc<WindowsWindow>` staying alive —
-        // not to the underlying native HWND staying valid. Those are NOT
-        // the same lifetime: `PlatformWindow::close()` (or the user closing
-        // the window, which reaches `DestroyWindow` through `window_proc`
-        // regardless of which thread requested it) can destroy the native
-        // window while an `Arc<WindowsWindow>`, and therefore a
-        // `WindowHandle` borrowed from it, is still held and used elsewhere
-        // (e.g. by wgpu to (re)create a surface). Unlike the cross-thread
-        // `GWLP_USERDATA` race (closed by the context gate documented on
-        // this type's `Send`/`Sync` impls above), this HWND-lifetime gap
-        // remains open — a real gap this comment does not close, not a
-        // validity claim this code has actually established.
+        // `WindowHandle`'s lifetime, which this function ties only to
+        // `&self` — i.e. to the `Arc<WindowsWindow>` staying alive — not to
+        // the underlying native HWND staying valid for that whole span.
+        //
+        // What the `handle_available` check above closes: a caller that
+        // re-acquires a handle from a retained `Arc<dyn PlatformWindow>`
+        // (issue #1043's recovery path) never receives one for a window
+        // that is already destroyed or whose `HWND` value the OS already
+        // recycled for someone else's window — those routes are refused
+        // before `Win32WindowHandle::new` runs. And `WM_DESTROY` now calls
+        // `WindowCallbacks::clear()` (see `platform.rs`), which breaks the
+        // frame-callback → renderer → surface → `Arc<WindowsWindow>` cycle
+        // that used to orphan the whole chain forever after a native close
+        // — a surface is no longer pinned alive past the window it was
+        // created from.
+        //
+        // What stays open: the identity probe is a point-in-time check.
+        // `close()` on the owning thread (`TeardownRoute::DestroyDirect`)
+        // calls `DestroyWindow` synchronously, and Win32 dispatches
+        // `WM_DESTROY` — with it, `callbacks.clear()` — before that call
+        // returns. If that `close()` is itself invoked from inside a
+        // callback currently leased out of `WindowCallbacks` (the
+        // `CallbackLease` restore hazard #919 identified), a surface built
+        // from a handle this method returned earlier in the same call chain
+        // can still be alive while `DestroyWindow` runs beneath it — rwh's
+        // own contract puts the burden of not outliving the native window
+        // on the caller holding the handle, not on this method. That is a
+        // logic-level ordering gap this comment records, not a memory-safety
+        // one: rwh's own docs state window ids like `HWND` "may be deleted
+        // by the underlying window system whenever safe code is running",
+        // so a caller is required to handle `HandleError` on every
+        // subsequent use rather than assume a handle it already holds stays
+        // good.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
+    }
+}
+
+#[cfg(test)]
+mod window_handle_availability_tests {
+    use super::handle_available;
+    use crate::shared::hwnd_affinity::TeardownRoute;
+
+    // This module compiles and runs only on Windows (`WindowsWindow` lives
+    // under `#[cfg(windows)]`), so on every other host it is proven sound
+    // only by `cross-typecheck`'s clippy pass — never linked, never
+    // executed there. `handle_available` itself is a pure function over an
+    // already-Linux-tested enum (`hwnd_affinity::route_teardown`'s own
+    // tests), so these four cases are the entire behavior this file adds.
+
+    #[test]
+    fn a_live_window_this_wrapper_owns_may_hand_out_a_handle() {
+        assert!(handle_available(TeardownRoute::DestroyDirect));
+        assert!(handle_available(TeardownRoute::PostClose));
+    }
+
+    #[test]
+    fn a_destroyed_or_recycled_window_refuses_a_handle() {
+        assert!(!handle_available(TeardownRoute::AlreadyGone));
+        assert!(!handle_available(TeardownRoute::StaleHandle));
     }
 }
 
