@@ -363,9 +363,9 @@ impl HeadlessBinding {
         };
 
         let (render_root, render_root_children) = pipeline_owner.with(|owner| {
-            let installed = owner.root_id().expect(
-                "BUG: RootRenderElement must install PipelineOwner.root_id during mount",
-            );
+            let installed = owner
+                .root_id()
+                .expect("BUG: RootRenderElement must install PipelineOwner.root_id during mount");
             let render_tree = owner.render_tree();
             let mut roots = render_tree
                 .iter()
