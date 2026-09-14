@@ -1967,8 +1967,40 @@ impl WinitApp {
     }
 
     fn finish_shutdown(&mut self) {
+        self.release_open_window_callbacks();
         self.close_owner_lane();
         self.notify_quit_once();
+    }
+
+    /// Clears every still-tracked window's callback slots on the way out.
+    ///
+    /// `complete_pending_closes` only tears down windows whose `close()` was
+    /// actually requested — a window left open when the loop is asked to
+    /// quit (`owner.quit()`, or `on_ready` failing after step 6) never runs
+    /// [`Self::complete_window_close`] at all, so its `on_request_frame`
+    /// callback — where production code
+    /// (`install_pre_present_hook`, `crates/flui-app/src/app/runner/frame_pacing.rs`)
+    /// stores its own `Arc::clone` of the window inside the renderer — was
+    /// never released: window -> callback slot -> frame closure ->
+    /// `Arc<window>` is a strong cycle, and only a callback-clearing call
+    /// breaks it (see [`crate::shared::WindowCallbacks::clear`]'s own doc).
+    /// This does not run the rest of `complete_window_close`'s teardown
+    /// (visibility, `on_close`, the global `Closed` event, the exit-policy
+    /// re-consult) — that body takes a live `&ActiveEventLoop`, and
+    /// [`Self::finish_shutdown`] (this method's caller) also runs once more
+    /// from `run_event_loop`, after `event_loop.run_app` has returned and
+    /// consumed the `EventLoop` itself, by which point no `ActiveEventLoop`
+    /// can exist to pass it. Clearing callbacks is the minimum that breaks
+    /// the cycle and is safe to run unconditionally: `clear()` is
+    /// idempotent-terminal, so a window already closed through the normal
+    /// path (its slots already empty) is a no-op here.
+    fn release_open_window_callbacks(&mut self) {
+        let windows = self
+            .platform
+            .with_state(|state| state.windows.values().cloned().collect::<Vec<_>>());
+        for window in windows {
+            window.callbacks().clear();
+        }
     }
 
     fn close_owner_lane(&mut self) {

@@ -71,6 +71,76 @@ pub(crate) fn assert_route_observed(log_path: &Path, route: CloseRoute) -> Resul
     )
 }
 
+/// The `flui.gpu` trace's structured marker for a released GPU surface
+/// (`SurfaceLease::drop`, `crates/flui-engine/src/wgpu/surface_lease.rs`,
+/// issue #1043's cycle-breaker) — matched on the field, not the
+/// human-readable message, the same discipline `harness.rs`'s own
+/// `GPU_PRESENT_MARKER`/`GPU_PRE_PRESENT_MARKER` use. Requires `flui.gpu`
+/// enabled at `debug` or louder in `RUST_LOG` — the level `SurfaceLease::drop`
+/// logs at.
+const SURFACE_RELEASED_MARKER: &str = "event=\"surface_released\"";
+
+/// The winit backend's own "the loop is exiting" line
+/// (`WinitApp::request_exit`) — logged only after the closing window's
+/// callbacks have already been cleared and the exit-policy hook has
+/// confirmed no window remains, which makes it the closest thing this
+/// single-window harness has to an observable "the window has now fully
+/// closed" instant. Matched on the literal message: it carries no
+/// structured field of its own.
+const EVENT_LOOP_QUITTING_LINE: &str = "Quitting event loop";
+
+/// Asserts the app log shows its GPU surface released strictly before the
+/// event loop reports itself quitting, on whichever close route produced
+/// this log.
+///
+/// This is the only executed evidence that `SurfaceLease`'s target (the
+/// renderer's own `Arc` clone of the window, the same shape
+/// `install_pre_present_hook` captures in production) was actually
+/// released while the window and event loop were still alive, rather than
+/// orphaned by the frame-closure cycle (window -> callback slot -> frame
+/// closure -> `Arc<window>`) that only a callback-clearing call breaks —
+/// see the memory note `pre-present-hook-pins-the-window-in-a-cycle`.
+/// Before this check existed, `just live-smoke-wayland` asserted only the
+/// exit code, which stays 0 whether the surface was released in order,
+/// released late, or never released at all (the process's own exit
+/// reclaims the leak either way).
+pub(crate) fn assert_surface_released_before_window_close(log_path: &Path) -> Result<()> {
+    let log = std::fs::read_to_string(log_path)
+        .with_context(|| format!("reading the app log {}", log_path.display()))?;
+    let log = strip_ansi(&log);
+    let lines: Vec<&str> = log.lines().collect();
+
+    let surface_line = lines
+        .iter()
+        .position(|line| line.contains(SURFACE_RELEASED_MARKER));
+    let close_line = lines
+        .iter()
+        .position(|line| line.contains(EVENT_LOOP_QUITTING_LINE));
+
+    match (surface_line, close_line) {
+        (Some(surface_line), Some(close_line)) if surface_line < close_line => Ok(()),
+        (None, _) => bail!(
+            "surface-release check FAILED: no '{SURFACE_RELEASED_MARKER}' log line at all -- \
+             either the flui.gpu trace target is not reaching the log (check RUST_LOG), or \
+             SurfaceLease::drop never ran -- the frame-closure cycle (window -> callback slot \
+             -> closure -> Arc<window>) was not broken"
+        ),
+        (_, None) => bail!(
+            "surface-release check FAILED: the app exited 0 but its log never shows \
+             '{EVENT_LOOP_QUITTING_LINE}' -- cannot order the surface release against it"
+        ),
+        (Some(surface_line), Some(close_line)) => bail!(
+            "surface-release check FAILED: the surface release line comes AFTER the loop's own \
+             quitting line -- the renderer's Arc<window> survived past the point the loop \
+             believed every window was gone, the orphaned-by-the-callback-cycle shape issue \
+             #1043 closes.\n  surface release (log line {surface_line}): {}\n  loop quitting \
+             (log line {close_line}): {}",
+            lines[surface_line],
+            lines[close_line],
+        ),
+    }
+}
+
 /// Strips ANSI CSI escape sequences (the colour codes `tracing`'s fmt layer
 /// emits on a tty-shaped stream) so log oracles match on content.
 pub(crate) fn strip_ansi(s: &str) -> String {

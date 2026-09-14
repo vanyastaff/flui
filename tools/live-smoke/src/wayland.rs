@@ -104,7 +104,11 @@ fn run_one_cycle(
             self_close::SELF_CLOSE_AFTER_MS.to_string(),
         )
         .env(self_close::ROUTE_ENV, route.env_value())
-        .env("RUST_LOG", "warn,flui_platform=debug")
+        // `flui.gpu=trace` is required for the surface-release ordering
+        // check below (`SurfaceLease::drop` logs at `debug` on that
+        // target) — without it the check would fail on a missing marker
+        // regardless of whether the surface was ever released.
+        .env("RUST_LOG", "warn,flui_platform=debug,flui.gpu=trace")
         .stdout(log_file.try_clone().context("cloning the app log handle")?)
         .stderr(log_file)
         .spawn()
@@ -114,10 +118,11 @@ fn run_one_cycle(
     let route_name = route.env_value();
     let result = match status {
         Some(status) if status.success() => self_close::assert_route_observed(&log_path, route)
+            .and_then(|()| self_close::assert_surface_released_before_window_close(&log_path))
             .map(|()| {
                 eprintln!(
                     "live-smoke(wayland): {route_name} close cycle {run}/{runs} exited 0, route \
-                     observed"
+                     observed, surface released before the loop quit"
                 );
             }),
         Some(status) => Err(anyhow::anyhow!(

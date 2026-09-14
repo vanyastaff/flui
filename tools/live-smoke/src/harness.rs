@@ -116,7 +116,11 @@ fn check_programmatic_close(app_path: &str) -> Result<()> {
 
     let mut app = Command::new(app_path)
         .env_remove("WAYLAND_DISPLAY")
-        .env("RUST_LOG", "warn,flui_platform=debug")
+        // `flui.gpu=trace` is required for the surface-release ordering
+        // check below (`SurfaceLease::drop` logs at `debug` on that
+        // target) — without it the check would fail on a missing marker
+        // regardless of whether the surface was ever released.
+        .env("RUST_LOG", "warn,flui_platform=debug,flui.gpu=trace")
         .env(
             self_close::DEADLINE_ENV,
             self_close::SELF_CLOSE_AFTER_MS.to_string(),
@@ -132,9 +136,14 @@ fn check_programmatic_close(app_path: &str) -> Result<()> {
         Some(status) if status.success() => {
             // Exit 0 alone would also be true of the compositor route; the
             // marker proves the deadline fired THROUGH PlatformWindow::close.
-            self_close::assert_route_observed(&log_path, CloseRoute::Programmatic).map(|()| {
-                eprintln!("live-smoke: programmatic close OK (exit 0, route observed)");
-            })
+            self_close::assert_route_observed(&log_path, CloseRoute::Programmatic)
+                .and_then(|()| self_close::assert_surface_released_before_window_close(&log_path))
+                .map(|()| {
+                    eprintln!(
+                        "live-smoke: programmatic close OK (exit 0, route observed, surface \
+                         released before the loop quit)"
+                    );
+                })
         }
         Some(status) => Err(anyhow::anyhow!(
             "programmatic close check FAILED: teardown finished with {status} — a post-quit \
@@ -283,6 +292,8 @@ fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
     match status {
         Some(status) if status.success() => {
             eprintln!("live-smoke: clean close OK (exit 0)");
+            self_close::assert_surface_released_before_window_close(app_log)?;
+            eprintln!("live-smoke: surface released before the loop quit OK");
             check_frame_signal_armed_before_every_present(app_log)
         }
         Some(status) => bail!(
