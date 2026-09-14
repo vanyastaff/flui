@@ -60,7 +60,7 @@
 //! `Offstage`. That hole is closed: `build` uses a release `assert!` so a
 //! mismatch surfaces as a framework `ErrorView` (via the build-error
 //! boundary) in every profile — same public-widget invariant class as
-//! [`TabController`](crate::TabController) index bounds (#1101).
+//! [`TabController`] index bounds (#1101).
 
 use std::cell::RefCell;
 
