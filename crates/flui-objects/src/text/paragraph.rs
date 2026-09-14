@@ -321,6 +321,39 @@ mod tests {
     }
 
     #[test]
+    fn max_lines_does_not_collapse_min_intrinsic_width() {
+        let p = RenderParagraph::new(TextSpan::new("a WWWWWWWWWW"), TextDirection::Ltr)
+            .with_max_lines(Some(1));
+        let uncapped = para("a WWWWWWWWWW");
+        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f32::INFINITY, c));
+        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
+        let uncapped_min =
+            leaf_intrinsics(|c| uncapped.compute_min_intrinsic_width(f32::INFINITY, c));
+        assert!(
+            min > 0.0,
+            "RenderParagraph min intrinsic must stay positive under max_lines, got {min}"
+        );
+        assert!(min <= max, "min-content {min} must be <= max-content {max}");
+        assert!(
+            (min - uncapped_min).abs() < 0.01,
+            "max_lines must not change RenderParagraph min intrinsic: {min} vs {uncapped_min}"
+        );
+    }
+
+    #[test]
+    fn max_lines_with_ellipsis_keeps_positive_min_intrinsic() {
+        let p = RenderParagraph::new(
+            TextSpan::new("a soft wrapping phrase that exceeds one line"),
+            TextDirection::Ltr,
+        )
+        .with_max_lines(Some(1))
+        .with_ellipsis(Some("…".to_string()));
+        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f32::INFINITY, c));
+        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
+        assert!(min > 0.0 && min <= max);
+    }
+
+    #[test]
     fn narrow_constraints_wrap_taller_and_no_wider_than_single_line() {
         let p = para("a b c d e f g h i j k l m n");
         let wide = leaf_dry_layout(|c| {

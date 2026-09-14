@@ -312,6 +312,42 @@ request); `probe-variable-wght.ttf` carries an `fvar` `wght` axis spanning 100..
 `usWeightClass` of 400 (the variable-weight arm). Each of the three fails when its production arm is
 reverted; that was verified, not assumed.
 
+### 10. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
+
+**Rule:** Prime Directive rule #1 — Flutter is not a clean oracle for this edge
+([flutter/flutter#13512](https://github.com/flutter/flutter/issues/13512) still open; pinned
+`text_painter_test.dart` skips the intrinsic/`maxLines` block). Record the FLUI contract and
+replace the skipped reference with a FLUI test.
+
+**Choice:** [`TextPainter`](src/text_painter/measure.rs) min/max intrinsic width probes
+(`layout()` cache fill and the uncached getters) shape with
+`LineOverflow::IgnoreForWidthIntrinsic`, so `max_lines` truncation does not reach
+`TextLayout::from_spans`. When `max_lines` and a non-empty ellipsis are both set, the
+probe then floors at the shaped ellipsis width (`ellipsis_width_floor`) — truncating
+layouts may commit an ellipsis-only buffer once the text prefix is exhausted. Committed
+`layout`, `dry_size`, `intrinsic_height`, and `dry_baseline` use `LineOverflow::Enforce`.
+
+**Why:** At `max_width = 0`, soft wrap produces many visual lines; enforcing `max_lines` then
+truncates toward an empty prefix and reports `min_intrinsic_width == 0` for non-empty text
+(#1085). Dropping the ellipsis from that probe entirely under-reports when the ellipsis is
+wider than the text's narrowest run. Intrinsics measure shaped runs / wrap opportunities,
+with the ellipsis as a lower bound when truncation can leave only that glyph string.
+
+**Alternatives:**
+- Copy Flutter's skipped exact intrinsic/`maxLines` equality expectations — rejected; the
+  upstream contract is unresolved.
+- Derive min intrinsic from break opportunities without a zero-width layout — deferred; the
+  overflow-free probe plus ellipsis floor restores the documented contract without a second
+  shaping pipeline for the main text.
+- Keep ellipsis inside the zero-width truncating probe — rejected; that reintroduces the
+  empty-prefix collapse for ordinary `max_lines` without a wide ellipsis.
+
+**Accepted trade-off:** `max_lines` does not shrink min/max intrinsic *width* below the
+shaped content (or the ellipsis floor). Parents that need truncated size use dry layout /
+committed layout. Locked by `max_lines_does_not_collapse_min_intrinsic_width`,
+`wide_ellipsis_floors_min_intrinsic_width`, and the matching `RenderParagraph` intrinsic
+tests.
+
 ### Net unsafe delta: 0
 
 The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before and after the chain. Zero `unsafe` blocks introduced; zero removed. Distinct from the `flui-layer` chain's -39 net delta (flui-layer had 39 cargo-cult `unsafe impl Send + Sync` blocks to delete; flui-painting never had them).
