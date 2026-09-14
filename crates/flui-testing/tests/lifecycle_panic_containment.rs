@@ -282,7 +282,7 @@ fn mount_healthy_row() -> (HeadlessBinding, PipelineCell, ElementId, DenseSnapsh
         binding.build_owner_mut().take_recovered_panics().is_empty(),
         "healthy bootstrap has no recovery"
     );
-    let root = mounted.root_element;
+    let root = mounted.content_element;
     let initial = snapshot(&mut binding, &pipeline, root);
     (binding, pipeline, root, initial)
 }

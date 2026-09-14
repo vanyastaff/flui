@@ -118,12 +118,19 @@ fn mount_root_installs_the_render_root_and_lays_it_out() {
     assert_eq!(
         pipeline_owner.with(flui_rendering::PipelineOwner::root_id),
         Some(mounted.render_root),
-        "the discovered parentless node is installed as the pipeline root",
+        "RootRenderElement installs the RenderView as the pipeline root",
     );
+    // RootRenderView seeds from constraints.biggest(); RenderView then lays
+    // its child under tight constraints of that size (production shape).
     assert_eq!(
         pipeline_owner.with(|owner| inspect::box_geometry(owner, mounted.render_root)),
-        Some(Size::new(px(40.0), px(25.0))),
-        "the bootstrap frame lays the root out under the mount constraints",
+        Some(Size::new(px(200.0), px(200.0))),
+        "the bootstrap frame lays the RenderView out at the seeded root size",
+    );
+    assert_eq!(
+        pipeline_owner.with(|owner| inspect::box_geometry(owner, mounted.logical_render_root())),
+        Some(Size::new(px(200.0), px(200.0))),
+        "the caller's leaf under the RenderView receives the view's tight size",
     );
     assert!(
         mounted.painted,
@@ -132,9 +139,9 @@ fn mount_root_installs_the_render_root_and_lays_it_out() {
 }
 
 #[test]
-fn a_single_root_view_mounts_with_no_presentation_anchor() {
-    // Without presentation scopes the caller's own view IS the parentless
-    // node, so `logical_render_root` reports it rather than inventing a child.
+fn mount_root_wraps_the_caller_in_root_render_view() {
+    // The caller's leaf becomes the RenderView's single child; logical root
+    // is that child, not the pipeline RenderView.
     let mut binding = HeadlessBinding::new();
     let mounted = binding.mount_root(
         &leaf(10.0, 10.0),
@@ -142,8 +149,37 @@ fn a_single_root_view_mounts_with_no_presentation_anchor() {
         MountOptions::tight(50.0, 50.0),
     );
 
-    assert!(mounted.render_root_children.is_empty());
-    assert_eq!(mounted.logical_render_root(), mounted.render_root);
+    assert_eq!(mounted.render_root_children.len(), 1);
+    assert_eq!(
+        mounted.logical_render_root(),
+        mounted.render_root_children[0]
+    );
+    assert_ne!(mounted.logical_render_root(), mounted.render_root);
+}
+
+#[test]
+fn bare_element_tree_mount_leaves_pipeline_root_unset() {
+    // The low-level slab attach must not pretend to be a full render-root
+    // bootstrap: an ordinary render leaf mounts parentless without becoming
+    // PipelineOwner.root_id. HeadlessBinding / WidgetsBinding wrap in
+    // RootRenderView so that invariant is owned in one place.
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+    let mut tree = ElementTree::new();
+    let mut build_owner = BuildOwner::new();
+    let root = tree.mount_root_with_pipeline_owner(
+        &leaf(10.0, 10.0),
+        Some(pipeline_owner.clone()),
+        &mut build_owner.element_owner_mut(),
+    );
+    build_owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+    build_owner.build_scope(&mut tree);
+
+    assert!(
+        pipeline_owner
+            .with(flui_rendering::PipelineOwner::root_id)
+            .is_none(),
+        "mount_root_with_pipeline_owner alone must not install root_id",
+    );
 }
 
 #[test]

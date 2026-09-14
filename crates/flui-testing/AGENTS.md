@@ -55,6 +55,11 @@ unbuilt; none ran the lazy-sliver service pass.
 > `run_frame_with_layout_builders` fixpoint, same `service_child_requests`,
 > same owner scope.
 
+It also owns the **render-root bootstrap**: the caller view is wrapped in
+`RootRenderView` (same production shape as `WidgetsBinding::attach_root_widget`),
+so `PipelineOwner.root_id` is installed by `RootRenderElement` rather than
+reconstructed by scanning for a parentless node after the fact.
+
 So: mount through it. If a harness needs something it does not offer, extend
 `MountOptions` rather than re-deriving the sequence beside it.
 

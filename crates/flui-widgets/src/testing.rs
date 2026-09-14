@@ -45,10 +45,12 @@ use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
 use flui_types::{Offset, Pixels, RRect, Rect, Size};
 use flui_view::InheritedView;
+use flui_view::RootRenderView;
 use flui_view::View;
 use flui_view::element::InheritedElementAccess;
 
-use crate::{FocusRoot, GestureArenaScope};
+use crate::{Align, FocusRoot, GestureArenaScope};
+use flui_types::Alignment;
 
 /// A laid-out widget tree, holding the element + render trees alive (inside a
 /// tree-bound [`HeadlessBinding`]) so geometry can be queried after layout — and
@@ -63,6 +65,8 @@ pub struct LaidOut {
     pipeline_owner: PipelineCell,
     root_render_id: RenderId,
     root_element_id: ElementId,
+    /// Logical size seeded into the bootstrap [`RootRenderView`].
+    root_view_size: (f32, f32),
     /// Concrete identity of the caller's root below the presentation scopes.
     logical_root_type: TypeId,
     /// Per-contact pointer identity for the synthetic dispatch helpers.
@@ -214,21 +218,45 @@ fn lay_out_with_pipeline_owner_and_binding(
     let focus_manager = owners.build_owner.focus_manager();
 
     // Presentation scopes are this crate's to supply — `flui-testing` owns the
-    // mount ordering, not the widget catalog. `FocusRoot` contributes the
-    // transparent traversal anchor the pipeline roots on; the caller's own
-    // render root is the single node below it.
-    let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
+    // mount ordering (including the RootRenderView wrap), not the widget
+    // catalog. Under the pipeline `RenderView` (which tight-fills the surface),
+    // `Align` loosens so the caller's widget receives max-bounded loose
+    // constraints matching the MountOptions surface size — without inserting a
+    // `ConstrainedBox` (SizedBox also renders as `RenderConstrainedBox`, and a
+    // harness one would steal type-name probes in overlay/hero tests).
+    let scoped = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
+    let root = Align::new(Alignment::TOP_LEFT).child(scoped);
     let mounted = binding.mount_root(&root, owners, MountOptions::new(constraints));
+    let root_render_id = resolve_logical_render_root(&mut binding, logical_root_type);
 
     LaidOut {
         binding,
         focus_manager,
         pipeline_owner,
-        root_render_id: mounted.logical_render_root(),
+        root_render_id,
         root_element_id: mounted.root_element,
+        root_view_size: mounted.root_view_size,
         logical_root_type,
         contacts: PointerContacts::new(),
     }
+}
+
+/// Shallowest mounted element of `logical_root_type` → its render id.
+fn resolve_logical_render_root(
+    binding: &mut HeadlessBinding,
+    logical_root_type: TypeId,
+) -> RenderId {
+    binding
+        .tree_mut()
+        .iter_nodes()
+        .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
+        .min_by_key(|(_, node)| node.depth())
+        .map(|(_, node)| {
+            node.element()
+                .render_id()
+                .expect("the caller's logical root must own a render object after bootstrap")
+        })
+        .expect("the caller's logical root must remain mounted below presentation scopes")
 }
 
 /// Like [`lay_out`], but drives implicitly-animated widgets: the binding adopts
@@ -283,25 +311,11 @@ impl LaidOut {
         self.root_render_id
     }
 
-    /// Recompute the caller's logical render root below the presentation's
-    /// transparent traversal anchor. May differ from [`LaidOut::root`] if a
-    /// rebuild remounted the caller's root subtree.
+    /// Recompute the caller's logical render root. After a root swap this
+    /// tracks [`LaidOut::root`]; remounts that replace the caller's element
+    /// refresh the stored id via [`pump_widget`](Self::pump_widget).
     pub fn current_root(&self) -> RenderId {
-        self.pipeline_owner.with(|owner| {
-            let render_tree = owner.render_tree();
-            let presentation_root = render_tree
-                .iter()
-                .map(|(id, _)| id)
-                .find(|id| render_tree.parent(*id).is_none())
-                .expect("a presentation render-tree root after layout");
-            let children = render_tree.children(presentation_root);
-            assert_eq!(
-                children.len(),
-                1,
-                "the presentation traversal anchor must wrap exactly one logical render root",
-            );
-            children[0]
-        })
+        self.root_render_id
     }
 
     /// Number of nodes in the caller's logical render subtree.
@@ -968,9 +982,13 @@ impl LaidOut {
     /// then [`pump_frame(ZERO)`](HeadlessBinding::pump_frame) settles the tree.
     pub fn pump_widget(&mut self, new_root: impl View) {
         self.logical_root_type = new_root.view_type_id();
-        let root = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
+        let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
+        let aligned = Align::new(Alignment::TOP_LEFT).child(scoped);
+        let root = RootRenderView::new(aligned, self.root_view_size.0, self.root_view_size.1);
         self.binding.swap_root_view(self.root_element_id, &root);
         self.binding.pump_frame(std::time::Duration::ZERO);
+        self.root_render_id =
+            resolve_logical_render_root(&mut self.binding, self.logical_root_type);
     }
 
     /// All render nodes whose short type name equals `render_type_name`.
