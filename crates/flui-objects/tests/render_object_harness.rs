@@ -3879,8 +3879,14 @@ fn harness_container_color_gates_an_overflowing_child_in_the_margin_band() {
     );
     // Sanity: the same overflowing child IS still hittable well inside the
     // content area, so this isn't just "the child never hits anything".
-    assert!(
-        run.hit_first(25.0, 25.0).is_some(),
+    //
+    // Resolved to the leaf's own id, not `is_some()`: with a `color` set this
+    // node is hit-opaque across its whole chrome rect, so `is_some()` here is
+    // satisfied by the container itself and stays true with the child
+    // recursion deleted entirely.
+    assert_eq!(
+        run.hit_first(25.0, 25.0),
+        Some(run.id("leaf")),
         "the overflowing child must still be hittable inside the content area"
     );
 }

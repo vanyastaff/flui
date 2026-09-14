@@ -1016,6 +1016,20 @@ shape is `Row → Expanded → Container` / `Stack → Positioned → Container`
 Covered by
 `identity_container_between_flex_and_expanded_is_not_parent_data_transparent`.
 
+Parent data is not the only consequence of that always-a-node choice.
+Hit-testing has the same shape one level up: `RenderContainer` always bounds
+the incoming position against its own box before doing anything else, while
+Flutter's identity `Container` is not a node at all and so bounds nothing. A
+child whose own `hit_test` deliberately does not bound itself — `RenderTransform`
+is the documented case — is therefore reachable outside the container's box in
+Flutter and not here, whenever *no* margin and *none* of the five gated
+properties are set. Measured under a shared `RenderPadding` parent with a
+scaled child, three of four probe points outside the box hit in Flutter's tree
+and miss here. Unlike the margin-band gate below, this one is **not** closed:
+the gated-level reasoning that fixes that case does not extend to the outer
+gate, because at identity there is no level to reason about — the node itself
+is the divergence. Tracked in issue #1143.
+
 **Collapsed branch:** Flutter's three childless shapes — the placeholder
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
 inner widget at all — all resolve to the same box, so `RenderContainer` has no
