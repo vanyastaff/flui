@@ -95,8 +95,13 @@ ownership discipline.
    surface so retention (a `Weak` to the target upgrades exactly while the
    lease lives), drop order (recording `Drop`s), cancellation (a future
    polled once and dropped leaks nothing), and the Unavailable path are unit
-   tests with a fake target and a fake surface, not GPU runs. When ADR-0045's
-   presentation-owned surface arrives, the lease moves there unchanged.
+   tests with a fake target and a fake surface, not GPU runs; `Renderer::new`
+   itself is pinned GPU-free (a fake target answering `Unavailable` fails
+   the constructor before `wgpu::Instance::new`). `recover()`'s windowed
+   re-probe has **no executed pin** — it needs a real window, and
+   `flui-engine` has no windowing dev-dependency; it is verified by reading,
+   and recorded here as such. When ADR-0045's presentation-owned surface
+   arrives, the lease moves there unchanged.
 5. **Every `PlatformWindow` backend owes `Err(HandleError::Unavailable)` once
    its native window is destroyed or suspended**, and the two native desktop
    backends release the renderer on close:
@@ -134,7 +139,7 @@ ownership discipline.
   also re-introduce the stored bytes ADR-0045 promised to delete.
 - **Presentation-owned surface now (`Renderer::new(instance, surface)`,
   `recover(|instance| ..)`).** This is ADR-0045 decision 2's end state and
-  the critic's strongest alternative: the escape becomes impossible by
+  the strongest alternative considered: the escape becomes impossible by
   absence of API. But the wgpu instance and surface must be created together
   (they share a wgpu-core `Global`; a foreign surface panics on
   `request_adapter`), so every caller would have to own the instance — that
@@ -142,8 +147,8 @@ ownership discipline.
   measurement and a still-Proposed ADR. A P0 soundness fix must not couple
   to it. The lease is the bridge: generic over `S`, it relocates without
   changing.
-- **"Add `Arc`, keep `RawHandles`, narrow the SAFETY comment."** Rejected as
-  RESHAPE NEEDED at the pre-code gate: the protocol would stay untestable
+- **"Add `Arc`, keep `RawHandles`, narrow the SAFETY comment."** Rejected
+  before any code was written: the protocol would stay untestable
   without a GPU, and the first draft's residual was described with two
   mechanisms that do not exist (recovery is reached only through the
   device-lost flag, never by a `SurfaceLost` after a close; nothing dropped
@@ -178,10 +183,15 @@ backoff loop is the mechanism #1043 makes sound.
 ## Consequences
 
 **Positive**
-- Net unsafe delta in `renderer.rs`: −2 blocks and −1 manual `Send` impl; the
-  crate's only remaining SAFETY stories are ones the code enforces.
+- Net unsafe delta in `renderer.rs`: −1 `unsafe {}` block and −1 manual
+  `Send` impl (the old file had exactly one of each; `git show
+  53b04347:crates/flui-engine/src/wgpu/renderer.rs | rg -n 'unsafe impl|unsafe \{'`).
+  Two test-only `borrow_raw` blocks arrive with the lease's fake target. The
+  crate's remaining production SAFETY stories are ones the code enforces.
 - Android device-loss recovery after a pause/resume cycle rebuilds against
-  the live `ANativeWindow`.
+  the live `ANativeWindow` — by construction of the shared code path, not
+  by execution: the Android runner (`runner/android.rs`) and the demo are
+  compiled by no gate (`cross-typecheck` builds `flui-platform` only).
 - The frame-closure → lane → renderer → surface → `Arc<window>` cycle
   (present on every desktop backend through the pre-present hook) is broken
   at native close, not only on winit; a close requested from inside a leased
@@ -189,8 +199,8 @@ backoff loop is the mechanism #1043 makes sound.
 
 **Negative / trade-offs, stated**
 - `Renderer::new` is a breaking signature change on a `#[doc(hidden)]`
-  function; eight call sites pass `Arc::clone(&window)` instead of
-  `window.as_ref()`. One extra `Arc` allocation per construction/recovery.
+  function; seven call sites pass `Arc::clone(&window)` instead of
+  `window.as_ref()`, and the Android demo passes its handle by value. One extra `Arc` allocation per construction/recovery.
 - An `Arc<dyn PlatformWindow>` is wrapped in a second `Arc` (it cannot upcast
   to `Arc<dyn WindowTarget>` without `PlatformWindow: WindowTarget`, which
   would invert the platform→engine layer edge). One extra pointer chase at
@@ -201,9 +211,15 @@ backoff loop is the mechanism #1043 makes sound.
   swapchain fails — not memory unsafety); Android does not drop its surface
   on `Paused`/`TerminateWindow` (the market shape — filed as a follow-up
   with the survey's citations); a quit that skips per-window close leaks
-  window + surface silently, and `just live-smoke-wayland` asserted only
-  the exit code until this change taught it to look for the
-  `surface_released` trace line.
+  window + surface silently — closed for the quit route by clearing every
+  still-tracked window's callback slots in the winit shutdown path, pinned by
+  a real-loop test. Both live-smoke harnesses asserted only the exit code
+  before this change (the Wayland variant's log filter did not even include
+  `flui.gpu`), so the `surface_released` trace line the lease emits on drop is
+  now asserted in both, on both close routes, before the loop's own quit
+  line — the one executed witness that the surface was released rather than
+  orphaned. The X11 variant ran here; the Wayland variant runs in CI, where
+  `weston` is installed.
 - The native backends' changes are compile-only verified (see decision 5).
 
 ## Amendments to ADR-0045
