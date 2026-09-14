@@ -52,7 +52,7 @@ pub use layout::{
     AspectRatioFactor, BuildDuringLayoutCell, FractionFactor, HeaderShrink, HeaderShrinkCell,
     LayoutConstraintsCell, RenderAlign, RenderAnimatedSize, RenderAspectRatio, RenderBaseline,
     RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox,
-    RenderConstraintsTransformBox, RenderCustomMultiChildLayoutBox,
+    RenderConstraintsTransformBox, RenderContainer, RenderCustomMultiChildLayoutBox,
     RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex, RenderFlow,
     RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,

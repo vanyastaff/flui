@@ -1,44 +1,57 @@
 //! [`Container`] — the Flutter convenience widget that composes padding,
 //! alignment, sizing, decoration, margin, and a transform around a child.
 
-use flui_foundation::ViewKey;
 use flui_geometry::{EdgeInsets, Matrix4};
-use flui_rendering::constraints::{BoxConstraints, Constraints};
+use flui_objects::RenderContainer;
+use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::protocol::BoxProtocol;
 use flui_types::geometry::px;
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, Pixels};
-use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{BoxedView, Child, GlobalKey, IntoView, StatelessView, View, ViewExt, ViewState};
-
-use crate::layout::{Align, ConstrainedBox, LimitedBox, Padding, Transform};
-use crate::paint::{ColoredBox, DecoratedBox};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A convenience widget that composes common painting, positioning, and sizing
-/// widgets around a single child.
+/// behaviour around a single child.
 ///
-/// Flutter parity: `widgets/container.dart` `Container`. `build` composes, from
-/// the child outward: `Align` → `Padding` → `ColoredBox` → `DecoratedBox` →
-/// `ConstrainedBox` → `Padding` (margin) → `Transform`, each layer added only
-/// when its property is set — exactly Flutter's order. `width`/`height` fold
-/// into the constraints via `tightFor`/`tighten`.
+/// # One render object, not a stack
 ///
-/// # State stability
+/// Flutter builds `Container` as a conditional widget stack
+/// (`widgets/container.dart`): from the child outward, `Align` → `Padding` →
+/// `ColoredBox` → `DecoratedBox` → `ConstrainedBox` → `Padding` (margin) →
+/// `Transform`, each layer present only while its property is set. FLUI keeps
+/// that stack's observable geometry and folds it into one
+/// [`RenderContainer`]. Two things follow, and both are the reason:
 ///
-/// Flutter's conditional stack recreates an unkeyed child when an optional
-/// layer appears or disappears (flutter/flutter#161698). FLUI keeps that
-/// composition shape for layout/paint parity, but owns a [`GlobalKey`] slot
-/// around the caller's child so toggling options reparents the child instead
-/// of disposing it. See `ARCHITECTURE.md` mapping decision 15.
+/// * **Toggling an option does not recreate the child.** In the conditional
+///   stack, an option turning on or off inserts or removes a level between the
+///   parent and the child, so reconciliation diverges there and every element
+///   below — including an unkeyed stateful child — is rebuilt from scratch
+///   (flutter/flutter#161698). Here the options are render-object fields, so
+///   the child's slot never moves and no state is lost. No `GlobalKey`, no
+///   reparenting, nothing for the caller to opt into.
+/// * **A `Container` costs one node.** The stack's own justification is that
+///   an unused layer is absent; one node is cheaper than the cheapest stack.
+///
+/// The divergence is recorded in `ARCHITECTURE.md` mapping decision 15, and
+/// the geometry is pinned against the stack it replaces by
+/// `harness_container_matches_the_widget_stack_it_collapses`.
 ///
 /// # Parity scope
 ///
-/// Decoration *painting* (color, gradient, border, radius, shadow) is faithful.
-/// One Flutter nuance is not yet modelled: a [`BoxDecoration`] border's
-/// thickness is not folded into the effective layout padding
+/// Decoration *painting* (color, gradient, border, radius, shadow) is
+/// faithful. One Flutter nuance is not yet modelled: a [`BoxDecoration`]
+/// border's thickness is not folded into the effective layout padding
 /// (`_paddingIncludingDecoration`), because `flui-types`' `BoxDecoration` does
 /// not expose border insets. Set `padding` explicitly if a bordered container
 /// must reserve the border's thickness.
-#[derive(Clone, Debug, Default, StatefulView)]
+///
+/// # Examples
+///
+/// ```rust
+/// # use flui_widgets::prelude::*;
+/// let _ = Container::new().width(120.0).padding(EdgeInsets::all(px(8.0)));
+/// ```
+#[derive(Clone, Debug, Default)]
 pub struct Container {
     alignment: Option<Alignment>,
     padding: Option<EdgeInsets>,
@@ -73,9 +86,11 @@ impl Container {
         self
     }
 
-    /// Paint a solid background `color` behind the child. Mutually exclusive
-    /// with [`Container::decoration`] in Flutter; if both are set here, the
-    /// color paints behind the decoration.
+    /// Paint a solid background `color` behind the child.
+    ///
+    /// Mutually exclusive with [`Container::decoration`] in Flutter; if both
+    /// are set here, the color paints *over* the decoration, which is the
+    /// order the widget stack produces (`DecoratedBox` encloses `ColoredBox`).
     #[must_use]
     pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
@@ -132,8 +147,9 @@ impl Container {
         self
     }
 
-    /// `width`/`height` fold into the additional constraints exactly as Flutter
-    /// does: tighten the explicit constraints when present, else `tightFor`.
+    /// `width`/`height` fold into the additional constraints exactly as
+    /// Flutter does: tighten the explicit constraints when present, else
+    /// `tightFor`.
     fn effective_constraints(&self) -> Option<BoxConstraints> {
         if self.width.is_some() || self.height.is_some() {
             let width = self.width.map(px);
@@ -148,133 +164,42 @@ impl Container {
     }
 }
 
-/// State for [`Container`]: owns the [`GlobalKey`] that pins the caller's child
-/// across optional-layer topology changes.
-pub struct ContainerState {
-    child_slot_key: GlobalKey<()>,
-}
+impl RenderView for Container {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderContainer;
 
-impl std::fmt::Debug for ContainerState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ContainerState").finish_non_exhaustive()
-    }
-}
-
-impl StatefulView for Container {
-    type State = ContainerState;
-
-    fn create_state(&self) -> Self::State {
-        ContainerState {
-            child_slot_key: GlobalKey::new(),
-        }
-    }
-}
-
-impl ViewState<Container> for ContainerState {
-    fn build(&self, view: &Container, _ctx: &dyn BuildContext) -> impl IntoView {
-        let effective_constraints = view.effective_constraints();
-        let child = view.child.clone().into_inner().map(|child| {
-            ContainerChildSlot {
-                key: self.child_slot_key.clone(),
-                child,
-            }
-            .boxed()
-        });
-
-        // Innermost: the child, or Flutter's childless placeholder
-        // (LimitedBox(0,0) over a ConstrainedBox.expand()) so a childless
-        // container fills bounded space and collapses under unbounded space.
-        // Tight effective constraints suppress that placeholder; only then may
-        // a childless alignment produce an empty Align, matching Flutter's
-        // mutually-exclusive `if (...) placeholder else if (...) Align`.
-        let use_placeholder = child.is_none()
-            && effective_constraints
-                .as_ref()
-                .is_none_or(|constraints| !constraints.is_tight());
-        let mut current: Option<BoxedView> = if use_placeholder {
-            Some(
-                LimitedBox::new(0.0, 0.0)
-                    .child(ConstrainedBox::new(BoxConstraints::expand()))
-                    .boxed(),
-            )
-        } else if let Some(alignment) = view.alignment {
-            Some(match child {
-                Some(child) => Align::new(alignment).child(child).boxed(),
-                None => Align::new(alignment).boxed(),
-            })
-        } else {
-            child
-        };
-        if let Some(padding) = view.padding {
-            current = Some(match current {
-                Some(child) => Padding::new(padding).child(child).boxed(),
-                None => Padding::new(padding).boxed(),
-            });
-        }
-        if let Some(color) = view.color {
-            current = Some(match current {
-                Some(child) => ColoredBox::new(color).child(child).boxed(),
-                None => ColoredBox::new(color).boxed(),
-            });
-        }
-        if let Some(decoration) = &view.decoration {
-            current = Some(match current {
-                Some(child) => DecoratedBox::new(decoration.clone()).child(child).boxed(),
-                None => DecoratedBox::new(decoration.clone()).boxed(),
-            });
-        }
-        if let Some(constraints) = effective_constraints {
-            current = Some(match current {
-                Some(child) => ConstrainedBox::new(constraints).child(child).boxed(),
-                None => ConstrainedBox::new(constraints).boxed(),
-            });
-        }
-        let mut current = match current {
-            Some(current) => current,
-            None => LimitedBox::new(0.0, 0.0)
-                .child(ConstrainedBox::new(BoxConstraints::expand()))
-                .boxed(),
-        };
-        if let Some(margin) = view.margin {
-            current = Padding::new(margin).child(current).boxed();
-        }
-        if let Some(transform) = view.transform {
-            current = Transform::new(transform).child(current).boxed();
-        }
-
-        current
-    }
-}
-
-/// Stateless host that carries [`Container`]'s child-slot [`GlobalKey`].
-///
-/// Owns no render object: the child's render node still attaches to whatever
-/// optional layer sits above this slot, so layout/paint topology stays Flutter-
-/// shaped while the element can be retaken across layer insert/remove.
-#[derive(Clone)]
-struct ContainerChildSlot {
-    key: GlobalKey<()>,
-    child: BoxedView,
-}
-
-impl std::fmt::Debug for ContainerChildSlot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ContainerChildSlot").finish_non_exhaustive()
-    }
-}
-
-impl View for ContainerChildSlot {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        let mut render_object = RenderContainer::new();
+        let _ = render_object.set_alignment(self.alignment);
+        let _ = render_object.set_padding(self.padding.unwrap_or_default());
+        let _ = render_object.set_margin(self.margin.unwrap_or_default());
+        let _ = render_object.set_color(self.color);
+        let _ = render_object.set_decoration(self.decoration.clone());
+        let _ = render_object.set_additional_constraints(self.effective_constraints());
+        let _ = render_object.set_transform(self.transform);
+        render_object
     }
 
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_padding(self.padding.unwrap_or_default());
+        impact |= render_object.set_margin(self.margin.unwrap_or_default());
+        impact |= render_object.set_color(self.color);
+        impact |= render_object.set_decoration(self.decoration.clone());
+        impact |= render_object.set_additional_constraints(self.effective_constraints());
+        impact |= render_object.set_transform(self.transform);
+        impact
     }
+
+    flui_view::single_child_view_children!();
 }
 
-impl StatelessView for ContainerChildSlot {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        self.child.clone()
-    }
-}
+impl_render_view!(Container);

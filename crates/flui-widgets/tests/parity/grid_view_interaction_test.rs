@@ -993,7 +993,7 @@ fn grid_view_one_line_paints_only_onstage_tiles() {
     let root = Center::new().child(SizedBox::height(200.0).child(GridView::count(2, children)));
     let laid = harness::pump_widget(root, harness::screen());
 
-    let tiles = laid.find_all_by_render_type("RenderDecoratedBox");
+    let tiles = laid.find_all_by_render_type("RenderContainer");
     assert_eq!(
         tiles.len(),
         4,

@@ -949,30 +949,53 @@ the offending widget behind `TypeId` text, and let secondary bootstrap
 message is not `BoxLayoutCtx::from_erased`. Happy paths remain in
 `flex_parent_data.rs` / `stack_positioned.rs`.
 
-### 15. `Container` keeps Flutter's optional layers but pins the child with a `GlobalKey`
+### 15. `Container` is one render object, not a conditional widget stack
 
-**Rule:** Prime Directive #1 — convenience-widget implementation shape must not
-make the caller's unkeyed child state depend on which cosmetic options are set.
+**Rule:** Prime Directive #1 — a convenience widget's implementation shape must
+not make the caller's unkeyed child state depend on which cosmetic options are
+set.
 
 **Oracle:** `widgets/container.dart` builds `Align` / `Padding` / `ColoredBox` /
-`DecoratedBox` / `ConstrainedBox` / margin / `Transform` only when the matching
-field is set. Toggling a field changes element topology and recreates an unkeyed
-stateful child (flutter/flutter#161698). Flutter has not shipped a fix; maintainers
-discussed render-level composition, compressed elements, and GlobalKey-like
-reparenting (with cost).
+`DecoratedBox` / `ConstrainedBox` / margin `Padding` / `Transform` only when the
+matching field is set. Toggling a field inserts or removes a level between the
+parent and the child, so reconciliation diverges there and an unkeyed stateful
+child below is rebuilt from scratch (flutter/flutter#161698). Flutter has not
+shipped a fix; maintainers discussed render-level composition, compressed
+elements, and GlobalKey-like reparenting (with cost).
 
-**Choice:** keep the conditional composition for layout/paint/hit-test parity
-(always-inserting no-op `Align` or empty `DecoratedBox` would change constraints
-or hit opacity). Make `Container` a `StatefulView` that owns one `GlobalKey` on a
-private `ContainerChildSlot` wrapping the caller's child. Optional layers may
-still inflate/deflate; the slot is retaken so child `State` survives.
+**Choice:** take the render-level composition. `Container` is a `RenderView`
+over one `RenderContainer` (`flui-objects`) that carries margin, additional
+constraints, padding, alignment, color, decoration and transform as *fields*.
+The child's slot is therefore structurally fixed and no option can move it.
 
-**Cost note (vs always-present layers):** one stateful element + one keyed
-stateless slot + a registry entry per `Container`, and a GlobalKey retake when a
-layer appears/disappears. Always-present no-op layers would avoid retakes but
-need a true pass-through align slot and inactive paint/hit behavior — deferred
-unless profiling shows retakes dominate.
+Two properties follow, and both are the reason for the divergence:
 
-**Replacement tests:** `container.rs` —
-`container_optional_*_preserves_unkeyed_child_state`, combinations, and
-`animated_container_optional_color_preserves_unkeyed_child_state`.
+* **State survives every toggle** with no `GlobalKey`, no retake, and no
+  lifecycle churn — nothing for the caller to opt into, and no reparenting
+  semantics leaking into an unmoved subtree.
+* **A `Container` costs one node instead of up to seven.** Flutter's own
+  justification for the conditional stack is that an unused layer is absent;
+  one node beats the cheapest stack in every configuration.
+
+**Collapsed branch:** Flutter's three childless shapes — the placeholder
+`LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
+inner widget at all — all resolve to the same box, so `RenderContainer` has no
+childless branch. The equality is proven, not assumed, by
+`harness_container_childless_branches_all_size_the_same`.
+
+**Not carried over:** `foregroundDecoration`, `clipBehavior`, `isAntiAlias` and
+`transformAlignment` have no FLUI `Container` setter, and a `BoxDecoration`
+border's thickness is still not folded into the effective padding
+(`_paddingIncludingDecoration`) because `flui-types`' `BoxDecoration` exposes no
+border insets.
+
+**Replacement tests:** the geometry the collapsed stack owes is pinned against
+the stack itself by `harness_container_matches_the_widget_stack_it_collapses`
+(size, child size, absolute child position and hit path, over four
+configurations, each making a different level decide), plus
+`harness_container_paints_its_chrome_inside_the_margin` for the decorated box's
+own rect — the level Flutter's `paints..rect(...)` oracle pins and the one a
+single node no longer exposes as a separate render object. State stability is
+covered by `container.rs`'s `container_optional_*_preserves_unkeyed_child_state`
+family and `animated_container_optional_color_preserves_unkeyed_child_state`;
+all five fail against the conditional stack and pass against this node.

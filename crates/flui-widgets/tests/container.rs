@@ -39,7 +39,6 @@ fn container_width_height_force_size_regardless_of_child() {
 
 #[test]
 fn container_aligns_child_within_forced_size() {
-    // ConstrainedBox(tight 100) → Align(center) → SizedBox(20): child centered.
     let laid = lay_out(
         Container::new()
             .width(100.0)
@@ -50,8 +49,7 @@ fn container_aligns_child_within_forced_size() {
     );
     assert_eq!(laid.size(laid.root()), size(100.0, 100.0));
 
-    let align = laid.only_child(laid.root());
-    let inner = laid.only_child(align);
+    let inner = laid.only_child(laid.root());
     assert_eq!(laid.size(inner), size(20.0, 20.0));
     // Centered in 100×100: (100-20)/2 = 40 on each axis.
     assert_eq!(laid.offset(inner), offset(40.0, 40.0));

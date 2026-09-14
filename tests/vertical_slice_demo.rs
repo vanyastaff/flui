@@ -217,15 +217,14 @@ impl MountedDemo {
         })
     }
 
-    /// The animated box's own `RenderConstrainedBox`.
+    /// The animated box's own `RenderContainer`.
     ///
-    /// The demo tree mounts several `RenderConstrainedBox` nodes (the "+"
-    /// button's spacer `SizedBox`, the list's fixed-height wrapper, the
-    /// animated box's zero-size filler child, and the animated box's own
-    /// width/height constraint), so type-name lookup alone is ambiguous.
-    /// The animated box is the only one whose *committed width and height
-    /// are simultaneously* within `[COLLAPSED, EXPANDED]` on both axes —
-    /// every other candidate fails on at least one axis by construction
+    /// The demo tree mounts several `RenderContainer` nodes (the screen
+    /// background, the "+" and details buttons, every list item, and the
+    /// animated box), so type-name lookup alone is ambiguous. The animated
+    /// box is the only one whose *committed width and height are
+    /// simultaneously* within `[COLLAPSED, EXPANDED]` on both axes — every
+    /// other candidate fails on at least one axis by construction
     /// (`tree.rs`'s constants keep the ranges disjoint).
     ///
     /// # Panics
@@ -237,7 +236,7 @@ impl MountedDemo {
             let height_range = tree::COLLAPSED_HEIGHT.min(tree::EXPANDED_HEIGHT) - 1.0
                 ..=tree::COLLAPSED_HEIGHT.max(tree::EXPANDED_HEIGHT) + 1.0;
             let matches: Vec<RenderId> = self
-                .find_all_by_render_type("RenderConstrainedBox")
+                .find_all_by_render_type("RenderContainer")
                 .into_iter()
                 .filter(|&id| {
                     inspect::box_geometry(owner, id).is_some_and(|size| {
@@ -248,9 +247,9 @@ impl MountedDemo {
                 .collect();
             match matches.as_slice() {
                 [id] => *id,
-                [] => panic!("no RenderConstrainedBox falls within the animated box's size range"),
+                [] => panic!("no RenderContainer falls within the animated box's size range"),
                 _ => panic!(
-                    "{} RenderConstrainedBox nodes fall within the animated box's size range; \
+                    "{} RenderContainer nodes fall within the animated box's size range; \
                  expected exactly one",
                     matches.len()
                 ),
@@ -261,11 +260,10 @@ impl MountedDemo {
     /// The list's fixed-height `SizedBox` wrapper.
     ///
     /// Same disambiguation problem as [`animated_box_render_id`]'s doc
-    /// explains: several `RenderConstrainedBox` nodes exist in this tree.
-    /// This one is the unique node whose committed height equals
-    /// [`tree::LIST_BOX_HEIGHT`] (200px) — distinct by construction from the
-    /// counter spacer and the animated box's collapsed/expanded height range
-    /// (64/140px).
+    /// explains, on the other type: the demo's `SizedBox`es each mount a
+    /// `RenderConstrainedBox`. This one is the unique node whose committed
+    /// height equals [`tree::LIST_BOX_HEIGHT`] (200px) — distinct by
+    /// construction from the counter and details spacers (16px).
     ///
     /// # Panics
     /// Panics when zero or more than one candidate matches.
