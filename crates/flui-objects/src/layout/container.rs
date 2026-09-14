@@ -459,6 +459,12 @@ impl RenderBox for RenderContainer {
     }
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        // Tight additional width answers the query; asking the child would
+        // hit LayoutBuilder's unsupported-intrinsics path even though the
+        // result is discarded (same short-circuit as RenderConstrainedBox).
+        if self.additional_width_is_tight() {
+            return self.intrinsic_width(0.0);
+        }
         let content_height =
             (height - self.margin.vertical_total().get() - self.padding.vertical_total().get())
                 .max(0.0);
@@ -471,6 +477,9 @@ impl RenderBox for RenderContainer {
     }
 
     fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        if self.additional_width_is_tight() {
+            return self.intrinsic_width(0.0);
+        }
         let content_height =
             (height - self.margin.vertical_total().get() - self.padding.vertical_total().get())
                 .max(0.0);
@@ -483,6 +492,9 @@ impl RenderBox for RenderContainer {
     }
 
     fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        if self.additional_height_is_tight() {
+            return self.intrinsic_height(0.0);
+        }
         let content_width =
             (width - self.margin.horizontal_total().get() - self.padding.horizontal_total().get())
                 .max(0.0);
@@ -495,6 +507,9 @@ impl RenderBox for RenderContainer {
     }
 
     fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        if self.additional_height_is_tight() {
+            return self.intrinsic_height(0.0);
+        }
         let content_width =
             (width - self.margin.horizontal_total().get() - self.padding.horizontal_total().get())
                 .max(0.0);
@@ -701,6 +716,16 @@ impl RenderBox for RenderContainer {
 }
 
 impl RenderContainer {
+    fn additional_width_is_tight(&self) -> bool {
+        self.additional_constraints
+            .is_some_and(|c| c.has_bounded_width() && c.has_tight_width())
+    }
+
+    fn additional_height_is_tight(&self) -> bool {
+        self.additional_constraints
+            .is_some_and(|c| c.has_bounded_height() && c.has_tight_height())
+    }
+
     /// Applies the additional constraints and the margin to a content-level
     /// intrinsic width, mirroring `RenderConstrainedBox`'s own intrinsics.
     fn intrinsic_width(&self, content: f32) -> f32 {

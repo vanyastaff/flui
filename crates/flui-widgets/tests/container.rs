@@ -11,7 +11,10 @@ use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color};
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
-use flui_widgets::{AnimatedContainer, Container, SizedBox, VsyncScope};
+use flui_widgets::{
+    AnimatedContainer, Container, IntrinsicHeight, IntrinsicWidth, LayoutBuilder, SizedBox,
+    VsyncScope,
+};
 
 #[test]
 fn container_padding_shrink_wraps_child() {
@@ -270,4 +273,65 @@ fn animated_container_optional_color_preserves_unkeyed_child_state() {
         AnimatedContainer::new(child).duration(Duration::from_millis(200)),
     ));
     assert_child_state_preserved(&creates, &disposes, "AnimatedContainer color Some→None");
+}
+
+/// A tight additional width must answer an intrinsic query without asking the
+/// child — matching `RenderConstrainedBox`. `LayoutBuilder` logs (Flutter
+/// throws) if asked; the control below proves that log is reachable.
+#[test]
+fn container_tight_width_does_not_query_layout_builder_intrinsics() {
+    const NEEDLE: &str = "does not support intrinsic dimensions";
+
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        let _ = lay_out(
+            IntrinsicWidth::new().child(LayoutBuilder::new(|_ctx, _c| SizedBox::square(10.0))),
+            loose(200.0),
+        );
+    });
+    assert!(
+        log.count_containing(NEEDLE) >= 1,
+        "control: LayoutBuilder under IntrinsicWidth must emit the unsupported-intrinsics \
+         error, got {log}"
+    );
+
+    let (laid, log) = flui_testing::log_capture::capture(|| {
+        lay_out(
+            IntrinsicWidth::new().child(
+                Container::new()
+                    .width(100.0)
+                    .child(LayoutBuilder::new(|_ctx, _c| SizedBox::square(10.0))),
+            ),
+            loose(200.0),
+        )
+    });
+    assert_eq!(laid.size(laid.root()).width.get(), 100.0);
+    assert_eq!(
+        log.count_containing(NEEDLE),
+        0,
+        "a tight Container width must answer the intrinsic without asking LayoutBuilder: {log}"
+    );
+}
+
+/// Height counterpart of
+/// [`container_tight_width_does_not_query_layout_builder_intrinsics`].
+#[test]
+fn container_tight_height_does_not_query_layout_builder_intrinsics() {
+    const NEEDLE: &str = "does not support intrinsic dimensions";
+
+    let (laid, log) = flui_testing::log_capture::capture(|| {
+        lay_out(
+            IntrinsicHeight::new().child(
+                Container::new()
+                    .height(50.0)
+                    .child(LayoutBuilder::new(|_ctx, _c| SizedBox::square(10.0))),
+            ),
+            loose(200.0),
+        )
+    });
+    assert_eq!(laid.size(laid.root()).height.get(), 50.0);
+    assert_eq!(
+        log.count_containing(NEEDLE),
+        0,
+        "a tight Container height must answer the intrinsic without asking LayoutBuilder: {log}"
+    );
 }

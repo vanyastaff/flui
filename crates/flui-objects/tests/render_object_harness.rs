@@ -3548,6 +3548,11 @@ fn harness_container_intrinsics_add_insets_and_honour_constraints() {
         100.0 + 10.0,
         "a tight width overrides the child's intrinsic, but the margin still adds"
     );
+    assert_eq!(
+        tight.min_intrinsic_height(tight_root, f32::INFINITY),
+        50.0 + 10.0,
+        "a tight height overrides the child's intrinsic, but the margin still adds"
+    );
 }
 
 /// Dry layout must agree with the wet pass it predicts, across every level.

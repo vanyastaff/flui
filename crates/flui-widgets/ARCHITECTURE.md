@@ -979,6 +979,11 @@ Two properties follow, and both are the reason for the divergence:
   extra nodes. The reason for the divergence is the stable slot, not a
   cheaper identity `Container`.
 
+**Intrinsics:** a tight additional width or height answers before the child
+is queried, matching `RenderConstrainedBox`. Without that short-circuit a
+`LayoutBuilder` (or any child that rejects speculative intrinsic queries)
+would be asked even though the result is discarded.
+
 **Collapsed branch:** Flutter's three childless shapes — the placeholder
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
 inner widget at all — all resolve to the same box, so `RenderContainer` has no
@@ -1004,3 +1009,7 @@ single node no longer exposes as a separate render object. State stability is
 covered by `container.rs`'s `container_optional_*_preserves_unkeyed_child_state`
 family and `animated_container_optional_color_preserves_unkeyed_child_state`;
 all five fail against the conditional stack and pass against this node.
+Tight additional constraints answering an intrinsic without querying a
+`LayoutBuilder` child are covered by
+`container_tight_width_does_not_query_layout_builder_intrinsics` and
+`container_tight_height_does_not_query_layout_builder_intrinsics`.
