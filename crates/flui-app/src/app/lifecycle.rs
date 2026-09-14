@@ -716,10 +716,11 @@ pub enum PublishError {
 struct EventQueue<E> {
     events: parking_lot::Mutex<VecDeque<E>>,
     capacity: usize,
-    /// Cleared when the [`ServiceEvents`] receiver is dropped. An in-flight
-    /// `publish` may still hold an upgraded `Arc` after that; this flag is
-    /// what makes the next ring mutation observe [`PublishError::OwnerGone`]
-    /// instead of silently succeeding into a queue nobody will drain.
+    /// Cleared when the [`ServiceEvents`] receiver is dropped, **under the
+    /// same mutex** that guards ring mutation. An in-flight `publish` may
+    /// still hold an upgraded `Arc` after that; this flag is what makes the
+    /// next ring mutation observe [`PublishError::OwnerGone`] instead of
+    /// silently succeeding into a queue nobody will drain.
     receiver_alive: AtomicBool,
 }
 
@@ -824,6 +825,11 @@ pub struct ServiceEvents<E> {
 
 impl<E> Drop for ServiceEvents<E> {
     fn drop(&mut self) {
+        // Must serialize with `publish`'s ring mutation: clear liveness only
+        // while holding the same mutex. Otherwise a publisher can load
+        // `true`, lose the race to this Drop's store, then still `push_back`
+        // and return `Ok(())` into a queue nobody will drain.
+        let _guard = self.queue.events.lock();
         self.queue.receiver_alive.store(false, Ordering::Release);
     }
 }
@@ -2257,6 +2263,64 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 4 * 64 - 1);
         drop(remaining);
         assert_eq!(drops.load(Ordering::SeqCst), 4 * 64);
+    }
+
+    /// After `ServiceEvents` drop returns, concurrent publishers that still
+    /// hold an upgraded `Arc` must observe `OwnerGone` — the liveness clear
+    /// is serialized with ring mutation under the same mutex.
+    #[test]
+    fn concurrent_receiver_drop_serializes_with_publish() {
+        use std::sync::Barrier;
+        use std::time::Duration;
+
+        for _ in 0..64 {
+            let (publisher, receiver) = service_events::<u32>("toctou", 16);
+            let start = Arc::new(Barrier::new(3));
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+            let workers: Vec<_> = (0..2)
+                .map(|_| {
+                    let publisher = publisher.clone();
+                    let start = Arc::clone(&start);
+                    let done_tx = done_tx.clone();
+                    std::thread::spawn(move || {
+                        start.wait();
+                        for value in 0..128u32 {
+                            let _ = publisher.publish(value);
+                        }
+                        done_tx.send(()).expect("orchestrator waiting");
+                    })
+                })
+                .collect();
+            drop(done_tx);
+
+            let dropper = {
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    std::thread::yield_now();
+                    drop(receiver);
+                })
+            };
+
+            for i in 0..2 {
+                done_rx
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap_or_else(|_| {
+                        panic!("publisher {i} timed out — likely deadlock with receiver Drop")
+                    });
+            }
+            for worker in workers {
+                worker.join().expect("publisher must not panic");
+            }
+            dropper.join().expect("receiver dropper must not panic");
+
+            assert_eq!(
+                publisher.publish(999),
+                Err(PublishError::OwnerGone),
+                "after ServiceEvents::drop returns, publish must not commit"
+            );
+        }
     }
 
     // ── Service registry: lifetime policy, staged shutdown, deadlines ───────
