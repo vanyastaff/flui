@@ -684,6 +684,10 @@ where
     fn debug_name(&self) -> &'static str {
         <T as RenderSliver>::debug_name(self)
     }
+
+    fn child_parent_data_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<T::ParentData>()
+    }
 }
 
 // ============================================================================

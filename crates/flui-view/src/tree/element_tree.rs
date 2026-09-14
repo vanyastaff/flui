@@ -1123,6 +1123,14 @@ impl ElementTree {
     /// Existing data is mutated through the typed hook so layout-owned fields
     /// survive; its returned impact controls the render-parent dirty work.
     ///
+    /// Before writing, the provider's parent-data [`TypeId`] is
+    /// checked against the render parent's
+    /// [`child_parent_data_type_id`](flui_rendering::RenderObject::child_parent_data_type_id).
+    /// A mismatch panics with a composition diagnostic (offending
+    /// `ParentDataView`, typical ancestor family, actual render parent, element
+    /// ancestry) — the same failure in debug and release — rather than reaching
+    /// layout's `BoxLayoutCtx::from_erased` TypeId assert.
+    ///
     /// Average case O(1) — for a plain render child the very first ancestor is
     /// the render parent, so the walk stops in one hop and never touches the
     /// pipeline owner. Worst case O(proxy-nesting depth) between the render
@@ -1152,7 +1160,7 @@ impl ElementTree {
                 break;
             }
             if nearest_parent_data_element.is_none()
-                && node.element().parent_data_config().is_some()
+                && node.element().parent_data_type_id().is_some()
             {
                 nearest_parent_data_element = Some(ancestor_id);
             }
@@ -1168,11 +1176,49 @@ impl ElementTree {
             return;
         };
 
-        let parent_data_element = self
-            .get(parent_data_element_id)
-            .expect("BUG: located ParentDataView element must remain live");
+        let (provided_type_id, provider_name, typical_ancestor, provided_pd_name) = {
+            let element = self
+                .get(parent_data_element_id)
+                .expect("BUG: located ParentDataView element must remain live")
+                .element();
+            (
+                element
+                    .parent_data_type_id()
+                    .expect("BUG: located ParentDataView must report a parent-data TypeId"),
+                element
+                    .parent_data_debug_type_name()
+                    .unwrap_or("ParentDataView"),
+                element
+                    .parent_data_typical_ancestor_description()
+                    .unwrap_or("a render parent whose children use this parent-data type"),
+                element
+                    .parent_data_storage_type_name()
+                    .unwrap_or("unknown parent-data type"),
+            )
+        };
+
         // The element-tree borrow and render-tree checkout are disjoint.
+        // Ancestry is formatted only inside the assert failure path — not on
+        // every successful ParentDataView attach/update.
         pipeline_owner.with_mut(|owner| {
+            if let Some(parent_render_id) = parent_render_id
+                && let Some(parent_node) = owner.render_tree().get(parent_render_id)
+            {
+                assert!(
+                    provided_type_id == parent_node.child_parent_data_type_id(),
+                    "Incorrect use of ParentDataView `{provider_name}`: it contributes \
+                     `{provided_pd_name}` but its nearest render parent is `{}` \
+                     (incompatible child parent-data TypeId). `{provider_name}` must be \
+                     placed under {typical_ancestor}. Element ancestry \
+                     (child → … → root): {}",
+                    parent_node.debug_name(),
+                    self.format_element_ancestry(child_id),
+                );
+            }
+
+            let parent_data_element = self
+                .get(parent_data_element_id)
+                .expect("BUG: located ParentDataView element must remain live");
             let impact = {
                 let Some(node) = owner.render_tree_mut().get_mut(child_render_id) else {
                     return;
@@ -1194,6 +1240,24 @@ impl ElementTree {
                 owner.apply_render_update_impact(parent_render_id, impact);
             }
         });
+    }
+
+    /// Child → … → root labels for parent-data mismatch diagnostics.
+    fn format_element_ancestry(&self, from: ElementId) -> String {
+        let mut parts = Vec::new();
+        let mut cursor = Some(from);
+        while let Some(id) = cursor {
+            let Some(node) = self.get(id) else {
+                break;
+            };
+            let label = node
+                .element()
+                .parent_data_debug_type_name()
+                .unwrap_or("Element");
+            parts.push(format!("{label}#{id}"));
+            cursor = node.parent();
+        }
+        parts.join(" → ")
     }
 
     fn reset_ancestor_parent_data(&mut self, child_id: ElementId) {
@@ -2870,6 +2934,137 @@ mod tests {
         }
     }
 
+    /// Leaf render host that declares a specific child [`ParentData`] type so
+    /// `ParentDataView` fixtures can sit under a compatible render parent.
+    struct AcceptingParentDataBox<P> {
+        _marker: std::marker::PhantomData<P>,
+    }
+
+    impl<P> Default for AcceptingParentDataBox<P> {
+        fn default() -> Self {
+            Self {
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<P> std::fmt::Debug for AcceptingParentDataBox<P> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("AcceptingParentDataBox").finish()
+        }
+    }
+
+    impl<P: 'static> flui_foundation::Diagnosticable for AcceptingParentDataBox<P> {}
+
+    impl<P> flui_rendering::traits::RenderBox for AcceptingParentDataBox<P>
+    where
+        P: flui_rendering::ParentData + Default + 'static,
+    {
+        type Arity = flui_tree::Leaf;
+        type ParentData = P;
+
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                Self::ParentData,
+            >,
+        ) -> flui_types::geometry::Size {
+            flui_types::geometry::Size::new(
+                flui_types::geometry::px(1.0),
+                flui_types::geometry::px(1.0),
+            )
+        }
+    }
+
+    #[derive(Clone)]
+    struct RelocationHostA;
+
+    impl RenderView for RelocationHostA {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = AcceptingParentDataBox<RelocationParentDataA>;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            AcceptingParentDataBox::default()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for RelocationHostA {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[derive(Clone)]
+    struct RelocationHostB;
+
+    impl RenderView for RelocationHostB {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = AcceptingParentDataBox<RelocationParentDataB>;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            AcceptingParentDataBox::default()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for RelocationHostB {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[derive(Clone)]
+    struct AttachOrderHost;
+
+    impl RenderView for AttachOrderHost {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = AcceptingParentDataBox<AttachOrderParentData>;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            AcceptingParentDataBox::default()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for AttachOrderHost {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
     #[derive(Clone)]
     struct KeyedUnitRenderHost {
         key: GlobalKey<()>,
@@ -3900,13 +4095,14 @@ mod tests {
     }
 
     fn relocate_keyed_render_child_through(
+        destination_render_parent_view: &dyn View,
         destination_wrapper: &dyn View,
     ) -> (PipelineCell, RenderId) {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
         let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
         let root = tree.mount_root_with_pipeline_owner(
-            &UnitRenderHost,
+            &RelocationHostA,
             Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
@@ -3931,8 +4127,12 @@ mod tests {
             .expect("donor wrapper")
             .set_child_ids(vec![moved]);
 
-        let destination_render_parent =
-            tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let destination_render_parent = tree.insert(
+            destination_render_parent_view,
+            root,
+            1,
+            &mut owner.element_owner_mut(),
+        );
         let destination_wrapper = tree.insert(
             destination_wrapper,
             destination_render_parent,
@@ -3984,7 +4184,8 @@ mod tests {
             value: 41,
             child: KeyedUnitRenderHost { key },
         };
-        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        let (pipeline, moved_render) =
+            relocate_keyed_render_child_through(&RelocationHostA, &destination);
         pipeline.with(|owner| {
             assert_eq!(
                 owner
@@ -4005,7 +4206,8 @@ mod tests {
             label: 73,
             child: KeyedUnitRenderHost { key },
         };
-        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        let (pipeline, moved_render) =
+            relocate_keyed_render_child_through(&RelocationHostB, &destination);
         pipeline.with(|owner| {
             let moved = owner.render_tree().get(moved_render).expect("moved render");
             assert!(
@@ -4028,7 +4230,8 @@ mod tests {
         let destination = TestView {
             name: "transparent destination".into(),
         };
-        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        let (pipeline, moved_render) =
+            relocate_keyed_render_child_through(&UnitRenderHost, &destination);
         pipeline.with(|owner| {
             assert!(
                 owner
@@ -4049,7 +4252,7 @@ mod tests {
         let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
         let events = RelocationEvents::default();
         let root = tree.mount_root_with_pipeline_owner(
-            &UnitRenderHost,
+            &AttachOrderHost,
             Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
@@ -4073,7 +4276,7 @@ mod tests {
             .unwrap()
             .set_child_ids(vec![moved]);
         let destination_render_parent =
-            tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+            tree.insert(&AttachOrderHost, root, 1, &mut owner.element_owner_mut());
         let destination_wrapper = tree.insert(
             &AttachOrderParentDataView {
                 value: 88,
@@ -4107,7 +4310,6 @@ mod tests {
             [
                 "parent-data-detach",
                 "render-detach",
-                "parent-data-create",
                 "parent-data-create",
                 "render-attach",
             ],

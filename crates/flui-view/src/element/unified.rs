@@ -297,6 +297,23 @@ where
             .apply_parent_data_config(&self.core, parent_data)
     }
 
+    fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
+        self.behavior.parent_data_type_id(&self.core)
+    }
+
+    fn parent_data_debug_type_name(&self) -> Option<&'static str> {
+        self.behavior.parent_data_debug_type_name(&self.core)
+    }
+
+    fn parent_data_typical_ancestor_description(&self) -> Option<&'static str> {
+        self.behavior
+            .parent_data_typical_ancestor_description(&self.core)
+    }
+
+    fn parent_data_storage_type_name(&self) -> Option<&'static str> {
+        self.behavior.parent_data_storage_type_name(&self.core)
+    }
+
     // ========================================================================
     // Notification handler protocol
     //

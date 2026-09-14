@@ -490,6 +490,14 @@ impl ParentDataView for TableCell {
         parent_data.vertical_alignment = alignment;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
+
+    fn debug_type_name(&self) -> &'static str {
+        "TableCell"
+    }
+
+    fn typical_ancestor_description(&self) -> &'static str {
+        "Table"
+    }
 }
 
 impl_parent_data_view!(TableCell);

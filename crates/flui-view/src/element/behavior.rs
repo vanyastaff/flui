@@ -374,6 +374,37 @@ where
         flui_rendering::RenderUpdateImpact::NONE
     }
 
+    /// [`TypeId`] of the parent-data storage this element
+    /// contributes, if it is a [`ParentDataView`](crate::view::ParentDataView).
+    ///
+    /// Default `None`. Used by `ElementTree::apply_ancestor_parent_data` to
+    /// validate compatibility with the nearest render parent before writing.
+    #[expect(unused_variables)]
+    fn parent_data_type_id(&self, core: &ElementCore<V, A>) -> Option<std::any::TypeId> {
+        None
+    }
+
+    /// Short diagnostic name of the contributing `ParentDataView`.
+    #[expect(unused_variables)]
+    fn parent_data_debug_type_name(&self, core: &ElementCore<V, A>) -> Option<&'static str> {
+        None
+    }
+
+    /// Description of legal ancestors for the contributing `ParentDataView`.
+    #[expect(unused_variables)]
+    fn parent_data_typical_ancestor_description(
+        &self,
+        core: &ElementCore<V, A>,
+    ) -> Option<&'static str> {
+        None
+    }
+
+    /// Fully-qualified name of the contributed parent-data storage type.
+    #[expect(unused_variables)]
+    fn parent_data_storage_type_name(&self, core: &ElementCore<V, A>) -> Option<&'static str> {
+        None
+    }
+
     /// Object-safe notification handler hook routed from
     /// [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
     /// during bubble dispatch.
@@ -580,10 +611,36 @@ where
         core: &ElementCore<V, A>,
         parent_data: &mut dyn flui_rendering::parent_data::ParentData,
     ) -> flui_rendering::RenderUpdateImpact {
-        let typed = parent_data
-            .downcast_mut::<V::ParentData>()
-            .expect("BUG: ParentDataView must match the existing render-node parent-data type");
+        let typed = parent_data.downcast_mut::<V::ParentData>().unwrap_or_else(|| {
+            panic!(
+                "Incorrect use of ParentDataView `{}`: existing child parent-data type does not \
+                 match `{}`. `{}` must be placed under {}.",
+                core.view().debug_type_name(),
+                core.view().parent_data_type_name(),
+                core.view().debug_type_name(),
+                core.view().typical_ancestor_description(),
+            )
+        });
         core.view().apply_parent_data(typed)
+    }
+
+    fn parent_data_type_id(&self, _core: &ElementCore<V, A>) -> Option<std::any::TypeId> {
+        Some(std::any::TypeId::of::<V::ParentData>())
+    }
+
+    fn parent_data_debug_type_name(&self, core: &ElementCore<V, A>) -> Option<&'static str> {
+        Some(core.view().debug_type_name())
+    }
+
+    fn parent_data_typical_ancestor_description(
+        &self,
+        core: &ElementCore<V, A>,
+    ) -> Option<&'static str> {
+        Some(core.view().typical_ancestor_description())
+    }
+
+    fn parent_data_storage_type_name(&self, core: &ElementCore<V, A>) -> Option<&'static str> {
+        Some(core.view().parent_data_type_name())
     }
 }
 

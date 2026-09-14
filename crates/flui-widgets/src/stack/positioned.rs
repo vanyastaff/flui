@@ -148,6 +148,14 @@ impl ParentDataView for Positioned {
         parent_data.height = self.height;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
+
+    fn debug_type_name(&self) -> &'static str {
+        "Positioned"
+    }
+
+    fn typical_ancestor_description(&self) -> &'static str {
+        "Stack"
+    }
 }
 
 impl_parent_data_view!(Positioned);

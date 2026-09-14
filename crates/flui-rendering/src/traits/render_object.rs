@@ -34,6 +34,8 @@
 //! - Owner-local access via `PipelineCell` (the owning tree belongs to
 //!   exactly one `PipelineOwner` on exactly one thread)
 
+use std::any::TypeId;
+
 use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::Diagnosticable;
 
@@ -824,6 +826,19 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // ========================================================================
     // Diagnostics
     // ========================================================================
+
+    /// [`TypeId`] of the [`ParentData`] this render object expects on each
+    /// child.
+    ///
+    /// Used by the element-tree parent-data attach seam to reject
+    /// `ParentDataView` misuse (e.g. `Expanded` under a `Stack`) before
+    /// layout constructs a typed `BoxLayoutCtx`. The `RenderBox` /
+    /// `RenderSliver` blankets override this to
+    /// `TypeId::of::<Self::ParentData>()`; direct `RenderObject`
+    /// implementors keep the box-protocol default.
+    fn child_parent_data_type_id(&self) -> TypeId {
+        TypeId::of::<crate::parent_data::BoxParentData>()
+    }
 
     /// Stable static identifier for this render object.
     ///
