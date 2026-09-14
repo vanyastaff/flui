@@ -2924,6 +2924,17 @@ struct ContainerStackCase {
     color: Option<Color>,
     decoration: Option<BoxDecoration<Pixels>>,
     transform: Option<Matrix4>,
+    /// When set, the CHILD itself is wrapped in a `RenderTransform` using
+    /// this matrix — distinct from `transform` above, which is the
+    /// CONTAINER's own outer transform applied to the whole collapsed
+    /// fragment. `RenderTransform::hit_test` deliberately does not bound
+    /// itself to its own laid-out box (a scaled child visually covering
+    /// more than that box must stay hittable across the whole area), so a
+    /// case that sets this exercises a child whose hit region can overflow
+    /// past whatever box the levels between the margin and the child gate
+    /// on — proving those gates still apply ahead of the collapsed node's
+    /// own child recursion.
+    child_overflow_transform: Option<Matrix4>,
 }
 
 /// Asserts that one `RenderContainer` configuration is geometrically
@@ -2954,7 +2965,26 @@ fn assert_container_matches_stack(spec: ContainerStackCase) {
         color,
         decoration,
         transform,
+        child_overflow_transform,
     } = spec;
+
+    // The CHILD subtree: a plain colored leaf, or that leaf wrapped in a
+    // `RenderTransform` when `child_overflow_transform` is set — built
+    // identically for both trees, so only the levels between the margin
+    // and the child can disagree about whether it stays reachable.
+    // `"child"` always labels whatever RenderContainer treats as ITS
+    // child — the leaf itself, or the wrapping `RenderTransform` when one
+    // is present — so the existing size/position parity checks below (which
+    // assume "child" is the node RenderContainer positions directly) still
+    // apply unchanged; the leaf gets its own `"leaf"` label underneath.
+    let build_child = || -> TreeNode {
+        match child_overflow_transform {
+            Some(matrix) => box_node(RenderTransform::new(matrix))
+                .label("child")
+                .child(box_node(RenderColoredBox::new(CHILD_COLOR, child)).label("leaf")),
+            None => box_node(RenderColoredBox::new(CHILD_COLOR, child)).label("child"),
+        }
+    };
 
     let mut container = RenderContainer::new()
         .with_margin(margin)
@@ -2974,15 +3004,12 @@ fn assert_container_matches_stack(spec: ContainerStackCase) {
     if let Some(transform) = transform {
         container = container.with_transform(transform);
     }
-    let collapsed = RenderTester::mount(
-        box_node(container)
-            .child(box_node(RenderColoredBox::new(CHILD_COLOR, child)).label("child")),
-    )
-    .with_constraints(constraints)
-    .run_frame();
+    let collapsed = RenderTester::mount(box_node(container).child(build_child()))
+        .with_constraints(constraints)
+        .run_frame();
 
     let mut levels = vec!["child"];
-    let mut node = box_node(RenderColoredBox::new(CHILD_COLOR, child)).label("child");
+    let mut node = build_child();
     if let Some(alignment) = alignment {
         node = box_node(RenderAlign::new(alignment))
             .label("align")
@@ -3105,7 +3132,21 @@ fn assert_container_matches_stack(spec: ContainerStackCase) {
         (
             margin.left.get() * 0.5 + shift.dx.get(),
             chrome_mid_y,
-            "inside the margin band",
+            "inside the margin band (left)",
+        ),
+        // Mirrored right/bottom probes: an overflowing child
+        // (`child_overflow_transform`) that grows toward the right/bottom
+        // from a top-left pivot reaches these bands, not the left/top one
+        // above — the left-only probe would miss exactly that regression.
+        (
+            chrome_right + margin.right.get() * 0.5,
+            chrome_mid_y,
+            "inside the margin band (right)",
+        ),
+        (
+            chrome_mid_x,
+            chrome_bottom + margin.bottom.get() * 0.5,
+            "inside the margin band (bottom)",
         ),
     ] {
         assert_eq!(
@@ -3135,6 +3176,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         color: None,
         decoration: None,
         transform: None,
+        child_overflow_transform: None,
     });
 
     assert_container_matches_stack(ContainerStackCase {
@@ -3148,6 +3190,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         color: None,
         decoration: None,
         transform: None,
+        child_overflow_transform: None,
     });
 
     assert_container_matches_stack(ContainerStackCase {
@@ -3161,6 +3204,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         color: None,
         decoration: None,
         transform: None,
+        child_overflow_transform: None,
     });
 
     assert_container_matches_stack(ContainerStackCase {
@@ -3179,6 +3223,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         color: None,
         decoration: None,
         transform: None,
+        child_overflow_transform: None,
     });
 
     assert_container_matches_stack(ContainerStackCase {
@@ -3192,6 +3237,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         color: Some(Color::RED),
         decoration: Some(BoxDecoration::with_color(Color::BLUE)),
         transform: Some(Matrix4::translation(10.0, 4.0, 0.0)),
+        child_overflow_transform: None,
     });
 
     // Every case above hands the Align level a BOUNDED incoming axis —
@@ -3227,6 +3273,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         color: None,
         decoration: None,
         transform: None,
+        child_overflow_transform: None,
     };
     assert_container_matches_stack(unbounded_case.clone());
 
@@ -3264,6 +3311,31 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         Offset::new(px(7.0), px(90.0)),
         "the unbounded-width case's child must land at exactly (7, 90)"
     );
+
+    // A non-zero margin, no padding, no alignment — the child sits directly
+    // under `Padding(padding)`, whose own box IS `inner_size` — wrapping a
+    // scaled child whose own `hit_test` does not bound itself
+    // (`RenderTransform`, deliberately, so a visually-overflowing child stays
+    // hittable across its whole painted area). The stack's `Padding(padding)`
+    // level still gates that child behind `inner_size` before it is ever
+    // reached, so the overflow must not leak into the margin band. This is
+    // the "inside the margin band (right)" / "(bottom)" probes' load-bearing
+    // case: the scale(2) pivot sits at the child's own top-left, so the
+    // overflow grows toward the right/bottom, past the inner box and into
+    // the margin there, never toward the left/top.
+    assert_container_matches_stack(ContainerStackCase {
+        case: "a non-zero margin does not expose an overflowing scaled child",
+        margin: EdgeInsets::all(px(10.0)),
+        extra: None,
+        padding: EdgeInsets::ZERO,
+        alignment: None,
+        child: Size::new(px(30.0), px(30.0)),
+        constraints: loose(200.0),
+        color: None,
+        decoration: None,
+        transform: None,
+        child_overflow_transform: Some(Matrix4::scaling(2.0, 2.0, 1.0)),
+    });
 }
 
 /// A childless container stands in for Flutter's placeholder subtree,
@@ -3664,6 +3736,129 @@ fn harness_container_translation_moves_paint_and_hit() {
         run.hit_first(5.0, 5.0),
         None,
         "the child's pre-translation position must no longer be hit"
+    );
+}
+
+/// A child whose own `hit_test` does not bound itself to its laid-out box —
+/// `RenderTransform` deliberately does not (a scale(2) child visually
+/// covering 60×60 must stay hittable across that whole area even though its
+/// own laid-out size is 30×30) — must still be gated by the levels between
+/// the margin and the child. In the stack, `Padding(padding)`'s own box IS
+/// `inner_size` (the margin-offset box); its `hit_test` gates on that box
+/// (`is_within_own_size`) before ever reaching the transform, so a point in
+/// the margin band never reaches it. Before this fix, `RenderContainer`
+/// tested the child before applying that same `inner_size` gate, so the
+/// margin band let the overflow through.
+///
+/// Margin 10, no padding, no alignment, a 30×30 leaf scaled ×2 pivoted at
+/// its own top-left (`RenderTransform::new`'s default pivot — no alignment,
+/// no origin): the leaf fills the whole 30×30 content area exactly, so the
+/// scaled hit region is [0,60)×[0,60) in the content area's own frame,
+/// overflowing 20px past the content/inner box on the right and bottom —
+/// well into the 10px margin there. (45, 25) sits inside the container's
+/// own 50×50 outer box, inside the right margin band (x ∈ [40, 50), past
+/// the 30-wide inner box), and inside the transform's overflow — exactly
+/// the point this gate must reject.
+#[test]
+fn harness_container_margin_does_not_expose_an_overflowing_child() {
+    let margin = EdgeInsets::all(px(10.0));
+    let leaf_color = [0.0, 0.0, 1.0, 1.0];
+    let leaf_size = Size::new(px(30.0), px(30.0));
+    let scale = Matrix4::scaling(2.0, 2.0, 1.0);
+
+    let run = RenderTester::mount(
+        box_node(RenderContainer::new().with_margin(margin)).child(
+            box_node(RenderTransform::new(scale))
+                .label("transform")
+                .child(box_node(RenderColoredBox::new(leaf_color, leaf_size)).label("leaf")),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(50.0), px(50.0)),
+        "margin(10) around the unscaled 30×30 layout box must be 50×50"
+    );
+    assert_eq!(
+        run.hit_first(45.0, 25.0),
+        None,
+        "a point in the margin band must not reach a child that visually \
+         overflows into it, even though the child's own hit_test does not \
+         bound itself"
+    );
+    // Sanity: the same overflowing child IS still hittable well inside the
+    // content area, so this isn't just "the child never hits anything".
+    assert!(
+        run.hit_first(25.0, 25.0).is_some(),
+        "the overflowing child must still be hittable inside the content area"
+    );
+}
+
+/// The `Align` level the stack inserts when an alignment is set gates on
+/// its OWN box — the CONTENT area (inside the margin AND the padding) —
+/// which can be narrower than `inner_size` alone. Verified against FLUI's
+/// own `RenderAlign` (`AligningShiftedBox::hit_test`, which gates on
+/// `is_within_own_size` exactly like `RenderPadding` does) and against
+/// `.flutter`'s `RenderPositionedBox`/`RenderAligningShiftedBox`
+/// (`rendering/shifted_box.dart`), which gate on `size.contains(position)`
+/// the same way before forwarding. So this is a SECOND, narrower gate than
+/// [`harness_container_margin_does_not_expose_an_overflowing_child`]'s, and
+/// only exists when `alignment` is `Some` — without one there is no `Align`
+/// level, and the child sits directly under `Padding(padding)`, whose own
+/// box already IS `inner_size`.
+///
+/// Margin 5, padding 10, `BOTTOM_RIGHT` alignment, tight 100×100 incoming:
+/// content area is 70×70 at (15, 15). A 20×20 leaf at `BOTTOM_RIGHT` sits at
+/// content-relative (50, 50) — absolute (65, 65) — exactly touching the
+/// content box's own bottom-right corner. Scaled ×2 from that corner (the
+/// transform's own top-left pivot), the hit region overflows to absolute
+/// [65, 105)×[65, 105) — past the content box's edge (85) and into the
+/// padding band (85..95), which `inner_size` alone (spanning to 95) would
+/// NOT catch. (90, 70) sits inside `inner_size`, inside that overflow, and
+/// outside the content box: the point only the content-box gate rejects.
+#[test]
+fn harness_container_padding_does_not_expose_an_overflowing_aligned_child() {
+    let margin = EdgeInsets::all(px(5.0));
+    let padding = EdgeInsets::all(px(10.0));
+    let leaf_color = [0.0, 0.0, 1.0, 1.0];
+    let leaf_size = Size::new(px(20.0), px(20.0));
+    let scale = Matrix4::scaling(2.0, 2.0, 1.0);
+
+    let run = RenderTester::mount(
+        box_node(
+            RenderContainer::new()
+                .with_margin(margin)
+                .with_padding(padding)
+                .with_alignment(Alignment::BOTTOM_RIGHT),
+        )
+        .child(
+            box_node(RenderTransform::new(scale))
+                .label("transform")
+                .child(box_node(RenderColoredBox::new(leaf_color, leaf_size)).label("leaf")),
+        ),
+    )
+    .with_constraints(BoxConstraints::tight(Size::new(px(100.0), px(100.0))))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(100.0), px(100.0)),
+        "tight incoming constraints must be honoured regardless of content"
+    );
+    assert_eq!(
+        run.hit_first(90.0, 70.0),
+        None,
+        "a point inside inner_size but outside the content box must not \
+         reach a child that overflows past the content box, even under an \
+         alignment"
+    );
+    // Sanity: the same overflowing child IS still hittable at its own
+    // content-relative corner.
+    assert!(
+        run.hit_first(70.0, 70.0).is_some(),
+        "the overflowing child must still be hittable at its own corner"
     );
 }
 

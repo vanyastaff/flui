@@ -86,6 +86,12 @@ pub struct RenderContainer {
     /// last layout. This is the `DecoratedBox`/`ColoredBox` level's own size
     /// in the stack this collapses.
     inner_size: Size,
+    /// Extent of the `Align` level's own box — the content area (inside the
+    /// margin AND the padding) — from the last layout. Only meaningful when
+    /// [`alignment`](Self::alignment) is `Some`: that is the only condition
+    /// under which the stack this collapses inserts an `Align` level at all,
+    /// and [`hit_test`](RenderBox::hit_test) gates on this box only then.
+    content_size: Size,
     /// Child baselines captured during layout, indexed by [`TextBaseline`]
     /// (0 = alphabetic, 1 = ideographic).
     child_baselines: [Option<f32>; 2],
@@ -461,6 +467,7 @@ impl RenderBox for RenderContainer {
             Self::childless_content_size(&content_constraints)
         };
 
+        self.content_size = content_size;
         let (inner_size, outer_size) = self.inflate(&constraints, &inner_constraints, content_size);
         self.inner_size = inner_size;
         outer_size
@@ -701,23 +708,6 @@ impl RenderBox for RenderContainer {
             return false;
         }
 
-        // Child before self: the decoration's shape excludes its rounded
-        // corners, and a child hittable in a cut-out must still be reachable.
-        if self.has_child {
-            let child_local = Offset::new(
-                position.dx - self.child_offset.dx,
-                position.dy - self.child_offset.dy,
-            );
-            let hit = if self.child_offset == Offset::ZERO {
-                ctx.hit_test_child(0, child_local)
-            } else {
-                ctx.with_offset(self.child_offset, |ctx| ctx.hit_test_child(0, child_local))
-            };
-            if hit {
-                return true;
-            }
-        }
-
         let rect = Rect::from_origin_size(
             Point::new(self.margin.left, self.margin.top),
             self.inner_size,
@@ -730,6 +720,60 @@ impl RenderBox for RenderContainer {
             && position.dx < rect.max.x
             && position.dy >= rect.min.y
             && position.dy < rect.max.y;
+
+        // Child before self: the decoration's shape excludes its rounded
+        // corners, and a child hittable in a cut-out must still be reachable.
+        //
+        // But not before the boxes the stack itself gates the child behind.
+        // Every level between the margin and the child — `ConstrainedBox`,
+        // `DecoratedBox`, `ColoredBox`, `Padding` — reports the SAME
+        // margin-offset `inner_size` box and rejects a position outside it
+        // before descending (`is_within_own_size`), so a point in the
+        // margin band must never reach the child even when the child's own
+        // `hit_test` does not bound itself — `RenderTransform` deliberately
+        // does not (a scaled child visually covering more than its own
+        // laid-out box must still be reachable across that whole area, so
+        // only the child decides). Without this gate, collapsing the stack
+        // would let a margin tap through to exactly such a child.
+        //
+        // When an alignment is set, the stack also inserts an `Align` level
+        // whose own box is the CONTENT area — inside the margin AND the
+        // padding, narrower still (`RenderPositionedBox`/
+        // `AligningShiftedBox::hit_test` gate on their own box the same
+        // way) — so that box gates too. Without an alignment there is no
+        // `Align` level: the child sits directly under `Padding(padding)`,
+        // whose own box IS `inner_size`, so the one gate above already
+        // covers it and no second, narrower gate is needed.
+        if self.has_child && inside_decoration {
+            let content_gate = self.alignment.is_none() || {
+                let content_rect = Rect::from_origin_size(
+                    Point::new(
+                        self.margin.left + self.padding.left,
+                        self.margin.top + self.padding.top,
+                    ),
+                    self.content_size,
+                );
+                position.dx >= content_rect.min.x
+                    && position.dx < content_rect.max.x
+                    && position.dy >= content_rect.min.y
+                    && position.dy < content_rect.max.y
+            };
+            if content_gate {
+                let child_local = Offset::new(
+                    position.dx - self.child_offset.dx,
+                    position.dy - self.child_offset.dy,
+                );
+                let hit = if self.child_offset == Offset::ZERO {
+                    ctx.hit_test_child(0, child_local)
+                } else {
+                    ctx.with_offset(self.child_offset, |ctx| ctx.hit_test_child(0, child_local))
+                };
+                if hit {
+                    return true;
+                }
+            }
+        }
+
         if !inside_decoration {
             return false;
         }

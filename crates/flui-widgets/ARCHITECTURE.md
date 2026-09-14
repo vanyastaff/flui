@@ -1071,8 +1071,9 @@ over the decoration — the order the widget stack would have produced
 
 **Replacement tests:** the geometry the collapsed stack owes is pinned against
 the stack itself by `harness_container_matches_the_widget_stack_it_collapses`
-(size, child size, absolute child position and hit path, over four
-configurations, each making a different level decide), plus
+(size, child size, absolute child position and hit path, over seven
+configurations spanning both wet layout and hit-testing, each making a
+different level decide), plus
 `harness_container_paints_its_chrome_inside_the_margin` for the decorated box's
 own rect — the level Flutter's `paints..rect(...)` oracle pins and the one a
 single node no longer exposes as a separate render object. State stability is
@@ -1087,3 +1088,25 @@ Chrome self-hit uses the same half-open gate as the stacked `DecoratedBox`
 (`harness_container_decoration_misses_the_exclusive_chrome_max_edge`);
 baselines add the child's offset
 (`harness_container_baseline_adds_child_offset`).
+
+**Hit-testing gates the child behind the SAME boxes the stack does, not only
+the outer one.** `RenderContainer::hit_test` tests the child before the
+decoration/color path (a child hittable in a cut-out the decoration's rounded
+corners exclude must stay reachable), but that ordering is not the only thing
+that has to match the stack: every level between the margin and the child —
+`ConstrainedBox`/`DecoratedBox`/`ColoredBox`/`Padding` — reports the same
+margin-offset `inner_size` box and rejects a position outside it
+(`is_within_own_size`) before ever reaching the child, and when an alignment
+is set the stack additionally inserts an `Align` level gating on the
+narrower CONTENT box (inside the margin AND the padding). A collapsed node
+that tested the child before applying those same two gates would let a tap
+in the margin (or, under an alignment, the padding) band reach a child whose
+own `hit_test` does not bound itself to its laid-out box — `RenderTransform`
+deliberately does not, so a scaled child stays hittable across its whole
+visually-overflowing area. Pinned by
+`harness_container_margin_does_not_expose_an_overflowing_child` (the
+`inner_size` gate, no alignment) and
+`harness_container_padding_does_not_expose_an_overflowing_aligned_child` (the
+narrower content-box gate, alignment set), plus the differential's own
+"a non-zero margin does not expose an overflowing scaled child" case and its
+mirrored margin-band probes.
