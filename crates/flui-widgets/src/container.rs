@@ -29,13 +29,20 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///   (flutter/flutter#161698). Here the options are render-object fields, so
 ///   the child's slot never moves and no state is lost. No `GlobalKey`, no
 ///   reparenting, nothing for the caller to opt into.
-/// * **A `Container` costs one node.** Flutter's unused-layer-is-absent
-///   stack is cheaper only in the identity case (no options → the child
-///   itself, zero extra nodes). Every other configuration is one node here
-///   versus up to seven there. The reason for the divergence is the stable
-///   child slot, not a cheaper identity `Container`. Because the identity
-///   case is still a `RenderContainer`, it is **not** parent-data-transparent:
-///   put [`crate::Expanded`] / [`crate::Positioned`] *around* the container
+/// * **Node count only favors this from two options up.** Flutter's stack
+///   costs zero extra nodes at identity (no options → the child itself) and
+///   exactly one extra node per option set below that — a single option
+///   (say, just `padding`) built exactly one `RenderPadding` there too, so
+///   one node here is a wash on count against one node there, not a win.
+///   From two options up, one node here beats Flutter's per-option levels
+///   (up to seven if every option is set). What one node here does *not* buy
+///   is a lighter node: `RenderContainer` carries every field whether or not
+///   that option is set, so it is heavier than whichever single-purpose
+///   object the stack would have used, in every configuration including
+///   identity. The reason for the divergence is the stable child slot, not a
+///   cheaper or lighter `Container`. Because the identity case is still a
+///   `RenderContainer`, it is **not** parent-data-transparent: put
+///   [`crate::Expanded`] / [`crate::Positioned`] *around* the container
 ///   (`Row → Expanded → Container`), not inside it.
 ///
 /// The divergence is recorded in `ARCHITECTURE.md` mapping decision 15, and

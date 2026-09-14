@@ -973,11 +973,19 @@ Two properties follow, and both are the reason for the divergence:
 * **State survives every toggle** with no `GlobalKey`, no retake, and no
   lifecycle churn — nothing for the caller to opt into, and no reparenting
   semantics leaking into an unmoved subtree.
-* **A `Container` costs one node instead of up to seven** whenever any
-  option is set. Flutter's unused-layer-is-absent stack is cheaper only in
-  the identity case: no options at all, and the widget *is* the child, zero
-  extra nodes. The reason for the divergence is the stable slot, not a
-  cheaper identity `Container`.
+* **Node count only favors the collapse from two options up.** At identity
+  (no options at all) the widget *is* the child — zero extra nodes — so
+  Flutter is cheaper there. At exactly one option, Flutter's stack is also
+  exactly one extra node (a single `padding` builds one `RenderPadding`), so
+  node count ties. `RenderContainer` only wins on count from two options up,
+  where Flutter would otherwise stack one level per option (up to seven if
+  every option is set). **What it does not win is node weight**:
+  `RenderContainer` carries every field — alignment, padding, margin, color,
+  decoration, additional constraints, transform, plus the committed child
+  offset/size/baselines — whether or not that option is set, so it is
+  heavier than whichever single-purpose object the stack would have used, in
+  every configuration including identity. The reason for the divergence is
+  the stable slot, not a cheaper or lighter `Container`.
 
 **Intrinsics:** a tight additional width or height answers before the child
 is queried, matching `RenderConstrainedBox`. Without that short-circuit a
