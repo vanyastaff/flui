@@ -959,20 +959,55 @@ set.
 `DecoratedBox` / `ConstrainedBox` / margin `Padding` / `Transform` only when the
 matching field is set. Toggling a field inserts or removes a level between the
 parent and the child, so reconciliation diverges there and an unkeyed stateful
-child below is rebuilt from scratch (flutter/flutter#161698). Flutter has not
-shipped a fix; maintainers discussed render-level composition, compressed
-elements, and GlobalKey-like reparenting (with cost).
+child below is rebuilt from scratch (flutter/flutter#161698). That issue is
+still open, and the thread is worth reading before touching this decision:
+maintainers weighed GlobalKey-like reparenting (goderbauer — concluded it
+duplicates the GlobalKey mechanism and its cost, so a caller may as well key
+the child), a "compressed element" holding the intermediate widgets (chunhtai),
+a local deactivated-element map, and render-level composition. Hixie's position
+is to fix the docs rather than the widget, and to steer people away from
+`Container` entirely.
 
-**Choice:** take the render-level composition. `Container` is a `RenderView`
+**Choice:** take the render-level composition — the option loic-sharma proposed
+upstream (2025-05-13) and later prototyped as `Container2` in
+`loic-sharma/flutter_playground` (2025-12-26). `Container` is a `RenderView`
 over one `RenderContainer` (`flui-objects`) that carries margin, additional
 constraints, padding, alignment, color, decoration and transform as *fields*.
 The child's slot is therefore structurally fixed and no option can move it.
+
+**Where we diverge from that prototype, and what it costs.** The upstream
+sketch keeps composition in the render layer: its `RenderContainer` extends a
+`RenderComposedBox` that builds a real render-object subtree
+(`RenderPadding` → `RenderDecoratedBox` → …) behind one widget/element. FLUI's
+is a single render object that *re-derives* that subtree's geometry, paint,
+hit-test and intrinsics as its own code. The upside is one node and no
+composition machinery to build. The cost is that every contract the levels
+would have inherited has to be re-proved here, and that is where this object's
+defects have actually come from: an absent level and a zero-inset level are
+not the same thing for hit-testing (which is why `padding` is `Option` and the
+child-recursion gate is conditional — see **Hit-testing** below), and the
+layered-range predicate now exists in two places (issue #1143). A composed
+shape would make those classes unrepresentable rather than tested-for. It is a
+legitimate future reshape, not a defect in this one; tracked separately.
+chunhtai's objection to render-level composition applies to us unchanged —
+it fixes `Container` and not the general class, so any other conditional-layer
+widget in this catalog keeps the same hazard.
 
 Two properties follow, and both are the reason for the divergence:
 
 * **State survives every toggle** with no `GlobalKey`, no retake, and no
   lifecycle churn — nothing for the caller to opt into, and no reparenting
   semantics leaking into an unmoved subtree.
+* **The element tree is where the win is, not the render tree.** A conditional
+  stack inflates and deflates an *element* per toggled option, and elements are
+  not free: knopp reports on the upstream issue (2026-04-12) that element
+  inflation/deflation is a measured bottleneck during fast scrolling — "a
+  thousand cuts problem" — and names constraining `Container` to a single
+  element as a direct improvement. That is the load-bearing argument for this
+  divergence. The render-node accounting below is an honest cost statement, not
+  the justification; read it as "what this costs", not "why we did it". FLUI has
+  no equivalent measurement of its own yet, so this rests on an upstream
+  maintainer's profiling, not ours.
 * **Node count depends on whether there is a child.** With a child, identity
   (no options at all) is the widget passing the child straight through —
   zero extra nodes — so Flutter is cheaper there. At exactly one option,
