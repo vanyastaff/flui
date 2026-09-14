@@ -42,6 +42,18 @@
 //!   Flutter does), but a `usize::MAX` "unknown" count is read as the sentinel
 //!   it is and served as a small bounded window, exactly as the lazy grid does
 //!   (`MAX_UNBOUNDED_WINDOW_CHILDREN`, `UNBOUNDED_SENTINEL_WINDOW`).
+//! - **Non-finite scroll-window inputs never reach `as usize`.** Flutter's
+//!   `RenderSliverFixedExtentBoxAdaptor` crashes on `Infinity or NaN toInt`
+//!   (flutter/flutter#105630). Rust's float-to-int cast saturates instead
+//!   (`+∞ → usize::MAX`, `NaN → 0`), which is worse operationally: a poisoned
+//!   retain band or build window can freeze the viewport without a crisp
+//!   error. Index helpers and `window` reject `NaN` and `+∞` leading edges
+//!   (and `NaN`/`−∞` trailing edges) with a `tracing::error!` and an empty
+//!   window; `−∞` on the leading edge still clamps to `0` via `.max(0.0)`,
+//!   matching a negative finite offset. Only a positive-infinite trailing
+//!   cache extent keeps the intentional unbounded-window meaning. The grid
+//!   applies the same leading/trailing policy. Cross-object ledger:
+//!   [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §Mapping decisions.
 
 use std::collections::BTreeMap;
 
@@ -157,8 +169,26 @@ impl RenderSliverFixedExtentList {
     /// An offset within `PRECISION_ERROR_TOLERANCE` of an item boundary
     /// counts as that boundary, so accumulated rounding never pulls in the
     /// child that ends exactly there.
+    ///
+    /// # Non-finite offsets
+    ///
+    /// `NaN` and `+∞` are rejected: the helper returns `0` and emits a
+    /// `tracing::error!`. Rust's `f32 as usize` would otherwise saturate `+∞`
+    /// to [`usize::MAX`], which must never become a retain-band or
+    /// build-request edge. `−∞` is treated like any negative offset and
+    /// selects index `0` without an error.
     #[must_use]
     pub fn min_child_index_for_scroll_offset(&self, scroll_offset: f32) -> usize {
+        if is_poison_scroll_offset(scroll_offset) {
+            tracing::error!(
+                scroll_offset,
+                item_extent = self.item_extent,
+                render_object = "RenderSliverFixedExtentList",
+                "min_child_index_for_scroll_offset rejected a NaN or +∞ scroll offset; \
+                 returning 0 so index math cannot saturate to usize::MAX"
+            );
+            return 0;
+        }
         if self.item_extent <= 0.0 {
             return 0;
         }
@@ -175,8 +205,23 @@ impl RenderSliverFixedExtentList {
     /// The last child index that starts before `scroll_offset`
     /// (Flutter's `getMaxChildIndexForScrollOffset`): the child that ends
     /// exactly at the offset is not included.
+    ///
+    /// # Non-finite offsets
+    ///
+    /// Same contract as [`Self::min_child_index_for_scroll_offset`]: `NaN` /
+    /// `+∞` return `0` with a `tracing::error!`; `−∞` selects index `0`.
     #[must_use]
     pub fn max_child_index_for_scroll_offset(&self, scroll_offset: f32) -> usize {
+        if is_poison_scroll_offset(scroll_offset) {
+            tracing::error!(
+                scroll_offset,
+                item_extent = self.item_extent,
+                render_object = "RenderSliverFixedExtentList",
+                "max_child_index_for_scroll_offset rejected a NaN or +∞ scroll offset; \
+                 returning 0 so index math cannot saturate to usize::MAX"
+            );
+            return 0;
+        }
         if self.item_extent <= 0.0 {
             return 0;
         }
@@ -207,9 +252,21 @@ impl RenderSliverFixedExtentList {
 
     /// The window `[first, last]` of logical indices the constraints ask for,
     /// and the count the reported extent covers, or `None` when the window
-    /// starts past the last item.
+    /// starts past the last item or the leading edge is `NaN`/`+∞`.
     fn window(&mut self, constraints: &SliverConstraints) -> Option<(usize, usize, usize)> {
-        let cache_start = (constraints.scroll_offset + constraints.cache_origin).max(0.0);
+        let Some(cache_start) = finite_leading_cache_edge(constraints) else {
+            tracing::error!(
+                scroll_offset = constraints.scroll_offset,
+                cache_origin = constraints.cache_origin,
+                remaining_cache_extent = constraints.remaining_cache_extent,
+                item_extent = self.item_extent,
+                item_count = self.item_count,
+                render_object = "RenderSliverFixedExtentList",
+                "fixed-extent list received a NaN or +∞ leading cache/scroll edge; \
+                 treating the window as empty so index math cannot saturate to usize::MAX"
+            );
+            return None;
+        };
         let cache_end = cache_start + constraints.remaining_cache_extent;
         let first = self.min_child_index_for_scroll_offset(cache_start);
         let (last, effective_count) = if cache_end.is_finite() {
@@ -217,23 +274,40 @@ impl RenderSliverFixedExtentList {
                 .max_child_index_for_scroll_offset(cache_end)
                 .min(self.item_count - 1);
             (last, self.item_count)
-        } else if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
-            if self.warned_truncation_for != Some(self.item_count) {
-                self.warned_truncation_for = Some(self.item_count);
-                tracing::warn!(
-                    item_count = self.item_count,
-                    threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
-                    window = UNBOUNDED_SENTINEL_WINDOW,
-                    "fixed-extent list asked to fill an unbounded main axis declares \
-                     more children than any real data source has; reading the count \
-                     as an undefined-count stand-in and serving a small bounded window \
-                     instead, so the committed extent is far short of the declared \
-                     content"
-                );
+        } else if cache_end.is_infinite() && cache_end.is_sign_positive() {
+            // Intentional unbounded trailing edge (shrink-wrap / unknown extent).
+            if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
+                if self.warned_truncation_for != Some(self.item_count) {
+                    self.warned_truncation_for = Some(self.item_count);
+                    tracing::warn!(
+                        item_count = self.item_count,
+                        threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                        window = UNBOUNDED_SENTINEL_WINDOW,
+                        "fixed-extent list asked to fill an unbounded main axis declares \
+                         more children than any real data source has; reading the count \
+                         as an undefined-count stand-in and serving a small bounded window \
+                         instead, so the committed extent is far short of the declared \
+                         content"
+                    );
+                }
+                (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
+            } else {
+                (self.item_count - 1, self.item_count)
             }
-            (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
         } else {
-            (self.item_count - 1, self.item_count)
+            // NaN or −∞ trailing edge: not a meaningful unbounded window.
+            tracing::error!(
+                scroll_offset = constraints.scroll_offset,
+                cache_origin = constraints.cache_origin,
+                remaining_cache_extent = constraints.remaining_cache_extent,
+                cache_end,
+                item_extent = self.item_extent,
+                item_count = self.item_count,
+                render_object = "RenderSliverFixedExtentList",
+                "fixed-extent list received a non-finite trailing cache edge that is not \
+                 +∞; treating the window as empty so index math cannot saturate to usize::MAX"
+            );
+            return None;
         };
         (first <= last).then_some((first, last, effective_count))
     }
@@ -241,8 +315,41 @@ impl RenderSliverFixedExtentList {
 
 /// Clamp a rounded index to `usize`: negative offsets (a cache origin above
 /// the content) and any rounding below zero mean "the first child".
+///
+/// Non-finite values are a defensive second line: the public helpers and
+/// [`RenderSliverFixedExtentList::window`] reject `NaN`/`+∞` first, but
+/// `+∞ as usize` would otherwise silently become [`usize::MAX`].
 fn float_to_index(index: f32) -> usize {
-    if index <= 0.0 { 0 } else { index as usize }
+    if !index.is_finite() || index <= 0.0 {
+        0
+    } else {
+        index as usize
+    }
+}
+
+/// `NaN` or `+∞` — the values that must not reach float→index conversion.
+///
+/// `−∞` is intentionally excluded: like any negative offset it clamps to the
+/// origin via `.max(0.0)` / [`float_to_index`].
+#[inline]
+fn is_poison_scroll_offset(value: f32) -> bool {
+    value.is_nan() || (value.is_infinite() && value.is_sign_positive())
+}
+
+/// Leading edge of the cache-extended scroll window, or `None` when the sum
+/// is `NaN` or `+∞`.
+///
+/// `−∞` and negative finites clamp to `0.0` — the pre-guard `.max(0.0)`
+/// behaviour — so a pathological negative-infinite leading edge still lays
+/// out from the origin instead of evicting the window. `NaN` is rejected
+/// before `.max(0.0)` because Rust's `f32::max` would otherwise return `0.0`
+/// and hide the contract violation.
+fn finite_leading_cache_edge(constraints: &SliverConstraints) -> Option<f32> {
+    let leading = constraints.scroll_offset + constraints.cache_origin;
+    if is_poison_scroll_offset(leading) {
+        return None;
+    }
+    Some(leading.max(0.0))
 }
 
 impl Diagnosticable for RenderSliverFixedExtentList {
@@ -275,18 +382,19 @@ impl RenderSliver for RenderSliverFixedExtentList {
 
         let Some((first, mut last, effective_count)) = self.window(&constraints) else {
             // The window starts past the last item (scrolled beyond the end,
-            // or the source shrank under the viewport): report the extent
-            // the count implies and let the viewport clamp. Flutter's
-            // `addInitialChild` failing for `firstIndex > 0` reports the
-            // same `scrollExtent` / `maxPaintExtent` pair.
+            // or the source shrank under the viewport), or the leading /
+            // trailing cache edge was non-finite: report the extent the count
+            // implies and let the viewport clamp. Flutter's `addInitialChild`
+            // failing for `firstIndex > 0` reports the same `scrollExtent` /
+            // `maxPaintExtent` pair. A non-finite leading edge must never be
+            // converted to an index — that path saturates at `usize::MAX`.
             let scroll_extent = self.compute_max_scroll_offset(effective_count_for_past_end(
                 self.item_count,
                 &constraints,
             ));
             self.attached_child_count = ctx.child_count();
-            let first = self.min_child_index_for_scroll_offset(
-                (constraints.scroll_offset + constraints.cache_origin).max(0.0),
-            );
+            let first = finite_leading_cache_edge(&constraints)
+                .map_or(0, |start| self.min_child_index_for_scroll_offset(start));
             ctx.emit_retain_band(first, first);
             return SliverGeometry {
                 scroll_extent,
@@ -413,9 +521,14 @@ impl RenderSliver for RenderSliverFixedExtentList {
 /// unless the window is unbounded and the count is the undefined-count
 /// sentinel, in which case the same truncated window the in-band arm serves.
 fn effective_count_for_past_end(item_count: usize, constraints: &SliverConstraints) -> usize {
-    let cache_end = (constraints.scroll_offset + constraints.cache_origin).max(0.0)
-        + constraints.remaining_cache_extent;
-    if !cache_end.is_finite() && item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
+    let Some(cache_start) = finite_leading_cache_edge(constraints) else {
+        return item_count;
+    };
+    let cache_end = cache_start + constraints.remaining_cache_extent;
+    if cache_end.is_infinite()
+        && cache_end.is_sign_positive()
+        && item_count > MAX_UNBOUNDED_WINDOW_CHILDREN
+    {
         UNBOUNDED_SENTINEL_WINDOW
     } else {
         item_count
@@ -571,5 +684,111 @@ mod tests {
     #[should_panic(expected = "item_extent must be finite")]
     fn new_rejects_a_zero_extent() {
         let _ = RenderSliverFixedExtentList::new(0.0, 1);
+    }
+
+    /// `NaN` / `+∞` offsets must never become `usize::MAX` via saturating
+    /// `f32 as usize`. `−∞` is treated like a negative offset → index `0`.
+    #[test]
+    fn index_helpers_reject_poison_offsets() {
+        let list = list(GENERIC_ITEM_EXTENT);
+        for offset in [f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                list.min_child_index_for_scroll_offset(offset),
+                0,
+                "min helper for {offset}"
+            );
+            assert_eq!(
+                list.max_child_index_for_scroll_offset(offset),
+                0,
+                "max helper for {offset}"
+            );
+        }
+        assert_eq!(list.min_child_index_for_scroll_offset(f32::NEG_INFINITY), 0);
+        assert_eq!(list.max_child_index_for_scroll_offset(f32::NEG_INFINITY), 0);
+    }
+
+    fn vertical_window_constraints(
+        scroll_offset: f32,
+        cache_origin: f32,
+        remaining_cache_extent: f32,
+    ) -> SliverConstraints {
+        SliverConstraints {
+            scroll_offset,
+            cache_origin,
+            remaining_cache_extent,
+            remaining_paint_extent: 100.0,
+            cross_axis_extent: 300.0,
+            viewport_main_axis_extent: 100.0,
+            ..SliverConstraints::default()
+        }
+    }
+
+    /// `NaN` / `+∞` leading edges yield no window: layout takes the empty-band
+    /// path instead of converting `+∞` into `usize::MAX`.
+    #[test]
+    fn window_rejects_poison_leading_edge() {
+        let mut list = RenderSliverFixedExtentList::new(25.0, 1000);
+        for (scroll_offset, cache_origin) in [
+            (f32::INFINITY, 0.0),
+            (f32::NAN, 0.0),
+            (0.0, f32::NAN),
+            (f32::NEG_INFINITY, f32::INFINITY), // sum is NaN
+        ] {
+            let constraints = vertical_window_constraints(scroll_offset, cache_origin, 250.0);
+            assert!(
+                list.window(&constraints).is_none(),
+                "leading edge scroll_offset={scroll_offset} cache_origin={cache_origin}"
+            );
+            assert_eq!(
+                finite_leading_cache_edge(&constraints)
+                    .map_or(0, |start| list.min_child_index_for_scroll_offset(start)),
+                0,
+                "empty-band index must stay 0, never usize::MAX"
+            );
+        }
+    }
+
+    /// `−∞` on the leading edge clamps to the origin — same as a negative
+    /// finite offset — and keeps a normal window instead of evicting.
+    #[test]
+    fn window_clamps_negative_infinite_leading_edge_to_origin() {
+        let mut list = RenderSliverFixedExtentList::new(25.0, 10);
+        let constraints = vertical_window_constraints(f32::NEG_INFINITY, 0.0, 250.0);
+        assert_eq!(finite_leading_cache_edge(&constraints), Some(0.0));
+        assert_eq!(list.window(&constraints), Some((0, 9, 10)));
+    }
+
+    /// `NaN` / `−∞` trailing edges are not the shrink-wrap unbounded contract;
+    /// only `+∞` keeps that meaning.
+    #[test]
+    fn window_rejects_nan_or_negative_infinite_trailing_edge() {
+        let mut list = RenderSliverFixedExtentList::new(25.0, 10);
+        for remaining_cache_extent in [f32::NAN, f32::NEG_INFINITY] {
+            let constraints = vertical_window_constraints(0.0, 0.0, remaining_cache_extent);
+            assert!(
+                list.window(&constraints).is_none(),
+                "trailing extent {remaining_cache_extent}"
+            );
+        }
+    }
+
+    /// Positive-infinite trailing cache extent still means "unbounded window"
+    /// and materialises the full finite source (below the sentinel threshold).
+    #[test]
+    fn window_keeps_positive_infinite_trailing_edge_as_unbounded() {
+        let mut list = RenderSliverFixedExtentList::new(25.0, 10);
+        let constraints = vertical_window_constraints(0.0, 0.0, f32::INFINITY);
+        assert_eq!(list.window(&constraints), Some((0, 9, 10)));
+    }
+
+    /// Defense in depth: even a rounded non-finite index clamps to 0 instead
+    /// of saturating at `usize::MAX`.
+    #[test]
+    fn float_to_index_never_saturates_non_finite_to_usize_max() {
+        assert_eq!(float_to_index(f32::INFINITY), 0);
+        assert_eq!(float_to_index(f32::NEG_INFINITY), 0);
+        assert_eq!(float_to_index(f32::NAN), 0);
+        assert_eq!(float_to_index(-1.0), 0);
+        assert_eq!(float_to_index(42.7), 42);
     }
 }

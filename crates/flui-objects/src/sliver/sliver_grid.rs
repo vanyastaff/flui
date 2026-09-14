@@ -40,6 +40,13 @@
 //! out in full, matching the oracle, and it is set above every count that can
 //! render at all.
 //!
+//! ## Documented divergence — non-finite scroll-window edges
+//!
+//! `NaN` / `+∞` leading edges and `NaN` / `−∞` trailing edges are rejected
+//! before float→index conversion can saturate to `usize::MAX`. Shared
+//! policy with `RenderSliverFixedExtentList`; ledger entry in
+//! [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §Mapping decisions.
+//!
 //! # Lifecycle
 //!
 //! Inert until a `ChildManager` is wired (via the `SliverGrid` view in
@@ -56,9 +63,9 @@ use flui_tree::Variable;
 use flui_types::geometry::px;
 
 use flui_rendering::{
-    constraints::{SliverGeometry, grid_child_paint_offset},
+    constraints::{SliverConstraints, SliverGeometry, grid_child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
-    delegates::SliverGridDelegate,
+    delegates::{SliverGridDelegate, SliverGridLayout},
     parent_data::SliverMultiBoxAdaptorParentData,
     traits::RenderSliver,
 };
@@ -102,6 +109,52 @@ pub(super) const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
 /// fill. A thousand tiles clears the last by a wide margin, and it converges:
 /// the requests are serviced once and every later frame finds them resident.
 pub(super) const UNBOUNDED_SENTINEL_WINDOW: usize = 1_000;
+
+/// Classification of the cache-extended scroll window before any float→index
+/// conversion. Shared policy with `RenderSliverFixedExtentList` — see
+/// [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §Mapping decisions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CacheWindow {
+    /// `NaN` or `+∞` leading edge — empty retain band.
+    PoisonLeading,
+    /// Finite leading and trailing edges.
+    Bounded { cache_start: f32, cache_end: f32 },
+    /// Finite leading, intentional `+∞` trailing (shrink-wrap / unbounded).
+    UnboundedTrailing { cache_start: f32 },
+    /// Finite leading, but `NaN` / `−∞` trailing — not an unbounded window.
+    PoisonTrailing { cache_start: f32 },
+}
+
+/// Classify the cache-extended window without converting floats to indices.
+fn classify_cache_window(constraints: &SliverConstraints) -> CacheWindow {
+    let leading = constraints.scroll_offset + constraints.cache_origin;
+    if leading.is_nan() || (leading.is_infinite() && leading.is_sign_positive()) {
+        return CacheWindow::PoisonLeading;
+    }
+    let cache_start = leading.max(0.0);
+    let cache_end = cache_start + constraints.remaining_cache_extent;
+    if cache_end.is_finite() {
+        CacheWindow::Bounded {
+            cache_start,
+            cache_end,
+        }
+    } else if cache_end.is_infinite() && cache_end.is_sign_positive() {
+        CacheWindow::UnboundedTrailing { cache_start }
+    } else {
+        CacheWindow::PoisonTrailing { cache_start }
+    }
+}
+
+/// Geometry returned on a poisonous window: extent from the declared count,
+/// matching `max_paint_extent`, zero paint otherwise.
+fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> SliverGeometry {
+    let scroll_extent = tile_layout.compute_max_scroll_offset(item_count);
+    SliverGeometry {
+        scroll_extent,
+        max_paint_extent: scroll_extent,
+        ..SliverGeometry::ZERO
+    }
+}
 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
@@ -263,71 +316,109 @@ impl RenderSliver for RenderSliverGrid {
         // ── 2. Grid layout from delegate ──────────────────────────────────────
         let tile_layout = self.grid_delegate.get_layout(constraints);
 
-        // ── 3. Cache-extended viewport window ────────────────────────────────
-        // Mirror of Flutter's performLayout lines 599-603:
-        //   effectiveScrollOffset = scrollOffset + cacheOrigin
-        //   targetEndScrollOffset = effectiveScrollOffset + remainingCacheExtent
-        // Negative effective offsets saturate to 0 in the delegate's usize math.
-        let cache_start_offset = constraints.scroll_offset + constraints.cache_origin;
-        let cache_end_offset = cache_start_offset + constraints.remaining_cache_extent;
+        // Cache-extended viewport window — classify before any float→index
+        // conversion so NaN/+∞ cannot saturate at usize::MAX. Policy ledger:
+        // `ARCHITECTURE.md` §Mapping decisions.
+        let cache_window = classify_cache_window(&constraints);
+        let (cache_start_offset, last_in_window, effective_item_count) = match cache_window {
+            CacheWindow::PoisonLeading => {
+                tracing::error!(
+                    scroll_offset = constraints.scroll_offset,
+                    cache_origin = constraints.cache_origin,
+                    item_count = self.item_count,
+                    render_object = "RenderSliverGrid",
+                    "lazy grid received a NaN or +∞ leading cache/scroll edge; \
+                     emitting an empty retain band so index math cannot saturate to usize::MAX"
+                );
+                self.attached_child_count = ctx.child_count();
+                ctx.emit_retain_band(0, 0);
+                return poison_window_geometry(&tile_layout, self.item_count);
+            }
+            CacheWindow::PoisonTrailing { .. } => {
+                tracing::error!(
+                    scroll_offset = constraints.scroll_offset,
+                    cache_origin = constraints.cache_origin,
+                    remaining_cache_extent = constraints.remaining_cache_extent,
+                    item_count = self.item_count,
+                    render_object = "RenderSliverGrid",
+                    "lazy grid received a non-finite trailing cache edge that is not \
+                     +∞; emitting an empty retain band so index math cannot saturate to usize::MAX"
+                );
+                self.attached_child_count = ctx.child_count();
+                ctx.emit_retain_band(0, 0);
+                return poison_window_geometry(&tile_layout, self.item_count);
+            }
+            CacheWindow::Bounded {
+                cache_start,
+                cache_end,
+            } => {
+                let last = tile_layout
+                    .get_max_child_index_for_scroll_offset(cache_end)
+                    .min(self.item_count - 1);
+                (cache_start, last, self.item_count)
+            }
+            CacheWindow::UnboundedTrailing { cache_start } => {
+                // An infinite window end means "no upper bound" and must not
+                // reach the delegate: it divides infinity by the stride,
+                // saturates the `f32 as usize` cast at `usize::MAX`, and
+                // overflows the index product. The oracle expresses the same
+                // thing by not asking at all —
+                // `sliver_grid.dart:608-610` passes a null `targetLastIndex` —
+                // and a shrink-wrapped `GridView::builder` under an unbounded
+                // parent hands down exactly that window.
+                //
+                // Falling back to every child needs an extra bound here,
+                // because `item_count` is whatever the caller declared rather
+                // than a count of mounted children, and `usize::MAX` is the
+                // conventional stand-in for the oracle's undefined
+                // `itemCount`. The request loop below is synchronous, so an
+                // unbounded count would ask for ~2^64 build requests in a
+                // single frame.
+                //
+                // [`MAX_UNBOUNDED_WINDOW_CHILDREN`] bounds that, and it draws
+                // its line between a declared length and a sentinel rather
+                // than between a large grid and a small one: a finite count
+                // at or below it is laid out in full, and the constant is set
+                // above every count that can render at all. Past it the tree
+                // is asking for infinite content in an infinitely tall box,
+                // which the oracle answers by looping until the builder
+                // returns null — and would never terminate for a builder that
+                // never does.
+                //
+                // Truncating also has to move the reported scroll extent with
+                // it. `item_count` normally drives that extent so a bounded
+                // viewport can scroll through content it has not built yet —
+                // correct there, and left alone. But under an unbounded main
+                // axis the shrink-wrapping viewport *sizes itself* to that
+                // extent, and declaring content this frame never laid out
+                // would commit a box no child of it fills. So a truncated
+                // window reports the extent it actually covers.
+                if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
+                    if self.warned_truncation_for != Some(self.item_count) {
+                        self.warned_truncation_for = Some(self.item_count);
+                        tracing::warn!(
+                            item_count = self.item_count,
+                            threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                            window = UNBOUNDED_SENTINEL_WINDOW,
+                            "lazy grid asked to fill an unbounded main axis declares \
+                             more children than any real data source has; reading the \
+                             count as an undefined-count stand-in and serving a small \
+                             bounded window instead, so the committed extent is far \
+                             short of the declared content"
+                        );
+                    }
+                    (
+                        cache_start,
+                        UNBOUNDED_SENTINEL_WINDOW - 1,
+                        UNBOUNDED_SENTINEL_WINDOW,
+                    )
+                } else {
+                    (cache_start, self.item_count - 1, self.item_count)
+                }
+            }
+        };
 
         let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
-        // Clamp to item_count−1; no underflow risk since item_count > 0 above.
-        //
-        // An infinite window end means "no upper bound" and must not reach the
-        // delegate: it divides infinity by the stride, saturates the
-        // `f32 as usize` cast at `usize::MAX`, and overflows the index product.
-        // The oracle expresses the same thing by not asking at all —
-        // `sliver_grid.dart:608-610` passes a null `targetLastIndex` — and a
-        // shrink-wrapped `GridView::builder` under an unbounded parent hands
-        // down exactly that window.
-        //
-        // Falling back to every child needs an extra bound here, because
-        // `item_count` is whatever the caller declared rather than a count of
-        // mounted children, and `usize::MAX` is the conventional stand-in for
-        // the oracle's undefined `itemCount`. The request loop below is
-        // synchronous, so an unbounded count would ask for ~2^64 build
-        // requests in a single frame.
-        //
-        // [`MAX_UNBOUNDED_WINDOW_CHILDREN`] bounds that, and it draws its line
-        // between a declared length and a sentinel rather than between a large
-        // grid and a small one: a finite count at or below it is laid out in
-        // full, and the constant is set above every count that can render at
-        // all. Past it the tree is asking for infinite content in an infinitely
-        // tall box, which the oracle answers by looping until the builder
-        // returns null — and would never terminate for a builder that never
-        // does.
-        //
-        // Truncating also has to move the reported scroll extent with it.
-        // `item_count` normally drives that extent so a bounded viewport can
-        // scroll through content it has not built yet — correct there, and
-        // left alone. But under an unbounded main axis the shrink-wrapping
-        // viewport *sizes itself* to that extent, and declaring content this
-        // frame never laid out would commit a box no child of it fills. So a
-        // truncated window reports the extent it actually covers.
-        let (last_in_window, effective_item_count) = if cache_end_offset.is_finite() {
-            let last = tile_layout
-                .get_max_child_index_for_scroll_offset(cache_end_offset)
-                .min(self.item_count - 1);
-            (last, self.item_count)
-        } else if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
-            if self.warned_truncation_for != Some(self.item_count) {
-                self.warned_truncation_for = Some(self.item_count);
-                tracing::warn!(
-                    item_count = self.item_count,
-                    threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
-                    window = UNBOUNDED_SENTINEL_WINDOW,
-                    "lazy grid asked to fill an unbounded main axis declares \
-                     more children than any real data source has; reading the \
-                     count as an undefined-count stand-in and serving a small \
-                     bounded window instead, so the committed extent is far \
-                     short of the declared content"
-                );
-            }
-            (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
-        } else {
-            (self.item_count - 1, self.item_count)
-        };
 
         // Guard: window is entirely past the last item (e.g. scrolled to end).
         if first_in_window > last_in_window {
@@ -337,6 +428,7 @@ impl RenderSliver for RenderSliverGrid {
             ctx.emit_retain_band(first_in_window, first_in_window);
             return SliverGeometry {
                 scroll_extent,
+                max_paint_extent: scroll_extent,
                 ..SliverGeometry::ZERO
             };
         }
@@ -728,5 +820,87 @@ mod tests {
             100.0,
             "tile 3 is in row 1 → y=100"
         );
+    }
+
+    // ── Non-finite scroll-window classification ───────────────────────────────
+
+    fn window_constraints(
+        scroll_offset: f32,
+        cache_origin: f32,
+        remaining_cache_extent: f32,
+    ) -> SliverConstraints {
+        SliverConstraints {
+            scroll_offset,
+            cache_origin,
+            remaining_cache_extent,
+            remaining_paint_extent: 200.0,
+            cross_axis_extent: 200.0,
+            viewport_main_axis_extent: 200.0,
+            ..vertical_constraints(0.0, 200.0, 200.0)
+        }
+    }
+
+    /// `NaN` / `+∞` leading edges must classify as poison — the path that
+    /// emits an empty retain band instead of saturating at `usize::MAX`.
+    #[test]
+    fn classify_rejects_poison_leading_edges() {
+        for (scroll_offset, cache_origin) in [
+            (f32::INFINITY, 0.0),
+            (f32::NAN, 0.0),
+            (0.0, f32::NAN),
+            (f32::NEG_INFINITY, f32::INFINITY), // sum is NaN
+        ] {
+            assert_eq!(
+                classify_cache_window(&window_constraints(scroll_offset, cache_origin, 250.0)),
+                CacheWindow::PoisonLeading,
+                "scroll_offset={scroll_offset} cache_origin={cache_origin}"
+            );
+        }
+    }
+
+    /// `−∞` leading clamps to the origin and keeps a normal bounded window.
+    #[test]
+    fn classify_clamps_negative_infinite_leading_edge_to_origin() {
+        assert_eq!(
+            classify_cache_window(&window_constraints(f32::NEG_INFINITY, 0.0, 250.0)),
+            CacheWindow::Bounded {
+                cache_start: 0.0,
+                cache_end: 250.0,
+            }
+        );
+    }
+
+    /// `NaN` / `−∞` trailing edges are not the shrink-wrap unbounded contract.
+    #[test]
+    fn classify_rejects_poison_trailing_edges() {
+        for remaining_cache_extent in [f32::NAN, f32::NEG_INFINITY] {
+            assert_eq!(
+                classify_cache_window(&window_constraints(0.0, 0.0, remaining_cache_extent)),
+                CacheWindow::PoisonTrailing { cache_start: 0.0 },
+                "trailing extent {remaining_cache_extent}"
+            );
+        }
+    }
+
+    /// `+∞` trailing keeps the intentional unbounded-window meaning.
+    #[test]
+    fn classify_keeps_positive_infinite_trailing_as_unbounded() {
+        assert_eq!(
+            classify_cache_window(&window_constraints(0.0, 0.0, f32::INFINITY)),
+            CacheWindow::UnboundedTrailing { cache_start: 0.0 }
+        );
+    }
+
+    /// Poison fallback geometry must set `max_paint_extent` to the same
+    /// scroll extent the declared count implies — matching the fixed-extent
+    /// empty-window path (and failing if only `scroll_extent` is filled).
+    #[test]
+    fn poison_window_geometry_sets_matching_max_paint_extent() {
+        let layout = SliverGridDelegateWithFixedCrossAxisCount::new(2)
+            .get_layout(vertical_constraints(0.0, 200.0, 200.0));
+        let geometry = poison_window_geometry(&layout, 50);
+        assert_eq!(geometry.scroll_extent, 2500.0);
+        assert_eq!(geometry.max_paint_extent, geometry.scroll_extent);
+        assert_eq!(geometry.paint_extent, 0.0);
     }
 }
