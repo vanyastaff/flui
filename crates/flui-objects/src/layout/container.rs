@@ -16,10 +16,21 @@
 //!   below it — including an unkeyed stateful child — is rebuilt from scratch
 //!   (flutter/flutter#161698). Here the options are *fields*, so no element
 //!   moves and no state is lost.
-//! * **A `Container` costs one node, not up to seven**, whenever any option
-//!   is set. Flutter's unused-layer-is-absent stack is cheaper only in the
-//!   identity case (no options → the child itself). The reason for the
-//!   collapse is the stable child slot, not a cheaper identity `Container`.
+//! * **Node count only favors the collapse from two options up.** Flutter's
+//!   stack costs zero extra nodes at identity (no options set — the widget
+//!   *is* the child) and exactly one extra node per option set below that:
+//!   a single option (say, just `padding`) built exactly one `RenderPadding`
+//!   there too, so folding into `RenderContainer` is a wash on count at one
+//!   option and only wins from two up.
+//! * **The collapsed node is heavier in every configuration**, identity
+//!   included: `RenderContainer` carries every field — alignment, padding,
+//!   margin, color, decoration, additional constraints, transform, plus the
+//!   committed child offset/size/baselines — whether or not that option is
+//!   set, against whichever single-purpose object (`RenderPadding`,
+//!   `RenderDecoratedBox`, …) the stack would have used instead. Node count
+//!   and node weight move in opposite directions here; the reason for the
+//!   collapse is the stable child slot above, not a lighter or fewer-node
+//!   tree.
 //!
 //! See `crates/flui-widgets/ARCHITECTURE.md` mapping decision 15.
 

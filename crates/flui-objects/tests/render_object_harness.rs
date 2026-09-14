@@ -3192,6 +3192,27 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         decoration: Some(BoxDecoration::with_color(Color::BLUE)),
         transform: Some(Matrix4::translation(10.0, 4.0, 0.0)),
     });
+
+    // Every case above hands the Align level a BOUNDED incoming axis —
+    // `extra`'s own unbounded maxes (where present) are clamped back to
+    // finite by `additional.enforce(&after_margin)` before they ever reach
+    // it. `positioned_box_size`'s shrink-wrap fork
+    // (`constraints.max_width.is_infinite()`, `align.rs`) only fires on a
+    // genuinely unbounded axis, which none of the above ever supplies — no
+    // `extra` here, so the incoming width's own infinity survives margin and
+    // padding deflation unclamped.
+    assert_container_matches_stack(ContainerStackCase {
+        case: "an unbounded incoming width shrink-wraps to the child under alignment",
+        margin: EdgeInsets::all(px(3.0)),
+        extra: None,
+        padding: EdgeInsets::all(px(4.0)),
+        alignment: Some(Alignment::CENTER),
+        child: Size::new(px(30.0), px(20.0)),
+        constraints: BoxConstraints::new(px(0.0), unbounded, px(0.0), px(200.0)),
+        color: None,
+        decoration: None,
+        transform: None,
+    });
 }
 
 /// A childless container stands in for Flutter's placeholder subtree,
@@ -3237,55 +3258,88 @@ fn harness_container_childless_fills_bounded_and_collapses_unbounded() {
 }
 
 /// Flutter's childless `Container` takes one of three shapes — the
-/// placeholder, an empty `Align`, or nothing — depending on whether the
-/// additional constraints are tight and whether an alignment is set. All
-/// three produce the same box, which is why `RenderContainer` needs no
-/// branch at all; this pins that claim rather than assuming it.
+/// placeholder `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty
+/// `Align`, or no inner widget at all — depending on whether the additional
+/// constraints are tight and whether an alignment is set. All three produce
+/// the same box, which is why `RenderContainer` needs no branch at all.
+///
+/// This mounts each REAL shape (not another `RenderContainer`) and diffs it
+/// against the equivalent childless `RenderContainer`, the way
+/// [`assert_container_matches_stack`] diffs the non-childless levels — three
+/// same-shaped `RenderContainer`s compared to each other, which the prior
+/// version of this test did, cannot fail when `childless_content_size` is
+/// simply wrong, only when its three call sites disagree with each other.
 #[test]
 fn harness_container_childless_branches_all_size_the_same() {
+    // Flutter's placeholder branch: no child, no additional constraints (so
+    // nothing is tight). Exercised at a bounded, a fully unbounded, and a
+    // half-unbounded incoming axis — the per-axis bounded/unbounded fork is
+    // the only branch `childless_content_size` has, and only this shape
+    // reaches it: the other two force tight (hence bounded) content
+    // constraints regardless of the incoming ones.
+    for incoming in [
+        loose(100.0),
+        BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(f32::INFINITY)),
+        BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(f32::INFINITY)),
+    ] {
+        let container = RenderTester::mount(box_node(RenderContainer::new()))
+            .with_constraints(incoming)
+            .run_layout();
+        let placeholder =
+            RenderTester::mount(box_node(RenderLimitedBox::both(px(0.0), px(0.0))).child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::expand())),
+            ))
+            .with_constraints(incoming)
+            .run_layout();
+        assert_eq!(
+            container.box_geometry(container.root()),
+            placeholder.box_geometry(placeholder.root()),
+            "under {incoming:?}, a childless container must size exactly like \
+             Flutter's LimitedBox(0, 0, child: ConstrainedBox(expand())) placeholder"
+        );
+    }
+
+    // Flutter's empty-`Align` branch: additional constraints tight, an
+    // alignment set — `ConstrainedBox(tight)` still wraps the childless
+    // `Align` in the real stack (margin/padding are zero on both sides here,
+    // so they contribute nothing to compare).
     let incoming = loose(100.0);
-
-    // Flutter's placeholder branch: no child, non-tight constraints. The
-    // alignment is set but discarded upstream, so it must not change the box.
-    let placeholder = RenderTester::mount(box_node(
+    let tight = BoxConstraints::tight(Size::new(px(40.0), px(30.0)));
+    let container = RenderTester::mount(box_node(
         RenderContainer::new()
-            .with_additional_constraints(BoxConstraints::loose(Size::new(px(40.0), px(30.0))))
+            .with_additional_constraints(tight)
             .with_alignment(Alignment::CENTER_LEFT),
     ))
     .with_constraints(incoming)
     .run_layout();
-
-    // Flutter's empty-`Align` branch: tight constraints suppress the
-    // placeholder, and the alignment survives.
-    let empty_align = RenderTester::mount(box_node(
-        RenderContainer::new()
-            .with_additional_constraints(BoxConstraints::tight(Size::new(px(40.0), px(30.0))))
-            .with_alignment(Alignment::CENTER_LEFT),
-    ))
+    let empty_align = RenderTester::mount(
+        box_node(RenderConstrainedBox::new(tight))
+            .child(box_node(RenderAlign::new(Alignment::CENTER_LEFT))),
+    )
     .with_constraints(incoming)
     .run_layout();
+    assert_eq!(
+        container.box_geometry(container.root()),
+        empty_align.box_geometry(empty_align.root()),
+        "a childless, aligned container under tight additional constraints must \
+         size like ConstrainedBox(tight, child: Align(..))"
+    );
 
     // Flutter's third branch: tight constraints, no alignment, no inner
-    // widget at all.
-    let bare = RenderTester::mount(box_node(
-        RenderContainer::new()
-            .with_additional_constraints(BoxConstraints::tight(Size::new(px(40.0), px(30.0)))),
+    // widget at all — a bare, childless `ConstrainedBox(tight)`.
+    let bare_container = RenderTester::mount(box_node(
+        RenderContainer::new().with_additional_constraints(tight),
     ))
     .with_constraints(incoming)
     .run_layout();
-
+    let bare = RenderTester::mount(box_node(RenderConstrainedBox::new(tight)))
+        .with_constraints(incoming)
+        .run_layout();
     assert_eq!(
-        placeholder.box_geometry(placeholder.root()),
-        Size::new(px(40.0), px(30.0)),
-        "the placeholder fills the loose additional constraints"
-    );
-    assert_eq!(
-        empty_align.box_geometry(empty_align.root()),
-        placeholder.box_geometry(placeholder.root()),
-    );
-    assert_eq!(
+        bare_container.box_geometry(bare_container.root()),
         bare.box_geometry(bare.root()),
-        placeholder.box_geometry(placeholder.root()),
+        "a childless, unaligned container under tight additional constraints \
+         must size like a bare, childless ConstrainedBox(tight)"
     );
 }
 
@@ -3333,6 +3387,38 @@ fn harness_container_paints_its_chrome_inside_the_margin() {
         run.offset(run.id("child")),
         Offset::new(px(26.0), px(43.0)),
         "padding(7) + BOTTOM_RIGHT inside the 53x78 chrome box, shifted by the margin"
+    );
+}
+
+/// `paint` records the decoration, then the color, then the child —
+/// Flutter's order for the stack this collapses (`DecoratedBox` encloses
+/// `ColoredBox`, which encloses the content), so the color must paint OVER
+/// the decoration. Both fills draw the same rect as a plain `DrawRect`, so
+/// this discriminates them by color rather than by [`DrawKind`] alone.
+#[test]
+fn harness_container_color_paints_over_decoration() {
+    let run = RenderTester::mount(box_node(
+        RenderContainer::new()
+            .with_decoration(BoxDecoration::with_color(Color::BLUE))
+            .with_color(Color::RED),
+    ))
+    .with_size(Size::new(px(50.0), px(50.0)))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let decoration_idx = commands
+        .iter()
+        .position(|c| c.kind == DrawKind::Rect && c.line.contains("#0000FFFF"))
+        .unwrap_or_else(|| {
+            panic!("decoration fill (blue) must be painted; commands:\n{commands:#?}")
+        });
+    let color_idx = commands
+        .iter()
+        .position(|c| c.kind == DrawKind::Rect && c.line.contains("#FF0000FF"))
+        .unwrap_or_else(|| panic!("color fill (red) must be painted; commands:\n{commands:#?}"));
+    assert!(
+        decoration_idx < color_idx,
+        "the color must paint after (over) the decoration; commands:\n{commands:#?}"
     );
 }
 
@@ -3491,6 +3577,12 @@ fn harness_container_singular_transform_paints_and_hits_nothing() {
     .run_frame();
 
     assert_eq!(run.hit_first(5.0, 5.0), None);
+    assert!(
+        run.display_commands().is_empty(),
+        "a singular transform must skip paint entirely, child included; \
+         commands: {:#?}",
+        run.display_commands()
+    );
 }
 
 /// A non-translation matrix must come from `paint_effects` (not a paint
@@ -3626,6 +3718,109 @@ fn harness_container_intrinsics_add_insets_and_honour_constraints() {
     );
 }
 
+/// Two branches the `f32::INFINITY` cross-axis argument above never reaches:
+/// the `(cross − margin − padding).max(0.0)` deflation (an infinite cross
+/// axis stays infinite whether it is deflated correctly, deflated with the
+/// wrong sign, or not deflated at all — only a FINITE cross axis can tell
+/// those apart) and `intrinsic_width`/`intrinsic_height`'s middle match arm,
+/// which only fires for a bounded-but-not-tight `additional_constraints`
+/// (`BoxConstraints::loose`, as opposed to `None` or a tight one).
+#[test]
+fn harness_container_intrinsics_deflate_the_finite_cross_axis_and_clamp_loose_constraints() {
+    // A finite cross axis, with a child whose own intrinsic genuinely
+    // depends on it (`RenderAspectRatio`) so a deflation bug changes the
+    // number rather than vanishing into infinity.
+    let margin = EdgeInsets::all(px(5.0));
+    let padding = EdgeInsets::all(px(8.0));
+    let mut cross = RenderTester::mount(
+        box_node(
+            RenderContainer::new()
+                .with_margin(margin)
+                .with_padding(padding),
+        )
+        .child(box_node(RenderAspectRatio::new(
+            AspectRatioFactor::new(2.0).expect("2.0 is a valid ratio"),
+        ))),
+    )
+    .with_constraints(loose(500.0))
+    .run_layout();
+    let cross_root = cross.root();
+
+    // content_height = 100 − margin.vertical(10) − padding.vertical(16) = 74;
+    // the child reports 74 × 2 = 148; + padding.horizontal(16) + margin.horizontal(10) = 174.
+    assert_eq!(
+        cross.min_intrinsic_width(cross_root, 100.0),
+        174.0,
+        "min intrinsic width must deflate the finite height by margin + padding \
+         before asking the child"
+    );
+    assert_eq!(
+        cross.max_intrinsic_width(cross_root, 100.0),
+        174.0,
+        "max intrinsic width must deflate the same way"
+    );
+    // content_width = 100 − margin.horizontal(10) − padding.horizontal(16) = 74;
+    // the child reports 74 / 2 = 37; + padding.vertical(16) + margin.vertical(10) = 63.
+    assert_eq!(
+        cross.min_intrinsic_height(cross_root, 100.0),
+        63.0,
+        "min intrinsic height must deflate the finite width by margin + padding \
+         before asking the child"
+    );
+    assert_eq!(
+        cross.max_intrinsic_height(cross_root, 100.0),
+        63.0,
+        "max intrinsic height must deflate the same way"
+    );
+
+    // A bounded-but-not-tight (loose) additional_constraints: neither the
+    // top `additional_width_is_tight()` short-circuit (which only fires for
+    // a TIGHT additional constraint) nor the `_ => padded` fallback (which
+    // only fires with no additional constraint at all) applies — this is
+    // `intrinsic_width`/`intrinsic_height`'s middle arm, `constrain_width`/
+    // `constrain_height` clamping the padded content down to the loose cap.
+    let mut loose_extra = RenderTester::mount(
+        box_node(
+            RenderContainer::new()
+                .with_margin(margin)
+                .with_padding(padding)
+                .with_additional_constraints(BoxConstraints::loose(Size::new(px(60.0), px(40.0)))),
+        )
+        .child(box_node(RenderColoredBox::blue(100.0, 100.0))),
+    )
+    .with_constraints(loose(500.0))
+    .run_layout();
+    let loose_root = loose_extra.root();
+
+    // padded = 100 (child) + padding.horizontal(16) = 116, clamped to the
+    // loose cap of 60, then + margin.horizontal(10) = 70 — not the
+    // unclamped 126 the `_ => padded` fallback would give.
+    assert_eq!(
+        loose_extra.min_intrinsic_width(loose_root, f32::INFINITY),
+        70.0,
+        "a loose (bounded, non-tight) additional width must clamp the padded \
+         content, not pass it through unclamped"
+    );
+    assert_eq!(
+        loose_extra.max_intrinsic_width(loose_root, f32::INFINITY),
+        70.0,
+        "max intrinsic width must clamp the same way"
+    );
+    // Same shape on the height axis: 100 + padding.vertical(16) = 116,
+    // clamped to 40, + margin.vertical(10) = 50.
+    assert_eq!(
+        loose_extra.min_intrinsic_height(loose_root, f32::INFINITY),
+        50.0,
+        "a loose (bounded, non-tight) additional height must clamp the padded \
+         content, not pass it through unclamped"
+    );
+    assert_eq!(
+        loose_extra.max_intrinsic_height(loose_root, f32::INFINITY),
+        50.0,
+        "max intrinsic height must clamp the same way"
+    );
+}
+
 /// Dry layout must agree with the wet pass it predicts, across every level.
 #[test]
 fn harness_container_dry_layout_matches_layout() {
@@ -3710,6 +3905,79 @@ fn harness_container_baseline_adds_child_offset() {
         live.offset(live.id("container")).dy,
         px(77.0),
         "live baseline must include margin + padding; dropping child_offset.dy would place the container at 90"
+    );
+}
+
+/// Diagnostics is the only oracle two downstream crates rely on:
+/// `flui-material`'s `divider.rs`/`tabs.rs` tests assert `decoration`/`color`
+/// through `debug_fill_properties` with no other way to observe them from a
+/// widget-level harness. Pins both states this node can be in: every option
+/// unset (the conditional properties absent, the unconditional ones still
+/// present) and every option set (every property present).
+#[test]
+fn harness_container_self_describes() {
+    let unset = RenderTester::mount(box_node(RenderContainer::new()))
+        .with_size(Size::new(px(50.0), px(50.0)))
+        .run_frame();
+    assert_descendant_properties(
+        &unset.diagnostics(),
+        "RenderContainer",
+        &["padding", "margin", "hasConstraints", "hasTransform"],
+    );
+    for absent in ["alignment", "color", "decoration"] {
+        assert_eq!(
+            unset.descendant_property("RenderContainer", absent),
+            None,
+            "{absent:?} must be absent from diagnostics when unset"
+        );
+    }
+    assert_eq!(
+        unset
+            .descendant_property("RenderContainer", "hasConstraints")
+            .as_deref(),
+        Some("false"),
+    );
+    assert_eq!(
+        unset
+            .descendant_property("RenderContainer", "hasTransform")
+            .as_deref(),
+        Some("false"),
+    );
+
+    let set = RenderTester::mount(box_node(
+        RenderContainer::new()
+            .with_alignment(Alignment::CENTER)
+            .with_padding(EdgeInsets::all(px(4.0)))
+            .with_margin(EdgeInsets::all(px(2.0)))
+            .with_color(Color::RED)
+            .with_decoration(BoxDecoration::with_color(Color::BLUE))
+            .with_additional_constraints(BoxConstraints::tight(Size::new(px(40.0), px(40.0))))
+            .with_transform(Matrix4::translation(1.0, 1.0, 0.0)),
+    ))
+    .with_size(Size::new(px(50.0), px(50.0)))
+    .run_frame();
+    assert_descendant_properties(
+        &set.diagnostics(),
+        "RenderContainer",
+        &[
+            "alignment",
+            "padding",
+            "margin",
+            "color",
+            "decoration",
+            "hasConstraints",
+            "hasTransform",
+        ],
+    );
+    assert_eq!(
+        set.descendant_property("RenderContainer", "hasConstraints")
+            .as_deref(),
+        Some("true"),
+    );
+    assert_eq!(
+        set.descendant_property("RenderContainer", "hasTransform")
+            .as_deref(),
+        Some("true"),
     );
 }
 
