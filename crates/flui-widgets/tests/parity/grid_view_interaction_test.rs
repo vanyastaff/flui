@@ -970,7 +970,7 @@ fn grid_view_change_max_cross_axis_extent_relayouts_onstage_band() {
 
 /// Flutter parity: `grid_view_test.dart` `'One-line GridView paints'` (tag
 /// `3.44.0`). No `paints`/paint-command recorder exists in this harness
-/// (Finding 4); the onstage-band-check on the 4 `RenderDecoratedBox` nodes
+/// (Finding 4); the onstage-band-check on the 4 `RenderContainer` nodes
 /// answers the same question ("exactly 2 of 4 tiles are painted, not 3")
 /// via geometry. `Center(child: SizedBox(height: 200, child:
 /// GridView.count(crossAxisCount: 2, ...)))`: 2 columns on an (unconstrained

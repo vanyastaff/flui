@@ -973,9 +973,11 @@ Two properties follow, and both are the reason for the divergence:
 * **State survives every toggle** with no `GlobalKey`, no retake, and no
   lifecycle churn — nothing for the caller to opt into, and no reparenting
   semantics leaking into an unmoved subtree.
-* **A `Container` costs one node instead of up to seven.** Flutter's own
-  justification for the conditional stack is that an unused layer is absent;
-  one node beats the cheapest stack in every configuration.
+* **A `Container` costs one node instead of up to seven** whenever any
+  option is set. Flutter's unused-layer-is-absent stack is cheaper only in
+  the identity case: no options at all, and the widget *is* the child, zero
+  extra nodes. The reason for the divergence is the stable slot, not a
+  cheaper identity `Container`.
 
 **Collapsed branch:** Flutter's three childless shapes — the placeholder
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
@@ -987,7 +989,10 @@ childless branch. The equality is proven, not assumed, by
 `transformAlignment` have no FLUI `Container` setter, and a `BoxDecoration`
 border's thickness is still not folded into the effective padding
 (`_paddingIncludingDecoration`) because `flui-types`' `BoxDecoration` exposes no
-border insets.
+border insets. Flutter also `assert`s that `color` and `decoration` are
+mutually exclusive; FLUI accepts both and paints color over the decoration —
+the order the widget stack would have produced (`DecoratedBox` enclosing
+`ColoredBox`) — rather than panicking.
 
 **Replacement tests:** the geometry the collapsed stack owes is pinned against
 the stack itself by `harness_container_matches_the_widget_stack_it_collapses`

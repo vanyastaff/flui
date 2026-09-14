@@ -10,9 +10,9 @@ is a **small immutable configuration object** in one of these shapes:
 
 | Shape | Trait | When | Example |
 |---|---|---|---|
-| Render-object widget | `RenderView` + `impl_render_view!` | wraps one `flui-objects` render box | `Padding`, `ColoredBox`, `Text` |
+| Render-object widget | `RenderView` + `impl_render_view!` | wraps one `flui-objects` render box | `Padding`, `ColoredBox`, `Container`, `Text` |
 | Multi-child render widget | `RenderView` (hand-written `impl View`, generic over `C: ViewSeq`) | lays out a child sequence | `Flex`/`Row`/`Column` |
-| Composition widget | `StatelessView` + `#[derive(StatelessView)]` | builds other widgets | `Container` |
+| Composition widget | `StatelessView` + `#[derive(StatelessView)]` | builds other widgets | `SafeArea` |
 | Parent-data widget | `ParentDataView` + `impl_parent_data_view!` | configures a child's parent-layout data | `Flexible`/`Expanded`/`Positioned` |
 | Render-driven transition | `StatefulView` + persistent `ProxyAnimation` + private `RenderView` | render object repaints each `Animation` tick | `FadeTransition` |
 
@@ -72,9 +72,13 @@ impl_render_view!(Foo);
   (no child). For Flutter parity, `SizedBox` wraps **`RenderConstrainedBox`** (tight
   constraints) and `ColoredBox` wraps **`RenderDecoratedBox`** (color decoration) —
   both Single-child, matching Flutter exactly.
-- `Container::build` composes, child-outward: `Align → Padding → ColoredBox →
-  DecoratedBox → ConstrainedBox → Padding(margin) → Transform` — Flutter's exact
-  order. `width`/`height` fold into constraints via `tighten`/`tightFor`.
+- `Container` is a `RenderView` over one `RenderContainer` (`flui-objects`)
+  that carries margin, additional constraints, padding, alignment, color,
+  decoration and transform as fields — not Flutter's conditional
+  Align→Padding→ColoredBox→DecoratedBox→ConstrainedBox→Padding(margin)→Transform
+  stack. Toggling an option cannot recreate an unkeyed child. `width`/`height`
+  still fold into constraints via `tighten`/`tightFor`. See mapping decision 15
+  in `ARCHITECTURE.md`.
 - `BoxDecoration` does not expose border insets, so `Container` does **not** fold a
   border's thickness into layout padding (documented on `Container`). Set `padding`
   explicitly if a bordered box must reserve the border.

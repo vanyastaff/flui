@@ -133,7 +133,7 @@ use flui_rendering::{
     view::{ScrollDirection, ScrollableViewportOffset},
 };
 use flui_types::{
-    Alignment, EdgeInsets, Matrix4, Offset, Point, Rect, Size,
+    Alignment, EdgeInsets, Matrix4, Offset, Pixels, Point, Rect, Size,
     geometry::px,
     layout::{
         Axis, AxisDirection, BoxFit, BoxShape, StackFit, TableCellVerticalAlignment,
@@ -2910,6 +2910,21 @@ fn harness_constrained_box_enforces_minimums() {
 // RenderContainer — the collapsed form of Flutter's Container widget stack
 // ════════════════════════════════════════════════════════════════════════
 
+/// One configuration of the stack `RenderContainer` collapses, used by
+/// [`assert_container_matches_stack`].
+struct ContainerStackCase {
+    case: &'static str,
+    margin: EdgeInsets,
+    extra: Option<BoxConstraints>,
+    padding: EdgeInsets,
+    alignment: Option<Alignment>,
+    child: Size,
+    constraints: BoxConstraints,
+    color: Option<Color>,
+    decoration: Option<BoxDecoration<Pixels>>,
+    transform: Option<Matrix4>,
+}
+
 /// Asserts that one `RenderContainer` configuration is geometrically
 /// indistinguishable from the widget stack Flutter would have built for it.
 ///
@@ -2921,16 +2936,23 @@ fn harness_constrained_box_enforces_minimums() {
 /// `Align` and `ConstrainedBox` appear only when their property is set,
 /// mirroring Flutter's conditional stack. Both `Padding` levels are always
 /// present because a zero inset is indistinguishable from an absent level.
-fn assert_container_matches_stack(
-    case: &str,
-    margin: EdgeInsets,
-    extra: Option<BoxConstraints>,
-    padding: EdgeInsets,
-    alignment: Option<Alignment>,
-    child: Size,
-    constraints: BoxConstraints,
-) {
+/// Color, decoration and transform are included when `Some`, so a case that
+/// sets them actually compares against `DecoratedBox` / `RenderTransform`
+/// rather than omitting those levels.
+fn assert_container_matches_stack(spec: ContainerStackCase) {
     const CHILD_COLOR: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    let ContainerStackCase {
+        case,
+        margin,
+        extra,
+        padding,
+        alignment,
+        child,
+        constraints,
+        color,
+        decoration,
+        transform,
+    } = spec;
 
     let mut container = RenderContainer::new()
         .with_margin(margin)
@@ -2940,6 +2962,15 @@ fn assert_container_matches_stack(
     }
     if let Some(alignment) = alignment {
         container = container.with_alignment(alignment);
+    }
+    if let Some(color) = color {
+        container = container.with_color(color);
+    }
+    if let Some(decoration) = decoration.clone() {
+        container = container.with_decoration(decoration);
+    }
+    if let Some(transform) = transform {
+        container = container.with_transform(transform);
     }
     let collapsed = RenderTester::mount(
         box_node(container)
@@ -2960,6 +2991,18 @@ fn assert_container_matches_stack(
         .label("padding")
         .child(node);
     levels.push("padding");
+    if let Some(color) = color {
+        node = box_node(RenderDecoratedBox::new(BoxDecoration::with_color(color)))
+            .label("color")
+            .child(node);
+        levels.push("color");
+    }
+    if let Some(decoration) = decoration {
+        node = box_node(RenderDecoratedBox::new(decoration))
+            .label("decoration")
+            .child(node);
+        levels.push("decoration");
+    }
     if let Some(extra) = extra {
         node = box_node(RenderConstrainedBox::new(extra))
             .label("constraints")
@@ -2970,6 +3013,12 @@ fn assert_container_matches_stack(
         .label("margin")
         .child(node);
     levels.push("margin");
+    if let Some(transform) = transform {
+        node = box_node(RenderTransform::new(transform))
+            .label("transform")
+            .child(node);
+        levels.push("transform");
+    }
 
     let composed = RenderTester::mount(node)
         .with_constraints(constraints)
@@ -2988,7 +3037,9 @@ fn assert_container_matches_stack(
 
     // Child POSITION parity. The collapsed tree reaches the child in one hop,
     // so its local offset is already absolute; the stack's has to be summed
-    // across the levels it spreads that same offset over.
+    // across the levels it spreads that same offset over. A paint transform
+    // does not change layout offsets, so it is included in the sum (it
+    // contributes zero) and applied only to the hit probes below.
     let origin = levels
         .into_iter()
         .map(|label| composed.offset(composed.id(label)))
@@ -3001,20 +3052,30 @@ fn assert_container_matches_stack(
         "[{case}] the child must land at the same absolute position in both trees"
     );
 
+    let shift = transform
+        .and_then(|matrix| matrix.as_translation())
+        .map_or(Offset::ZERO, |(dx, dy)| Offset::new(px(dx), px(dy)));
+
     // And the hit path must agree at probes that straddle the child's edges,
     // so a shifted child is caught rather than landing inside both windows.
     let child_size = composed.box_geometry(composed.id("child"));
     for (x, y) in [
         (0.0, 0.0),
-        (origin.dx.get() - 1.0, origin.dy.get() - 1.0),
-        (origin.dx.get() + 1.0, origin.dy.get() + 1.0),
         (
-            origin.dx.get() + child_size.width.get() - 1.0,
-            origin.dy.get() + child_size.height.get() - 1.0,
+            origin.dx.get() + shift.dx.get() - 1.0,
+            origin.dy.get() + shift.dy.get() - 1.0,
         ),
         (
-            origin.dx.get() + child_size.width.get() + 1.0,
-            origin.dy.get() + child_size.height.get() + 1.0,
+            origin.dx.get() + shift.dx.get() + 1.0,
+            origin.dy.get() + shift.dy.get() + 1.0,
+        ),
+        (
+            origin.dx.get() + shift.dx.get() + child_size.width.get() - 1.0,
+            origin.dy.get() + shift.dy.get() + child_size.height.get() - 1.0,
+        ),
+        (
+            origin.dx.get() + shift.dx.get() + child_size.width.get() + 1.0,
+            origin.dy.get() + shift.dy.get() + child_size.height.get() + 1.0,
         ),
     ] {
         assert_eq!(
@@ -3033,50 +3094,75 @@ fn assert_container_matches_stack(
 fn harness_container_matches_the_widget_stack_it_collapses() {
     let unbounded = px(f32::INFINITY);
 
-    assert_container_matches_stack(
-        "alignment leaves slack in both axes",
-        EdgeInsets::all(px(5.0)),
-        Some(BoxConstraints::new(px(80.0), unbounded, px(0.0), unbounded)),
-        EdgeInsets::all(px(8.0)),
-        Some(Alignment::BOTTOM_RIGHT),
-        Size::new(px(30.0), px(20.0)),
-        loose(200.0),
-    );
+    assert_container_matches_stack(ContainerStackCase {
+        case: "alignment leaves slack in both axes",
+        margin: EdgeInsets::all(px(5.0)),
+        extra: Some(BoxConstraints::new(px(80.0), unbounded, px(0.0), unbounded)),
+        padding: EdgeInsets::all(px(8.0)),
+        alignment: Some(Alignment::BOTTOM_RIGHT),
+        child: Size::new(px(30.0), px(20.0)),
+        constraints: loose(200.0),
+        color: None,
+        decoration: None,
+        transform: None,
+    });
 
-    assert_container_matches_stack(
-        "tight additional constraints outvote a smaller child",
-        EdgeInsets::all(px(4.0)),
-        Some(BoxConstraints::tight(Size::new(px(120.0), px(60.0)))),
-        EdgeInsets::all(px(6.0)),
-        None,
-        Size::new(px(20.0), px(20.0)),
-        loose(200.0),
-    );
+    assert_container_matches_stack(ContainerStackCase {
+        case: "tight additional constraints outvote a smaller child",
+        margin: EdgeInsets::all(px(4.0)),
+        extra: Some(BoxConstraints::tight(Size::new(px(120.0), px(60.0)))),
+        padding: EdgeInsets::all(px(6.0)),
+        alignment: None,
+        child: Size::new(px(20.0), px(20.0)),
+        constraints: loose(200.0),
+        color: None,
+        decoration: None,
+        transform: None,
+    });
 
-    assert_container_matches_stack(
-        "tight incoming constraints with a centred child",
-        EdgeInsets::ZERO,
-        None,
-        EdgeInsets::all(px(12.0)),
-        Some(Alignment::CENTER),
-        Size::new(px(40.0), px(40.0)),
-        BoxConstraints::tight(Size::new(px(200.0), px(200.0))),
-    );
+    assert_container_matches_stack(ContainerStackCase {
+        case: "tight incoming constraints with a centred child",
+        margin: EdgeInsets::ZERO,
+        extra: None,
+        padding: EdgeInsets::all(px(12.0)),
+        alignment: Some(Alignment::CENTER),
+        child: Size::new(px(40.0), px(40.0)),
+        constraints: BoxConstraints::tight(Size::new(px(200.0), px(200.0))),
+        color: None,
+        decoration: None,
+        transform: None,
+    });
 
-    assert_container_matches_stack(
-        "a minimum on one axis only",
-        EdgeInsets::all(px(7.0)),
-        Some(BoxConstraints::new(
+    assert_container_matches_stack(ContainerStackCase {
+        case: "a minimum on one axis only",
+        margin: EdgeInsets::all(px(7.0)),
+        extra: Some(BoxConstraints::new(
             px(0.0),
             unbounded,
             px(150.0),
             unbounded,
         )),
-        EdgeInsets::ZERO,
-        None,
-        Size::new(px(30.0), px(30.0)),
-        loose(300.0),
-    );
+        padding: EdgeInsets::ZERO,
+        alignment: None,
+        child: Size::new(px(30.0), px(30.0)),
+        constraints: loose(300.0),
+        color: None,
+        decoration: None,
+        transform: None,
+    });
+
+    assert_container_matches_stack(ContainerStackCase {
+        case: "color, decoration and a translation wrap the same child",
+        margin: EdgeInsets::all(px(5.0)),
+        extra: Some(BoxConstraints::new(px(80.0), unbounded, px(0.0), unbounded)),
+        padding: EdgeInsets::all(px(8.0)),
+        alignment: Some(Alignment::TOP_LEFT),
+        child: Size::new(px(30.0), px(20.0)),
+        constraints: loose(200.0),
+        color: Some(Color::RED),
+        decoration: Some(BoxDecoration::with_color(Color::BLUE)),
+        transform: Some(Matrix4::translation(10.0, 4.0, 0.0)),
+    });
 }
 
 /// A childless container stands in for Flutter's placeholder subtree,
@@ -3334,6 +3420,93 @@ fn harness_container_singular_transform_paints_and_hits_nothing() {
     .run_frame();
 
     assert_eq!(run.hit_first(5.0, 5.0), None);
+}
+
+/// A non-translation matrix must come from `paint_effects` (not a paint
+/// offset), invert the same way `apply_paint_transform` folds it, and hit
+/// the child where the composed `RenderTransform` stack would.
+#[test]
+fn harness_container_scale_shares_one_transform_with_the_stack() {
+    let scale = Matrix4::scaling(2.0, 2.0, 1.0);
+    let size = Size::new(px(40.0), px(40.0));
+
+    let collapsed = RenderTester::mount(
+        box_node(
+            RenderContainer::new()
+                .with_alignment(Alignment::TOP_LEFT)
+                .with_transform(scale),
+        )
+        .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("child")),
+    )
+    .with_size(size)
+    .run_frame();
+
+    let composed = RenderTester::mount(
+        box_node(RenderTransform::new(scale)).child(
+            box_node(RenderAlign::new(Alignment::TOP_LEFT))
+                .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("child")),
+        ),
+    )
+    .with_size(size)
+    .run_frame();
+
+    let node = RenderContainer::new().with_transform(scale);
+    assert_eq!(
+        RenderBox::paint_effects(&node, size).transform,
+        Some(scale),
+        "a non-translation matrix must come from paint_effects"
+    );
+    let mut mapped = Matrix4::IDENTITY;
+    node.apply_paint_transform(0, Offset::ZERO, size, &mut mapped);
+    assert_eq!(
+        mapped, scale,
+        "coordinate mapping must fold in the same matrix hit-test inverts"
+    );
+
+    // Scale 2 about the origin: parent (30, 30) is child (15, 15), inside
+    // the 20×20 child that alignment pinned at (0, 0).
+    assert_eq!(
+        collapsed.hit_first(30.0, 30.0) == Some(collapsed.id("child")),
+        composed.hit_first(30.0, 30.0) == Some(composed.id("child")),
+        "a 2× scale must hit the child at the same parent-space point as the stack"
+    );
+    assert_eq!(
+        collapsed.hit_first(5.0, 5.0) == Some(collapsed.id("child")),
+        composed.hit_first(5.0, 5.0) == Some(composed.id("child")),
+        "pre-scale coordinates must miss the child in both trees"
+    );
+}
+
+/// `set_transform`'s impact algebra: `COMPOSITED_LAYER_UPDATE` only when the
+/// node owns a `TransformLayer` both BEFORE and AFTER the change.
+#[test]
+fn harness_container_set_transform_reports_layer_update_only_within_the_layered_range() {
+    let mut node = RenderContainer::new().with_transform(Matrix4::scaling(2.0, 2.0, 1.0));
+
+    assert_eq!(
+        node.set_transform(Some(Matrix4::scaling(3.0, 3.0, 1.0))),
+        RenderUpdateImpact::COMPOSITED_LAYER_UPDATE | RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(
+        node.set_transform(Some(Matrix4::translation(5.0, 5.0, 0.0))),
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(
+        node.set_transform(Some(Matrix4::scaling(4.0, 4.0, 1.0))),
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(
+        node.set_transform(Some(Matrix4::scaling(0.0, 0.0, 1.0))),
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(
+        node.set_transform(Some(Matrix4::scaling(2.0, 2.0, 1.0))),
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(
+        node.set_transform(None),
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
+    );
 }
 
 /// Intrinsics travel the same levels layout does: the insets add, and tight

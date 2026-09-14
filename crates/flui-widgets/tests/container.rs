@@ -57,14 +57,14 @@ fn container_aligns_child_within_forced_size() {
 
 #[test]
 fn container_childless_with_size_fills_to_size() {
-    // No child + forced size: the childless placeholder is pinned by the
-    // ConstrainedBox layer to the requested size.
+    // No child + forced size: additional constraints pin the childless
+    // placeholder to the requested size.
     let laid = lay_out(Container::new().width(80.0).height(40.0), loose(1000.0));
     assert_eq!(laid.size(laid.root()), size(80.0, 40.0));
 }
 
 /// Counts `create_state` / `dispose` so optional-layer toggles can assert the
-/// unkeyed child was reparented rather than recreated.
+/// unkeyed child was neither recreated nor disposed.
 #[derive(Clone, StatefulView)]
 struct StateProbe {
     creates: Arc<AtomicUsize>,

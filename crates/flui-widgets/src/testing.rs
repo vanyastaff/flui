@@ -244,9 +244,11 @@ fn lay_out_with_pipeline_owner_and_binding(
 /// Shallowest mounted element of `logical_root_type` → its render id.
 ///
 /// RenderViews own a node directly. Composition roots (`StatelessView` /
-/// `StatefulView` such as [`Container`](crate::Container)) do not: walk to the
-/// first render-owning descendant so `LaidOut::root` still names the caller's
-/// outermost laid-out box (Flutter's "size of the Container").
+/// `StatefulView`, e.g. [`AnimatedContainer`](crate::AnimatedContainer)) do
+/// not: walk to the first render-owning descendant so `LaidOut::root` still
+/// names the caller's outermost laid-out box (Flutter's "size of the
+/// widget"). [`Container`](crate::Container) is a `RenderView` and takes the
+/// direct path.
 fn resolve_logical_render_root(
     binding: &mut HeadlessBinding,
     logical_root_type: TypeId,
@@ -267,7 +269,7 @@ fn resolve_logical_render_root(
     }
 
     // Level-order: the outermost composed render object is the first child that
-    // owns one (Container → ConstrainedBox / Padding / …), not a deeper leaf.
+    // owns one (`AnimatedContainer` → `RenderContainer`, …), not a deeper leaf.
     let mut queue: Vec<_> = tree
         .get(logical_root_id)
         .map(|node| node.child_ids().to_vec())

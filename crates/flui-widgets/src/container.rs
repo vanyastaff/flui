@@ -29,8 +29,11 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///   (flutter/flutter#161698). Here the options are render-object fields, so
 ///   the child's slot never moves and no state is lost. No `GlobalKey`, no
 ///   reparenting, nothing for the caller to opt into.
-/// * **A `Container` costs one node.** The stack's own justification is that
-///   an unused layer is absent; one node is cheaper than the cheapest stack.
+/// * **A `Container` costs one node.** Flutter's unused-layer-is-absent
+///   stack is cheaper only in the identity case (no options → the child
+///   itself, zero extra nodes). Every other configuration is one node here
+///   versus up to seven there. The reason for the divergence is the stable
+///   child slot, not a cheaper identity `Container`.
 ///
 /// The divergence is recorded in `ARCHITECTURE.md` mapping decision 15, and
 /// the geometry is pinned against the stack it replaces by

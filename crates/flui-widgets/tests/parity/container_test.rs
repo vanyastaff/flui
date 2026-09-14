@@ -6,13 +6,12 @@
 //! and out of scope for this file — not yet ported to `tests/decorated_box.rs`
 //! either, which currently has no zero-area case).
 //!
-//! `Container` is not a single render object: `StatelessView::build`
-//! (`crates/flui-widgets/src/container.rs`) composes, from the child
-//! outward, `Align` → `Padding` → `ColoredBox`/`DecoratedBox` →
-//! `ConstrainedBox` → `Padding` (margin) → `Transform` — the same order as
-//! Flutter's `Container.build`. The cases below exercise that composition
-//! order and the child/no-child sizing contract; paint-color values are out
-//! of scope (this crate's test harness has no display-list/paint-command
+//! `Container` is one [`RenderContainer`](flui_objects::RenderContainer): a
+//! `RenderView` that carries Flutter's optional layers as fields. The
+//! cases below exercise that node's geometry, hit-testing and the
+//! child/no-child sizing contract against the stack the node collapses
+//! (recorded as mapping decision 15). Paint-color values are out of scope
+//! (this crate's test harness has no display-list/paint-command
 //! introspection, same limitation `tests/decorated_box.rs` and
 //! `tests/clip.rs` already document).
 //!
@@ -73,8 +72,8 @@ use flui_geometry::Matrix4;
 use flui_geometry::px;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color, Size};
-use flui_widgets::{Center, Container, GestureDetector, SizedBox, Text};
+use flui_types::{Alignment, Axis, Color, Size};
+use flui_widgets::{Center, Container, GestureDetector, SizedBox, Text, UnconstrainedBox};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -192,26 +191,34 @@ fn container_full_composition_clamps_size_and_positions_child() {
 /// fit.
 ///
 /// Flutter parity: container_test.dart `'Can be placed in an infinite box'`
-/// (3.44.0) — a smoke test there (no explicit size assertion); ported here
-/// with a concrete size pin since FLUI's harness can assert it directly.
+/// (3.44.0) — a smoke test there (`ListView(children: [Container()])` under
+/// a bounded viewport, no explicit size assertion). The list is an infinite
+/// *box* on the main axis; unbounded constraints as the pipeline root are
+/// rejected by `RenderViewAdapter`. Ported here with a concrete size pin
+/// under the same constraint shape: `UnconstrainedBox` keeps width, frees
+/// height.
 #[test]
 fn container_collapses_to_zero_in_the_unbounded_dimension_when_childless() {
-    let unbounded_height = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(f32::INFINITY));
-    let laid = lay_out(Container::new(), unbounded_height);
+    let laid = lay_out(
+        UnconstrainedBox::new()
+            .constrained_axis(Axis::Horizontal)
+            .alignment(Alignment::TOP_LEFT)
+            .child(Container::new()),
+        tight(300.0, 600.0),
+    );
 
+    let container = laid.find_by_render_type("RenderContainer");
     assert_eq!(
-        laid.size(laid.root()),
+        laid.size(container),
         size(300.0, 0.0),
         "a childless Container must collapse to 0 height under an unbounded \
          height constraint, not panic"
     );
 }
 
-/// `Transform` is the outermost layer in `Container::build`, and a
-/// transform never changes its own render object's laid-out box (Flutter
-/// parity: transform affects painting/hit-testing of descendants, not this
-/// object's own geometry) — the oracle's `getSize`/corner-offset assertions
-/// on the transformed `Container` all resolve to its untransformed box.
+/// The laid-out box is unaffected by a paint transform — the transform
+/// only moves painting and hit-testing of what's inside, never this
+/// object's own geometry.
 ///
 /// Flutter parity: container_test.dart `'Container transformAlignment'`
 /// (3.44.0) — the box-geometry invariant the `getSize`/`getTopLeft`/etc.

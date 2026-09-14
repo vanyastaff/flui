@@ -16,9 +16,10 @@
 //!   below it — including an unkeyed stateful child — is rebuilt from scratch
 //!   (flutter/flutter#161698). Here the options are *fields*, so no element
 //!   moves and no state is lost.
-//! * **A `Container` costs one node, not up to seven.** The stack's own
-//!   justification is that an unused layer is absent; one node makes every
-//!   configuration, used or not, cheaper than the cheapest stack.
+//! * **A `Container` costs one node, not up to seven**, whenever any option
+//!   is set. Flutter's unused-layer-is-absent stack is cheaper only in the
+//!   identity case (no options → the child itself). The reason for the
+//!   collapse is the stable child slot, not a cheaper identity `Container`.
 //!
 //! See `crates/flui-widgets/ARCHITECTURE.md` mapping decision 15.
 
@@ -179,10 +180,15 @@ impl RenderContainer {
 
     /// Sets the constraints imposed on the child in addition to the incoming
     /// ones.
+    ///
+    /// Rounds through [`BoxConstraints::round_for_cache`] the same way
+    /// [`crate::RenderConstrainedBox`] does, so user-supplied `f32` width/
+    /// height do not thrash the layout cache.
     pub fn set_additional_constraints(
         &mut self,
         constraints: Option<BoxConstraints>,
     ) -> RenderUpdateImpact {
+        let constraints = constraints.map(|c| c.round_for_cache());
         if self.additional_constraints == constraints {
             return RenderUpdateImpact::NONE;
         }
@@ -191,46 +197,75 @@ impl RenderContainer {
     }
 
     /// Sets the paint transform.
+    ///
+    /// Impact matches [`crate::RenderTransform::set_transform`]: a matrix that
+    /// stays inside the layered range (owns a `TransformLayer` both before and
+    /// after) reports [`RenderUpdateImpact::COMPOSITED_LAYER_UPDATE`] so the
+    /// frame can patch that layer; crossing into or out of the range — none ↔
+    /// some, translation ↔ non-translation, or singular ↔ non-singular — is
+    /// structural and reports [`RenderUpdateImpact::PAINT`].
     pub fn set_transform(&mut self, transform: Option<Matrix4>) -> RenderUpdateImpact {
         if self.transform == transform {
             return RenderUpdateImpact::NONE;
         }
+        let owned_before = self.owns_effect_layer();
         self.transform = transform;
-        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+        let owned_after = self.owns_effect_layer();
+        let paint_or_layer = if owned_before && owned_after {
+            RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+        } else {
+            RenderUpdateImpact::PAINT
+        };
+        paint_or_layer | RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Whether [`paint_effects`](RenderBox::paint_effects) currently owns a
+    /// `TransformLayer`.
+    ///
+    /// True only for a non-singular, non-translation matrix. Unlike
+    /// `RenderTransform`, a child is not required: a childless container still
+    /// paints its chrome, so the layer wraps that fragment too.
+    fn owns_effect_layer(&self) -> bool {
+        match self.transform {
+            Some(matrix) => {
+                !<Self as RenderBox>::skip_paint(self) && matrix.as_translation().is_none()
+            }
+            None => false,
+        }
     }
 
     /// Builder form of [`set_alignment`](Self::set_alignment).
     #[must_use]
     pub fn with_alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = Some(alignment);
+        let _ = self.set_alignment(Some(alignment));
         self
     }
 
     /// Builder form of [`set_padding`](Self::set_padding).
     #[must_use]
     pub fn with_padding(mut self, padding: EdgeInsets) -> Self {
-        self.padding = padding;
+        let _ = self.set_padding(padding);
         self
     }
 
     /// Builder form of [`set_margin`](Self::set_margin).
     #[must_use]
     pub fn with_margin(mut self, margin: EdgeInsets) -> Self {
-        self.margin = margin;
+        let _ = self.set_margin(margin);
         self
     }
 
     /// Builder form of [`set_color`](Self::set_color).
     #[must_use]
     pub fn with_color(mut self, color: Color) -> Self {
-        self.color = Some(color);
+        let _ = self.set_color(Some(color));
         self
     }
 
     /// Builder form of [`set_decoration`](Self::set_decoration).
     #[must_use]
     pub fn with_decoration(mut self, decoration: BoxDecoration<Pixels>) -> Self {
-        self.decoration = Some(decoration);
+        let _ = self.set_decoration(Some(decoration));
         self
     }
 
@@ -238,14 +273,14 @@ impl RenderContainer {
     /// [`set_additional_constraints`](Self::set_additional_constraints).
     #[must_use]
     pub fn with_additional_constraints(mut self, constraints: BoxConstraints) -> Self {
-        self.additional_constraints = Some(constraints);
+        let _ = self.set_additional_constraints(Some(constraints));
         self
     }
 
     /// Builder form of [`set_transform`](Self::set_transform).
     #[must_use]
     pub fn with_transform(mut self, transform: Matrix4) -> Self {
-        self.transform = Some(transform);
+        let _ = self.set_transform(Some(transform));
         self
     }
 
@@ -600,10 +635,12 @@ impl RenderBox for RenderContainer {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // Undo the transform first: everything below it — the margin's bounds
-        // gate, the child, the decoration shape — lives in the untransformed
-        // space. The driver pushes the inverse of `hit_test_transform` onto the
-        // result stack, so the entry's coordinate mapping is already handled.
+        // `ctx.position()` is still in this node's parent space. The pipeline
+        // records the inverse of `hit_test_transform` on the *result entry*
+        // (so later coordinate mapping can walk back), but it does not rewrite
+        // the incoming position — invert here, the same way
+        // `hit_test_child_at_offset` does, before the margin gate and the
+        // child / decoration / color tests which all live untransformed.
         let position = match self.transform {
             Some(matrix) => {
                 let Some(inverse) = matrix.try_inverse() else {
