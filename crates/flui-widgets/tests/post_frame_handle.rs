@@ -115,18 +115,27 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
                 observed.store(
                     pipeline.with(|owner| {
                         // The parentless render node is the pipeline
-                        // `RenderView` (the finite surface), not the probe's
-                        // `SizedBox`. Committed geometry is the probe child's
-                        // 64×18 after the rebuild.
+                        // `RenderView`; the probe's own `SizedBox` is its
+                        // logical root (the `Mounted::logical_render_root`
+                        // shape, applied through every wrapper `lay_out`
+                        // inserts under non-tight mount constraints — here,
+                        // an `Align` loosener — by walking single-child
+                        // descendants until the chain branches or ends).
+                        // Committed geometry there must be 64×18 after the
+                        // rebuild.
                         let expected = flui_types::Size::new(
                             flui_types::geometry::px(64.0),
                             flui_types::geometry::px(18.0),
                         );
-                        callback_local.get()
-                            && owner
-                                .render_tree()
-                                .iter()
-                                .any(|(id, _)| owner.box_size(id) == Some(expected))
+                        let Some(root_id) = owner.root_id() else {
+                            return false;
+                        };
+                        let render_tree = owner.render_tree();
+                        let mut logical_root = root_id;
+                        while let [only_child] = render_tree.children(logical_root) {
+                            logical_root = *only_child;
+                        }
+                        callback_local.get() && owner.box_size(logical_root) == Some(expected)
                     }),
                     Ordering::SeqCst,
                 );
