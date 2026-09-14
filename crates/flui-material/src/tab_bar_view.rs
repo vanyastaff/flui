@@ -53,17 +53,14 @@
 //!
 //! ## Length mismatch
 //!
-//! [`TabBarView::new`]'s `children` count is expected to equal the
-//! controller's [`length`](crate::TabController::length) — enforced with a
-//! `debug_assert!`, matching `CupertinoTabScaffold`'s own out-of-range-index
-//! precedent (`tab_scaffold.rs`'s `is_valid_tab_index` doc comment). In a
-//! release build (where `debug_assert!` compiles out), an out-of-range
-//! current index simply never matches any child's own index in `build`'s
-//! `0..children.len()` iteration — every child renders `Offstage`-hidden and
-//! none is marked active, with no panic and no `Vec` index out of bounds.
-//! This is a documented fall-through, not a silent one: do not "fix" it by
-//! clamping the index — the debug assertion exists so a real mismatch is
-//! caught long before any release build ships.
+//! [`TabBarView::new`]'s `children` count must equal the controller's
+//! [`length`](crate::TabController::length). Flutter / an earlier FLUI port
+//! used `debug_assert!` and documented a release fall-through where an
+//! out-of-range current index matched no child and every page stayed
+//! `Offstage`. That hole is closed: `build` uses a release `assert!` so a
+//! mismatch surfaces as a framework `ErrorView` (via the build-error
+//! boundary) in every profile — same public-widget invariant class as
+//! [`TabController`] index bounds (#1101).
 
 use std::cell::RefCell;
 
@@ -238,7 +235,7 @@ impl ViewState<TabBarView> for TabBarViewState {
         let controller = self.resolve_controller(view, ctx);
         let child_count = view.children.len();
 
-        debug_assert!(
+        assert!(
             child_count == controller.length(),
             "TabBarView: {child_count} children does not match the TabController's length of \
              {} — the children list and the tab count must agree",

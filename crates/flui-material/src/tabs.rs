@@ -637,8 +637,22 @@ impl ViewState<TabBar> for TabBarState {
             // `_controller!.length == 0`. A zero-tab `TabBar` with no
             // controller and no `DefaultTabController` ancestor still
             // panics, same as a non-empty one.
+            assert!(
+                controller.length() == 0,
+                "TabBar: empty tabs list does not match the TabController's length of {} — \
+                 the tabs list and the tab count must agree",
+                controller.length()
+            );
             return SizedBox::height(height).boxed();
         }
+
+        assert!(
+            view.tabs.len() == controller.length(),
+            "TabBar: {} tabs does not match the TabController's length of {} — \
+             the tabs list and the tab count must agree",
+            view.tabs.len(),
+            controller.length()
+        );
 
         let mixed = tab_has_text_and_icon(&view.tabs);
         let current_index = controller.index();

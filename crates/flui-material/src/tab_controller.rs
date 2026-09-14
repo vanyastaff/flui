@@ -178,19 +178,44 @@ pub struct TabController {
     listeners: TabListenerRegistry,
 }
 
+/// Rejects an illegal construction-time tab index in every build profile.
+///
+/// Stricter than Flutter's constructor assert when `length == 0`: only
+/// `index == 0` is accepted (Flutter allows any non-negative `initialIndex`
+/// when `length == 0`). See `ARCHITECTURE.md` §TabController.
+#[inline]
+fn assert_construction_tab_index(length: usize, index: usize, context: &str) {
+    assert!(
+        (length == 0 && index == 0) || index < length,
+        "{context}: index {index} is out of range for length {length}"
+    );
+}
+
+/// Rejects an out-of-range `set_index` argument using Flutter `_changeIndex`'s
+/// predicate (`value < length || length == 0`), raised to a release `assert!`.
+///
+/// When `length == 0`, any `index` passes this gate and then hits the
+/// `length < 2` no-op — matching Flutter release (debug assert stripped).
+#[inline]
+fn assert_set_index_in_range(length: usize, index: usize) {
+    assert!(
+        index < length || length == 0,
+        "TabController::set_index: index {index} is out of range for length {length}"
+    );
+}
+
 impl TabController {
     /// A controller over `length` tabs, starting at `initial_index`.
     ///
-    /// Flutter parity: `TabController`'s constructor asserts (`length >= 0`
-    /// is implied by `usize`; `initialIndex` valid for `length`) — ported as
-    /// a `debug_assert!`, matching this crate's other oracle-assert ports
-    /// (e.g. `flui_cupertino::CupertinoTabScaffold`'s index-bounds check).
+    /// # Panics
+    ///
+    /// Panics if `initial_index` is out of range for `length` (only `0` is
+    /// valid when `length == 0` — stricter than Flutter's constructor assert).
+    /// Flutter uses a debug-only assert; FLUI enforces construction bounds in
+    /// every build profile — see `ARCHITECTURE.md` §TabController length/index.
     #[must_use]
     pub fn new(length: usize, initial_index: usize) -> Self {
-        debug_assert!(
-            (length == 0 && initial_index == 0) || initial_index < length,
-            "TabController: initial_index {initial_index} is out of range for length {length}"
-        );
+        assert_construction_tab_index(length, initial_index, "TabController::new");
         Self::with_previous(length, initial_index, initial_index)
     }
 
@@ -198,7 +223,11 @@ impl TabController {
     /// the shape [`DefaultTabController`]'s length-change re-creation needs
     /// (Flutter parity: `TabController._copyWithAndDispose`'s
     /// `index`/`previousIndex` pair, see that type's docs).
+    ///
+    /// `index` must already be in range for `length`; callers that shrink
+    /// length clamp first (see `recreate_for_length_change`).
     fn with_previous(length: usize, index: usize, previous_index: usize) -> Self {
+        assert_construction_tab_index(length, index, "TabController::with_previous");
         Self {
             state: Rc::new(Cell::new(IndexPair {
                 index,
@@ -244,18 +273,18 @@ impl TabController {
     /// `notify_listeners()` that follows always observes a consistent pair
     /// — never `index` updated with a stale `previous_index` or vice versa.
     ///
-    /// Flutter parity: `_changeIndex`'s own bounds assert (`assert(value >=
-    /// 0 && (value < length || length == 0))`) is ported as a
-    /// `debug_assert!` here too, matching [`new`](Self::new)'s — `index`
-    /// must be in range for [`length`](Self::length) (or `length` must be
-    /// `0`, in which case only `index == 0` ever reaches this far since the
-    /// `length < 2` no-op guard below returns first).
+    /// # Panics
+    ///
+    /// Panics if `index >= length` when `length > 0` (Flutter `_changeIndex`'s
+    /// `assert(value < length || length == 0)`, raised to release). When
+    /// `length == 0` (or `length == 1`), the call is a no-op after the check —
+    /// same as Flutter release once the debug assert is stripped.
+    ///
+    /// This panic is **not** wrapped by the build-error `ErrorView` boundary:
+    /// it fires on the caller's thread (gesture / app code). Length mismatch
+    /// asserts inside `TabBar` / `TabBarView::build` recover as `ErrorView`.
     pub fn set_index(&self, index: usize) {
-        debug_assert!(
-            index < self.length || self.length == 0,
-            "TabController::set_index: index {index} is out of range for length {}",
-            self.length
-        );
+        assert_set_index_in_range(self.length, index);
         let current = self.state.get();
         if index == current.index || self.length < 2 {
             return;
@@ -426,8 +455,18 @@ impl DefaultTabController {
     }
 
     /// Overrides the initially-selected tab. Defaults to `0`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `initial_index` is out of range for this controller's
+    /// `length` (only `0` is valid when `length == 0`).
     #[must_use]
     pub fn initial_index(mut self, initial_index: usize) -> Self {
+        assert_construction_tab_index(
+            self.length,
+            initial_index,
+            "DefaultTabController::initial_index",
+        );
         self.initial_index = initial_index;
         self
     }
@@ -611,21 +650,41 @@ mod tests {
         let _id = controller.add_listener(listener);
 
         controller.set_index(0);
+        // Flutter `_changeIndex`: when `length == 0`, any index passes the
+        // bounds assert then hits `length < 2` and returns without notifying.
+        controller.set_index(99);
 
         assert_eq!(count.get(), 0);
         assert_eq!(controller.index(), 0);
     }
 
     /// Flutter parity: `_changeIndex`'s own bounds assert. Red-check: delete
-    /// the `debug_assert!` in `set_index` — this test stops panicking and
+    /// the release `assert!` in `set_index` — this test stops panicking and
     /// `set_index(7)` on a length-3 controller instead silently stores 7 and
-    /// notifies.
-    #[cfg(debug_assertions)]
+    /// notifies (the #1101 release hole).
     #[test]
     #[should_panic(expected = "index 7 is out of range for length 3")]
-    fn set_index_out_of_range_debug_asserts() {
+    fn set_index_out_of_range_fails_the_release_invariant() {
         let controller = TabController::new(3, 0);
         controller.set_index(7);
+    }
+
+    #[test]
+    #[should_panic(expected = "index 2 is out of range for length 2")]
+    fn new_rejects_an_out_of_range_initial_index() {
+        let _ = TabController::new(2, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "index 1 is out of range for length 0")]
+    fn new_rejects_nonzero_index_when_length_is_zero() {
+        let _ = TabController::new(0, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "index 5 is out of range for length 3")]
+    fn default_tab_controller_initial_index_rejects_out_of_range() {
+        let _ = DefaultTabController::new(3, flui_widgets::SizedBox::shrink()).initial_index(5);
     }
 
     #[test]
