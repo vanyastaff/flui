@@ -988,7 +988,7 @@ not the same thing for hit-testing (which is why `padding` is `Option` and the
 child-recursion gate is conditional — see **Hit-testing** below), and the
 layered-range predicate now exists in two places (issue #1143). A composed
 shape would make those classes unrepresentable rather than tested-for. It is a
-legitimate future reshape, not a defect in this one; tracked separately.
+legitimate future reshape, not a defect in this one; tracked in issue #1144.
 chunhtai's objection to render-level composition applies to us unchanged —
 it fixes `Container` and not the general class, so any other conditional-layer
 widget in this catalog keeps the same hazard.
