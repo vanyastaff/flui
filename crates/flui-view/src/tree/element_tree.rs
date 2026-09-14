@@ -1196,28 +1196,29 @@ impl ElementTree {
                     .unwrap_or("unknown parent-data type"),
             )
         };
-        let ancestry = self.format_element_ancestry(child_id);
 
-        let parent_data_element = self
-            .get(parent_data_element_id)
-            .expect("BUG: located ParentDataView element must remain live");
         // The element-tree borrow and render-tree checkout are disjoint.
+        // Ancestry is formatted only inside the assert failure path — not on
+        // every successful ParentDataView attach/update.
         pipeline_owner.with_mut(|owner| {
             if let Some(parent_render_id) = parent_render_id
                 && let Some(parent_node) = owner.render_tree().get(parent_render_id)
             {
-                let expected_type_id = parent_node.child_parent_data_type_id();
                 assert!(
-                    provided_type_id == expected_type_id,
+                    provided_type_id == parent_node.child_parent_data_type_id(),
                     "Incorrect use of ParentDataView `{provider_name}`: it contributes \
                      `{provided_pd_name}` but its nearest render parent is `{}` \
                      (incompatible child parent-data TypeId). `{provider_name}` must be \
                      placed under {typical_ancestor}. Element ancestry \
-                     (child → … → root): {ancestry}",
+                     (child → … → root): {}",
                     parent_node.debug_name(),
+                    self.format_element_ancestry(child_id),
                 );
             }
 
+            let parent_data_element = self
+                .get(parent_data_element_id)
+                .expect("BUG: located ParentDataView element must remain live");
             let impact = {
                 let Some(node) = owner.render_tree_mut().get_mut(child_render_id) else {
                     return;
