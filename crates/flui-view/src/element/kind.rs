@@ -707,6 +707,22 @@ impl ElementBase for ElementKind {
         self.element().apply_parent_data_config(parent_data)
     }
 
+    fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
+        self.element().parent_data_type_id()
+    }
+
+    fn parent_data_debug_type_name(&self) -> Option<&'static str> {
+        self.element().parent_data_debug_type_name()
+    }
+
+    fn parent_data_typical_ancestor_description(&self) -> Option<&'static str> {
+        self.element().parent_data_typical_ancestor_description()
+    }
+
+    fn parent_data_storage_type_name(&self) -> Option<&'static str> {
+        self.element().parent_data_storage_type_name()
+    }
+
     fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
         self.element().on_notification(type_id, notification)
     }

@@ -147,6 +147,29 @@ pub trait ParentDataView: Clone + 'static + Sized {
         &self,
         parent_data: &mut Self::ParentData,
     ) -> flui_rendering::RenderUpdateImpact;
+
+    /// Short name for diagnostics (`"Expanded"`, `"Positioned"`).
+    ///
+    /// Default: the fully-qualified Rust type name. Catalog widgets override
+    /// with a stable short label so attach-seam failures read like Flutter's
+    /// `Incorrect use of ParentDataWidget` messages.
+    fn debug_type_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
+
+    /// Human description of legal render ancestors for this view.
+    ///
+    /// Shown when the attach seam rejects a `ParentDataView` whose storage
+    /// type does not match the nearest render parent's
+    /// [`child_parent_data_type_id`](flui_rendering::RenderObject::child_parent_data_type_id).
+    fn typical_ancestor_description(&self) -> &'static str {
+        "a render parent whose children use this parent-data type"
+    }
+
+    /// Fully-qualified name of [`Self::ParentData`] for diagnostics.
+    fn parent_data_type_name(&self) -> &'static str {
+        core::any::type_name::<Self::ParentData>()
+    }
 }
 
 /// Implement View for a ParentDataView type.
@@ -356,9 +379,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "BUG: ParentDataView must match the existing render-node parent-data type"
-    )]
+    #[should_panic(expected = "Incorrect use of ParentDataView")]
     fn parent_data_type_mismatch_panics() {
         let view = TestFlexible {
             flex: 1.0,

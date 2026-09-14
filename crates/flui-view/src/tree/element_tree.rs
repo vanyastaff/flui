@@ -1123,6 +1123,14 @@ impl ElementTree {
     /// Existing data is mutated through the typed hook so layout-owned fields
     /// survive; its returned impact controls the render-parent dirty work.
     ///
+    /// Before writing, the provider's parent-data [`TypeId`] is
+    /// checked against the render parent's
+    /// [`child_parent_data_type_id`](flui_rendering::RenderObject::child_parent_data_type_id).
+    /// A mismatch panics with a composition diagnostic (offending
+    /// `ParentDataView`, typical ancestor family, actual render parent, element
+    /// ancestry) — the same failure in debug and release — rather than reaching
+    /// layout's `BoxLayoutCtx::from_erased` TypeId assert.
+    ///
     /// Average case O(1) — for a plain render child the very first ancestor is
     /// the render parent, so the walk stops in one hop and never touches the
     /// pipeline owner. Worst case O(proxy-nesting depth) between the render
@@ -1152,7 +1160,7 @@ impl ElementTree {
                 break;
             }
             if nearest_parent_data_element.is_none()
-                && node.element().parent_data_config().is_some()
+                && node.element().parent_data_type_id().is_some()
             {
                 nearest_parent_data_element = Some(ancestor_id);
             }
@@ -1168,11 +1176,48 @@ impl ElementTree {
             return;
         };
 
+        let (provided_type_id, provider_name, typical_ancestor, provided_pd_name) = {
+            let element = self
+                .get(parent_data_element_id)
+                .expect("BUG: located ParentDataView element must remain live")
+                .element();
+            (
+                element
+                    .parent_data_type_id()
+                    .expect("BUG: located ParentDataView must report a parent-data TypeId"),
+                element
+                    .parent_data_debug_type_name()
+                    .unwrap_or("ParentDataView"),
+                element
+                    .parent_data_typical_ancestor_description()
+                    .unwrap_or("a render parent whose children use this parent-data type"),
+                element
+                    .parent_data_storage_type_name()
+                    .unwrap_or("unknown parent-data type"),
+            )
+        };
+        let ancestry = self.format_element_ancestry(child_id);
+
         let parent_data_element = self
             .get(parent_data_element_id)
             .expect("BUG: located ParentDataView element must remain live");
         // The element-tree borrow and render-tree checkout are disjoint.
         pipeline_owner.with_mut(|owner| {
+            if let Some(parent_render_id) = parent_render_id
+                && let Some(parent_node) = owner.render_tree().get(parent_render_id)
+            {
+                let expected_type_id = parent_node.child_parent_data_type_id();
+                assert!(
+                    provided_type_id == expected_type_id,
+                    "Incorrect use of ParentDataView `{provider_name}`: it contributes \
+                     `{provided_pd_name}` but its nearest render parent is `{}` \
+                     (incompatible child parent-data TypeId). `{provider_name}` must be \
+                     placed under {typical_ancestor}. Element ancestry \
+                     (child → … → root): {ancestry}",
+                    parent_node.debug_name(),
+                );
+            }
+
             let impact = {
                 let Some(node) = owner.render_tree_mut().get_mut(child_render_id) else {
                     return;
@@ -1194,6 +1239,24 @@ impl ElementTree {
                 owner.apply_render_update_impact(parent_render_id, impact);
             }
         });
+    }
+
+    /// Child → … → root labels for parent-data mismatch diagnostics.
+    fn format_element_ancestry(&self, from: ElementId) -> String {
+        let mut parts = Vec::new();
+        let mut cursor = Some(from);
+        while let Some(id) = cursor {
+            let Some(node) = self.get(id) else {
+                break;
+            };
+            let label = node
+                .element()
+                .parent_data_debug_type_name()
+                .unwrap_or("Element");
+            parts.push(format!("{label}#{id}"));
+            cursor = node.parent();
+        }
+        parts.join(" → ")
     }
 
     fn reset_ancestor_parent_data(&mut self, child_id: ElementId) {

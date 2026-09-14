@@ -690,7 +690,7 @@ pub trait ElementBase: Downcast + 'static {
     /// [`ParentDataView`](crate::ParentDataView) updates configuration owned by
     /// the view. Ordinary elements keep the default `NONE`; parent-data
     /// elements downcast to their associated parent-data type and panic with a
-    /// `BUG:` invariant message if render storage contains the wrong type.
+    /// composition diagnostic if render storage contains the wrong type.
     /// Implementors of custom element families should not report an impact
     /// unless they also mutate the supplied value.
     /// The element-tree caller ends the child render-node borrow before it
@@ -712,6 +712,30 @@ pub trait ElementBase: Downcast + 'static {
         _parent_data: &mut dyn flui_rendering::parent_data::ParentData,
     ) -> flui_rendering::RenderUpdateImpact {
         flui_rendering::RenderUpdateImpact::NONE
+    }
+
+    /// [`TypeId`] of the parent-data storage this element contributes, if any.
+    ///
+    /// Default `None`. `ParentDataElement`s override. Used by
+    /// `ElementTree::apply_ancestor_parent_data` to validate the provider
+    /// against the nearest render parent's expected child parent-data type.
+    fn parent_data_type_id(&self) -> Option<TypeId> {
+        None
+    }
+
+    /// Short diagnostic name of a contributing `ParentDataView` (`"Expanded"`).
+    fn parent_data_debug_type_name(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Description of legal ancestors for a contributing `ParentDataView`.
+    fn parent_data_typical_ancestor_description(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Fully-qualified name of the contributed parent-data storage type.
+    fn parent_data_storage_type_name(&self) -> Option<&'static str> {
+        None
     }
 
     // ========================================================================

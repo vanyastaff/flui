@@ -83,6 +83,14 @@ impl ParentDataView for Flexible {
         parent_data.fit = self.fit;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
+
+    fn debug_type_name(&self) -> &'static str {
+        "Flexible"
+    }
+
+    fn typical_ancestor_description(&self) -> &'static str {
+        "Flex (Row, Column, or Flex)"
+    }
 }
 
 impl_parent_data_view!(Flexible);
@@ -138,6 +146,14 @@ impl ParentDataView for Expanded {
         parent_data.flex = flex;
         parent_data.fit = FlexFit::Tight;
         flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    fn debug_type_name(&self) -> &'static str {
+        "Expanded"
+    }
+
+    fn typical_ancestor_description(&self) -> &'static str {
+        "Flex (Row, Column, or Flex)"
     }
 }
 

@@ -59,6 +59,14 @@ impl ParentDataView for LayoutId {
         parent_data.id = Some(self.id.clone());
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
+
+    fn debug_type_name(&self) -> &'static str {
+        "LayoutId"
+    }
+
+    fn typical_ancestor_description(&self) -> &'static str {
+        "CustomMultiChildLayout"
+    }
 }
 
 impl_parent_data_view!(LayoutId);

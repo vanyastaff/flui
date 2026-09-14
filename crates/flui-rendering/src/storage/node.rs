@@ -658,6 +658,13 @@ impl RenderNode {
         with_entry!(self, entry => entry.render_object().debug_name())
     }
 
+    /// [`TypeId`] of the parent-data type this node expects
+    /// on each child — see [`RenderObject::child_parent_data_type_id`].
+    #[inline]
+    pub fn child_parent_data_type_id(&self) -> std::any::TypeId {
+        with_entry!(self, entry => entry.render_object().child_parent_data_type_id())
+    }
+
     /// Whether this node's render object requests that child paint be skipped.
     ///
     /// Returns `true` when the node is fully transparent (e.g. `RenderOpacity`

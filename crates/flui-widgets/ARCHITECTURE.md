@@ -916,3 +916,35 @@ tree.
 `a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`
 (`navigator_tests.rs`), red-checked by swapping step 0 and step 1 — which yields
 `[pop, push]`, i.e. **the divergence, not the fix**.
+
+### 14. `ParentDataView` ancestry is checked at attach, with catalog diagnostic labels
+
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — framework-user
+composition errors must not surface as internal render-protocol panics.
+
+**Oracle:** Flutter's `ParentDataWidget` / `_updateParentData` rejects misuse
+(e.g. `Expanded` under `Stack`) with an "Incorrect use of ParentDataWidget"
+diagnostic naming the widget, typical ancestor, and ownership chain. Debug and
+profile/release are meant to agree on the contract (see flutter/flutter#108186).
+
+**Choice:** keep Flutter's *observable* early-reject contract, expressed in Rust
+as:
+
+- `ParentDataView::{debug_type_name, typical_ancestor_description}` — catalog
+  widgets (`Expanded`/`Flexible`/`Positioned`/`TableCell`/`LayoutId`) override
+  with short labels and ancestor families;
+- `RenderObject::child_parent_data_type_id` — the render parent declares the
+  `ParentData` `TypeId` it expects on children;
+- `ElementTree::apply_ancestor_parent_data` validates provider `TypeId` against
+  that expectation **before** `set_parent_data` / `apply_parent_data_config`, and
+  panics with the same semantic message in debug and release.
+
+**Why not wait for layout.** Leaving the mismatch to
+`BoxLayoutCtx::from_erased`'s `debug_assert!` made release/profile diverge, hid
+the offending widget behind `TypeId` text, and let secondary bootstrap
+`InvalidGeometry` panics mask the primary failure in harnesses.
+
+**Replacement tests:** `parent_data_ancestry.rs` (`expanded_under_stack_…`,
+`positioned_under_row_…`) — assert the attach-seam diagnostic and that the
+message is not `BoxLayoutCtx::from_erased`. Happy paths remain in
+`flex_parent_data.rs` / `stack_positioned.rs`.
