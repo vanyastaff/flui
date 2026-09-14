@@ -1168,11 +1168,15 @@ impl HasWindowHandle for WindowsWindow {
         // own contract puts the burden of not outliving the native window
         // on the caller holding the handle, not on this method. That is a
         // logic-level ordering gap this comment records, not a memory-safety
-        // one: rwh's own docs state window ids like `HWND` "may be deleted
-        // by the underlying window system whenever safe code is running",
-        // so a caller is required to handle `HandleError` on every
-        // subsequent use rather than assume a handle it already holds stays
-        // good.
+        // one: `WindowHandle::borrow_raw`'s own doc
+        // (raw-window-handle-0.6.2/src/borrowed.rs) states its non-null
+        // guarantee "only applies to *pointers*, and not any window ID
+        // types in the handle", explaining that "it is possible for safe
+        // code in the same process to delete the window" — `hwnd` here is
+        // exactly such an ID (`Win32WindowHandle::hwnd: NonZeroIsize`, not a
+        // pointer type), so a caller is required to handle `HandleError` on
+        // every subsequent use rather than assume a handle it already holds
+        // stays good.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }

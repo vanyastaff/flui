@@ -298,6 +298,12 @@ enum WindowCallbackEvent {
     Visibility(bool),
     Hover(bool),
     AppearanceChanged,
+    /// A deferred [`WindowCallbacks::clear`]: queued instead of run inline
+    /// when `clear()` is called while this window's FIFO is already
+    /// draining (a `close()` issued from inside one of this window's own
+    /// callbacks — see `clear()`'s own doc for why draining it in order
+    /// matters).
+    Clear,
 }
 
 struct DispatchState<E> {
@@ -405,19 +411,32 @@ impl<T> Drop for CallbackLease<'_, T> {
         let Some(callback) = self.callback.take() else {
             return;
         };
-        // `SeqCst`: this flag is a one-shot "the window is gone" latch that
-        // every lease on every slot reads, with no other synchronization
-        // tying a read here to the specific `clear()` write that set it —
-        // a weaker ordering would need per-slot reasoning this shared flag
-        // does not have. `clear()` and lease drops each happen a handful of
-        // times per window's lifetime, so the cost is immaterial.
-        if self.cleared.load(Ordering::SeqCst) {
+        let mut slot = self.slot.lock();
+        // Read the latch UNDER the slot lock, not before it. `clear_now()`
+        // (see `WindowCallbacks::clear`'s doc) stores this flag, in program
+        // order on one thread, strictly before it takes ANY slot — so a
+        // `false` observed HERE, synchronized against that store through
+        // this very slot's mutex, means `clear_now()`'s own take of this
+        // exact slot (if it ever runs) is still ahead of us: restoring is
+        // safe, because `clear_now()` visits every slot unconditionally and
+        // will still find and drop whatever we put back. A `true` observed
+        // here means `clear_now()` has already started, so this slot must
+        // end up empty regardless of whether its take of this slot already
+        // ran (and found nothing, because we were holding the callback) or
+        // is still to come. Checking before acquiring the lock instead would
+        // race: `clear_now()` could store the flag and take this slot
+        // (finding it empty, since we're holding the callback) entirely
+        // between our read and our lock, and we would restore a callback
+        // `clear_now()` already believes it dropped.
+        if self.cleared.load(Ordering::SeqCst) || slot.is_some() {
+            // Release the guard before the callback's destructor runs — it
+            // may re-enter platform code that locks this same
+            // (non-reentrant) mutex.
+            drop(slot);
+            drop(callback);
             return;
         }
-        let mut slot = self.slot.lock();
-        if slot.is_none() {
-            *slot = Some(callback);
-        }
+        *slot = Some(callback);
     }
 }
 
@@ -455,10 +474,54 @@ impl WindowCallbacks {
     /// final `Arc` unwinds anywhere else), Win32's `WM_DESTROY` arm, and
     /// AppKit's `windowWillClose:` handler — so that destruction order is
     /// pinned deterministically instead of left to struct field order.
+    ///
+    /// **Drain-ordered, not immediate, when called while this window's FIFO
+    /// is already draining.** A `close()` issued from inside one of this
+    /// window's own callbacks (e.g. `on_input`) reaches one of the three
+    /// call sites above SYNCHRONOUSLY, while that callback's own dispatch
+    /// is still on the stack — so `dispatch_close()` (called from
+    /// `handle_close`/`WM_DESTROY`) finds the FIFO already dispatching and
+    /// only QUEUES `Close` rather than invoking `on_close` inline (see
+    /// [`DispatchDrain::begin`]). If `clear()` took every slot immediately
+    /// at that point, it would take `on_close` before the queued `Close`
+    /// event ever gets a chance to run it — dropping the callback silently
+    /// instead of firing it, which is how a widget's `close_this_window`
+    /// wiring would leak the window from `flui-app`'s registry forever
+    /// (issue #1043's SAFETY-GATE finding). So `clear()` itself goes
+    /// through the same FIFO: it queues a [`WindowCallbackEvent::Clear`]
+    /// exactly like any other event, and either drains it immediately (no
+    /// dispatch was in flight) or lets the ALREADY-running drain reach it
+    /// in causal order — after the `Close` queued ahead of it, and after
+    /// every other event queued ahead of that. The actual take-and-drop
+    /// body lives in [`Self::clear_now`], called either directly below or
+    /// from `drain_events`'s own `Clear` arm.
+    ///
+    /// **Terminal.** The `cleared` latch `clear_now()` sets never resets:
+    /// any callback registered after this call returns — on this same
+    /// `WindowCallbacks` — is dropped by its own first lease instead of
+    /// ever running (see `CallbackLease::drop`). A backend that reopens a
+    /// window must construct a fresh `WindowCallbacks` for it, not reuse
+    /// one that has already been cleared.
+    pub fn clear(&self) {
+        let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Clear)
+        else {
+            // Already draining: the running drain's own loop will reach
+            // this queued `Clear` in FIFO order and call `clear_now` from
+            // `drain_events`'s own arm.
+            return;
+        };
+        self.drain_events(drain);
+    }
+
+    /// The actual latch-then-take-all body behind [`Self::clear`]. Called
+    /// either directly by `clear()` (no dispatch was in flight) or from
+    /// `drain_events`'s `Clear` arm (a dispatch was already draining this
+    /// window's FIFO, so this runs once every event queued ahead of it —
+    /// including a reentrant `close()`'s own `Close` — has already fired).
     /// Payloads are collected first and dropped only after every slot's
     /// lock has been released, since a callback's destructor may re-enter
     /// platform code.
-    pub fn clear(&self) {
+    fn clear_now(&self) {
         // Set BEFORE taking any slot: a callback leased out right now (its
         // slot already empty, user code running) checks this flag when its
         // lease drops, which happens strictly after this store — the only
@@ -544,6 +607,9 @@ impl WindowCallbacks {
                     if let Some(callback) = lease.callback_mut() {
                         callback();
                     }
+                }
+                WindowCallbackEvent::Clear => {
+                    self.clear_now();
                 }
             }
         }
@@ -788,8 +854,75 @@ impl std::fmt::Debug for WindowCallbacks {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
 
     use super::*;
+
+    /// A keyboard event: the cheapest concrete `PlatformInput` to construct
+    /// for a test that only cares about triggering the `on_input` drain.
+    fn keyboard_event() -> PlatformInput {
+        PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
+            state: ui_events::keyboard::KeyState::Down,
+            key: keyboard_types::Key::Named(keyboard_types::NamedKey::Enter),
+            code: ui_events::keyboard::Code::Unidentified,
+            location: ui_events::keyboard::Location::Standard,
+            modifiers: keyboard_types::Modifiers::empty(),
+            repeat: false,
+            is_composing: false,
+        })
+    }
+
+    /// The SAFETY-GATE liveness finding on issue #1043: a widget closing its
+    /// own window from inside a currently-dispatched callback (here,
+    /// `on_input`) reaches `dispatch_close()` while the FIFO is already
+    /// draining, so `dispatch_close()` only QUEUES `Close` instead of
+    /// invoking `on_close` inline. `clear()` called right after it (as every
+    /// real close arm does) must not take `on_close` out from under that
+    /// still-queued event — `on_close` must still fire exactly once, and
+    /// every slot must still end up empty once the drain finishes. Goes red
+    /// if `clear()` reverts to taking every slot immediately instead of
+    /// queuing a `Clear` event behind the pending `Close`.
+    #[test]
+    fn close_from_inside_a_drained_callback_still_fires_on_close() {
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let close_count = Arc::new(AtomicU32::new(0));
+
+        let count_for_close = Arc::clone(&close_count);
+        callbacks.on_close.lock().replace(Box::new(move || {
+            count_for_close.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let inner = Arc::clone(&callbacks);
+        callbacks.on_input.lock().replace(Box::new(move |_event| {
+            // Simulate a widget synchronously closing its own window from
+            // inside an input callback — exactly the native shape (a
+            // gesture handler calling `window.close()`, which reaches
+            // `dispatch_close()` then `clear()` on the owning thread
+            // before this callback returns).
+            inner.dispatch_close();
+            inner.clear();
+            DispatchEventResult::default()
+        }));
+
+        callbacks.dispatch_input(keyboard_event());
+
+        assert_eq!(
+            close_count.load(Ordering::SeqCst),
+            1,
+            "on_close must still fire exactly once even when close() is \
+             requested from inside a callback the FIFO is already draining"
+        );
+        assert!(callbacks.on_input.lock().is_none());
+        assert!(callbacks.on_close.lock().is_none());
+        assert!(callbacks.on_request_frame.lock().is_none());
+        assert!(callbacks.on_resize.lock().is_none());
+        assert!(callbacks.on_moved.lock().is_none());
+        assert!(callbacks.on_should_close.lock().is_none());
+        assert!(callbacks.on_active_status_change.lock().is_none());
+        assert!(callbacks.on_visibility_status_change.lock().is_none());
+        assert!(callbacks.on_hover_status_change.lock().is_none());
+        assert!(callbacks.on_appearance_changed.lock().is_none());
+    }
 
     /// The #919-class hazard from the other direction: `close()` requested
     /// from inside a callback that is currently leased out. Without the

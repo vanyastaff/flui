@@ -1553,6 +1553,17 @@ impl MacOSWindow {
         // closure → raster lane → renderer → surface → `Arc<MacOSWindow>`,
         // a cycle nothing else here breaks.
         self.callbacks.clear();
+
+        // Match winit's own `windowWillClose:` handling: nil the delegate
+        // so no further delegate method can fire against a window this
+        // wrapper now treats as closed. Harmless even without this today
+        // (the delegate holds only a `Weak<MacOSWindow>`), but this is the
+        // documented AppKit-recommended cleanup, not just a FLUI habit.
+        //
+        // SAFETY: `ns_window` is alive for the lifetime of `self`.
+        unsafe {
+            let _: () = msg_send![self.ns_window, setDelegate: nil];
+        }
     }
 
     /// Handle backing properties changed (Retina/DPI change)
