@@ -72,9 +72,9 @@ pub struct LaidOut {
     /// Concrete identity of the caller's root below the presentation scopes.
     logical_root_type: TypeId,
     /// Whether this mount wrapped the caller in [`Align`] so a non-tight
-    /// [`lay_out`] request actually reaches the widget. [`pump_widget`] must
-    /// keep the same wrapper: `RootRenderView` swaps require the same child
-    /// type as the original mount.
+    /// [`lay_out`] request actually reaches the widget. [`Self::pump_widget`]
+    /// must keep the same wrapper: `RootRenderView` swaps require the same
+    /// child type as the original mount.
     loosen_with_align: bool,
     /// Additional constraints re-applied under the [`Align`] loosener when
     /// the caller asked for a non-zero minimum. `Align` loosens to `0..=max`,
