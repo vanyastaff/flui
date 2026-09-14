@@ -16,12 +16,20 @@
 //!   below it — including an unkeyed stateful child — is rebuilt from scratch
 //!   (flutter/flutter#161698). Here the options are *fields*, so no element
 //!   moves and no state is lost.
-//! * **Node count only favors the collapse from two options up.** Flutter's
-//!   stack costs zero extra nodes at identity (no options set — the widget
-//!   *is* the child) and exactly one extra node per option set below that:
-//!   a single option (say, just `padding`) built exactly one `RenderPadding`
-//!   there too, so folding into `RenderContainer` is a wash on count at one
-//!   option and only wins from two up.
+//! * **Node count depends on whether there is a child.** With a child,
+//!   Flutter's stack costs zero extra nodes at identity (no options set —
+//!   the widget passes the child straight through) and exactly one extra
+//!   node per option set below that: a single option (say, just `padding`)
+//!   built exactly one `RenderPadding` there too, so folding into
+//!   `RenderContainer` is a wash on count at one option and only wins from
+//!   two up. **Childless, Flutter is never free**: `build` reaches for a
+//!   two-node placeholder (`LimitedBox` + `ConstrainedBox`) even with no
+//!   option set at all (`Container()`), so the collapse already wins there;
+//!   a bare `width`/`height` spacer with no other option set is the one
+//!   childless configuration that ties, Flutter's own single
+//!   `ConstrainedBox` against this one node. Every other childless option —
+//!   color, padding, decoration, an alignment paired with a fixed size —
+//!   only grows Flutter's node count further.
 //! * **The collapsed node is heavier in every configuration**, identity
 //!   included: `RenderContainer` carries every field — alignment, padding,
 //!   margin, color, decoration, additional constraints, transform, plus the
@@ -323,8 +331,10 @@ impl RenderContainer {
     ///   constraints, where `min == max` makes every candidate coincide.
     ///
     /// Collapsing the stack therefore collapses the branch too. The three
-    /// configurations are pinned separately by
-    /// `harness_container_childless_branches_all_size_the_same`.
+    /// Flutter shapes are diffed against `RenderContainer` AND against each
+    /// other — including the placeholder forced under the tight additional
+    /// constraints Flutter itself never builds it under — by
+    /// `harness_container_childless_matches_each_flutter_shape_it_replaces`.
     fn childless_content_size(constraints: &BoxConstraints) -> Size {
         let width = if constraints.has_bounded_width() {
             constraints.max_width

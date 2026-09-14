@@ -973,19 +973,28 @@ Two properties follow, and both are the reason for the divergence:
 * **State survives every toggle** with no `GlobalKey`, no retake, and no
   lifecycle churn — nothing for the caller to opt into, and no reparenting
   semantics leaking into an unmoved subtree.
-* **Node count only favors the collapse from two options up.** At identity
-  (no options at all) the widget *is* the child — zero extra nodes — so
-  Flutter is cheaper there. At exactly one option, Flutter's stack is also
-  exactly one extra node (a single `padding` builds one `RenderPadding`), so
-  node count ties. `RenderContainer` only wins on count from two options up,
-  where Flutter would otherwise stack one level per option (up to seven if
-  every option is set). **What it does not win is node weight**:
-  `RenderContainer` carries every field — alignment, padding, margin, color,
-  decoration, additional constraints, transform, plus the committed child
-  offset/size/baselines — whether or not that option is set, so it is
-  heavier than whichever single-purpose object the stack would have used, in
-  every configuration including identity. The reason for the divergence is
-  the stable slot, not a cheaper or lighter `Container`.
+* **Node count depends on whether there is a child.** With a child, identity
+  (no options at all) is the widget passing the child straight through —
+  zero extra nodes — so Flutter is cheaper there. At exactly one option,
+  Flutter's stack is also exactly one extra node (a single `padding` builds
+  one `RenderPadding`), so node count ties. `RenderContainer` only wins on
+  count from two options up, where Flutter would otherwise stack one level
+  per option (up to seven if every option is set). **Childless, Flutter is
+  never free**: `build` reaches for a two-node placeholder (`LimitedBox` +
+  `ConstrainedBox`) even with no option set at all (`Container()`), so
+  `RenderContainer` already wins there. A bare `width`/`height` spacer with
+  no other option set is the one childless configuration that ties —
+  Flutter's own single `ConstrainedBox` against one node here — and every
+  other childless option (color, padding, decoration, an alignment paired
+  with a fixed size) only grows Flutter's node count further, never brings
+  it back below one. **What node count never buys, in either regime, is
+  node weight**: `RenderContainer` carries every field — alignment, padding,
+  margin, color, decoration, additional constraints, transform, plus the
+  committed child offset/size/baselines — whether or not that option is
+  set, so it is heavier than whichever single-purpose object the stack
+  would have used, in every configuration including identity. The reason
+  for the divergence is the stable slot, not a cheaper or lighter
+  `Container`.
 
 **Intrinsics:** a tight additional width or height answers before the child
 is queried, matching `RenderConstrainedBox`. Without that short-circuit a
@@ -1008,16 +1017,54 @@ Covered by
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
 inner widget at all — all resolve to the same box, so `RenderContainer` has no
 childless branch. The equality is proven, not assumed, by
-`harness_container_childless_branches_all_size_the_same`.
+`harness_container_childless_matches_each_flutter_shape_it_replaces`, which
+diffs each real shape against `RenderContainer` under the configuration
+Flutter would pick it for, and additionally forces the placeholder shape
+under the tight additional constraints branches two and three use, so all
+three shapes are diffed against EACH OTHER too, not only each against
+`RenderContainer`.
 
 **Not carried over:** `foregroundDecoration`, `clipBehavior`, `isAntiAlias` and
-`transformAlignment` have no FLUI `Container` setter, and a `BoxDecoration`
-border's thickness is still not folded into the effective padding
-(`_paddingIncludingDecoration`) because `flui-types`' `BoxDecoration` exposes no
-border insets. Flutter also `assert`s that `color` and `decoration` are
-mutually exclusive; FLUI accepts both and paints color over the decoration —
-the order the widget stack would have produced (`DecoratedBox` enclosing
-`ColoredBox`) — rather than panicking.
+`transformAlignment` have no FLUI `Container` setter. These are four
+different kinds of gap, not one undifferentiated "not yet":
+
+- **`clipBehavior` does not fit this shape at all.** [`PaintEffects`] gives a
+  node exactly one clip slot, wrapping everything the node's `paint` records
+  as one fragment. Flutter's `ClipPath` (the `clipBehavior != Clip.none`
+  branch in `Container.build`) sits between `ColoredBox` and `DecoratedBox`:
+  it clips the padding, color and child, and explicitly does **not** clip
+  the decoration (`DecoratedBox` wraps the already-clipped `current`
+  afterward, unclipped). `RenderContainer::paint` records decoration, color
+  and child as one fragment, so a `PaintEffects.clip` here would clip the
+  decoration too — wrong. Adding this needs a paint-level re-split (a second
+  recorded fragment, or a clip scoped to a sub-range of one), not a new
+  `Option` field.
+- **`foregroundDecoration` is additive.** A second decoration field, a
+  `paint_box_decoration` call after the child (Flutter's `DecorationPosition
+  .foreground`, painted on top rather than behind), and a hit arm —
+  `DecoratedBox`'s own doc states a foreground decoration participates in
+  `hitTestSelf` exactly like the background one does.
+- **`transformAlignment` is additive but not local.** It needs an
+  `alignment: Option<Alignment>` field folded into the pivot the way
+  [`RenderTransform::effective_transform`] already combines one with its own
+  base matrix, and that combined value would have to move together through
+  `apply_paint_transform`, `hit_test`'s inverse, `paint_translation`,
+  `skip_paint` and `owns_effect_layer` — every site that reads `self.transform`
+  today.
+- **`isAntiAlias` is additive and narrow.** In Flutter it is a `ColoredBox`-
+  only flag (`Container.build`'s `ColoredBox(color:, isAntiAlias:, …)` call);
+  nothing else in the stack reads it. FLUI's own color fill
+  (`ctx.canvas().draw_rect(rect, &Paint::fill(color))`) always anti-aliases
+  (`Paint::fill`'s default), with `Paint::with_anti_alias` already available
+  to turn it off — adding the setter is one field plus one call-site change,
+  not a structural gap.
+
+A `BoxDecoration` border's thickness is separately still not folded into the
+effective padding (`_paddingIncludingDecoration`) because `flui-types`'
+`BoxDecoration` exposes no border insets. Flutter also `assert`s that `color`
+and `decoration` are mutually exclusive; FLUI accepts both and paints color
+over the decoration — the order the widget stack would have produced
+(`DecoratedBox` enclosing `ColoredBox`) — rather than panicking.
 
 **Replacement tests:** the geometry the collapsed stack owes is pinned against
 the stack itself by `harness_container_matches_the_widget_stack_it_collapses`

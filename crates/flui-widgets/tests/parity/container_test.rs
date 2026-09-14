@@ -373,11 +373,10 @@ fn container_discards_alignment_when_childless_and_constraints_not_tight() {
     // constraints alone, with no `&self` parameter at all, so it is
     // structurally incapable of reading `alignment` — any childless
     // `Container` under the same constraints reaches this same size by
-    // construction. That equality is the actual oracle, and it is proven
-    // once, independently of any one configuration, by
-    // `harness_container_childless_branches_all_size_the_same`. What
-    // remains a real pin here is the concrete size a childless, aligned
-    // `Container` reaches under these bounded constraints.
+    // construction, and that is true by the function's signature, not by
+    // anything a test proves. What remains a real pin here is the concrete
+    // size a childless, aligned `Container` reaches under these bounded
+    // constraints.
     assert_eq!(
         laid.size(laid.root()),
         size(1000.0, 1000.0),

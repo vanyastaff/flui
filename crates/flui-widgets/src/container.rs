@@ -29,18 +29,25 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///   (flutter/flutter#161698). Here the options are render-object fields, so
 ///   the child's slot never moves and no state is lost. No `GlobalKey`, no
 ///   reparenting, nothing for the caller to opt into.
-/// * **Node count only favors this from two options up.** Flutter's stack
-///   costs zero extra nodes at identity (no options → the child itself) and
-///   exactly one extra node per option set below that — a single option
-///   (say, just `padding`) built exactly one `RenderPadding` there too, so
-///   one node here is a wash on count against one node there, not a win.
-///   From two options up, one node here beats Flutter's per-option levels
-///   (up to seven if every option is set). What one node here does *not* buy
-///   is a lighter node: `RenderContainer` carries every field whether or not
-///   that option is set, so it is heavier than whichever single-purpose
-///   object the stack would have used, in every configuration including
-///   identity. The reason for the divergence is the stable child slot, not a
-///   cheaper or lighter `Container`. Because the identity case is still a
+/// * **Node count depends on whether there is a child.** With a child,
+///   Flutter's stack costs zero extra nodes at identity (no options → the
+///   child itself) and exactly one extra node per option set below that — a
+///   single option (say, just `padding`) built exactly one `RenderPadding`
+///   there too, so one node here is a wash on count against one node there
+///   at one option, and only wins from two up (up to seven if every option
+///   is set). Childless, Flutter is never free: `build` reaches for a
+///   two-node placeholder (`LimitedBox` + `ConstrainedBox`) even with no
+///   option set at all (`Container()`), so one node here already wins there;
+///   a bare `width`/`height` spacer with no other option set is the one
+///   childless configuration that ties, Flutter's own single
+///   `ConstrainedBox` against one node here. Every other childless option —
+///   color, padding, decoration, an alignment paired with a fixed size —
+///   only grows Flutter's node count further. What one node here does *not*
+///   buy, in either regime, is a lighter node: `RenderContainer` carries
+///   every field whether or not that option is set, so it is heavier than
+///   whichever single-purpose object the stack would have used. The reason
+///   for the divergence is the stable child slot, not a cheaper or lighter
+///   `Container`. Because the identity case (with a child) is still a
 ///   `RenderContainer`, it is **not** parent-data-transparent: put
 ///   [`crate::Expanded`] / [`crate::Positioned`] *around* the container
 ///   (`Row → Expanded → Container`), not inside it.
