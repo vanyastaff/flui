@@ -146,8 +146,14 @@ pub enum BuildCapabilities {
 /// Root constraints and capability policy for a bootstrap.
 #[derive(Debug, Clone, Copy)]
 pub struct MountOptions {
-    /// Constraints installed on the pipeline root before the first frame.
-    /// Setting them is what marks the root dirty for that frame's layout.
+    /// Seeds the root view's size — it is never installed on the pipeline
+    /// root verbatim. `root_view_size` takes this value's biggest size,
+    /// falling back per-axis to 800×600 where an axis is unbounded, and the
+    /// pipeline root is tightened to that seeded size before the first
+    /// frame. An unbounded axis here therefore never reaches the pipeline
+    /// `RenderView` (which rejects one outright) — it becomes 800 or 600
+    /// instead. [`HeadlessBinding::mount_root`] installs a fresh value every
+    /// call, which is what marks the root dirty for that frame's layout.
     pub constraints: BoxConstraints,
     /// Which capabilities the `BuildOwner` carries into the mount pass.
     pub capabilities: BuildCapabilities,
@@ -271,7 +277,12 @@ impl HeadlessBinding {
     ///    whole subtree's render objects;
     /// 4. **verify** the single parentless render node equals the already-
     ///    installed pipeline root (the scan does not invent `root_id`);
-    /// 5. install root constraints from [`MountOptions::constraints`];
+    /// 5. tighten the pipeline root to `root_view_size` of
+    ///    [`MountOptions::constraints`] — that constraint's biggest size,
+    ///    falling back per-axis to 800×600 where it is unbounded — never
+    ///    `options.constraints` installed verbatim: the pipeline `RenderView`
+    ///    rejects an unbounded root constraint outright, so an unbounded
+    ///    caller axis becomes the finite fallback instead of reaching it;
     /// 6. run the layout↔build fixpoint — the same
     ///    `run_frame_with_layout_builders` helper `pump_frame`'s pipeline step
     ///    and the live `draw_frame` use, never a bare
