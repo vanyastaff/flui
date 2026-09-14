@@ -291,6 +291,32 @@ mod tests {
 
     impl_parent_data_view!(TestFlexible);
 
+    /// Render parent that accepts [`TestParentData`] on children — mirrors a
+    /// Flex/Stack host for the attach-seam TypeId check.
+    #[derive(Debug, Default)]
+    struct TestParentDataHostBox;
+
+    impl flui_foundation::Diagnosticable for TestParentDataHostBox {}
+
+    impl flui_rendering::traits::RenderBox for TestParentDataHostBox {
+        type Arity = flui_tree::Leaf;
+        type ParentData = TestParentData;
+
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                Self::ParentData,
+            >,
+        ) -> flui_types::geometry::Size {
+            flui_types::geometry::Size::new(
+                flui_types::geometry::px(1.0),
+                flui_types::geometry::px(1.0),
+            )
+        }
+    }
+
     #[derive(Clone)]
     struct ParentHost {
         child: TestFlexible,
@@ -298,13 +324,13 @@ mod tests {
 
     impl crate::RenderView for ParentHost {
         type Protocol = BoxProtocol;
-        type RenderObject = RenderSizedBox;
+        type RenderObject = TestParentDataHostBox;
 
         fn create_render_object(
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::shrink()
+            TestParentDataHostBox
         }
 
         fn update_render_object(

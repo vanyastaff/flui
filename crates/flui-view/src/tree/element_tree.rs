@@ -2934,6 +2934,137 @@ mod tests {
         }
     }
 
+    /// Leaf render host that declares a specific child [`ParentData`] type so
+    /// `ParentDataView` fixtures can sit under a compatible render parent.
+    struct AcceptingParentDataBox<P> {
+        _marker: std::marker::PhantomData<P>,
+    }
+
+    impl<P> Default for AcceptingParentDataBox<P> {
+        fn default() -> Self {
+            Self {
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<P> std::fmt::Debug for AcceptingParentDataBox<P> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("AcceptingParentDataBox").finish()
+        }
+    }
+
+    impl<P: 'static> flui_foundation::Diagnosticable for AcceptingParentDataBox<P> {}
+
+    impl<P> flui_rendering::traits::RenderBox for AcceptingParentDataBox<P>
+    where
+        P: flui_rendering::ParentData + Default + 'static,
+    {
+        type Arity = flui_tree::Leaf;
+        type ParentData = P;
+
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                Self::ParentData,
+            >,
+        ) -> flui_types::geometry::Size {
+            flui_types::geometry::Size::new(
+                flui_types::geometry::px(1.0),
+                flui_types::geometry::px(1.0),
+            )
+        }
+    }
+
+    #[derive(Clone)]
+    struct RelocationHostA;
+
+    impl RenderView for RelocationHostA {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = AcceptingParentDataBox<RelocationParentDataA>;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            AcceptingParentDataBox::default()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for RelocationHostA {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[derive(Clone)]
+    struct RelocationHostB;
+
+    impl RenderView for RelocationHostB {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = AcceptingParentDataBox<RelocationParentDataB>;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            AcceptingParentDataBox::default()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for RelocationHostB {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[derive(Clone)]
+    struct AttachOrderHost;
+
+    impl RenderView for AttachOrderHost {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = AcceptingParentDataBox<AttachOrderParentData>;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            AcceptingParentDataBox::default()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for AttachOrderHost {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
     #[derive(Clone)]
     struct KeyedUnitRenderHost {
         key: GlobalKey<()>,
@@ -3964,13 +4095,14 @@ mod tests {
     }
 
     fn relocate_keyed_render_child_through(
+        destination_render_parent_view: &dyn View,
         destination_wrapper: &dyn View,
     ) -> (PipelineCell, RenderId) {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
         let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
         let root = tree.mount_root_with_pipeline_owner(
-            &UnitRenderHost,
+            &RelocationHostA,
             Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
@@ -3995,8 +4127,12 @@ mod tests {
             .expect("donor wrapper")
             .set_child_ids(vec![moved]);
 
-        let destination_render_parent =
-            tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let destination_render_parent = tree.insert(
+            destination_render_parent_view,
+            root,
+            1,
+            &mut owner.element_owner_mut(),
+        );
         let destination_wrapper = tree.insert(
             destination_wrapper,
             destination_render_parent,
@@ -4048,7 +4184,8 @@ mod tests {
             value: 41,
             child: KeyedUnitRenderHost { key },
         };
-        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        let (pipeline, moved_render) =
+            relocate_keyed_render_child_through(&RelocationHostA, &destination);
         pipeline.with(|owner| {
             assert_eq!(
                 owner
@@ -4069,7 +4206,8 @@ mod tests {
             label: 73,
             child: KeyedUnitRenderHost { key },
         };
-        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        let (pipeline, moved_render) =
+            relocate_keyed_render_child_through(&RelocationHostB, &destination);
         pipeline.with(|owner| {
             let moved = owner.render_tree().get(moved_render).expect("moved render");
             assert!(
@@ -4092,7 +4230,8 @@ mod tests {
         let destination = TestView {
             name: "transparent destination".into(),
         };
-        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        let (pipeline, moved_render) =
+            relocate_keyed_render_child_through(&UnitRenderHost, &destination);
         pipeline.with(|owner| {
             assert!(
                 owner
@@ -4113,7 +4252,7 @@ mod tests {
         let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
         let events = RelocationEvents::default();
         let root = tree.mount_root_with_pipeline_owner(
-            &UnitRenderHost,
+            &AttachOrderHost,
             Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
@@ -4137,7 +4276,7 @@ mod tests {
             .unwrap()
             .set_child_ids(vec![moved]);
         let destination_render_parent =
-            tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+            tree.insert(&AttachOrderHost, root, 1, &mut owner.element_owner_mut());
         let destination_wrapper = tree.insert(
             &AttachOrderParentDataView {
                 value: 88,
@@ -4171,7 +4310,6 @@ mod tests {
             [
                 "parent-data-detach",
                 "render-detach",
-                "parent-data-create",
                 "parent-data-create",
                 "render-attach",
             ],
