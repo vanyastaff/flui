@@ -22,7 +22,10 @@
 //! `widget_override_is_ignored_when_disabled_even_if_selected`/
 //! `widget_override_is_ignored_when_unselected`), plus `CheckboxPainter`'s
 //! own paint-invocation proof (`draws_the_correct_mark_per_tristate_value`,
-//! a real `Canvas`/`DisplayList` recording).
+//! a real `Canvas`/`DisplayList` recording). The illegal
+//! `(None, tristate: false)` pair is unrepresentable at the type level
+//! (`CheckboxMode`); the a11y cases below prove indeterminate still exports
+//! `Toggled::Mixed` while binary never does.
 
 mod common;
 
@@ -31,6 +34,7 @@ use std::rc::Rc;
 
 use common::{lay_out, size, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
+use flui_testing::a11y::Toggled;
 
 /// The checkbox's full tap target — Flutter parity: `kMinInteractiveDimension`
 /// (`constants.dart`, `48.0`, oracle tag `3.44.0`), the branch
@@ -53,7 +57,7 @@ fn themed(checkbox: Checkbox) -> Theme {
 #[test]
 fn mounting_a_checkbox_creates_a_semantics_annotated_tap_target() {
     let laid = lay_out(
-        themed(Checkbox::new(Some(false)).on_changed(|_| {})),
+        themed(Checkbox::new(false).on_changed(|_| {})),
         constraints(),
     );
 
@@ -68,7 +72,7 @@ fn tap_fires_on_changed_with_the_next_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
-        themed(Checkbox::new(Some(false)).on_changed(move |next| {
+        themed(Checkbox::new(false).on_changed(move |next| {
             *recorder.borrow_mut() = Some(next);
         })),
         constraints(),
@@ -95,7 +99,7 @@ fn tristate_cycle_survives_a_rebuild_between_each_tap() {
     let observed: Rc<RefCell<Option<bool>>> = Rc::new(RefCell::new(None));
 
     let build = |value: Option<bool>, sink: Rc<RefCell<Option<bool>>>| {
-        themed(Checkbox::new(value).tristate(true).on_changed(move |next| {
+        themed(Checkbox::tristate(value).on_changed(move |next| {
             *sink.borrow_mut() = next;
         }))
     };
@@ -128,7 +132,7 @@ fn disabled_checkbox_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
     // wiring survives `did_update_view`, not just the initial mount.
     let taps = Rc::new(RefCell::new(0_u32));
 
-    let laid_disabled = lay_out(themed(Checkbox::new(Some(false))), constraints());
+    let laid_disabled = lay_out(themed(Checkbox::new(false)), constraints());
     laid_disabled.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
     laid_disabled.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
     // No on_changed at all: nothing to observe going wrong beyond "does not
@@ -137,7 +141,7 @@ fn disabled_checkbox_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
 
     let mut laid_enabled = laid_disabled;
     let counter = Rc::clone(&taps);
-    laid_enabled.pump_widget(themed(Checkbox::new(Some(false)).on_changed(move |_| {
+    laid_enabled.pump_widget(themed(Checkbox::new(false).on_changed(move |_| {
         *counter.borrow_mut() += 1;
     })));
     laid_enabled.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
@@ -147,5 +151,55 @@ fn disabled_checkbox_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
         *taps.borrow(),
         1,
         "adding on_changed on rebuild must make the very next tap interactive",
+    );
+}
+
+/// Mounts `checkbox` with a unique label, enables semantics, and returns the
+/// AccessKit toggle state announced for that label.
+fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
+    let mut laid = lay_out(
+        themed(checkbox.semantic_label(label).on_changed(|_| {})),
+        constraints(),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    laid.a11y_tree()
+        .expect("semantics enabled before the frame")
+        .find_by_label(label)
+        .unwrap_or_else(|error| panic!("expected one node labeled {label:?}: {error}"))
+        .toggled()
+}
+
+#[test]
+fn indeterminate_tristate_exports_mixed_semantics() {
+    // Issue #1102 AC: valid tristate `None` paints the dash (unit-covered)
+    // AND exports mixed — never the old release hole of dash + unchecked.
+    assert_eq!(
+        announced_toggled(Checkbox::tristate(None), "indeterminate"),
+        Some(Toggled::Mixed),
+    );
+}
+
+#[test]
+fn binary_checkbox_never_exports_mixed_semantics() {
+    assert_eq!(
+        announced_toggled(Checkbox::new(false), "binary-off"),
+        Some(Toggled::False),
+    );
+    assert_eq!(
+        announced_toggled(Checkbox::new(true), "binary-on"),
+        Some(Toggled::True),
+    );
+}
+
+#[test]
+fn tristate_some_values_export_checked_not_mixed() {
+    assert_eq!(
+        announced_toggled(Checkbox::tristate(Some(false)), "tri-off"),
+        Some(Toggled::False),
+    );
+    assert_eq!(
+        announced_toggled(Checkbox::tristate(Some(true)), "tri-on"),
+        Some(Toggled::True),
     );
 }

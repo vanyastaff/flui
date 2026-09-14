@@ -21,8 +21,9 @@
 //! already substitutes `InkWell` for `RawMaterialButton`'s ink-feature
 //! registry. Named deferral, not a silent drop: a future animated Checkbox
 //! reintroduces `AnimationController`-driven interpolation without changing
-//! this type's public surface (`value`/`tristate`/`on_changed` are already
-//! the oracle's steady-state contract).
+//! this type's public surface (`value` via [`Checkbox::new`] /
+//! [`Checkbox::tristate`], plus `on_changed`, are already the oracle's
+//! steady-state contract).
 //!
 //! # Composition: `InkWell` owns interaction, `Checkbox` owns `Selected`
 //!
@@ -139,20 +140,23 @@ type CheckboxChangeCallback = Rc<dyn Fn(Option<bool>)>;
 ///
 /// The checkbox itself holds no state: [`Checkbox::on_changed`] fires with
 /// the next value on tap, and the caller re-renders with the updated
-/// `value` — see the module docs for what "next value" means under
-/// [`Checkbox::tristate`].
+/// `value`. Construct with [`Checkbox::new`] for a binary on/off control, or
+/// [`Checkbox::tristate`] when the third (`None`/indeterminate) value is
+/// allowed. Storage is a private mode enum (binary vs tristate), so
+/// `(value: None, tristate: false)` is not representable even inside this
+/// module (Flutter only `assert`s the pair in debug; FLUI closes the release
+/// hole — same public-widget invariant class as GitHub #1101 for tabs).
 ///
 /// ```rust
 /// use flui_material::Checkbox;
 ///
-/// let _off = Checkbox::new(Some(false)).on_changed(|_next| { /* ... */ });
-/// let _tristate = Checkbox::new(None).tristate(true);
-/// let _disabled = Checkbox::new(Some(true));
+/// let _off = Checkbox::new(false).on_changed(|_next| { /* ... */ });
+/// let _tristate = Checkbox::tristate(None);
+/// let _disabled = Checkbox::new(true);
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct Checkbox {
-    value: Option<bool>,
-    tristate: bool,
+    mode: CheckboxMode,
     on_changed: Option<CheckboxChangeCallback>,
     active_color: Option<Color>,
     check_color: Option<Color>,
@@ -160,11 +164,61 @@ pub struct Checkbox {
     semantic_label: Option<String>,
 }
 
+/// Binary vs tristate value storage. Keeping these as one enum (not independent
+/// `Option<bool>` + `bool` fields) is what makes the illegal pair unrepresentable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckboxMode {
+    Binary(bool),
+    Tristate(Option<bool>),
+}
+
+impl CheckboxMode {
+    /// The oracle's `value` field: always `Some` for binary, `None` when
+    /// indeterminate under tristate.
+    fn value(self) -> Option<bool> {
+        match self {
+            Self::Binary(value) => Some(value),
+            Self::Tristate(value) => value,
+        }
+    }
+
+    /// Flutter parity: `value ?? true` for `WidgetState.selected`.
+    fn is_selected(self) -> bool {
+        self.value().unwrap_or(true)
+    }
+}
+
+/// Checked / mixed flags exported to assistive tech for a given mode.
+///
+/// Extracted so unit tests can pin the binary vs indeterminate mapping without
+/// mounting a tree — the integration suite then proves the same flags reach
+/// AccessKit as `Toggled::Mixed` / `True` / `False`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CheckboxSemanticsFlags {
+    checked: bool,
+    mixed: bool,
+}
+
+fn checkbox_semantics_flags(mode: CheckboxMode) -> CheckboxSemanticsFlags {
+    match mode {
+        CheckboxMode::Tristate(None) => CheckboxSemanticsFlags {
+            // Mixed + checked(false) is the AccessKit form of indeterminate.
+            checked: false,
+            mixed: true,
+        },
+        CheckboxMode::Binary(value) | CheckboxMode::Tristate(Some(value)) => {
+            CheckboxSemanticsFlags {
+                checked: value,
+                mixed: false,
+            }
+        }
+    }
+}
+
 impl std::fmt::Debug for Checkbox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Checkbox")
-            .field("value", &self.value)
-            .field("tristate", &self.tristate)
+            .field("mode", &self.mode)
             .field("is_interactive", &self.is_interactive())
             .field("is_error", &self.is_error)
             .finish_non_exhaustive()
@@ -172,18 +226,12 @@ impl std::fmt::Debug for Checkbox {
 }
 
 impl Checkbox {
-    /// Creates a checkbox at `value`, tristate disabled, no change handler
-    /// (disabled), no overrides.
-    ///
-    /// `value` may only be `None` once [`Self::tristate`] is enabled —
-    /// checked with `debug_assert!`, matching the oracle's own
-    /// `assert(tristate || value != null)` (`checkbox.dart`, a debug-only
-    /// constructor invariant in both Dart and Rust).
+    /// Creates a binary (on/off) checkbox. Indeterminate is not representable
+    /// on this path — use [`Self::tristate`] when `None` is needed.
     #[must_use]
-    pub fn new(value: Option<bool>) -> Self {
+    pub fn new(value: bool) -> Self {
         Self {
-            value,
-            tristate: false,
+            mode: CheckboxMode::Binary(value),
             on_changed: None,
             active_color: None,
             check_color: None,
@@ -192,12 +240,19 @@ impl Checkbox {
         }
     }
 
-    /// Enables the third (`None`/indeterminate) value. See the tap-cycle
-    /// order documented on `Checkbox::on_changed`.
+    /// Creates a tristate checkbox. `None` means indeterminate; `Some(false)` /
+    /// `Some(true)` are the off/on arms of the same cycle. See the tap-cycle
+    /// order documented on [`Self::on_changed`].
     #[must_use]
-    pub fn tristate(mut self, tristate: bool) -> Self {
-        self.tristate = tristate;
-        self
+    pub fn tristate(value: Option<bool>) -> Self {
+        Self {
+            mode: CheckboxMode::Tristate(value),
+            on_changed: None,
+            active_color: None,
+            check_color: None,
+            is_error: false,
+            semantic_label: None,
+        }
     }
 
     /// Sets the change handler. Presence of a handler is what makes this
@@ -254,16 +309,11 @@ impl Checkbox {
     /// (value)` (`checkbox.dart` `:241-248`): `false -> true`, `true ->
     /// tristate ? null : false`, `null -> false`.
     fn next_value(&self) -> Option<bool> {
-        match self.value {
-            Some(false) => Some(true),
-            Some(true) => {
-                if self.tristate {
-                    None
-                } else {
-                    Some(false)
-                }
-            }
-            None => Some(false),
+        match self.mode {
+            CheckboxMode::Binary(false) | CheckboxMode::Tristate(Some(false)) => Some(true),
+            CheckboxMode::Tristate(Some(true)) => None,
+            // Binary true wraps to false; tristate null advances to false.
+            CheckboxMode::Binary(true) | CheckboxMode::Tristate(None) => Some(false),
         }
     }
 }
@@ -293,8 +343,7 @@ impl StatefulView for Checkbox {
         // WidgetState.selected` — seeded from the initial view (`&self`
         // here IS that initial view), so `Selected` is correct before the
         // first `build` rather than needing a same-frame correction.
-        let selected = self.value.unwrap_or(true);
-        let initial = if selected {
+        let initial = if self.mode.is_selected() {
             WidgetStates::from(WidgetState::Selected)
         } else {
             WidgetStates::NONE
@@ -323,18 +372,13 @@ impl ViewState<Checkbox> for CheckboxState {
         // change (`checkbox.dart` `:424-430`); V1 has no animation to drive,
         // so this resyncs `Selected` directly. Never called from `build` —
         // same care `InkWellState::did_update_view` takes.
-        if old_view.value != new_view.value {
-            let selected = new_view.value.unwrap_or(true);
-            self.states.update(WidgetState::Selected, selected);
+        if old_view.mode.value() != new_view.mode.value() {
+            self.states
+                .update(WidgetState::Selected, new_view.mode.is_selected());
         }
     }
 
     fn build(&self, view: &Checkbox, ctx: &dyn BuildContext) -> impl IntoView {
-        debug_assert!(
-            view.tristate || view.value.is_some(),
-            "BUG: Checkbox::value must not be None unless Checkbox::tristate(true) is set"
-        );
-
         let theme = Theme::of(ctx);
         let checkbox_theme = theme.checkbox_theme.clone();
         let colors = theme.color_scheme;
@@ -388,7 +432,7 @@ impl ViewState<Checkbox> for CheckboxState {
             fill_color,
             side,
             check_color,
-            value: view.value,
+            value: view.mode.value(),
         });
 
         let interactive = view.is_interactive();
@@ -413,12 +457,11 @@ impl ViewState<Checkbox> for CheckboxState {
             });
         }
 
+        let flags = checkbox_semantics_flags(view.mode);
         let mut semantics = Semantics::new()
-            .checked(view.value.unwrap_or(false))
-            .enabled(interactive);
-        if view.tristate {
-            semantics = semantics.mixed(view.value.is_none());
-        }
+            .enabled(interactive)
+            .checked(flags.checked)
+            .mixed(flags.mixed);
         if let Some(label) = &view.semantic_label {
             semantics = semantics.label(label.clone());
         }
@@ -655,17 +698,35 @@ mod tests {
 
     #[test]
     fn new_leaves_every_override_unset_and_is_not_interactive() {
-        let checkbox = Checkbox::new(Some(false));
+        let checkbox = Checkbox::new(false);
         assert!(checkbox.active_color.is_none());
         assert!(checkbox.check_color.is_none());
-        assert!(!checkbox.tristate);
+        assert_eq!(checkbox.mode, CheckboxMode::Binary(false));
         assert!(!checkbox.is_error);
         assert!(!checkbox.is_interactive());
     }
 
     #[test]
+    fn tristate_constructor_allows_none_and_marks_tristate() {
+        let checkbox = Checkbox::tristate(None);
+        assert_eq!(checkbox.mode, CheckboxMode::Tristate(None));
+        assert!(matches!(checkbox.mode, CheckboxMode::Tristate(_)));
+        assert!(checkbox.mode.value().is_none());
+    }
+
+    #[test]
+    fn binary_constructor_never_stores_none() {
+        assert_eq!(Checkbox::new(false).mode, CheckboxMode::Binary(false));
+        assert_eq!(Checkbox::new(true).mode, CheckboxMode::Binary(true));
+        assert_eq!(Checkbox::new(false).mode.value(), Some(false));
+        assert_eq!(Checkbox::new(true).mode.value(), Some(true));
+        assert!(matches!(Checkbox::new(false).mode, CheckboxMode::Binary(_)));
+        assert!(matches!(Checkbox::new(true).mode, CheckboxMode::Binary(_)));
+    }
+
+    #[test]
     fn on_changed_makes_the_checkbox_interactive() {
-        let checkbox = Checkbox::new(Some(false)).on_changed(|_| {});
+        let checkbox = Checkbox::new(false).on_changed(|_| {});
         assert!(checkbox.is_interactive());
     }
 
@@ -675,26 +736,81 @@ mod tests {
 
     #[test]
     fn next_value_toggles_false_to_true_regardless_of_tristate() {
-        assert_eq!(Checkbox::new(Some(false)).next_value(), Some(true));
-        assert_eq!(
-            Checkbox::new(Some(false)).tristate(true).next_value(),
-            Some(true)
-        );
+        assert_eq!(Checkbox::new(false).next_value(), Some(true));
+        assert_eq!(Checkbox::tristate(Some(false)).next_value(), Some(true));
     }
 
     #[test]
     fn next_value_true_goes_to_false_when_not_tristate() {
-        assert_eq!(Checkbox::new(Some(true)).next_value(), Some(false));
+        assert_eq!(Checkbox::new(true).next_value(), Some(false));
     }
 
     #[test]
     fn next_value_true_goes_to_null_when_tristate() {
-        assert_eq!(Checkbox::new(Some(true)).tristate(true).next_value(), None);
+        assert_eq!(Checkbox::tristate(Some(true)).next_value(), None);
     }
 
     #[test]
     fn next_value_null_goes_to_false() {
-        assert_eq!(Checkbox::new(None).tristate(true).next_value(), Some(false));
+        assert_eq!(Checkbox::tristate(None).next_value(), Some(false));
+    }
+
+    /// The bug #1102 closed: independent `Option<bool>` + `tristate: bool`
+    /// fields allowed `None` without tristate, so paint drew a dash while
+    /// semantics reported unchecked/not-mixed. [`CheckboxMode`] makes that
+    /// pair unrepresentable; these flags are what `build` exports.
+    #[test]
+    fn semantics_flags_agree_with_mode_so_paint_and_a11y_cannot_diverge() {
+        assert_eq!(
+            checkbox_semantics_flags(CheckboxMode::Binary(false)),
+            CheckboxSemanticsFlags {
+                checked: false,
+                mixed: false,
+            },
+        );
+        assert_eq!(
+            checkbox_semantics_flags(CheckboxMode::Binary(true)),
+            CheckboxSemanticsFlags {
+                checked: true,
+                mixed: false,
+            },
+        );
+        assert_eq!(
+            checkbox_semantics_flags(CheckboxMode::Tristate(Some(false))),
+            CheckboxSemanticsFlags {
+                checked: false,
+                mixed: false,
+            },
+        );
+        assert_eq!(
+            checkbox_semantics_flags(CheckboxMode::Tristate(Some(true))),
+            CheckboxSemanticsFlags {
+                checked: true,
+                mixed: false,
+            },
+        );
+        assert_eq!(
+            checkbox_semantics_flags(CheckboxMode::Tristate(None)),
+            CheckboxSemanticsFlags {
+                checked: false,
+                mixed: true,
+            },
+            "indeterminate must export mixed — never checked(false) alone",
+        );
+    }
+
+    #[test]
+    fn public_constructors_only_produce_legal_modes() {
+        assert!(matches!(Checkbox::new(false).mode, CheckboxMode::Binary(_)));
+        assert!(Checkbox::new(false).mode.value().is_some());
+        assert!(matches!(
+            Checkbox::tristate(None).mode,
+            CheckboxMode::Tristate(_)
+        ));
+        assert!(matches!(
+            Checkbox::tristate(Some(true)).mode,
+            CheckboxMode::Tristate(_)
+        ));
     }
 
     // ------------------------------------------------------------------

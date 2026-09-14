@@ -20,6 +20,7 @@ Material Design theming foundation: `ColorScheme`, the M3 2021 type scale (`Typo
 - **The default `TextTheme` is baked once, at `ThemeData::light`/`dark` construction** — the oracle recomputes it lazily per `Theme.of` read, keyed on the ambient locale's script category (`Theme.build`'s `ThemeData.localize` step). FLUI has no script-category-resolving localization consumer yet, so this is a documented, named simplification, not a silent gap.
 - **`AnimatedTheme` / `ColorScheme`/`TextTheme` lerp are deferred** — no component consumes an interpolated theme yet.
 - **`MaterialApp` composes downward only** — it builds on `flui-widgets`' `WidgetsApp` (ADR-0028/ADR-0042: the design-neutral shell never learns about this crate). Theme *selection* (`ThemeMode`) lives here, next to the tokens it selects between — never in `flui-app` (ADR-0042 §2/§6).
+- **Public-widget invariants ship in release.** Caller-violable construction contracts on Material widgets (e.g. `Checkbox` value/tristate, and the same class as GitHub #1101 for `TabController` length/index) must not rely on `debug_assert!` alone. Prefer making the illegal state unrepresentable (typed constructors / private mode enum); use a release `assert!` only as a temporary fallback.
 
 ## Related crates
 
