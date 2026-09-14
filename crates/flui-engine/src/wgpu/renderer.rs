@@ -25,17 +25,23 @@
 //! ```rust,ignore
 //! use flui_engine::wgpu::Renderer;
 //!
-//! // Create renderer (automatically selects backend)
+//! // Create renderer (automatically selects backend). `window` is moved in
+//! // — an owned, `'static` handle source (see `WindowTarget`), not a
+//! // borrow — so the renderer can outlive the caller's stack frame.
 //! let renderer = Renderer::new(window).await?;
 //!
 //! // Render frame
 //! renderer.render(display_list)?;
 //! ```
 
+use std::cell::Cell;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use wgpu;
 
+use super::surface_lease::SurfaceLease;
+use super::window_target::WindowTarget;
 use crate::error::{EngineError, EngineResult};
 
 /// Surface-acquisition outcomes normalized away from wgpu's concrete frame
@@ -366,159 +372,58 @@ struct WindowedGpuStack {
 }
 
 /// Who constructed this renderer's `Instance`/`Adapter`/`Device`/`Queue`
-/// stack — decides whether [`Renderer::recover`] may run.
+/// stack — decides whether [`Renderer::recover`] may run, and (since
+/// issue #1043) whether a windowed [`SurfaceLease`] exists at all.
+///
+/// Collapses what used to be two independently-checked facts —
+/// `raw_handles.window.is_some()` and `gpu_stack_origin == Owned` covering
+/// both the windowed and offscreen cases — into one enum: `OwnedWindowed`
+/// is the only variant with a surface, full stop.
 ///
 /// A renderer built via [`Renderer::from_offscreen_services`] shares its
 /// stack with every other renderer built from the same `GpuServices`
 /// (ADR-0045 decision 2); it must not rebuild a private one in `recover()`,
 /// which would install a second `set_device_lost_callback` that only it
 /// observes. See [`EngineError::SharedServicesNotRecoverable`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GpuStackOrigin {
-    /// Built its own stack (`new`, `new_offscreen`); owns its own recovery.
-    Owned,
+    /// Built its own windowed stack (`new`); owns its own recovery and the
+    /// [`WindowTarget`] the surface was built from.
+    OwnedWindowed {
+        /// The owned target and the surface built from it. See
+        /// [`SurfaceLease`]'s doc for the field-order/drop-order invariant.
+        lease: SurfaceLease<wgpu::Surface<'static>>,
+    },
+    /// Built its own offscreen (no-surface) stack (`new_offscreen`); owns
+    /// its own recovery.
+    OwnedOffscreen,
     /// Shares a `GpuServices` value; recovery is the owner thread's job.
     SharedServices,
-}
-
-/// The renderer's two raw platform handles, wrapped so `Renderer: Send`
-/// follows by compiler derivation instead of a blanket, hand-written
-/// assertion covering every field.
-///
-/// `RawWindowHandle`/`RawDisplayHandle` contain `NonNull<c_void>` on some
-/// platforms (e.g. `UiKitWindowHandle`) and are therefore `!Send` by
-/// default. Confining them behind this newtype means the crate's one
-/// manual `unsafe impl Send` reasons about exactly these two fields — see
-/// its SAFETY comment below — rather than asserting `Send` for every field
-/// `Renderer` has today *and every field it gains later* (ADR-0045
-/// decision 1: the old blanket `Send` impl on `Renderer` itself reasoned
-/// about only these two handles).
-struct RawHandles {
-    /// `None` for offscreen renderers.
-    window: Option<raw_window_handle::RawWindowHandle>,
-    /// `None` for offscreen renderers, alongside `window`.
-    display: Option<raw_window_handle::RawDisplayHandle>,
-}
-
-// SAFETY: `RawHandles` is Plain-Old-Data -- two `Copy` enums, no pointee is
-// touched by relocating the value itself, so *moving* it to another thread
-// cannot race or corrupt memory on its own. That is the whole of what
-// `Send` promises; it says nothing about which thread may legally *use*
-// the pointee, and this crate's one consumer of these fields
-// (`Renderer::recover`, via `build_windowed_gpu_stack` and its
-// `create_surface_unsafe` call) does dereference them, exclusively under
-// `&mut self` (no two threads can call `recover` concurrently on the same
-// `Renderer`). Per platform, checked against the crates actually in this
-// workspace's dependency graph rather than assumed:
-//
-// - **Win32** (`Win32WindowHandle` / `WindowsDisplayHandle`): the HWND is
-//   an opaque value (`NonZeroIsize`), not a pointer into thread-owned
-//   memory; raw-window-handle 0.6.2 itself asserts
-//   `Win32WindowHandle: Send + Sync` (src/lib.rs:482). Creating a DXGI
-//   swap chain against an HWND from a thread other than the one that
-//   created the window is a documented, widely used pattern -- the
-//   message-loop is the HWND's only thread-affine property, and nothing
-//   here posts messages. `WindowsDisplayHandle` is a zero-field marker
-//   (raw-window-handle src/windows.rs) -- nothing to invalidate.
-// - **AppKit** (`AppKitWindowHandle` / `AppKitDisplayHandle`): **not safe
-//   to dereference off the main thread today.** raw-window-handle 0.6.2
-//   documents this directly -- "NSView can only be accessed from the main
-//   thread of the application. This struct is `!Send` and `!Sync` to help
-//   with ensuring that" (src/appkit.rs) -- and wgpu-hal 30.0.1's
-//   Metal backend enforces it in code: `Instance::create_surface`
-//   (src/metal/mod.rs) calls `raw_window_metal::Layer::from_ns_view`,
-//   which panics via `MainThreadMarker::new().expect(..)` off the main
-//   thread (raw-window-metal 1.1.0 src/lib.rs).
-//   `AppKitDisplayHandle` is itself a zero-field marker, so the display
-//   half is inert; the window half is the hazard. **This means
-//   `Renderer::recover()` -- which ADR-0045 decision 1 designates
-//   raster-affine -- cannot run on a non-main raster thread on AppKit
-//   without hitting this panic.** That is a gap between this narrowing and
-//   decision 1's stated plan, not something this argument papers over: it
-//   is a known, reported, open finding against the ADR, not resolved by
-//   this impl. `Send` itself stays sound (relocating the bytes alone does
-//   nothing), but a raster-thread `recover()` call is not safe to reach on
-//   this platform yet.
-// - **X11 via winit's fallback backend** (`XlibWindowHandle` /
-//   `XlibDisplayHandle`): safe. `XlibWindowHandle` (the window XID) is
-//   already `Send + Sync` per raw-window-handle's own assertions
-//   (src/lib.rs:477). The `Display*` in `XlibDisplayHandle` is the
-//   pointer winit's `XConnection::new` opens; winit 0.30.13 calls
-//   `(xlib.XInitThreads)()` unconditionally before `XOpenDisplay`
-//   (src/platform_impl/linux/x11/xdisplay.rs:76) and itself asserts
-//   `unsafe impl Send for XConnection {}` / `Sync` on that identical
-//   pointer (same file, :62-63) -- winit's own authors made and shipped
-//   this exact judgment call already. The connection is opened once and
-//   shared for the life of the event loop, which outlives every window
-//   built from it, so the pointer stays valid for as long as any
-//   `Renderer` built against it.
-// - **Wayland** (winit fallback): not verified to the same standard as the
-//   two cases above. `wl_display` is documented by libwayland as
-//   supporting multi-threaded access via its own read-lock protocol, and
-//   this crate's only use of the pointer is a one-shot surface-
-//   registration call, not raw event dispatch -- no blocker found, but
-//   this is a lower-confidence claim than the X11 and Win32 cases and
-//   should be reverified before anything here is load-bearing for
-//   Wayland specifically.
-//
-// Pointee *validity* (as opposed to thread-affinity) is argued separately
-// from the above: the window handle's validity is tied to the window's
-// own lifetime (flui-app's `App` owns it for the `Renderer`'s whole life);
-// the display handle's validity is tied to the platform connection, which
-// outlives every window built from it (argued per-platform above; Win32
-// and AppKit carry no display-handle data to invalidate in the first
-// place).
-#[expect(unsafe_code)]
-unsafe impl Send for RawHandles {}
-
-#[cfg(test)]
-mod raw_handles_field_pin {
-    use super::RawHandles;
-
-    /// Pins `RawHandles`' field set at exactly the two fields the SAFETY
-    /// argument above covers.
-    ///
-    /// The struct literal below has no `..Default::default()`, and the
-    /// destructure has no `..` -- both are exhaustive, so a field smuggled
-    /// onto `RawHandles` (e.g. `smuggled: Option<std::rc::Rc<u8>>`, read
-    /// from `Renderer::recover`) fails to compile here: E0063 on the
-    /// literal, E0027 on the destructure. This is the check
-    /// `static_assertions::assert_impl_all!(Renderer: Send)` cannot do —
-    /// that assertion only proves `Send` still holds, and it would still
-    /// (correctly, per this same `unsafe impl`) hold for the smuggled
-    /// field too, exactly as the old blanket impl let it silently hold for
-    /// any field. This test is the one that actually goes red.
-    #[test]
-    fn raw_handles_has_exactly_the_two_fields_the_safety_argument_covers() {
-        let handles = RawHandles {
-            window: None,
-            display: None,
-        };
-        let RawHandles {
-            window: _window,
-            display: _display,
-        } = handles;
-    }
 }
 
 /// Cross-platform GPU renderer
 ///
 /// `Send` by compiler derivation: every field is `Send`, including
-/// `raw_handles` via the private `RawHandles` newtype's `unsafe impl
-/// Send` above — the
-/// crate's only remaining manual `Send` assertion, narrowed to exactly the
-/// two fields it reasons about. Deliberately never `Sync`: the raster owner
+/// `gpu_stack_origin`'s `Arc<dyn WindowTarget>` (via [`WindowTarget`]'s own
+/// `Send + Sync + 'static` bound) and its `wgpu::Surface<'static>` (`Send +
+/// Sync` per wgpu, on wasm32 via the crate's `fragile-send-sync-non-atomic-wasm`
+/// feature). Issue #1043 deleted the crate's one hand-written `unsafe impl
+/// Send` (it covered two raw platform handles the renderer no longer keeps —
+/// see `SurfaceLease`/`WindowTarget` in the sibling modules) — there is no
+/// manual `Send` assertion left anywhere in this file.
+///
+/// Deliberately never `Sync`: the raster owner
 /// (`crate::raster_owner::RasterOwner`) has sole mutable access to the
 /// `Renderer`/`Surface`/`Device`/`Queue` it wraps, and a shared `&Renderer`
-/// across threads would defeat that single-mutator contract. No field
-/// grants `Sync` today, so this already holds without a marker type; the
-/// doctest below pins the contract so a future field addition that
-/// accidentally makes every field `Sync` fails loudly at compile time
-/// instead of silently reopening `Arc<Renderer>` shared-mutation. The
-/// `assert_impl_all!`/`assert_not_impl_any!` pair after this struct pins
-/// the `Send`/`!Sync` split itself: a future field that is `!Send` and left
-/// outside `RawHandles` now fails `cargo check` instead of silently riding
-/// a re-widened blanket `Send` impl on `Renderer` itself.
+/// across threads would defeat that single-mutator contract. Before #1043
+/// this held only by accident, riding on `pre_present_hook`'s `Box<dyn
+/// FnMut() + Send>` field (a `!Sync` type with no `!Sync` marker of its
+/// own would have quietly gone `Sync` the day that field's type changed);
+/// the `_single_mutator` marker field below now states the contract as a
+/// field, not a side effect. The doctest below pins the contract so a
+/// future field addition that accidentally makes every field `Sync` fails
+/// loudly at compile time instead of silently reopening `Arc<Renderer>`
+/// shared-mutation. The `assert_impl_all!`/`assert_not_impl_any!` pair after
+/// this struct pins the `Send`/`!Sync` split itself.
 ///
 /// ```compile_fail
 /// fn assert_sync<T: Sync>() {}
@@ -533,7 +438,6 @@ pub struct Renderer {
     adapter: wgpu::Adapter,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
     capabilities: GpuCapabilities,
     painter: Option<super::painter::WgpuPainter>,
@@ -548,14 +452,16 @@ pub struct Renderer {
     /// Runs immediately before every `queue.present` — see
     /// [`crate::RasterBackend::set_pre_present_hook`].
     pre_present_hook: Option<crate::raster::PrePresentHook>,
-    /// Raw platform handles, wrapped in [`RawHandles`] so `Renderer: Send`
-    /// is a compiler derivation rather than a hand-written assertion.
-    /// Reused by `recover()` to rebuild the wgpu surface after a GPU device
-    /// loss; the validity argument lives on `RawHandles`' SAFETY comment.
-    raw_handles: RawHandles,
-    /// Who owns this renderer's GPU stack; gates `recover()`. See
+    /// Who owns this renderer's GPU stack; gates `recover()`, and (for the
+    /// windowed case) owns the surface itself via a [`SurfaceLease`]. See
     /// [`GpuStackOrigin`].
     gpu_stack_origin: GpuStackOrigin,
+    /// States the "single mutator, never shared" contract
+    /// (`docs/runtime-contract.toml`) as a field instead of a side effect of
+    /// some other field's type. `Cell<()>` is `!Sync`; `PhantomData` of it
+    /// carries that without occupying space or affecting `Send` (`Cell<()>`
+    /// is `Send`) or drop-check (nothing to drop).
+    _single_mutator: PhantomData<Cell<()>>,
     /// GPU timestamp profiler. `None` when the `gpu-profiler` feature is off
     /// or the adapter does not expose `wgpu::Features::TIMESTAMP_QUERY`.
     #[cfg(feature = "gpu-profiler")]
@@ -589,13 +495,14 @@ pub struct Renderer {
     force_full_repaint_next_frame: bool,
 }
 
-// `Renderer: Send` is now a compiler derivation: every field is `Send`,
-// including `raw_handles` via `RawHandles`' own `unsafe impl Send` above.
-// There is deliberately no manual `Send` impl on `Renderer` itself any
-// more — ADR-0045 decision 1 narrowed the crate's one manual `Send`
-// assertion to exactly the two raw-handle fields it is actually about, so
-// a future field that is `!Send` and left outside `RawHandles` fails
-// `cargo check` on its own instead of silently riding a blanket impl.
+// `Renderer: Send` is a compiler derivation: every field is `Send` —
+// `gpu_stack_origin`'s `Arc<dyn WindowTarget>` and `wgpu::Surface<'static>`
+// included, per their own bounds (see the struct doc above). There is no
+// manual `Send` assertion anywhere in this crate any more (issue #1043
+// deleted the private newtype that used to narrow two raw platform handles
+// into one — the renderer no longer keeps raw handles at all). `Renderer:
+// !Sync` is likewise no longer an accident of some other field's type:
+// `_single_mutator: PhantomData<Cell<()>>` states it directly.
 // Pinned below; `docs/runtime-contract.toml` carries the matching
 // forbidden-pattern guards (both this bound's re-widening and its `!Sync`
 // sibling) so a hand-reintroduced blanket impl fails `just
@@ -607,7 +514,7 @@ impl SurfaceAcquireBackend for Renderer {
     type Frame = wgpu::SurfaceTexture;
 
     fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
-        let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
+        let surface = self.surface().ok_or(EngineError::SurfaceLost)?;
         // Under `Fifo` with a frame latency of 1 this is where the vsync
         // block lands (ADR-0045 decision 3), so its duration is the one
         // number that says whether the display is pacing this thread.
@@ -652,9 +559,10 @@ impl Renderer {
     ///
     /// ```rust,ignore
     /// use flui_engine::wgpu::Renderer;
-    /// use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
     ///
-    /// let renderer = Renderer::new(&window).await?;
+    /// // `window` is moved in — an owned, `'static` handle source (see
+    /// // `WindowTarget`), not a borrow.
+    /// let renderer = Renderer::new(window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
     /// ```
     ///
@@ -672,38 +580,31 @@ impl Renderer {
     /// later slice once those eight consumers move to a
     /// `GpuServices`-backed constructor.
     #[doc(hidden)]
-    pub async fn new<W>(window: &W) -> EngineResult<Self>
-    where
-        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + ?Sized,
-    {
-        // Extract raw handles before calling the GPU stack builder.
-        // `window_handle()` and `display_handle()` are safe trait methods; no
-        // unsafe is required here. The stored raw handles are later reused by
-        // `recover()` to rebuild the surface; they remain valid for the same
-        // reason the `wgpu::Surface<'static>` is sound — the window (owned by
-        // flui-app's `App`) outlives the `Renderer`.
-        //
-        // wgpu 29.x multi-monitor fix: explicitly extract raw handles to work
-        // around DisplayHandle lifetime issues on multi-display systems.
-        let window_handle = window
-            .window_handle()
-            .map_err(EngineError::surface_creation)?;
-        let display_handle = window
-            .display_handle()
-            .map_err(EngineError::surface_creation)?;
-        let (raw_window_handle, raw_display_handle) =
-            (window_handle.as_raw(), Some(display_handle.as_raw()));
+    pub async fn new(target: impl WindowTarget) -> EngineResult<Self> {
+        // An `Arc<dyn PlatformWindow>` (the common caller shape) becomes an
+        // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
+        // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
+        // `PlatformWindow: WindowTarget`, which would invert the
+        // flui-platform → flui-engine layer edge (docs/workspace-layers.toml).
+        // One extra pointer chase per surface creation; documented, not
+        // fixed — see issue #1043.
+        let target: Arc<dyn WindowTarget> = Arc::new(target);
+
+        // Probe the owner BEFORE any GPU work starts (before even
+        // `wgpu::Instance::new`, inside `build_windowed_gpu_stack`) — see
+        // `surface_lease::probe_target`'s doc for why this distinction from
+        // a generic `SurfaceCreation` failure matters to callers.
+        super::surface_lease::probe_target(&target)?;
 
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
-        let stack =
-            Self::build_windowed_gpu_stack(raw_window_handle, raw_display_handle, w, h).await?;
+        let stack = Self::build_windowed_gpu_stack(&target, w, h).await?;
+        let lease = SurfaceLease::from_parts(target, stack.surface);
 
         Ok(Self {
             instance: stack.instance,
             adapter: stack.adapter,
             device: stack.device,
             queue: stack.queue,
-            surface: Some(stack.surface),
             config: Some(stack.config),
             capabilities: stack.capabilities,
             painter: Some(stack.painter),
@@ -712,23 +613,23 @@ impl Renderer {
             device_lost: stack.device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
             pre_present_hook: None,
-            raw_handles: RawHandles {
-                window: Some(raw_window_handle),
-                display: raw_display_handle,
-            },
-            gpu_stack_origin: GpuStackOrigin::Owned,
+            gpu_stack_origin: GpuStackOrigin::OwnedWindowed { lease },
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: stack.gpu_profiler,
             #[cfg(test)]
             force_intermediate: false,
             force_full_repaint_next_frame: false,
+            _single_mutator: PhantomData,
         })
     }
 
-    /// Build the full windowed GPU stack from raw handles.
+    /// Build the full windowed GPU stack from an owned [`WindowTarget`].
     ///
-    /// Factored out of `new` so `recover` can call it without re-extracting
-    /// the window handles. Called once at construction and again on device loss.
+    /// Factored out of `new` so `recover` can rebuild the SAME stack shape
+    /// against the retained target. Called once at construction and again
+    /// on device loss; the caller is responsible for probing the target
+    /// first (see `surface_lease::probe_target`) — this function does not
+    /// probe on its own.
     ///
     /// # Errors
     ///
@@ -736,8 +637,7 @@ impl Renderer {
     /// a TDR). Returns the underlying [`EngineError`]; the caller may retry on
     /// the next frame.
     async fn build_windowed_gpu_stack(
-        raw_window_handle: raw_window_handle::RawWindowHandle,
-        raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
+        target: &Arc<dyn WindowTarget>,
         width: u32,
         height: u32,
     ) -> EngineResult<WindowedGpuStack> {
@@ -776,24 +676,25 @@ impl Renderer {
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
-        // Create surface from stored raw handles.
+        // Create the surface through wgpu's SAFE owned-target path (issue
+        // #1043): `Arc<dyn WindowTarget>` satisfies wgpu's
+        // `DisplayAndWindowHandle + 'static` bound through raw-window-handle
+        // 0.6.2's `Arc<H: ?Sized>` blanket impls of `HasWindowHandle`/
+        // `HasDisplayHandle` plus wgpu's own `impl<T: DisplayAndWindowHandle>
+        // From<T> for SurfaceTarget`. wgpu queries `target.window_handle()`/
+        // `display_handle()` itself here — this is the "wgpu 29 multi-monitor
+        // fix" note's successor: that workaround extracted raw handles by
+        // hand to route the display handle around a lifetime issue; the safe
+        // path lets wgpu do that query on the retained `Arc` instead.
         //
-        // SAFETY: The raw handles were captured from the live window at
-        // construction time (see `Renderer::new`) and remain valid while the
-        // window is alive. Both `SurfaceTargetUnsafe::RawHandle` and
-        // `Instance::create_surface_unsafe` require the handles to stay valid
-        // for the lifetime of the resulting `Surface<'static>`; that invariant
-        // is upheld because flui-app's `App` owns the window for its lifetime.
-        #[expect(unsafe_code)]
-        let surface = unsafe {
-            let surface_target = wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle,
-                raw_window_handle,
-            };
-            instance
-                .create_surface_unsafe(surface_target)
-                .map_err(EngineError::surface_creation)?
-        };
+        // No `unsafe` block: the old unsafe raw-handle surface-creation call
+        // and the newtype that narrowed its two handle fields are both gone
+        // from this crate — see `docs/runtime-contract.toml`'s matching
+        // `forbidden_pattern` entry, which ratchets that deletion
+        // workspace-wide.
+        let surface: wgpu::Surface<'static> = instance
+            .create_surface(Arc::clone(target))
+            .map_err(EngineError::surface_creation)?;
 
         let adapter = instance
             .request_adapter(&super::adapter::trusted_adapter_options(
@@ -948,7 +849,6 @@ impl Renderer {
             adapter: gpu.adapter,
             device: Arc::new(gpu.device),
             queue: Arc::new(gpu.queue),
-            surface: None,
             config: None,
             capabilities: gpu.capabilities,
             painter: None,
@@ -957,11 +857,7 @@ impl Renderer {
             device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
             pre_present_hook: None,
-            raw_handles: RawHandles {
-                window: None,
-                display: None,
-            },
-            gpu_stack_origin: GpuStackOrigin::Owned,
+            gpu_stack_origin: GpuStackOrigin::OwnedOffscreen,
             // Offscreen renderers have no surface present, so profiling results
             // cannot be harvested with process_finished_frame. Disabled here.
             #[cfg(feature = "gpu-profiler")]
@@ -969,6 +865,7 @@ impl Renderer {
             #[cfg(test)]
             force_intermediate: false,
             force_full_repaint_next_frame: false,
+            _single_mutator: PhantomData,
         })
     }
 
@@ -1005,7 +902,6 @@ impl Renderer {
             adapter: services.adapter().clone(),
             device: Arc::clone(services.device()),
             queue: Arc::clone(services.queue()),
-            surface: None,
             config: None,
             capabilities: services.capabilities().clone(),
             painter: None,
@@ -1014,16 +910,13 @@ impl Renderer {
             device_lost: services.device_lost_handle(),
             damage_tracker: flui_layer::damage::DamageTracker::new(),
             pre_present_hook: None,
-            raw_handles: RawHandles {
-                window: None,
-                display: None,
-            },
             gpu_stack_origin: GpuStackOrigin::SharedServices,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: None,
             #[cfg(test)]
             force_intermediate: false,
             force_full_repaint_next_frame: false,
+            _single_mutator: PhantomData,
         }
     }
 
@@ -1074,16 +967,19 @@ impl Renderer {
 
     /// Rebuild the GPU device and surface after a device-lost event.
     ///
-    /// On the **windowed** path (`raw_handles.window` is `Some`) this rebuilds
-    /// the entire GPU stack (instance → adapter → device → surface → painter →
-    /// offscreen) and swaps the new pieces into `self`. The recovered surface
-    /// is configured at the **current** surface size captured from `self.config`
-    /// (falling back to 800×600), so the window keeps its correct dimensions
-    /// without a separate resize call.
+    /// On the **windowed** path ([`GpuStackOrigin::OwnedWindowed`]) this
+    /// re-probes the SAME retained [`WindowTarget`] the renderer was built
+    /// from, then — only if that probe succeeds — rebuilds the entire GPU
+    /// stack (instance → adapter → device → surface → painter → offscreen)
+    /// and swaps the new pieces into `self`. There is no saved-bytes
+    /// recovery path any more; there is nothing to save. The recovered
+    /// surface is configured at the **current** surface size captured from
+    /// `self.config` (falling back to 800×600), so the window keeps its
+    /// correct dimensions without a separate resize call.
     ///
-    /// On the **offscreen** path (`raw_handles.window` is `None`) only the
-    /// device/queue are replaced; surface, painter, and offscreen are left as
-    /// `None`.
+    /// On the **offscreen** path ([`GpuStackOrigin::OwnedOffscreen`]) only
+    /// the device/queue are replaced; surface, painter, and offscreen are
+    /// left as `None`.
     ///
     /// On success the device-lost flag is cleared (the fresh device starts
     /// healthy). On failure the underlying [`EngineError`] is returned — the
@@ -1097,18 +993,37 @@ impl Renderer {
     /// why rebuilding a private stack here would be unsound for a shared
     /// one.
     ///
+    /// Returns [`EngineError::SurfaceTargetUnavailable`] — before starting
+    /// any GPU work — if the window owner reports the native target is gone
+    /// or suspended (a destroyed window, a suspended Android surface). The
+    /// caller (`flui-app`'s device-recovery loop) should treat this as
+    /// transient and retry once the owner reports the target live again.
+    ///
     /// Returns [`EngineError::AdapterRequest`] or [`EngineError::DeviceCreation`]
     /// when the driver is still resetting or the adapter is no longer available.
-    /// Returns [`EngineError::SurfaceCreation`] if the surface cannot be
-    /// recreated from the stored raw handles (very unlikely while the window is
-    /// alive).
+    /// Returns [`EngineError::SurfaceCreation`] if wgpu refuses to build a
+    /// surface from the still-live target for some other reason.
     #[tracing::instrument(level = "warn", skip(self))]
     pub async fn recover(&mut self) -> EngineResult<()> {
-        if self.gpu_stack_origin == GpuStackOrigin::SharedServices {
-            return Err(EngineError::SharedServicesNotRecoverable);
+        match &self.gpu_stack_origin {
+            GpuStackOrigin::SharedServices => {
+                return Err(EngineError::SharedServicesNotRecoverable);
+            }
+            GpuStackOrigin::OwnedWindowed { .. } | GpuStackOrigin::OwnedOffscreen => {}
         }
 
-        if let Some(raw_window) = self.raw_handles.window {
+        // Resolved before any `.await` so the borrow of `gpu_stack_origin`
+        // never needs to live across one; `target` is an owned `Arc` clone,
+        // not a borrow of `self`.
+        let windowed_target = match &self.gpu_stack_origin {
+            GpuStackOrigin::OwnedWindowed { lease } => {
+                lease.probe()?;
+                Some(Arc::clone(lease.target()))
+            }
+            GpuStackOrigin::OwnedOffscreen | GpuStackOrigin::SharedServices => None,
+        };
+
+        if let Some(target) = windowed_target {
             // Capture current dimensions before rebuild so the recovered
             // surface matches the live window size instead of defaulting to
             // 800×600.
@@ -1117,15 +1032,12 @@ impl Renderer {
                 .as_ref()
                 .map_or((800u32, 600u32), |c| (c.width, c.height));
 
-            let stack =
-                Self::build_windowed_gpu_stack(raw_window, self.raw_handles.display, width, height)
-                    .await?;
+            let stack = Self::build_windowed_gpu_stack(&target, width, height).await?;
 
             self.instance = stack.instance;
             self.adapter = stack.adapter;
             self.device = stack.device;
             self.queue = stack.queue;
-            self.surface = Some(stack.surface);
             self.config = Some(stack.config);
             self.capabilities = stack.capabilities;
             self.painter = Some(stack.painter);
@@ -1138,6 +1050,9 @@ impl Renderer {
             #[cfg(feature = "gpu-profiler")]
             {
                 self.gpu_profiler = stack.gpu_profiler;
+            }
+            if let GpuStackOrigin::OwnedWindowed { lease } = &mut self.gpu_stack_origin {
+                lease.replace_surface(stack.surface);
             }
             // Force a full repaint so the first recovered frame is complete.
             self.damage_tracker.mark_full_repaint();
@@ -1410,22 +1325,31 @@ impl Renderer {
 
     /// Resize the surface
     pub fn resize(&mut self, width: u32, height: u32) {
-        if let (Some(config), Some(surface)) = (&mut self.config, &self.surface)
-            && width > 0
-            && height > 0
-        {
-            config.width = width;
-            config.height = height;
-            surface.configure(&self.device, config);
-
-            if let Some(painter) = &mut self.painter {
-                painter.resize(width, height);
-            }
-
-            self.damage_tracker.mark_full_repaint();
-
-            tracing::debug!("Surface resized to {}x{}", width, height);
+        // Direct field projections (not the `self.surface()` accessor, which
+        // borrows all of `&self`) so this coexists with the `&mut
+        // self.config` borrow below — `gpu_stack_origin` and `config` are
+        // disjoint fields.
+        let GpuStackOrigin::OwnedWindowed { lease } = &self.gpu_stack_origin else {
+            return;
+        };
+        let Some(config) = &mut self.config else {
+            return;
+        };
+        if width == 0 || height == 0 {
+            return;
         }
+
+        config.width = width;
+        config.height = height;
+        lease.surface().configure(&self.device, config);
+
+        if let Some(painter) = &mut self.painter {
+            painter.resize(width, height);
+        }
+
+        self.damage_tracker.mark_full_repaint();
+
+        tracing::debug!("Surface resized to {}x{}", width, height);
     }
 
     /// Get GPU capabilities
@@ -1445,7 +1369,10 @@ impl Renderer {
 
     /// Get reference to wgpu surface (if available)
     pub fn surface(&self) -> Option<&wgpu::Surface<'_>> {
-        self.surface.as_ref()
+        match &self.gpu_stack_origin {
+            GpuStackOrigin::OwnedWindowed { lease } => Some(lease.surface()),
+            GpuStackOrigin::OwnedOffscreen | GpuStackOrigin::SharedServices => None,
+        }
     }
 
     /// Get current surface configuration (if available)
@@ -1502,14 +1429,16 @@ impl Renderer {
     /// `CurrentSurfaceTexture::Validation` is encountered, but can also be
     /// called manually if needed.
     pub fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-        if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
-            surface.configure(&self.device, config);
-            self.damage_tracker.mark_full_repaint();
-            tracing::info!("Surface reconfigured ({}x{})", config.width, config.height);
-            Ok(())
-        } else {
-            Err(EngineError::NotInitialized)
-        }
+        let GpuStackOrigin::OwnedWindowed { lease } = &self.gpu_stack_origin else {
+            return Err(EngineError::NotInitialized);
+        };
+        let Some(config) = &self.config else {
+            return Err(EngineError::NotInitialized);
+        };
+        lease.surface().configure(&self.device, config);
+        self.damage_tracker.mark_full_repaint();
+        tracing::info!("Surface reconfigured ({}x{})", config.width, config.height);
+        Ok(())
     }
 
     /// Render a `flui_layer::Scene` to the surface.
@@ -2427,7 +2356,7 @@ mod tests {
         // the rest of this crate's async tests (no tokio-macros dependency).
         pollster::block_on(async {
             if let Ok(renderer) = Renderer::new_offscreen().await {
-                assert!(renderer.surface.is_none());
+                assert!(renderer.surface().is_none());
                 assert!(renderer.config.is_none());
                 assert!(!renderer.capabilities.adapter_name.is_empty());
             }

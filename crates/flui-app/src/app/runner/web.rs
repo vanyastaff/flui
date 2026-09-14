@@ -92,7 +92,11 @@ where
         // browser platform installs RAF and returns immediately, and startup can
         // also return early before the window reaches AppRuntime's redraw-poke slot.
         wasm_bindgen_futures::spawn_local(async move {
-            let mut r = match Renderer::new(renderer_window.as_ref()).await {
+            // `Renderer::new` takes ownership of a `WindowTarget` (issue
+            // #1043) — `Arc::clone` gives it its own strong ref rather than
+            // a borrow of `renderer_window` (which the future already owns,
+            // per the comment above).
+            let mut r = match Renderer::new(Arc::clone(&renderer_window)).await {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::error!("GPU init failed: {:?}", e);
@@ -256,6 +260,25 @@ where
                                 match result {
                                     Ok(()) => {
                                         tracing::warn!("GPU device lost — recovered successfully");
+                                        wake();
+                                    }
+                                    Err(e @ flui_engine::EngineError::SurfaceTargetUnavailable {
+                                        ..
+                                    }) => {
+                                        // The window owner reports its native
+                                        // handle is gone or suspended —
+                                        // `Recoverability::Recoverable` for
+                                        // `HandleError::Unavailable` (issue
+                                        // #1043): a backgrounded tab's canvas
+                                        // can report this transiently. Same
+                                        // retry wake as any other failure
+                                        // below, just logged at a lower
+                                        // severity since this is expected to
+                                        // clear on its own.
+                                        tracing::warn!(
+                                            error = ?e,
+                                            "GPU device recovery deferred — window target unavailable; retry armed for the next wake"
+                                        );
                                         wake();
                                     }
                                     Err(e) => {

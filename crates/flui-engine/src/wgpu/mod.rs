@@ -44,8 +44,10 @@
 //! use flui_engine::wgpu::Renderer;
 //! use flui_layer::Scene;
 //!
-//! // Create a renderer for a window (owns per-window GPU state)
-//! let mut renderer = Renderer::new(&window).await?;
+//! // Create a renderer for a window (owns per-window GPU state). `window`
+//! // is an owned, `'static` handle source — see `WindowTarget` — not a
+//! // borrow, so the renderer can outlive the caller's stack frame.
+//! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render a scene
 //! renderer.render_scene(&scene)?;
@@ -207,12 +209,20 @@ pub(crate) mod ssaa;
 /// be owned and delegated as a unit. Owned by `WgpuPainter` via the `state`
 /// field.
 pub(super) mod state_stack;
+/// The owned-target/surface protocol ([`SurfaceLease`]) — GPU-free so its
+/// probe-before-build and drop-order invariants can be tested and (later)
+/// interpreted under Miri without a real `wgpu::Surface`.
+mod surface_lease;
 mod tessellator;
 mod text;
 pub mod texture_cache;
 mod texture_pool;
 mod uniform_pool;
 mod vertex;
+/// What a windowed [`Renderer`] draws into: an owned, `'static`,
+/// `Send + Sync` handle source (issue #1043). Exported here and re-exported
+/// at the crate root beside `Renderer`.
+mod window_target;
 
 // ============================================================================
 // LAYER RENDERING
@@ -387,6 +397,9 @@ pub use painter::WgpuPainter;
 
 // Renderer (the one and only externally-consumed wgpu/* type)
 pub use renderer::Renderer;
+// What a windowed `Renderer` draws into (issue #1043); re-exported at the
+// crate root beside `Renderer` itself.
+pub use window_target::WindowTarget;
 // Shared per-owner-thread GPU services (ADR-0045 decision 2; external via
 // lib.rs re-export at crate root as `flui_engine::GpuServices`).
 pub use gpu_services::{GpuResourceGeneration, GpuServices};

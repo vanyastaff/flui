@@ -275,8 +275,10 @@ fn main() {
         "window created"
     );
 
-    let mut renderer =
-        pollster::block_on(Renderer::new(window.as_ref())).expect("failed to create GPU renderer");
+    // `Renderer::new` takes ownership of a `WindowTarget` (issue #1043) —
+    // `Arc::clone` gives it its own strong ref rather than a borrow.
+    let mut renderer = pollster::block_on(Renderer::new(Arc::clone(&window)))
+        .expect("failed to create GPU renderer");
 
     let physical = window.physical_size();
     renderer.resize(physical.width.0 as u32, physical.height.0 as u32);

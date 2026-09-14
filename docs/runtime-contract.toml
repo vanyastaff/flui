@@ -3074,9 +3074,9 @@ kind = "type"
 declared_in = "crates/flui-engine/src/wgpu/renderer.rs"
 contains = "pub struct Renderer"
 classification = "transitional"
-thread_affinity = "Send + !Sync (unsafe impl Send, no Sync) — movable to a raster owner, single mutator by convention"
+thread_affinity = "Send + !Sync by compiler derivation — no manual Send impl anywhere in the crate (issue #1043 deleted the one raw-platform-handle newtype that ever needed one); !Sync is stated directly by a `_single_mutator: PhantomData<Cell<()>>` field rather than riding on some other field's type — movable to a raster owner, single mutator by convention"
 owner = "GPU surface/device/queue owner; moves behind the raster-owner lane"
-failure_semantics = "typed EngineError with Recoverability; device loss recovered via recover()"
+failure_semantics = "typed EngineError with Recoverability; device loss recovered via recover(); recover() and new() also report EngineError::SurfaceTargetUnavailable (Recoverable for HandleError::Unavailable, Fatal otherwise) when the owned WindowTarget's window owner reports its native handle gone or suspended, checked before any GPU work starts (issue #1043)"
 consumers = ["runner frame callbacks", "run_direct", "HeadlessRenderer path"]
 owner_issue = 559
 
@@ -3647,6 +3647,21 @@ allow_files = []
 pattern = "unsafe impl Send for crate::wgpu::Renderer"
 why = "fully-qualified spelling of the entry above (ADR-0045 decision 1) — same rationale, same forbidden shape."
 allow_files = []
+
+[[forbidden_pattern]]
+pattern = "create_surface_unsafe"
+why = """
+issue #1043: the engine creates windowed surfaces through wgpu's safe \
+owned-target path (`Instance::create_surface` over an `Arc<dyn \
+WindowTarget>`), not the unsafe raw-handle path — deleted from \
+`flui-engine` along with the `RawHandles` newtype and its `unsafe impl \
+Send` (the crate's `renderer.rs` no longer keeps a raw window/display \
+handle at all). Workspace-wide (no `scope`) so the unsafe path cannot \
+return in a different file within the crate. The two allow-listed files \
+are standalone demos that build their own private wgpu stack outside \
+`flui-engine`'s `Renderer` entirely and are not bound by this contract.\
+"""
+allow_files = ["examples/wgpu_window.rs", "examples/painting_demo/src/lib.rs"]
 
 [[forbidden_pattern]]
 pattern = "debug_assert_owner"

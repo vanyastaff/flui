@@ -1,0 +1,79 @@
+error[E0597]: `window` does not live long enough
+  --> tests/compile_fail/renderer_new_rejects_borrowed_window.rs:42:53
+   |
+34 | async fn borrow_then_drop<W>(window: W)
+   |                              ------ binding `window` declared here
+...
+42 |     let renderer = flui_engine::wgpu::Renderer::new(&window).await;
+   |                    ---------------------------------^^^^^^^-
+   |                    |                                |
+   |                    |                                borrowed value does not live long enough
+   |                    argument requires that `window` is borrowed for `'static`
+...
+45 | }
+   | - `window` dropped here while still borrowed
+
+error[E0505]: cannot move out of `window` because it is borrowed
+  --> tests/compile_fail/renderer_new_rejects_borrowed_window.rs:43:10
+   |
+34 | async fn borrow_then_drop<W>(window: W)
+   |                              ------ binding `window` declared here
+...
+42 |     let renderer = flui_engine::wgpu::Renderer::new(&window).await;
+   |                    -----------------------------------------
+   |                    |                                |
+   |                    |                                borrow of `window` occurs here
+   |                    argument requires that `window` is borrowed for `'static`
+43 |     drop(window);
+   |          ^^^^^^ move out of `window` occurs here
+   |
+help: if `W` implemented `Clone`, you could clone the value
+  --> tests/compile_fail/renderer_new_rejects_borrowed_window.rs:34:27
+   |
+34 | async fn borrow_then_drop<W>(window: W)
+   |                           ^ consider constraining this type parameter with `Clone`
+...
+42 |     let renderer = flui_engine::wgpu::Renderer::new(&window).await;
+   |                                                      ------ you could clone this value
+
+error[E0310]: the parameter type `W` may not live long enough
+  --> tests/compile_fail/renderer_new_rejects_borrowed_window.rs:42:20
+   |
+42 |     let renderer = flui_engine::wgpu::Renderer::new(&window).await;
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                    |
+   |                    the parameter type `W` must be valid for the static lifetime...
+   |                    ...so that the type `W` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+40 |     W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
+   |                                                         +++++++++
+
+error[E0310]: the parameter type `W` may not live long enough
+  --> tests/compile_fail/renderer_new_rejects_borrowed_window.rs:42:20
+   |
+42 |     let renderer = flui_engine::wgpu::Renderer::new(&window).await;
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                    |
+   |                    the parameter type `W` must be valid for the static lifetime...
+   |                    ...so that the type `W` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+40 |     W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
+   |                                                         +++++++++
+
+error[E0310]: the parameter type `W` may not live long enough
+  --> tests/compile_fail/renderer_new_rejects_borrowed_window.rs:42:62
+   |
+42 |     let renderer = flui_engine::wgpu::Renderer::new(&window).await;
+   |                                                              ^^^^^
+   |                                                              |
+   |                                                              the parameter type `W` must be valid for the static lifetime...
+   |                                                              ...so that the type `W` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+40 |     W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
+   |                                                         +++++++++

@@ -255,7 +255,11 @@ fn android_main(app: AndroidApp) {
         if resumed && renderer.is_none() && app.native_window().is_some() {
             tracing::info!("Native window ready — creating renderer");
             let handle = AndroidWindowHandle { app: app.clone() };
-            match pollster::block_on(Renderer::new(&handle)) {
+            // `Renderer::new` takes ownership of a `WindowTarget` (issue
+            // #1043) — `handle` is a fresh, freely-`Clone`-backed value
+            // (`AndroidApp` is itself a cheap handle), so passing it by
+            // value costs nothing extra here.
+            match pollster::block_on(Renderer::new(handle)) {
                 Ok(mut r) => {
                     if let Some(native_window) = app.native_window() {
                         let w = native_window.width() as u32;

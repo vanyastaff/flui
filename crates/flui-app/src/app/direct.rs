@@ -45,7 +45,7 @@
 
 use std::sync::Arc;
 
-use flui_engine::{Recoverability, wgpu::Renderer};
+use flui_engine::{EngineError, Recoverability, wgpu::Renderer};
 use flui_layer::{LayerTree, Scene, SceneBuilder};
 use flui_platform::{
     WindowOptions,
@@ -142,9 +142,12 @@ pub fn run_direct(
             }
         };
 
-        // 2. Create GPU renderer
+        // 2. Create GPU renderer. `Renderer::new` takes ownership of a
+        // `WindowTarget` (issue #1043) — `Arc::clone(&window)` gives it its
+        // own strong ref rather than a borrow, so the renderer stays sound
+        // even if this scope's `window` binding is dropped first.
         let phys_size = window.physical_size();
-        let renderer = pollster::block_on(Renderer::new(window.as_ref()));
+        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {
@@ -209,6 +212,17 @@ pub fn run_direct(
                 match pollster::block_on(r.recover()) {
                     Ok(()) => {
                         tracing::warn!("GPU device lost — recovered successfully");
+                    }
+                    Err(e @ EngineError::SurfaceTargetUnavailable { .. }) => {
+                        // The window owner reports its native handle is gone
+                        // or suspended — `Recoverability::Recoverable` for
+                        // `HandleError::Unavailable` (issue #1043): wait for
+                        // the owner to report the target live again rather
+                        // than treating this like a driver-level failure.
+                        tracing::warn!(
+                            error = ?e,
+                            "GPU device recovery deferred — window target unavailable; will retry next frame"
+                        );
                     }
                     Err(e) => {
                         tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");

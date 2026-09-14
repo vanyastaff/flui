@@ -67,8 +67,10 @@
 //!     0,
 //! );
 //!
-//! // 2. Render the Scene (in the engine layer) — `Renderer` owns per-window GPU state
-//! let mut renderer = Renderer::new(&window).await?;
+//! // 2. Render the Scene (in the engine layer) — `Renderer` owns per-window
+//! //    GPU state, and owns `window` itself (an owned, `'static` handle
+//! //    source — see `flui_engine::wgpu::WindowTarget` — not a borrow).
+//! let mut renderer = Renderer::new(window).await?;
 //! renderer.render_scene(&scene)?;
 //! ```
 //!
