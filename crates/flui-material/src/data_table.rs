@@ -810,7 +810,7 @@ fn header_checkbox_cell(
     margin_start: f32,
     margin_end: f32,
 ) -> BoxedView {
-    let checkbox = Checkbox::new(checked).tristate(true).on_changed(on_change);
+    let checkbox = Checkbox::tristate(checked).on_changed(on_change);
     let content = Semantics::new().container(true).child(
         Padding::new(EdgeInsets::new(
             px(0.0),
@@ -834,7 +834,7 @@ fn row_checkbox_cell(
     margin_end: f32,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
-    let mut checkbox = Checkbox::new(Some(selected)).tristate(false);
+    let mut checkbox = Checkbox::new(selected);
     if let Some(handler) = on_select_changed.clone() {
         checkbox = checkbox.on_changed(move |next| handler(next.unwrap_or(false)));
     }

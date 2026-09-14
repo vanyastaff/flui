@@ -2,6 +2,8 @@
 
 Material Design theming foundation: `ColorScheme`, the M3 2021 type scale (`Typography`/`TextTheme`), `ThemeData`, and the `Theme` inherited widget that publishes it to a subtree.
 
+Mapping decisions (deliberate divergences from Flutter) live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ## What lives here
 
 - **`ColorScheme`** — the full Material 3 color-role palette (50 fields incl. `brightness`), `#[non_exhaustive]`. `light()`/`dark()` are verbatim ports of the oracle's `_colorSchemeLightM3`/`_colorSchemeDarkM3` const tables (`theme_data.dart`) — the same table `ThemeData()` defaults to, not the legacy M2 `ColorScheme.light()`/`.dark()` baseline constructors. `copy_with` takes a `ColorSchemeOverrides` patch struct (Rust has no optional named parameters).
@@ -20,6 +22,7 @@ Material Design theming foundation: `ColorScheme`, the M3 2021 type scale (`Typo
 - **The default `TextTheme` is baked once, at `ThemeData::light`/`dark` construction** — the oracle recomputes it lazily per `Theme.of` read, keyed on the ambient locale's script category (`Theme.build`'s `ThemeData.localize` step). FLUI has no script-category-resolving localization consumer yet, so this is a documented, named simplification, not a silent gap.
 - **`AnimatedTheme` / `ColorScheme`/`TextTheme` lerp are deferred** — no component consumes an interpolated theme yet.
 - **`MaterialApp` composes downward only** — it builds on `flui-widgets`' `WidgetsApp` (ADR-0028/ADR-0042: the design-neutral shell never learns about this crate). Theme *selection* (`ThemeMode`) lives here, next to the tokens it selects between — never in `flui-app` (ADR-0042 §2/§6).
+- **Public-widget invariants ship in release.** Caller-violable construction contracts on Material widgets (e.g. `Checkbox` value/tristate, and the same class as GitHub #1101 for `TabController` length/index) must not rely on `debug_assert!` alone. Prefer making the illegal state unrepresentable (typed constructors / private mode enum); use a release `assert!` only as a temporary fallback.
 
 ## Related crates
 
