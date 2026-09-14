@@ -982,9 +982,12 @@ Two properties follow, and both are the reason for the divergence:
   per option (up to seven if every option is set). **Childless, Flutter is
   never free**: `build` reaches for a two-node placeholder (`LimitedBox` +
   `ConstrainedBox`) even with no option set at all (`Container()`), so
-  `RenderContainer` already wins there. A bare `width`/`height` spacer with
-  no other option set is the one childless configuration that ties —
-  Flutter's own single `ConstrainedBox` against one node here — and every
+  `RenderContainer` already wins there. The only childless tie is a *tight*
+  effective constraint — both `width` and `height` set, or an explicit tight
+  `constraints` — which suppresses the placeholder and leaves Flutter a
+  single `ConstrainedBox` against one node here; a lone `width` does not
+  qualify, since `BoxConstraints::is_tight` requires both axes, so that case
+  still takes the placeholder and costs three. Every
   other childless option (color, padding, decoration, an alignment paired
   with a fixed size) only grows Flutter's node count further, never brings
   it back below one. **What node count never buys, in either regime, is

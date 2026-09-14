@@ -38,9 +38,12 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///   is set). Childless, Flutter is never free: `build` reaches for a
 ///   two-node placeholder (`LimitedBox` + `ConstrainedBox`) even with no
 ///   option set at all (`Container()`), so one node here already wins there;
-///   a bare `width`/`height` spacer with no other option set is the one
-///   childless configuration that ties, Flutter's own single
-///   `ConstrainedBox` against one node here. Every other childless option —
+///   the only childless tie is a *tight* effective constraint — both `width`
+///   and `height` set, or an explicit tight `constraints` — which suppresses
+///   the placeholder and leaves Flutter a single `ConstrainedBox` against one
+///   node here. A lone `width` does not qualify: `BoxConstraints::is_tight`
+///   requires both axes, so that case still takes the placeholder and costs
+///   three. Every other childless option —
 ///   color, padding, decoration, an alignment paired with a fixed size —
 ///   only grows Flutter's node count further. What one node here does *not*
 ///   buy, in either regime, is a lighter node: `RenderContainer` carries
