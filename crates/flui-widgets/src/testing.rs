@@ -31,8 +31,9 @@ use flui_interaction::events::{
 };
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
-    RenderConstraintsTransformBox, RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph,
-    RenderPhysicalModel, RenderPhysicalShape, RenderSliverOpacity, RenderTransform,
+    RenderConstraintsTransformBox, RenderContainer, RenderFittedBox, RenderImage, RenderOpacity,
+    RenderParagraph, RenderPhysicalModel, RenderPhysicalShape, RenderSliverOpacity,
+    RenderTransform,
 };
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -43,14 +44,15 @@ use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::geometry::px;
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
-use flui_types::{Offset, Pixels, RRect, Rect, Size};
+use flui_types::{Alignment, Axis, Offset, Pixels, RRect, Rect, Size};
+use flui_view::BoxedView;
 use flui_view::InheritedView;
 use flui_view::RootRenderView;
 use flui_view::View;
+use flui_view::ViewExt;
 use flui_view::element::InheritedElementAccess;
 
-use crate::{Align, FocusRoot, GestureArenaScope};
-use flui_types::Alignment;
+use crate::{Align, ConstrainedBox, FocusRoot, GestureArenaScope, UnconstrainedBox};
 
 /// A laid-out widget tree, holding the element + render trees alive (inside a
 /// tree-bound [`HeadlessBinding`]) so geometry can be queried after layout — and
@@ -69,6 +71,22 @@ pub struct LaidOut {
     root_view_size: (f32, f32),
     /// Concrete identity of the caller's root below the presentation scopes.
     logical_root_type: TypeId,
+    /// Whether this mount wrapped the caller in [`Align`] so a non-tight
+    /// [`lay_out`] request actually reaches the widget. [`Self::pump_widget`]
+    /// must keep the same wrapper: `RootRenderView` swaps require the same
+    /// child type as the original mount.
+    loosen_with_align: bool,
+    /// Additional constraints re-applied under the [`Align`] loosener when
+    /// the caller asked for a non-zero minimum. `Align` loosens to `0..=max`,
+    /// which would drop that minimum (e.g. `StackFit::Passthrough` under
+    /// min 50). [`ConstrainedBox`] sits above the logical root so it does
+    /// not steal `find_by_render_type("RenderConstrainedBox")`.
+    reapply_constraints: Option<BoxConstraints>,
+    /// How [`UnconstrainedBox`] restores infinite caller maxes after the
+    /// pipeline `RenderView` tight-fills a finite surface. Ancestor of the
+    /// logical root, so it does not steal
+    /// `find_by_render_type("RenderConstraintsTransformBox")`.
+    unconstrained_wrap: UnconstrainedWrap,
     /// Per-contact pointer identity for the synthetic dispatch helpers.
     contacts: PointerContacts,
 }
@@ -180,6 +198,67 @@ pub fn tight(width: f32, height: f32) -> BoxConstraints {
     BoxConstraints::tight(Size::new(px(width), px(height)))
 }
 
+/// How the harness [`UnconstrainedBox`] wrap treats incoming maxes.
+#[derive(Clone, Copy)]
+enum UnconstrainedWrap {
+    /// Both incoming maxes are finite — no wrap.
+    Off,
+    /// Caller asked for infinite max on both axes.
+    Both,
+    /// Keep this axis's incoming constraint, free the other.
+    Keep(Axis),
+}
+
+/// Which [`UnconstrainedWrap`] restores infinite caller maxes after the
+/// pipeline `RenderView` tight-fills a finite surface.
+fn unconstrained_wrap_for(constraints: &BoxConstraints) -> UnconstrainedWrap {
+    match (
+        constraints.max_width.is_finite(),
+        constraints.max_height.is_finite(),
+    ) {
+        (true, true) => UnconstrainedWrap::Off,
+        (false, false) => UnconstrainedWrap::Both,
+        (true, false) => UnconstrainedWrap::Keep(Axis::Horizontal),
+        (false, true) => UnconstrainedWrap::Keep(Axis::Vertical),
+    }
+}
+
+/// Presentation wrap under [`RootRenderView`]: optional `Align` loosener,
+/// then `UnconstrainedBox` for infinite axes, then `ConstrainedBox` for a
+/// non-zero minimum. Always boxed so [`LaidOut::pump_widget`] can swap the
+/// same `RootRenderView<BoxedView>` child type it mounted.
+fn wrap_presentation(
+    scoped: impl View,
+    loosen_with_align: bool,
+    reapply_constraints: Option<BoxConstraints>,
+    unconstrained_wrap: UnconstrainedWrap,
+) -> BoxedView {
+    let mut tree: BoxedView = scoped.boxed();
+    if let Some(extra) = reapply_constraints {
+        tree = ConstrainedBox::new(extra).child(tree).boxed();
+    }
+    match unconstrained_wrap {
+        UnconstrainedWrap::Off => {}
+        UnconstrainedWrap::Both => {
+            tree = UnconstrainedBox::new()
+                .alignment(Alignment::TOP_LEFT)
+                .child(tree)
+                .boxed();
+        }
+        UnconstrainedWrap::Keep(axis) => {
+            tree = UnconstrainedBox::new()
+                .alignment(Alignment::TOP_LEFT)
+                .constrained_axis(axis)
+                .child(tree)
+                .boxed();
+        }
+    }
+    if loosen_with_align {
+        tree = Align::new(Alignment::TOP_LEFT).child(tree).boxed();
+    }
+    tree
+}
+
 /// Build `root`, mount it as the render-tree root, and lay it out under
 /// `constraints`. Panics on any pipeline error so a regression is loud.
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
@@ -219,14 +298,33 @@ fn lay_out_with_pipeline_owner_and_binding(
 
     // Presentation scopes are this crate's to supply — `flui-testing` owns the
     // mount ordering (including the RootRenderView wrap), not the widget
-    // catalog. Under the pipeline `RenderView` (which tight-fills the surface),
-    // `Align` loosens so the caller's widget receives max-bounded loose
-    // constraints matching the MountOptions surface size — without inserting a
-    // `ConstrainedBox` (SizedBox also renders as `RenderConstrainedBox`, and a
-    // harness one would steal type-name probes in overlay/hero tests).
+    // catalog. The pipeline `RenderView` tight-fills a finite surface (unbounded
+    // axes fall back to 800×600). Tight `lay_out` requests must reach the
+    // caller as tight, so they skip the loosener. Non-tight requests wrap
+    // `Align` so the widget can shrink-wrap; a non-zero minimum is re-applied
+    // with `ConstrainedBox` under that Align (ancestor of the logical root,
+    // so `find_by_render_type("RenderConstrainedBox")` still names the
+    // caller's node). Infinite max on an axis is restored with
+    // `UnconstrainedBox` — otherwise ListBody/Flex see the clamped view
+    // height and trip "must have unlimited space along its main axis".
+    let loosen_with_align = !(constraints.has_tight_width() && constraints.has_tight_height());
+    let reapply_constraints = if loosen_with_align
+        && (constraints.min_width > Pixels::ZERO || constraints.min_height > Pixels::ZERO)
+    {
+        Some(constraints)
+    } else {
+        None
+    };
+    let unconstrained_wrap = unconstrained_wrap_for(&constraints);
     let scoped = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
-    let root = Align::new(Alignment::TOP_LEFT).child(scoped);
-    let mounted = binding.mount_root(&root, owners, MountOptions::new(constraints));
+    let wrapped = wrap_presentation(
+        scoped,
+        loosen_with_align,
+        reapply_constraints,
+        unconstrained_wrap,
+    );
+    let options = MountOptions::new(constraints);
+    let mounted = binding.mount_root(&wrapped, owners, options);
     let root_render_id = resolve_logical_render_root(&mut binding, logical_root_type);
 
     LaidOut {
@@ -237,26 +335,62 @@ fn lay_out_with_pipeline_owner_and_binding(
         root_element_id: mounted.root_element,
         root_view_size: mounted.root_view_size,
         logical_root_type,
+        loosen_with_align,
+        reapply_constraints,
+        unconstrained_wrap,
         contacts: PointerContacts::new(),
     }
 }
 
 /// Shallowest mounted element of `logical_root_type` → its render id.
+///
+/// RenderViews own a node directly. Composition roots (`StatelessView` /
+/// `StatefulView`, e.g. [`AnimatedContainer`](crate::AnimatedContainer)) do
+/// not: walk to the first render-owning descendant so `LaidOut::root` still
+/// names the caller's outermost laid-out box (Flutter's "size of the
+/// widget"). [`Container`](crate::Container) is a `RenderView` and takes the
+/// direct path.
 fn resolve_logical_render_root(
     binding: &mut HeadlessBinding,
     logical_root_type: TypeId,
 ) -> RenderId {
-    binding
-        .tree_mut()
+    let tree = binding.tree_mut();
+    let logical_root_id = tree
         .iter_nodes()
         .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
         .min_by_key(|(_, node)| node.depth())
-        .map(|(_, node)| {
-            node.element()
-                .render_id()
-                .expect("the caller's logical root must own a render object after bootstrap")
-        })
-        .expect("the caller's logical root must remain mounted below presentation scopes")
+        .map(|(id, _)| id)
+        .expect("the caller's logical root must remain mounted below presentation scopes");
+
+    if let Some(render_id) = tree
+        .get(logical_root_id)
+        .and_then(|node| node.element().render_id())
+    {
+        return render_id;
+    }
+
+    // Level-order: the outermost composed render object is the first child that
+    // owns one (`AnimatedContainer` → `RenderContainer`, …), not a deeper leaf.
+    let mut queue: Vec<_> = tree
+        .get(logical_root_id)
+        .map(|node| node.child_ids().to_vec())
+        .unwrap_or_default();
+    let mut index = 0;
+    while index < queue.len() {
+        let id = queue[index];
+        index += 1;
+        let Some(node) = tree.get(id) else {
+            continue;
+        };
+        if let Some(render_id) = node.element().render_id() {
+            return render_id;
+        }
+        queue.extend(node.child_ids().iter().copied());
+    }
+
+    panic!(
+        "BUG: the caller's logical root must own a render object, or compose one, after bootstrap"
+    );
 }
 
 /// Like [`lay_out`], but drives implicitly-animated widgets: the binding adopts
@@ -891,6 +1025,22 @@ impl LaidOut {
         })
     }
 
+    /// The decorated/colored area of a [`RenderContainer`] inside its margin.
+    ///
+    /// [`size`](Self::size) on the same id includes the margin (the collapsed
+    /// `Padding` level). Probes that used to read a nested `RenderDecoratedBox`
+    /// want this instead. Panics if `id` is not a `RenderContainer`.
+    pub fn container_inner_size(&self, id: RenderId) -> Size {
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderContainer>())
+                .map(|render| render.inner_size())
+                .expect("render node should be a RenderContainer")
+        })
+    }
+
     /// The destination rectangle [`RenderImage::paint_rect_in`] computes for
     /// its CURRENT committed box size — where the image content actually
     /// paints once `fit`/`alignment` are applied, not merely the box's own
@@ -983,8 +1133,13 @@ impl LaidOut {
     pub fn pump_widget(&mut self, new_root: impl View) {
         self.logical_root_type = new_root.view_type_id();
         let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
-        let aligned = Align::new(Alignment::TOP_LEFT).child(scoped);
-        let root = RootRenderView::new(aligned, self.root_view_size.0, self.root_view_size.1);
+        let wrapped = wrap_presentation(
+            scoped,
+            self.loosen_with_align,
+            self.reapply_constraints,
+            self.unconstrained_wrap,
+        );
+        let root = RootRenderView::new(wrapped, self.root_view_size.0, self.root_view_size.1);
         self.binding.swap_root_view(self.root_element_id, &root);
         self.binding.pump_frame(std::time::Duration::ZERO);
         self.root_render_id =

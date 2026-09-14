@@ -70,6 +70,11 @@ struct LocalPostFrameProbe {
     observed_committed_geometry: Arc<AtomicBool>,
     desired_width: Arc<AtomicUsize>,
     rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
+    /// The caller's own render id, the same value `LaidOut::root()` names —
+    /// set by the test itself once it exists (mounting hasn't produced it
+    /// yet when `init_state` schedules the callback below). `None` until
+    /// then.
+    logical_root: Rc<Cell<Option<flui_foundation::RenderId>>>,
 }
 
 impl View for LocalPostFrameProbe {
@@ -87,6 +92,7 @@ impl StatefulView for LocalPostFrameProbe {
             observed_committed_geometry: Arc::clone(&self.observed_committed_geometry),
             desired_width: Arc::clone(&self.desired_width),
             rebuild: Arc::clone(&self.rebuild),
+            logical_root: Rc::clone(&self.logical_root),
         }
     }
 }
@@ -96,6 +102,7 @@ struct LocalPostFrameProbeState {
     observed_committed_geometry: Arc<AtomicBool>,
     desired_width: Arc<AtomicUsize>,
     rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
+    logical_root: Rc<Cell<Option<flui_foundation::RenderId>>>,
 }
 
 impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
@@ -106,6 +113,7 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
             .expect("the binding must install a LocalPostFrameHandle");
         let pipeline = self.pipeline.clone();
         let observed = Arc::clone(&self.observed_committed_geometry);
+        let logical_root = Rc::clone(&self.logical_root);
         let owner_local = Rc::new(Cell::new(false));
         let callback_local = Rc::clone(&owner_local);
 
@@ -114,18 +122,20 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
                 callback_local.set(true);
                 observed.store(
                     pipeline.with(|owner| {
-                        let render_tree = owner.render_tree();
-                        let root = render_tree
-                            .iter()
-                            .map(|(id, _)| id)
-                            .find(|id| render_tree.parent(*id).is_none())
-                            .expect("the mounted subtree should have a render root");
-                        callback_local.get()
-                            && owner.box_size(root)
-                                == Some(flui_types::Size::new(
-                                    flui_types::geometry::px(64.0),
-                                    flui_types::geometry::px(18.0),
-                                ))
+                        // The probe's own render id — the same value the
+                        // test asserts against via `LaidOut::root()` before
+                        // the rebuild — set by the test itself once mounting
+                        // (which runs before this callback ever fires) has
+                        // produced it. Committed geometry there must be
+                        // 64×18 after the rebuild.
+                        let expected = flui_types::Size::new(
+                            flui_types::geometry::px(64.0),
+                            flui_types::geometry::px(18.0),
+                        );
+                        let Some(root) = logical_root.get() else {
+                            return false;
+                        };
+                        callback_local.get() && owner.box_size(root) == Some(expected)
                     }),
                     Ordering::SeqCst,
                 );
@@ -278,12 +288,14 @@ fn an_owner_local_post_frame_callback_observes_committed_geometry() {
     let observed = Arc::new(AtomicBool::new(false));
     let desired_width = Arc::new(AtomicUsize::new(32));
     let rebuild = Arc::new(Mutex::new(None));
+    let logical_root = Rc::new(Cell::new(None));
     let mut laid = crate::common::lay_out_with_pipeline_owner(
         LocalPostFrameProbe {
             pipeline: pipeline.clone(),
             observed_committed_geometry: Arc::clone(&observed),
             desired_width: Arc::clone(&desired_width),
             rebuild: Arc::clone(&rebuild),
+            logical_root: Rc::clone(&logical_root),
         },
         loose(100.0),
         pipeline.clone(),
@@ -297,6 +309,13 @@ fn an_owner_local_post_frame_callback_observes_committed_geometry() {
         )),
         "bootstrap geometry must differ from the geometry expected by the callback"
     );
+    // Only available now: `LaidOut::root()` resolves the caller's own render
+    // id by walking the ELEMENT tree for the probe's concrete type
+    // (`resolve_logical_render_root`), which the probe's own callback has no
+    // way to do from inside `init_state` (mounting isn't finished yet, and
+    // the callback only ever captures the `PipelineCell`). Hand it the same
+    // value this assertion just used.
+    logical_root.set(Some(laid.root()));
     desired_width.store(64, Ordering::SeqCst);
     rebuild
         .lock()

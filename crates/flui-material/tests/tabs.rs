@@ -172,12 +172,12 @@ fn divider_theme_override_reaches_the_mounted_tree() {
         tight(200.0, 48.0),
     );
 
-    // Every per-tab indicator band is ALSO a `RenderDecoratedBox` (a
+    // Every per-tab indicator band is ALSO a `RenderContainer` (a
     // `Container::color(...)`, same as the divider) — 100px wide, 2dp
     // tall. The divider is the one spanning the FULL bar width at 1dp
     // tall, which disambiguates it without walking exact tree structure.
     let divider = laid
-        .find_all_by_render_type("RenderDecoratedBox")
+        .find_all_by_render_type("RenderContainer")
         .into_iter()
         .find(|&id| {
             let size = laid.size(id);
@@ -185,19 +185,19 @@ fn divider_theme_override_reaches_the_mounted_tree() {
         })
         .expect("a full-width 1dp divider must be mounted");
 
-    let decoration = laid
-        .render_property(divider, "decoration")
-        .expect("RenderDecoratedBox reports a \"decoration\" diagnostics property");
+    let color = laid
+        .render_property(divider, "color")
+        .expect("RenderContainer reports a \"color\" diagnostics property");
 
     assert!(
-        decoration.contains(&format!("{themed_divider:?}")),
+        color.contains(&format!("{themed_divider:?}")),
         "a configured tab_bar_theme.divider_color must reach the mounted divider — got \
-         {decoration:?}"
+         {color:?}"
     );
 }
 
 /// The selected tab's indicator band (2dp, `indicator_color`) is the OTHER
-/// `RenderDecoratedBox` shape — 100px wide (one of two equal tabs), 2dp
+/// `RenderContainer` shape — 100px wide (one of two equal tabs), 2dp
 /// tall — and a `TabBarThemeData.indicator_color` override reaches it too.
 #[test]
 fn indicator_theme_override_reaches_the_mounted_selected_tab_band() {
@@ -220,10 +220,10 @@ fn indicator_theme_override_reaches_the_mounted_selected_tab_band() {
 
     // Both tabs' indicator bands are 100px wide, 2dp tall — the size alone
     // doesn't distinguish selected (opaque) from unselected (transparent);
-    // search for the one whose decoration actually carries the themed
+    // search for the one whose color actually carries the themed
     // color instead of guessing which match is "first".
     let indicator_bands: Vec<_> = laid
-        .find_all_by_render_type("RenderDecoratedBox")
+        .find_all_by_render_type("RenderContainer")
         .into_iter()
         .filter(|&id| {
             let size = laid.size(id);
@@ -237,8 +237,8 @@ fn indicator_theme_override_reaches_the_mounted_selected_tab_band() {
     );
 
     let has_themed_band = indicator_bands.iter().any(|&id| {
-        laid.render_property(id, "decoration")
-            .is_some_and(|decoration| decoration.contains(&format!("{themed_indicator:?}")))
+        laid.render_property(id, "color")
+            .is_some_and(|color| color.contains(&format!("{themed_indicator:?}")))
     });
 
     assert!(
@@ -284,7 +284,7 @@ fn indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it(
     );
 
     let divider = laid
-        .find_all_by_render_type("RenderDecoratedBox")
+        .find_all_by_render_type("RenderContainer")
         .into_iter()
         .find(|&id| {
             let size = laid.size(id);
@@ -292,7 +292,7 @@ fn indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it(
         })
         .expect("a full-width 1dp divider must be mounted");
     let band = laid
-        .find_all_by_render_type("RenderDecoratedBox")
+        .find_all_by_render_type("RenderContainer")
         .into_iter()
         .find(|&id| {
             let size = laid.size(id);
@@ -459,13 +459,13 @@ fn default_tab_controller_is_reachable_by_a_descendant_tab_bar_and_drives_its_in
     laid.pump();
 
     let indicator_color = ThemeData::light().color_scheme.primary;
-    let bands = laid.find_all_by_render_type("RenderDecoratedBox");
+    let bands = laid.find_all_by_render_type("RenderContainer");
     let opaque_bands: Vec<_> = bands
         .into_iter()
         .filter(|&id| laid.size(id).height.get() == 2.0 && laid.size(id).width.get() == 100.0)
         .filter(|&id| {
-            laid.render_property(id, "decoration")
-                .is_some_and(|decoration| decoration.contains(&format!("{indicator_color:?}")))
+            laid.render_property(id, "color")
+                .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))
         })
         .collect();
 
@@ -524,12 +524,12 @@ fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     // tap always selects whatever it lands on.
     let indicator_color = ThemeData::light().color_scheme.primary;
     let clamped_band_x = laid
-        .find_all_by_render_type("RenderDecoratedBox")
+        .find_all_by_render_type("RenderContainer")
         .into_iter()
         .filter(|&id| laid.size(id).height.get() == 2.0 && laid.size(id).width.get() == 150.0)
         .find(|&id| {
-            laid.render_property(id, "decoration")
-                .is_some_and(|decoration| decoration.contains(&format!("{indicator_color:?}")))
+            laid.render_property(id, "color")
+                .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))
         })
         .map(|id| laid.absolute_offset(id).dx.get());
     assert_eq!(
@@ -549,12 +549,12 @@ fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     laid.pump();
 
     let opaque_bands: Vec<_> = laid
-        .find_all_by_render_type("RenderDecoratedBox")
+        .find_all_by_render_type("RenderContainer")
         .into_iter()
         .filter(|&id| laid.size(id).height.get() == 2.0 && laid.size(id).width.get() == 150.0)
         .filter(|&id| {
-            laid.render_property(id, "decoration")
-                .is_some_and(|decoration| decoration.contains(&format!("{indicator_color:?}")))
+            laid.render_property(id, "color")
+                .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))
         })
         .collect();
 

@@ -27,15 +27,15 @@ fn default_geometry_matches_the_m3_token_table() {
     );
 
     let decorated = laid
-        .try_find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderContainer")
         .expect("Divider must compose a decorated (filled) line");
     assert_eq!(
-        laid.size(decorated).height.get(),
+        laid.container_inner_size(decorated).height.get(),
         1.0,
         "_DividerDefaultsM3.thickness (1.0) must set the filled line's height"
     );
 
-    let width = laid.size(decorated).width.get();
+    let width = laid.container_inner_size(decorated).width.get();
     assert_eq!(
         width,
         400.0 - 8.0 - 12.0,
@@ -64,16 +64,16 @@ fn vertical_divider_default_geometry_matches_the_m3_token_table_on_the_transpose
     );
 
     let decorated = laid
-        .try_find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderContainer")
         .expect("VerticalDivider must compose a decorated (filled) line");
     assert_eq!(
-        laid.size(decorated).width.get(),
+        laid.container_inner_size(decorated).width.get(),
         1.0,
         "_DividerDefaultsM3.thickness (1.0) must set the filled line's WIDTH for \
          VerticalDivider"
     );
 
-    let height = laid.size(decorated).height.get();
+    let height = laid.container_inner_size(decorated).height.get();
     assert_eq!(
         height,
         400.0 - 8.0 - 12.0,
@@ -99,11 +99,11 @@ fn themed_color_beats_the_m3_default() {
     let laid = lay_out(Theme::new(theme, Divider::new()), loose(400.0));
 
     let decorated = laid
-        .try_find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderContainer")
         .expect("Divider must compose a decorated (filled) line");
     let decoration = laid
         .render_property(decorated, "decoration")
-        .expect("RenderDecoratedBox reports a \"decoration\" diagnostics property");
+        .expect("RenderContainer reports a \"decoration\" diagnostics property");
 
     assert!(
         decoration.contains(&format!("{themed_color:?}")),
@@ -130,11 +130,11 @@ fn widget_color_override_wins_over_the_divider_theme() {
     );
 
     let decorated = laid
-        .try_find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderContainer")
         .expect("Divider must compose a decorated (filled) line");
     let decoration = laid
         .render_property(decorated, "decoration")
-        .expect("RenderDecoratedBox reports a \"decoration\" diagnostics property");
+        .expect("RenderContainer reports a \"decoration\" diagnostics property");
 
     assert!(
         decoration.contains(&format!("{widget_color:?}")),

@@ -26,7 +26,7 @@ Two facts shaped the design, both ground-truthed against the code, not assumed:
 
 - **Render-object widget** — implements `RenderView` (+ `impl_render_view!`), wraps one `flui-objects` render box. Single child stored as `Child`; `.child(impl IntoView)`.
 - **Multi-child render widget** — `Flex`/`Row`/`Column`, **generic over `C: ViewSeq`** with default `Vec<BoxedView>`. This is how **C2's two load-bearing paths** are served by one type: `column!`/`row!` produce a monomorphic tuple (`Flex<(A,B,C)>`), a `Vec<BoxedView>` carries a dynamic list. Generic widgets hand-write `impl View` via the crate-local `generic_render_view_element!` macro (the `impl_render_view!` macro can't express generic bounds).
-- **Composition widget** — `Container` is a `StatelessView` whose `build` composes other widgets in Flutter's exact child-outward order.
+- **Composition widget** — `Container` is a `StatelessView` whose `build` composes other widgets in Flutter's exact child-outward order. **(superseded — see "Amendment (2026-09-14): `Container` is a render-object widget, not a composition widget" below; `SafeArea` is the catalog's Composition-widget exemplar now.)**
 
 **Parity over the available primitive, not the convenient one.** `SizedBox` → `RenderConstrainedBox` (tight constraints, exactly Flutter's implementation); `ColoredBox` → `RenderDecoratedBox` (color decoration, exactly `ColoredBox ≈ DecoratedBox(color)`). The Leaf `RenderSizedBox`/`RenderColoredBox` stay engine-demo primitives.
 
@@ -50,3 +50,23 @@ Two facts shaped the design, both ground-truthed against the code, not assumed:
 - **`SizedBox`/`ColoredBox` over the Leaf `RenderSizedBox`/`RenderColoredBox`.** Rejected: no child support — a parity regression masquerading as done.
 - **Testing widgets at the render-object level (`RenderTester`).** Rejected: that re-tests `flui-objects`, not the widgets. The view-level harness is what proves *the widget* wires its render object and attaches its child.
 - **Driving tests through `WidgetsBinding`.** Rejected: a process singleton (the CI `--test-threads=1` flake source). The direct `ElementTree` + `PipelineOwner` mount is parallel-safe.
+
+---
+
+## Amendment (2026-09-14): `Container` is a render-object widget, not a composition widget
+
+§Decision named `Container` as the catalog's **Composition widget** exemplar — a `StatelessView` whose `build` composes other widgets in Flutter's exact child-outward order. That is no longer what `Container` is: it is now a `RenderView` over one `RenderContainer` (`flui-objects`), which carries every optional layer (alignment, padding, margin, color, decoration, additional constraints, transform) as a field instead of a conditionally-present widget level. `SafeArea` is the catalog's Composition-widget exemplar now — both crate tables that cited this ADR (`crates/flui-widgets/AGENTS.md`, `crates/flui-widgets/README.md`) already point to it.
+
+**Why.** Flutter's `Container.build` (`widgets/container.dart`) is the conditional stack this ADR described: `Align` → `Padding` → `ColoredBox` → `DecoratedBox` → `ConstrainedBox` → `Padding` (margin) → `Transform`, each level present only while its field is set. Toggling a field inserts or removes a level between the parent and the caller's child, so reconciliation diverges at that level and everything below it — including an unkeyed stateful child — is rebuilt from scratch instead of updated in place. Flutter has never fixed this (flutter/flutter#161698); a `Container` composed the way this ADR originally specified inherits the same hazard verbatim. Folding the optional levels into `RenderContainer` fields makes the child's slot structurally fixed: no level can appear or disappear, so no unkeyed child ever loses state from a cosmetic option changing. See `crates/flui-widgets/ARCHITECTURE.md` mapping decision 15 and issue #1096.
+
+**The rule for the next case.** Composing widgets is still the default shape (§Decision's three shapes stand); this is a narrow exception, not a precedent to reach for casually. A composition widget may collapse into a single render object only when:
+
+(a) its optional levels are conditional on caller-visible properties **and** its child slot is the caller's — i.e. toggling a property would otherwise insert or remove an element between the widget and an unkeyed caller-supplied child; **and**
+
+(b) every level absorbed is pure box-protocol geometry/paint, with no build, no parent data, and no element identity of its own.
+
+`Container` satisfies both: every level it absorbs (`Align`, `Padding`, `ColoredBox`, `DecoratedBox`, `ConstrainedBox`, `Transform`) is geometry/paint over the same caller-supplied child, none of them builds or owns parent-data, and the whole point is the reconciliation hazard in (a).
+
+`SafeArea` and `Card` both fail (a), before (b) is ever reached: `SafeArea` is fixed-depth (always exactly one `Padding`), and `Card::build` (`crates/flui-material/src/card.rs`) is `Padding(margin).child(Material::new(color)...)` — also fixed-depth, since `margin` resolves through the card theme to a hard default and is never absent. Neither widget's structure ever changes shape under the caller, so there is no identity hazard in (a) to fix by collapsing either one. `ListTile` matches the reasoning as stated: it builds an icon/text `Row` whose members are genuinely conditional on which of `ListTile`'s optional slots (`leading`, `trailing`, …) are set, so it fails (b) instead — it builds child widgets with their own element identity, not box-protocol geometry/paint over the caller's child.
+
+`Material` (`crates/flui-material/src/material.rs`) is not a composition widget at all — it is a `RenderView` (`type RenderObject = RenderPhysicalShape`) with no `build` — so neither clause applies to it; it is already the single render object this rule is about, not a candidate for becoming one.

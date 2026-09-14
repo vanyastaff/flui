@@ -948,3 +948,239 @@ the offending widget behind `TypeId` text, and let secondary bootstrap
 `positioned_under_row_…`) — assert the attach-seam diagnostic and that the
 message is not `BoxLayoutCtx::from_erased`. Happy paths remain in
 `flex_parent_data.rs` / `stack_positioned.rs`.
+
+### 15. `Container` is one render object, not a conditional widget stack
+
+**Rule:** Prime Directive #1 — a convenience widget's implementation shape must
+not make the caller's unkeyed child state depend on which cosmetic options are
+set.
+
+**Oracle:** `widgets/container.dart` builds `Align` / `Padding` / `ColoredBox` /
+`DecoratedBox` / `ConstrainedBox` / margin `Padding` / `Transform` only when the
+matching field is set. Toggling a field inserts or removes a level between the
+parent and the child, so reconciliation diverges there and an unkeyed stateful
+child below is rebuilt from scratch (flutter/flutter#161698). That issue is
+still open, and the thread is worth reading before touching this decision:
+maintainers weighed GlobalKey-like reparenting (goderbauer — concluded it
+duplicates the GlobalKey mechanism and its cost, so a caller may as well key
+the child), a "compressed element" holding the intermediate widgets (chunhtai),
+a local deactivated-element map, and render-level composition. Hixie's position
+is to fix the docs rather than the widget, and to steer people away from
+`Container` entirely.
+
+**Choice:** take the render-level composition — the option loic-sharma proposed
+upstream (2025-05-13) and later prototyped as `Container2` in
+`loic-sharma/flutter_playground` (2025-12-26). `Container` is a `RenderView`
+over one `RenderContainer` (`flui-objects`) that carries margin, additional
+constraints, padding, alignment, color, decoration and transform as *fields*.
+The child's slot is therefore structurally fixed and no option can move it.
+
+**Where we diverge from that prototype, and what it costs.** The upstream
+sketch keeps composition in the render layer: its `RenderContainer` extends a
+`RenderComposedBox` that builds a real render-object subtree
+(`RenderPadding` → `RenderDecoratedBox` → …) behind one widget/element. FLUI's
+is a single render object that *re-derives* that subtree's geometry, paint,
+hit-test and intrinsics as its own code. The upside is one node and no
+composition machinery to build. The cost is that every contract the levels
+would have inherited has to be re-proved here, and that is where this object's
+defects have actually come from: an absent level and a zero-inset level are
+not the same thing for hit-testing (which is why `padding` is `Option` and the
+child-recursion gate is conditional — see **Hit-testing** below), and the
+layered-range predicate now exists in two places (issue #1143). A composed
+shape would make those classes unrepresentable rather than tested-for. It is a
+legitimate future reshape, not a defect in this one; tracked in issue #1144.
+chunhtai's objection to render-level composition applies to us unchanged —
+it fixes `Container` and not the general class, so any other conditional-layer
+widget in this catalog keeps the same hazard.
+
+Two properties follow, and both are the reason for the divergence:
+
+* **State survives every toggle** with no `GlobalKey`, no retake, and no
+  lifecycle churn — nothing for the caller to opt into, and no reparenting
+  semantics leaking into an unmoved subtree.
+* **The element tree is where the win is, not the render tree.** A conditional
+  stack inflates and deflates an *element* per toggled option, and elements are
+  not free: knopp reports on the upstream issue (2026-04-12) that element
+  inflation/deflation is a measured bottleneck during fast scrolling — "a
+  thousand cuts problem" — and names constraining `Container` to a single
+  element as a direct improvement. That is the load-bearing argument for this
+  divergence. The render-node accounting below is an honest cost statement, not
+  the justification; read it as "what this costs", not "why we did it". FLUI has
+  no equivalent measurement of its own yet, so this rests on an upstream
+  maintainer's profiling, not ours.
+* **Node count depends on whether there is a child.** With a child, identity
+  (no options at all) is the widget passing the child straight through —
+  zero extra nodes — so Flutter is cheaper there. At exactly one option,
+  Flutter's stack is also exactly one extra node (a single `padding` builds
+  one `RenderPadding`), so node count ties. `RenderContainer` only wins on
+  count from two options up, where Flutter would otherwise stack one level
+  per option (up to seven if every option is set). **Childless, Flutter is
+  never free**: `build` reaches for a two-node placeholder (`LimitedBox` +
+  `ConstrainedBox`) even with no option set at all (`Container()`), so
+  `RenderContainer` already wins there. The only childless tie is a *tight*
+  effective constraint — both `width` and `height` set, or an explicit tight
+  `constraints` — which suppresses the placeholder and leaves Flutter a
+  single `ConstrainedBox` against one node here; a lone `width` does not
+  qualify, since `BoxConstraints::is_tight` requires both axes, so that case
+  still takes the placeholder and costs three. Every
+  other childless option (color, padding, decoration, an alignment paired
+  with a fixed size) only grows Flutter's node count further, never brings
+  it back below one. **What node count never buys, in either regime, is
+  node weight**: `RenderContainer` carries every field — alignment, padding,
+  margin, color, decoration, additional constraints, transform, plus the
+  committed child offset/size/baselines — whether or not that option is
+  set, so it is heavier than whichever single-purpose object the stack
+  would have used, in every configuration including identity. The reason
+  for the divergence is the stable slot, not a cheaper or lighter
+  `Container`.
+
+**Intrinsics:** a tight additional width or height answers before the child
+is queried, matching `RenderConstrainedBox`. Without that short-circuit a
+`LayoutBuilder` (or any child that rejects speculative intrinsic queries)
+would be asked even though the result is discarded.
+
+**Parent-data transparency:** Flutter's identity `Container` (every option
+absent) builds to the child itself, so `Row → Container → Expanded` and
+`Stack → Container → Positioned` attach the parent-data widget directly to
+Flex/Stack. A `RenderView` always inserts `RenderContainer`
+(`ParentData = BoxParentData`) between them, so those trees panic at
+`apply_ancestor_parent_data`. That is a named consequence of the stable-slot
+choice, not an accidental drop: restoring identity passthrough would recreate
+flutter/flutter#161698 the moment any option is toggled on. The supported
+shape is `Row → Expanded → Container` / `Stack → Positioned → Container`.
+Covered by
+`identity_container_between_flex_and_expanded_is_not_parent_data_transparent`.
+
+Parent data is not the only consequence of that always-a-node choice.
+Hit-testing has the same shape one level up: `RenderContainer` always bounds
+the incoming position against its own box before doing anything else, while
+Flutter's identity `Container` is not a node at all and so bounds nothing. A
+child whose own `hit_test` deliberately does not bound itself — `RenderTransform`
+is the documented case — is therefore reachable outside the container's box in
+Flutter and not here, whenever *no* margin and *none* of the five gated
+properties are set. Measured under a shared `RenderPadding` parent with a
+scaled child, three of four probe points outside the box hit in Flutter's tree
+and miss here. Unlike the margin-band gate below, this one is **not** closed:
+the gated-level reasoning that fixes that case does not extend to the outer
+gate, because at identity there is no level to reason about — the node itself
+is the divergence. Tracked in issue #1143.
+
+**Collapsed branch:** Flutter's three childless shapes — the placeholder
+`LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
+inner widget at all — all resolve to the same box, so `RenderContainer` has no
+childless branch. The equality is proven, not assumed, by
+`harness_container_childless_matches_each_flutter_shape_it_replaces`, which
+diffs each real shape against `RenderContainer` under the configuration
+Flutter would pick it for, and additionally forces the placeholder shape
+under the tight additional constraints branches two and three use, so all
+three shapes are diffed against EACH OTHER too, not only each against
+`RenderContainer`.
+
+**Not carried over:** `foregroundDecoration`, `clipBehavior`, `isAntiAlias` and
+`transformAlignment` have no FLUI `Container` setter. These are four
+different kinds of gap, not one undifferentiated "not yet":
+
+- **`clipBehavior` does not fit this shape at all.** [`PaintEffects`] gives a
+  node exactly one clip slot, wrapping everything the node's `paint` records
+  as one fragment. Flutter's `ClipPath` (the `clipBehavior != Clip.none`
+  branch in `Container.build`) sits between `ColoredBox` and `DecoratedBox`:
+  it clips the padding, color and child, and explicitly does **not** clip
+  the decoration (`DecoratedBox` wraps the already-clipped `current`
+  afterward, unclipped). `RenderContainer::paint` records decoration, color
+  and child as one fragment, so a `PaintEffects.clip` here would clip the
+  decoration too — wrong. Adding this needs a paint-level re-split (a second
+  recorded fragment, or a clip scoped to a sub-range of one), not a new
+  `Option` field.
+- **`foregroundDecoration` is additive.** A second decoration field, a
+  `paint_box_decoration` call after the child (Flutter's `DecorationPosition
+  .foreground`, painted on top rather than behind), and a hit arm —
+  `DecoratedBox`'s own doc states a foreground decoration participates in
+  `hitTestSelf` exactly like the background one does.
+- **`transformAlignment` is additive but not local.** It needs an
+  `alignment: Option<Alignment>` field folded into the pivot the way
+  [`RenderTransform::effective_transform`] already combines one with its own
+  base matrix, and that combined value would have to move together through
+  `apply_paint_transform`, `hit_test`'s inverse, `paint_translation`,
+  `skip_paint` and `owns_effect_layer` — every site that reads `self.transform`
+  today.
+- **`isAntiAlias` is additive and narrow.** In Flutter it is a `ColoredBox`-
+  only flag (`Container.build`'s `ColoredBox(color:, isAntiAlias:, …)` call);
+  nothing else in the stack reads it. FLUI's own color fill
+  (`ctx.canvas().draw_rect(rect, &Paint::fill(color))`) always anti-aliases
+  (`Paint::fill`'s default), with `Paint::with_anti_alias` already available
+  to turn it off — adding the setter is one field plus one call-site change,
+  not a structural gap.
+
+A `BoxDecoration` border's thickness is separately still not folded into the
+effective padding (`_paddingIncludingDecoration`) because `flui-types`'
+`BoxDecoration` exposes no border insets. Flutter also `assert`s that `color`
+and `decoration` are mutually exclusive; FLUI accepts both and paints color
+over the decoration — the order the widget stack would have produced
+(`DecoratedBox` enclosing `ColoredBox`) — rather than panicking.
+
+**Replacement tests:** the geometry the collapsed stack owes is pinned against
+the stack itself by `harness_container_matches_the_widget_stack_it_collapses`
+(size, child size, absolute child position and hit path, over eight
+configurations spanning both wet layout and hit-testing, each making a
+different level decide), plus
+`harness_container_paints_its_chrome_inside_the_margin` for the decorated box's
+own rect — the level Flutter's `paints..rect(...)` oracle pins and the one a
+single node no longer exposes as a separate render object. State stability is
+covered by `container.rs`'s `container_optional_*_preserves_unkeyed_child_state`
+family and `animated_container_optional_color_preserves_unkeyed_child_state`;
+all five fail against the conditional stack and pass against this node.
+Tight additional constraints answering an intrinsic without querying a
+`LayoutBuilder` child are covered by
+`container_tight_width_does_not_query_layout_builder_intrinsics` and
+`container_tight_height_does_not_query_layout_builder_intrinsics`.
+Chrome self-hit uses the same half-open gate as the stacked `DecoratedBox`
+(`harness_container_decoration_misses_the_exclusive_chrome_max_edge`);
+baselines add the child's offset
+(`harness_container_baseline_adds_child_offset`).
+
+**Hit-testing gates the child behind the SAME boxes the stack does — only
+when a level exists to gate on, and none always does.** `RenderContainer::
+hit_test` tests the child before the decoration/color path (a child hittable
+in a cut-out the decoration's rounded corners exclude must stay reachable),
+but ordering is not the only thing that has to match the stack: `Container.
+build` inserts `Padding`/`ColoredBox`/`DecoratedBox`/`ConstrainedBox`/`Align`
+between `Padding(margin)` and the child only when `padding`/`color`/
+`decoration`/`additional_constraints`/`alignment` (respectively) is set —
+`_paddingIncludingDecoration` is null, and so no `Padding` level exists,
+precisely when `padding` is unset (FLUI's `BoxDecoration` never contributes
+a padding of its own, so a decoration alone can't supply one either). With
+NONE of those five set, the composed shape is `Padding(margin) → child`
+with nothing between them, and nothing gates a hit-test there either — a
+`RenderContainer` that always applied the `inner_size` gate regardless would
+reject a tap the real stack accepts. `padding` is therefore `Option
+<EdgeInsets>` on `RenderContainer`, not a plain `EdgeInsets` defaulting to
+zero: `None` (unset) and `Some(EdgeInsets::ZERO)` (explicitly zero) are
+geometrically identical but hit-test differently, since an explicit zero
+inset still gets a real (zero-inset) level.
+
+Once at least one of those five IS set, every level that exists reports the
+same margin-offset `inner_size` box and rejects a position outside it
+(`is_within_own_size`) before ever reaching the child, and when an alignment
+is set specifically, the stack additionally inserts an `Align` level gating
+on the narrower CONTENT box (inside the margin AND the padding) — a gate
+whose OWN condition needs nothing else, since an `Align` level exists
+whenever alignment does, independent of whichever of the other four are
+also set. A collapsed node that let a child overflow past either gate, once
+its condition holds, would expose a child whose own `hit_test` does not
+bound itself to its laid-out box — `RenderTransform` deliberately does not,
+so a scaled child stays hittable across its whole visually-overflowing
+area — to a tap the real stack rejects.
+
+Pinned in both directions: `harness_container_margin_alone_does_not_gate_an_
+overflowing_child` (nothing set — the tap DOES hit) against
+`harness_container_color_gates_an_overflowing_child_in_the_margin_band` (one
+property added — the identical tap does NOT), and
+`harness_container_padding_does_not_expose_an_overflowing_aligned_child`
+(the narrower content-box gate, alignment set) against
+`harness_container_padding_without_alignment_does_not_narrow_the_gate` (the
+same padding, no alignment — the content-box gate must not bind on its
+own). The differential carries the matching pair of cases too, and
+`padding` is `Option<EdgeInsets>` on `ContainerStackCase` for the same
+reason it is on `RenderContainer` — a composed tree that always inserted a
+zero-inset `Padding` level would silently endorse the divergence instead of
+detecting it.

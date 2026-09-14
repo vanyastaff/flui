@@ -6,13 +6,12 @@
 //! and out of scope for this file — not yet ported to `tests/decorated_box.rs`
 //! either, which currently has no zero-area case).
 //!
-//! `Container` is not a single render object: `StatelessView::build`
-//! (`crates/flui-widgets/src/container.rs`) composes, from the child
-//! outward, `Align` → `Padding` → `ColoredBox`/`DecoratedBox` →
-//! `ConstrainedBox` → `Padding` (margin) → `Transform` — the same order as
-//! Flutter's `Container.build`. The cases below exercise that composition
-//! order and the child/no-child sizing contract; paint-color values are out
-//! of scope (this crate's test harness has no display-list/paint-command
+//! `Container` is one [`RenderContainer`](flui_objects::RenderContainer): a
+//! `RenderView` that carries Flutter's optional layers as fields. The
+//! cases below exercise that node's geometry, hit-testing and the
+//! child/no-child sizing contract against the stack the node collapses
+//! (recorded as mapping decision 15). Paint-color values are out of scope
+//! (this crate's test harness has no display-list/paint-command
 //! introspection, same limitation `tests/decorated_box.rs` and
 //! `tests/clip.rs` already document).
 //!
@@ -31,10 +30,10 @@
 //!   [`container_collapses_to_zero_in_the_unbounded_dimension_when_childless`].
 //! - `'Container transformAlignment'` — partial: ported only as the box-geometry invariant
 //!   the oracle's `getSize`/`getTopLeft`/`getTopRight`/`getBottomLeft`/
-//!   `getBottomRight` asserts really pin (a `Transform`-wrapped `Container`'s
+//!   `getBottomRight` asserts really pin (a `Transform`-configured `Container`'s
 //!   own laid-out box is unaffected by its transform; the transform only
 //!   affects painting/hit-testing of what's *inside* it) —
-//!   [`container_transform_is_outermost_and_does_not_affect_own_box_size`].
+//!   [`container_own_box_size_is_unaffected_by_its_transform`].
 //!   `transformAlignment` itself is dropped — `Container` has no such
 //!   setter (see `docs/ROADMAP.md` Cross.H).
 //! - `'Container is hittable only when having decorations'` — the `color`,
@@ -73,8 +72,8 @@ use flui_geometry::Matrix4;
 use flui_geometry::px;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color, Size};
-use flui_widgets::{Center, Container, GestureDetector, SizedBox, Text};
+use flui_types::{Alignment, Axis, Color, Size};
+use flui_widgets::{Center, Container, GestureDetector, SizedBox, Text, UnconstrainedBox};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -116,10 +115,7 @@ fn container_alignment_bottom_right_positions_child_correctly() {
     );
     assert_eq!(laid.size(laid.root()), size(100.0, 80.0));
 
-    // FLUI's Container with alignment composes Align → child.
-    // root → constrained_box → align → sized_box
-    let align_node = laid.only_child(laid.root());
-    let child_node = laid.only_child(align_node);
+    let child_node = laid.only_child(laid.root());
     assert_eq!(
         laid.size(child_node),
         size(30.0, 20.0),
@@ -172,46 +168,13 @@ fn container_full_composition_clamps_size_and_positions_child() {
         "margin(5) around the clamped 53×78 color box must be 63×88"
     );
 
-    let color_node = laid.find_by_render_type("RenderDecoratedBox");
-    assert_eq!(
-        laid.size(color_node),
-        size(53.0, 78.0),
-        "height 76 must clamp up to the constraints' 78 minimum"
-    );
-    assert_eq!(
-        laid.absolute_offset(color_node),
-        offset(5.0, 5.0),
-        "the color layer sits inside the 5px margin"
-    );
-
-    // Padding∘Align and Align∘Padding commute for the child's final offset,
-    // so pin the order by layer identity and intermediate box: the layer
-    // directly inside the color box must be the Padding, filling it at
-    // 53×78, with Align inside it at the padded 39×64 — the swapped order
-    // would put Align first and shrink-wrap the Padding to 39×47.
-    let padding_node = laid.only_child(color_node);
-    assert!(
-        laid.find_all_by_render_type("RenderPadding")
-            .contains(&padding_node),
-        "the layer directly inside the color box must be the Padding layer"
-    );
-    assert_eq!(
-        laid.size(padding_node),
-        size(53.0, 78.0),
-        "Padding fills the color box"
-    );
-    let align_node = laid.only_child(padding_node);
-    assert_eq!(
-        laid.find_by_render_type("RenderAlign"),
-        align_node,
-        "Align must sit inside the Padding layer"
-    );
-    assert_eq!(
-        laid.size(align_node),
-        size(39.0, 64.0),
-        "Align's box is the color box minus 7px padding per side"
-    );
-    let child_node = laid.only_child(align_node);
+    // The chrome box itself (53×78 at (5, 5), the level Flutter's
+    // `paints..rect(...)` pins) is internal to `RenderContainer`, so it is
+    // asserted where it is observable — against the painted rect, in
+    // `harness_container_paints_its_chrome_inside_the_margin`. What remains
+    // observable here is the geometry a caller can see: the outer box and
+    // where the child lands inside it.
+    let child_node = laid.only_child(laid.root());
     assert_eq!(laid.size(child_node), size(25.0, 33.0));
     assert_eq!(
         laid.absolute_offset(child_node),
@@ -228,33 +191,48 @@ fn container_full_composition_clamps_size_and_positions_child() {
 /// fit.
 ///
 /// Flutter parity: container_test.dart `'Can be placed in an infinite box'`
-/// (3.44.0) — a smoke test there (no explicit size assertion); ported here
-/// with a concrete size pin since FLUI's harness can assert it directly.
+/// (3.44.0) — a smoke test there (`ListView(children: [Container()])` under
+/// a bounded viewport, no explicit size assertion). The list is an infinite
+/// *box* on the main axis; unbounded constraints as the pipeline root are
+/// rejected by `RenderViewAdapter`. Ported here with a concrete size pin
+/// under the same constraint shape: `UnconstrainedBox` keeps width, frees
+/// height.
 #[test]
 fn container_collapses_to_zero_in_the_unbounded_dimension_when_childless() {
-    let unbounded_height = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(f32::INFINITY));
-    let laid = lay_out(Container::new(), unbounded_height);
+    let laid = lay_out(
+        UnconstrainedBox::new()
+            .constrained_axis(Axis::Horizontal)
+            .alignment(Alignment::TOP_LEFT)
+            .child(Container::new()),
+        tight(300.0, 600.0),
+    );
 
+    let container = laid.find_by_render_type("RenderContainer");
     assert_eq!(
-        laid.size(laid.root()),
+        laid.size(container),
         size(300.0, 0.0),
         "a childless Container must collapse to 0 height under an unbounded \
          height constraint, not panic"
     );
 }
 
-/// `Transform` is the outermost layer in `Container::build`, and a
-/// transform never changes its own render object's laid-out box (Flutter
-/// parity: transform affects painting/hit-testing of descendants, not this
-/// object's own geometry) — the oracle's `getSize`/corner-offset assertions
-/// on the transformed `Container` all resolve to its untransformed box.
+/// The laid-out box is unaffected by a paint transform — the transform
+/// only moves painting and hit-testing of what's inside, never this
+/// object's own geometry.
+///
+/// `Container` is one `RenderContainer`, so there is no separate `Transform`
+/// level whose "outermost"-ness this test could still distinguish (that
+/// shape — a non-translation matrix wrapping the whole painted fragment
+/// including chrome — is pinned at the render-object level by
+/// `harness_container_scale_shares_one_transform_with_the_stack`); what
+/// remains observable through the widget API is this size invariant.
 ///
 /// Flutter parity: container_test.dart `'Container transformAlignment'`
 /// (3.44.0) — the box-geometry invariant the `getSize`/`getTopLeft`/etc.
 /// assertions actually pin. `transformAlignment` itself has no FLUI
 /// `Container` setter (module doc, `docs/ROADMAP.md` Cross.H).
 #[test]
-fn container_transform_is_outermost_and_does_not_affect_own_box_size() {
+fn container_own_box_size_is_unaffected_by_its_transform() {
     let laid = lay_out(
         Container::new()
             .width(100.0)
@@ -264,14 +242,8 @@ fn container_transform_is_outermost_and_does_not_affect_own_box_size() {
         loose(1000.0),
     );
 
-    let root = laid.root();
     assert_eq!(
-        laid.find_by_render_type("RenderTransform"),
-        root,
-        "transform must be the outermost composed layer"
-    );
-    assert_eq!(
-        laid.size(root),
+        laid.size(laid.root()),
         size(100.0, 100.0),
         "the Container's own box size is unaffected by its transform"
     );
@@ -395,30 +367,49 @@ fn container_discards_alignment_when_childless_and_constraints_not_tight() {
         loose(1000.0),
     );
 
-    assert!(
-        laid.find_all_by_render_type("RenderAlign").is_empty(),
-        "Container must not mount an Align/RenderAlign when child is None \
-         and constraints is not tight — alignment is discarded in that case"
+    // The comparison this test used to make against an unaligned sibling
+    // configuration could never fail: childless sizing
+    // (`RenderContainer::childless_content_size`) is a function of
+    // constraints alone, with no `&self` parameter at all, so it is
+    // structurally incapable of reading `alignment` — any childless
+    // `Container` under the same constraints reaches this same size by
+    // construction, and that is true by the function's signature, not by
+    // anything a test proves. What remains a real pin here is the concrete
+    // size a childless, aligned `Container` reaches under these bounded
+    // constraints.
+    assert_eq!(
+        laid.size(laid.root()),
+        size(1000.0, 1000.0),
+        "a childless Container fills the bounded space it is given, \
+         even with an alignment set"
     );
 }
 
-/// Flutter's mutually-exclusive childless branches use the Container's
-/// effective constraints, not the incoming parent constraints. Tight
-/// effective constraints suppress the placeholder and permit Align even with
-/// no child.
+/// Flutter's mutually-exclusive childless branches — the placeholder, an
+/// empty `Align`, and nothing at all — are selected by the Container's
+/// *effective* constraints, folded from `width`/`height`, not by the incoming
+/// parent constraints.
+///
+/// All three branches resolve to the same box, so collapsing the widget stack
+/// into one render object also collapses the branch (see
+/// `RenderContainer::childless_content_size`). There is no branch left to
+/// select here — `RenderContainer` runs one formula regardless — so what is
+/// checked is the consequence a caller can see: each configuration (loose vs.
+/// tight effective constraints, aligned vs. not) reaches the same size.
 #[test]
-fn childless_container_tightness_selects_placeholder_or_alignment_exactly() {
+fn childless_container_size_is_independent_of_alignment_and_tightness() {
+    let expected = size(40.0, 30.0);
+
     let non_tight = lay_out(
         Container::new()
             .constraints(BoxConstraints::loose(Size::new(px(40.0), px(30.0))))
             .alignment(Alignment::CENTER_LEFT),
         loose(100.0),
     );
-    assert!(non_tight.find_all_by_render_type("RenderAlign").is_empty());
     assert_eq!(
-        non_tight.find_all_by_render_type("RenderLimitedBox").len(),
-        1,
-        "a childless non-tight Container uses the placeholder"
+        non_tight.size(non_tight.root()),
+        expected,
+        "a childless non-tight Container fills its loose additional constraints"
     );
 
     let tight_aligned = lay_out(
@@ -429,28 +420,16 @@ fn childless_container_tightness_selects_placeholder_or_alignment_exactly() {
         loose(100.0),
     );
     assert_eq!(
-        tight_aligned.find_all_by_render_type("RenderAlign").len(),
-        1,
-        "a childless tight aligned Container retains Align"
-    );
-    assert!(
-        tight_aligned
-            .find_all_by_render_type("RenderLimitedBox")
-            .is_empty(),
-        "tight effective constraints suppress the placeholder"
+        tight_aligned.size(tight_aligned.root()),
+        expected,
+        "tight effective constraints pin the box, alignment or not"
     );
 
     let tight_unaligned = lay_out(Container::new().width(40.0).height(30.0), loose(100.0));
-    assert!(
-        tight_unaligned
-            .find_all_by_render_type("RenderAlign")
-            .is_empty()
-    );
-    assert!(
-        tight_unaligned
-            .find_all_by_render_type("RenderLimitedBox")
-            .is_empty(),
-        "a childless tight unaligned Container adds no inner wrapper"
+    assert_eq!(
+        tight_unaligned.size(tight_unaligned.root()),
+        expected,
+        "and the same holds with no alignment at all"
     );
 }
 
@@ -477,7 +456,7 @@ fn container_does_not_crash_at_zero_area() {
         tight(800.0, 600.0),
     );
 
-    let container_node = laid.find_by_render_type("RenderDecoratedBox");
+    let container_node = laid.find_by_render_type("RenderContainer");
     assert_eq!(
         laid.size(container_node),
         size(0.0, 0.0),

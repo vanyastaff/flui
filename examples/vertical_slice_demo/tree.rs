@@ -411,9 +411,8 @@ impl ViewState<DemoHome> for DemoHomeState {
                 // nested inside this container's own tight width/height
                 // constraint would be tightened down to the SAME committed
                 // size (Flutter's `enforce` semantics: an incoming tight
-                // constraint always wins), producing a second
-                // `RenderConstrainedBox` indistinguishable from the
-                // container's own by geometry alone.
+                // constraint always wins), so it would carry no information
+                // and only add a node the tests must then disambiguate.
                 AnimatedContainer::new(Text::new(""))
                     .width(target_width)
                     .height(target_height)

@@ -31,7 +31,7 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 
 | Family | Widgets |
 |---|---|
-| **Layout** | `Padding` · `Align` · `Center` · `SizedBox` · `ConstrainedBox` · `LimitedBox` · `AspectRatio` · `FittedBox` · `FractionallySizedBox` · `Transform` · `FractionalTranslation` · `Baseline` |
+| **Layout** | `Container` · `Padding` · `Align` · `Center` · `SizedBox` · `ConstrainedBox` · `LimitedBox` · `AspectRatio` · `FittedBox` · `FractionallySizedBox` · `Transform` · `FractionalTranslation` · `Baseline` |
 | **Flex / Stack** | `Flex` · `Row` · `Column` · `Stack` |
 | **Parent-data** | `Flexible` · `Expanded` · `Positioned` |
 | **Paint** | `ColoredBox` · `DecoratedBox` · `Opacity` · `RepaintBoundary` |
@@ -39,7 +39,7 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 | **Scroll / Sliver** | `SingleChildScrollView` · `ListView` · `Viewport` · `SliverToBoxAdapter` · `SliverFixedExtentList` · `SliverPadding` · `SliverOpacity` |
 | **Transitions** | `FadeTransition` · `ScaleTransition` · `RotationTransition` |
 | **Interaction** | `GestureDetector` · `Listener` · `IgnorePointer` · `AbsorbPointer` · `Offstage` |
-| **Composition** | `Container` |
+| **Composition** | `SafeArea` |
 | **Text** | `Text` |
 
 Each is **behavior-loyal to Flutter** (same layout/paint algorithm) with a
@@ -48,14 +48,14 @@ Each is **behavior-loyal to Flutter** (same layout/paint algorithm) with a
 
 ## How it composes (the three shapes)
 
-- **Render-object widget** — wraps one render box (`Padding`, `Text`, …): a
-  `RenderView` + `impl_render_view!`.
+- **Render-object widget** — wraps one render box (`Padding`, `Container`,
+  `Text`, …): a `RenderView` + `impl_render_view!`.
 - **Multi-child widget** — `Row`/`Column`/`Stack`: generic over
   `C: ViewSeq` (default `Vec<BoxedView>`), so the static `column!`/`row!` tuple
   path (monomorphic per child) and the dynamic `Vec<BoxedView>` path are *one
   type* (contract C2).
-- **Composition widget** — `Container`: a `StatelessView` that builds a stack of
-  other widgets in Flutter's exact order.
+- **Composition widget** — `SafeArea`: a `StatelessView` that builds other
+  widgets.
 - **Parent-data widget** — `Flexible`/`Expanded`/`Positioned`: a `ParentDataView`
   that writes layout data (flex factor, edge offsets) onto its child's render
   node, which the parent `RenderFlex`/`RenderStack` reads.
