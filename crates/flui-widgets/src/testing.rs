@@ -242,21 +242,52 @@ fn lay_out_with_pipeline_owner_and_binding(
 }
 
 /// Shallowest mounted element of `logical_root_type` → its render id.
+///
+/// RenderViews own a node directly. Composition roots (`StatelessView` /
+/// `StatefulView` such as [`Container`](crate::Container)) do not: walk to the
+/// first render-owning descendant so `LaidOut::root` still names the caller's
+/// outermost laid-out box (Flutter's "size of the Container").
 fn resolve_logical_render_root(
     binding: &mut HeadlessBinding,
     logical_root_type: TypeId,
 ) -> RenderId {
-    binding
-        .tree_mut()
+    let tree = binding.tree_mut();
+    let logical_root_id = tree
         .iter_nodes()
         .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
         .min_by_key(|(_, node)| node.depth())
-        .map(|(_, node)| {
-            node.element()
-                .render_id()
-                .expect("the caller's logical root must own a render object after bootstrap")
-        })
-        .expect("the caller's logical root must remain mounted below presentation scopes")
+        .map(|(id, _)| id)
+        .expect("the caller's logical root must remain mounted below presentation scopes");
+
+    if let Some(render_id) = tree
+        .get(logical_root_id)
+        .and_then(|node| node.element().render_id())
+    {
+        return render_id;
+    }
+
+    // Level-order: the outermost composed render object is the first child that
+    // owns one (Container → ConstrainedBox / Padding / …), not a deeper leaf.
+    let mut queue: Vec<_> = tree
+        .get(logical_root_id)
+        .map(|node| node.child_ids().to_vec())
+        .unwrap_or_default();
+    let mut index = 0;
+    while index < queue.len() {
+        let id = queue[index];
+        index += 1;
+        let Some(node) = tree.get(id) else {
+            continue;
+        };
+        if let Some(render_id) = node.element().render_id() {
+            return render_id;
+        }
+        queue.extend(node.child_ids().iter().copied());
+    }
+
+    panic!(
+        "BUG: the caller's logical root must own a render object, or compose one, after bootstrap"
+    );
 }
 
 /// Like [`lay_out`], but drives implicitly-animated widgets: the binding adopts

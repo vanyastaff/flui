@@ -948,3 +948,31 @@ the offending widget behind `TypeId` text, and let secondary bootstrap
 `positioned_under_row_…`) — assert the attach-seam diagnostic and that the
 message is not `BoxLayoutCtx::from_erased`. Happy paths remain in
 `flex_parent_data.rs` / `stack_positioned.rs`.
+
+### 15. `Container` keeps Flutter's optional layers but pins the child with a `GlobalKey`
+
+**Rule:** Prime Directive #1 — convenience-widget implementation shape must not
+make the caller's unkeyed child state depend on which cosmetic options are set.
+
+**Oracle:** `widgets/container.dart` builds `Align` / `Padding` / `ColoredBox` /
+`DecoratedBox` / `ConstrainedBox` / margin / `Transform` only when the matching
+field is set. Toggling a field changes element topology and recreates an unkeyed
+stateful child (flutter/flutter#161698). Flutter has not shipped a fix; maintainers
+discussed render-level composition, compressed elements, and GlobalKey-like
+reparenting (with cost).
+
+**Choice:** keep the conditional composition for layout/paint/hit-test parity
+(always-inserting no-op `Align` or empty `DecoratedBox` would change constraints
+or hit opacity). Make `Container` a `StatefulView` that owns one `GlobalKey` on a
+private `ContainerChildSlot` wrapping the caller's child. Optional layers may
+still inflate/deflate; the slot is retaken so child `State` survives.
+
+**Cost note (vs always-present layers):** one stateful element + one keyed
+stateless slot + a registry entry per `Container`, and a GlobalKey retake when a
+layer appears/disappears. Always-present no-op layers would avoid retakes but
+need a true pass-through align slot and inactive paint/hit behavior — deferred
+unless profiling shows retakes dominate.
+
+**Replacement tests:** `container.rs` —
+`container_optional_*_preserves_unkeyed_child_state`, combinations, and
+`animated_container_optional_color_preserves_unkeyed_child_state`.

@@ -160,7 +160,7 @@ pub use async_builders::{
     BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,
     SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
 };
-pub use container::Container;
+pub use container::{Container, ContainerState};
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
 pub use icon::{Icon, IconData, IconTheme, IconThemeData};

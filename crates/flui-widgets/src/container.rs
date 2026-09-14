@@ -1,13 +1,14 @@
 //! [`Container`] — the Flutter convenience widget that composes padding,
 //! alignment, sizing, decoration, margin, and a transform around a child.
 
+use flui_foundation::ViewKey;
 use flui_geometry::{EdgeInsets, Matrix4};
 use flui_rendering::constraints::{BoxConstraints, Constraints};
 use flui_types::geometry::px;
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, Pixels};
-use flui_view::prelude::StatelessView;
-use flui_view::{BoxedView, BuildContext, Child, IntoView, ViewExt};
+use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::{BoxedView, Child, GlobalKey, IntoView, StatelessView, View, ViewExt, ViewState};
 
 use crate::layout::{Align, ConstrainedBox, LimitedBox, Padding, Transform};
 use crate::paint::{ColoredBox, DecoratedBox};
@@ -21,6 +22,14 @@ use crate::paint::{ColoredBox, DecoratedBox};
 /// when its property is set — exactly Flutter's order. `width`/`height` fold
 /// into the constraints via `tightFor`/`tighten`.
 ///
+/// # State stability
+///
+/// Flutter's conditional stack recreates an unkeyed child when an optional
+/// layer appears or disappears (flutter/flutter#161698). FLUI keeps that
+/// composition shape for layout/paint parity, but owns a [`GlobalKey`] slot
+/// around the caller's child so toggling options reparents the child instead
+/// of disposing it. See `ARCHITECTURE.md` mapping decision 15.
+///
 /// # Parity scope
 ///
 /// Decoration *painting* (color, gradient, border, radius, shadow) is faithful.
@@ -29,7 +38,7 @@ use crate::paint::{ColoredBox, DecoratedBox};
 /// (`_paddingIncludingDecoration`), because `flui-types`' `BoxDecoration` does
 /// not expose border insets. Set `padding` explicitly if a bordered container
 /// must reserve the border's thickness.
-#[derive(Clone, Debug, Default, StatelessView)]
+#[derive(Clone, Debug, Default, StatefulView)]
 pub struct Container {
     alignment: Option<Alignment>,
     padding: Option<EdgeInsets>,
@@ -139,10 +148,38 @@ impl Container {
     }
 }
 
-impl StatelessView for Container {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let effective_constraints = self.effective_constraints();
-        let child = self.child.clone().into_inner();
+/// State for [`Container`]: owns the [`GlobalKey`] that pins the caller's child
+/// across optional-layer topology changes.
+pub struct ContainerState {
+    child_slot_key: GlobalKey<()>,
+}
+
+impl std::fmt::Debug for ContainerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainerState").finish_non_exhaustive()
+    }
+}
+
+impl StatefulView for Container {
+    type State = ContainerState;
+
+    fn create_state(&self) -> Self::State {
+        ContainerState {
+            child_slot_key: GlobalKey::new(),
+        }
+    }
+}
+
+impl ViewState<Container> for ContainerState {
+    fn build(&self, view: &Container, _ctx: &dyn BuildContext) -> impl IntoView {
+        let effective_constraints = view.effective_constraints();
+        let child = view.child.clone().into_inner().map(|child| {
+            ContainerChildSlot {
+                key: self.child_slot_key.clone(),
+                child,
+            }
+            .boxed()
+        });
 
         // Innermost: the child, or Flutter's childless placeholder
         // (LimitedBox(0,0) over a ConstrainedBox.expand()) so a childless
@@ -160,7 +197,7 @@ impl StatelessView for Container {
                     .child(ConstrainedBox::new(BoxConstraints::expand()))
                     .boxed(),
             )
-        } else if let Some(alignment) = self.alignment {
+        } else if let Some(alignment) = view.alignment {
             Some(match child {
                 Some(child) => Align::new(alignment).child(child).boxed(),
                 None => Align::new(alignment).boxed(),
@@ -168,19 +205,19 @@ impl StatelessView for Container {
         } else {
             child
         };
-        if let Some(padding) = self.padding {
+        if let Some(padding) = view.padding {
             current = Some(match current {
                 Some(child) => Padding::new(padding).child(child).boxed(),
                 None => Padding::new(padding).boxed(),
             });
         }
-        if let Some(color) = self.color {
+        if let Some(color) = view.color {
             current = Some(match current {
                 Some(child) => ColoredBox::new(color).child(child).boxed(),
                 None => ColoredBox::new(color).boxed(),
             });
         }
-        if let Some(decoration) = &self.decoration {
+        if let Some(decoration) = &view.decoration {
             current = Some(match current {
                 Some(child) => DecoratedBox::new(decoration.clone()).child(child).boxed(),
                 None => DecoratedBox::new(decoration.clone()).boxed(),
@@ -198,13 +235,46 @@ impl StatelessView for Container {
                 .child(ConstrainedBox::new(BoxConstraints::expand()))
                 .boxed(),
         };
-        if let Some(margin) = self.margin {
+        if let Some(margin) = view.margin {
             current = Padding::new(margin).child(current).boxed();
         }
-        if let Some(transform) = self.transform {
+        if let Some(transform) = view.transform {
             current = Transform::new(transform).child(current).boxed();
         }
 
         current
+    }
+}
+
+/// Stateless host that carries [`Container`]'s child-slot [`GlobalKey`].
+///
+/// Owns no render object: the child's render node still attaches to whatever
+/// optional layer sits above this slot, so layout/paint topology stays Flutter-
+/// shaped while the element can be retaken across layer insert/remove.
+#[derive(Clone)]
+struct ContainerChildSlot {
+    key: GlobalKey<()>,
+    child: BoxedView,
+}
+
+impl std::fmt::Debug for ContainerChildSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainerChildSlot").finish_non_exhaustive()
+    }
+}
+
+impl View for ContainerChildSlot {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatelessView for ContainerChildSlot {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.child.clone()
     }
 }
