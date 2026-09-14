@@ -67,12 +67,28 @@ use crate::layout::align::positioned_box_size;
 /// A render object that composes `Container`'s optional layers in one node.
 ///
 /// Every option defaults to "absent", which reproduces the stack that omits
-/// the corresponding layer: zero insets, no additional constraints, no
-/// alignment, no background, and no transform.
+/// the corresponding layer: no padding inset, no additional constraints, no
+/// alignment, no background, and no transform. `margin` alone stays a plain
+/// `EdgeInsets` rather than `Option<EdgeInsets>`: unlike `padding`, whether
+/// its own `Padding(margin)` level exists in the stack never changes what a
+/// hit-test gates on (that level's box always coincides with this node's own
+/// outer `ctx.own_size()`, already checked unconditionally), so there is
+/// nothing an `Option` would let a caller distinguish.
 #[derive(Debug, Clone, Default)]
 pub struct RenderContainer {
     alignment: Option<Alignment>,
-    padding: EdgeInsets,
+    /// The child's inset from the decorated area, or `None` if never set.
+    ///
+    /// This is `Option`, not a plain `EdgeInsets` defaulting to zero,
+    /// because Flutter's `Container.build` inserts a `Padding` level only
+    /// when `padding` (or a decoration's own padding, which FLUI's
+    /// `BoxDecoration` has no equivalent of) is non-null
+    /// (`_paddingIncludingDecoration`) — an explicit `EdgeInsets.zero` still
+    /// gets a (zero-inset) level, but an absent `padding` gets none at all.
+    /// That absence is observable in hit-testing: a level, even a zero-inset
+    /// one, gates on its own box (`is_within_own_size`) before descending;
+    /// no level gates on nothing. See [`hit_test`](RenderBox::hit_test).
+    padding: Option<EdgeInsets>,
     margin: EdgeInsets,
     color: Option<Color>,
     decoration: Option<BoxDecoration<Pixels>>,
@@ -108,9 +124,17 @@ impl RenderContainer {
         self.alignment
     }
 
-    /// Returns the inner padding.
-    pub fn padding(&self) -> EdgeInsets {
+    /// Returns the inner padding, if set.
+    pub fn padding(&self) -> Option<EdgeInsets> {
         self.padding
+    }
+
+    /// The padding actually used for layout math: zero when unset, the same
+    /// way Flutter's own `EdgeInsetsGeometry` arithmetic treats an absent
+    /// value. Layout geometry does not depend on whether `padding` was ever
+    /// set — only [`hit_test`](RenderBox::hit_test) does.
+    fn effective_padding(&self) -> EdgeInsets {
+        self.padding.unwrap_or_default()
     }
 
     /// Returns the outer margin.
@@ -147,7 +171,14 @@ impl RenderContainer {
         RenderUpdateImpact::LAYOUT
     }
 
-    /// Sets the inner padding.
+    /// Sets the inner padding, or clears it with `None`.
+    ///
+    /// `None` is not the same as `Some(EdgeInsets::ZERO)`: an explicit zero
+    /// inset still gets its own (zero-inset) level in the stack this
+    /// collapses and still gates a hit-test the way that level would; an
+    /// absent padding gets no level at all, and — with every other option
+    /// also absent — gates nothing, exactly like `Padding(margin) → child`
+    /// with nothing in between.
     ///
     /// # Panics
     ///
@@ -155,11 +186,13 @@ impl RenderContainer {
     /// `assert(padding.isNonNegative)`: layout deflates the constraints by
     /// these insets and re-inflates the size by them, so a negative inset
     /// would report a size that does not contain the child.
-    pub fn set_padding(&mut self, padding: EdgeInsets) -> RenderUpdateImpact {
-        debug_assert!(
-            padding.is_non_negative(),
-            "RenderContainer padding must be non-negative, got {padding:?}"
-        );
+    pub fn set_padding(&mut self, padding: Option<EdgeInsets>) -> RenderUpdateImpact {
+        if let Some(padding) = padding {
+            debug_assert!(
+                padding.is_non_negative(),
+                "RenderContainer padding must be non-negative, got {padding:?}"
+            );
+        }
         if self.padding == padding {
             return RenderUpdateImpact::NONE;
         }
@@ -269,10 +302,12 @@ impl RenderContainer {
         self
     }
 
-    /// Builder form of [`set_padding`](Self::set_padding).
+    /// Builder form of [`set_padding`](Self::set_padding), setting an
+    /// explicit padding. There is no `without_padding`/`None` builder form:
+    /// [`new`](Self::new)'s default already leaves padding unset.
     #[must_use]
     pub fn with_padding(mut self, padding: EdgeInsets) -> Self {
-        let _ = self.set_padding(padding);
+        let _ = self.set_padding(Some(padding));
         self
     }
 
@@ -376,9 +411,10 @@ impl RenderContainer {
         inner_constraints: &BoxConstraints,
         content_size: Size,
     ) -> (Size, Size) {
+        let padding = self.effective_padding();
         let inner_size = inner_constraints.constrain(Size::new(
-            content_size.width + self.padding.horizontal_total(),
-            content_size.height + self.padding.vertical_total(),
+            content_size.width + padding.horizontal_total(),
+            content_size.height + padding.vertical_total(),
         ));
         let outer_size = constraints.constrain(Size::new(
             inner_size.width + self.margin.horizontal_total(),
@@ -390,9 +426,10 @@ impl RenderContainer {
     /// The child's offset from this box's origin, given the alignment's
     /// contribution inside the content area.
     fn child_offset_for(&self, align_offset: Offset) -> Offset {
+        let padding = self.effective_padding();
         Offset::new(
-            self.margin.left + self.padding.left + align_offset.dx,
-            self.margin.top + self.padding.top + align_offset.dy,
+            self.margin.left + padding.left + align_offset.dx,
+            self.margin.top + padding.top + align_offset.dy,
         )
     }
 
@@ -414,7 +451,14 @@ impl flui_foundation::Diagnosticable for RenderContainer {
         if let Some(alignment) = self.alignment {
             properties.add_enum("alignment", alignment);
         }
-        properties.add_enum("padding", self.padding);
+        // Reported as its effective (zero-defaulted) value unconditionally,
+        // like `margin` — this diagnostics property predates `padding`
+        // becoming `Option` and nothing downstream (`harness_container_
+        // self_describes`, most directly) expects it to disappear when
+        // unset. `hasPadding` is not exposed the way `hasConstraints`/
+        // `hasTransform` are; add it if a consumer ever needs to
+        // distinguish "unset" from "explicitly zero" from diagnostics.
+        properties.add_enum("padding", self.effective_padding());
         properties.add_enum("margin", self.margin);
         if let Some(color) = self.color {
             properties.add_enum("color", color);
@@ -434,7 +478,7 @@ impl RenderBox for RenderContainer {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let inner_constraints = self.inner_constraints(&constraints);
-        let content_constraints = inner_constraints.deflate(self.padding);
+        let content_constraints = inner_constraints.deflate(self.effective_padding());
 
         self.has_child = ctx.child_count() > 0;
 
@@ -488,9 +532,10 @@ impl RenderBox for RenderContainer {
         if self.additional_width_is_tight() {
             return self.intrinsic_width(0.0);
         }
-        let content_height =
-            (height - self.margin.vertical_total().get() - self.padding.vertical_total().get())
-                .max(0.0);
+        let content_height = (height
+            - self.margin.vertical_total().get()
+            - self.effective_padding().vertical_total().get())
+        .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -503,9 +548,10 @@ impl RenderBox for RenderContainer {
         if self.additional_width_is_tight() {
             return self.intrinsic_width(0.0);
         }
-        let content_height =
-            (height - self.margin.vertical_total().get() - self.padding.vertical_total().get())
-                .max(0.0);
+        let content_height = (height
+            - self.margin.vertical_total().get()
+            - self.effective_padding().vertical_total().get())
+        .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -518,9 +564,10 @@ impl RenderBox for RenderContainer {
         if self.additional_height_is_tight() {
             return self.intrinsic_height(0.0);
         }
-        let content_width =
-            (width - self.margin.horizontal_total().get() - self.padding.horizontal_total().get())
-                .max(0.0);
+        let content_width = (width
+            - self.margin.horizontal_total().get()
+            - self.effective_padding().horizontal_total().get())
+        .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -533,9 +580,10 @@ impl RenderBox for RenderContainer {
         if self.additional_height_is_tight() {
             return self.intrinsic_height(0.0);
         }
-        let content_width =
-            (width - self.margin.horizontal_total().get() - self.padding.horizontal_total().get())
-                .max(0.0);
+        let content_width = (width
+            - self.margin.horizontal_total().get()
+            - self.effective_padding().horizontal_total().get())
+        .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -550,7 +598,7 @@ impl RenderBox for RenderContainer {
         ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
         let inner_constraints = self.inner_constraints(&constraints);
-        let content_constraints = inner_constraints.deflate(self.padding);
+        let content_constraints = inner_constraints.deflate(self.effective_padding());
 
         let content_size = if ctx.child_count() > 0 {
             match self.alignment {
@@ -578,7 +626,7 @@ impl RenderBox for RenderContainer {
             return None;
         }
         let inner_constraints = self.inner_constraints(&constraints);
-        let content_constraints = inner_constraints.deflate(self.padding);
+        let content_constraints = inner_constraints.deflate(self.effective_padding());
 
         let (child_constraints, align_dy) = match self.alignment {
             Some(alignment) => {
@@ -724,32 +772,46 @@ impl RenderBox for RenderContainer {
         // Child before self: the decoration's shape excludes its rounded
         // corners, and a child hittable in a cut-out must still be reachable.
         //
-        // But not before the boxes the stack itself gates the child behind.
-        // Every level between the margin and the child — `ConstrainedBox`,
-        // `DecoratedBox`, `ColoredBox`, `Padding` — reports the SAME
-        // margin-offset `inner_size` box and rejects a position outside it
-        // before descending (`is_within_own_size`), so a point in the
-        // margin band must never reach the child even when the child's own
-        // `hit_test` does not bound itself — `RenderTransform` deliberately
-        // does not (a scaled child visually covering more than its own
-        // laid-out box must still be reachable across that whole area, so
-        // only the child decides). Without this gate, collapsing the stack
-        // would let a margin tap through to exactly such a child.
+        // But not before the boxes the stack itself gates the child behind
+        // — and gates it behind only when a level actually exists there.
+        // `Container.build` inserts `Padding`/`ColoredBox`/`DecoratedBox`/
+        // `ConstrainedBox` between `Padding(margin)` and the child only when
+        // `padding`, `color`, `decoration` or `additional_constraints`
+        // (respectively) is set; with NONE of those AND no alignment, the
+        // composed shape is `Padding(margin) → child`, with nothing
+        // between — no level, no gate, same as `RenderContainer` must be
+        // here. (`_paddingIncludingDecoration` is null, hence no `Padding`
+        // level, precisely when `padding` is unset AND the decoration
+        // contributes no padding of its own — true unconditionally for
+        // FLUI's `BoxDecoration`, which has no border-inset equivalent.)
+        // Every level that DOES exist reports the SAME margin-offset
+        // `inner_size` box and rejects a position outside it before
+        // descending (`is_within_own_size`), so once any of them exists, a
+        // point in the margin band must never reach the child — even when
+        // the child's own `hit_test` does not bound itself, which
+        // `RenderTransform` deliberately does not (a scaled child visually
+        // covering more than its own laid-out box must still be reachable
+        // across that whole area, so only the child decides).
         //
         // When an alignment is set, the stack also inserts an `Align` level
         // whose own box is the CONTENT area — inside the margin AND the
         // padding, narrower still (`RenderPositionedBox`/
         // `AligningShiftedBox::hit_test` gate on their own box the same
-        // way) — so that box gates too. Without an alignment there is no
-        // `Align` level: the child sits directly under `Padding(padding)`,
-        // whose own box IS `inner_size`, so the one gate above already
-        // covers it and no second, narrower gate is needed.
-        if self.has_child && inside_decoration {
+        // way) — so that box gates too, on top of whatever the paragraph
+        // above already established.
+        if self.has_child {
+            let has_gated_level = self.padding.is_some()
+                || self.color.is_some()
+                || self.decoration.is_some()
+                || self.additional_constraints.is_some()
+                || self.alignment.is_some();
+            let inner_gate = !has_gated_level || inside_decoration;
             let content_gate = self.alignment.is_none() || {
+                let padding = self.effective_padding();
                 let content_rect = Rect::from_origin_size(
                     Point::new(
-                        self.margin.left + self.padding.left,
-                        self.margin.top + self.padding.top,
+                        self.margin.left + padding.left,
+                        self.margin.top + padding.top,
                     ),
                     self.content_size,
                 );
@@ -758,7 +820,7 @@ impl RenderBox for RenderContainer {
                     && position.dy >= content_rect.min.y
                     && position.dy < content_rect.max.y
             };
-            if content_gate {
+            if inner_gate && content_gate {
                 let child_local = Offset::new(
                     position.dx - self.child_offset.dx,
                     position.dy - self.child_offset.dy,
@@ -802,7 +864,7 @@ impl RenderContainer {
     /// Applies the additional constraints and the margin to a content-level
     /// intrinsic width, mirroring `RenderConstrainedBox`'s own intrinsics.
     fn intrinsic_width(&self, content: f32) -> f32 {
-        let padded = content + self.padding.horizontal_total().get();
+        let padded = content + self.effective_padding().horizontal_total().get();
         let constrained = match self.additional_constraints {
             Some(additional) if additional.has_bounded_width() && additional.has_tight_width() => {
                 additional.min_width.get()
@@ -817,7 +879,7 @@ impl RenderContainer {
 
     /// Height counterpart of [`intrinsic_width`](Self::intrinsic_width).
     fn intrinsic_height(&self, content: f32) -> f32 {
-        let padded = content + self.padding.vertical_total().get();
+        let padded = content + self.effective_padding().vertical_total().get();
         let constrained = match self.additional_constraints {
             Some(additional)
                 if additional.has_bounded_height() && additional.has_tight_height() =>

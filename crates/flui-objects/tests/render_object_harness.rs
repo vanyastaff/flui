@@ -2917,7 +2917,14 @@ struct ContainerStackCase {
     case: &'static str,
     margin: EdgeInsets,
     extra: Option<BoxConstraints>,
-    padding: EdgeInsets,
+    /// `None` means padding was never set — `Container.build` inserts no
+    /// `Padding` level at all in that case (`_paddingIncludingDecoration`
+    /// is null), distinct from `Some(EdgeInsets::ZERO)`, which still gets a
+    /// real (zero-inset) level that gates a hit-test the way any other
+    /// level does. Collapsing the two into a bare `EdgeInsets` is exactly
+    /// the bug this case's oracle exists to catch, so the composed tree
+    /// below must actually omit the level when this is `None`.
+    padding: Option<EdgeInsets>,
     alignment: Option<Alignment>,
     child: Size,
     constraints: BoxConstraints,
@@ -2947,8 +2954,18 @@ struct ContainerStackCase {
 /// whether the child was) all have to agree.
 ///
 /// `Align` and `ConstrainedBox` appear only when their property is set,
-/// mirroring Flutter's conditional stack. Both `Padding` levels are always
-/// present because a zero inset is indistinguishable from an absent level.
+/// mirroring Flutter's conditional stack. The margin `Padding` level is
+/// always present (`Container.build` inserts one whenever `margin` is
+/// set, which every case here does). The INNER `Padding` level — the one
+/// `padding` controls — is present only when `padding` is `Some`, even
+/// `Some(EdgeInsets::ZERO)`: an explicit zero inset still gets a real
+/// (zero-inset) level that gates a hit-test the way any other level does,
+/// but an absent `padding` gets no level at all
+/// (`_paddingIncludingDecoration` is null), which is observably different
+/// for hit-testing even though the two are geometrically identical. A
+/// version of this helper that always inserted a `Padding(EdgeInsets::ZERO)`
+/// level regardless would silently endorse that divergence instead of
+/// detecting it — which is exactly what an earlier version of this file did.
 /// Color, decoration and transform are included when `Some`, so a case that
 /// sets them actually compares against `DecoratedBox` / `RenderTransform`
 /// rather than omitting those levels.
@@ -2986,9 +3003,10 @@ fn assert_container_matches_stack(spec: ContainerStackCase) {
         }
     };
 
-    let mut container = RenderContainer::new()
-        .with_margin(margin)
-        .with_padding(padding);
+    let mut container = RenderContainer::new().with_margin(margin);
+    if let Some(padding) = padding {
+        container = container.with_padding(padding);
+    }
     if let Some(extra) = extra {
         container = container.with_additional_constraints(extra);
     }
@@ -3016,10 +3034,12 @@ fn assert_container_matches_stack(spec: ContainerStackCase) {
             .child(node);
         levels.push("align");
     }
-    node = box_node(RenderPadding::new(padding))
-        .label("padding")
-        .child(node);
-    levels.push("padding");
+    if let Some(padding) = padding {
+        node = box_node(RenderPadding::new(padding))
+            .label("padding")
+            .child(node);
+        levels.push("padding");
+    }
     if let Some(color) = color {
         node = box_node(RenderDecoratedBox::new(BoxDecoration::with_color(color)))
             .label("color")
@@ -3169,7 +3189,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         case: "alignment leaves slack in both axes",
         margin: EdgeInsets::all(px(5.0)),
         extra: Some(BoxConstraints::new(px(80.0), unbounded, px(0.0), unbounded)),
-        padding: EdgeInsets::all(px(8.0)),
+        padding: Some(EdgeInsets::all(px(8.0))),
         alignment: Some(Alignment::BOTTOM_RIGHT),
         child: Size::new(px(30.0), px(20.0)),
         constraints: loose(200.0),
@@ -3183,7 +3203,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         case: "tight additional constraints outvote a smaller child",
         margin: EdgeInsets::all(px(4.0)),
         extra: Some(BoxConstraints::tight(Size::new(px(120.0), px(60.0)))),
-        padding: EdgeInsets::all(px(6.0)),
+        padding: Some(EdgeInsets::all(px(6.0))),
         alignment: None,
         child: Size::new(px(20.0), px(20.0)),
         constraints: loose(200.0),
@@ -3197,7 +3217,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         case: "tight incoming constraints with a centred child",
         margin: EdgeInsets::ZERO,
         extra: None,
-        padding: EdgeInsets::all(px(12.0)),
+        padding: Some(EdgeInsets::all(px(12.0))),
         alignment: Some(Alignment::CENTER),
         child: Size::new(px(40.0), px(40.0)),
         constraints: BoxConstraints::tight(Size::new(px(200.0), px(200.0))),
@@ -3216,7 +3236,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
             px(150.0),
             unbounded,
         )),
-        padding: EdgeInsets::ZERO,
+        padding: Some(EdgeInsets::ZERO),
         alignment: None,
         child: Size::new(px(30.0), px(30.0)),
         constraints: loose(300.0),
@@ -3230,7 +3250,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         case: "color, decoration and a translation wrap the same child",
         margin: EdgeInsets::all(px(5.0)),
         extra: Some(BoxConstraints::new(px(80.0), unbounded, px(0.0), unbounded)),
-        padding: EdgeInsets::all(px(8.0)),
+        padding: Some(EdgeInsets::all(px(8.0))),
         alignment: Some(Alignment::TOP_LEFT),
         child: Size::new(px(30.0), px(20.0)),
         constraints: loose(200.0),
@@ -3266,7 +3286,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         case: "an unbounded incoming width shrink-wraps to the child under alignment",
         margin: EdgeInsets::all(px(3.0)),
         extra: None,
-        padding: EdgeInsets::all(px(4.0)),
+        padding: Some(EdgeInsets::all(px(4.0))),
         alignment: Some(Alignment::CENTER),
         child: Size::new(px(30.0), px(20.0)),
         constraints: BoxConstraints::new(px(0.0), unbounded, px(0.0), px(200.0)),
@@ -3288,7 +3308,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         box_node(
             RenderContainer::new()
                 .with_margin(unbounded_case.margin)
-                .with_padding(unbounded_case.padding)
+                .with_padding(unbounded_case.padding.expect("case sets padding"))
                 .with_alignment(unbounded_case.alignment.expect("case sets alignment")),
         )
         .child(
@@ -3312,22 +3332,46 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
         "the unbounded-width case's child must land at exactly (7, 90)"
     );
 
-    // A non-zero margin, no padding, no alignment — the child sits directly
-    // under `Padding(padding)`, whose own box IS `inner_size` — wrapping a
-    // scaled child whose own `hit_test` does not bound itself
-    // (`RenderTransform`, deliberately, so a visually-overflowing child stays
-    // hittable across its whole painted area). The stack's `Padding(padding)`
-    // level still gates that child behind `inner_size` before it is ever
-    // reached, so the overflow must not leak into the margin band. This is
-    // the "inside the margin band (right)" / "(bottom)" probes' load-bearing
-    // case: the scale(2) pivot sits at the child's own top-left, so the
-    // overflow grows toward the right/bottom, past the inner box and into
-    // the margin there, never toward the left/top.
+    // A non-zero margin, NOTHING else set, no alignment — `padding: None`
+    // means `Container.build` inserts no level at all between
+    // `Padding(margin)` and the child (`_paddingIncludingDecoration` is
+    // null), so a scaled child whose own `hit_test` does not bound itself
+    // (`RenderTransform`, deliberately, so a visually-overflowing child
+    // stays hittable across its whole painted area) is reachable straight
+    // through the margin band — both trees must AGREE it hits there, not
+    // that it doesn't. See
+    // `harness_container_margin_alone_does_not_gate_an_overflowing_child`
+    // for the same claim pinned directly (not just diffed).
     assert_container_matches_stack(ContainerStackCase {
-        case: "a non-zero margin does not expose an overflowing scaled child",
+        case: "a non-zero margin with nothing else set does not gate an overflowing scaled child",
         margin: EdgeInsets::all(px(10.0)),
         extra: None,
-        padding: EdgeInsets::ZERO,
+        padding: None,
+        alignment: None,
+        child: Size::new(px(30.0), px(30.0)),
+        constraints: loose(200.0),
+        color: None,
+        decoration: None,
+        transform: None,
+        child_overflow_transform: Some(Matrix4::scaling(2.0, 2.0, 1.0)),
+    });
+
+    // The mirror case, with exactly one property added: a real `padding`
+    // level. Now `Container.build` inserts `Padding(padding)` between
+    // `Padding(margin)` and the child, and its own box (`inner_size`) gates
+    // the same overflowing child before it is ever reached — so the overflow
+    // must NOT leak into the margin band here. This is the "inside the
+    // margin band (right)" / "(bottom)" probes' load-bearing case: the
+    // scale(2) pivot sits at the child's own top-left, so the overflow grows
+    // toward the right/bottom, past the inner box and into the margin there,
+    // never toward the left/top. See
+    // `harness_container_color_gates_an_overflowing_child_in_the_margin_band`
+    // for the same claim pinned directly with `color` instead of `padding`.
+    assert_container_matches_stack(ContainerStackCase {
+        case: "a non-zero margin with a real padding level gates an overflowing scaled child",
+        margin: EdgeInsets::all(px(10.0)),
+        extra: None,
+        padding: Some(EdgeInsets::all(px(5.0))),
         alignment: None,
         child: Size::new(px(30.0), px(30.0)),
         constraints: loose(200.0),
@@ -3739,28 +3783,23 @@ fn harness_container_translation_moves_paint_and_hit() {
     );
 }
 
-/// A child whose own `hit_test` does not bound itself to its laid-out box —
-/// `RenderTransform` deliberately does not (a scale(2) child visually
-/// covering 60×60 must stay hittable across that whole area even though its
-/// own laid-out size is 30×30) — must still be gated by the levels between
-/// the margin and the child. In the stack, `Padding(padding)`'s own box IS
-/// `inner_size` (the margin-offset box); its `hit_test` gates on that box
-/// (`is_within_own_size`) before ever reaching the transform, so a point in
-/// the margin band never reaches it. Before this fix, `RenderContainer`
-/// tested the child before applying that same `inner_size` gate, so the
-/// margin band let the overflow through.
+/// `Container.build` inserts NO level at all between `Padding(margin)` and
+/// the child when none of `padding`/`color`/`decoration`/
+/// `additional_constraints`/`alignment` is set: `_paddingIncludingDecoration`
+/// is null (padding unset, and FLUI's `BoxDecoration` has no border-inset
+/// equivalent to contribute one), so `Container(margin: 10, child:
+/// Transform.scale(2))` composes as exactly `Padding(margin) → Transform →
+/// leaf`, with nothing between them to gate on. A tap the transform's own
+/// (deliberately unbounded) `hit_test` covers therefore DOES hit, margin
+/// included — margin alone gates nothing.
 ///
-/// Margin 10, no padding, no alignment, a 30×30 leaf scaled ×2 pivoted at
-/// its own top-left (`RenderTransform::new`'s default pivot — no alignment,
-/// no origin): the leaf fills the whole 30×30 content area exactly, so the
-/// scaled hit region is [0,60)×[0,60) in the content area's own frame,
-/// overflowing 20px past the content/inner box on the right and bottom —
-/// well into the 10px margin there. (45, 25) sits inside the container's
-/// own 50×50 outer box, inside the right margin band (x ∈ [40, 50), past
-/// the 30-wide inner box), and inside the transform's overflow — exactly
-/// the point this gate must reject.
+/// Same margin, leaf and scale as
+/// [`harness_container_color_gates_an_overflowing_child_in_the_margin_band`]
+/// below, which adds exactly one property (`color`) and gets the opposite
+/// outcome at the identical probe points: proof that the difference is the
+/// level's existence, not the geometry.
 #[test]
-fn harness_container_margin_does_not_expose_an_overflowing_child() {
+fn harness_container_margin_alone_does_not_gate_an_overflowing_child() {
     let margin = EdgeInsets::all(px(10.0));
     let leaf_color = [0.0, 0.0, 1.0, 1.0];
     let leaf_size = Size::new(px(30.0), px(30.0));
@@ -3781,18 +3820,129 @@ fn harness_container_margin_does_not_expose_an_overflowing_child() {
         Size::new(px(50.0), px(50.0)),
         "margin(10) around the unscaled 30×30 layout box must be 50×50"
     );
+    for (x, y) in [(45.0, 25.0), (25.0, 45.0), (45.0, 45.0)] {
+        assert!(
+            run.hit_first(x, y).is_some(),
+            "margin alone gates nothing: a tap at ({x}, {y}) in the margin \
+             band must reach a child whose own hit_test overflows into it, \
+             exactly matching Padding(margin) → Transform → leaf with no \
+             level between them"
+        );
+    }
+    assert!(
+        run.hit_first(25.0, 25.0).is_some(),
+        "the child must also be hittable well inside the content area"
+    );
+}
+
+/// The mirror of the test above with exactly one property added: `color`.
+/// `Container.build` now inserts `ColoredBox` between `Padding(margin)` and
+/// the child (`Padding(margin) → ColoredBox → Transform → leaf`), and
+/// `ColoredBox`'s own box — `inner_size`, the same margin-offset box
+/// `RenderPadding`/`RenderDecoratedBox`/`RenderConstrainedBox` would each
+/// report in this slot too — gates a hit-test (`is_within_own_size`) before
+/// it ever reaches the transform. The SAME probe points that hit above must
+/// not hit here.
+#[test]
+fn harness_container_color_gates_an_overflowing_child_in_the_margin_band() {
+    let margin = EdgeInsets::all(px(10.0));
+    let leaf_color = [0.0, 0.0, 1.0, 1.0];
+    let leaf_size = Size::new(px(30.0), px(30.0));
+    let scale = Matrix4::scaling(2.0, 2.0, 1.0);
+
+    let run = RenderTester::mount(
+        box_node(
+            RenderContainer::new()
+                .with_margin(margin)
+                .with_color(Color::RED),
+        )
+        .child(
+            box_node(RenderTransform::new(scale))
+                .label("transform")
+                .child(box_node(RenderColoredBox::new(leaf_color, leaf_size)).label("leaf")),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(50.0), px(50.0)),
+        "margin(10) around the unscaled 30×30 layout box must be 50×50"
+    );
     assert_eq!(
         run.hit_first(45.0, 25.0),
         None,
-        "a point in the margin band must not reach a child that visually \
-         overflows into it, even though the child's own hit_test does not \
-         bound itself"
+        "with `color` set, ColoredBox's own inner_size box must gate the \
+         same overflowing child the margin-alone test above shows is \
+         reachable without it"
     );
     // Sanity: the same overflowing child IS still hittable well inside the
     // content area, so this isn't just "the child never hits anything".
     assert!(
         run.hit_first(25.0, 25.0).is_some(),
         "the overflowing child must still be hittable inside the content area"
+    );
+}
+
+/// Without an alignment, `inner_size` is the ONLY gate — there is no `Align`
+/// level to narrow it further, so a tap anywhere inside `inner_size`
+/// (including what would be a "padding band" if an alignment inserted one)
+/// must reach a child that overflows into it. Verified: dropping the
+/// `self.alignment.is_none() ||` short-circuit from the content-box gate,
+/// so it binds unconditionally, left the WHOLE 440-test harness binary
+/// green — nothing pinned that the gate must NOT apply without an
+/// alignment. This is that pin.
+///
+/// Tight 100×100 incoming, margin 5, padding 10, no alignment: content
+/// constraints are tight 70×70, so the child (no alignment to loosen or
+/// offset it) is laid out AT that exact size, top-left at (15, 15) —
+/// filling the content area exactly, same as
+/// [`harness_container_padding_does_not_expose_an_overflowing_aligned_child`]'s
+/// leaf did before alignment moved it. Scaled ×2 from that top-left pivot,
+/// the hit region overflows to [15, 155)×[15, 155) — past `inner_size`'s own
+/// edge (95) this time, not just the content box's (85). (90, 70) sits
+/// inside `inner_size`, inside the overflow, and — unlike the aligned test —
+/// there is no content-box gate to reject it: only `inner_size` matters, and
+/// 90 < 95.
+#[test]
+fn harness_container_padding_without_alignment_does_not_narrow_the_gate() {
+    let margin = EdgeInsets::all(px(5.0));
+    let padding = EdgeInsets::all(px(10.0));
+    let leaf_color = [0.0, 0.0, 1.0, 1.0];
+    let leaf_size = Size::new(px(20.0), px(20.0));
+    let scale = Matrix4::scaling(2.0, 2.0, 1.0);
+
+    let run = RenderTester::mount(
+        box_node(
+            RenderContainer::new()
+                .with_margin(margin)
+                .with_padding(padding),
+        )
+        .child(
+            box_node(RenderTransform::new(scale))
+                .label("transform")
+                .child(box_node(RenderColoredBox::new(leaf_color, leaf_size)).label("leaf")),
+        ),
+    )
+    .with_constraints(BoxConstraints::tight(Size::new(px(100.0), px(100.0))))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(100.0), px(100.0)),
+        "tight incoming constraints must be honoured regardless of content"
+    );
+    assert!(
+        run.hit_first(90.0, 70.0).is_some(),
+        "without an alignment, a tap inside inner_size (even past where a \
+         content-box gate would sit if one existed) must reach an \
+         overflowing child — there is no Align level here to narrow the \
+         gate further"
+    );
+    assert!(
+        run.hit_first(50.0, 50.0).is_some(),
+        "the child must also be hittable well inside the content area"
     );
 }
 
@@ -3804,10 +3954,12 @@ fn harness_container_margin_does_not_expose_an_overflowing_child() {
 /// `.flutter`'s `RenderPositionedBox`/`RenderAligningShiftedBox`
 /// (`rendering/shifted_box.dart`), which gate on `size.contains(position)`
 /// the same way before forwarding. So this is a SECOND, narrower gate than
-/// [`harness_container_margin_does_not_expose_an_overflowing_child`]'s, and
-/// only exists when `alignment` is `Some` — without one there is no `Align`
-/// level, and the child sits directly under `Padding(padding)`, whose own
-/// box already IS `inner_size`.
+/// [`harness_container_color_gates_an_overflowing_child_in_the_margin_band`]'s,
+/// and only exists when `alignment` is `Some` — without one there is no
+/// `Align` level, and the child sits directly under `Padding(padding)`,
+/// whose own box already IS `inner_size`
+/// ([`harness_container_padding_without_alignment_does_not_narrow_the_gate`]
+/// pins that half).
 ///
 /// Margin 5, padding 10, `BOTTOM_RIGHT` alignment, tight 100×100 incoming:
 /// content area is 70×70 at (15, 15). A 20×20 leaf at `BOTTOM_RIGHT` sits at

@@ -197,7 +197,7 @@ impl RenderView for Container {
     ) -> Self::RenderObject {
         let mut render_object = RenderContainer::new();
         let _ = render_object.set_alignment(self.alignment);
-        let _ = render_object.set_padding(self.padding.unwrap_or_default());
+        let _ = render_object.set_padding(self.padding);
         let _ = render_object.set_margin(self.margin.unwrap_or_default());
         let _ = render_object.set_color(self.color);
         let _ = render_object.set_decoration(self.decoration.clone());
@@ -213,7 +213,7 @@ impl RenderView for Container {
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_alignment(self.alignment);
-        impact |= render_object.set_padding(self.padding.unwrap_or_default());
+        impact |= render_object.set_padding(self.padding);
         impact |= render_object.set_margin(self.margin.unwrap_or_default());
         impact |= render_object.set_color(self.color);
         impact |= render_object.set_decoration(self.decoration.clone());
