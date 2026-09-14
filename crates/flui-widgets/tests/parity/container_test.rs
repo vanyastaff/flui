@@ -30,10 +30,10 @@
 //!   [`container_collapses_to_zero_in_the_unbounded_dimension_when_childless`].
 //! - `'Container transformAlignment'` — partial: ported only as the box-geometry invariant
 //!   the oracle's `getSize`/`getTopLeft`/`getTopRight`/`getBottomLeft`/
-//!   `getBottomRight` asserts really pin (a `Transform`-wrapped `Container`'s
+//!   `getBottomRight` asserts really pin (a `Transform`-configured `Container`'s
 //!   own laid-out box is unaffected by its transform; the transform only
 //!   affects painting/hit-testing of what's *inside* it) —
-//!   [`container_transform_is_outermost_and_does_not_affect_own_box_size`].
+//!   [`container_own_box_size_is_unaffected_by_its_transform`].
 //!   `transformAlignment` itself is dropped — `Container` has no such
 //!   setter (see `docs/ROADMAP.md` Cross.H).
 //! - `'Container is hittable only when having decorations'` — the `color`,
@@ -220,12 +220,19 @@ fn container_collapses_to_zero_in_the_unbounded_dimension_when_childless() {
 /// only moves painting and hit-testing of what's inside, never this
 /// object's own geometry.
 ///
+/// `Container` is one `RenderContainer`, so there is no separate `Transform`
+/// level whose "outermost"-ness this test could still distinguish (that
+/// shape — a non-translation matrix wrapping the whole painted fragment
+/// including chrome — is pinned at the render-object level by
+/// `harness_container_scale_shares_one_transform_with_the_stack`); what
+/// remains observable through the widget API is this size invariant.
+///
 /// Flutter parity: container_test.dart `'Container transformAlignment'`
 /// (3.44.0) — the box-geometry invariant the `getSize`/`getTopLeft`/etc.
 /// assertions actually pin. `transformAlignment` itself has no FLUI
 /// `Container` setter (module doc, `docs/ROADMAP.md` Cross.H).
 #[test]
-fn container_transform_is_outermost_and_does_not_affect_own_box_size() {
+fn container_own_box_size_is_unaffected_by_its_transform() {
     let laid = lay_out(
         Container::new()
             .width(100.0)
@@ -235,14 +242,8 @@ fn container_transform_is_outermost_and_does_not_affect_own_box_size() {
         loose(1000.0),
     );
 
-    let root = laid.root();
     assert_eq!(
-        laid.find_by_render_type("RenderContainer"),
-        root,
-        "the Container is one render object, transform included"
-    );
-    assert_eq!(
-        laid.size(root),
+        laid.size(laid.root()),
         size(100.0, 100.0),
         "the Container's own box size is unaffected by its transform"
     );
@@ -366,22 +367,22 @@ fn container_discards_alignment_when_childless_and_constraints_not_tight() {
         loose(1000.0),
     );
 
-    let aligned_size = laid.size(laid.root());
-    let unaligned = lay_out(
-        Container::new().decoration(BoxDecoration::new().set_color(Some(Color::rgb(0, 0, 0)))),
-        loose(1000.0),
-    );
-
+    // The comparison this test used to make against an unaligned sibling
+    // configuration could never fail: childless sizing
+    // (`RenderContainer::childless_content_size`) is a function of
+    // constraints alone, with no `&self` parameter at all, so it is
+    // structurally incapable of reading `alignment` — any childless
+    // `Container` under the same constraints reaches this same size by
+    // construction. That equality is the actual oracle, and it is proven
+    // once, independently of any one configuration, by
+    // `harness_container_childless_branches_all_size_the_same`. What
+    // remains a real pin here is the concrete size a childless, aligned
+    // `Container` reaches under these bounded constraints.
     assert_eq!(
-        aligned_size,
+        laid.size(laid.root()),
         size(1000.0, 1000.0),
-        "a childless Container fills the bounded space it is given"
-    );
-    assert_eq!(
-        aligned_size,
-        unaligned.size(unaligned.root()),
-        "the alignment is discarded when the child is None and the \
-         constraints are not tight, so it must not change the box"
+        "a childless Container fills the bounded space it is given, \
+         even with an alignment set"
     );
 }
 
@@ -392,11 +393,12 @@ fn container_discards_alignment_when_childless_and_constraints_not_tight() {
 ///
 /// All three branches resolve to the same box, so collapsing the widget stack
 /// into one render object also collapses the branch (see
-/// `RenderContainer::childless_content_size`). What is checked here is the
-/// consequence a caller can see: each configuration reaches the effective
-/// constraints' size, by whichever route.
+/// `RenderContainer::childless_content_size`). There is no branch left to
+/// select here — `RenderContainer` runs one formula regardless — so what is
+/// checked is the consequence a caller can see: each configuration (loose vs.
+/// tight effective constraints, aligned vs. not) reaches the same size.
 #[test]
-fn childless_container_tightness_selects_placeholder_or_alignment_exactly() {
+fn childless_container_size_is_independent_of_alignment_and_tightness() {
     let expected = size(40.0, 30.0);
 
     let non_tight = lay_out(
