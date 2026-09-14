@@ -34,7 +34,8 @@ All types re-export flat from the crate root: `flui_objects::RenderPadding`.
 ## Documentation
 
 Every public item is documented (`#![deny(missing_docs)]`); build locally with
-`cargo doc -p flui-objects --open`. The harness API is documented in
+`cargo doc -p flui-objects --open`. Architectural mapping decisions live in
+[`ARCHITECTURE.md`](ARCHITECTURE.md). The harness API is documented in
 [`flui-rendering/docs/TESTING.md`](../flui-rendering/docs/TESTING.md).
 
 ## License

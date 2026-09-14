@@ -52,7 +52,8 @@
 //!   window; `−∞` on the leading edge still clamps to `0` via `.max(0.0)`,
 //!   matching a negative finite offset. Only a positive-infinite trailing
 //!   cache extent keeps the intentional unbounded-window meaning. The grid
-//!   applies the same leading/trailing policy.
+//!   applies the same leading/trailing policy. Cross-object ledger:
+//!   [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §Mapping decisions.
 
 use std::collections::BTreeMap;
 
