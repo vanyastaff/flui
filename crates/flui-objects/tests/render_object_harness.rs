@@ -6568,6 +6568,10 @@ fn harness_sliver_fixed_extent_list_count_clamp_shrinks_the_extent() {
 // `'Implements paintsChild correctly'` and leading/trailing-garbage cases are
 // about a child manager's residency, which the pins above cover through the
 // request and retain-band sinks instead.
+//
+// Non-finite scroll-window edges (`NaN` / `±∞`) cannot be injected through a
+// healthy viewport host; the finite-domain contract and empty-band fallback
+// are proven on `window` / the index helpers in that same unit-test module.
 
 // ── RenderSliverGrid ─────────────────────────────────────────────────────────
 

@@ -268,7 +268,32 @@ impl RenderSliver for RenderSliverGrid {
         //   effectiveScrollOffset = scrollOffset + cacheOrigin
         //   targetEndScrollOffset = effectiveScrollOffset + remainingCacheExtent
         // Negative effective offsets saturate to 0 in the delegate's usize math.
-        let cache_start_offset = constraints.scroll_offset + constraints.cache_origin;
+        //
+        // A poisonous leading edge (`NaN` / `+∞`) must not reach the delegate:
+        // `+∞ / stride` saturates `f32 as usize` at `usize::MAX` the same way a
+        // non-finite trailing edge used to (see the guard below). `−∞` still
+        // clamps to `0` via `.max(0.0)`, matching
+        // `RenderSliverFixedExtentList::window`.
+        let leading = constraints.scroll_offset + constraints.cache_origin;
+        if leading.is_nan() || (leading.is_infinite() && leading.is_sign_positive()) {
+            tracing::error!(
+                scroll_offset = constraints.scroll_offset,
+                cache_origin = constraints.cache_origin,
+                item_count = self.item_count,
+                render_object = "RenderSliverGrid",
+                "lazy grid received a NaN or +∞ leading cache/scroll edge; \
+                 emitting an empty retain band so index math cannot saturate to usize::MAX"
+            );
+            let scroll_extent = tile_layout.compute_max_scroll_offset(self.item_count);
+            self.attached_child_count = ctx.child_count();
+            ctx.emit_retain_band(0, 0);
+            return SliverGeometry {
+                scroll_extent,
+                max_paint_extent: scroll_extent,
+                ..SliverGeometry::ZERO
+            };
+        }
+        let cache_start_offset = leading.max(0.0);
         let cache_end_offset = cache_start_offset + constraints.remaining_cache_extent;
 
         let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
@@ -310,23 +335,44 @@ impl RenderSliver for RenderSliverGrid {
                 .get_max_child_index_for_scroll_offset(cache_end_offset)
                 .min(self.item_count - 1);
             (last, self.item_count)
-        } else if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
-            if self.warned_truncation_for != Some(self.item_count) {
-                self.warned_truncation_for = Some(self.item_count);
-                tracing::warn!(
-                    item_count = self.item_count,
-                    threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
-                    window = UNBOUNDED_SENTINEL_WINDOW,
-                    "lazy grid asked to fill an unbounded main axis declares \
-                     more children than any real data source has; reading the \
-                     count as an undefined-count stand-in and serving a small \
-                     bounded window instead, so the committed extent is far \
-                     short of the declared content"
-                );
+        } else if cache_end_offset.is_infinite() && cache_end_offset.is_sign_positive() {
+            if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
+                if self.warned_truncation_for != Some(self.item_count) {
+                    self.warned_truncation_for = Some(self.item_count);
+                    tracing::warn!(
+                        item_count = self.item_count,
+                        threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                        window = UNBOUNDED_SENTINEL_WINDOW,
+                        "lazy grid asked to fill an unbounded main axis declares \
+                         more children than any real data source has; reading the \
+                         count as an undefined-count stand-in and serving a small \
+                         bounded window instead, so the committed extent is far \
+                         short of the declared content"
+                    );
+                }
+                (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
+            } else {
+                (self.item_count - 1, self.item_count)
             }
-            (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
         } else {
-            (self.item_count - 1, self.item_count)
+            tracing::error!(
+                scroll_offset = constraints.scroll_offset,
+                cache_origin = constraints.cache_origin,
+                remaining_cache_extent = constraints.remaining_cache_extent,
+                cache_end = cache_end_offset,
+                item_count = self.item_count,
+                render_object = "RenderSliverGrid",
+                "lazy grid received a non-finite trailing cache edge that is not \
+                 +∞; emitting an empty retain band so index math cannot saturate to usize::MAX"
+            );
+            let scroll_extent = tile_layout.compute_max_scroll_offset(self.item_count);
+            self.attached_child_count = ctx.child_count();
+            ctx.emit_retain_band(0, 0);
+            return SliverGeometry {
+                scroll_extent,
+                max_paint_extent: scroll_extent,
+                ..SliverGeometry::ZERO
+            };
         };
 
         // Guard: window is entirely past the last item (e.g. scrolled to end).
@@ -337,6 +383,7 @@ impl RenderSliver for RenderSliverGrid {
             ctx.emit_retain_band(first_in_window, first_in_window);
             return SliverGeometry {
                 scroll_extent,
+                max_paint_extent: scroll_extent,
                 ..SliverGeometry::ZERO
             };
         }
