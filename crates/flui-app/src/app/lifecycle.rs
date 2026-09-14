@@ -716,6 +716,12 @@ pub enum PublishError {
 struct EventQueue<E> {
     events: parking_lot::Mutex<VecDeque<E>>,
     capacity: usize,
+    /// Cleared when the [`ServiceEvents`] receiver is dropped, **under the
+    /// same mutex** that guards ring mutation. An in-flight `publish` may
+    /// still hold an upgraded `Arc` after that; this flag is what makes the
+    /// next ring mutation observe [`PublishError::OwnerGone`] instead of
+    /// silently succeeding into a queue nobody will drain.
+    receiver_alive: AtomicBool,
 }
 
 /// The publishing half of a [`service_events`] channel. `Send + Sync` and
@@ -745,41 +751,87 @@ impl<E> fmt::Debug for ServicePublisher<E> {
 }
 
 impl<E: Send> ServicePublisher<E> {
-    /// Publish one event. **Never blocks**: when the ring is full the
-    /// oldest unconsumed event is dropped (these are optional,
-    /// latest-relevant events by contract — anything that must be
-    /// delivered reliably belongs on a dedicated completion path, not
-    /// here).
+    /// Publish one event. **Never waits on consumer progress**: when the
+    /// ring is full the oldest unconsumed event is retired (these are
+    /// optional, latest-relevant events by contract — anything that must
+    /// be delivered reliably belongs on a dedicated completion path, not
+    /// here). Bounded capacity is a lossy policy, not a lock-free or
+    /// wait-free guarantee: the publisher still takes a short mutex, and
+    /// a payload `Drop` that re-enters [`Self::publish`] is supported only
+    /// because retired events are destroyed *after* that mutex is
+    /// released.
+    ///
+    /// Nested publish from an evicted event's destructor observes the
+    /// newly enqueued event already in the ring, and may itself retire
+    /// that newer event if capacity is still exhausted.
     ///
     /// # Errors
     ///
-    /// [`PublishError::OwnerGone`] when the receiver was dropped; the
-    /// event is discarded.
+    /// [`PublishError::OwnerGone`] when the receiver was already dropped at
+    /// upgrade time, **or** when it dies before this call commits a ring
+    /// mutation (an outer `publish` can keep the queue `Arc` alive across
+    /// that window). The refused event is discarded outside the mutex.
     pub fn publish(&self, event: E) -> Result<(), PublishError> {
         let Some(queue) = self.queue.upgrade() else {
             return Err(PublishError::OwnerGone);
         };
-        let mut events = queue.events.lock();
-        if events.len() == queue.capacity {
-            events.pop_front();
-            tracing::trace!(
-                service = self.name,
-                "event ring full; dropped the oldest unconsumed event"
-            );
+        // Keep retired / refused payloads out of the critical section: their
+        // Drop is arbitrary user code and may publish again through a cloned
+        // handle. Destroying them while `events` is locked deadlocks on the
+        // non-reentrant mutex (issue #1071).
+        let outcome = {
+            let mut events = queue.events.lock();
+            if queue.receiver_alive.load(Ordering::Acquire) {
+                let evicted = if events.len() == queue.capacity {
+                    events.pop_front()
+                } else {
+                    None
+                };
+                events.push_back(event);
+                Ok(evicted)
+            } else {
+                Err(event)
+            }
+        };
+        match outcome {
+            Err(refused) => {
+                drop(refused);
+                Err(PublishError::OwnerGone)
+            }
+            Ok(evicted) => {
+                if evicted.is_some() {
+                    tracing::trace!(
+                        service = self.name,
+                        "event ring full; dropped the oldest unconsumed event"
+                    );
+                }
+                drop(evicted);
+                Ok(())
+            }
         }
-        events.push_back(event);
-        Ok(())
     }
 }
 
 /// The receiving half of a [`service_events`] channel — owned by the
 /// consumer, **pull-only**: events sit in the bounded ring until drained
 /// at an anchor of the owner's choosing; nothing here can wake or mutate
-/// UI state. Dropping this receiver is what turns every later publish
-/// into [`PublishError::OwnerGone`].
+/// UI state. Dropping this receiver clears the queue's receiver-alive
+/// flag so in-flight publishers that already upgraded their `Weak` still
+/// observe [`PublishError::OwnerGone`] before committing a ring mutation.
 pub struct ServiceEvents<E> {
     name: &'static str,
     queue: Arc<EventQueue<E>>,
+}
+
+impl<E> Drop for ServiceEvents<E> {
+    fn drop(&mut self) {
+        // Must serialize with `publish`'s ring mutation: clear liveness only
+        // while holding the same mutex. Otherwise a publisher can load
+        // `true`, lose the race to this Drop's store, then still `push_back`
+        // and return `Ok(())` into a queue nobody will drain.
+        let _guard = self.queue.events.lock();
+        self.queue.receiver_alive.store(false, Ordering::Release);
+    }
 }
 
 impl<E> fmt::Debug for ServiceEvents<E> {
@@ -793,13 +845,26 @@ impl<E> fmt::Debug for ServiceEvents<E> {
 
 impl<E> ServiceEvents<E> {
     /// The oldest pending event, if any. Never blocks.
+    ///
+    /// The returned value is detached from the ring before this method
+    /// returns, so dropping it (including a `Drop` that re-enters
+    /// [`ServicePublisher::publish`]) cannot contend with the queue mutex.
     pub fn try_next(&self) -> Option<E> {
-        self.queue.events.lock().pop_front()
+        let mut events = self.queue.events.lock();
+        let event = events.pop_front();
+        drop(events);
+        event
     }
 
     /// Every pending event, oldest first. Never blocks.
+    ///
+    /// Same destructor-scope guarantee as [`Self::try_next`]: the drained
+    /// values leave the mutex before their `Drop` can run.
     pub fn drain(&self) -> Vec<E> {
-        self.queue.events.lock().drain(..).collect()
+        let mut events = self.queue.events.lock();
+        let drained: Vec<E> = events.drain(..).collect();
+        drop(events);
+        drained
     }
 }
 
@@ -819,6 +884,7 @@ pub fn service_events<E: Send>(
     let queue = Arc::new(EventQueue {
         events: parking_lot::Mutex::new(VecDeque::new()),
         capacity: capacity.max(1),
+        receiver_alive: AtomicBool::new(true),
     });
     (
         ServicePublisher {
@@ -1723,6 +1789,538 @@ mod tests {
             Err(PublishError::OwnerGone),
             "clones observe the same dead owner"
         );
+    }
+
+    /// Evicting the oldest event must destroy it *after* releasing the
+    /// ring mutex. A payload `Drop` that publishes again would otherwise
+    /// re-lock the same non-reentrant `parking_lot::Mutex` and hang the
+    /// calling thread forever (issue #1071).
+    ///
+    /// The probe runs on a worker thread with a bounded join so a
+    /// regression fails the test instead of wedging the suite.
+    #[test]
+    fn publish_destroys_evicted_events_outside_the_queue_mutex() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct Event {
+            id: usize,
+            counts: Arc<[AtomicUsize; 3]>,
+            after_drop: Option<Box<dyn FnOnce() + Send>>,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                let count = self.counts[self.id].fetch_add(1, Ordering::SeqCst) + 1;
+                assert_eq!(count, 1, "each event must be dropped exactly once");
+                if let Some(callback) = self.after_drop.take() {
+                    callback();
+                }
+            }
+        }
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let counts: Arc<[AtomicUsize; 3]> =
+                Arc::new(std::array::from_fn(|_| AtomicUsize::new(0)));
+            let (publisher, receiver) = service_events::<Event>("eviction-probe", 1);
+
+            let mut first = Event {
+                id: 0,
+                counts: Arc::clone(&counts),
+                after_drop: None,
+            };
+            let nested_publisher = publisher.clone();
+            let nested_counts = Arc::clone(&counts);
+            first.after_drop = Some(Box::new(move || {
+                nested_publisher
+                    .publish(Event {
+                        id: 2,
+                        counts: nested_counts,
+                        after_drop: None,
+                    })
+                    .expect("receiver remains alive during nested publish");
+            }));
+
+            publisher.publish(first).expect("receiver alive");
+            publisher
+                .publish(Event {
+                    id: 1,
+                    counts: Arc::clone(&counts),
+                    after_drop: None,
+                })
+                .expect("eviction publish must return");
+
+            let remaining = receiver.drain();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(
+                remaining[0].id, 2,
+                "nested publish during eviction must land"
+            );
+            drop(remaining);
+
+            let actual = std::array::from_fn(|i| counts[i].load(Ordering::SeqCst));
+            assert_eq!(
+                actual,
+                [1, 1, 1],
+                "every event — including the one nested from Drop — must drop exactly once"
+            );
+            assert!(receiver.try_next().is_none());
+            done_tx
+                .send(())
+                .expect("orchestrator is waiting for completion");
+        });
+
+        match done_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(()) => worker
+                .join()
+                .expect("reentrant eviction worker must not panic"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+                "reentrant eviction publish deadlocked — evicted Drop still runs under the queue mutex"
+            ),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("reentrant eviction worker disconnected before signaling completion")
+            }
+        }
+    }
+
+    /// Control for #1071: the same reentrant payload is safe when destroyed
+    /// after `try_next` returns it (outside any queue lock), proving the
+    /// hang is specific to in-critical-section destruction, not to nested
+    /// publish in general.
+    #[test]
+    fn dropping_a_received_event_may_reenter_publish() {
+        struct Event {
+            after_drop: Option<Box<dyn FnOnce() + Send>>,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                if let Some(callback) = self.after_drop.take() {
+                    callback();
+                }
+            }
+        }
+
+        let (publisher, receiver) = service_events::<Event>("outside-lock", 2);
+        let nested = publisher.clone();
+        publisher
+            .publish(Event {
+                after_drop: Some(Box::new(move || {
+                    nested
+                        .publish(Event { after_drop: None })
+                        .expect("receiver alive");
+                })),
+            })
+            .expect("receiver alive");
+
+        let first = receiver.try_next().expect("first event queued");
+        drop(first);
+        assert_eq!(receiver.drain().len(), 1);
+    }
+
+    /// Dropping the receiver while an outer `publish` still holds the
+    /// upgraded `Arc` must not let a nested `publish` succeed into a dead
+    /// owner. Without a receiver-alive flag, `Weak::upgrade` still succeeds
+    /// (the outer call keeps the queue alive) and the nested publish
+    /// returns `Ok` for an event nobody can drain.
+    #[test]
+    fn publish_observes_receiver_death_after_upgrade() {
+        struct Event {
+            drops: Arc<AtomicUsize>,
+            on_drop: Option<Box<dyn FnOnce() + Send>>,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+                if let Some(callback) = self.on_drop.take() {
+                    callback();
+                }
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (publisher, receiver) = service_events::<Event>("receiver-race", 1);
+        let nested_publisher = publisher.clone();
+        let nested_drops = Arc::clone(&drops);
+        let nested_result = Arc::new(std::sync::Mutex::new(None));
+        let nested_result_in_drop = Arc::clone(&nested_result);
+        let receiver_slot = std::sync::Mutex::new(Some(receiver));
+
+        publisher
+            .publish(Event {
+                drops: Arc::clone(&drops),
+                on_drop: Some(Box::new(move || {
+                    drop(receiver_slot.lock().expect("receiver slot").take());
+                    let result = nested_publisher.publish(Event {
+                        drops: nested_drops,
+                        on_drop: None,
+                    });
+                    *nested_result_in_drop.lock().expect("result slot") = Some(result);
+                })),
+            })
+            .expect("receiver alive");
+
+        // Evict the first event: its Drop kills the receiver, then nested
+        // publishes while this call still holds the upgraded Arc.
+        publisher
+            .publish(Event {
+                drops: Arc::clone(&drops),
+                on_drop: None,
+            })
+            .expect("replacement publish commits before the receiver dies");
+
+        assert_eq!(
+            nested_result.lock().expect("result slot").clone(),
+            Some(Err(PublishError::OwnerGone)),
+            "nested publish after receiver death must not Ok into a dying queue"
+        );
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            3,
+            "evicted, replacement (queue teardown), and refused nested event each drop once"
+        );
+    }
+
+    #[test]
+    fn capacity_zero_clamps_to_one() {
+        let (publisher, events) = service_events::<u32>("clamped", 0);
+        publisher.publish(1).expect("receiver alive");
+        publisher
+            .publish(2)
+            .expect("capacity 0 must behave as capacity 1");
+        assert_eq!(
+            events.drain(),
+            vec![2],
+            "newest wins under clamped capacity"
+        );
+    }
+
+    /// Dropping a drained batch may re-enter publish — the drained values
+    /// must leave the mutex before their destructors run.
+    #[test]
+    fn drain_drop_may_reenter_publish() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct Event {
+            on_drop: Option<Box<dyn FnOnce() + Send>>,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                if let Some(callback) = self.on_drop.take() {
+                    callback();
+                }
+            }
+        }
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let (publisher, receiver) = service_events::<Event>("drain-reenter", 2);
+            let nested = publisher.clone();
+            publisher
+                .publish(Event {
+                    on_drop: Some(Box::new(move || {
+                        nested
+                            .publish(Event { on_drop: None })
+                            .expect("receiver alive during drain Drop");
+                    })),
+                })
+                .expect("receiver alive");
+            publisher
+                .publish(Event { on_drop: None })
+                .expect("receiver alive");
+
+            let drained = receiver.drain();
+            assert_eq!(drained.len(), 2);
+            drop(drained);
+            assert_eq!(
+                receiver.drain().len(),
+                1,
+                "nested publish from drain Drop landed"
+            );
+            done_tx.send(()).expect("orchestrator waiting");
+        });
+
+        match done_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(()) => worker.join().expect("drain reentry worker must not panic"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("drain Drop reentered publish while the queue mutex was held")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("drain reentry worker disconnected before signaling completion")
+            }
+        }
+    }
+
+    /// Capacity-2 eviction: when the evicted event's Drop nested-publishes,
+    /// capacity is full again so the nested event retires the just-pushed
+    /// replacement's predecessor — final ring is `[replacement, nested]`.
+    #[test]
+    fn nested_eviction_with_capacity_two() {
+        struct Event {
+            id: u32,
+            drops: Arc<AtomicUsize>,
+            on_drop: Option<Box<dyn FnOnce() + Send>>,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+                if let Some(callback) = self.on_drop.take() {
+                    callback();
+                }
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (publisher, receiver) = service_events::<Event>("cap-two", 2);
+
+        // Seed [0, 1]; 1's Drop will nested-publish 3.
+        publisher
+            .publish(Event {
+                id: 0,
+                drops: Arc::clone(&drops),
+                on_drop: None,
+            })
+            .unwrap();
+        let nested = publisher.clone();
+        let nested_drops = Arc::clone(&drops);
+        publisher
+            .publish(Event {
+                id: 1,
+                drops: Arc::clone(&drops),
+                on_drop: Some(Box::new(move || {
+                    nested
+                        .publish(Event {
+                            id: 3,
+                            drops: nested_drops,
+                            on_drop: None,
+                        })
+                        .expect("nested publish during capacity-2 eviction");
+                })),
+            })
+            .unwrap();
+
+        // Evict 0 → [1, 2]; Drop(0) is inert.
+        publisher
+            .publish(Event {
+                id: 2,
+                drops: Arc::clone(&drops),
+                on_drop: None,
+            })
+            .unwrap();
+        // Evict 1 → push replacement 4 → [2, 4]; Drop(1) publishes 3 →
+        // full, so evict 2 and push 3 → [4, 3].
+        publisher
+            .publish(Event {
+                id: 4,
+                drops: Arc::clone(&drops),
+                on_drop: None,
+            })
+            .unwrap();
+
+        let remaining = receiver.drain();
+        let ids: Vec<u32> = remaining.iter().map(|e| e.id).collect();
+        assert_eq!(
+            ids,
+            vec![4, 3],
+            "nested publish must land; capacity-2 retires the older sibling"
+        );
+        drop(remaining);
+        // Published 0,1,2,4,3 — five events, all dropped exactly once.
+        assert_eq!(drops.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn panic_in_evicted_drop_leaves_ring_consistent() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        struct Event {
+            id: u32,
+            panic_on_drop: bool,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                assert!(!self.panic_on_drop, "expected panic from evicted Drop");
+            }
+        }
+
+        let (publisher, receiver) = service_events::<Event>("panic-drop", 1);
+        publisher
+            .publish(Event {
+                id: 0,
+                panic_on_drop: true,
+            })
+            .unwrap();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            publisher
+                .publish(Event {
+                    id: 1,
+                    panic_on_drop: false,
+                })
+                .expect("push commits before evicted Drop");
+        }));
+        assert!(result.is_err(), "evicted Drop panic must propagate");
+
+        let remaining = receiver.drain();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "replacement must remain in the ring after evicted Drop panics"
+        );
+        assert_eq!(remaining[0].id, 1);
+        drop(remaining);
+
+        publisher
+            .publish(Event {
+                id: 2,
+                panic_on_drop: false,
+            })
+            .expect("channel remains usable after panic-in-Drop");
+        assert_eq!(receiver.try_next().map(|e| e.id), Some(2));
+    }
+
+    #[test]
+    fn owner_gone_drops_refused_event_exactly_once() {
+        struct Event {
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (publisher, receiver) = service_events::<Event>("refused-drop", 1);
+        drop(receiver);
+        assert_eq!(
+            publisher.publish(Event {
+                drops: Arc::clone(&drops),
+            }),
+            Err(PublishError::OwnerGone)
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    /// Concurrent publishers into a capacity-1 ring must not deadlock or
+    /// double-drop under a bounded join.
+    #[test]
+    fn concurrent_publishers_capacity_one_smoke() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct Event {
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Drop for Event {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (publisher, receiver) = service_events::<Event>("concurrent", 1);
+        let (done_tx, done_rx) = mpsc::channel();
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let publisher = publisher.clone();
+                let drops = Arc::clone(&drops);
+                let done_tx = done_tx.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..64 {
+                        publisher
+                            .publish(Event {
+                                drops: Arc::clone(&drops),
+                            })
+                            .expect("receiver alive");
+                    }
+                    done_tx.send(()).expect("orchestrator waiting");
+                })
+            })
+            .collect();
+        drop(done_tx);
+
+        for i in 0..4 {
+            done_rx
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap_or_else(|_| panic!("publisher thread {i} timed out — likely deadlock"));
+        }
+        for handle in threads {
+            handle.join().expect("publisher thread must not panic");
+        }
+
+        let remaining = receiver.drain();
+        assert_eq!(remaining.len(), 1, "capacity-1 ring retains one event");
+        // 4*64 published; all but the retained event dropped via eviction.
+        assert_eq!(drops.load(Ordering::SeqCst), 4 * 64 - 1);
+        drop(remaining);
+        assert_eq!(drops.load(Ordering::SeqCst), 4 * 64);
+    }
+
+    /// After `ServiceEvents` drop returns, concurrent publishers that still
+    /// hold an upgraded `Arc` must observe `OwnerGone` — the liveness clear
+    /// is serialized with ring mutation under the same mutex.
+    #[test]
+    fn concurrent_receiver_drop_serializes_with_publish() {
+        use std::sync::Barrier;
+        use std::time::Duration;
+
+        for _ in 0..64 {
+            let (publisher, receiver) = service_events::<u32>("toctou", 16);
+            let start = Arc::new(Barrier::new(3));
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+            let workers: Vec<_> = (0..2)
+                .map(|_| {
+                    let publisher = publisher.clone();
+                    let start = Arc::clone(&start);
+                    let done_tx = done_tx.clone();
+                    std::thread::spawn(move || {
+                        start.wait();
+                        for value in 0..128u32 {
+                            let _ = publisher.publish(value);
+                        }
+                        done_tx.send(()).expect("orchestrator waiting");
+                    })
+                })
+                .collect();
+            drop(done_tx);
+
+            let dropper = {
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    std::thread::yield_now();
+                    drop(receiver);
+                })
+            };
+
+            for i in 0..2 {
+                done_rx
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap_or_else(|_| {
+                        panic!("publisher {i} timed out — likely deadlock with receiver Drop")
+                    });
+            }
+            for worker in workers {
+                worker.join().expect("publisher must not panic");
+            }
+            dropper.join().expect("receiver dropper must not panic");
+
+            assert_eq!(
+                publisher.publish(999),
+                Err(PublishError::OwnerGone),
+                "after ServiceEvents::drop returns, publish must not commit"
+            );
+        }
     }
 
     // ── Service registry: lifetime policy, staged shutdown, deadlines ───────
