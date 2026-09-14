@@ -1869,9 +1869,12 @@ mod tests {
             Ok(()) => worker
                 .join()
                 .expect("reentrant eviction worker must not panic"),
-            Err(_) => panic!(
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
                 "reentrant eviction publish deadlocked — evicted Drop still runs under the queue mutex"
             ),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("reentrant eviction worker disconnected before signaling completion")
+            }
         }
     }
 
@@ -2037,7 +2040,12 @@ mod tests {
 
         match done_rx.recv_timeout(Duration::from_secs(3)) {
             Ok(()) => worker.join().expect("drain reentry worker must not panic"),
-            Err(_) => panic!("drain Drop reentered publish while the queue mutex was held"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("drain Drop reentered publish while the queue mutex was held")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("drain reentry worker disconnected before signaling completion")
+            }
         }
     }
 
@@ -2131,9 +2139,7 @@ mod tests {
 
         impl Drop for Event {
             fn drop(&mut self) {
-                if self.panic_on_drop {
-                    panic!("expected panic from evicted Drop");
-                }
+                assert!(!self.panic_on_drop, "expected panic from evicted Drop");
             }
         }
 
