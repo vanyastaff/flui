@@ -984,6 +984,18 @@ is queried, matching `RenderConstrainedBox`. Without that short-circuit a
 `LayoutBuilder` (or any child that rejects speculative intrinsic queries)
 would be asked even though the result is discarded.
 
+**Parent-data transparency:** Flutter's identity `Container` (every option
+absent) builds to the child itself, so `Row → Container → Expanded` and
+`Stack → Container → Positioned` attach the parent-data widget directly to
+Flex/Stack. A `RenderView` always inserts `RenderContainer`
+(`ParentData = BoxParentData`) between them, so those trees panic at
+`apply_ancestor_parent_data`. That is a named consequence of the stable-slot
+choice, not an accidental drop: restoring identity passthrough would recreate
+flutter/flutter#161698 the moment any option is toggled on. The supported
+shape is `Row → Expanded → Container` / `Stack → Positioned → Container`.
+Covered by
+`identity_container_between_flex_and_expanded_is_not_parent_data_transparent`.
+
 **Collapsed branch:** Flutter's three childless shapes — the placeholder
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
 inner widget at all — all resolve to the same box, so `RenderContainer` has no
@@ -1013,3 +1025,7 @@ Tight additional constraints answering an intrinsic without querying a
 `LayoutBuilder` child are covered by
 `container_tight_width_does_not_query_layout_builder_intrinsics` and
 `container_tight_height_does_not_query_layout_builder_intrinsics`.
+Chrome self-hit uses the same half-open gate as the stacked `DecoratedBox`
+(`harness_container_decoration_misses_the_exclusive_chrome_max_edge`);
+baselines add the child's offset
+(`harness_container_baseline_adds_child_offset`).

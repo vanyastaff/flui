@@ -2930,8 +2930,9 @@ struct ContainerStackCase {
 ///
 /// The stack is assembled here out of the individual render objects, each of
 /// which already carries its own Flutter-verified tests — so this is the
-/// oracle for the collapse: size, child size, absolute child position, and the
-/// hit path all have to agree.
+/// oracle for the collapse: size, child size, absolute child position, the
+/// child hit path, and chrome self-hit (whether *anything* was hit, not only
+/// whether the child was) all have to agree.
 ///
 /// `Align` and `ConstrainedBox` appear only when their property is set,
 /// mirroring Flutter's conditional stack. Both `Padding` levels are always
@@ -3082,6 +3083,34 @@ fn assert_container_matches_stack(spec: ContainerStackCase) {
             collapsed.hit_first(x, y) == Some(collapsed.id("child")),
             composed.hit_first(x, y) == Some(composed.id("child")),
             "[{case}] child hit disagreement at ({x}, {y})"
+        );
+    }
+
+    // Chrome self-hit. Comparing only `hit == child` hid a half-open vs
+    // inclusive disagreement on the decoration's max edge: the stack's
+    // `DecoratedBox` gates with `is_within_own_size` (half-open on the
+    // chrome size), while a collapsed node gates on the *outer* size
+    // (margin included) and then used inclusive `Rect::contains`.
+    let outer = collapsed.box_geometry(collapsed.root());
+    let chrome_left = margin.left.get() + shift.dx.get();
+    let chrome_top = margin.top.get() + shift.dy.get();
+    let chrome_right = chrome_left + outer.width.get() - margin.horizontal_total().get();
+    let chrome_bottom = chrome_top + outer.height.get() - margin.vertical_total().get();
+    let chrome_mid_x = chrome_left + (chrome_right - chrome_left) / 2.0;
+    let chrome_mid_y = chrome_top + (chrome_bottom - chrome_top) / 2.0;
+    for (x, y, why) in [
+        (chrome_right, chrome_mid_y, "exclusive max-x of the chrome"),
+        (chrome_mid_x, chrome_bottom, "exclusive max-y of the chrome"),
+        (
+            margin.left.get() * 0.5 + shift.dx.get(),
+            chrome_mid_y,
+            "inside the margin band",
+        ),
+    ] {
+        assert_eq!(
+            collapsed.hit_first(x, y).is_some(),
+            composed.hit_first(x, y).is_some(),
+            "[{case}] chrome hit disagreement at ({x}, {y}) ({why})"
         );
     }
 }
@@ -3380,6 +3409,48 @@ fn harness_container_decoration_shape_bounds_its_own_hits() {
     );
 }
 
+/// The chrome's exclusive max edge is hittable under inclusive
+/// `Rect::contains`, but the stacked `Padding(margin)` → `DecoratedBox`
+/// rejects it: `DecoratedBox` gates with half-open `is_within_own_size` on
+/// the chrome size itself. After collapse the own-size gate is the *outer*
+/// box, so the chrome edge must be half-open on its own rect.
+#[test]
+fn harness_container_decoration_misses_the_exclusive_chrome_max_edge() {
+    let run = RenderTester::mount(box_node(
+        RenderContainer::new()
+            .with_margin(EdgeInsets::all(px(10.0)))
+            .with_decoration(BoxDecoration::with_color(Color::RED)),
+    ))
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(
+        run.hit_first(50.0, 50.0),
+        Some(run.root()),
+        "the decorated interior must absorb a hit"
+    );
+    assert_eq!(
+        run.hit_first(90.0, 50.0),
+        None,
+        "x == chrome.max.x is outside a half-open gate (inner 80×80 at origin 10)"
+    );
+    assert_eq!(
+        run.hit_first(50.0, 90.0),
+        None,
+        "y == chrome.max.y is outside a half-open gate"
+    );
+    assert_eq!(
+        run.hit_first(89.0, 50.0),
+        Some(run.root()),
+        "a pixel inside the chrome, just before the exclusive max, must still hit"
+    );
+    assert_eq!(
+        run.hit_first(5.0, 50.0),
+        None,
+        "the margin band stays transparent"
+    );
+}
+
 /// A pure translation moves both the painted content and the hit region, and
 /// it does so without a compositing layer — the same fork `RenderTransform`
 /// takes.
@@ -3574,6 +3645,72 @@ fn harness_container_dry_layout_matches_layout() {
     let root = run.root();
     let wet = run.box_geometry(root);
     assert_eq!(run.dry_layout(root, constraints), wet);
+}
+
+/// Live and dry baselines add the child's offset (margin + padding + align).
+/// Dropping that term still sizes and paints correctly, so size/hit oracles
+/// would stay green.
+#[test]
+fn harness_container_baseline_adds_child_offset() {
+    let constraints = loose(200.0);
+    let margin = EdgeInsets::all(px(5.0));
+    let padding = EdgeInsets::all(px(8.0));
+    let mut dry = RenderTester::mount(
+        box_node(
+            RenderContainer::new()
+                .with_margin(margin)
+                .with_padding(padding)
+                .with_alignment(Alignment::TOP_LEFT),
+        )
+        .child(
+            box_node(RenderParagraph::new(
+                TextSpan::new("Ag"),
+                TextDirection::Ltr,
+            ))
+            .label("text"),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let child_constraints = constraints.deflate(margin).deflate(padding).loosen();
+    let child_baseline = dry
+        .dry_baseline(dry.id("text"), child_constraints, TextBaseline::Alphabetic)
+        .expect("paragraph reports a dry baseline");
+    let container_baseline = dry
+        .dry_baseline(dry.root(), constraints, TextBaseline::Alphabetic)
+        .expect("container must forward the child's baseline");
+    assert_eq!(
+        container_baseline,
+        child_baseline + margin.top.get() + padding.top.get(),
+        "dry baseline must include margin + padding (TOP_LEFT alignment adds nothing)"
+    );
+
+    // Live path: an outer `RenderBaseline` places the container so the
+    // captured baseline sits at y=100. Inner baseline 10 + margin 5 +
+    // padding 8 = 23, so the container's offset is 77.
+    let live = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(100.0))).child(
+            box_node(
+                RenderContainer::new()
+                    .with_margin(margin)
+                    .with_padding(padding)
+                    .with_alignment(Alignment::TOP_LEFT),
+            )
+            .label("container")
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(10.0)))
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+            ),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+    assert_eq!(
+        live.offset(live.id("container")).dy,
+        px(77.0),
+        "live baseline must include margin + padding; dropping child_offset.dy would place the container at 90"
+    );
 }
 
 #[test]

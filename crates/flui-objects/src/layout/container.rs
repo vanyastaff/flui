@@ -377,14 +377,6 @@ impl RenderContainer {
             .and_then(|matrix| matrix.as_translation())
             .map_or(Offset::ZERO, |(dx, dy)| Offset::new(px(dx), px(dy)))
     }
-
-    /// The rect the decoration and color fill, in this box's local space.
-    fn chrome_rect(&self, shift: Offset) -> Rect<Pixels> {
-        Rect::from_origin_size(
-            Point::new(self.margin.left + shift.dx, self.margin.top + shift.dy),
-            self.inner_size,
-        )
-    }
 }
 
 impl flui_foundation::Diagnosticable for RenderContainer {
@@ -596,7 +588,10 @@ impl RenderBox for RenderContainer {
     /// `ColoredBox`, which encloses the content.
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         let shift = self.paint_translation();
-        let rect = self.chrome_rect(shift);
+        let rect = Rect::from_origin_size(
+            Point::new(self.margin.left + shift.dx, self.margin.top + shift.dy),
+            self.inner_size,
+        );
 
         if let Some(decoration) = &self.decoration {
             paint_box_decoration(
@@ -699,7 +694,21 @@ impl RenderBox for RenderContainer {
             }
         }
 
-        let rect = self.chrome_rect(Offset::ZERO);
+        let rect = Rect::from_origin_size(
+            Point::new(self.margin.left, self.margin.top),
+            self.inner_size,
+        );
+        // Half-open on the inner box, matching `is_within_own_size` on the
+        // stacked `DecoratedBox`. `Rect::contains` is inclusive on `max`,
+        // and after collapse that max sits inside our outer (margin-included)
+        // size, so an inclusive test would hit a pixel the stack misses.
+        let inside_decoration = position.dx >= rect.min.x
+            && position.dx < rect.max.x
+            && position.dy >= rect.min.y
+            && position.dy < rect.max.y;
+        if !inside_decoration {
+            return false;
+        }
         if let Some(decoration) = &self.decoration
             && box_decoration_hit_test(rect, decoration, position)
         {
@@ -708,10 +717,6 @@ impl RenderBox for RenderContainer {
         // A colored box is hit-opaque across its whole rect — Flutter's
         // `_RenderColoredBox` is a proxy with `HitTestBehavior.opaque`.
         self.color.is_some()
-            && position.dx >= rect.min.x
-            && position.dx < rect.max.x
-            && position.dy >= rect.min.y
-            && position.dy < rect.max.y
     }
 }
 

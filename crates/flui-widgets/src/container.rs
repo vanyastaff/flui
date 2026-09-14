@@ -33,7 +33,10 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///   stack is cheaper only in the identity case (no options → the child
 ///   itself, zero extra nodes). Every other configuration is one node here
 ///   versus up to seven there. The reason for the divergence is the stable
-///   child slot, not a cheaper identity `Container`.
+///   child slot, not a cheaper identity `Container`. Because the identity
+///   case is still a `RenderContainer`, it is **not** parent-data-transparent:
+///   put [`crate::Expanded`] / [`crate::Positioned`] *around* the container
+///   (`Row → Expanded → Container`), not inside it.
 ///
 /// The divergence is recorded in `ARCHITECTURE.md` mapping decision 15, and
 /// the geometry is pinned against the stack it replaces by
