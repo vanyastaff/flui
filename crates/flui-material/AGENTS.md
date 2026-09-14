@@ -2,6 +2,8 @@
 
 Material Design theming foundation: `ColorScheme`, the M3 2021 type scale (`Typography`/`TextTheme`), `ThemeData`, and the `Theme` inherited widget that publishes it to a subtree.
 
+Mapping decisions (deliberate divergences from Flutter) live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ## What lives here
 
 - **`ColorScheme`** — the full Material 3 color-role palette (50 fields incl. `brightness`), `#[non_exhaustive]`. `light()`/`dark()` are verbatim ports of the oracle's `_colorSchemeLightM3`/`_colorSchemeDarkM3` const tables (`theme_data.dart`) — the same table `ThemeData()` defaults to, not the legacy M2 `ColorScheme.light()`/`.dark()` baseline constructors. `copy_with` takes a `ColorSchemeOverrides` patch struct (Rust has no optional named parameters).

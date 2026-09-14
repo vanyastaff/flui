@@ -145,7 +145,8 @@ type CheckboxChangeCallback = Rc<dyn Fn(Option<bool>)>;
 /// allowed. Storage is a private mode enum (binary vs tristate), so
 /// `(value: None, tristate: false)` is not representable even inside this
 /// module (Flutter only `assert`s the pair in debug; FLUI closes the release
-/// hole — same public-widget invariant class as GitHub #1101 for tabs).
+/// hole — same public-widget invariant class as GitHub #1101 for tabs). Ledger:
+/// `ARCHITECTURE.md` §Checkbox value/tristate.
 ///
 /// ```rust
 /// use flui_material::Checkbox;
