@@ -377,6 +377,41 @@ fn zero_tab_bar_mounts_a_48px_box() {
     );
 }
 
+/// `tabs.len() != controller.length()` panics inside `build` and recovers as
+/// an `ErrorView` in every profile — including empty tabs + nonzero length
+/// (the release `assert!` on the zero-tabs branch).
+///
+/// Red-check: weaken those checks to `debug_assert!` — release would mount
+/// with no selected cell / empty box instead of surfacing the mismatch.
+#[test]
+fn a_tab_count_mismatched_with_the_controllers_length_builds_an_error() {
+    let mut mismatched_nonempty = lay_out(
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(two_tabs()).controller(TabController::new(3, 0)),
+        ),
+        tight(200.0, 48.0),
+    );
+    assert_eq!(
+        mismatched_nonempty.count_elements_by_view_type::<ErrorView>(),
+        1,
+        "two tabs + length-3 controller must recover as exactly one ErrorView"
+    );
+
+    let mut mismatched_empty = lay_out(
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(vec![]).controller(TabController::new(2, 0)),
+        ),
+        bar_constraints(300.0, 100.0),
+    );
+    assert_eq!(
+        mismatched_empty.count_elements_by_view_type::<ErrorView>(),
+        1,
+        "empty tabs + nonzero controller length must recover as exactly one ErrorView"
+    );
+}
+
 /// A `TabBar` with neither an explicit `controller` nor a
 /// [`DefaultTabController`] ancestor panics loudly (Flutter parity:
 /// `_updateTabController`'s `FlutterError`) instead of silently rendering

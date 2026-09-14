@@ -5,9 +5,9 @@
 //! for: a not-yet-visited child is never built, a visited-then-hidden
 //! child's own state survives (`Offstage`, not unmount), an inactive
 //! child's animation is muted (`TickerMode`), a controller swap/unmount
-//! removes the old listener, and an out-of-range controller index falls
-//! through without panicking in release (proven here via the `debug_assert!`
-//! itself, live in this crate's own debug test profile).
+//! removes the old listener, and a children↔controller length mismatch
+//! recovers as an `ErrorView` in every build profile (release `assert!` in
+//! `build`, not a silent all-`Offstage` fall-through).
 
 mod common;
 
@@ -322,18 +322,13 @@ fn a_tab_bar_view_with_no_controller_and_no_default_tab_controller_ancestor_buil
     );
 }
 
-/// The `children.len() != controller.length()` mismatch `debug_assert!` is
-/// live in this crate's own (debug-profile) test build — a length mismatch
-/// panics inside `build` and the framework's build-error boundary substitutes
-/// an `ErrorView` (same mechanism the previous test's doc comment cites).
+/// The `children.len() != controller.length()` mismatch `assert!` is live in
+/// every build profile — a length mismatch panics inside `build` and the
+/// framework's build-error boundary substitutes an `ErrorView`.
 ///
-/// Red-check: delete the `debug_assert!` in `tab_bar_view.rs`'s `build` —
-/// this test stops producing an `ErrorView`; the view instead mounts with tab index 2
-/// (out of range for the 2-child `Vec`) simply never matching any child, so
-/// every child renders `Offstage`-hidden — the documented release
-/// fall-through this test's sibling assertion (module docs) describes,
-/// silently reached in a build where the assert should have fired instead.
-#[cfg(debug_assertions)]
+/// Red-check: weaken that check to `debug_assert!` — in release this would
+/// stop producing an `ErrorView` and mount with every child `Offstage`-hidden
+/// (the old documented fall-through #1101 closed).
 #[test]
 fn a_children_count_mismatched_with_the_controllers_length_builds_an_error() {
     let controller = TabController::new(3, 2);
