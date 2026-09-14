@@ -114,18 +114,19 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
                 callback_local.set(true);
                 observed.store(
                     pipeline.with(|owner| {
-                        let render_tree = owner.render_tree();
-                        let root = render_tree
-                            .iter()
-                            .map(|(id, _)| id)
-                            .find(|id| render_tree.parent(*id).is_none())
-                            .expect("the mounted subtree should have a render root");
+                        // The parentless render node is the pipeline
+                        // `RenderView` (the finite surface), not the probe's
+                        // `SizedBox`. Committed geometry is the probe child's
+                        // 64×18 after the rebuild.
+                        let expected = flui_types::Size::new(
+                            flui_types::geometry::px(64.0),
+                            flui_types::geometry::px(18.0),
+                        );
                         callback_local.get()
-                            && owner.box_size(root)
-                                == Some(flui_types::Size::new(
-                                    flui_types::geometry::px(64.0),
-                                    flui_types::geometry::px(18.0),
-                                ))
+                            && owner
+                                .render_tree()
+                                .iter()
+                                .any(|(id, _)| owner.box_size(id) == Some(expected))
                     }),
                     Ordering::SeqCst,
                 );

@@ -394,8 +394,12 @@ impl flui_foundation::Diagnosticable for RenderContainer {
         }
         properties.add_enum("padding", self.padding);
         properties.add_enum("margin", self.margin);
-        properties.add("hasColor", self.color.is_some());
-        properties.add("hasDecoration", self.decoration.is_some());
+        if let Some(color) = self.color {
+            properties.add_enum("color", color);
+        }
+        if let Some(decoration) = &self.decoration {
+            properties.add_enum("decoration", decoration.clone());
+        }
         properties.add("hasConstraints", self.additional_constraints.is_some());
         properties.add("hasTransform", self.transform.is_some());
     }

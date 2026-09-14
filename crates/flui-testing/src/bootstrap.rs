@@ -230,8 +230,8 @@ impl Mounted {
     /// itself when it has none yet (a recovered `ErrorView` is render-less).
     ///
     /// Widget harnesses that insert an `Align` loosener under the `RenderView`
-    /// then take that Align's child as the caller's root — see
-    /// `flui_widgets::testing::lay_out`.
+    /// (only for non-tight mount constraints) then take that Align's child as
+    /// the caller's root — see `flui_widgets::testing::lay_out`.
     ///
     /// # Panics
     ///
@@ -389,7 +389,15 @@ impl HeadlessBinding {
         pipeline_owner.with_mut(|owner| {
             // RootRenderElement already set root_id; only constraints remain.
             // Fresh root constraints mark the root dirty for the frame below.
-            owner.set_root_constraints(Some(options.constraints));
+            // The pipeline `RenderView` rejects unbounded constraints (they
+            // come from a window surface). Seed a tight box of the finite
+            // `view_size` already computed above — unbounded axes fall back
+            // to 800×600 — and let the widget harness loosen if the caller
+            // asked for non-tight layout.
+            owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
+                px(view_size.0),
+                px(view_size.1),
+            ))));
         });
 
         // The PIPELINE step, deliberately not a whole scheduler frame — see

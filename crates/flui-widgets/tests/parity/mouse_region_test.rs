@@ -807,11 +807,15 @@ fn mouse_region_uses_updated_callbacks() {
 /// hit-test-transform-composition fixes land correctly through the widget →
 /// render-object wiring `MouseRegion` uses.
 ///
-/// Geometry: the unscaled child (`SizedBox(150, 100)`) lays out at local
-/// `(0,0)-(150,100)`; `Transform::scale` defaults to `Alignment::CENTER`
-/// (matching Flutter's `Transform.scale` factory), pivoting on the child's
-/// own center `(75, 50)`. The scaled absolute span is therefore `x:
-/// [75-150, 75+150] = [-75, 225]`, `y: [50-100, 50+100] = [-50, 150]`.
+/// Geometry: Flutter's `'works with transform'` wraps the scale in
+/// `Center` so the scaled span sits inside the test surface (a
+/// `RenderView` clips hit-testing to its box — negative coordinates
+/// never reach the child). Unscaled child `SizedBox(150, 100)` centered
+/// in the 400×400 view sits at `(125, 150)–(275, 250)`; `Transform::scale`
+/// defaults to `Alignment::CENTER` (matching Flutter's `Transform.scale`
+/// factory), pivoting on `(200, 200)`. The scaled hit span is therefore
+/// `x: [50, 350]`, `y: [100, 300]`. Probes match the oracle's
+/// `topLeft ± Offset(1, 1)` / `bottomLeft ± Offset(1, ±1)`.
 ///
 /// Flutter parity: `'works with transform'` — the `delta`-field assertion
 /// has no port (see the module doc); the equally strong substitute checks
@@ -823,45 +827,44 @@ fn hit_test_transitions_correctly_through_a_2x_transform_scale() {
         (Rc::clone(&events), Rc::clone(&events), Rc::clone(&events));
 
     let laid = harness::pump_widget(
-        Transform::scale(2.0, 2.0).child(
-            MouseRegion::new()
-                .on_enter(move |_d, p| on_enter.borrow_mut().push(("enter", p)))
-                .on_hover(move |_d, p| on_hover.borrow_mut().push(("hover", p)))
-                .on_exit(move |_d, p| on_exit.borrow_mut().push(("exit", p)))
-                .child(SizedBox::new(150.0, 100.0)),
+        Center::new().child(
+            Transform::scale(2.0, 2.0).child(
+                MouseRegion::new()
+                    .on_enter(move |_d, p| on_enter.borrow_mut().push(("enter", p)))
+                    .on_hover(move |_d, p| on_hover.borrow_mut().push(("hover", p)))
+                    .on_exit(move |_d, p| on_exit.borrow_mut().push(("exit", p)))
+                    .child(SizedBox::new(150.0, 100.0)),
+            ),
         ),
         crate::common::loose(400.0),
     );
 
-    // Just outside the scaled span's top-left corner (-75, -50).
-    laid.dispatch_pointer_hover(-76.0, -51.0);
+    // Just outside the scaled span's top-left corner (50, 100).
+    laid.dispatch_pointer_hover(49.0, 99.0);
     assert!(events.borrow().is_empty());
 
     // Just inside the same corner.
-    laid.dispatch_pointer_hover(-74.0, -49.0);
+    laid.dispatch_pointer_hover(51.0, 101.0);
     assert_eq!(
         events.borrow().as_slice(),
         &[
-            ("enter", offset(-74.0, -49.0)),
-            ("hover", offset(-74.0, -49.0)),
+            ("enter", offset(51.0, 101.0)),
+            ("hover", offset(51.0, 101.0)),
         ]
     );
     events.borrow_mut().clear();
 
-    // Just inside the scaled span's bottom-left corner (-75, 150).
-    laid.dispatch_pointer_hover(-74.0, 149.0);
+    // Just inside the scaled span's bottom-left corner (50, 300).
+    laid.dispatch_pointer_hover(51.0, 299.0);
     assert_eq!(
         events.borrow().as_slice(),
-        &[("hover", offset(-74.0, 149.0))]
+        &[("hover", offset(51.0, 299.0))]
     );
     events.borrow_mut().clear();
 
     // Just outside the same corner.
-    laid.dispatch_pointer_hover(-74.0, 151.0);
-    assert_eq!(
-        events.borrow().as_slice(),
-        &[("exit", offset(-74.0, 151.0))]
-    );
+    laid.dispatch_pointer_hover(51.0, 301.0);
+    assert_eq!(events.borrow().as_slice(), &[("exit", offset(51.0, 301.0))]);
 }
 
 // ── Build/rebuild safety ──────────────────────────────────────────────────
