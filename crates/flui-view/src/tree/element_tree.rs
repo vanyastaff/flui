@@ -684,17 +684,21 @@ impl ElementTree {
         self.mount_root_with_pipeline_owner(view, None, owner)
     }
 
-    /// Mount a View as the root of the tree with PipelineOwner.
+    /// Mount a View as the element-tree slab root, optionally threading a
+    /// [`PipelineCell`] into the root element before `mount`.
     ///
-    /// This method passes the PipelineOwner to the root element before
-    /// mounting, which is necessary for RenderObjectElements to create
-    /// their RenderObjects.
+    /// This is the **low-level element-tree attach** primitive. It does **not**
+    /// install [`PipelineOwner::root_id`](flui_rendering::PipelineOwner::root_id)
+    /// for an ordinary render-producing view — only
+    /// [`crate::RootRenderView`] / `RootRenderElement` owns that invariant.
+    /// Production and the headless harness therefore wrap the user view in
+    /// `RootRenderView` before calling this (`WidgetsBinding::attach_root_widget`,
+    /// `HeadlessBinding::mount_root`).
     ///
-    /// # Flutter Equivalent
-    ///
-    /// In Flutter, this corresponds to `RootWidget.attach(buildOwner,
-    /// rootElement)` combined with `_RawViewElement.mount()` which sets up
-    /// the PipelineOwner.
+    /// Callers that need a live render pipeline must use one of those
+    /// root-bootstrap APIs (or an equivalent `RootRenderView` wrap). Direct
+    /// use here remains appropriate for element-tree unit tests that never
+    /// drive layout/paint from `root_id`.
     ///
     /// # Arguments
     ///

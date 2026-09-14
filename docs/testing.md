@@ -357,7 +357,10 @@ production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 `flui_testing::HeadlessBinding` is the frame tier: a non-singleton, sleep-free
 runtime whose `pump_frame(dt)` advances a virtual `ManualClock` and runs the
 same frame the live `draw_frame` runs. Mount through `mount_root`; never
-hand-roll the bootstrap (see the map above).
+hand-roll the bootstrap (see the map above). `mount_root` wraps the caller in
+`RootRenderView` — the same production root-bootstrap path as
+`WidgetsBinding::attach_root_widget` — so `PipelineOwner.root_id` is installed
+by `RootRenderElement`, not by a post-hoc parentless-node scan.
 
 ```rust,ignore
 let mut binding = HeadlessBinding::new();

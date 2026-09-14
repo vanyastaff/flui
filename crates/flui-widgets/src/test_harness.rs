@@ -25,19 +25,23 @@ use flui_interaction::events::{
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
+use flui_types::Alignment;
 use flui_types::Offset;
 use flui_types::geometry::{Bounds, Pixels, px};
-use flui_view::{ElementNode, View};
+use flui_view::{ElementNode, RootRenderView, View};
 
 use crate::testing::{POINTER_SAMPLE_INTERVAL, PointerContacts};
+use crate::{Align, FocusRoot, GestureArenaScope};
 
 /// A mounted, laid-out widget tree.
 pub(crate) struct Harness {
     binding: HeadlessBinding,
     /// Focus owner of the exact `BuildOwner` backing this mounted tree.
     focus_manager: Rc<flui_interaction::FocusManager>,
-    /// Mounted presentation wrapper, retained as the root-swap target.
+    /// Mounted `RootRenderView`, retained as the root-swap target.
     root_element: ElementId,
+    /// Logical size seeded into the bootstrap `RootRenderView`.
+    root_view_size: (f32, f32),
     /// Concrete type of the caller's logical root below presentation
     /// infrastructure. Element-structure probes resolve this node lazily.
     logical_root_type: TypeId,
@@ -157,18 +161,21 @@ pub(crate) fn mount_with_capabilities(
             (None, None, None)
         };
 
-    let root = crate::GestureArenaScope::new(binding.arena().clone(), crate::FocusRoot::new(root));
+    let scoped = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
+    let root = Align::new(Alignment::TOP_LEFT).child(scoped);
     let mounted = binding.mount_root(
         &root,
         owners,
         MountOptions::tight(800.0, 600.0).with_capabilities(capabilities),
     );
     let root_element = mounted.root_element;
+    let root_view_size = mounted.root_view_size;
 
     Harness {
         binding,
         focus_manager,
         root_element,
+        root_view_size,
         logical_root_type,
         pipeline_owner,
         cursor_area_calls,
@@ -339,10 +346,9 @@ impl Harness {
     /// the root's *type* must not change between frames. Toggling a field on one
     /// root type is how a subtree gets unmounted.
     pub(crate) fn swap_root(&mut self, new_root: impl View) {
-        let root = crate::GestureArenaScope::new(
-            self.binding.arena().clone(),
-            crate::FocusRoot::new(new_root),
-        );
+        let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
+        let aligned = Align::new(Alignment::TOP_LEFT).child(scoped);
+        let root = RootRenderView::new(aligned, self.root_view_size.0, self.root_view_size.1);
         self.binding.swap_root_view(self.root_element, &root);
         self.binding.pump_frame(Duration::ZERO);
     }

@@ -33,7 +33,7 @@
 //!   `PipelineCell`, so `pump_frame` also drains the build inbox
 //!   (`BuildOwner::build_scope`) and lays out / paints / composites
 //!   (`PipelineOwner::run_frame`). The binding does **not** mount or root the
-//!   tree — that bootstrap (root discovery, `set_root_constraints`) is
+//!   tree — that bootstrap (`RootRenderView` wrap, root constraints) is
 //!   embedder/harness policy; `with_tree` receives owners already mounted, rooted,
 //!   and laid out.
 //!

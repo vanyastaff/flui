@@ -37,6 +37,8 @@
 //!     MountOwners::fresh(),
 //!     MountOptions::tight(800.0, 600.0),
 //! );
+//! // `mounted.root_element` is the RootRenderView; `content_element` is the
+//! // GestureArenaScope the caller passed in.
 //! assert!(mounted.painted);
 //! ```
 
@@ -45,9 +47,31 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_types::Size;
 use flui_types::geometry::px;
-use flui_view::{BuildOwner, ElementId, ElementTree, View};
+use flui_view::{BuildOwner, ElementId, ElementTree, RootRenderView, View};
 
 use crate::HeadlessBinding;
+
+/// Seed size for the headless [`RootRenderView`] when mount constraints are
+/// unbounded on an axis — matches the production
+/// `WidgetsBinding` default root-view seed (800×600).
+const DEFAULT_ROOT_VIEW_SIZE: (f32, f32) = (800.0, 600.0);
+
+/// Logical width × height seeded into [`RootRenderView`] from mount
+/// constraints' biggest size, falling back per-axis when unbounded.
+fn root_view_size(constraints: &BoxConstraints) -> (f32, f32) {
+    let biggest = constraints.biggest();
+    let width = if biggest.width.is_finite() {
+        biggest.width.0
+    } else {
+        DEFAULT_ROOT_VIEW_SIZE.0
+    };
+    let height = if biggest.height.is_finite() {
+        biggest.height.0
+    } else {
+        DEFAULT_ROOT_VIEW_SIZE.1
+    };
+    (width, height)
+}
 
 /// The three owners a bootstrap consumes.
 ///
@@ -167,46 +191,57 @@ impl MountOptions {
 /// the shared render owner through the [`PipelineCell`] the caller passed in.
 #[derive(Debug, Clone)]
 pub struct Mounted {
-    /// The mounted root element — the node a root swap targets.
-    pub root_element: ElementId,
-    /// The single parentless render node, installed as the pipeline root.
+    /// The element-tree root — always a [`RootRenderView`] / `RootRenderElement`.
     ///
-    /// When the caller wraps its widget in presentation scopes (a `FocusRoot`
-    /// contributes a transparent traversal anchor), this is the *anchor*, not
-    /// the caller's own root. See [`logical_render_root`](Self::logical_render_root).
+    /// A root swap ([`HeadlessBinding::swap_root_view`]) targets this id and
+    /// must pass another [`RootRenderView`] of the same concrete child type.
+    pub root_element: ElementId,
+    /// The caller's view element — the single child of [`root_element`](Self::root_element)
+    /// after the first build. Geometry and recovery probes that talk about
+    /// "the mounted widget" want this, not the `RootRenderView` wrapper.
+    pub content_element: ElementId,
+    /// Pipeline render root — the `RenderView` installed by `RootRenderElement`
+    /// as [`PipelineOwner::root_id`](flui_rendering::PipelineOwner::root_id).
+    ///
+    /// See [`logical_render_root`](Self::logical_render_root) for the caller's
+    /// own render node below it.
     pub render_root: RenderId,
     /// Children of [`render_root`](Self::render_root), in pipeline order.
     ///
     /// Exposed rather than resolved because what counts as "the caller's own
     /// root" is presentation policy owned by the widget layer, not by this
-    /// crate.
+    /// crate (e.g. a harness may insert an `Align` loosener under the
+    /// `RenderView` before the caller's first render object). Prefer
+    /// [`logical_render_root`](Self::logical_render_root) for the common
+    /// single-child-of-`RenderView` case.
     pub render_root_children: Vec<RenderId>,
+    /// Logical size seeded into the [`RootRenderView`] at bootstrap — pass the
+    /// same pair when swapping the root so the `RenderView` configuration
+    /// stays stable.
+    pub root_view_size: (f32, f32),
     /// Whether the bootstrap frame committed a layer tree. Read it through
     /// [`HeadlessBinding::layer_tree`].
     pub painted: bool,
 }
 
 impl Mounted {
-    /// The caller's own render root, for the common single-anchor shape: the
-    /// only child of [`render_root`](Self::render_root), or the anchor itself
-    /// when it has none.
+    /// The immediate child of the pipeline
+    /// [`RenderView`](flui_rendering::view::RenderView), or the `RenderView`
+    /// itself when it has none yet (a recovered `ErrorView` is render-less).
     ///
-    /// A childless anchor is a real case, not a bug — a recovered `ErrorView`
-    /// is render-less — so this reports the anchor rather than panicking, and
-    /// a caller that must distinguish the two reads
-    /// [`render_root_children`](Self::render_root_children) directly.
+    /// Widget harnesses that insert an `Align` loosener under the `RenderView`
+    /// then take that Align's child as the caller's root — see
+    /// `flui_widgets::testing::lay_out`.
     ///
     /// # Panics
     ///
-    /// If the anchor has more than one child: a presentation anchor wraps at
-    /// most one logical root, so a second child means the caller mounted
-    /// something other than the single-anchor shape this helper is for.
+    /// If the `RenderView` has more than one child.
     #[must_use]
     pub fn logical_render_root(&self) -> RenderId {
         assert!(
             self.render_root_children.len() <= 1,
-            "logical_render_root expects a presentation anchor wrapping at most one \
-             logical render root, but the mounted render root has {} children; read \
+            "logical_render_root expects the RootRenderView's RenderView to wrap at most one \
+             child, but the mounted render root has {} children; read \
              render_root_children directly for other shapes",
             self.render_root_children.len(),
         );
@@ -226,14 +261,17 @@ impl HeadlessBinding {
     /// 1. install the build capabilities named by
     ///    [`MountOptions::capabilities`] — **before** the mount, because
     ///    `init_state` asks for them during it;
-    /// 2. mount `root` inside [`enter_owner_scope`](Self::enter_owner_scope),
-    ///    so lifecycle callbacks see the same active interaction lane they see
-    ///    during [`pump_frame`](Self::pump_frame);
+    /// 2. wrap `root` in [`RootRenderView`] (same production shape as
+    ///    [`flui_view::WidgetsBinding::attach_root_widget`]) and mount it
+    ///    inside [`enter_owner_scope`](Self::enter_owner_scope), so
+    ///    `RootRenderElement` installs `PipelineOwner.root_id` and lifecycle
+    ///    callbacks see the same active interaction lane they see during
+    ///    [`pump_frame`](Self::pump_frame);
     /// 3. schedule and run the initial build pass, reconciling and mounting the
     ///    whole subtree's render objects;
-    /// 4. discover the single parentless render node;
-    /// 5. install it as the pipeline root under
-    ///    [`MountOptions::constraints`];
+    /// 4. **verify** the single parentless render node equals the already-
+    ///    installed pipeline root (the scan does not invent `root_id`);
+    /// 5. install root constraints from [`MountOptions::constraints`];
     /// 6. run the layout↔build fixpoint — the same
     ///    `run_frame_with_layout_builders` helper `pump_frame`'s pipeline step
     ///    and the live `draw_frame` use, never a bare
@@ -264,12 +302,13 @@ impl HeadlessBinding {
     /// # Panics
     ///
     /// If the mounted subtree does not produce exactly one parentless render
-    /// node, or if the bootstrap frame fails. Both are regressions in code
-    /// under test, and both are loud on purpose: a harness that swallowed them
-    /// would report a tree that never rendered as a passing test.
-    pub fn mount_root(
+    /// node equal to `PipelineOwner.root_id`, or if the bootstrap frame fails.
+    /// Both are regressions in code under test, and both are loud on purpose:
+    /// a harness that swallowed them would report a tree that never rendered
+    /// as a passing test.
+    pub fn mount_root<V: View + Clone + 'static>(
         &mut self,
-        root: &dyn View,
+        root: &V,
         owners: MountOwners,
         options: MountOptions,
     ) -> Mounted {
@@ -292,37 +331,63 @@ impl HeadlessBinding {
             }
         }
 
+        let view_size = root_view_size(&options.constraints);
+        let root_render_view = RootRenderView::new(root.clone(), view_size.0, view_size.1);
+
         let root_element = self.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
-                root,
+                &root_render_view,
                 Some(pipeline_owner.clone()),
                 &mut build_owner.element_owner_mut(),
             );
             // Reconcile and mount the whole subtree: children's render objects
-            // attach to their parents during this pass.
+            // attach under the RenderView during this pass.
             build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
             build_owner.build_scope(&mut tree);
             root_element
         });
 
+        let content_element = {
+            let kids = tree
+                .get(root_element)
+                .expect("BUG: RootRenderView element must remain after mount build")
+                .child_ids();
+            assert_eq!(
+                kids.len(),
+                1,
+                "RootRenderView must reconcile exactly one content child after the \
+                 bootstrap build; got {}",
+                kids.len(),
+            );
+            kids[0]
+        };
+
         let (render_root, render_root_children) = pipeline_owner.with(|owner| {
+            let installed = owner
+                .root_id()
+                .expect("BUG: RootRenderElement must install PipelineOwner.root_id during mount");
             let render_tree = owner.render_tree();
             let mut roots = render_tree
                 .iter()
                 .map(|(id, _)| id)
                 .filter(|id| render_tree.parent(*id).is_none());
-            let root = roots
+            let discovered = roots
                 .next()
                 .expect("the mounted subtree must have a render root");
             assert!(
                 roots.next().is_none(),
                 "expected exactly one parentless render node after mount",
             );
-            (root, render_tree.children(root).to_vec())
+            assert_eq!(
+                discovered, installed,
+                "parentless render node must equal PipelineOwner.root_id — \
+                 HeadlessBinding must not invent a pipeline root by scanning",
+            );
+            (installed, render_tree.children(installed).to_vec())
         });
 
         pipeline_owner.with_mut(|owner| {
-            owner.set_root_id(Some(render_root));
+            // RootRenderElement already set root_id; only constraints remain.
             // Fresh root constraints mark the root dirty for the frame below.
             owner.set_root_constraints(Some(options.constraints));
         });
@@ -358,8 +423,10 @@ impl HeadlessBinding {
 
         Mounted {
             root_element,
+            content_element,
             render_root,
             render_root_children,
+            root_view_size: view_size,
             painted,
         }
     }
