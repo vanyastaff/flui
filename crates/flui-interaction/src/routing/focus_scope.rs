@@ -126,7 +126,12 @@ pub enum FocusTreeError {
 /// Result of a node-level focus request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusRequestOutcome {
-    /// The node became primary focus.
+    /// Accepted — applied immediately, or, when requested from inside a
+    /// focus-change listener, queued and applied after the in-flight
+    /// notification completes (see `FocusManager`'s notification-ordering
+    /// contract). Does not by itself mean the node has primary focus yet:
+    /// for a queued request, `has_primary_focus()` only becomes true once
+    /// the notification that queued it finishes.
     Focused,
     /// The node is detached; the request will be fulfilled when it attaches.
     Queued,
@@ -147,7 +152,7 @@ pub enum FocusDetachOutcome {
     OwnerClosed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ManagerBinding {
     Unbound,
     Bound(Weak<FocusManager>),
@@ -653,8 +658,15 @@ impl FocusNode {
 
     pub(crate) fn notify_listeners_after_tree_change(&self) {
         let listeners = self.listeners.borrow().clone();
-        for (_, listener) in listeners {
-            listener();
+        for (id, listener) in listeners {
+            // Mirrors `FocusManager::notify_listeners`: a listener removed
+            // by an earlier one in this same dispatch (itself included) is
+            // never called, matching Flutter's
+            // `_HighlightModeManager.notifyListeners` contract.
+            let still_registered = self.listeners.borrow().iter().any(|(held, _)| *held == id);
+            if still_registered {
+                listener();
+            }
         }
     }
 
@@ -708,11 +720,23 @@ impl FocusNode {
     }
 
     /// Request focus, queueing the request while detached.
+    ///
+    /// A request accepted while attached is either applied immediately or,
+    /// when made from inside a focus-change listener, queued and applied
+    /// after the in-flight notification completes (see `FocusManager`'s
+    /// notification-ordering contract) — both return
+    /// [`FocusRequestOutcome::Focused`].
     pub fn request_focus(self: &Rc<Self>) -> FocusRequestOutcome {
         if !self.can_request_focus() {
             return FocusRequestOutcome::Rejected;
         }
-        match &*self.manager_binding.borrow() {
+        // Clone the binding out of the `RefCell` before acting on it: the
+        // `Bound` arm below calls into the manager, which can (through a
+        // reentrant focus listener) close this same manager and tombstone
+        // this very node — a nested `manager_binding.borrow_mut()` while
+        // this match's scrutinee borrow were still held would panic.
+        let binding = self.manager_binding.borrow().clone();
+        match binding {
             ManagerBinding::Unbound => {
                 self.pending_focus_request.set(true);
                 FocusRequestOutcome::Queued
