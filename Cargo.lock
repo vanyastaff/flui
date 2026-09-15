@@ -2135,6 +2135,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ui-events",
+ "ui-events-winit",
  "wasm-bindgen",
  "web-sys",
  "web-time",
@@ -5978,6 +5979,17 @@ dependencies = [
  "dpi",
  "keyboard-types",
  "kurbo",
+]
+
+[[package]]
+name = "ui-events-winit"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de12c5f7e256ff97aa9a710a5e2fb345bb59302c98d77a3d2f249100d92145d4"
+dependencies = [
+ "ui-events",
+ "web-time",
+ "winit",
 ]
 
 [[package]]

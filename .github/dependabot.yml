@@ -28,6 +28,16 @@ updates:
       accesskit-cohort:
         patterns: ["accesskit", "accesskit_*"]
         update-types: ["major", "minor", "patch"]
+      # ui-events-winit pins the ui_events shape it converts winit's native
+      # keyboard/pointer types into (`ui-events-winit/src/keyboard.rs`
+      # matches on `ui_events::keyboard::{Code, Key, Location, ...}`
+      # variants by name). A 0.x minor of either crate alone can rename or
+      # add a variant the other side does not yet know about — same
+      # coupled-0.x-minors hazard as the accesskit cohort above — so both
+      # move together. Listed before `patch-and-minor` so it wins the match.
+      ui-events-cohort:
+        patterns: ["ui-events", "ui-events-winit"]
+        update-types: ["major", "minor", "patch"]
       # Group patch + minor bumps into one PR per cycle — reduces noise; major
       # bumps still surface as individual PRs for review.
       patch-and-minor:

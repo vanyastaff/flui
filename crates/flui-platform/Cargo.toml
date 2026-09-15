@@ -38,6 +38,18 @@ dpi = "0.1"
 # Windowing (for platform implementations)
 winit = { workspace = true, optional = true }
 
+# The ecosystem bridge from winit's native event types to our canonical
+# `ui_events`/`keyboard-types` vocabulary (Masonry ships it too) — the winit
+# backend's whole keyboard event (code, logical key, location, state,
+# repeat, modifiers) delegates to it entirely rather than hand-assembling
+# any of those fields here. See ARCHITECTURE.md §Mapping decisions for why
+# the Win32 and AppKit backends keep their own hand-written `Code`/`Key`
+# tables instead of also delegating. Pins `winit ^0.30`; if the workspace
+# winit pin needs to move to 0.31 before this crate follows, patch it via
+# `[patch.crates-io]` pointing at the upstream git repo (and add that repo
+# to `deny.toml`'s `sources.allow-git`) rather than reviving a hand table.
+ui-events-winit = { version = "0.3", optional = true }
+
 # Clipboard (for winit backend)
 arboard = { workspace = true, optional = true }
 
@@ -183,7 +195,7 @@ a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
-winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel"]
+winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel", "dep:ui-events-winit"]
 
 # Web platform
 # Honest note (verified 2026-08-04): no-op selector — zero
