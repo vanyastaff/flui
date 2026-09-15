@@ -25,14 +25,18 @@
 //! around its own transient-callback loop, and `handleDrawFrame`'s `finally`
 //! resets it to `SchedulerPhase.idle` — but `_invokeFrameCallback` wraps
 //! EVERY individual transient/persistent/post-frame callback in its own
-//! `FlutterError`-reporting boundary, so a throwing callback never unwinds
-//! Dart's call stack at all. Those `finally` blocks exist for symmetry with
-//! `handleDrawFrame`'s pipeline-exception handling, not because a callback
-//! panic ever reaches them. FLUI does not isolate per callback — a panic
-//! here poisons and propagates the whole frame, unchanged by this issue —
-//! so what these tests pin is narrower than Flutter's contract: the
-//! scheduler's OWN bookkeeping closes cleanly no matter which phase raised
-//! the panic, while the panic itself still escapes to the caller.
+//! `FlutterError`-reporting boundary, and `drawFrame()` — the pipeline's own
+//! equivalent — is itself registered and invoked as a persistent callback
+//! through that SAME boundary (`rendering/binding.dart:61`, `:557-558`), so
+//! no callback's exception, `drawFrame`'s included, ever unwinds Dart's call
+//! stack far enough to reach either `finally` at all. Per-callback isolation
+//! is what the source actually shows holding there; each `finally` covers
+//! whatever else could still escape past it. FLUI does not isolate per
+//! callback — a panic here poisons and propagates the whole frame, unchanged
+//! by this issue — so what these tests pin is narrower than Flutter's
+//! contract: the scheduler's OWN bookkeeping closes cleanly no matter which
+//! phase raised the panic, while the panic itself still escapes to the
+//! caller.
 
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -180,6 +184,12 @@ fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
         1,
         "the preserved sibling survives to the next frame, exactly once"
     );
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the completion waiter's notifier was drained by the abort; a later, unrelated \
+         clean frame must not wake it a second time"
+    );
 }
 
 // ── Mid-frame microtask ─────────────────────────────────────────────────
@@ -221,6 +231,12 @@ fn mid_frame_microtask_panic_closes_the_frame_and_preserves_its_sibling() {
         sibling_ran.load(Ordering::SeqCst),
         1,
         "the preserved microtask survives to the next frame, exactly once"
+    );
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the completion waiter's notifier was drained by the abort; a later, unrelated \
+         clean frame must not wake it a second time"
     );
 }
 
@@ -272,6 +288,12 @@ fn build_priority_task_panic_closes_the_frame_and_preserves_its_sibling() {
         "the preserved task survives to the next frame, exactly once"
     );
     assert_eq!(scheduler.task_queue().len(), queue_len_before);
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the completion waiter's notifier was drained by the abort; a later, unrelated \
+         clean frame must not wake it a second time"
+    );
 }
 
 // ── Persistent callback ─────────────────────────────────────────────────
@@ -338,6 +360,12 @@ fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_open
         1,
         "the recovered frame reaches its own pipeline"
     );
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the completion waiter's notifier was drained by the abort; a later, unrelated \
+         clean frame must not wake it a second time"
+    );
 }
 
 // ── Async future poll ───────────────────────────────────────────────────
@@ -352,6 +380,25 @@ impl Future for PanicsOnPoll {
     }
 }
 
+/// A future that records how many times it was polled and completes on its
+/// second poll — a well-behaved sibling spawned alongside `PanicsOnPoll`,
+/// to prove the zombie-slot fix does not corrupt the async driver's OTHER
+/// tasks, only remove the panicking one's own slot.
+struct CountedThenReady(Arc<AtomicUsize>);
+
+impl Future for CountedThenReady {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+        let polls = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        if polls >= 2 {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
 #[test]
 fn async_future_poll_panic_closes_the_frame() {
     let scheduler = UpdateScheduler::new();
@@ -359,8 +406,11 @@ fn async_future_poll_panic_closes_the_frame() {
     let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
     let pending_before = scheduler.pending_task_count();
 
-    let _token = scheduler.spawn_local(Box::pin(PanicsOnPoll));
-    assert_eq!(scheduler.pending_task_count(), pending_before + 1);
+    let sibling_polls = Arc::new(AtomicUsize::new(0));
+    let _panicking_token = scheduler.spawn_local(Box::pin(PanicsOnPoll));
+    let _sibling_token =
+        scheduler.spawn_local(Box::pin(CountedThenReady(Arc::clone(&sibling_polls))));
+    assert_eq!(scheduler.pending_task_count(), pending_before + 2);
 
     let payload = catch_unwind(AssertUnwindSafe(|| {
         scheduler.drive_frame(Instant::now(), far_deadline(), || {});
@@ -375,15 +425,37 @@ fn async_future_poll_panic_closes_the_frame() {
         completion_future,
         &completion_counter,
     );
+    // The panicking future's own slot is gone; the well-behaved sibling's
+    // is not -- only one of the two tasks the driver held is a zombie.
     assert_eq!(
         scheduler.pending_task_count(),
-        pending_before,
-        "the panicking future's slot must not be left as a zombie (issue #1057)"
+        pending_before + 1,
+        "the panicking future's slot must not be left as a zombie (issue #1057), but the \
+         sibling task must still be tracked"
+    );
+    assert_eq!(
+        sibling_polls.load(Ordering::SeqCst),
+        0,
+        "the sibling is polled in ascending task-id order, after the panicking one -- \
+         it must not have been reached in the frame that aborted"
     );
 
-    // A later frame's async-driver step does not touch the removed slot.
+    // A later frame's async-driver step does not touch the removed slot,
+    // and it polls the sibling normally -- exactly once, since one poll
+    // (of the two `CountedThenReady` needs) happens per frame.
     scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    assert_eq!(scheduler.pending_task_count(), pending_before);
+    assert_eq!(scheduler.pending_task_count(), pending_before + 1);
+    assert_eq!(
+        sibling_polls.load(Ordering::SeqCst),
+        1,
+        "the sibling must be polled on the very next frame, exactly once"
+    );
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the completion waiter's notifier was drained by the abort; a later, unrelated \
+         clean frame must not wake it a second time"
+    );
 }
 
 // ── Owner-local-lane entry point ────────────────────────────────────────
@@ -422,6 +494,12 @@ fn transient_callback_panic_recovers_identically_through_drive_frame_with_lane()
         .expect("lane is alive after recovery");
     scheduler.drive_frame_with_lane(Instant::now(), far_deadline(), || {}, &lane);
     assert_eq!(local_ran.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the completion waiter's notifier was drained by the abort; a later, unrelated \
+         clean frame must not wake it a second time"
+    );
 }
 
 // ── execute_frame (ALT-1: the no-pipeline convenience path) ────────────
@@ -455,6 +533,12 @@ fn transient_callback_panic_recovers_identically_through_execute_frame() {
     }));
     scheduler.execute_frame();
     assert_eq!(post_frame_ran.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the completion waiter's notifier was drained by the abort; a later, unrelated \
+         clean frame must not wake it a second time"
+    );
 }
 
 // ── Idle work and post-frame callbacks are not starved by recovery ─────
@@ -490,5 +574,51 @@ fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_rec
         post_frame_ran.load(Ordering::SeqCst),
         1,
         "a clean frame after recovery still runs its post-frame callbacks"
+    );
+}
+
+// ── A secondary panic during abort must not displace the original one ──
+
+struct PanicWaker;
+
+impl Wake for PanicWaker {
+    fn wake(self: Arc<Self>) {
+        panic!("waker probe");
+    }
+}
+
+/// `drive_frame_impl`'s `Err` arm calls `abort_frame`, which calls
+/// `notify_frame_completion` -- and a panicking waker there is a SECOND,
+/// unrelated panic on top of the pipeline's own. Without containing it,
+/// `abort_frame()` itself panics with the waker's payload before ever
+/// reaching `resume_unwind(payload)`, so the caller observes the waker's
+/// panic instead of the pipeline's -- the ORIGINAL failure this frame was
+/// actually reporting is lost.
+#[test]
+fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort() {
+    let scheduler = UpdateScheduler::new();
+    let mut future = scheduler.end_of_frame();
+    let panic_waker = Waker::from(Arc::new(PanicWaker));
+    let mut cx = Context::from_waker(&panic_waker);
+    assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        scheduler.drive_frame(Instant::now(), far_deadline(), || {
+            panic!("probe frame panic")
+        })
+    }))
+    .expect_err("a panic must still escape drive_frame");
+
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("probe frame panic"),
+        "the ORIGINAL pipeline panic must survive a panicking waker inside \
+         abort_frame's own notify_frame_completion, not be displaced by it"
+    );
+    assert_eq!(
+        scheduler.phase(),
+        SchedulerPhase::Idle,
+        "the phase reset inside abort_frame happens before notify_frame_completion \
+         runs, so it must hold regardless of the waker's own panic"
     );
 }

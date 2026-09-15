@@ -2184,6 +2184,7 @@ dependencies = [
  "dashmap",
  "event-listener",
  "flui-foundation",
+ "flui-testing",
  "parking_lot",
  "serde",
  "static_assertions",

@@ -339,46 +339,97 @@ impl TaskQueue {
         self.len() == 0
     }
 
-    /// Execute tasks at or above `min_priority`, one at a time.
+    /// Execute tasks at or above `min_priority`, one at a time, bounded to
+    /// the tasks already queued when THIS call started.
     ///
-    /// Each iteration takes the queue lock only long enough to peek the top
-    /// entry and, if it still meets `min_priority`, pop it — the same
+    /// Each iteration takes the queue lock only long enough to pop one
+    /// eligible task and execute it OUTSIDE the lock — the same
     /// pop-one-under-lock, execute-outside-it shape [`Self::pop`] and
-    /// `UpdateScheduler::flush_microtasks` use — rather than draining the
+    /// `UpdateScheduler::flush_microtasks` use, rather than draining the
     /// whole matching run into a batch before executing any of it. A task
-    /// that panics then loses only itself: every task still behind it in
-    /// the heap (same priority, queued later, or a HIGHER priority task a
-    /// sibling's own callback added mid-loop) stays queued for the next
-    /// call to see, instead of already being removed from the heap by this
-    /// call's own batch drain and lost with it (issue #1057). The atomic
-    /// `len` mirror is decremented per pop, inside the same critical
-    /// section as the pop itself — matching `add_task`/`pop`'s ordering, so
-    /// a panic mid-loop cannot leave `len()` under- or over-reporting the
-    /// heap's real size.
+    /// that panics loses only itself: every task still behind it stays
+    /// queued for the next call to see, instead of already being removed
+    /// from the heap by this call's own batch drain and lost with it
+    /// (issue #1057). The atomic `len` mirror is decremented per pop,
+    /// inside the same critical section as the pop itself — matching
+    /// `add_task`/`pop`'s ordering, so a panic mid-loop cannot leave
+    /// `len()` under- or over-reporting the heap's real size.
     ///
-    /// Preserves the priority-threshold semantics exactly: stops the moment
-    /// the highest remaining priority in the heap no longer meets
-    /// `min_priority`, identically to the batched version this replaced.
+    /// # The id watermark
+    ///
+    /// Simply re-peeking the live heap until its top drops below
+    /// `min_priority` is NOT equivalent to the batched version this
+    /// replaced: a task that enqueues another task of its own during this
+    /// same call would be visible to that live re-peek and run in the SAME
+    /// call, with nothing bounding a chain that keeps re-enqueuing itself
+    /// (measured: a self-re-enqueuing `Priority::Build` task ran 500+
+    /// times in one `execute_until` call and never returned, hanging the
+    /// frame — the caller's own reentrant-pass cap in `handle_draw_frame`
+    /// never got a chance to fire, since it only runs BETWEEN calls to this
+    /// method). Task ids are minted from one monotonic counter
+    /// (`next_task_id`), so this call reads the highest id currently
+    /// queued ONCE, under the first lock acquisition, before running
+    /// anything, and then only pops a task whose id is `<=` that watermark.
+    /// A task enqueued reentrantly during this call always gets a strictly
+    /// greater id and is left queued for the NEXT call to see — exactly
+    /// what the batched snapshot this replaced also guaranteed, since it
+    /// popped its whole matching run into a `Vec` before invoking any of
+    /// it. Because ids are independent of priority, a freshly-enqueued
+    /// task of the SAME or a HIGHER priority than something still-eligible
+    /// and lower in this call's own watermarked set does not stop the scan
+    /// early: it is popped, set aside, and the scan continues past it —
+    /// only the top's priority against `min_priority` ends the scan, same
+    /// as before.
+    ///
+    /// Preserves the priority-threshold semantics exactly: stops the
+    /// moment the highest remaining ELIGIBLE priority no longer meets
+    /// `min_priority`.
     ///
     /// Returns the number of tasks executed before returning — a panic
     /// propagates past this method with that count short of the full
     /// matching run; the caller observes the panic, not a partial count.
     pub fn execute_until(&self, min_priority: Priority) -> usize {
+        // Read the watermark under its own lock acquisition, before
+        // anything runs. `None` means the queue was empty at entry -- no
+        // watermark, nothing to do.
+        let watermark = {
+            let queue = self.queue.lock();
+            queue.iter().map(|pt| pt.0.id.get()).max()
+        };
+        let Some(watermark) = watermark else {
+            return 0;
+        };
+
         let mut executed = 0usize;
+        // Tasks popped past because they exceed `watermark` (reentrant
+        // additions from a task this call already ran) -- re-queued once,
+        // after the scan, rather than immediately: pushing back into the
+        // SAME heap we are still popping from would let a later iteration
+        // of this very call see it again if it happens to sort back to the
+        // top, defeating the watermark.
+        let mut deferred: Vec<PriorityTask> = Vec::new();
         loop {
             let task = {
                 let mut queue = self.queue.lock();
-                match queue.peek() {
-                    Some(pt) if pt.0.priority >= min_priority => {
-                        let popped = queue.pop().expect(
-                            "BUG: peek returned Some under the same lock, so pop must succeed",
-                        );
-                        // Decrement inside the critical section — matches
-                        // add_task / pop ordering.
-                        self.len.fetch_sub(1, AtomicOrdering::AcqRel);
-                        Some(popped.0)
+                loop {
+                    match queue.peek() {
+                        Some(pt) if pt.0.priority >= min_priority => {
+                            let popped = queue.pop().expect(
+                                "BUG: peek returned Some under the same lock, so pop must \
+                                 succeed",
+                            );
+                            // Decrement inside the critical section —
+                            // matches add_task / pop ordering, regardless
+                            // of whether this pop turns out to be eligible
+                            // or deferred: either way it left the heap here.
+                            self.len.fetch_sub(1, AtomicOrdering::AcqRel);
+                            if popped.0.id.get() <= watermark {
+                                break Some(popped.0);
+                            }
+                            deferred.push(popped);
+                        }
+                        _ => break None,
                     }
-                    _ => None,
                 }
             };
             let Some(task) = task else {
@@ -386,6 +437,17 @@ impl TaskQueue {
             };
             task.execute();
             executed += 1;
+        }
+
+        if !deferred.is_empty() {
+            let mut queue = self.queue.lock();
+            let count = deferred.len();
+            for pt in deferred {
+                queue.push(pt);
+            }
+            // Re-added inside the critical section — matches add_task's
+            // own ordering.
+            self.len.fetch_add(count, AtomicOrdering::AcqRel);
         }
         executed
     }

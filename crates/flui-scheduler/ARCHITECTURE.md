@@ -45,24 +45,60 @@ silently reopen the same gap later.
 **Per-queue policy, so "closed" does not also mean "lossy":** every queue
 this scheduler drains before the pipeline runs now pops one entry at a time
 and invokes it OUTSIDE the queue's lock, rather than draining a whole
-matching batch into a local buffer before running any of it:
+matching batch into a local buffer before running any of it. Each is bounded
+by an id watermark, not a remaining-iteration COUNT: a count survives neither
+a reentrant registration nor a cancellation interleaved with one (both
+measured regressions, below), while an id — minted once, monotonically, at
+registration time — is a property of the entry itself that no sibling
+mutation can change out from under it.
 
 - `handle_begin_frame`'s transient-callback loop pops from the front of
   `CallbackState::transient` (now a `VecDeque`, not a `Vec`, to make the pop
-  O(1) — the same reason `flush_microtasks` already used one) — but bounded
-  to the queue's length AT ENTRY, read once before invoking anything, not
-  "until empty": a callback that registers another transient callback of
-  its own from inside itself must still have the new one deferred to the
-  NEXT frame (issue #1058's reentrant-registration contract), and looping
-  "until empty" would reach that newly-appended entry in the same call.
-- [`TaskQueue::execute_until`](../../crates/flui-scheduler/src/task.rs) pops
-  the top of the heap only while it still meets the priority threshold,
-  one task at a time, instead of draining the whole matching run into a
-  batch first. The atomic `len` mirror decrements per pop (inside the same
-  critical section as the pop), matching `add_task`/`pop`'s existing
-  ordering, so a panic mid-loop cannot leave it under- or over-reporting.
-- `flush_microtasks` already had this shape and needed no change; it is the
-  model the other two now follow.
+  O(1) — the same reason `flush_microtasks` already used one), bounded by
+  the id of the LAST (`back()`) entry queued at entry, read once before
+  invoking anything: `CallbackId`s are minted from this scheduler's own
+  monotonic `id_gen` in registration order, so `back().id` at entry is
+  exactly the highest id already queued, in O(1) — no scan needed, since a
+  `VecDeque` already keeps registration order. A callback that registers
+  another transient callback of its own from inside itself must still have
+  the new one deferred to the NEXT frame (issue #1058's reentrant-
+  registration contract): the fresh entry always gets a strictly greater id
+  and is excluded by `front().id <= watermark` regardless of where it lands.
+  A remaining-COUNT bound (tried first, and wrong) does not survive
+  cancellation: a callback that cancels a not-yet-run sibling
+  (`cancel_frame_callback` removes it from the live queue directly, #1156)
+  and registers a fresh one in its place leaves the queue's LENGTH
+  unchanged from that callback's own perspective, so a count budget still
+  reaches the fresh entry in the SAME call — measured: it ran in the same
+  frame it was registered in.
+- [`TaskQueue::execute_until`](src/task.rs) pops the top of the heap only
+  while it still meets the priority threshold, one task at a time, bounded
+  by the highest `Task::id` present in the heap at entry — read once, under
+  the SAME first lock acquisition, by scanning the heap (`BinaryHeap` does
+  not track insertion order the way a `VecDeque` does, so this one costs an
+  O(n) scan the transient-callback bound does not). Task ids are minted
+  from one process-wide monotonic counter, so a task enqueued reentrantly
+  during the call always exceeds the watermark. Because ids are independent
+  of priority, a fresh task of the SAME or a HIGHER priority than something
+  still-eligible does not end the scan early: an ineligible pop is set aside
+  in a side buffer and the scan continues past it, re-queuing everything set
+  aside only once the scan itself is done. A remaining-COUNT bound (tried
+  first, and wrong) does not survive genuine reentrancy at all: simply
+  re-peeking the live heap until its top drops below the threshold lets a
+  self-re-enqueuing task run without limit inside ONE call — measured: 500+
+  executions and no return, hanging the frame, because `handle_draw_frame`'s
+  own `MAX_BUILD_REENTRY_PASSES` cap only ever fires BETWEEN calls to this
+  method and never got the chance.
+- `flush_microtasks` already had a pop-one-under-lock shape (the model the
+  other two now follow for that part). It carries no id watermark: no
+  reentrant-registration contract is documented for microtasks the way
+  issue #1058 documents one for transient callbacks, and no test has found
+  a same-frame-reentrancy gap there. Not a claim that one could not exist —
+  only that this round measured two concrete regressions (transient,
+  `TaskQueue`) and fixed those; a microtask that registers another
+  microtask from inside itself running within the SAME `flush_microtasks`
+  call is the current, unaudited behavior, named here rather than silently
+  assumed correct.
 
 The result: **the panicking entry itself is consumed; every entry still
 queued behind it is preserved and runs on the next completed frame — not
@@ -122,17 +158,51 @@ catch-then-resume shape for a panicking post-frame callback.
 **Honest Flutter comparison:** `.flutter/packages/flutter/lib/src/scheduler/binding.dart`
 @ 3.44.0 cannot unwind out of either `handleBeginFrame` or `handleDrawFrame`
 at all — `_invokeFrameCallback` wraps every individual transient/
-persistent/post-frame callback in its own `FlutterError`-reporting
-boundary, so a throwing callback never unwinds Dart's call stack; their
-`finally { _schedulerPhase = ... }` blocks exist for symmetry with
-`handleDrawFrame`'s pipeline-exception handling, not because a callback
-panic ever reaches them. FLUI does not isolate per callback — this issue
+persistent/post-frame callback in its own `FlutterError`-reporting boundary,
+and `drawFrame()` — the pipeline's own equivalent — is itself registered and
+invoked as a persistent callback through that SAME boundary
+(`rendering/binding.dart:61`, `:557-558`), so no callback's exception,
+`drawFrame`'s included, ever unwinds Dart's call stack far enough to reach
+either `finally { _schedulerPhase = ... }` at all. Per-callback isolation is
+what the source actually shows holding there; each `finally` covers whatever
+else could still escape past it — the source does not say what that is, and
+neither does this entry. FLUI does not isolate per callback — this issue
 does not change that, and does not attempt to (see
 `docs/PANIC-POLICY.md` and the port-check/doc note this crate already
 carries on the topic) — a panic here still poisons and propagates the
 whole frame. What this issue closes is narrower and Rust-specific: the
 scheduler's OWN bookkeeping must never be left half-closed by an unwind it
 did not choose to isolate.
+
+**A secondary panic during recovery never displaces the original one.**
+Two distinct sites can themselves panic while THIS issue's own recovery
+runs, both discovered by review after the first pass shipped:
+
+- `drive_frame_impl`'s `Err` arm calls `abort_frame`, which calls
+  `notify_frame_completion` — and a panicking waker there is a second panic
+  on top of the pipeline's (or `handle_begin_frame`/`handle_draw_frame`'s)
+  own. `abort_frame` is now called inside its OWN `catch_unwind`; a
+  secondary panic is traced at `error` level and the ORIGINAL payload is
+  what `resume_unwind`s, always — measured before the fix: the escaped
+  panic was the waker's, not the frame's, silently losing whichever failure
+  the frame was actually reporting.
+- `end_frame_impl`'s CLEAN path (`drive_frame`'s `Ok` arm) calls
+  `notify_frame_completion` OUTSIDE the post-frame callback's own
+  `catch_unwind`, so a panicking waker there used to escape straight past
+  the phase reset at the end of that function, leaving the scheduler stuck
+  at `PostFrameCallbacks` with `current_vsync_time` still set — the exact
+  class of bug this issue exists to close, just reachable from the success
+  path instead of the failure one. `notify_frame_completion` is now caught
+  there too, and folded into the SAME `callback_result`-or-`notify_result`
+  check that already ran the phase reset for a panicking post-frame
+  callback: whichever of the two panicked, the phase still closes before
+  either one resumes (the post-frame callback's payload wins if both did,
+  since it panicked earlier in this frame's own order).
+
+The general rule, in both places: **the panic that caused THIS frame to
+need recovery is never displaced by a panic the recovery itself raises
+while running.** A secondary panic is contained, logged, and never allowed
+to become the one the caller observes.
 
 **Alternatives considered:**
 

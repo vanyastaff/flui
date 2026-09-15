@@ -42,6 +42,12 @@ serde = { workspace = true, optional = true }
 [dev-dependencies]
 static_assertions.workspace = true
 criterion = { workspace = true }
+# `log_capture::capture`, which this crate's tracing-capturing tests call so a
+# sibling test cannot poison their callsites' cached interest. A dev-only
+# edge, and a dev-only CYCLE: flui-testing depends on this crate normally,
+# which cargo permits for dev-dependencies precisely so a lower crate can use
+# the test support built on it.
+flui-testing = { workspace = true }
 
 [lib]
 name = "flui_scheduler"

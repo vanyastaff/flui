@@ -361,6 +361,80 @@ fn transient_callback_registering_another_transient_callback_defers_to_next_fram
     );
 }
 
+/// Cancelling a not-yet-run sibling and registering a fresh one from inside
+/// a transient callback must not let the fresh one run in the SAME frame.
+///
+/// `cancel_frame_callback` removes the cancelled entry from the live queue
+/// directly when it is still queued (#1156's lock-then-drop fix) — so
+/// cancelling B and registering C in the same callback leaves the queue's
+/// LENGTH unchanged (minus one for B, plus one for C), even though B and C
+/// are different entries with different ids. A bound expressed as "how many
+/// entries were queued at entry" (issue #1057's own regression) is fooled by
+/// this: the length-based budget still reaches the fresh entry C, because
+/// the length looks the same as if B had simply run. An id watermark is
+/// not: C's id always exceeds whatever was queued at the start of THIS
+/// `handle_begin_frame` call, regardless of what got cancelled out from
+/// under it in between.
+#[test]
+fn transient_callback_cancelling_a_later_sibling_and_registering_a_replacement_defers_the_replacement()
+ {
+    let scheduler = UpdateScheduler::new();
+    let sibling_ran = Arc::new(AtomicU32::new(0));
+    let replacement_ran = Arc::new(AtomicU32::new(0));
+    let sibling_id_slot: Arc<Mutex<Option<CallbackId>>> = Arc::new(Mutex::new(None));
+
+    // A: registered FIRST, so it pops and runs before B. Cancels B (still
+    // queued, not yet invoked -- a "later" sibling) and registers C.
+    let cancel_scheduler = scheduler.clone();
+    let replacement_ran_for_a = Arc::clone(&replacement_ran);
+    let sibling_id_slot_for_a = Arc::clone(&sibling_id_slot);
+    scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+        let sibling_id: CallbackId = sibling_id_slot_for_a
+            .lock()
+            .expect("B must already be registered by the time A runs");
+        assert!(
+            cancel_scheduler.cancel_frame_callback(sibling_id),
+            "B must still be queued (not yet invoked) when A cancels it"
+        );
+        let replacement_ran = Arc::clone(&replacement_ran_for_a);
+        cancel_scheduler.schedule_frame_callback(Box::new(move |_| {
+            replacement_ran.fetch_add(1, Ordering::SeqCst);
+        }));
+    }));
+
+    // B: registered SECOND -- "later" than A -- and cancelled by A before
+    // it ever runs.
+    let sibling_ran_for_b = Arc::clone(&sibling_ran);
+    let sibling_id = scheduler.schedule_frame_callback(Box::new(move |_| {
+        sibling_ran_for_b.fetch_add(1, Ordering::SeqCst);
+    }));
+    *sibling_id_slot.lock() = Some(sibling_id);
+
+    scheduler.execute_frame();
+    assert_eq!(
+        sibling_ran.load(Ordering::SeqCst),
+        0,
+        "B was cancelled before it ever ran"
+    );
+    assert_eq!(
+        replacement_ran.load(Ordering::SeqCst),
+        0,
+        "C must not run in the same handle_begin_frame call that registered it"
+    );
+
+    scheduler.execute_frame();
+    assert_eq!(
+        replacement_ran.load(Ordering::SeqCst),
+        1,
+        "C must run exactly once, on the very next begin-frame"
+    );
+    assert_eq!(
+        sibling_ran.load(Ordering::SeqCst),
+        0,
+        "B, cancelled, never runs at all"
+    );
+}
+
 /// Persistent callbacks fire every frame for the lifetime of the
 /// application (Flutter parity: `SchedulerBinding.addPersistentFrameCallback`'s
 /// own doc, `scheduler/binding.dart` @ 3.44.0), so unlike the
