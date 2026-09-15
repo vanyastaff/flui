@@ -68,19 +68,28 @@ impl Wake for ResolutionLockProbe {
     }
 }
 
-/// Samples, from inside `wake()`, whether the resolution was already published
-/// to the durable state. Records rather than asserts: an assertion failure here
-/// would unwind out of `event-listener`'s notify loop, which corrupts its
-/// internal notified-counter and turns a readable test failure into an
-/// arithmetic overflow inside the dependency's `Drop`.
+/// Samples, from inside `wake()`, the state that has been published to the
+/// durable slot by the time the notification arrives. `None` means the state
+/// mutex was still held by the resolver.
+///
+/// Two deliberate choices, both about failing rather than hanging:
+///
+/// - `try_lock`, not `lock`. A resolver that notified while still holding the
+///   state guard would self-deadlock a blocking read here — the mutex is not
+///   reentrant and this runs on the resolver's own thread — and a hanging test
+///   is worse than no test. `None` turns that into a clean assertion failure.
+/// - records rather than asserts. An assertion failure here would unwind out of
+///   `event-listener`'s notify loop, which skips its notified-counter increment
+///   and turns a readable test failure into an arithmetic overflow inside the
+///   dependency's own `Drop`.
 struct PublishedBeforeNotifyProbe {
     future_inner: Arc<TickerFutureInner>,
-    observed_states: Arc<Mutex<Vec<TickerFutureState>>>,
+    observed_states: Arc<Mutex<Vec<Option<TickerFutureState>>>>,
 }
 
 impl Wake for PublishedBeforeNotifyProbe {
     fn wake(self: Arc<Self>) {
-        let published = *self.future_inner.state.lock();
+        let published = self.future_inner.state.try_lock().map(|state| *state);
         self.observed_states.lock().push(published);
     }
 }
@@ -249,7 +258,8 @@ fn an_or_cancel_poll_registers_its_listener_before_the_decisive_state_read() {
 // ---------------------------------------------------------------------------
 
 /// **Regression pin** (green before this change too). Reverting the resolution
-/// helper to notify *before* it writes the durable state reddens it.
+/// helper to notify *before* it writes the durable state reddens it, and so
+/// does notifying while the state guard is still held.
 ///
 /// Register-then-recheck is correct only because the durable state is written
 /// first; nothing else in this file can fail if that order is ever reversed.
@@ -273,10 +283,10 @@ fn the_resolution_is_published_before_the_notification() {
 
     assert_eq!(
         observed_states.lock().as_slice(),
-        &[TickerFutureState::Complete],
-        "a woken task must be able to see the resolution that woke it; a waker \
-         that reads Pending here is being notified of a state change that has \
-         not been published yet"
+        &[Some(TickerFutureState::Complete)],
+        "a woken task must be able to see the resolution that woke it: Pending \
+         means the notification outran the publication, and None means the \
+         resolver was still holding the state guard while it notified"
     );
 }
 
