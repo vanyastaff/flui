@@ -639,10 +639,24 @@ That predicate has two halves, and only the first belongs to the registry:
   at request time, and `frame_scheduled` has a second clearer besides
   `handle_begin_frame`: the public `finish_async_pump`. If a live waiter's
   demand is revoked, a later push sees that live entry, stays silent, and both
-  wait forever. `set_frames_enabled(true)`'s re-request on the disabled to
-  enabled edge is the other half of this liveness argument, not a consistency
-  nicety, and it is the only thing that can re-issue a demand nothing recorded
-  as lost.
+  wait forever. Only a frames-enabled edge can re-issue a demand that nothing
+  recorded as lost, which makes that edge the other half of this liveness
+  argument rather than a consistency nicety.
+
+  **The production carrier is `handle_app_lifecycle_state_change`**, whose
+  `if !frames_were_enabled && should_render { self.request_frame(); }` leg
+  predates this issue and is pinned by
+  `lifecycle_reenable_edge_schedules_exactly_one_frame`. That is the edge a
+  real app crosses, and the sequence is reachable rather than theoretical:
+  frames enabled, a demand issued, lifecycle goes `Hidden`, a `PumpAsync`
+  tick revokes the latch through `finish_async_pump` with no drain, later
+  registrations stay silent behind the still-live waiter, and the resume edge
+  is what recovers them. `set_frames_enabled(true)` gained the same re-request
+  so the public setter mirrors the lifecycle path rather than being a second
+  way to reach the stranded state. It has **zero production callers** today
+  (the only non-test call in the workspace passes `false`, and it is itself
+  inside a `#[cfg(test)]` module), so do not read its caller count as a
+  measure of whether this argument holds.
 
 **Alternatives considered:**
 
@@ -691,4 +705,7 @@ output type; issue #1162 carries it. A panicking `on_frame_scheduled` hook also
 loses its demand permanently, since `request_frame` sets the latch before firing
 the hook, and FLUI defines no recovery transition for that (Compose does: a
 throwing `onNewAwaiters` permanently fails the clock and resumes every current
-and future awaiter with the error). Both are named on `end_of_frame`'s own doc.
+and future awaiter with the error). The dropped-scheduler and not-fused notes
+are on `FrameCompletionFuture`'s own doc, where a caller holding the future
+will meet them; the panicking-hook note is on `end_of_frame`, which is the call
+that can reach the hook.

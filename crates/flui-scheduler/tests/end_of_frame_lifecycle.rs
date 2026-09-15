@@ -201,10 +201,20 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
 /// frame is still open at phase `PostFrameCallbacks`) must leave a frame
 /// demanded once the frame returns.
 ///
-/// This is the primary oracle for the defect four plan revisions kept
-/// reintroducing: every gate that read a scheduler phase or a per-frame
-/// "a frame is already coming" flag went silent in exactly this window and
-/// hung the fresh waiter forever.
+/// Any demand gate that reads a scheduler phase, or a per-frame "a frame is
+/// already coming" flag, goes silent in exactly this window and hangs the
+/// fresh waiter forever. That is what this pins.///
+/// # This oracle fails by HANGING, not by asserting
+///
+/// The waker calls `end_of_frame()`, which takes a real
+/// `completion_waiters` lock. Under the one regression that would hold that
+/// registry guard across the wake loop, this blocks forever and nextest
+/// reports it on the terminate-after timeout rather than in milliseconds.
+/// That is tolerable because the demand genuinely is this test's assertion,
+/// and because `completion_waker_runs_with_no_scheduler_lock_held` (in
+/// `scheduler/lock_discipline_tests.rs`) catches that same regression in
+/// its own process, fast, with a `try_lock` probe. Read a hang here as a
+/// pointer to that sibling, never as the intended signal.
 #[test]
 fn a_registration_from_inside_a_completion_waker_demands_the_next_frame() {
     let scheduler = UpdateScheduler::new();
@@ -232,7 +242,18 @@ fn a_registration_from_inside_a_completion_waker_demands_the_next_frame() {
     );
 }
 
-/// Criterion 3 — the same, on the abort path, asserting EXACTLY one demand.
+/// Criterion 3 — the same, on the abort path, asserting EXACTLY one demand.///
+/// # This oracle fails by HANGING, not by asserting
+///
+/// The waker calls `end_of_frame()`, which takes a real
+/// `completion_waiters` lock. Under the one regression that would hold that
+/// registry guard across the wake loop, this blocks forever and nextest
+/// reports it on the terminate-after timeout rather than in milliseconds.
+/// That is tolerable because the demand genuinely is this test's assertion,
+/// and because `completion_waker_runs_with_no_scheduler_lock_held` (in
+/// `scheduler/lock_discipline_tests.rs`) catches that same regression in
+/// its own process, fast, with a `try_lock` probe. Read a hang here as a
+/// pointer to that sibling, never as the intended signal.
 #[test]
 fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame() {
     let scheduler = UpdateScheduler::new();
@@ -306,6 +327,69 @@ fn many_registrations_inside_one_frame_demand_at_most_one_wake() {
         scheduler.is_frame_scheduled(),
         "and they must still leave a frame demanded -- coalescing to ZERO would be the \
          original bug wearing the coalescing label"
+    );
+}
+
+/// The suppressing branch of the demand predicate, which nothing else
+/// covers: a registration made while another waiter is still live must
+/// issue NO demand, because the frame that waiter already bought will drain
+/// both.
+///
+/// # Why the mid-frame step is the whole test
+///
+/// `request_frame`'s own `frame_scheduled` false-to-true swap edge absorbs a
+/// redundant demand, so an oracle that registers twice on an idle scheduler
+/// counts one hook edge whether the predicate suppresses or not. Opening the
+/// frame first defeats that: `handle_begin_frame` clears the latch at the
+/// top of the frame and does not drain the registry, so the second
+/// registration lands with the latch DOWN and the first waiter still live.
+/// A demand issued there is visible.
+///
+/// This passes against the unfixed `end_of_frame` too, which never demanded
+/// at all, so it is no evidence of issue #1055's defect. It is the pin on
+/// the branch the fix added: replace the predicate with a constant `false`
+/// and every other test in this crate stays green while this one fails.
+#[test]
+fn a_registration_behind_a_live_waiter_issues_no_demand_of_its_own() {
+    let scheduler = UpdateScheduler::new();
+    let edges = counting_wake_hook(&scheduler);
+
+    let mut first = scheduler.end_of_frame();
+    assert_eq!(
+        (scheduler.is_frame_scheduled(), edges.load(Ordering::SeqCst)),
+        (true, 1),
+        "the first registration demands"
+    );
+
+    scheduler.handle_begin_frame(Instant::now());
+    assert!(
+        !scheduler.is_frame_scheduled(),
+        "handle_begin_frame clears the latch at the top of the frame; without that \
+         the assertions below would be satisfied by the swap edge alone"
+    );
+    let edges_before = edges.load(Ordering::SeqCst);
+
+    let mut second = scheduler.end_of_frame();
+
+    assert_eq!(
+        (
+            scheduler.is_frame_scheduled(),
+            edges.load(Ordering::SeqCst) - edges_before
+        ),
+        (false, 0),
+        "a registration behind a live waiter must stay silent: the frame already in \
+         flight drains the whole registry, so a second demand buys a surplus frame"
+    );
+
+    // Suppressed, not stranded. The in-flight frame must resolve both.
+    scheduler.handle_draw_frame();
+    scheduler.end_frame();
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut first).poll(&mut cx).is_ready());
+    assert!(
+        Pin::new(&mut second).poll(&mut cx).is_ready(),
+        "the silent registration must still be served by the frame it declined to \
+         ask for a second time"
     );
 }
 

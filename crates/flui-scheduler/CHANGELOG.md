@@ -135,10 +135,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the demand, which is a divergence from Flutter's `endOfFrame`.
 - **`set_frames_enabled(true)` re-requests a frame on the disabled to enabled
   edge**, mirroring `handle_app_lifecycle_state_change` and Flutter's
-  `_setFramesEnabledState`. This closes the one hole in the rule above: a
-  demand issued while frames were off was dropped by
-  `schedule_frame_if_enabled` with nothing recording the loss, so every later
-  registration would see the still-live waiter and stay silent.
+  `_setFramesEnabledState`. A demand issued while frames were off is dropped
+  by `schedule_frame_if_enabled` with nothing recording the loss, and every
+  later registration then sees the still-live waiter and stays silent, so only
+  a frames-enabled edge can recover them. The edge a running app crosses is
+  the lifecycle resume leg, which has always re-requested; this setter has no
+  production callers and gains the re-request so the public surface cannot
+  reach a stranded state the lifecycle path recovers from.
 - **`FrameCompletionFuture::poll` drops the waker it displaces outside the
   shared-state lock.** A `Waker`'s `Drop` is executor code, and one that
   re-polls the same future relocked a non-reentrant `parking_lot::Mutex` and
