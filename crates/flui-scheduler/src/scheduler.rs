@@ -368,11 +368,13 @@ impl FrameCompletionRegistry {
     /// total scan work over *n* pushes in O(*n*).
     ///
     /// Phrased against the *instantaneous* live count it is false, and the
-    /// gap is not small: hold 24 waiters until a scan lifts the threshold,
-    /// drop all 24, then keep registering and cancelling, and the registry
-    /// reaches `len = 24` with `live = 0`, against a `2 * 0 + 8` budget of
-    /// 8. `the_completion_registry_compacts_within_its_amortized_bound`
-    /// asserts exactly that instant.
+    /// gap is not small: hold `3 * COMPACTION_SLACK` waiters until a scan
+    /// lifts the threshold, drop all of them, then keep registering and
+    /// cancelling, and the registry sits at `len = 3 * COMPACTION_SLACK`
+    /// with `live = 0` against a ceiling of one slack.
+    /// `the_completion_registry_compacts_within_its_amortized_bound`
+    /// asserts exactly that instant. At the shipped `COMPACTION_SLACK = 8`
+    /// that is 24 entries against a budget of 8, measured.
     ///
     /// It also does **not** buy "dead entries do not accumulate", which is
     /// a stronger claim than amortized doubling makes.
@@ -3859,10 +3861,12 @@ mod tests {
     /// therefore `len() <= 2 * peak_live + COMPACTION_SLACK`.
     ///
     /// Phrased against the *instantaneous* live count it is simply false,
-    /// and this test's own phase 2 is the counterexample: hold 24 waiters
-    /// until a scan lifts the threshold, drop all 24, then keep registering
-    /// and cancelling. That reaches `len = 24, live = 0` against a
-    /// `2 * 0 + 8` budget of 8, which the test asserts outright.
+    /// and this test's own phase 2 is the counterexample: hold
+    /// `3 * COMPACTION_SLACK` waiters until a scan lifts the threshold,
+    /// drop all of them, then keep registering and cancelling. That reaches
+    /// `len = 3 * COMPACTION_SLACK` with `live = 0`, against a
+    /// `2 * 0 + COMPACTION_SLACK` budget of one slack, which the test
+    /// asserts outright.
     ///
     /// The peak-relative bound is still the useful one: every entry the
     /// registry holds is bounded by a constant factor of a population that
@@ -3870,20 +3874,58 @@ mod tests {
     /// in the number of registrations.
     #[test]
     fn the_completion_registry_compacts_within_its_amortized_bound() {
+        // Both phase sizes are derived from `COMPACTION_SLACK` so that
+        // changing the constant moves the phases with it, instead of
+        // leaving this test failing on arithmetic that reads like a broken
+        // invariant.
+        //
+        // Phase 1 must push MORE than `COMPACTION_SLACK`, or no scan ever
+        // fires and the threshold never leaves its floor. Three times it is
+        // the point at which an all-live registry sits exactly at the
+        // threshold the first scan set, which is the largest phase 1 can be
+        // without a second scan.
+        const PHASE_ONE_REGISTRATIONS: usize = 3 * COMPACTION_SLACK;
+
+        // Phase 2 must push MORE than `4 * COMPACTION_SLACK`: with
+        // compaction deleted the registry would hold
+        // `PHASE_ONE_REGISTRATIONS + n`, and that only exceeds the
+        // `2 * peak_live + COMPACTION_SLACK` budget of `7 * COMPACTION_SLACK`
+        // once `n > 4 * COMPACTION_SLACK`. Five leaves one slack's margin.
+        const PHASE_TWO_REGISTRATIONS: usize = 5 * COMPACTION_SLACK;
+
         let scheduler = UpdateScheduler::new();
         let mut registrations = 0usize;
 
         // Phase 1 — build a live population and let a scan set the
         // threshold from it. No bound assertion here: every future is held,
-        // so `live == len == peak_live` and `len <= 2 * len + 8` cannot
+        // so `live == len == peak_live` and `len <= 2 * len + slack` cannot
         // fail for any input. Phase 2 is the only phase that can.
         let mut held = Vec::new();
-        for _ in 0..24 {
+        for _ in 0..PHASE_ONE_REGISTRATIONS {
             held.push(scheduler.end_of_frame());
             registrations += 1;
         }
         let peak_live = scheduler.live_completion_waiter_count();
-        assert_eq!(peak_live, 24, "phase 1 is the high-water mark");
+
+        // Phase 1's stated job is to let a scan set the threshold, so
+        // assert the scan happened. Pinning this is what stops a future
+        // `COMPACTION_SLACK` change from making the phase silently
+        // vacuous: a fixed phase size that no longer exceeds the constant
+        // never reaches the threshold at all, and the test stays green
+        // while testing nothing.
+        assert!(
+            scheduler.completion_compaction_scan_work() > 0,
+            "phase 1 must actually trigger a compaction scan"
+        );
+
+        // A property, not an observation of today's constants: compaction
+        // may drop tombstones, and may never drop a live entry, so a phase
+        // of all-held pushes ends with every one of them still countable
+        // whatever the threshold arithmetic does in between.
+        assert_eq!(
+            peak_live, PHASE_ONE_REGISTRATIONS,
+            "compaction must never remove a live waiter"
+        );
 
         // Phase 2 — the live population collapses while registrations keep
         // arriving. This is what makes the peak phrasing necessary.
@@ -3891,20 +3933,20 @@ mod tests {
 
         // The instant that falsifies the instantaneous-live phrasing,
         // pinned as a fact rather than left as a claim in a comment: every
-        // waiter is gone, and the registry still holds 24 tombstones under
-        // a threshold set when 24 were live. A `2 * 0 + 8` budget would put
-        // the ceiling at 8. This records the shape; the loop below is what
-        // tests the bound.
+        // waiter is gone, and the registry still holds all of their
+        // tombstones under a threshold sized when all of them were live,
+        // while a `2 * 0 + COMPACTION_SLACK` ceiling would be one slack.
+        // This records the shape; the loop below is what tests the bound.
         assert_eq!(
             (
                 scheduler.completion_waiter_count(),
                 scheduler.live_completion_waiter_count()
             ),
-            (24, 0),
+            (PHASE_ONE_REGISTRATIONS, 0),
             "tombstones outlive the population whose threshold sized them"
         );
 
-        for _ in 0..40 {
+        for _ in 0..PHASE_TWO_REGISTRATIONS {
             drop(scheduler.end_of_frame());
             registrations += 1;
             let len = scheduler.completion_waiter_count();
@@ -3931,7 +3973,11 @@ mod tests {
         // the threshold ratchets to the all-time peak, and the registry's
         // size bound silently becomes a high-water mark instead of a
         // statement about the population that is actually live.
-        let long_lived: Vec<_> = (0..30).map(|_| scheduler.end_of_frame()).collect();
+        // Enough live registrations to ratchet the threshold well above its
+        // floor, so that failing to reset it on drain is visible below.
+        let long_lived: Vec<_> = (0..PHASE_ONE_REGISTRATIONS)
+            .map(|_| scheduler.end_of_frame())
+            .collect();
         scheduler.execute_frame();
         drop(long_lived);
         assert_eq!(
