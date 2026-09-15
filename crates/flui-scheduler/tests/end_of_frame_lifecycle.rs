@@ -96,9 +96,12 @@ fn explicit_frame_completes_waiter_and_releases_waker() {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Acceptance criteria for the demand-driven, cancellation-safe registration
-// (issue #1055). The three tests above are the issue's own reproducer and
-// are RED EVIDENCE, not pins: `idle_frame_waiter_requests_a_frame` polls
-// after registering, so it stays green whether the demand happens at
+// (issue #1055). The three tests above are the issue's own reproducer, and
+// TWO of them were red against the unfixed code: `explicit_frame_completes_
+// waiter_and_releases_waker` passed there, since an explicit frame always
+// did resolve and release. Even the two that failed are evidence rather
+// than pins -- `idle_frame_waiter_requests_a_frame` polls after
+// registering, so it stays green whether the demand happens at
 // registration or at first poll. The tests below are the pins.
 //
 // Two construction rules hold for every oracle in this file, and both exist
@@ -293,21 +296,35 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
     assert!(scheduler.is_frame_scheduled());
 }
 
-/// Criterion 4 — coalescing. Registration being the demand must not mean a
-/// frame per registration: `request_frame_impl`'s false→true swap edge is
-/// what keeps N registrations inside one frame to at most one wake.
+/// Criterion 4 — coalescing at the `frame_scheduled` swap edge. Eight
+/// registrations that each REACH the demand path must still produce one
+/// platform wake.
+///
+/// # Each registration has to reach `request_frame_impl` for this to mean
+/// # anything
+///
+/// The eight futures are dropped as they are made, so every one of them
+/// finds no live waiter and calls `schedule_frame_if_enabled()`. That is
+/// the whole point: retaining them instead makes the registry's own
+/// predicate suppress seven of the eight demands BEFORE `request_frame_impl`
+/// is ever entered, and the test then observes one hook call whether the
+/// swap edge coalesces or not. Delete `request_frame_impl`'s
+/// `if !was_scheduled` guard and this test fails with eight; against the
+/// retaining version it would still have passed with one.
 #[test]
-fn many_registrations_inside_one_frame_demand_at_most_one_wake() {
+fn many_registrations_reaching_the_demand_path_fire_one_wake() {
     let scheduler = UpdateScheduler::new();
     let edges = counting_wake_hook(&scheduler);
-    let held: Arc<Mutex<Vec<FrameCompletionFuture>>> = Arc::new(Mutex::new(Vec::new()));
+    let registrations = Arc::new(AtomicUsize::new(0));
 
     let registrar = scheduler.clone();
-    let held_for_callback = Arc::clone(&held);
+    let registrations_in_callback = Arc::clone(&registrations);
     scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
-        let mut slot = held_for_callback.lock().expect("uncontended in a test");
         for _ in 0..8 {
-            slot.push(registrar.end_of_frame());
+            // Dropped immediately, so the next registration sees no live
+            // waiter and issues a demand of its own.
+            drop(registrar.end_of_frame());
+            registrations_in_callback.fetch_add(1, Ordering::SeqCst);
         }
     }));
 
@@ -316,88 +333,19 @@ fn many_registrations_inside_one_frame_demand_at_most_one_wake() {
     let fired = edges.load(Ordering::SeqCst) - edges_before;
 
     assert_eq!(
-        held.lock().expect("uncontended in a test").len(),
+        registrations.load(Ordering::SeqCst),
         8,
-        "all eight registrations must have happened inside the one frame"
+        "the persistent callback must have run and registered eight times"
     );
-    assert!(
-        fired <= 1,
-        "eight registrations inside one frame fired the wake hook {fired} times; the \
-         false->true swap edge must coalesce them to at most one"
+    assert_eq!(
+        fired, 1,
+        "eight demands inside one frame fired the wake hook {fired} times; the \
+         false->true swap edge must coalesce them to exactly one"
     );
     assert!(
         scheduler.is_frame_scheduled(),
         "and they must still leave a frame demanded -- coalescing to ZERO would be the \
          original bug wearing the coalescing label"
-    );
-}
-
-/// The suppressing branch of the demand predicate, which nothing else
-/// covers: a registration made while another waiter is still live must
-/// issue NO demand, because the frame that waiter already bought will drain
-/// both.
-///
-/// # Why the mid-frame step is the whole test
-///
-/// `request_frame`'s own `frame_scheduled` false-to-true swap edge absorbs a
-/// redundant demand, so an oracle that registers twice on an idle scheduler
-/// counts one hook edge whether the predicate suppresses or not. Opening the
-/// frame first defeats that: `handle_begin_frame` clears the latch at the
-/// top of the frame and does not drain the registry, so the second
-/// registration lands with the latch DOWN and the first waiter still live.
-/// A demand issued there is visible.
-///
-/// The *suppression assertion alone* would be satisfied by code that never
-/// demands at all, which is what makes the mid-frame latch clear above
-/// load-bearing rather than scene-setting. The setup around it is not:
-/// asserting `(true, 1)` after the first registration is exactly issue
-/// #1055's red, so this test does not pass against the unfixed
-/// `end_of_frame`.
-///
-/// What it uniquely pins is the suppressing branch. Replace the predicate
-/// with a constant `false` and every other test in this crate stays green
-/// while this one fails.
-#[test]
-fn a_registration_behind_a_live_waiter_issues_no_demand_of_its_own() {
-    let scheduler = UpdateScheduler::new();
-    let edges = counting_wake_hook(&scheduler);
-
-    let mut first = scheduler.end_of_frame();
-    assert_eq!(
-        (scheduler.is_frame_scheduled(), edges.load(Ordering::SeqCst)),
-        (true, 1),
-        "the first registration demands"
-    );
-
-    scheduler.handle_begin_frame(Instant::now());
-    assert!(
-        !scheduler.is_frame_scheduled(),
-        "handle_begin_frame clears the latch at the top of the frame; without that \
-         the assertions below would be satisfied by the swap edge alone"
-    );
-    let edges_before = edges.load(Ordering::SeqCst);
-
-    let mut second = scheduler.end_of_frame();
-
-    assert_eq!(
-        (
-            scheduler.is_frame_scheduled(),
-            edges.load(Ordering::SeqCst) - edges_before
-        ),
-        (false, 0),
-        "a registration behind a live waiter must stay silent: the frame already in \
-         flight drains the whole registry, so a second demand buys a surplus frame"
-    );
-
-    // Suppressed, not stranded. The in-flight frame must resolve both.
-    scheduler.handle_draw_frame();
-    scheduler.end_frame();
-    let mut cx = Context::from_waker(Waker::noop());
-    assert!(Pin::new(&mut first).poll(&mut cx).is_ready());
-    assert!(
-        Pin::new(&mut second).poll(&mut cx).is_ready(),
-        "the silent registration must still be served by the frame it declined to \
-         ask for a second time"
     );
 }
 

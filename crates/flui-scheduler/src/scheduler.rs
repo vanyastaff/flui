@@ -158,11 +158,18 @@ struct FrameCompletionState {
 ///
 /// # Cancellation
 ///
-/// Dropping this future is the cancellation: it holds the only strong
-/// reference to its shared state, so the drop frees the state and the
-/// stored [`Waker`] with it, immediately, taking no scheduler lock. The
+/// Dropping this future is the cancellation: it holds the only long-lived
+/// strong reference to its shared state, so the drop frees the state and
+/// the stored [`Waker`] with it, immediately, taking no scheduler lock. The
 /// registry keeps only a [`Weak`] handle and skips a dead one on its next
 /// drain or compaction.
+///
+/// One exception to "immediately", and it is bounded: while
+/// `notify_frame_completion` is servicing this entry it holds a temporary
+/// strong reference from its own `upgrade()`. A drop racing that window
+/// frees nothing until the notifier's loop iteration ends. The waker is
+/// already `take()`n out by then, so what that iteration finally drops is
+/// an empty state and never caller code under a lock.
 ///
 /// # Polling it again after it resolved is a silent hang
 ///
@@ -264,9 +271,11 @@ impl Future for FrameCompletionFuture {
             // Pinned by `a_frame_completing_while_poll_clones_the_waker_
             // still_resolves_it` in `tests/integration_tests.rs`, which
             // opens the window deterministically with a hand-rolled
-            // `RawWakerVTable` whose `clone` drives a frame. Nothing built
-            // from safe `Waker`s can reach it, so delete these lines
-            // without that test and the whole suite stays green.
+            // `RawWakerVTable` whose `clone` drives a frame. An ordinary
+            // safe waker can land a frame in the same window from another
+            // thread; the hand-built one only makes it happen on every run
+            // instead of occasionally. Delete these lines without that
+            // test and the whole suite stays green.
             if let Some(timing) = state.completed.take() {
                 return Poll::Ready(timing);
             }
@@ -283,10 +292,12 @@ impl Future for FrameCompletionFuture {
 impl FrameCompletionFuture {
     /// Create a new frame completion future.
     ///
-    /// The returned future holds the **only** strong reference to the shared
-    /// state; the registry takes a [`Weak`] one through
+    /// The returned future holds the only *lasting* strong reference to the
+    /// shared state; the registry takes a [`Weak`] one through
     /// [`notifier`](Self::notifier). That asymmetry is what makes dropping
-    /// the future a complete, lock-free cancellation.
+    /// the future a complete, lock-free cancellation. The one other strong
+    /// reference is the temporary `notify_frame_completion` upgrades for
+    /// the length of a single loop iteration.
     fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(FrameCompletionState {
@@ -345,10 +356,32 @@ struct FrameCompletionRegistry {
     waiters: Vec<FrameCompletionNotifier>,
     /// Length at which the next push compacts.
     next_compaction: usize,
+    /// Index of the earliest entry that might still be live.
+    ///
+    /// Everything below it was observed dead by an earlier scan, and dead
+    /// is a final observation for a [`Weak`], so no later scan has to look
+    /// at it again. This is what keeps the demand predicate amortized
+    /// O(1): without it, a run of tombstones at the front of the vec is
+    /// re-walked on every single registration, and the compaction that
+    /// would clear them does not arrive until `len` reaches a threshold an
+    /// earlier, larger live population already raised. That is quadratic
+    /// in an ordinary workload, not an adversarial one, and it runs under
+    /// this registry's mutex.
+    ///
+    /// Reset to zero by anything that moves entries: `compact_if_due`'s
+    /// `retain` and `drain` both leave it pointing at a vec whose entries
+    /// were all live when they were kept, so zero is both correct and the
+    /// cheapest place to resume from.
+    first_possibly_live: usize,
     /// Entries examined by every compaction scan so far, for the test that
     /// pins the amortized bound.
     #[cfg(test)]
     compaction_scan_work: usize,
+    /// Entries probed by every demand scan so far. Counted separately from
+    /// the compaction scan because the two bounds fail independently, and
+    /// the demand scan is the one that shipped quadratic.
+    #[cfg(test)]
+    demand_scan_work: usize,
 }
 
 impl FrameCompletionRegistry {
@@ -356,8 +389,11 @@ impl FrameCompletionRegistry {
         Self {
             waiters: Vec::new(),
             next_compaction: COMPACTION_SLACK,
+            first_possibly_live: 0,
             #[cfg(test)]
             compaction_scan_work: 0,
+            #[cfg(test)]
+            demand_scan_work: 0,
         }
     }
 
@@ -414,6 +450,44 @@ impl FrameCompletionRegistry {
         self.waiters
             .retain(|notifier| notifier.state.strong_count() > 0);
         self.next_compaction = 2 * self.waiters.len() + COMPACTION_SLACK;
+        // `retain` moved every surviving entry, so the old cursor indexes
+        // nothing meaningful. Everything kept was live at this scan, so
+        // resuming from the front is both correct and O(1) for the next
+        // demand scan.
+        self.first_possibly_live = 0;
+    }
+
+    /// Whether any registration still has a live future, advancing the
+    /// scan cursor past every tombstone it walks over.
+    ///
+    /// This is the demand predicate: a registration issues a frame request
+    /// exactly when this returns `false`, which is the zero-to-one
+    /// transition of the live-waiter set.
+    ///
+    /// Amortized O(1). Each call either stops on the first entry it looks
+    /// at, or permanently retires however many tombstones it walks past,
+    /// so the total probes over *n* registrations is O(*n*) rather than
+    /// O(*n*) per registration. Skipping a retired prefix can never skip a
+    /// live waiter: `strong_count() == 0` is final for a [`Weak`], since
+    /// `upgrade()` already fails at zero and the count can never rise
+    /// again.
+    fn has_live_waiter(&mut self) -> bool {
+        while self.first_possibly_live < self.waiters.len() {
+            #[cfg(test)]
+            {
+                self.demand_scan_work += 1;
+            }
+
+            if self.waiters[self.first_possibly_live].state.strong_count() > 0 {
+                // Deliberately NOT advanced past a live entry: it may die
+                // later, and re-checking one entry is O(1).
+                return true;
+            }
+
+            self.first_possibly_live += 1;
+        }
+
+        false
     }
 
     /// Take every registration, leaving the registry empty and its
@@ -424,6 +498,7 @@ impl FrameCompletionRegistry {
     /// high-water mark rather than a statement about the live population.
     fn drain(&mut self) -> Vec<FrameCompletionNotifier> {
         self.next_compaction = COMPACTION_SLACK;
+        self.first_possibly_live = 0;
         std::mem::take(&mut self.waiters)
     }
 }
@@ -2385,13 +2460,13 @@ impl UpdateScheduler {
             // besides `handle_begin_frame` — the public `finish_async_pump`
             // — so a demand can be revoked with no drain, and `is_empty()`
             // would then be sound only through an untested coupling across
-            // the registry, that latch, and `frames_enabled`. `any` reads
-            // only the vec already under this guard and short-circuits on
-            // the first live entry, so it costs the index of that entry:
-            // O(1) in the common case, O(len) whenever the live entries sit
-            // behind a run of tombstones (all-tombstones is only the worst
-            // of those, not the only one). `len` is bounded by the
-            // compaction invariant either way.
+            // the registry, that latch, and `frames_enabled`.
+            //
+            // `has_live_waiter` reads only the vec already under this
+            // guard, and is amortized O(1) rather than O(len): it retires
+            // the tombstones it walks past instead of re-walking them on
+            // every registration. The cost matters because this runs under
+            // the registry mutex, so it blocks registration AND completion.
             //
             // What this buys is the ISSUANCE half of the invariant: after a
             // drain the vec is empty, so the first push demands, and every
@@ -2399,10 +2474,7 @@ impl UpdateScheduler {
             // that drain or demands itself. SURVIVAL of an issued demand is
             // not decidable here at all -- only `set_frames_enabled`'s
             // enable edge can re-issue one that was revoked.
-            let had_live_waiter = registry
-                .waiters
-                .iter()
-                .any(|notifier| notifier.state.strong_count() > 0);
+            let had_live_waiter = registry.has_live_waiter();
 
             // Register BEFORE demanding, so the registration is the
             // linearization point: demand-first would let a concurrent
@@ -2416,10 +2488,14 @@ impl UpdateScheduler {
         };
         // The guard is released HERE, before the demand. The hook
         // `schedule_frame_if_enabled` can reach must find every scheduler
-        // mutex free, `completion_waiters` included --
-        // `frame_scheduled_hook_runs_with_no_scheduler_lock_held` asserts
-        // exactly that, so holding the guard across this call fails an
-        // already-green test rather than merely risking a deadlock.
+        // mutex free, `completion_waiters` included. The detector is
+        // `end_of_frame_demand_runs_the_frame_scheduled_hook_with_no_scheduler_lock_held`
+        // in `scheduler/lock_discipline_tests.rs`, which reaches the hook
+        // through THIS function. Its older sibling
+        // `frame_scheduled_hook_runs_with_no_scheduler_lock_held` calls
+        // `request_frame()` directly and so never holds this guard at all:
+        // it cannot catch a regression here, and citing it would be a false
+        // sense of coverage.
         if needs_demand {
             self.schedule_frame_if_enabled();
         }
@@ -2845,6 +2921,13 @@ impl UpdateScheduler {
             .completion_waiters
             .lock()
             .compaction_scan_work
+    }
+
+    /// Entries every demand scan has probed so far (for testing that a
+    /// tombstone prefix is not re-walked per registration).
+    #[cfg(test)]
+    fn completion_demand_scan_work(&self) -> usize {
+        self.inner.frame.completion_waiters.lock().demand_scan_work
     }
 }
 
@@ -3859,6 +3942,120 @@ mod tests {
         );
     }
 
+    /// Compaction must stay amortized: total scan work linear in the
+    /// registrations that caused it.
+    ///
+    /// # Why this workload and not the mixed one above
+    ///
+    /// Every future is held, so `retain` never removes anything and the
+    /// doubling in `compact_if_due`'s threshold is the only thing keeping
+    /// the scans rare. Drop the `2 *` from that assignment and the
+    /// threshold grows by a constant instead, so a scan fires every
+    /// `COMPACTION_SLACK` pushes and the total goes quadratic: 960 probes
+    /// here against the 208 the doubling costs.
+    ///
+    /// The bound test above cannot see that at all. Its second phase drops
+    /// every future, so `retain` empties the vec and the next threshold is
+    /// `COMPACTION_SLACK` either way, with or without the doubling.
+    #[test]
+    fn compaction_scan_work_stays_linear_in_registrations() {
+        // Enough to cross four thresholds at the shipped slack
+        // (8, 24, 56, 120), which is where a constant-growth threshold and
+        // a doubling one have visibly diverged.
+        const REGISTRATIONS: usize = 15 * COMPACTION_SLACK + 1;
+
+        let scheduler = UpdateScheduler::new();
+        let held: Vec<_> = (0..REGISTRATIONS)
+            .map(|_| scheduler.end_of_frame())
+            .collect();
+
+        assert_eq!(
+            scheduler.live_completion_waiter_count(),
+            REGISTRATIONS,
+            "every registration must still be live, or `retain` is doing the work \
+             the threshold is supposed to be doing"
+        );
+
+        let work = scheduler.completion_compaction_scan_work();
+        assert!(
+            work > 0,
+            "the workload must actually reach the threshold, or this bound is vacuous"
+        );
+        assert!(
+            work <= 3 * REGISTRATIONS,
+            "compaction probed {work} entries across {REGISTRATIONS} registrations; \
+             a doubling threshold keeps that linear"
+        );
+
+        drop(held);
+    }
+
+    /// A run of tombstones at the front of the registry must be walked
+    /// once, not re-walked by every later registration.
+    ///
+    /// # The workload is ordinary, not adversarial
+    ///
+    /// Hold a batch of waiters long enough for a compaction to raise the
+    /// threshold from that batch, cancel all but one, then keep
+    /// registering. Compaction cannot arrive to clear the tombstones,
+    /// because the threshold was sized for the larger live population that
+    /// has since gone. Every registration then walks the whole dead prefix
+    /// to reach the one live entry behind it, under the registry mutex,
+    /// which blocks registration and frame completion alike.
+    ///
+    /// The scan cursor is what makes this linear. Without it the probe
+    /// count here is quadratic in the batch size: measured at 14,762 for
+    /// 242 registrations against the 726 this allows, and the shape grows
+    /// as the square, so a larger app pays far more.
+    #[test]
+    fn the_demand_scan_does_not_rewalk_a_tombstone_prefix() {
+        // Sized from the constant rather than written as a literal. The
+        // all-live compaction thresholds are `COMPACTION_SLACK * (2^n - 1)`
+        // (8, 24, 56, 120, 248 at the shipped slack of 8), so registering
+        // `15 * COMPACTION_SLACK + 1` lands just past the fourth of them
+        // with the next one at `31 * COMPACTION_SLACK`. That leaves room
+        // for the same number of follow-up registrations without reaching
+        // it, which is the state this test needs: `2 * (15K + 1) < 31K`
+        // for any `K > 2`.
+        const BATCH: usize = 15 * COMPACTION_SLACK + 1;
+
+        let scheduler = UpdateScheduler::new();
+
+        let mut held: Vec<_> = (0..BATCH).map(|_| scheduler.end_of_frame()).collect();
+        assert_eq!(scheduler.live_completion_waiter_count(), BATCH);
+
+        // Cancel every waiter but the last, leaving a long dead prefix in
+        // front of a single live entry.
+        held.drain(..BATCH - 1);
+        assert_eq!(scheduler.live_completion_waiter_count(), 1);
+
+        let compaction_work_before = scheduler.completion_compaction_scan_work();
+        let demand_work_before = scheduler.completion_demand_scan_work();
+
+        let _second_batch: Vec<_> = (0..BATCH).map(|_| scheduler.end_of_frame()).collect();
+
+        // The scenario's own precondition, asserted rather than assumed: if
+        // a compaction fired it would clear the prefix and there would be
+        // nothing to re-walk. A future change to COMPACTION_SLACK that
+        // invalidates the sizing above fails HERE, saying the workload
+        // drifted, instead of passing vacuously.
+        assert_eq!(
+            scheduler.completion_compaction_scan_work(),
+            compaction_work_before,
+            "no compaction may fire during the measured phase, or the prefix this \
+             test is about would be cleared for free"
+        );
+
+        let registrations = 2 * BATCH;
+        let demand_work = scheduler.completion_demand_scan_work() - demand_work_before;
+        assert!(
+            demand_work <= 3 * registrations,
+            "the demand scan probed {demand_work} entries across {BATCH} registrations \
+             behind a dead prefix; a scan that retires what it walks past stays linear \
+             in the {registrations} registrations overall"
+        );
+    }
+
     /// Cancellation takes no lock, so it removes nothing: a dropped future
     /// leaves a tombstone that only a push past the compaction threshold,
     /// or a drain, reclaims. This pins the bound that buys.
@@ -3905,7 +4102,6 @@ mod tests {
         const PHASE_TWO_REGISTRATIONS: usize = 5 * COMPACTION_SLACK;
 
         let scheduler = UpdateScheduler::new();
-        let mut registrations = 0usize;
 
         // Phase 1 — build a live population and let a scan set the
         // threshold from it. No bound assertion here: every future is held,
@@ -3914,7 +4110,6 @@ mod tests {
         let mut held = Vec::new();
         for _ in 0..PHASE_ONE_REGISTRATIONS {
             held.push(scheduler.end_of_frame());
-            registrations += 1;
         }
         let peak_live = scheduler.live_completion_waiter_count();
 
@@ -3959,7 +4154,6 @@ mod tests {
 
         for _ in 0..PHASE_TWO_REGISTRATIONS {
             drop(scheduler.end_of_frame());
-            registrations += 1;
             let len = scheduler.completion_waiter_count();
             assert!(
                 len <= 2 * peak_live + COMPACTION_SLACK,
@@ -3967,18 +4161,6 @@ mod tests {
                  2 * {peak_live} + {COMPACTION_SLACK}"
             );
         }
-
-        // Linear, not merely finite. This one is NOT independent evidence:
-        // `work == 0` satisfies it, so deleting compaction outright leaves
-        // it green. What actually forces compaction to happen is the phase-2
-        // bound above, which `work == 0` fails. This bounds the cost of the
-        // work that bound already requires.
-        assert!(
-            scheduler.completion_compaction_scan_work() <= 4 * registrations,
-            "total compaction scan work ({}) must stay linear in the {registrations} \
-             registrations that caused it",
-            scheduler.completion_compaction_scan_work()
-        );
 
         // The drain resets the threshold to its floor. Without that reset
         // the threshold ratchets to the all-time peak, and the registry's

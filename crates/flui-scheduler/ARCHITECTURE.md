@@ -667,6 +667,14 @@ That predicate has two halves, and only the first belongs to the registry:
   `frames_enabled` plus the lifecycle edge), none of them asserted anywhere,
   and one leg of it is a public method any embedder may call. The live scan
   reads only the vec it already holds.
+
+  `is_empty()` is O(1) and the live scan is not, which is a real cost and was
+  a real defect: the first version walked the whole vec on every registration,
+  so a run of tombstones in front of one live entry was re-walked per push
+  (measured: 14,641 probes for 121 registrations, under the registry mutex).
+  The registry now carries a cursor that retires the tombstones it walks past,
+  which makes the scan amortized O(1) and brought the same workload to 241
+  probes. `the_demand_scan_does_not_rewalk_a_tombstone_prefix` pins it.
 - Gating the demand on `phase() == Idle`, the closest reading of Flutter's own
   `endOfFrame`. Rejected: it goes silent in the post-drain window, where
   `notify_frame_completion` has already emptied the registry but the phase is
@@ -689,13 +697,24 @@ That predicate has two halves, and only the first belongs to the registry:
   `notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics`).
 
 **Trade-off accepted:** a registration landing mid-frame while no other waiter
-is live demands a frame the in-flight drain would have served anyway. That is
-one surplus frame, self-limiting and never a loop, because `request_frame`
-fires the wake hook only on the `frame_scheduled` false to true edge and
-`handle_begin_frame` clears that latch before the frame body. Jetpack Compose,
-`Choreographer`, `requestAnimationFrame`, and Unity's `Awaitable.NextFrameAsync`
-all make registration itself the demand and all pay the same price; Compose
-states the rule as the zero to one transition of the awaiter set.
+is live demands a frame the in-flight drain would have served anyway. That
+costs one surplus frame per registration burst, and no more within a frame,
+because `request_frame` fires the wake hook only on the `frame_scheduled`
+false to true edge. Jetpack Compose, `Choreographer`, `requestAnimationFrame`,
+and Unity's `Awaitable.NextFrameAsync` all make registration itself the demand
+and all pay the same price; Compose states the rule as the zero to one
+transition of the awaiter set.
+
+**What that coalescing does NOT bound, stated because the obvious reading
+overstates it:** it bounds requests *within* one frame, not across frames. A
+caller that registers on every frame sustains the frame loop indefinitely, and
+nothing here damps it: `handle_begin_frame` clears the latch at the top of each
+frame, the registration re-demands, and that frame's own drain removes the
+entry so the next registration re-demands too. A persistent callback that drops
+an `end_of_frame()` each frame therefore keeps the scheduler awake forever. That
+is the same standing demand an animation ticker creates, and it is what asking
+for a frame every frame means rather than a runaway; the point is that "one
+surplus frame" describes a burst, not a repeating caller.
 
 **Recorded gap, deliberately not closed here:** a `FrameCompletionFuture` whose
 scheduler is dropped while it is pending never resolves, because only a frame

@@ -122,9 +122,15 @@ fn assert_recovered_from_panic(
     // `end_of_frame()` waiter demands a frame: `armed_completion_probe`
     // registers BEFORE the frame is driven, so `handle_begin_frame`'s
     // unconditional `frame_scheduled.store(false)` clears that demand at
-    // the top of the very frame this aborts. A probe registered from
-    // INSIDE the aborting frame would leave the latch set, and correctly
-    // so -- that waiter needs a frame of its own.
+    // the top of the very frame this aborts.
+    //
+    // A registration made from inside the frame would not change this
+    // either. `abort_frame` drains the WHOLE registry and resolves it with
+    // the aborted frame's own timing, so such a waiter needs no frame of
+    // its own; and while this probe is still live it would be suppressed
+    // and issue no demand at all. The only registration that leaves the
+    // latch set here is one made AFTER the drain, from inside a completion
+    // waker, which the drain has already passed by.
     assert!(
         !scheduler.is_frame_scheduled(),
         "frame_scheduled must not be left latched by the aborted frame"

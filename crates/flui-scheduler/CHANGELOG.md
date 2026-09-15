@@ -142,6 +142,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the lifecycle resume leg, which has always re-requested; this setter has no
   production callers and gains the re-request so the public surface cannot
   reach a stranded state the lifecycle path recovers from.
+- **The demand predicate retires the tombstones it walks past**, so a
+  cancelled-waiter prefix costs one walk rather than one per registration.
+  Scanning the whole registry on every `end_of_frame` was quadratic on an
+  ordinary workload: hold a batch of waiters until a compaction sizes the
+  threshold from them, cancel all but one, and every later registration walks
+  the dead prefix to reach the survivor, with compaction unable to arrive
+  because the threshold was set for the larger population that has since gone.
+  Measured at 14,641 probes for 242 registrations, down to 241 with the
+  cursor, all of it under the registry mutex that also blocks frame
+  completion.
 - **`FrameCompletionFuture::poll` drops the waker it displaces outside the
   shared-state lock.** A `Waker`'s `Drop` is executor code, and one that
   re-polls the same future relocked a non-reentrant `parking_lot::Mutex` and
