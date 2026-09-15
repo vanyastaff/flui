@@ -972,6 +972,14 @@ mod tests {
                 "parent.cancel() deadlocked: the nested TaskToken::drop tried to \
                  re-lock Inner::tasks while cancel()'s own guard was still held",
             );
+        // Termination alone would also be satisfied by a cancel that never
+        // reached the child; the empty driver pins that the nested token's
+        // own cancellation ran to completion.
+        assert_eq!(
+            driver.pending_task_count(),
+            0,
+            "the parent's destructor must have cancelled the child it owned"
+        );
     }
 
     /// A cancelled future's destructor may re-enter the driver three
@@ -985,7 +993,13 @@ mod tests {
         // A sibling task that stores its waker on every poll and stays
         // pending until told to finish.
         let (sibling, sibling_polls, sibling_finish, sibling_waker) = controlled();
-        let _sibling_token = driver.spawn_local(Box::pin(sibling));
+        // `ManuallyDrop`, not a plain binding: if the cancel below ever
+        // deadlocks again, the `expect` panics after 5 s and this thread
+        // unwinds — and a live `TaskToken` on the unwinding thread would run
+        // `cancel()` and block on the very guard the leaked thread still
+        // holds, turning a bounded failure into a hang. It is released only
+        // after the wait succeeds.
+        let sibling_token = std::mem::ManuallyDrop::new(driver.spawn_local(Box::pin(sibling)));
         driver.poll_ready();
         assert_eq!(sibling_polls.load(Ordering::Relaxed), 1, "waker stored");
 
@@ -1040,6 +1054,7 @@ mod tests {
         done_rx.recv_timeout(std::time::Duration::from_secs(5)).expect(
             "cancel() deadlocked: destructor reentry (query/spawn/wake) blocked on the task mutex",
         );
+        let _sibling_token = std::mem::ManuallyDrop::into_inner(sibling_token);
 
         assert!(
             spawned_token.lock().is_some(),
