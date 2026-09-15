@@ -7,9 +7,13 @@
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 #![expect(clippy::default_trait_access)]
-// A no-op `RawWaker` vtable is built manually to poll futures without a
-// runtime; `Waker::from_raw` is the one `unsafe` entry point, SAFETY-bound by
-// the vtable's no-op contract.
+// `RawWaker` vtables are built manually to poll futures without a runtime.
+// Most are no-ops, where `Waker::from_raw` is the only `unsafe` entry point
+// and the vtable's no-op contract is what makes it sound. One is not:
+// `a_frame_completing_while_poll_clones_the_waker_still_resolves_it` needs a
+// `clone` with a side effect, so its vtable dereferences a borrowed
+// `*const UpdateScheduler` and drives a frame. Its SAFETY comments carry the
+// lifetime and aliasing argument that the no-op contract does not cover.
 #![expect(unsafe_code)]
 
 use std::{
@@ -2811,4 +2815,100 @@ fn test_ticker_state_can_start_values() {
 #[test]
 fn test_ticker_state_default_idle() {
     assert_eq!(TickerState::default(), TickerState::Idle);
+}
+
+/// `FrameCompletionFuture::poll` releases the `state` guard across
+/// `Waker::clone` — the clone is executor code, and this crate's lock order
+/// forbids holding either completion mutex across any `Waker` operation. It
+/// then re-acquires the guard to store the clone, and re-checks `completed`
+/// before storing.
+///
+/// That re-check is what this pins. A frame completing inside the window has
+/// already taken the OLD waker and woken it, so the executor may have moved
+/// on to the waker it is polling with now. Returning `Pending` on the
+/// strength of the pre-clone check would strand the task forever: the
+/// completion was delivered to a waker nobody is listening on any more.
+///
+/// The window opens only while `Waker::clone` runs. A perfectly ordinary
+/// safe `Waker` can land a frame in it from another thread, so what the
+/// hand-built vtable buys is DETERMINISM, not reachability: it makes the
+/// interleaving happen on one thread, every run, with no barrier, no sleep,
+/// and no race to lose. That is why the test lives here rather than beside
+/// issue #1055's others in `end_of_frame_lifecycle.rs`, which is
+/// `#![forbid(unsafe_code)]`; this file already builds raw wakers by hand
+/// under the module-level `expect(unsafe_code)` above.
+///
+/// # This oracle can also fail by HANGING
+///
+/// Its `clone` drives a whole frame, so under the regression of moving the
+/// clone back under the `state` guard it deadlocks on one thread --
+/// `poll` -> `clone` -> `execute_frame` -> `notify_frame_completion` ->
+/// `state.lock()` -- and nextest reports it on the terminate-after timeout
+/// rather than in milliseconds. Same failure mode as the two waker-driven
+/// tests in `end_of_frame_lifecycle.rs`. The fast signal for that
+/// particular regression is
+/// `a_displaced_waker_is_dropped_outside_the_completion_state_lock` in
+/// `scheduler.rs`, which probes with `try_lock` instead of blocking.
+#[test]
+fn a_frame_completing_while_poll_clones_the_waker_still_resolves_it() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, RawWaker, RawWakerVTable, Waker},
+    };
+
+    /// A waker whose `clone` drives a whole frame before returning, landing
+    /// the completion exactly in `poll`'s guard-free window. Its data
+    /// pointer is a borrowed `*const UpdateScheduler`.
+    fn frame_driving_raw_waker(scheduler: *const UpdateScheduler) -> RawWaker {
+        fn clone(data: *const ()) -> RawWaker {
+            // SAFETY: `data` is the `&UpdateScheduler` the caller passed to
+            // `frame_driving_raw_waker`, and that scheduler is declared
+            // before every waker built from it, so it is still alive here
+            // (locals drop in reverse declaration order). The reference
+            // does not escape this function.
+            let scheduler = unsafe { &*data.cast::<UpdateScheduler>() };
+            scheduler.execute_frame();
+            frame_driving_raw_waker(std::ptr::from_ref(scheduler))
+        }
+        // Nothing is owned through the data pointer, so wake and drop have
+        // nothing to do; the future under test observes the frame, not a
+        // wake count.
+        fn no_op(_: *const ()) {}
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+        RawWaker::new(scheduler.cast(), &VTABLE)
+    }
+
+    let scheduler = UpdateScheduler::new();
+    let mut future = scheduler.end_of_frame();
+
+    // Poll once with a DIFFERENT waker, so the second poll cannot take
+    // `poll`'s `will_wake` fast path and must go through the clone.
+    let mut noop_cx = Context::from_waker(Waker::noop());
+    assert!(
+        Pin::new(&mut future).poll(&mut noop_cx).is_pending(),
+        "no frame has run yet"
+    );
+
+    // SAFETY: the vtable's `clone` returns a waker over the same borrowed
+    // data, and `wake`/`wake_by_ref`/`drop` are no-ops over a pointer that
+    // owns nothing, so every `RawWakerVTable` contract holds. `scheduler`
+    // outlives this waker: it is declared first and so dropped last.
+    let frame_driving_waker =
+        unsafe { Waker::from_raw(frame_driving_raw_waker(std::ptr::from_ref(&scheduler))) };
+
+    let resolved = Pin::new(&mut future).poll(&mut Context::from_waker(&frame_driving_waker));
+
+    assert_eq!(
+        scheduler.frame_count(),
+        1,
+        "the waker's clone must actually have driven a frame, or this test \
+         never opens the window it exists to probe"
+    );
+    assert!(
+        resolved.is_ready(),
+        "poll must re-check `completed` after re-acquiring the guard: the frame \
+         that completed while the waker was being cloned already took and woke \
+         the PREVIOUS waker, so returning Pending here strands the task forever"
+    );
 }

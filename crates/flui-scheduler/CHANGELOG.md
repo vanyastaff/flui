@@ -109,6 +109,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`UpdateScheduler::end_of_frame` now requests the frame it waits for, and
+  cancelling a wait releases the executor's waker immediately** (#1055).
+  Registering a waiter only pushed it onto the completion registry, so an idle
+  scheduler with nothing else demanding a frame left the caller waiting
+  forever; and the registry held a strong `Arc` to the waiter's shared state,
+  so dropping the future released neither that state nor the `Waker` parked in
+  it until the next frame completed. Registering is now itself the demand,
+  issued on the zero to one transition of the live-waiter set, which is the
+  rule Jetpack Compose's `BroadcastFrameClock` states for `onNewAwaiters` and
+  the one `Choreographer`, `requestAnimationFrame`, and Unity's
+  `Awaitable.NextFrameAsync` all follow. It goes through
+  `schedule_frame_if_enabled`, so a scheduler whose owner disabled frames is
+  not forced awake, and `request_frame`'s existing false to true swap edge
+  keeps N registrations inside one frame to at most one platform wake. The
+  registry's handle is now `Weak`, so dropping the future frees the state and
+  the waker with it, taking no lock at all; the drain skips a dead entry, and a
+  push past an amortized-doubling threshold reclaims the tombstones that
+  lock-free cancellation necessarily leaves behind. Three consequences are
+  worth knowing before calling it: `end_of_frame` is `#[must_use]` because a
+  registration costs a frame whether or not the future is awaited, a pending
+  waiter now suppresses `execute_idle_callbacks` until its frame runs, and the
+  call can propagate a panic from the `on_frame_scheduled` hook. See
+  `ARCHITECTURE.md`'s mapping entry for why the registration is ordered before
+  the demand, which is a divergence from Flutter's `endOfFrame`.
+- **`set_frames_enabled(true)` re-requests a frame on the disabled to enabled
+  edge**, mirroring `handle_app_lifecycle_state_change` and Flutter's
+  `_setFramesEnabledState`. A demand issued while frames were off is dropped
+  by `schedule_frame_if_enabled` with nothing recording the loss, and every
+  later registration then sees the still-live waiter and stays silent, so only
+  a frames-enabled edge can recover them. The edge a running app crosses is
+  the lifecycle resume leg, which has always re-requested; this setter has no
+  production callers and gains the re-request so the public surface cannot
+  reach a stranded state the lifecycle path recovers from.
+- **The demand predicate retires the tombstones it walks past**, so a
+  cancelled-waiter prefix costs one walk rather than one per registration.
+  Scanning the whole registry on every `end_of_frame` was quadratic on an
+  ordinary workload: hold a batch of waiters until a compaction sizes the
+  threshold from them, cancel all but one, and every later registration walks
+  the dead prefix to reach the survivor, with compaction unable to arrive
+  because the threshold was set for the larger population that has since gone.
+  Measured at 14,641 probes for the 121 registrations made behind the dead
+  prefix, down to 241 with the cursor, all of it under the registry mutex
+  that also blocks frame completion.
+- **`FrameCompletionFuture::poll` drops the waker it displaces outside the
+  shared-state lock.** A `Waker`'s `Drop` is executor code, and one that
+  re-polls the same future relocked a non-reentrant `parking_lot::Mutex` and
+  hung. Same class as #1038 and #1156, now with the lock order written at the
+  registry's own definition.
+- **`finish_async_pump`'s doc no longer claims `handle_begin_frame` is the only
+  place that clears the `frame_scheduled` latch.** That method clears it
+  itself, three lines below the claim.
+
 - **A ticker's callback slot is now leased across the user callback, not
   restored on state alone** (#1059): both dispatch paths took the callback out
   of `TickerInner`, dropped the lock, invoked it, then restored it whenever the

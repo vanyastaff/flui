@@ -55,7 +55,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
     task::{Context, Poll, Waker},
@@ -156,6 +156,37 @@ struct FrameCompletionState {
 /// This is returned by `UpdateScheduler::end_of_frame()` and allows awaiting
 /// the completion of the current or next frame.
 ///
+/// # Cancellation
+///
+/// Dropping this future is the cancellation: it holds the only long-lived
+/// strong reference to its shared state, so the drop frees the state and
+/// the stored [`Waker`] with it, immediately, taking no scheduler lock. The
+/// registry keeps only a [`Weak`] handle and skips a dead one on its next
+/// drain or compaction.
+///
+/// One exception to "immediately", and it is bounded: while
+/// `notify_frame_completion` is servicing this entry it holds a temporary
+/// strong reference from its own `upgrade()`. A drop racing that window
+/// frees nothing until the notifier's loop iteration ends. The waker is
+/// already `take()`n out by then, so what that iteration finally drops is
+/// an empty state and never caller code under a lock.
+///
+/// # Polling it again after it resolved is a silent hang
+///
+/// This future is **not fused**. `poll` `take()`s the completed timing and
+/// the drain has already removed the registry entry, so a second poll after
+/// `Poll::Ready` stores a waker nothing will ever call and returns
+/// `Poll::Pending` forever. Await it once, and drop it.
+///
+/// # A future outliving its scheduler never resolves
+///
+/// Only a frame resolves this future, and only the scheduler runs frames.
+/// If the last `UpdateScheduler` handle is dropped while this future is
+/// pending, nothing will ever complete it and awaiting it blocks the task
+/// forever. There is no sentinel to resolve with while `Output` is
+/// `FrameTiming`; issue #1162 carries the outcome type that would let
+/// teardown report itself.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -191,37 +222,328 @@ impl Future for FrameCompletionFuture {
     type Output = FrameTiming;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.state.lock();
+        // NO caller code runs under this guard, on either path -- which
+        // rests on a drop-order dependency named at the slow path below,
+        // not on the structure alone. That is stronger than the registry's
+        // lock-order rule demands, and it is why this reads as two
+        // acquisitions rather than one: `Waker`'s
+        // `clone`, `wake`, and `drop` are all vtable calls into executor
+        // code, and any of them may re-enter this same future. `state` is a
+        // non-reentrant `parking_lot::Mutex`, so a re-entrant one under the
+        // guard hangs rather than returning. Same lock-then-caller-code
+        // trap as `set_on_frame_scheduled` (#1038) and
+        // `cancel_frame_callback` (#1156).
 
-        if let Some(timing) = state.completed.take() {
-            Poll::Ready(timing)
-        } else {
-            // Store waker for notification when frame completes
-            state.waker = Some(cx.waker().clone());
-            Poll::Pending
+        // Fast path: already resolved, or the executor re-polled with the
+        // very waker already stored. Neither needs a clone, so the common
+        // case of a repeatedly-polled pending future does no executor-owned
+        // work at all.
+        {
+            let mut state = self.state.lock();
+
+            if let Some(timing) = state.completed.take() {
+                return Poll::Ready(timing);
+            }
+
+            if state
+                .waker
+                .as_ref()
+                .is_some_and(|stored| stored.will_wake(cx.waker()))
+            {
+                return Poll::Pending;
+            }
         }
+
+        // Slow path: first poll, or the executor handed us a different
+        // waker. Clone outside the guard, then re-acquire to store it.
+        //
+        // `fresh_waker` outlives the block below, and on the early
+        // `Poll::Ready` return inside it the clone is dropped on the way
+        // out. That drop is caller code, and it lands OUTSIDE the guard
+        // only because `state` is declared in that inner block: locals drop
+        // innermost-scope-first, so the guard goes before this binding
+        // does. Hoisting `let mut state` to function scope in a later
+        // refactor silently reverses that order and runs `Waker::drop`
+        // under the lock -- issue #1057's hang, reintroduced by a change
+        // that looks like tidying.
+        let fresh_waker = cx.waker().clone();
+
+        let displaced_waker = {
+            let mut state = self.state.lock();
+
+            // Re-check, because the guard was released across the clone.
+            // The window is narrow and real: a frame completing in it has
+            // already taken the OLD waker and woken it, and the executor
+            // may have replaced that waker precisely because it is no
+            // longer the one to wake. Returning `Pending` here on the
+            // strength of the check before the clone would then strand the
+            // task forever, with the completion delivered to a waker
+            // nobody is listening on.
+            //
+            // Pinned by `a_frame_completing_while_poll_clones_the_waker_
+            // still_resolves_it` in `tests/integration_tests.rs`, which
+            // opens the window deterministically with a hand-rolled
+            // `RawWakerVTable` whose `clone` drives a frame. An ordinary
+            // safe waker can land a frame in the same window from another
+            // thread; the hand-built one only makes it happen on every run
+            // instead of occasionally. Delete these lines without that
+            // test and the whole suite stays green.
+            if let Some(timing) = state.completed.take() {
+                return Poll::Ready(timing);
+            }
+
+            // Store waker for notification when frame completes
+            state.waker.replace(fresh_waker)
+        };
+        drop(displaced_waker);
+
+        Poll::Pending
     }
 }
 
 impl FrameCompletionFuture {
-    /// Create a new frame completion future
-    fn new() -> (Self, Arc<Mutex<FrameCompletionState>>) {
-        let state = Arc::new(Mutex::new(FrameCompletionState {
-            completed: None,
-            waker: None,
-        }));
-        (
-            Self {
-                state: state.clone(),
-            },
-            state,
-        )
+    /// Create a new frame completion future.
+    ///
+    /// The returned future holds the only *lasting* strong reference to the
+    /// shared state; the registry takes a [`Weak`] one through
+    /// [`notifier`](Self::notifier). That asymmetry is what makes dropping
+    /// the future a complete, lock-free cancellation. The one other strong
+    /// reference is the temporary `notify_frame_completion` upgrades for
+    /// the length of a single loop iteration.
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(FrameCompletionState {
+                completed: None,
+                waker: None,
+            })),
+        }
+    }
+
+    /// The registry's handle on this future's shared state.
+    fn notifier(&self) -> FrameCompletionNotifier {
+        FrameCompletionNotifier {
+            state: Arc::downgrade(&self.state),
+        }
     }
 }
 
-/// Pending frame completion notifier
+/// Pending frame completion notifier.
+///
+/// [`Weak`], never [`Arc`]: the registry must not keep a cancelled waiter's
+/// [`Waker`] alive, and an entry whose `upgrade()` fails means *cancelled*,
+/// never *error*.
 struct FrameCompletionNotifier {
-    state: Arc<Mutex<FrameCompletionState>>,
+    state: Weak<Mutex<FrameCompletionState>>,
+}
+
+/// Registrations left to compact before a push scans for dead entries, and
+/// the value the threshold resets to after every scan and every drain.
+///
+/// Not zero: a scan that leaves the registry empty would set the threshold
+/// to `2 * 0 + 0`, and every later push would then scan, forever.
+const COMPACTION_SLACK: usize = 8;
+
+/// The registry of pending [`FrameCompletionFuture`]s.
+///
+/// # Lock order
+///
+/// **`completion_waiters` strictly before [`FrameCompletionState`], never
+/// nested, and neither held across ANY [`Waker`] operation (`clone`,
+/// `wake`, or drop) or across `schedule_frame_if_enabled()`.** Every one of
+/// those is a vtable call into caller code that may re-enter this
+/// scheduler, and both mutexes are non-reentrant `parking_lot` locks: a
+/// re-entry under either one hangs rather than returning.
+///
+/// `clone` belongs in that list beside `wake` and drop even though it looks
+/// inert, because `RawWakerVTable::clone` is as arbitrary as the other two.
+/// `FrameCompletionFuture::poll`, `UpdateScheduler::end_of_frame`, and
+/// `UpdateScheduler::notify_frame_completion` are the three sites that have
+/// to honor this, and each carries the reason at the line that does so.
+struct FrameCompletionRegistry {
+    /// Live and cancelled registrations, in registration order.
+    ///
+    /// Cancelled entries are tombstones: dropping a future takes no lock
+    /// and so cannot remove its own entry. They are reclaimed by the drain
+    /// (which empties the vec outright) or by `compact_if_due`.
+    waiters: Vec<FrameCompletionNotifier>,
+    /// Length at which the next push compacts.
+    next_compaction: usize,
+    /// Index of the earliest entry that might still be live.
+    ///
+    /// Everything below it was observed dead by an earlier scan, and dead
+    /// is a final observation for a [`Weak`], so no later scan has to look
+    /// at it again. This is what keeps the demand predicate amortized
+    /// O(1): without it, a run of tombstones at the front of the vec is
+    /// re-walked on every single registration, and the compaction that
+    /// would clear them does not arrive until `len` reaches a threshold an
+    /// earlier, larger live population already raised. That is quadratic
+    /// in an ordinary workload, not an adversarial one, and it runs under
+    /// this registry's mutex.
+    ///
+    /// Reset to zero by anything that moves entries: `compact_if_due`'s
+    /// `retain` and `drain` both leave it pointing at a vec whose entries
+    /// were all live when they were kept, so zero is both correct and the
+    /// cheapest place to resume from.
+    first_possibly_live: usize,
+    /// Entries examined by every compaction scan so far, for the test that
+    /// pins the amortized bound.
+    #[cfg(test)]
+    compaction_scan_work: usize,
+    /// Entries probed by every demand scan so far. Counted separately from
+    /// the compaction scan because the two bounds fail independently, and
+    /// the demand scan is the one that shipped quadratic.
+    #[cfg(test)]
+    demand_scan_work: usize,
+}
+
+impl FrameCompletionRegistry {
+    fn new() -> Self {
+        Self {
+            waiters: Vec::new(),
+            next_compaction: COMPACTION_SLACK,
+            first_possibly_live: 0,
+            #[cfg(test)]
+            compaction_scan_work: 0,
+            #[cfg(test)]
+            demand_scan_work: 0,
+        }
+    }
+
+    /// Drop tombstoned entries if the registry has grown past its
+    /// threshold, then set the next threshold to `2 * live +
+    /// COMPACTION_SLACK`.
+    ///
+    /// The drain empties the vec every completed frame, so this only ever
+    /// matters while registrations accumulate and no frame completes.
+    ///
+    /// # What the bound is, stated against the peak
+    ///
+    /// The threshold set here is read from the live count *at this scan*,
+    /// and nothing lowers it again until the next scan or drain. So the
+    /// bound is `len() <= 2 * live_at_last_compaction + COMPACTION_SLACK`,
+    /// and therefore `len() <= 2 * peak_live + COMPACTION_SLACK`, with
+    /// total scan work over *n* pushes in O(*n*).
+    ///
+    /// Phrased against the *instantaneous* live count it is false, and the
+    /// gap is not small: hold `3 * COMPACTION_SLACK` waiters until a scan
+    /// lifts the threshold, drop all of them, then keep registering and
+    /// cancelling, and the registry sits at `len = 3 * COMPACTION_SLACK`
+    /// with `live = 0` against a ceiling of one slack.
+    /// `the_completion_registry_compacts_within_its_amortized_bound`
+    /// asserts exactly that instant. At the shipped `COMPACTION_SLACK = 8`
+    /// that is 24 entries against a budget of 8, measured.
+    ///
+    /// It also does **not** buy "dead entries do not accumulate", which is
+    /// a stronger claim than amortized doubling makes.
+    ///
+    /// Two properties make scanning under the registry guard safe, and only
+    /// the second is about correctness:
+    ///
+    /// * Dropping a [`Weak`] whose strong count is already zero runs no
+    ///   caller code. `FrameCompletionState::drop` ran when the count hit
+    ///   zero; all that remains is freeing the allocation. So this `retain`
+    ///   does not violate the lock order above.
+    /// * `strong_count() == 0` is a **final** observation: `upgrade()`
+    ///   already fails at zero and the count can never rise again, so this
+    ///   can never discard a live waiter. The inverse race — reading 1 for
+    ///   an entry that drops to zero immediately after — is harmless: that
+    ///   entry survives to the next scan, or to the drain, where
+    ///   `upgrade()` returns `None`.
+    fn compact_if_due(&mut self) {
+        if self.waiters.len() < self.next_compaction {
+            return;
+        }
+
+        #[cfg(test)]
+        {
+            self.compaction_scan_work += self.waiters.len();
+        }
+
+        // Reset BEFORE the retain, not after. `retain` moves every
+        // surviving entry, so the old cursor indexes nothing meaningful
+        // once it runs -- and `parking_lot` does not poison, so if anything
+        // in that closure ever unwound (`Weak::strong_count` cannot today,
+        // but a `tracing` call added there with a panicking subscriber
+        // could), the next lock would find a partially-retained vec behind
+        // a stale cursor pointing at LIVE entries. That silently skips a
+        // live waiter and reproduces this issue's hang, from a site neither
+        // guarded path touches. Zero is unconditionally a valid cursor, so
+        // writing it first costs nothing and closes that ordering.
+        self.first_possibly_live = 0;
+        self.waiters
+            .retain(|notifier| notifier.state.strong_count() > 0);
+        self.next_compaction = 2 * self.waiters.len() + COMPACTION_SLACK;
+    }
+
+    /// Whether any registration still has a live future, advancing the
+    /// scan cursor past every tombstone it walks over.
+    ///
+    /// This is the demand predicate: a registration issues a frame request
+    /// exactly when this returns `false`, which is the zero-to-one
+    /// transition of the live-waiter set.
+    ///
+    /// Amortized O(1). Each call either stops on the first entry it looks
+    /// at, or permanently retires however many tombstones it walks past,
+    /// so the total probes over *n* registrations is O(*n*) rather than
+    /// O(*n*) per registration. Skipping a retired prefix can never skip a
+    /// live waiter: `strong_count() == 0` is final for a [`Weak`], since
+    /// `upgrade()` already fails at zero and the count can never rise
+    /// again.
+    fn has_live_waiter(&mut self) -> bool {
+        // The cursor's whole safety argument is that everything below it was
+        // observed dead. That holds only while the sole mutation between
+        // scans is an append -- and `end_of_frame` pushes through the
+        // `waiters` field directly, so nothing but this assertion stops a
+        // future index-shifting mutation from stranding the cursor over live
+        // entries. Debug-only, and invisible to the scan counter, so it
+        // changes neither the shipped cost nor what the bound test measures;
+        // what it buys is that the violation surfaces as a loud unit-test
+        // failure rather than as a silently skipped waiter that hangs.
+        debug_assert!(
+            self.first_possibly_live <= self.waiters.len(),
+            "BUG: the demand-scan cursor ({}) is past the end of the registry ({}); \
+             a mutation that shrank or moved entries did not reset it",
+            self.first_possibly_live,
+            self.waiters.len()
+        );
+        debug_assert!(
+            self.waiters[..self.first_possibly_live.min(self.waiters.len())]
+                .iter()
+                .all(|notifier| notifier.state.strong_count() == 0),
+            "BUG: the demand-scan cursor ({}) has passed a live waiter; every entry \
+             below it must already be a tombstone",
+            self.first_possibly_live
+        );
+
+        while self.first_possibly_live < self.waiters.len() {
+            #[cfg(test)]
+            {
+                self.demand_scan_work += 1;
+            }
+
+            if self.waiters[self.first_possibly_live].state.strong_count() > 0 {
+                // Deliberately NOT advanced past a live entry: it may die
+                // later, and re-checking one entry is O(1).
+                return true;
+            }
+
+            self.first_possibly_live += 1;
+        }
+
+        false
+    }
+
+    /// Take every registration, leaving the registry empty and its
+    /// compaction threshold back at its floor.
+    ///
+    /// Resetting the threshold is load-bearing: without it, it ratchets to
+    /// the all-time peak registration count and the bound becomes a
+    /// high-water mark rather than a statement about the live population.
+    fn drain(&mut self) -> Vec<FrameCompletionNotifier> {
+        self.next_compaction = COMPACTION_SLACK;
+        self.first_possibly_live = 0;
+        std::mem::take(&mut self.waiters)
+    }
 }
 
 /// The Idle-slice deadline [`UpdateScheduler::drive_frame`] bounds
@@ -304,8 +626,10 @@ struct FrameState {
     /// ever gated this way: Animation and Build tasks run unconditionally
     /// regardless of the deadline (see `drive_frame`'s doc).
     idle_deadline: Mutex<Option<Instant>>,
-    /// Pending frame completion futures
-    completion_waiters: Mutex<Vec<FrameCompletionNotifier>>,
+    /// Pending frame completion futures. See
+    /// [`FrameCompletionRegistry`] for the lock order this field imposes on
+    /// everything that touches it.
+    completion_waiters: Mutex<FrameCompletionRegistry>,
 }
 
 /// Callback registration and cancellation state
@@ -553,7 +877,7 @@ impl UpdateScheduler {
                 janky_frame_count: AtomicU64::new(0),
                 warm_up_done: AtomicBool::new(false),
                 idle_deadline: Mutex::new(None),
-                completion_waiters: Mutex::new(Vec::new()),
+                completion_waiters: Mutex::new(FrameCompletionRegistry::new()),
             },
             callbacks: CallbackState {
                 post_frame_registration: Mutex::new(()),
@@ -1597,9 +1921,10 @@ impl UpdateScheduler {
     /// # Why this exists
     ///
     /// `on_frame_scheduled` fires only on `frame_scheduled`'s false→true
-    /// transition, and the *only* place that ever clears the latch back to
-    /// `false` is `handle_begin_frame`, unconditionally, at the top of every
-    /// real frame. A `PumpAsync` wake has no frame to do that clearing —
+    /// transition, and exactly two places ever clear the latch back to
+    /// `false`: `handle_begin_frame`, unconditionally at the top of every
+    /// real frame, and this method. A `PumpAsync` wake has no frame to do
+    /// that clearing —
     /// without this call, a `request_frame()` made before entering
     /// `PumpAsync` (a task's initial spawn, or an earlier wake) leaves the
     /// latch `true` forever: a LATER, independent wake (a network
@@ -1620,6 +1945,27 @@ impl UpdateScheduler {
     /// would silently erase that signal — the exact starvation this method
     /// exists to prevent, just for a self-waking task instead of an
     /// externally-woken one.
+    ///
+    /// # Clearing the latch now revokes frame demand, including an
+    /// # `end_of_frame` waiter's
+    ///
+    /// A pending [`end_of_frame`](Self::end_of_frame) waiter IS frame
+    /// demand: registering issues one, and every later registration stays
+    /// silent while that waiter is live. This method clears the latch
+    /// without draining the completion registry, so calling it outside the
+    /// frames-disabled `PumpAsync` arm revokes that demand with the waiter
+    /// still queued. Nothing re-issues it except a frames-enabled edge
+    /// (`handle_app_lifecycle_state_change`'s resume leg, or
+    /// [`set_frames_enabled`](Self::set_frames_enabled)), so until one of
+    /// those arrives, that waiter and every registration behind it wait
+    /// forever.
+    ///
+    /// This is reachable, not theoretical: frames enabled, a waiter
+    /// registered and its demand issued, the app goes `Hidden`, a pump tick
+    /// lands here and revokes the latch, and the waiters are stranded until
+    /// the resume edge. This method is `pub` and takes `&self` on a
+    /// `Clone + Send + Sync` scheduler, so an embedder can reach it from any
+    /// thread; call it only from the wake arm it documents above.
     pub fn finish_async_pump(&self) {
         self.inner
             .frame
@@ -2107,13 +2453,96 @@ impl UpdateScheduler {
     /// # Flutter Equivalent
     ///
     /// This is similar to Flutter's `SchedulerBinding.endOfFrame` Future.
+    ///
+    /// # Demand
+    ///
+    /// Registering **is** the demand: this schedules a frame on the 0 → 1
+    /// transition of the live-waiter set, the same rule Compose's
+    /// `BroadcastFrameClock` states for `onNewAwaiters` and the web's
+    /// `requestAnimationFrame` implies. So an idle scheduler wakes for this
+    /// call, and N registrations inside one frame still cost at most one
+    /// wake (`request_frame`'s own false→true swap edge coalesces them).
+    ///
+    /// The demand honors `frames_enabled`, matching Dart's `scheduleFrame()`
+    /// and its own documented consequence: a scheduler whose owner disabled
+    /// frames is not forced awake, and a future registered there resolves
+    /// only once frames come back — see
+    /// [`set_frames_enabled`](Self::set_frames_enabled).
+    ///
+    /// Two further consequences worth knowing before calling this:
+    ///
+    /// * A pending waiter is real frame demand, so it suppresses
+    ///   [`execute_idle_callbacks`](Self::execute_idle_callbacks) until the
+    ///   frame runs.
+    /// * If the `on_frame_scheduled` hook panics, the demand is lost
+    ///   permanently rather than retried: `request_frame` sets
+    ///   `frame_scheduled = true` *before* firing the hook, so an unwinding
+    ///   hook leaves the latch set with no wake delivered and every later
+    ///   demand hits the no-op edge. Compose defines a transition for this
+    ///   (a throwing `onNewAwaiters` fails the clock and resumes every
+    ///   current and future awaiter with the error); FLUI defines none yet.
+    ///
+    /// # Panics
+    ///
+    /// Propagates a panic from the `on_frame_scheduled` hook, which this
+    /// call reaches whenever it issues a demand. See
+    /// [`set_on_frame_scheduled`](Self::set_on_frame_scheduled) for that
+    /// hook's contract.
+    #[must_use = "registering a completion waiter schedules a frame whether or not the \
+                  future is awaited; drop it to cancel"]
     pub fn end_of_frame(&self) -> FrameCompletionFuture {
-        let (future, state) = FrameCompletionFuture::new();
-        self.inner
-            .frame
-            .completion_waiters
-            .lock()
-            .push(FrameCompletionNotifier { state });
+        let future = FrameCompletionFuture::new();
+
+        let needs_demand = {
+            let mut registry = self.inner.frame.completion_waiters.lock();
+            registry.compact_if_due();
+
+            // The predicate is LIVE entries, not `is_empty()`. A tombstone
+            // left by a cancelled waiter says nothing about whether a frame
+            // is still coming: `frame_scheduled` has a second clearer
+            // besides `handle_begin_frame` — the public `finish_async_pump`
+            // — so a demand can be revoked with no drain, and `is_empty()`
+            // would then be sound only through an untested coupling across
+            // the registry, that latch, and `frames_enabled`.
+            //
+            // `has_live_waiter` reads only the vec already under this
+            // guard, and is amortized O(1) rather than O(len): it retires
+            // the tombstones it walks past instead of re-walking them on
+            // every registration. The cost matters because this runs under
+            // the registry mutex, so it blocks registration AND completion.
+            //
+            // What this buys is the ISSUANCE half of the invariant: after a
+            // drain the vec is empty, so the first push demands, and every
+            // later push either sees a live entry whose demand postdates
+            // that drain or demands itself. SURVIVAL of an issued demand is
+            // not decidable here at all -- only `set_frames_enabled`'s
+            // enable edge can re-issue one that was revoked.
+            let had_live_waiter = registry.has_live_waiter();
+
+            // Register BEFORE demanding, so the registration is the
+            // linearization point: demand-first would let a concurrent
+            // frame both begin and drain in between, leaving this waiter to
+            // miss the frame it just paid for and buy a redundant next one.
+            // Flutter's `endOfFrame` requests first; this is a deliberate
+            // divergence, recorded in this crate's ARCHITECTURE.md.
+            registry.waiters.push(future.notifier());
+
+            !had_live_waiter
+        };
+        // The guard is released HERE, before the demand. The hook
+        // `schedule_frame_if_enabled` can reach must find every scheduler
+        // mutex free, `completion_waiters` included. The detector is
+        // `end_of_frame_demand_runs_the_frame_scheduled_hook_with_no_scheduler_lock_held`
+        // in `scheduler/lock_discipline_tests.rs`, which reaches the hook
+        // through THIS function. Its older sibling
+        // `frame_scheduled_hook_runs_with_no_scheduler_lock_held` calls
+        // `request_frame()` directly and so never holds this guard at all:
+        // it cannot catch a regression here, and citing it would be a false
+        // sense of coverage.
+        if needs_demand {
+            self.schedule_frame_if_enabled();
+        }
+
         future
     }
 
@@ -2136,20 +2565,42 @@ impl UpdateScheduler {
     /// catch-then-resume shape for a panicking post-frame callback, just
     /// upstream of it here.
     fn notify_frame_completion(&self, timing: &FrameTiming) {
-        let waiters: Vec<_> = {
-            let mut waiters = self.inner.frame.completion_waiters.lock();
-            waiters.drain(..).collect()
-        };
+        let waiters = self.inner.frame.completion_waiters.lock().drain();
 
         let mut first_panic: Option<Box<dyn std::any::Any + Send>> = None;
         for notifier in waiters {
+            // `upgrade()` at loop-body scope, never inside the
+            // `completion_waiters` block above: the temporary `Arc` it
+            // produces may be the LAST strong reference by the time this
+            // iteration ends, and dropping it then runs
+            // `FrameCompletionState::drop` -- caller-owned `Waker` teardown,
+            // which the lock order forbids under either mutex.
+            //
+            // A failed upgrade means the future was dropped, i.e. the wait
+            // was CANCELLED. That is an ordinary outcome, not an error, and
+            // must stay untraced: it would log at frame rate.
+            let Some(state) = notifier.state.upgrade() else {
+                continue;
+            };
+
             let waker = {
-                let mut state = notifier.state.lock();
+                let mut state = state.lock();
                 state.completed = Some(*timing);
+                // Taken, not read: with the waker moved out, the temporary
+                // `Arc`'s own drop at the end of this iteration has no
+                // caller code left to run even when it is the last
+                // reference.
                 state.waker.take()
             };
             let Some(waker) = waker else { continue };
 
+            // A legal and deliberate interleaving: another thread may poll
+            // this future between the guard release just above and this
+            // `wake()`, observe `completed`, resolve, and drop the task --
+            // so this can wake a waker whose task is already gone. Waking
+            // after completion is explicitly permitted by `Waker`'s own
+            // contract. Do not "fix" it by holding the guard across the
+            // wake; that is issue #1057's deadlock.
             if let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
             {
@@ -2189,12 +2640,37 @@ impl UpdateScheduler {
         self.inner.binding.frames_enabled.load(Ordering::Acquire)
     }
 
-    /// Enable or disable frame scheduling
+    /// Enable or disable frame scheduling.
+    ///
+    /// The disabled → enabled edge re-requests a frame, mirroring
+    /// [`handle_app_lifecycle_state_change`](Self::handle_app_lifecycle_state_change)
+    /// and Flutter's `_setFramesEnabledState`. A demand issued while frames
+    /// were disabled is silently dropped by
+    /// [`schedule_frame_if_enabled`](Self::schedule_frame_if_enabled) with
+    /// nothing recording the loss, and a pending
+    /// [`end_of_frame`](Self::end_of_frame) waiter left behind that way
+    /// waits forever, because every later registration sees it still live
+    /// and stays silent. Only a frames-enabled edge can re-issue such a
+    /// demand.
+    ///
+    /// **This setter is the API-surface mirror, not the production
+    /// carrier.** It has no production callers; the edge a running app
+    /// actually crosses is `handle_app_lifecycle_state_change`'s resume
+    /// leg, which has always re-requested and is pinned by
+    /// `lifecycle_reenable_edge_schedules_exactly_one_frame`. The
+    /// re-request is here so that an embedder toggling frames through the
+    /// public setter cannot reach a stranded state the lifecycle path
+    /// recovers from.
     pub fn set_frames_enabled(&mut self, enabled: bool) {
-        self.inner
+        let was_enabled = self
+            .inner
             .binding
             .frames_enabled
-            .store(enabled, Ordering::Release);
+            .swap(enabled, Ordering::AcqRel);
+
+        if !was_enabled && enabled {
+            self.request_frame();
+        }
     }
 
     /// Schedule a frame if frames are enabled
@@ -2454,10 +2930,47 @@ impl UpdateScheduler {
             .load(Ordering::Acquire)
     }
 
-    /// Get the number of pending frame completion waiters (for testing).
+    /// Registry entries, live and tombstoned (for testing).
+    ///
+    /// Under `Weak` handles this deliberately does **not** decrease when a
+    /// future is dropped -- cancellation takes no lock and so removes
+    /// nothing. Use it for capacity assertions; use
+    /// [`live_completion_waiter_count`](Self::live_completion_waiter_count)
+    /// to count waiters that can still be woken.
     #[cfg(test)]
     fn completion_waiter_count(&self) -> usize {
-        self.inner.frame.completion_waiters.lock().len()
+        self.inner.frame.completion_waiters.lock().waiters.len()
+    }
+
+    /// Registry entries whose future is still alive (for testing).
+    #[cfg(test)]
+    fn live_completion_waiter_count(&self) -> usize {
+        self.inner
+            .frame
+            .completion_waiters
+            .lock()
+            .waiters
+            .iter()
+            .filter(|notifier| notifier.state.strong_count() > 0)
+            .count()
+    }
+
+    /// Entries every compaction scan has examined so far (for testing the
+    /// amortized bound).
+    #[cfg(test)]
+    fn completion_compaction_scan_work(&self) -> usize {
+        self.inner
+            .frame
+            .completion_waiters
+            .lock()
+            .compaction_scan_work
+    }
+
+    /// Entries every demand scan has probed so far (for testing that a
+    /// tombstone prefix is not re-walked per registration).
+    #[cfg(test)]
+    fn completion_demand_scan_work(&self) -> usize {
+        self.inner.frame.completion_waiters.lock().demand_scan_work
     }
 }
 
@@ -3469,6 +3982,353 @@ mod tests {
             "notify_frame_completion must release notifier.state's lock before \
              calling wake() -- an inline-polling waker's own re-lock would \
              otherwise deadlock"
+        );
+    }
+
+    /// Compaction must stay amortized: total scan work linear in the
+    /// registrations that caused it.
+    ///
+    /// # Why this workload and not the mixed one above
+    ///
+    /// Every future is held, so `retain` never removes anything and the
+    /// doubling in `compact_if_due`'s threshold is the only thing keeping
+    /// the scans rare. Drop the `2 *` from that assignment and the
+    /// threshold grows by a constant instead, so a scan fires every
+    /// `COMPACTION_SLACK` pushes and the total goes quadratic: 960 probes
+    /// here against the 208 the doubling costs.
+    ///
+    /// The bound test above cannot see that at all. Its second phase drops
+    /// every future, so `retain` empties the vec and the next threshold is
+    /// `COMPACTION_SLACK` either way, with or without the doubling.
+    #[test]
+    fn compaction_scan_work_stays_linear_in_registrations() {
+        // Enough to cross four thresholds at the shipped slack
+        // (8, 24, 56, 120), which is where a constant-growth threshold and
+        // a doubling one have visibly diverged.
+        const REGISTRATIONS: usize = 15 * COMPACTION_SLACK + 1;
+
+        let scheduler = UpdateScheduler::new();
+        let held: Vec<_> = (0..REGISTRATIONS)
+            .map(|_| scheduler.end_of_frame())
+            .collect();
+
+        assert_eq!(
+            scheduler.live_completion_waiter_count(),
+            REGISTRATIONS,
+            "every registration must still be live, or `retain` is doing the work \
+             the threshold is supposed to be doing"
+        );
+
+        let work = scheduler.completion_compaction_scan_work();
+        assert!(
+            work > 0,
+            "the workload must actually reach the threshold, or this bound is vacuous"
+        );
+        assert!(
+            work <= 3 * REGISTRATIONS,
+            "compaction probed {work} entries across {REGISTRATIONS} registrations; \
+             a doubling threshold keeps that linear"
+        );
+
+        drop(held);
+    }
+
+    /// A run of tombstones at the front of the registry must be walked
+    /// once, not re-walked by every later registration.
+    ///
+    /// # The workload is ordinary, not adversarial
+    ///
+    /// Hold a batch of waiters long enough for a compaction to raise the
+    /// threshold from that batch, cancel all but one, then keep
+    /// registering. Compaction cannot arrive to clear the tombstones,
+    /// because the threshold was sized for the larger live population that
+    /// has since gone. Every registration then walks the whole dead prefix
+    /// to reach the one live entry behind it, under the registry mutex,
+    /// which blocks registration and frame completion alike.
+    ///
+    /// The scan cursor is what makes this linear. Every count below is the
+    /// measured delta across the registrations this test makes behind the
+    /// dead prefix, which at the shipped slack is 121 of them. Without the
+    /// cursor that costs 14,641 probes, against the 726 this test allows;
+    /// with it, 241, which is the 121 of the single prefix walk plus one
+    /// apiece for the 120 registrations after it. The shape grows as the
+    /// square of the batch, so a larger app pays disproportionately more.
+    #[test]
+    fn the_demand_scan_does_not_rewalk_a_tombstone_prefix() {
+        // Sized from the constant rather than written as a literal. The
+        // all-live compaction thresholds are `COMPACTION_SLACK * (2^n - 1)`
+        // (8, 24, 56, 120, 248 at the shipped slack of 8), so registering
+        // `15 * COMPACTION_SLACK + 1` lands just past the fourth of them
+        // with the next one at `31 * COMPACTION_SLACK`. That leaves room
+        // for the same number of follow-up registrations without reaching
+        // it, which is the state this test needs: `2 * (15K + 1) < 31K`
+        // for any `K > 2`.
+        const BATCH: usize = 15 * COMPACTION_SLACK + 1;
+
+        let scheduler = UpdateScheduler::new();
+
+        let mut held: Vec<_> = (0..BATCH).map(|_| scheduler.end_of_frame()).collect();
+        assert_eq!(scheduler.live_completion_waiter_count(), BATCH);
+
+        // Cancel every waiter but the last, leaving a long dead prefix in
+        // front of a single live entry.
+        held.drain(..BATCH - 1);
+        assert_eq!(scheduler.live_completion_waiter_count(), 1);
+
+        let compaction_work_before = scheduler.completion_compaction_scan_work();
+        let demand_work_before = scheduler.completion_demand_scan_work();
+
+        let _second_batch: Vec<_> = (0..BATCH).map(|_| scheduler.end_of_frame()).collect();
+
+        // The scenario's own precondition, asserted rather than assumed: if
+        // a compaction fired it would clear the prefix and there would be
+        // nothing to re-walk. A future change to COMPACTION_SLACK that
+        // invalidates the sizing above fails HERE, saying the workload
+        // drifted, instead of passing vacuously.
+        assert_eq!(
+            scheduler.completion_compaction_scan_work(),
+            compaction_work_before,
+            "no compaction may fire during the measured phase, or the prefix this \
+             test is about would be cleared for free"
+        );
+
+        let registrations = 2 * BATCH;
+        let demand_work = scheduler.completion_demand_scan_work() - demand_work_before;
+
+        // Lower bound first, because the upper one alone is satisfied by
+        // doing no work at all: swap `has_live_waiter()` for the unsound
+        // `!waiters.is_empty()` this design rejects and the scan never runs,
+        // leaving `demand_work == 0` comfortably under any ceiling. Nothing
+        // else in the suite discriminates either -- every other demand test
+        // starts from an empty registry, and the coalescing test sees one
+        // hook edge under both predicates because the swap edge coalesces
+        // regardless. The exact value here is `2 * BATCH - 1`: one full walk
+        // of the prefix, then one probe per later registration.
+        assert!(
+            demand_work >= BATCH,
+            "the demand scan probed only {demand_work} entries; walking the dead \
+             prefix once costs at least {BATCH}, so anything less means the live \
+             predicate was not consulted"
+        );
+        assert!(
+            demand_work <= 3 * registrations,
+            "the demand scan probed {demand_work} entries across {BATCH} registrations \
+             behind a dead prefix; a scan that retires what it walks past stays linear \
+             in the {registrations} registrations overall"
+        );
+    }
+
+    /// Cancellation takes no lock, so it removes nothing: a dropped future
+    /// leaves a tombstone that only a push past the compaction threshold,
+    /// or a drain, reclaims. This pins the bound that buys.
+    ///
+    /// # The bound is against the PEAK live population, not the current one
+    ///
+    /// `compact_if_due` sets the next threshold from the live count *at
+    /// that scan*, and nothing lowers it again until the next scan or
+    /// drain. So the honest statement is
+    /// `len() <= 2 * live_at_last_compaction + COMPACTION_SLACK`, and
+    /// therefore `len() <= 2 * peak_live + COMPACTION_SLACK`.
+    ///
+    /// Phrased against the *instantaneous* live count it is simply false,
+    /// and this test's own phase 2 is the counterexample: hold
+    /// `3 * COMPACTION_SLACK` waiters until a scan lifts the threshold,
+    /// drop all of them, then keep registering and cancelling. That reaches
+    /// `len = 3 * COMPACTION_SLACK` with `live = 0`, against a
+    /// `2 * 0 + COMPACTION_SLACK` budget of one slack, which the test
+    /// asserts outright.
+    ///
+    /// The peak-relative bound is still the useful one: every entry the
+    /// registry holds is bounded by a constant factor of a population that
+    /// was genuinely live at some point, and total scan work stays linear
+    /// in the number of registrations.
+    #[test]
+    fn the_completion_registry_compacts_within_its_amortized_bound() {
+        // Both phase sizes are derived from `COMPACTION_SLACK` so that
+        // changing the constant moves the phases with it, instead of
+        // leaving this test failing on arithmetic that reads like a broken
+        // invariant.
+        //
+        // Phase 1 must push MORE than `COMPACTION_SLACK`, or no scan ever
+        // fires and the threshold never leaves its floor. Three times it is
+        // the point at which an all-live registry sits exactly at the
+        // threshold the first scan set, which is the largest phase 1 can be
+        // without a second scan.
+        const PHASE_ONE_REGISTRATIONS: usize = 3 * COMPACTION_SLACK;
+
+        // Phase 2 must push MORE than `4 * COMPACTION_SLACK`: with
+        // compaction deleted the registry would hold
+        // `PHASE_ONE_REGISTRATIONS + n`, and that only exceeds the
+        // `2 * peak_live + COMPACTION_SLACK` budget of `7 * COMPACTION_SLACK`
+        // once `n > 4 * COMPACTION_SLACK`. Five leaves one slack's margin.
+        const PHASE_TWO_REGISTRATIONS: usize = 5 * COMPACTION_SLACK;
+
+        let scheduler = UpdateScheduler::new();
+
+        // Phase 1 — build a live population and let a scan set the
+        // threshold from it. No bound assertion here: every future is held,
+        // so `live == len == peak_live` and `len <= 2 * len + slack` cannot
+        // fail for any input. Phase 2 is the only phase that can.
+        let mut held = Vec::new();
+        for _ in 0..PHASE_ONE_REGISTRATIONS {
+            held.push(scheduler.end_of_frame());
+        }
+        let peak_live = scheduler.live_completion_waiter_count();
+
+        // Phase 1's stated job is to let a scan set the threshold, so
+        // assert the scan happened. Pinning this is what stops a future
+        // `COMPACTION_SLACK` change from making the phase silently
+        // vacuous: a fixed phase size that no longer exceeds the constant
+        // never reaches the threshold at all, and the test stays green
+        // while testing nothing.
+        assert!(
+            scheduler.completion_compaction_scan_work() > 0,
+            "phase 1 must actually trigger a compaction scan"
+        );
+
+        // A property, not an observation of today's constants: compaction
+        // may drop tombstones, and may never drop a live entry, so a phase
+        // of all-held pushes ends with every one of them still countable
+        // whatever the threshold arithmetic does in between.
+        assert_eq!(
+            peak_live, PHASE_ONE_REGISTRATIONS,
+            "compaction must never remove a live waiter"
+        );
+
+        // Phase 2 — the live population collapses while registrations keep
+        // arriving. This is what makes the peak phrasing necessary.
+        held.clear();
+
+        // The instant that falsifies the instantaneous-live phrasing,
+        // pinned as a fact rather than left as a claim in a comment: every
+        // waiter is gone, and the registry still holds all of their
+        // tombstones under a threshold sized when all of them were live,
+        // while a `2 * 0 + COMPACTION_SLACK` ceiling would be one slack.
+        // This records the shape; the loop below is what tests the bound.
+        assert_eq!(
+            (
+                scheduler.completion_waiter_count(),
+                scheduler.live_completion_waiter_count()
+            ),
+            (PHASE_ONE_REGISTRATIONS, 0),
+            "tombstones outlive the population whose threshold sized them"
+        );
+
+        for _ in 0..PHASE_TWO_REGISTRATIONS {
+            drop(scheduler.end_of_frame());
+            let len = scheduler.completion_waiter_count();
+            assert!(
+                len <= 2 * peak_live + COMPACTION_SLACK,
+                "registry holds {len} entries against a budget of \
+                 2 * {peak_live} + {COMPACTION_SLACK}"
+            );
+        }
+
+        // The drain resets the threshold to its floor. Without that reset
+        // the threshold ratchets to the all-time peak, and the registry's
+        // size bound silently becomes a high-water mark instead of a
+        // statement about the population that is actually live.
+        // Enough live registrations to ratchet the threshold well above its
+        // floor, so that failing to reset it on drain is visible below.
+        let long_lived: Vec<_> = (0..PHASE_ONE_REGISTRATIONS)
+            .map(|_| scheduler.end_of_frame())
+            .collect();
+        scheduler.execute_frame();
+        drop(long_lived);
+        assert_eq!(
+            scheduler.completion_waiter_count(),
+            0,
+            "the drain empties the registry outright"
+        );
+
+        let scan_work_before = scheduler.completion_compaction_scan_work();
+        for _ in 0..COMPACTION_SLACK {
+            drop(scheduler.end_of_frame());
+        }
+        assert_eq!(
+            scheduler.completion_compaction_scan_work(),
+            scan_work_before,
+            "the floor threshold is not reached until COMPACTION_SLACK entries are queued"
+        );
+
+        drop(scheduler.end_of_frame());
+        assert!(
+            scheduler.completion_compaction_scan_work() > scan_work_before,
+            "the push that crosses the floor threshold must compact; if the drain had \
+             left the threshold at its pre-drain high-water mark, this push would sit \
+             far below it and scan nothing"
+        );
+    }
+
+    /// A `Waker` displaced by a second `poll` is dropped where the
+    /// executor's own `Drop` runs, so it must be dropped with no lock held
+    /// — the same lock-then-drop trap `set_on_frame_scheduled` (#1038) and
+    /// `cancel_frame_callback` (#1156) already close. The concrete failure
+    /// is a single-threaded self-relock: a displaced waker whose `Drop`
+    /// re-polls the same future locks `state` again, and
+    /// `parking_lot::Mutex` is not reentrant.
+    ///
+    /// Two construction details are load-bearing, because the obvious
+    /// version of this test cannot fail. The probe is moved into
+    /// `Waker::from` with **no retained `Arc`**, so its `Drop` really runs
+    /// during the second `poll` rather than at the end of the test; and the
+    /// second `poll` uses a **distinct** waker, so something is displaced
+    /// at all. Probing with `try_lock` from inside `Drop` — rather than
+    /// performing the risky re-poll — gets the identical coverage without
+    /// hanging the suite when it regresses, exactly as
+    /// `notify_frame_completion_tolerates_an_inline_polling_waker` does
+    /// above.
+    #[test]
+    fn a_displaced_waker_is_dropped_outside_the_completion_state_lock() {
+        use std::task::Wake;
+
+        struct LockProbingWaker {
+            // The exact `Arc<Mutex<_>>` a re-polling `Drop` would need.
+            state: Arc<Mutex<FrameCompletionState>>,
+            observed_free: Arc<AtomicBool>,
+        }
+
+        #[expect(
+            clippy::manual_noop_waker,
+            reason = "the probe is its Drop impl, not its wake: Waker::noop() is a \
+                      static that is never dropped, so it cannot observe the lock \
+                      state this test exists to check"
+        )]
+        impl Wake for LockProbingWaker {
+            fn wake(self: Arc<Self>) {}
+        }
+
+        impl Drop for LockProbingWaker {
+            fn drop(&mut self) {
+                self.observed_free
+                    .store(self.state.try_lock().is_some(), Ordering::SeqCst);
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let mut future = scheduler.end_of_frame();
+        let observed_free = Arc::new(AtomicBool::new(false));
+
+        {
+            let displaced = Waker::from(Arc::new(LockProbingWaker {
+                state: Arc::clone(&future.state),
+                observed_free: Arc::clone(&observed_free),
+            }));
+            let mut cx = Context::from_waker(&displaced);
+            assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+        }
+        // The clone `poll` stored is now the only strong reference, so the
+        // next displacement is what runs `LockProbingWaker::drop`.
+
+        let replacement = Waker::noop();
+        let mut cx = Context::from_waker(replacement);
+        assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+
+        assert!(
+            observed_free.load(Ordering::SeqCst),
+            "poll must bind the displaced waker out of the `state` guard and drop it \
+             after the guard is released; dropping it under the guard hangs any waker \
+             whose Drop touches the same future"
         );
     }
 
