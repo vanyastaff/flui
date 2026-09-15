@@ -74,6 +74,17 @@ fn wait_for_running(platform: &WinitPlatform) {
 /// up) and that an unwind completed (count goes back down) — a
 /// deterministic condition, not a blind sleep, even though the exact
 /// wake-up latency is real wall-clock time.
+/// Bounded spin until `flag` is set. Used where a test must observe a side
+/// effect of a teardown step rather than a state the teardown reaches
+/// *before* that step (see `frame_callback_owner_is_released_by_complete_window_close`).
+fn wait_for_flag(flag: &AtomicBool, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !flag.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn wait_for_map_len(platform: &WinitPlatform, expected: usize, what: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -982,11 +993,18 @@ fn frame_callback_owner_is_released_by_complete_window_close() {
 
             wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
 
-            assert!(
-                probe_dropped_for_worker.load(Ordering::SeqCst),
-                "complete_window_close's callbacks().clear() must drop the \
-                 frame callback's owned probe once the map removal confirms \
-                 the close teardown ran"
+            // Wait on the effect itself, not on the map: `complete_window_close`
+            // removes the tracking entry BEFORE it clears the callback slots,
+            // so a poll that observes the empty map can land in the gap before
+            // `clear()` has run. The claim stays as strong -- this wait ends
+            // before `request_quit()` below, so the quit path's own
+            // `release_open_window_callbacks` (which only visits windows still
+            // in `state.windows`, and this one is already out) cannot be what
+            // satisfies it.
+            wait_for_flag(
+                &probe_dropped_for_worker,
+                "complete_window_close's callbacks().clear() to drop the frame \
+                 callback's owned probe",
             );
         }));
 
