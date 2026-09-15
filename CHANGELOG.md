@@ -700,6 +700,17 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **Ticker callbacks survive a reentrant restart, mute, or panic** (#1059):
+  `flui-scheduler`'s `Ticker` restored a checked-out callback whenever the
+  ticker was active, without asking whether that run was still the one that
+  checked it out. Chaining the next animation from a status listener — the
+  canonical idiom — therefore left two live tick chains on one controller
+  (ticking and notifying twice per frame, only one of them cancellable), muting
+  from inside a tick discarded the callback that `mute()` promises to retain,
+  and a panicking callback emptied the slot for good. The slot is now a
+  three-state machine leased across the callback by an RAII guard, with one
+  predicate gating every scheduling site.
+
 - **Scheduler frame state closes before a pre-pipeline panic propagates** (#1057):
   `flui-scheduler`'s `drive_frame`/`drive_frame_with_lane` used to catch only
   a panicking pipeline; a panic from a transient callback, the mid-frame

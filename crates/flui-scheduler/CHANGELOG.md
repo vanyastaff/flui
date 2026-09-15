@@ -109,6 +109,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A ticker's callback slot is now leased across the user callback, not
+  restored on state alone** (#1059): both dispatch paths took the callback out
+  of `TickerInner`, dropped the lock, invoked it, then restored it whenever the
+  ticker was `Active` — without checking whether that `Active` belonged to the
+  run that had checked the callback out. A callback that stopped its ticker and
+  started it again with a new callback had the superseded one restored over the
+  replacement, and the dispatch tail registered a second next-frame tick while
+  overwriting the new run's registration id, so the old id could never be
+  cancelled. The live shape is a status listener chaining the next animation
+  (`AnimationController::forward()` from a listener): it left two
+  self-perpetuating tick chains, ticking and notifying twice per frame for the
+  controller's life, with `stop()` able to cancel only one of them. A callback
+  that muted its own ticker lost the callback entirely — `mute()` documents that
+  it retains it — and a panicking callback left the slot empty forever.
+  `TickerInner`'s `Option<TickerCallback>` is now a three-state slot
+  (`Vacant`/`Ready`/`CheckedOut`) leased by an RAII guard that restores only
+  from `CheckedOut` and only while the ticker is still running (muted included),
+  and otherwise drops the superseded callback after releasing the lock. One
+  predicate — active, a callback present, no registration pending — now gates
+  every scheduling site, including the dispatch tail that previously omitted the
+  pending-registration term. The five sites that assign into the slot
+  (`stop`, `dispose`, `reset`, `start_inner`, `set_pending_callback`) also drop
+  the displaced callback outside the lock; that is hardening of the same class
+  as #1150/#1156, not a reachable defect today. See
+  `crates/flui-scheduler/ARCHITECTURE.md`'s mapping entry for the recorded
+  divergences left open.
+
 - **Two follow-up regressions in the #1057 panic-recovery bound, found by
   review:** `TaskQueue::execute_until`'s first attempt at bounding a
   reentrant pass parked tasks that outran its id watermark in a local
