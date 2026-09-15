@@ -626,6 +626,18 @@ file records the repo-consumer-visible summary.
 
 ### Removed
 
+- **`flui_scheduler::{UpdateScheduler::schedule_frame, FrameCallback}`**
+  (#1058): the legacy, `&FrameTiming`-argument frame-callback registration
+  is deleted, no alias. Its dispatch loop held the `current_frame` mutex
+  across every callback invocation, so a registered callback that read
+  `current_frame()` deadlocked on itself. `RenderingFlutterBinding::request_visual_update`
+  (its only production caller) now routes through
+  `UpdateScheduler::ensure_visual_update()` instead, which also fixes a
+  second bug: the retired call ignored `frames_enabled` and scheduled a
+  frame even while the app was backgrounded. Sibling lock-then-drop sites
+  fixed in the same change (tracked with #1150): `cancel_frame_callback`,
+  `remove_lifecycle_state_listener`, and `remove_timings_callback` no
+  longer drop a removed callback while its own collection is still locked.
 - **`paint_alpha`, `paint_layer_blend`, `paint_transform`** (#996): the three
   separate hooks on `RenderBox`/`RenderSliver`/`RenderObject`, and
   `RenderNode`'s dispatch of them, are gone — replaced by the single

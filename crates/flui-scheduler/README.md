@@ -56,9 +56,9 @@ use flui_scheduler::{UpdateScheduler, Priority};
 
 let scheduler = UpdateScheduler::new();
 
-// Schedule a frame callback
-scheduler.schedule_frame(Box::new(|timing| {
-    println!("Frame started");
+// Schedule a one-time frame callback (animation tick)
+scheduler.schedule_frame_callback(Box::new(|vsync_time| {
+    println!("Frame started at {:?}", vsync_time);
 }));
 
 // Add tasks with different priorities
@@ -280,7 +280,7 @@ match event {
         scheduler.add_task(Priority::UserInput, move || {
             handle_input(input);
         });
-        scheduler.schedule_frame(Box::new(|_| {}));
+        scheduler.request_frame();
     }
     _ => {}
 }

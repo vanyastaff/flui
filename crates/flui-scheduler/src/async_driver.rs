@@ -420,6 +420,20 @@ impl AsyncDriver {
             .filter(|task| task.ready.load(Ordering::Acquire))
             .count()
     }
+
+    /// Test-only probe: `true` if both of this driver's locks are currently
+    /// free.
+    ///
+    /// Backs `flui-scheduler`'s scheduler-wide lock-discipline oracle
+    /// (`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`),
+    /// so a callback that calls `spawn_local`/`spawn_local_eager` from inside another
+    /// callback can be observed NOT deadlocking against this driver's own
+    /// mutexes. `Inner`'s fields are private to this module; the oracle
+    /// probes them through this method rather than reaching in directly.
+    #[cfg(test)]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        self.inner.tasks.try_lock().is_some() && self.inner.request_frame.try_lock().is_some()
+    }
 }
 
 impl std::fmt::Debug for AsyncDriver {

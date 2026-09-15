@@ -86,9 +86,9 @@
 //!
 //! let scheduler = UpdateScheduler::new();
 //!
-//! // Schedule a frame
-//! scheduler.schedule_frame(Box::new(|frame_time| {
-//!     println!("Frame start: {:?}", frame_time);
+//! // Schedule a one-time frame callback (animation tick)
+//! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
+//!     println!("Frame start: {:?}", vsync_time);
 //! }));
 //!
 //! // Add task
@@ -187,7 +187,7 @@ pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};
 pub use frame::{
-    AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
+    AppLifecycleState, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
     LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback,
     SchedulerPhase,
 };

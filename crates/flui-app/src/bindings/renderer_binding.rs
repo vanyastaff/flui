@@ -623,11 +623,14 @@ impl RendererBinding for RenderingFlutterBinding {
 
     fn request_visual_update(&self) {
         // Upgrade-or-skip: if the owning realm's scheduler is already gone,
-        // there is no frame left to schedule a callback into.
+        // there is no frame left to schedule.
+        //
+        // Routes through the scheduler's gated pair (`ensure_visual_update`
+        // -> `schedule_frame_if_enabled`), matching Flutter's
+        // `ensureVisualUpdate` (`binding.dart` @ 3.44.0), which no-ops while
+        // frames are disabled instead of unconditionally requesting one.
         if let Some(scheduler) = self.scheduler.upgrade() {
-            scheduler.schedule_frame(Box::new(|_timing| {
-                // Visual update frame callback
-            }));
+            scheduler.ensure_visual_update();
         }
     }
 
@@ -756,6 +759,44 @@ mod tests {
             "request_visual_update must genuinely schedule a frame on a live \
              standalone scheduler, not silently no-op against an already-dead weak"
         );
+    }
+
+    /// #1058: `request_visual_update` must route through the scheduler's
+    /// GATED pair (`ensure_visual_update` -> `schedule_frame_if_enabled`),
+    /// matching Flutter's `ensureVisualUpdate` (`binding.dart` @ 3.44.0),
+    /// which returns early while frames are disabled. The retired
+    /// `schedule_frame` call this replaced went straight to the ungated
+    /// `request_frame()` and scheduled a frame regardless.
+    #[test]
+    fn request_visual_update_does_not_schedule_a_frame_while_frames_are_disabled() {
+        let binding = RenderingFlutterBinding::new();
+        let mut scheduler = binding
+            .scheduler
+            .upgrade()
+            .expect("standalone_scheduler keeps this upgradeable for the binding's whole life");
+        scheduler.set_frames_enabled(false);
+
+        binding.request_visual_update();
+
+        assert!(
+            !scheduler.is_frame_scheduled(),
+            "request_visual_update must respect frames_enabled, like Flutter's \
+             ensureVisualUpdate returning early while frames are disabled"
+        );
+    }
+
+    #[test]
+    fn request_visual_update_schedules_a_frame_while_frames_are_enabled() {
+        let binding = RenderingFlutterBinding::new();
+        let scheduler = binding
+            .scheduler
+            .upgrade()
+            .expect("standalone_scheduler keeps this upgradeable for the binding's whole life");
+        assert!(scheduler.frames_enabled(), "frames are enabled by default");
+
+        binding.request_visual_update();
+
+        assert!(scheduler.is_frame_scheduled());
     }
 
     #[test]

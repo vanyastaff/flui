@@ -73,7 +73,7 @@ use crate::{
     },
     duration::{FrameDuration, Milliseconds},
     frame::{
-        AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
+        AppLifecycleState, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
@@ -299,8 +299,6 @@ struct CallbackState {
     cancelled: DashMap<CallbackId, ()>,
     /// Callback ID generator
     id_gen: IdGenerator<flui_foundation::markers::FrameCallback>,
-    /// Legacy frame callbacks
-    frame: Mutex<Vec<FrameCallback>>,
     /// Persistent frame callbacks (every frame)
     persistent: Mutex<Vec<CancellablePersistentCallback>>,
     /// Post-frame callbacks (after frame completes)
@@ -536,7 +534,6 @@ impl UpdateScheduler {
                 transient: Mutex::new(Vec::new()),
                 cancelled: DashMap::new(),
                 id_gen: IdGenerator::new(),
-                frame: Mutex::new(Vec::new()),
                 persistent: Mutex::new(Vec::new()),
                 post_frame: Mutex::new(Vec::new()),
                 microtasks: Mutex::new(VecDeque::new()),
@@ -713,18 +710,6 @@ impl UpdateScheduler {
         // during transient callbacks (e.g. cancelling a post-frame callback)
         // must survive until handle_draw_frame checks them. The single clear()
         // at the end of handle_draw_frame is sufficient.
-
-        // Execute legacy frame callbacks
-        let callbacks: Vec<_> = {
-            let mut cbs = self.inner.callbacks.frame.lock();
-            cbs.drain(..).collect()
-        };
-
-        for callback in callbacks {
-            if let Some(timing) = self.inner.frame.current_frame.lock().as_ref() {
-                callback(timing);
-            }
-        }
 
         // Phase 2: MidFrameMicrotasks
         self.set_scheduler_phase(SchedulerPhase::MidFrameMicrotasks);
@@ -1278,24 +1263,31 @@ impl UpdateScheduler {
     /// scheduler.cancel_frame_callback(id);
     /// ```
     pub fn cancel_frame_callback(&self, id: CallbackId) -> bool {
-        // First, try to remove from pending callbacks
-        let mut callbacks = self.inner.callbacks.transient.lock();
-        let original_len = callbacks.len();
-        callbacks.retain(|c| c.id != id);
+        // Locate-then-remove instead of `Vec::retain`'s drop-in-place: `retain`
+        // would run the cancelled callback's `Drop` while `transient` is
+        // still held, and a capture that re-enters the scheduler (e.g.
+        // registering another callback) would deadlock on this same mutex.
+        // `position` + `remove` finds the single matching entry (ids are
+        // unique, so at most one) with no allocation and no full-Vec
+        // move — unlike a partition copy, the common no-match path (every
+        // `Ticker::stop`/`dispose` that outlives its callback) costs nothing
+        // extra. The removed value is dropped only after the guard falls.
+        let removed = {
+            let mut callbacks = self.inner.callbacks.transient.lock();
+            callbacks
+                .iter()
+                .position(|callback| callback.id == id)
+                .map(|index| callbacks.remove(index))
+        };
 
-        if callbacks.len() < original_len {
+        if let Some(callback) = removed {
+            drop(callback);
             return true; // Found and removed
         }
 
         // If not found, mark as cancelled (in case it's about to be executed)
         self.inner.callbacks.cancelled.insert(id, ());
         false
-    }
-
-    /// Schedule a legacy frame callback
-    pub fn schedule_frame(&self, callback: FrameCallback) {
-        self.inner.callbacks.frame.lock().push(callback);
-        self.request_frame();
     }
 
     /// Request a frame (without callback).
@@ -1559,6 +1551,14 @@ impl UpdateScheduler {
     }
 
     /// Set the current frame phase (for rendering pipeline)
+    ///
+    /// The `current_frame` guard is held for this whole call — it is a
+    /// plain field write, never a callback invocation — and must stay that
+    /// way: this is exactly the shape `handle_begin_frame`'s retired legacy
+    /// callback loop got wrong (issue #1058), where the lock outlived a
+    /// `callback(timing)` call and a callback reading `current_frame()`
+    /// deadlocked on itself. No user code may run inside this method's
+    /// locked scope.
     pub fn set_phase(&self, phase: FramePhase) {
         if let Some(timing) = self.inner.frame.current_frame.lock().as_mut() {
             timing.phase = phase;
@@ -1805,10 +1805,26 @@ impl UpdateScheduler {
     ///
     /// Returns `true` if the listener was found and removed.
     pub fn remove_lifecycle_state_listener(&self, id: CallbackId) -> bool {
-        let mut listeners = self.inner.callbacks.lifecycle_listeners.lock();
-        let original_len = listeners.len();
-        listeners.retain(|l| l.id != id);
-        listeners.len() < original_len
+        // Same hazard `cancel_frame_callback` guards against: `retain` would
+        // drop the removed listener's `Arc<dyn Fn(..)>` (possibly the last
+        // reference, running the captured state's `Drop`) while
+        // `lifecycle_listeners` is still locked. A listener whose capture
+        // re-enters this scheduler (adding or removing another listener) on
+        // drop would deadlock. `position` + `remove` finds the single
+        // matching entry (ids are unique) with no allocation and no full-Vec
+        // move on the common no-match path, and the removed value is
+        // dropped only after the guard falls.
+        let removed = {
+            let mut listeners = self.inner.callbacks.lifecycle_listeners.lock();
+            listeners
+                .iter()
+                .position(|listener| listener.id == id)
+                .map(|index| listeners.remove(index))
+        };
+
+        let found = removed.is_some();
+        drop(removed);
+        found
     }
 
     /// Check if frames should be scheduled based on lifecycle state
@@ -2004,8 +2020,21 @@ impl UpdateScheduler {
 
     /// Remove a timings callback
     pub fn remove_timings_callback(&self, callback: &TimingsCallback) {
-        let mut callbacks = self.inner.binding.timings_callbacks.lock();
-        callbacks.retain(|c| !Arc::ptr_eq(c, callback));
+        // Same hazard as `cancel_frame_callback`/`remove_lifecycle_state_listener`.
+        // `extract_if` (stable since Rust 1.87) removes every matching entry
+        // in one pass with no full-Vec reallocation or copy of the kept
+        // entries, and the removed `Arc<TimingsCallback>`s are dropped only
+        // once `timings_callbacks`'s guard has already fallen, not while a
+        // re-entrant drop could deadlock on it. Remove-all, not
+        // remove-first: unlike the two `CallbackId`-addressed sites above,
+        // nothing here guarantees a caller registers a given `Arc` only once.
+        let removed: Vec<_> = {
+            let mut callbacks = self.inner.binding.timings_callbacks.lock();
+            callbacks
+                .extract_if(.., |existing| Arc::ptr_eq(existing, callback))
+                .collect()
+        };
+        drop(removed);
     }
 
     /// Report pending frame timings to registered callbacks.
@@ -2243,6 +2272,15 @@ impl Default for SchedulerBuilder {
         Self::new()
     }
 }
+
+// The lock-discipline / reentrant-registration / lock-then-drop test family
+// (issue #1058) lives in its own file: it is one cohesive slice built on a
+// single shared oracle that nothing else in this file uses, and together
+// with that oracle it outgrew this file's already-large inline test module.
+// A sibling module rather than a nested one, so its tests sit beside `tests`
+// rather than two segments below it.
+#[cfg(test)]
+mod lock_discipline_tests;
 
 #[cfg(test)]
 mod tests {

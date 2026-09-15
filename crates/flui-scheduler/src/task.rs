@@ -454,6 +454,19 @@ impl TaskQueue {
 
         counts
     }
+
+    /// Test-only probe: `true` if this queue's lock is currently free.
+    ///
+    /// Backs `flui-scheduler`'s scheduler-wide lock-discipline oracle
+    /// (`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`),
+    /// so a callback that calls `add_task`/`execute_until` from inside another callback
+    /// can be observed NOT deadlocking against this queue's own mutex.
+    /// `queue` is private to this module; the oracle probes it through
+    /// this method rather than reaching into the field directly.
+    #[cfg(test)]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        self.queue.try_lock().is_some()
+    }
 }
 
 impl Default for TaskQueue {
