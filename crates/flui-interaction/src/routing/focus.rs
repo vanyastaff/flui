@@ -33,18 +33,31 @@ pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 /// [`FocusChangeCallback`] registered via [`Self::add_listener`]. A
 /// listener that itself calls `request_focus`/`unfocus` from inside that
 /// publication — a reentrant request — is never applied inline: it is
-/// queued and applied only after every currently in-flight notification
-/// has finished publishing, in the order it was requested (FIFO). By the
-/// time the outermost `request_focus`/`unfocus` call returns,
+/// queued, then re-validated (attached, focusable, still owned by this
+/// manager — see the private `is_eligible` predicate) immediately before
+/// its turn, and applied only once every currently in-flight notification
+/// has finished publishing, in the order it was requested (FIFO). A
+/// target that lost eligibility while it waited — a later listener in the
+/// same chain detached it, revoked its focusability, or reparented it
+/// elsewhere — is skipped rather than committed stale. By the time the
+/// outermost `request_focus`/`unfocus` call returns,
 /// [`Self::primary_focus`] and the last edge any listener observed always
 /// agree — no listener can observe a stale destination (issue #1040). The
-/// crate-internal node-replacement completion and [`Self::close`] publish
-/// under this same guard. A reentrant chain that never settles (two
-/// listeners that keep re-requesting each other) is bounded: past a fixed
-/// per-call budget of applications, the remaining queue is dropped with a
-/// single `tracing::warn!`. See `## Mapping decisions` in
-/// `crates/flui-interaction/docs/ARCHITECTURE.md` for how this compares to
-/// Flutter's microtask-deferred model.
+/// crate-internal node-replacement completion publishes its own outer
+/// edge under this same guard; [`Self::close`] does not participate in it
+/// at all — see its own doc for the distinct contract it keeps instead. A
+/// reentrant chain that never settles (two listeners that keep
+/// re-requesting each other) is bounded: past a fixed per-call budget of
+/// applications, the remaining queue is dropped with a single
+/// `tracing::warn!`. A listener that panics cannot leave this guard stuck
+/// open: `notification_depth` is held by a private RAII guard that
+/// decrements on unwind exactly as it
+/// does on a normal return, and — because the notification it was guarding
+/// never got to finish, so whatever it queued is only half a transaction —
+/// also discards the pending queue in that case, so a later, healthy call
+/// is never asked to replay a chain a panic interrupted partway through.
+/// See `## Mapping decisions` in `crates/flui-interaction/docs/ARCHITECTURE.md`
+/// for how this compares to Flutter's microtask-deferred model.
 pub struct FocusManager {
     root_scope: Rc<FocusScopeNode>,
     primary_focus: RefCell<Option<Rc<FocusNode>>>,
@@ -64,6 +77,39 @@ pub struct FocusManager {
     pending_focus_transitions: RefCell<VecDeque<Option<Rc<FocusNode>>>>,
 }
 
+/// RAII scope for one nested level of [`FocusManager::notification_depth`].
+///
+/// `enter` increments on construction; `Drop` decrements unconditionally,
+/// including when the drop runs while unwinding — a listener that panics
+/// mid-notification must not leave `notification_depth` stuck above zero,
+/// or every later `request_focus`/`unfocus` on that manager would queue
+/// forever instead of applying. Unwinding also means the notification this
+/// guard was covering never reached the point where it would drain what it
+/// queued, so any such entries describe a transaction the panic left half
+/// finished; replaying them under a later, healthy call would silently
+/// resurrect it, so the drop clears [`FocusManager::pending_focus_transitions`]
+/// in that case too.
+struct NotificationDepthGuard<'a> {
+    depth: &'a Cell<u32>,
+    pending: &'a RefCell<VecDeque<Option<Rc<FocusNode>>>>,
+}
+
+impl<'a> NotificationDepthGuard<'a> {
+    fn enter(depth: &'a Cell<u32>, pending: &'a RefCell<VecDeque<Option<Rc<FocusNode>>>>) -> Self {
+        depth.set(depth.get() + 1);
+        Self { depth, pending }
+    }
+}
+
+impl Drop for NotificationDepthGuard<'_> {
+    fn drop(&mut self) {
+        self.depth.set(self.depth.get() - 1);
+        if std::thread::panicking() {
+            self.pending.borrow_mut().clear();
+        }
+    }
+}
+
 impl FocusManager {
     /// Maximum reentrant focus transitions applied per outermost
     /// `request_focus`/`unfocus`/`close` call.
@@ -74,7 +120,12 @@ impl FocusManager {
     /// two listeners that keep redirecting focus to each other would
     /// otherwise spin the caller forever. Past the budget,
     /// [`Self::drain_pending_focus_transitions`] drops whatever is left
-    /// and warns once.
+    /// and warns once. The budget counts *applications* — queued
+    /// transitions that actually commit a change — not queue pops: a
+    /// queued entry that turns out to already name the current primary,
+    /// or whose target lost eligibility while it waited (see
+    /// [`Self::is_eligible`]), is skipped for free and never touches the
+    /// counter.
     const REENTRANT_FOCUS_DRAIN_BUDGET: usize = 32;
 
     /// Create an isolated focus owner and its attached root scope.
@@ -110,18 +161,16 @@ impl FocusManager {
         self.primary_focus.borrow().is_some()
     }
 
-    /// Accepts the request and either applies it immediately or, if a
-    /// notification is already in flight, queues it — see the type-level
-    /// ordering contract. Returns `true` whenever the request is accepted,
-    /// regardless of which of the two happens.
+    /// Accepted — applied immediately, or, when requested from inside a
+    /// focus-change listener, queued and applied after the in-flight
+    /// notification completes (see the type-level ordering contract).
+    /// Returns `true` whenever the request is accepted, regardless of
+    /// which of the two happens.
     pub(crate) fn request_focus(&self, node: &Rc<FocusNode>) -> bool {
         if self.closed.get() || !node.is_attached() || !node.can_request_focus() {
             return false;
         }
-        let Some(owner) = node.manager() else {
-            return false;
-        };
-        if !std::ptr::eq(owner.as_ref(), self) {
+        if !self.owns(node) {
             tracing::warn!(
                 node = node.id().get(),
                 "focus request rejected because the node belongs to another manager"
@@ -130,6 +179,28 @@ impl FocusManager {
         }
         self.set_primary_focus(Some(Rc::clone(node)));
         true
+    }
+
+    /// Whether `node` is currently attached under this manager's tree and
+    /// still bound to it (not, for instance, reparented under a different
+    /// manager after this manager last saw it).
+    fn owns(&self, node: &Rc<FocusNode>) -> bool {
+        node.manager()
+            .is_some_and(|owner| std::ptr::eq(owner.as_ref(), self))
+    }
+
+    /// Whether `node` may become primary focus on this manager right now.
+    ///
+    /// The same predicate [`Self::request_focus`] checks before accepting a
+    /// request, re-run by [`Self::drain_pending_focus_transitions`]
+    /// immediately before a queued transition is applied: the world can
+    /// change while a request waits in the queue — a reentrant listener
+    /// earlier in the same chain can detach `node`, flip its
+    /// [`FocusNode::can_request_focus`], or reparent it under a different
+    /// manager before its turn comes, and a stale queued target must be
+    /// skipped rather than committed.
+    fn is_eligible(&self, node: &Rc<FocusNode>) -> bool {
+        !self.closed.get() && node.is_attached() && node.can_request_focus() && self.owns(node)
     }
 
     /// Request that `node` (or `None` for [`Self::unfocus`]) become the
@@ -150,10 +221,11 @@ impl FocusManager {
     ///
     /// A no-op if `node` is already the committed primary. Otherwise
     /// commits, refreshes focus history, then notifies focus-tree nodes
-    /// and manager listeners with `notification_depth` held above zero so
-    /// a reentrant `request_focus`/`unfocus` queues instead of applying
-    /// inline. The caller is responsible for draining
-    /// `pending_focus_transitions` once this returns at depth zero.
+    /// and manager listeners with `notification_depth` held above zero
+    /// (via [`NotificationDepthGuard`]) so a reentrant
+    /// `request_focus`/`unfocus` queues instead of applying inline. The
+    /// caller is responsible for draining `pending_focus_transitions` once
+    /// this returns at depth zero.
     fn apply_focus_transition(&self, node: Option<Rc<FocusNode>>) {
         let previous = {
             let mut primary = self.primary_focus.borrow_mut();
@@ -173,12 +245,12 @@ impl FocusManager {
             Self::refresh_focus_history(node);
         }
 
-        self.notification_depth
-            .set(self.notification_depth.get() + 1);
+        let _guard = NotificationDepthGuard::enter(
+            &self.notification_depth,
+            &self.pending_focus_transitions,
+        );
         Self::notify_focus_nodes(previous.as_ref(), node.as_ref());
         self.notify_listeners(previous, node);
-        self.notification_depth
-            .set(self.notification_depth.get() - 1);
     }
 
     /// Whether `a` and `b` name the identical focus node (or both `None`).
@@ -193,6 +265,14 @@ impl FocusManager {
     /// Apply every focus transition queued by a reentrant listener, in the
     /// order it was requested, until the queue is empty, the manager
     /// closes, or [`Self::REENTRANT_FOCUS_DRAIN_BUDGET`] is exhausted.
+    ///
+    /// Each dequeued `Some(node)` is re-validated with [`Self::is_eligible`]
+    /// before it is applied — the world can change between when a
+    /// reentrant listener queued it and when its turn comes — and skipped
+    /// with a `tracing::trace!` if the target is no longer eligible. A
+    /// dequeued `None` ([`Self::unfocus`]) is always eligible. Neither an
+    /// eligibility skip nor a same-identity no-op counts against the drain
+    /// budget: it bounds applications, not queue pops.
     fn drain_pending_focus_transitions(&self) {
         let mut applied = 0usize;
         loop {
@@ -203,6 +283,21 @@ impl FocusManager {
             let Some(node) = self.pending_focus_transitions.borrow_mut().pop_front() else {
                 return;
             };
+            if let Some(target) = &node
+                && !self.is_eligible(target)
+            {
+                tracing::trace!(
+                    node = target.id().get(),
+                    "skipping a queued focus transition whose target is no longer eligible"
+                );
+                continue;
+            }
+            if Self::focus_identity_eq(self.primary_focus.borrow().as_ref(), node.as_ref()) {
+                // Already the committed primary: applying it would be the
+                // same no-op `apply_focus_transition` itself would detect,
+                // so it never counted as an application either.
+                continue;
+            }
             applied += 1;
             if applied > Self::REENTRANT_FOCUS_DRAIN_BUDGET {
                 // `node` (the one that tripped the budget) plus whatever is
@@ -246,15 +341,33 @@ impl FocusManager {
     /// (only its ancestry changed) is not a transition and publishes
     /// nothing; the affected ancestors' node-level listeners still fire
     /// via [`Self::notify_focus_path_change`]. Runs that node notification
-    /// with `notification_depth` held above zero, so a reentrant
-    /// `request_focus`/`unfocus` from one of those listeners is queued and
-    /// applied after this publication — see the type-level ordering
-    /// contract.
+    /// with `notification_depth` held above zero (via
+    /// [`NotificationDepthGuard`]), so a reentrant `request_focus`/`unfocus`
+    /// from one of those listeners is queued and applied after this
+    /// publication — see the type-level ordering contract.
+    ///
+    /// Every caller today (`replace_node`, from ordinary frame-phase code)
+    /// enters with `notification_depth` already zero. Entering nested — a
+    /// `replace_node` called from inside a focus-change listener — would
+    /// publish this call's own outer edge ahead of the notification still
+    /// in flight, the one stale-destination shape the reentrant-queue
+    /// contract above does not cover: the primary was already cleared
+    /// structurally by [`Self::clear_primary_for_node_replacement`], so
+    /// there is nothing left to *queue* the way `request_focus`/`unfocus`
+    /// do. Guarded with `debug_assert_eq!` rather than a `Result` because
+    /// no reachable caller can trip it today.
     pub(crate) fn finish_node_replacement(
         &self,
         previous_primary: Rc<FocusNode>,
         previous_focus_path: Vec<Rc<FocusNode>>,
     ) {
+        debug_assert_eq!(
+            self.notification_depth.get(),
+            0,
+            "BUG: finish_node_replacement entered while a notification is already in \
+             flight; see this method's doc for the nested-publish hazard that would follow"
+        );
+
         let current = self.primary_focus();
         if let Some(primary) = &current {
             Self::refresh_focus_history(primary);
@@ -265,15 +378,17 @@ impl FocusManager {
                 .collect()
         });
 
-        self.notification_depth
-            .set(self.notification_depth.get() + 1);
-        Self::notify_focus_path_change(previous_focus_path, current_focus_path);
-        if !Self::focus_identity_eq(current.as_ref(), Some(&previous_primary)) {
-            self.notify_listeners(Some(previous_primary), current);
+        {
+            let _guard = NotificationDepthGuard::enter(
+                &self.notification_depth,
+                &self.pending_focus_transitions,
+            );
+            Self::notify_focus_path_change(previous_focus_path, current_focus_path);
+            if !Self::focus_identity_eq(current.as_ref(), Some(&previous_primary)) {
+                self.notify_listeners(Some(previous_primary), current);
+            }
         }
-        let depth = self.notification_depth.get() - 1;
-        self.notification_depth.set(depth);
-        if depth == 0 {
+        if self.notification_depth.get() == 0 {
             self.drain_pending_focus_transitions();
         }
     }
@@ -492,12 +607,19 @@ impl FocusManager {
     /// Tombstoned nodes cannot later attach to a different manager.
     ///
     /// Primary focus is always cleared to `None`, even when `close` runs
-    /// reentrantly from inside a focus-change listener. Its own
-    /// manager-level publication, though, is skipped in that case rather
-    /// than interleaving out of order with the notification already in
-    /// flight — the same ordering contract `request_focus` and
-    /// [`Self::unfocus`] follow. Any request a reentrant listener queues
-    /// afterward is dropped, never applied, once closed.
+    /// reentrantly from inside a focus-change listener — unlike
+    /// `request_focus`/[`Self::unfocus`], `close` never takes the private
+    /// notification-depth guard itself, so its own node-level notification
+    /// (the private `notify_focus_nodes`) always runs immediately, nested
+    /// inside whatever notification is already in flight. Only its
+    /// *manager*-level publication is conditional: it fires `(previous,
+    /// None)` to [`FocusChangeCallback`] listeners only when
+    /// `notification_depth` reads zero (no outer notification is currently
+    /// publishing), and is skipped — rather than interleaved out of order
+    /// — otherwise. The net effect matches `request_focus`/`unfocus`'s
+    /// ordering goal, reached here by omission instead of participation.
+    /// Any request a reentrant listener queues afterward is dropped, never
+    /// applied, once closed.
     pub fn close(&self) {
         if self.closed.replace(true) {
             return;
@@ -1432,61 +1554,12 @@ mod tests {
     // ever observe a transition that a later, already-applied one has
     // superseded. These tests pin the ordering contract documented on
     // `FocusManager` and on `request_focus`/`unfocus`/`add_listener`.
-
-    /// Captures `tracing` output for the duration of `run`, thread-locally.
-    ///
-    /// Same technique as `processing::velocity`'s capture helper:
-    /// `with_default` redirects dispatch per-thread, but `tracing`'s
-    /// per-callsite interest cache is process-global, so this is only
-    /// race-free when each test owns its process — which is exactly what
-    /// `cargo nextest run` (what CI uses) provides.
-    fn capture_tracing<T>(run: impl FnOnce() -> T) -> (T, String) {
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone, Default)]
-        struct CapturedLog(Arc<Mutex<Vec<u8>>>);
-
-        impl std::io::Write for CapturedLog {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0
-                    .lock()
-                    .expect("captured-log mutex")
-                    .extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
-            type Writer = Self;
-
-            fn make_writer(&'a self) -> Self::Writer {
-                self.clone()
-            }
-        }
-
-        // Disarm `tracing`'s process-global callsite-interest cache first: it is
-        // computed on whichever thread reaches a callsite FIRST, so without this a
-        // sibling test can have it cached as `never` and silently empty this capture.
-        flui_testing::log_capture::disarm_interest_cache();
-        let captured = CapturedLog::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(captured.clone())
-            .with_max_level(tracing::level_filters::LevelFilter::TRACE)
-            .with_ansi(false)
-            .without_time()
-            .finish();
-
-        let out = tracing::subscriber::with_default(subscriber, run);
-        let bytes = captured.0.lock().expect("captured-log mutex").clone();
-        (
-            out,
-            String::from_utf8(bytes).expect("tracing output is valid UTF-8"),
-        )
-    }
+    //
+    // `tracing` capture for these tests goes through
+    // `flui_testing::log_capture::capture`, race-free in a thread-parallel
+    // test binary for the reason documented there — this crate sits below
+    // `flui-testing` in the layer DAG for everything else, but keeps it as
+    // a dev-dependency for exactly this.
 
     /// The issue #1040 reproducer: A is focused, B is requested, and B's
     /// own node listener reentrantly requests C while B is (momentarily)
@@ -1601,6 +1674,295 @@ mod tests {
         );
     }
 
+    /// Reentry from a *manager* listener (not a node listener): subscriber
+    /// 1 requests C while receiving the A -> B edge. Manager listeners are
+    /// dispatched from one snapshot of `(previous, new)` taken before the
+    /// loop starts, so subscriber 2 must still receive that same A -> B
+    /// edge — the reentrant C request is only queued, never rewinds what
+    /// the rest of this dispatch delivers — and neither subscriber sees
+    /// the queued B -> C edge until it is drained after this notification
+    /// finishes.
+    #[test]
+    fn manager_listener_reentry_does_not_rewind_sibling_listeners_snapshot() {
+        let (manager, nodes) = manager_with_nodes(3);
+        nodes[0].request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let node_b_id = nodes[1].id();
+        let target = Rc::clone(&nodes[2]);
+        let edges_for_first = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            let current_id = current.as_ref().map(|node| node.id());
+            edges_for_first.borrow_mut().push((
+                "first",
+                previous.map(|node| node.id()),
+                current_id,
+            ));
+            if current_id == Some(node_b_id) {
+                target.request_focus();
+            }
+        }));
+        let edges_for_second = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_second.borrow_mut().push((
+                "second",
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        nodes[1].request_focus();
+
+        assert!(nodes[2].has_primary_focus());
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[
+                ("first", Some(nodes[0].id()), Some(nodes[1].id())),
+                ("second", Some(nodes[0].id()), Some(nodes[1].id())),
+                ("first", Some(nodes[1].id()), Some(nodes[2].id())),
+                ("second", Some(nodes[1].id()), Some(nodes[2].id())),
+            ],
+            "subscriber 2 must observe (A, B) before either subscriber observes the \
+             reentrant (B, C) transition subscriber 1 queued"
+        );
+    }
+
+    /// A -> B -> C -> B: focus returns to an earlier node's *identity*, but
+    /// each hop is still a distinct, real transition and must publish as
+    /// one — this is not the "already-current" no-op case
+    /// (`focus_identity_eq` only short-circuits a request naming whatever
+    /// is CURRENTLY primary, not one that merely matches something
+    /// notified earlier in the same drain).
+    #[test]
+    fn reentrant_chain_returning_to_an_earlier_identity_publishes_every_hop() {
+        let (manager, nodes) = manager_with_nodes(3);
+        nodes[0].request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        // B redirects to C exactly once, the first time it becomes primary.
+        let b_redirected = Cell::new(false);
+        let c_for_b = Rc::clone(&nodes[2]);
+        let b_weak = Rc::downgrade(&nodes[1]);
+        nodes[1].add_listener(Rc::new(move || {
+            let b = b_weak.upgrade().unwrap();
+            if b.has_primary_focus() && !b_redirected.get() {
+                b_redirected.set(true);
+                c_for_b.request_focus();
+            }
+        }));
+        // C redirects back to B exactly once, the first time it becomes primary.
+        let c_redirected = Cell::new(false);
+        let b_for_c = Rc::clone(&nodes[1]);
+        let c_weak = Rc::downgrade(&nodes[2]);
+        nodes[2].add_listener(Rc::new(move || {
+            let c = c_weak.upgrade().unwrap();
+            if c.has_primary_focus() && !c_redirected.get() {
+                c_redirected.set(true);
+                b_for_c.request_focus();
+            }
+        }));
+
+        nodes[1].request_focus();
+
+        assert!(nodes[1].has_primary_focus(), "the chain settles back on B");
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[
+                (Some(nodes[0].id()), Some(nodes[1].id())),
+                (Some(nodes[1].id()), Some(nodes[2].id())),
+                (Some(nodes[2].id()), Some(nodes[1].id())),
+            ]
+        );
+    }
+
+    /// A queued transition's eligibility is checked again immediately
+    /// before it is applied, not only when it was accepted: B's listener
+    /// requests C, then detaches C before the outer notification finishes.
+    /// The drain must skip the now-detached target rather than committing
+    /// it as primary.
+    #[test]
+    fn queued_focus_target_detached_before_its_turn_is_skipped_not_applied() {
+        let manager = FocusManager::new();
+        let a = FocusNode::with_debug_label("a");
+        manager.root_scope().attach_node(&a).unwrap();
+        let b = FocusNode::with_debug_label("b");
+        manager.root_scope().attach_node(&b).unwrap();
+        let c = FocusNode::with_debug_label("c");
+        let c_attachment = manager.root_scope().attach_node(&c).unwrap();
+        a.request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        let c_for_listener = Rc::clone(&c);
+        let b_weak = Rc::downgrade(&b);
+        b.add_listener(Rc::new(move || {
+            if b_weak.upgrade().unwrap().has_primary_focus() {
+                c_for_listener.request_focus();
+                c_attachment.detach();
+            }
+        }));
+
+        b.request_focus();
+
+        assert!(
+            b.has_primary_focus(),
+            "the detached queued target must not become primary"
+        );
+        assert!(!c.is_attached());
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[(Some(a.id()), Some(b.id()))],
+            "a queued transition whose target detached before its turn runs must be \
+             skipped entirely, publishing no (B, C) edge"
+        );
+    }
+
+    /// Companion to the detach case: B's listener requests C, then C
+    /// becomes unfocusable before the outer notification finishes. The
+    /// drain must skip C rather than committing an ineligible target.
+    #[test]
+    fn queued_focus_target_made_unfocusable_before_its_turn_is_skipped() {
+        let manager = FocusManager::new();
+        let a = FocusNode::with_debug_label("a");
+        manager.root_scope().attach_node(&a).unwrap();
+        let b = FocusNode::with_debug_label("b");
+        manager.root_scope().attach_node(&b).unwrap();
+        let c = FocusNode::with_debug_label("c");
+        manager.root_scope().attach_node(&c).unwrap();
+        a.request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        let c_for_listener = Rc::clone(&c);
+        let b_weak = Rc::downgrade(&b);
+        b.add_listener(Rc::new(move || {
+            if b_weak.upgrade().unwrap().has_primary_focus() {
+                c_for_listener.request_focus();
+                c_for_listener.set_can_request_focus(false);
+            }
+        }));
+
+        b.request_focus();
+
+        assert!(
+            b.has_primary_focus(),
+            "a queued target that became unfocusable before its turn must not gain \
+             primary focus"
+        );
+        assert!(!c.can_request_focus());
+        assert_eq!(edges.borrow().as_slice(), &[(Some(a.id()), Some(b.id()))]);
+    }
+
+    /// A queued `None` (an [`Self::unfocus`] request) has no target to
+    /// re-validate and is always eligible: it must apply even though the
+    /// node that requested it may itself have detached in the meantime.
+    #[test]
+    fn queued_unfocus_is_always_eligible() {
+        let manager = FocusManager::new();
+        let a = FocusNode::with_debug_label("a");
+        let a_attachment = manager.root_scope().attach_node(&a).unwrap();
+        let b = FocusNode::with_debug_label("b");
+        manager.root_scope().attach_node(&b).unwrap();
+        a.request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        let manager_for_listener = Rc::clone(&manager);
+        let b_weak = Rc::downgrade(&b);
+        b.add_listener(Rc::new(move || {
+            if b_weak.upgrade().unwrap().has_primary_focus() {
+                manager_for_listener.unfocus();
+                a_attachment.detach();
+            }
+        }));
+
+        b.request_focus();
+
+        assert!(
+            manager.primary_focus().is_none(),
+            "a queued unfocus must apply even though the node that requested it detached"
+        );
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[(Some(a.id()), Some(b.id())), (Some(b.id()), None)]
+        );
+    }
+
+    /// A listener that panics mid-notification must not leave
+    /// `notification_depth` stuck above zero: every later, healthy
+    /// `request_focus` on this manager would otherwise queue silently and
+    /// never apply, since nothing would ever bring the depth back to zero
+    /// to drain it.
+    #[test]
+    fn listener_panic_does_not_leave_notification_depth_stuck() {
+        let (manager, nodes) = manager_with_nodes(2);
+        nodes[0].request_focus();
+
+        let panicking_listener =
+            nodes[0].add_listener(Rc::new(|| panic!("boom: listener under test panics")));
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            nodes[1].request_focus();
+        }));
+        assert!(panicked.is_err(), "the listener panic must propagate");
+        // Uninstall it: it would otherwise re-panic on every later
+        // notification that touches node 0, including the manager's own
+        // teardown at the end of this test — this test is about
+        // `notification_depth` recovering from ONE panic, not about a
+        // permanently misbehaving listener.
+        nodes[0].remove_listener(panicking_listener);
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        nodes[0].request_focus();
+
+        assert!(
+            nodes[0].has_primary_focus(),
+            "a healthy call after a listener panic must apply immediately, not queue \
+             forever behind a notification_depth stuck above zero"
+        );
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[(Some(nodes[1].id()), Some(nodes[0].id()))]
+        );
+    }
+
     /// Two listeners that keep redirecting focus to each other cannot spin
     /// the caller forever: FLUI applies transitions synchronously (unlike
     /// Flutter's microtask-scheduled model, which merely yields a frame
@@ -1626,20 +1988,20 @@ mod tests {
         // also waste applications re-requesting the already-current node.
         let target_of_0 = Rc::clone(&nodes[1]);
         let self_of_0 = Rc::downgrade(&nodes[0]);
-        nodes[0].add_listener(Rc::new(move || {
+        let listener_0 = nodes[0].add_listener(Rc::new(move || {
             if self_of_0.upgrade().unwrap().has_primary_focus() {
                 target_of_0.request_focus();
             }
         }));
         let target_of_1 = Rc::clone(&nodes[0]);
         let self_of_1 = Rc::downgrade(&nodes[1]);
-        nodes[1].add_listener(Rc::new(move || {
+        let listener_1 = nodes[1].add_listener(Rc::new(move || {
             if self_of_1.upgrade().unwrap().has_primary_focus() {
                 target_of_1.request_focus();
             }
         }));
 
-        let ((), log) = capture_tracing(|| {
+        let ((), log) = flui_testing::log_capture::capture(|| {
             nodes[0].request_focus();
         });
 
@@ -1649,9 +2011,58 @@ mod tests {
             "the initial (non-reentrant) transition plus one published edge \
              per budgeted drain application"
         );
-        assert!(
-            log.contains("drain budget"),
-            "expected a latched warning once the ping-pong exhausts the drain budget: {log}"
+        assert_eq!(
+            log.count_containing("drain budget"),
+            1,
+            "the latched warning must fire exactly once, not once per dropped entry: {log}"
+        );
+
+        // The concrete node left focused after the drop must match the
+        // last transition the drain actually committed, not a hardcoded
+        // parity assumption — read it back from the same trace-level
+        // "focus changed" events `apply_focus_transition` emits.
+        let last_committed = log
+            .records()
+            .iter()
+            .rev()
+            .find(|record| record.message == "focus changed")
+            .expect("the drain must have committed at least one transition");
+        let expected_primary = last_committed
+            .field("new")
+            .expect("every \"focus changed\" event carries a `new` field")
+            .to_owned();
+        assert_eq!(
+            format!("{:?}", manager.primary_focus().map(|node| node.id().get())),
+            expected_primary,
+            "the manager's committed primary must match the last transition actually \
+             applied, not whatever the dropped queue tail would have produced"
+        );
+
+        // The budget resets per outermost call rather than leaking state
+        // across calls: with the ping-pong wiring removed, a plain request
+        // from outside now behaves like any other healthy transition —
+        // applied immediately, publishing exactly one edge — proving the
+        // manager was left fully functional after the bounded drop.
+        nodes[0].remove_listener(listener_0);
+        nodes[1].remove_listener(listener_1);
+        edges.borrow_mut().clear();
+        let settled = manager
+            .primary_focus()
+            .expect("a node is focused after the drop");
+        let other = if Rc::ptr_eq(&settled, &nodes[0]) {
+            Rc::clone(&nodes[1])
+        } else {
+            Rc::clone(&nodes[0])
+        };
+
+        other.request_focus();
+
+        assert!(other.has_primary_focus());
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[(Some(settled.id()), Some(other.id()))],
+            "a healthy call after the bounded drop must apply as a single ordinary \
+             transition, not still be primed to warn or queue from the earlier storm"
         );
     }
 

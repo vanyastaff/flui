@@ -126,7 +126,12 @@ pub enum FocusTreeError {
 /// Result of a node-level focus request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusRequestOutcome {
-    /// The node became primary focus.
+    /// Accepted — applied immediately, or, when requested from inside a
+    /// focus-change listener, queued and applied after the in-flight
+    /// notification completes (see `FocusManager`'s notification-ordering
+    /// contract). Does not by itself mean the node has primary focus yet:
+    /// for a queued request, `has_primary_focus()` only becomes true once
+    /// the notification that queued it finishes.
     Focused,
     /// The node is detached; the request will be fulfilled when it attaches.
     Queued,
@@ -715,6 +720,12 @@ impl FocusNode {
     }
 
     /// Request focus, queueing the request while detached.
+    ///
+    /// A request accepted while attached is either applied immediately or,
+    /// when made from inside a focus-change listener, queued and applied
+    /// after the in-flight notification completes (see `FocusManager`'s
+    /// notification-ordering contract) — both return
+    /// [`FocusRequestOutcome::Focused`].
     pub fn request_focus(self: &Rc<Self>) -> FocusRequestOutcome {
         if !self.can_request_focus() {
             return FocusRequestOutcome::Rejected;
