@@ -313,6 +313,75 @@ fn frame_scheduled_hook_runs_with_no_scheduler_lock_held() {
     assert!(scheduler.is_frame_scheduled());
 }
 
+/// `end_of_frame()` reaches the platform wake hook, so the completion
+/// registry's guard must be released before the demand is issued.
+///
+/// Asserting the hook RAN is half the oracle: `end_of_frame` used to issue
+/// no demand at all, and without that assertion this test passes against
+/// that version by never firing the hook it is probing.
+#[test]
+fn end_of_frame_demand_runs_the_frame_scheduled_hook_with_no_scheduler_lock_held() {
+    let scheduler = UpdateScheduler::new();
+    let probe = scheduler.clone();
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran_for_hook = Arc::clone(&ran);
+    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+        assert_no_scheduler_lock_held(&probe);
+        ran_for_hook.store(true, Ordering::Release);
+    })));
+
+    let _waiter = scheduler.end_of_frame();
+
+    assert!(
+        ran.load(Ordering::Acquire),
+        "the hook must actually have fired -- an unfired hook asserts nothing"
+    );
+}
+
+/// The completion-waker family: `notify_frame_completion` calls each
+/// waiter's `Waker::wake()`, and every scheduler lock must be free while it
+/// does — including `completion_waiters` itself, which the drain holds
+/// immediately before.
+///
+/// This family was the only callback family in this file with no
+/// lock-discipline test, while `notify_frame_completion` is exactly where a
+/// lock-across-`wake()` regression would land.
+#[test]
+fn completion_waker_runs_with_no_scheduler_lock_held() {
+    struct ProbingWaker {
+        probe: UpdateScheduler,
+        ran: Arc<AtomicBool>,
+    }
+
+    impl std::task::Wake for ProbingWaker {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            assert_no_scheduler_lock_held(&self.probe);
+            self.ran.store(true, Ordering::Release);
+        }
+    }
+
+    let scheduler = UpdateScheduler::new();
+    let ran = Arc::new(AtomicBool::new(false));
+    let mut future = scheduler.end_of_frame();
+    let waker = Waker::from(Arc::new(ProbingWaker {
+        probe: scheduler.clone(),
+        ran: Arc::clone(&ran),
+    }));
+    let mut cx = Context::from_waker(&waker);
+    assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+
+    scheduler.execute_frame();
+
+    assert!(
+        ran.load(Ordering::Acquire),
+        "the completion waker must actually have run"
+    );
+}
+
 // =========================================================================
 // Reentrant registration (#1058) -- a callback that registers another
 // callback of its own family from inside itself must have the new one

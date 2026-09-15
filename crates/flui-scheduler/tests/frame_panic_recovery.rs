@@ -118,6 +118,13 @@ fn assert_recovered_from_panic(
         scheduler.current_frame().is_none(),
         "no frame timing must be left open"
     );
+    // One ordering detail keeps this green now that registering an
+    // `end_of_frame()` waiter demands a frame: `armed_completion_probe`
+    // registers BEFORE the frame is driven, so `handle_begin_frame`'s
+    // unconditional `frame_scheduled.store(false)` clears that demand at
+    // the top of the very frame this aborts. A probe registered from
+    // INSIDE the aborting frame would leave the latch set, and correctly
+    // so -- that waiter needs a frame of its own.
     assert!(
         !scheduler.is_frame_scheduled(),
         "frame_scheduled must not be left latched by the aborted frame"

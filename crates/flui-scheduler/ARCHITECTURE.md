@@ -594,3 +594,101 @@ run fully rather than one half of a duplicated pair.
 start-contract gap and the cross-thread register/store TOCTOU) ship
 unfixed, named rather than silently assumed closed; both predate this fix
 and are not measured to have widened under it.
+
+### `end_of_frame` registers before it demands, and the live registry is the memo
+
+**Rule:** `UpdateScheduler::end_of_frame` pushes its waiter onto the completion
+registry FIRST and issues the frame demand second, and it issues one only when
+the registry held no live waiter before that push. Flutter's `endOfFrame`
+(`scheduler/binding.dart` @ 3.44.0) orders it the other way: it calls
+`scheduleFrame()`, then hands back the shared `_nextFrameCompleter`'s future.
+
+**Conflict:** demand-then-register is not equivalent once a frame can run
+concurrently. A frame beginning on another thread can both start and drain the
+registry in the window between the demand and the push, so the waiter misses
+the very frame it paid for and silently buys a redundant next one. Registering
+first makes the registration the linearization point. An entry is then either
+inside the batch a drain took under the registry guard, and is served by that
+frame, or it was pushed after that guard was released, in which case its own
+predicate reads the post-drain registry and demands. Flutter never faces this
+ordering question: `SchedulerBinding` is confined to one isolate, there is no
+per-waiter registry to race against at all, and every caller within one frame
+coalesces onto a single completer the binding owns.
+
+FLUI keeps the per-waiter registry because its futures are independently
+cancellable values rather than listeners on one shared `Future`, which is also
+what makes the registry the natural place to keep the demand memo.
+
+**Choice:** the predicate is "no LIVE entry", evaluated on the vec already held
+under the registry guard, and the demand call is `schedule_frame_if_enabled()`
+rather than the ungated `request_frame()` (Dart's `scheduleFrame()` carries the
+same enablement check internally). The guard is released before the demand,
+because the demand reaches the `on_frame_scheduled` hook and
+`frame_scheduled_hook_runs_with_no_scheduler_lock_held` asserts every scheduler
+mutex, `completion_waiters` included, is free inside it.
+
+That predicate has two halves, and only the first belongs to the registry:
+
+- **Issuance.** After a drain the vec is empty, so the first push demands.
+  Every later push either observes a live entry whose demand postdates that
+  drain, by induction, or demands itself. The predicate is a pure function of
+  the vec's contents at push time, so there is no bit written at one time and
+  read at another.
+- **Survival.** No registry predicate can decide whether an issued demand
+  still stands. A demand is revoked without any drain when frames are disabled
+  at request time, and `frame_scheduled` has a second clearer besides
+  `handle_begin_frame`: the public `finish_async_pump`. If a live waiter's
+  demand is revoked, a later push sees that live entry, stays silent, and both
+  wait forever. `set_frames_enabled(true)`'s re-request on the disabled to
+  enabled edge is the other half of this liveness argument, not a consistency
+  nicety, and it is the only thing that can re-issue a demand nothing recorded
+  as lost.
+
+**Alternatives considered:**
+
+- `waiters.is_empty()` as the predicate, which is also sound against today's
+  code: a tombstone can only exist since the last drain, and the push that
+  created it already demanded. Rejected because that soundness spans three
+  pieces of state (registry population, the `frame_scheduled` latch, and
+  `frames_enabled` plus the lifecycle edge), none of them asserted anywhere,
+  and one leg of it is a public method any embedder may call. The live scan
+  reads only the vec it already holds.
+- Gating the demand on `phase() == Idle`, the closest reading of Flutter's own
+  `endOfFrame`. Rejected: it goes silent in the post-drain window, where
+  `notify_frame_completion` has already emptied the registry but the phase is
+  still `PostFrameCallbacks`, so a waiter registered from a completion waker
+  hangs. `crates/flui-scheduler/tests/end_of_frame_lifecycle.rs`'s
+  `a_registration_from_inside_a_completion_waker_demands_the_next_frame` is the
+  oracle for exactly that window.
+- A per-frame "a frame is already open" flag, cleared when the frame ends.
+  Rejected for the same defect one level down: every candidate clear point sits
+  later than the drain it is meant to pair with, so the flag is still set
+  during the post-drain window. Deleting the flag removes the clear point
+  rather than moving it.
+- Adopting `event-listener`, already a dependency of this crate and already
+  used by `TickerFuture` for the sibling problem. Rejected on a structural
+  reason this crate has paid for once: `Event::notify` calls `task.wake()`
+  inside the closure holding its own internal list mutex, which is the shape
+  issue #1057 removed from `notify_frame_completion`, and two currently-green
+  tests pin the contract it breaks
+  (`notify_frame_completion_tolerates_an_inline_polling_waker` and
+  `notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics`).
+
+**Trade-off accepted:** a registration landing mid-frame while no other waiter
+is live demands a frame the in-flight drain would have served anyway. That is
+one surplus frame, self-limiting and never a loop, because `request_frame`
+fires the wake hook only on the `frame_scheduled` false to true edge and
+`handle_begin_frame` clears that latch before the frame body. Jetpack Compose,
+`Choreographer`, `requestAnimationFrame`, and Unity's `Awaitable.NextFrameAsync`
+all make registration itself the demand and all pay the same price; Compose
+states the rule as the zero to one transition of the awaiter set.
+
+**Recorded gap, deliberately not closed here:** a `FrameCompletionFuture` whose
+scheduler is dropped while it is pending never resolves, because only a frame
+resolves it and only the scheduler runs frames. There is no sentinel to resolve
+with while `Output` is `FrameTiming`, so closing it is a breaking change to the
+output type; issue #1162 carries it. A panicking `on_frame_scheduled` hook also
+loses its demand permanently, since `request_frame` sets the latch before firing
+the hook, and FLUI defines no recovery transition for that (Compose does: a
+throwing `onNewAwaiters` permanently fails the clock and resumes every current
+and future awaiter with the error). Both are named on `end_of_frame`'s own doc.
