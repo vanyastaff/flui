@@ -114,21 +114,61 @@ impl Wake for ChannelWaker {
     }
 }
 
-/// One `(target, inner_lock_was_free)` pair per `tracing` event seen.
-type EventLockLog = Arc<Mutex<Vec<(String, bool)>>>;
+/// One `tracing` event seen by [`InnerLockProbeSubscriber`], with the ticker's
+/// inner-lock state at the moment it was emitted.
+struct ObservedEvent {
+    target: String,
+    /// Call site, used to prove a selector still names exactly one of them.
+    line: Option<u32>,
+    message: String,
+    inner_lock_free: bool,
+}
 
-/// The lock-freedom observations for events emitted from `ticker.rs` itself.
+type EventLockLog = Arc<Mutex<Vec<ObservedEvent>>>;
+
+/// Pulls the `message` field out of an event so a test can name the event it
+/// means instead of the file it came from.
+#[derive(Default)]
+struct MessageVisitor(String);
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0 = format!("{value:?}");
+        }
+    }
+}
+
+/// The lock-freedom observations for the one `ticker.rs` event whose message
+/// contains `names_the_event`.
 ///
-/// Filtered by target rather than counted raw: a probe that drives a real frame
-/// also sees the scheduler's own events, and "at least one event, all of them
-/// with the lock free" would then be satisfiable without the ticker having
-/// logged at all.
-fn ticker_event_lock_states(log: &EventLockLog) -> Vec<bool> {
-    log.lock()
+/// Selected by message, not by target alone: `ticker.rs` emits six distinct
+/// events under the target `flui_scheduler::ticker`, so a target-only filter
+/// can be satisfied by a *different* one of them after a future edit — the same
+/// shape as the hole that let "at least one event" pass without the ticker
+/// having logged at all, one step narrower. Selecting by text rather than by
+/// line number also survives every edit above the call site, which a line
+/// literal would not.
+///
+/// The call sites are checked rather than returned: two sites emitting the same
+/// text would otherwise merge into one oracle silently.
+fn lock_states_for_event(log: &EventLockLog, names_the_event: &str) -> Vec<bool> {
+    let observed = log.lock();
+    let matching: Vec<&ObservedEvent> = observed
         .iter()
-        .filter(|(target, _)| target == "flui_scheduler::ticker")
-        .map(|(_, lock_free)| *lock_free)
-        .collect()
+        .filter(|event| {
+            event.target == "flui_scheduler::ticker" && event.message.contains(names_the_event)
+        })
+        .collect();
+    let sites: std::collections::BTreeSet<Option<u32>> =
+        matching.iter().map(|event| event.line).collect();
+    assert!(
+        sites.len() <= 1,
+        "{names_the_event:?} matched events from {} different call sites; the \
+         selector no longer names a single event",
+        sites.len()
+    );
+    matching.iter().map(|event| event.inner_lock_free).collect()
 }
 
 /// Records whether `Mutex<TickerInner>` was free each time a `tracing` event
@@ -159,10 +199,15 @@ impl tracing::Subscriber for InnerLockProbeSubscriber {
     fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
 
     fn event(&self, event: &tracing::Event<'_>) {
-        let lock_free = self.ticker_inner.try_lock().is_some();
-        self.events
-            .lock()
-            .push((event.metadata().target().to_owned(), lock_free));
+        let inner_lock_free = self.ticker_inner.try_lock().is_some();
+        let mut message = MessageVisitor::default();
+        event.record(&mut message);
+        self.events.lock().push(ObservedEvent {
+            target: event.metadata().target().to_owned(),
+            line: event.metadata().line(),
+            message: message.0,
+            inner_lock_free,
+        });
     }
 
     fn enter(&self, _span: &tracing::span::Id) {}
@@ -454,6 +499,10 @@ fn when_complete_or_cancel_registers_before_its_decisive_read_too() {
     // listener is provably linked (it is registered before that read), so the
     // resolution below cannot be lost even if it lands before `wait()` is
     // reached — `event-listener` latches a notification onto a registered entry.
+    //
+    // `sleep`, not `yield_now`: under fully-parallel nextest on a small runner a
+    // spin burns a core against the very worker it is waiting for. 50 µs is far
+    // below the 5 s budget and weakens no assertion.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while future.inner.read_trace.lock().len() < 2 {
         assert!(
@@ -461,7 +510,7 @@ fn when_complete_or_cancel_registers_before_its_decisive_read_too() {
             "the blocking waiter must reach its post-registration re-read; it is \
              stuck on its first read or never registered"
         );
-        thread::yield_now();
+        thread::sleep(Duration::from_micros(50));
     }
 
     future.set_complete();
@@ -618,7 +667,7 @@ fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
         "precondition: this must be the refusal path"
     );
 
-    let logged = ticker_event_lock_states(&events);
+    let logged = lock_states_for_event(&events, "previous run's future is still live");
     assert!(
         !logged.is_empty(),
         "a refused start must be diagnosable: it has to emit a tracing event"
@@ -668,7 +717,7 @@ fn a_start_with_nothing_to_dispatch_logs_with_the_inner_lock_free() {
          returns an already-complete future"
     );
 
-    let logged = ticker_event_lock_states(&events);
+    let logged = lock_states_for_event(&events, "without a pre-loaded callback");
     assert!(
         !logged.is_empty(),
         "a start that dispatches nothing must say so"
@@ -711,7 +760,7 @@ fn a_discarded_lease_callback_logs_with_the_inner_lock_free() {
         || scheduler.execute_frame(),
     );
 
-    let logged = ticker_event_lock_states(&events);
+    let logged = lock_states_for_event(&events, "discarding a superseded or stale callback");
     assert!(
         !logged.is_empty(),
         "discarding a superseded callback must be diagnosable"

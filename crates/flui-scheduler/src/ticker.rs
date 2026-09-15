@@ -683,15 +683,24 @@ impl Ticker {
     /// # Cancelling the pending transient frame callback is not unconditional
     ///
     /// For an auto-scheduling ticker this cancels the pending transient frame
-    /// callback it can *observe*, which is not the same as "there is none left".
-    /// An auto-tick already in flight clears the registration id at the top of
-    /// the tick and records its replacement at the tail; a stop landing between
-    /// those two points sees no id, cancels nothing, and the replacement is then
-    /// recorded against a ticker this call has already stopped. The same window
-    /// applies to [`dispose`](Self::dispose), [`reset`](Self::reset), and
-    /// [`mute`](Self::mute), all of which cancel through the same field. The
-    /// stale callback is inert when it fires — the tick path re-reads the state
-    /// and finds it not running — but it does keep one frame registration alive.
+    /// callback it can *observe*, which is not quite the same as "there is none
+    /// left". An auto-tick already in flight clears the registration id at the
+    /// top of the tick and records its replacement at the tail, and a stop
+    /// arriving in between sees no id and cancels nothing.
+    ///
+    /// For nearly all of that interval that is simply correct: the tail's
+    /// decision to re-register is `should_schedule_tick()`, re-read under the
+    /// lock and requiring `state == Active`, so a stop landing any time before
+    /// that read produces no replacement registration at all. The window that
+    /// actually leaks is the narrow one between that read returning true and the
+    /// id being written back — a replacement registered there lands on a ticker
+    /// this call has already stopped. The same window applies to
+    /// [`dispose`](Self::dispose), [`reset`](Self::reset), and
+    /// [`mute`](Self::mute), all of which cancel through the same field.
+    ///
+    /// The stale callback is inert when it fires — the tick path re-reads the
+    /// state and finds it not `Active` (which also covers `Muted`, a state that
+    /// *is* running) — but it does keep one frame registration alive.
     pub fn stop(&mut self) {
         if !self.assert_not_disposed("stop") {
             return;
