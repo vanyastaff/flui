@@ -2307,4 +2307,60 @@ mod tests {
             "a manually-stopped ticker must not tick again"
         );
     }
+
+    /// Mixed manual and automatic dispatch on one ticker, from two threads.
+    ///
+    /// The slot's own state is what serialises the two paths: a checkout
+    /// matches only `Ready`, so whichever dispatch arrives second finds
+    /// `CheckedOut`, leaves it untouched and returns without invoking
+    /// anything. Every other reentrancy test in this file drives that
+    /// protocol from a single thread, where the mutex is never contended;
+    /// this one contends it, so a future change that made the losing path
+    /// fall through (or that restored the slot from the wrong owner) shows
+    /// up as a double invocation for one logical tick rather than as
+    /// reasoning about the code.
+    ///
+    /// Mixing the two dispatch modes is not a supported pattern — nothing
+    /// in the workspace does it — so the assertion is deliberately the
+    /// safety property (never more invocations than ticks issued, never a
+    /// hang or a panic), not a schedule.
+    #[test]
+    fn manual_and_auto_dispatch_from_two_threads_never_double_invoke() {
+        const ROUNDS: u32 = 200;
+
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+
+        ticker.lock().start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let manual_ticker = Arc::clone(&ticker);
+        let manual = std::thread::spawn(move || {
+            let provider = MockProvider;
+            for _ in 0..ROUNDS {
+                manual_ticker.lock().tick(&provider);
+            }
+        });
+
+        for _ in 0..ROUNDS {
+            scheduler.execute_frame();
+        }
+        manual
+            .join()
+            .expect("the manual dispatch thread does not panic");
+
+        let observed = calls.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2 * ROUNDS,
+            "each dispatch may invoke the callback at most once: {observed} invocations for \
+             {ROUNDS} manual ticks and {ROUNDS} frames"
+        );
+        assert!(
+            observed > 0,
+            "the ticker must have ticked at least once across {ROUNDS} rounds"
+        );
+    }
 }
