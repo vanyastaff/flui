@@ -11,11 +11,11 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
-use flui_scheduler::{IdleDeadline, Instant, Priority, UpdateScheduler};
+use flui_scheduler::{IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, Priority, UpdateScheduler};
 
 /// Phase-order canary: the async driver must still refuse to poll while the
 /// scheduler is in `PersistentCallbacks` (build/layout/paint). This is the
@@ -89,16 +89,20 @@ fn tiny_deadline_defers_idle_but_never_defers_build_or_animation() {
     );
 }
 
-/// Reentrancy exploit: `TaskQueue::execute_until` snapshots the queue once
-/// under a single lock acquisition and runs the batch OUTSIDE that lock
-/// (see its own doc in `task.rs`) — it does not loop to exhaustion. A
-/// Priority::Animation task that itself enqueues Priority::Build work
-/// during that same pass is invisible to a single `execute_until(Build)`
-/// call: the freshly-queued Build task lands in the queue only in time for
-/// the NEXT frame. Kills a regression in `handle_draw_frame` that collapses
-/// the Animation/Build drain into one non-reentrant pass — reentrant
-/// Build work must still run THIS frame, not next, and an already-passed
-/// Idle deadline must not matter to that (it only ever bounds Idle work).
+/// Reentrancy exploit: `TaskQueue::execute_until` bounds each call to an id
+/// watermark captured once, under its first lock acquisition (see its own
+/// doc in `task.rs`) — a task enqueued reentrantly during the call always
+/// gets a strictly greater id and is left queued for the NEXT call, not this
+/// one. A Priority::Animation task that itself enqueues Priority::Build work
+/// during that same pass is therefore invisible to the SAME
+/// `execute_until(Build)` call it ran inside of — but `handle_draw_frame`'s
+/// own reentrant-pass loop calls `execute_until` again immediately, within
+/// the same `handle_draw_frame` invocation, so the freshly-queued Build task
+/// still runs in THIS frame, one pass later, not deferred a whole frame.
+/// Kills a regression in `handle_draw_frame` that collapses the
+/// Animation/Build drain into one non-reentrant pass — reentrant Build work
+/// must still run THIS frame, not next, and an already-passed Idle deadline
+/// must not matter to that (it only ever bounds Idle work).
 #[test]
 fn build_work_enqueued_reentrantly_by_an_animation_task_runs_this_frame() {
     let scheduler = UpdateScheduler::new();
@@ -126,6 +130,70 @@ fn build_work_enqueued_reentrantly_by_an_animation_task_runs_this_frame() {
         "Build work enqueued by an Animation task during the same \
          handle_draw_frame pass must run in THIS frame, not be silently \
          deferred a whole frame"
+    );
+}
+
+/// A Build task that unconditionally re-enqueues itself must not hang the
+/// frame: `TaskQueue::execute_until`'s count budget (the number of tasks
+/// already queued when THAT call started, read once under its first lock
+/// acquisition) bounds each call to at most that many pops, so a
+/// self-re-enqueuing chain runs once per call, not without limit inside a
+/// single call — `handle_draw_frame`'s own reentrant-pass loop still gets to
+/// count passes and give up at [`MAX_BUILD_REENTRY_PASSES`]. Before this
+/// bound existed, a live re-peek of the heap absorbed the whole chain
+/// inside ONE `execute_until` call and never returned, so the outer loop's
+/// pass counter never advanced past 1 and this cap became unreachable dead
+/// code.
+///
+/// The observed run count is `MAX_BUILD_REENTRY_PASSES + 1`, not the cap
+/// itself: the reentry loop's 32nd pass warns and breaks with the
+/// 33rd-re-enqueued task still queued (its own call's budget already spent)
+/// -- but `handle_draw_frame` falls through, right after, to an
+/// unconditional `execute_until(Priority::Idle)` sweep (skipped only once
+/// the Idle deadline has passed, which a `far_future` deadline never does).
+/// That threshold accepts ANY priority, so it picks up exactly that one
+/// leftover Build task and runs it too, re-enqueuing a 34th that stays
+/// queued for a genuinely next frame. This is not new: the same two-drain
+/// shape existed before this bound and would have caught the same leftover
+/// task the same way; the bound only changes how the FIRST 32 executions
+/// are contained, not this trailing sweep.
+#[test]
+fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever() {
+    let scheduler = UpdateScheduler::new();
+    let runs = Arc::new(AtomicUsize::new(0));
+
+    // A named fn, not a closure capturing itself: each execution re-enqueues
+    // one more instance of itself, unconditionally, under its own scheduler
+    // handle and shared counter.
+    fn requeue(scheduler: UpdateScheduler, runs: Arc<AtomicUsize>) {
+        let next_scheduler = scheduler.clone();
+        let next_runs = Arc::clone(&runs);
+        scheduler.add_task(Priority::Build, move || {
+            next_runs.fetch_add(1, Ordering::SeqCst);
+            requeue(next_scheduler, next_runs);
+        });
+    }
+    requeue(scheduler.clone(), Arc::clone(&runs));
+
+    // Terminates at all -- the primary regression this test guards -- and
+    // the warning fires exactly once. `execute_frame` runs a full
+    // `handle_draw_frame` reentrant-pass loop identically to `drive_frame`.
+    let (_frame_id, log) = flui_testing::log_capture::capture(|| scheduler.execute_frame());
+
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        MAX_BUILD_REENTRY_PASSES + 1,
+        "the reentry cap bounds the Build/Animation reentrant-pass loop to \
+         MAX_BUILD_REENTRY_PASSES executions; the trailing, unconditional \
+         execute_until(Priority::Idle) sweep right after picks up the ONE \
+         task the cap left queued (its threshold accepts any priority) -- \
+         see this test's own doc for why that +1 is not the count budget's \
+         doing"
+    );
+    assert_eq!(
+        log.count_containing("reentrant drain"),
+        1,
+        "the reentry-cap warning must fire exactly once: {log}"
     );
 }
 

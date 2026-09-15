@@ -109,6 +109,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two follow-up regressions in the #1057 panic-recovery bound, found by
+  review:** `TaskQueue::execute_until`'s first attempt at bounding a
+  reentrant pass parked tasks that outran its id watermark in a local
+  `Vec`, re-queuing them only after the whole pass returned — a LATER
+  task's panic in the same pass unwound straight through that `Vec`,
+  silently dropping every task it held (never seen before #1057, since the
+  batch drain it replaced never removed anything from the heap except what
+  it was already executing). Replaced with a plain count budget
+  (`queue.len()` at entry, decremented per pop): the heap has no mid-scan
+  removal API the way the transient callback deque does, so a count cannot
+  go stale the way it can there, and nothing is ever held outside the live
+  heap to lose on unwind. Separately, `schedule_frame_callback` minted its
+  `CallbackId` before acquiring the `transient` lock; two threads racing
+  it could push entries out of id order, which made `handle_begin_frame`'s
+  id-watermark bound (the transient callbacks' own bound, unaffected by
+  the change above) fail its very first check and run neither callback,
+  every frame, until a later registration happened to raise the
+  watermark — fixed by minting inside the same lock acquisition as the
+  push, the same discipline post-frame registration already used. See
+  `crates/flui-scheduler/ARCHITECTURE.md`'s mapping entry for the accepted
+  trade-off the count budget introduces (a higher-priority reentrant task
+  displaces a queued sibling to the next call rather than deferring behind
+  it) and both regressions' own tests.
+- **A panic before the pipeline slot ever opens now closes the frame** (#1057):
+  `drive_frame`/`drive_frame_with_lane` used to `catch_unwind` only the
+  caller-supplied pipeline closure, so a panic from a transient callback,
+  the mid-frame async-driver poll, a persistent callback, or a
+  `Priority::Build`/`Animation`/`Idle` task — every one of which runs
+  BEFORE that closure — escaped past `abort_frame` entirely and left the
+  phase machine stuck (`TransientCallbacks`/`MidFrameMicrotasks`/
+  `PersistentCallbacks`), `frame_scheduled` unresolved, and every
+  `end_of_frame()` waiter hung forever. One `catch_unwind` now covers
+  `handle_begin_frame`, `handle_draw_frame`, and the pipeline together, and
+  `execute_frame`/`execute_frame_with_lane` route through the same
+  implementation instead of a second, unguarded sequence. Every queue
+  drained before the pipeline runs (transient callbacks,
+  `TaskQueue::execute_until`) now pops one entry at a time instead of
+  batch-draining, so a panicking entry's still-queued siblings survive to
+  the next frame rather than being lost with the batch. `AsyncDriver::poll_ready`
+  no longer leaves a zombie task slot behind when a future panics on
+  `poll`, and `notify_frame_completion` no longer holds a waiter's lock
+  across its `wake()` call (an inline-polling waker previously deadlocked)
+  and no longer lets one panicking waker starve the others. See
+  `crates/flui-scheduler/ARCHITECTURE.md`'s mapping entry for the full
+  per-queue policy and the named limitation (an aborted frame is not
+  distinguishable from a successful one through `end_of_frame()` alone).
 - `TickerFuture` is now wired to the `Ticker` lifecycle instead of existing as
   an unconnected async helper.
 - Thread spawn leak in `TickerFuture::when_complete_or_cancel` - threads no longer spin in a busy loop

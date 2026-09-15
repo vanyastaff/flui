@@ -98,7 +98,26 @@ use crate::{
 /// `is_idle_deadline_passed`). A task that hits this cap is re-enqueuing
 /// itself every single pass, which is a task bug this cap turns into a
 /// diagnosable trace rather than an unbounded loop.
-const MAX_BUILD_REENTRY_PASSES: usize = 32;
+///
+/// This counts CALLS to [`TaskQueue::execute_until`](crate::TaskQueue::execute_until)
+/// in this loop, each of which -- since issue #1057's count budget -- pops
+/// at most as many tasks as were queued at that call's OWN start, not
+/// "until the queue is empty". A single self-re-enqueuing `Priority::Build`
+/// task therefore runs exactly this many times from THIS loop before the
+/// cap gives up and warns — but `handle_draw_frame` still ends with one
+/// more, UNCONDITIONAL `execute_until(Priority::Idle)` sweep, whose
+/// threshold accepts any priority: it picks up the one task this cap's own
+/// last pass left queued, so a task that survives the whole cap is
+/// actually observed running `MAX_BUILD_REENTRY_PASSES + 1` times in that
+/// frame, not this many — see `tests/update_scheduler_reshape.rs`'s
+/// `a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever`
+/// for the pinned count and why the `+ 1` is not this cap's own doing.
+///
+/// `#[doc(hidden)] pub` rather than crate-private: an integration test
+/// cannot otherwise reference this exact value, and a hardcoded duplicate
+/// in that test would silently drift from a change made only here.
+#[doc(hidden)]
+pub const MAX_BUILD_REENTRY_PASSES: usize = 32;
 
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
@@ -293,8 +312,15 @@ struct FrameState {
 struct CallbackState {
     /// Linearizes shared/local post-frame registration with frame snapshots.
     post_frame_registration: Mutex<()>,
-    /// Transient callbacks - animation tickers
-    transient: Mutex<Vec<CancellableTransientCallback>>,
+    /// Transient callbacks - animation tickers.
+    ///
+    /// A `VecDeque`, not a `Vec`: `handle_begin_frame` pops one entry at a
+    /// time from the front and invokes it outside this lock (see that
+    /// method's own comment) so a panicking callback loses only itself --
+    /// every callback still behind it in the queue is untouched, not
+    /// silently dropped with the batch a single-lock drain would already
+    /// have removed it into (issue #1057).
+    transient: Mutex<VecDeque<CancellableTransientCallback>>,
     /// Cancelled callback IDs (lock-free)
     cancelled: DashMap<CallbackId, ()>,
     /// Callback ID generator
@@ -531,7 +557,7 @@ impl UpdateScheduler {
             },
             callbacks: CallbackState {
                 post_frame_registration: Mutex::new(()),
-                transient: Mutex::new(Vec::new()),
+                transient: Mutex::new(VecDeque::new()),
                 cancelled: DashMap::new(),
                 id_gen: IdGenerator::new(),
                 persistent: Mutex::new(Vec::new()),
@@ -687,23 +713,59 @@ impl UpdateScheduler {
         // Phase 1: TransientCallbacks (animation tickers)
         self.set_scheduler_phase(SchedulerPhase::TransientCallbacks);
 
-        // Execute transient callbacks (animations get vsync timestamp)
-        // Use drain() instead of take() to preserve Vec capacity across frames
-        let transient: Vec<_> = {
-            let mut cbs = self.inner.callbacks.transient.lock();
-            cbs.drain(..).collect()
+        // Execute transient callbacks (animations get vsync timestamp).
+        //
+        // Pop one callback at a time and invoke it OUTSIDE the lock -- the
+        // same shape `flush_microtasks` uses -- rather than draining the
+        // whole queue into a batch before running any of it. A callback
+        // that panics then loses only itself: every callback still behind
+        // it in `transient` is untouched and runs on the NEXT
+        // `handle_begin_frame`, instead of having already been removed from
+        // the queue by this frame's own drain and lost with it (issue
+        // #1057; see `flui-scheduler/ARCHITECTURE.md`'s mapping entry).
+        //
+        // Bounded by an id WATERMARK -- the id of the last (back) entry
+        // queued at entry, read once before invoking anything -- not a
+        // remaining-iteration COUNT. `CallbackId`s are minted from this
+        // scheduler's own monotonic `id_gen` in registration order, so
+        // `back().id` at entry is exactly the highest id already queued.
+        // A callback that registers another transient callback of its own
+        // from inside itself must have the new one deferred to the NEXT
+        // frame (issue #1058's reentrant-registration contract): the fresh
+        // entry always gets a strictly greater id, so `front().id <=
+        // watermark` excludes it regardless of where in the queue it lands.
+        // A remaining-COUNT bound does not survive cancellation: `A`
+        // cancelling a not-yet-run sibling `B` (`cancel_frame_callback`
+        // removes `B` from the live queue directly, #1156) and registering
+        // a fresh `C` leaves the queue's LENGTH unchanged from `A`'s own
+        // perspective, so a count budget still reaches `C` this same call
+        // even though `C`'s id exceeds the watermark (issue #1057's own
+        // regression, measured: `C` ran in the same frame it was
+        // registered in).
+        let (watermark, pending) = {
+            let cbs = self.inner.callbacks.transient.lock();
+            (cbs.back().map(|c| c.id), cbs.len())
         };
+        if let Some(watermark) = watermark {
+            tracing::debug!(count = pending, "executing transient callbacks");
+            loop {
+                let cancellable = {
+                    let mut cbs = self.inner.callbacks.transient.lock();
+                    match cbs.front() {
+                        Some(front) if front.id <= watermark => cbs.pop_front(),
+                        _ => None,
+                    }
+                };
+                let Some(cancellable) = cancellable else {
+                    break;
+                };
 
-        if !transient.is_empty() {
-            tracing::debug!(count = transient.len(), "executing transient callbacks");
-        }
-
-        for cancellable in transient {
-            // Skip if cancelled (DashMap provides lock-free contains_key)
-            if self.inner.callbacks.cancelled.contains_key(&cancellable.id) {
-                continue;
+                // Skip if cancelled (DashMap provides lock-free contains_key)
+                if self.inner.callbacks.cancelled.contains_key(&cancellable.id) {
+                    continue;
+                }
+                (cancellable.callback)(vsync_time);
             }
-            (cancellable.callback)(vsync_time);
         }
 
         // NOTE: Do NOT clear cancelled_callbacks here. Cancellations requested
@@ -789,20 +851,27 @@ impl UpdateScheduler {
         // Animation and Build always run — never gated. Only Idle work is
         // deadline-bounded (see this method's own doc and `drive_frame`).
         //
-        // `TaskQueue::execute_until` snapshots the queue once under a
-        // single lock acquisition, then runs the batch OUTSIDE that lock
-        // (see its own doc) — it does not loop until the queue is
-        // exhausted. A Priority::Animation (or Priority::UserInput) task
+        // `TaskQueue::execute_until` bounds each call to an id watermark
+        // captured once, under its first lock acquisition (see its own
+        // doc) — a task enqueued reentrantly during the call always gets a
+        // strictly greater id and is left queued for the NEXT call, not
+        // this one. A Priority::Animation (or Priority::UserInput) task
         // that itself calls `add_task` with Build-or-higher priority while
-        // it runs is invisible to that same snapshot: the freshly-queued
-        // work would otherwise sit until the *next* frame's
-        // `handle_draw_frame`, silently deferred a whole frame for no
-        // reason this method's own doc promises (a deadline bounds Idle
-        // work only). Loop until a pass finds nothing new, so reentrant
-        // Build work runs THIS frame. Bounded: a task that re-enqueues
-        // itself every single pass is a task bug (an unbounded reentrant
-        // chain), not a reason to hang this frame — cap the passes and
-        // trace loudly if the cap is hit, rather than looping forever.
+        // it runs is therefore invisible to the SAME `execute_until` call
+        // it ran inside of: the freshly-queued work would otherwise sit
+        // until the *next* frame's `handle_draw_frame`, silently deferred a
+        // whole frame for no reason this method's own doc promises (a
+        // deadline bounds Idle work only). Loop until a pass finds nothing
+        // new, so reentrant Build work still runs THIS frame, one pass
+        // later. Bounded: a task that re-enqueues itself every single pass
+        // is a task bug (an unbounded reentrant chain), not a reason to
+        // hang this frame — cap the passes and trace loudly if the cap is
+        // hit, rather than looping forever. That cap depends on
+        // `execute_until` actually returning once its own watermarked work
+        // is done: a version that re-peeks the LIVE queue instead (issue
+        // #1057's own regression) absorbs an unboundedly self-re-enqueuing
+        // chain inside ONE call and never returns, so this loop's own pass
+        // counter never gets a chance to fire the cap at all.
         let mut reentry_passes = 0usize;
         loop {
             let executed = self.inner.task_queue.execute_until(Priority::Build);
@@ -970,15 +1039,33 @@ impl UpdateScheduler {
             // Clear processed cancellations
             self.inner.callbacks.cancelled.clear();
 
-            // Notify frame completion futures
-            self.notify_frame_completion(&timing);
+            // Notify frame completion futures. Caught here, alongside
+            // `callback_result`, rather than left to propagate bare: a
+            // panicking waker is otherwise the exact class of bug issue
+            // #1057 exists to close, just on the CLEAN path this time --
+            // without this, it would escape straight past the phase reset
+            // below and leave the scheduler stuck at `PostFrameCallbacks`
+            // with `current_vsync_time` still set, reachable through
+            // `drive_frame`'s `Ok` arm rather than its `Err` one.
+            let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.notify_frame_completion(&timing);
+            }));
 
-            if let Err(payload) = callback_result {
+            if callback_result.is_err() || notify_result.is_err() {
                 self.inner
                     .frame
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
                 *self.inner.frame.current_vsync_time.lock() = None;
+                // The post-frame callback's panic happened first in this
+                // frame's own order; prefer surfacing it when both panicked
+                // (`notify_frame_completion` already traced its own panic
+                // via `tracing::error!` before propagating it here, so it is
+                // not silently lost either way).
+                let payload = callback_result
+                    .err()
+                    .or(notify_result.err())
+                    .expect("BUG: at least one of callback_result/notify_result is Err here");
                 std::panic::resume_unwind(payload);
             }
         }
@@ -998,11 +1085,13 @@ impl UpdateScheduler {
     ///
     /// # Who calls this, and why it is not a `Drop` guard
     ///
-    /// [`drive_frame`](Self::drive_frame) **does** catch a panicking pipeline: it
-    /// `catch_unwind`s, calls this, then `resume_unwind`s. So this runs *between*
-    /// the catch and the resume — the panic payload is already captured and nothing
-    /// here executes during unwinding. A caller that drives a frame by hand
-    /// (`handle_begin_frame` + `handle_draw_frame`) and panics must call this itself.
+    /// [`drive_frame`](Self::drive_frame) **does** catch a panic from any phase it
+    /// owns — `handle_begin_frame`, `handle_draw_frame`, or the pipeline, all three
+    /// under one `catch_unwind` — calls this, then `resume_unwind`s. So this runs
+    /// *between* the catch and the resume — the panic payload is already captured
+    /// and nothing here executes during unwinding. A caller that drives a frame by
+    /// hand (`handle_begin_frame` + `handle_draw_frame`) and panics must call this
+    /// itself.
     ///
     /// A `Drop` guard would be wrong twice. It would have to force
     /// `PersistentCallbacks -> Idle`, which
@@ -1015,6 +1104,23 @@ impl UpdateScheduler {
     ///
     /// Completion waiters **are** notified: an aborted frame is a frame that
     /// finished, badly. Leaving them queued would hang `end_of_frame()` forever.
+    /// The completion future does not distinguish an aborted frame from a
+    /// successful one — a known limitation, not an oversight (see
+    /// `flui-scheduler/ARCHITECTURE.md`'s mapping entry for issue #1057).
+    ///
+    /// # `frame_scheduled` is already closed; a catcher that wants another frame
+    /// # must ask for one
+    ///
+    /// By the time any callback this method could be recovering from has even run,
+    /// `handle_begin_frame` has already cleared `frame_scheduled` back to `false`
+    /// (it does so unconditionally, before the transient-callback loop) — so
+    /// [`is_frame_scheduled`](Self::is_frame_scheduled) reads `false` once `abort_frame`
+    /// returns, exactly as it would after any other completed frame. This method does
+    /// **not** re-arm it: doing so here would hot-loop a caller that keeps re-driving a
+    /// deterministically panicking frame. A caller that catches the resumed panic and
+    /// decides the show must go on owns calling [`request_frame`](Self::request_frame)
+    /// itself before the next platform wake, the same as it would after any other
+    /// frame that produced no visible work.
     ///
     /// Idempotent: a no-op when no frame is open.
     pub fn abort_frame(&self) {
@@ -1089,23 +1195,54 @@ impl UpdateScheduler {
     /// A pipeline that **returns** an error value is a completed frame: `end_frame`
     /// runs, post-frame callbacks fire, exactly once.
     ///
-    /// A pipeline that **panics** is an abandoned frame. The panic is caught,
-    /// [`abort_frame`](Self::abort_frame) resets the phase **without running any
-    /// post-frame callback**, and the panic is then resumed unchanged. The queued
-    /// callbacks survive to the next completed frame. This is Flutter's
-    /// `try { persistent; postFrame } finally { phase = idle; }`
-    /// (`scheduler/binding.dart:1341-1374`), where a throwing persistent callback
-    /// skips the post-frame loop but still resets the phase.
+    /// A panic from **any** phase this method drives — a transient callback or the
+    /// mid-frame async-driver poll inside `handle_begin_frame`; a persistent
+    /// callback or a `Priority::Animation`/`Build`/`Idle` task inside
+    /// `handle_draw_frame`; or the pipeline itself — is an abandoned frame. All
+    /// three phases run under ONE `catch_unwind`, so the panic is caught no matter
+    /// which one raised it, [`abort_frame`](Self::abort_frame) resets the phase
+    /// **without running any post-frame callback**, and the panic is then resumed
+    /// unchanged. This is issue #1057: earlier, only the pipeline sat inside the
+    /// `catch_unwind`, so a panic from `handle_begin_frame`/`handle_draw_frame`
+    /// escaped straight past `abort_frame` and left the phase machine, the
+    /// `frame_scheduled` latch, and every registered completion waiter stuck at
+    /// whatever state that frame happened to reach.
+    ///
+    /// Every queue this scheduler owns preserves the callbacks/tasks still behind
+    /// the panicking entry — see `handle_begin_frame`'s transient-callback loop and
+    /// [`TaskQueue::execute_until`](crate::TaskQueue::execute_until)'s own docs — so
+    /// only the entry that actually panicked is lost; everything queued after it
+    /// runs on the next completed frame, not retried and not silently dropped. This
+    /// is Flutter's `try { persistent; postFrame } finally { phase = idle; }`
+    /// (`scheduler/binding.dart:1341-1374`) in spirit — a throwing persistent
+    /// callback skips the post-frame loop but still resets the phase — but not in
+    /// mechanism: Flutter's `_invokeFrameCallback` wraps every individual
+    /// transient/persistent/post-frame callback in its own error-reporting
+    /// boundary, and `drawFrame()` — the pipeline's own equivalent — is itself
+    /// registered and invoked as a persistent callback through that SAME boundary
+    /// (`rendering/binding.dart:61`, `:557-558`), so no callback's exception,
+    /// `drawFrame`'s included, ever unwinds Dart's call stack far enough to reach
+    /// the `finally` at all. Per-callback isolation is what the source actually
+    /// shows holding there; the `finally` covers whatever else could still
+    /// escape past it. FLUI does not isolate per callback — a panic here poisons
+    /// and propagates the whole frame, same as before this issue — this method's
+    /// contract is only that the scheduler's OWN bookkeeping is never left
+    /// half-closed by it.
     ///
     /// The recovery runs *between* `catch_unwind` and `resume_unwind` — the panic
     /// payload is already captured, so nothing here executes during unwinding, and
     /// no `Drop` guard is involved for THIS part (see `abort_frame` for why a guard
     /// would `abort` the process here specifically — the earlier `IdleDeadlineGuard`
-    /// is a different, narrower guard over a plain field, not the phase machine).
-    /// Without this, a panicking pipeline would leave the
-    /// frame open at `PersistentCallbacks` and the *next* `handle_begin_frame`
-    /// would attempt the illegal `PersistentCallbacks -> TransientCallbacks`
-    /// transition.
+    /// is a different, narrower guard over a plain field, not the phase machine, and
+    /// now sits INSIDE this same `catch_unwind`). Without this, a panicking pipeline
+    /// would leave the frame open at `PersistentCallbacks` and the *next*
+    /// `handle_begin_frame` would attempt the illegal `PersistentCallbacks ->
+    /// TransientCallbacks` transition; a panic from an earlier phase left it open at
+    /// whichever phase that was instead.
+    ///
+    /// See [`abort_frame`](Self::abort_frame)'s own doc for the `frame_scheduled`
+    /// contract a catcher inherits: closed, not re-armed, so a caller that wants
+    /// another frame after catching this one's resumed panic must request it.
     ///
     /// Under `panic = "abort"` nothing is caught and the process dies with the
     /// frame open, which is moot.
@@ -1116,6 +1253,7 @@ impl UpdateScheduler {
         pipeline: impl FnOnce() -> R,
     ) -> R {
         self.drive_frame_impl(vsync_time, deadline, pipeline, None)
+            .1
     }
 
     /// [`drive_frame`](Self::drive_frame), additionally draining `lane`'s
@@ -1130,44 +1268,94 @@ impl UpdateScheduler {
         lane: &crate::LocalPostFrameLane,
     ) -> R {
         self.drive_frame_impl(vsync_time, deadline, pipeline, Some(lane))
+            .1
     }
 
+    /// The shared implementation behind [`drive_frame`](Self::drive_frame),
+    /// [`drive_frame_with_lane`](Self::drive_frame_with_lane),
+    /// [`execute_frame`](Self::execute_frame), and
+    /// [`execute_frame_with_lane`](Self::execute_frame_with_lane) — the
+    /// convenience pair routes through here too (with a no-op `pipeline`)
+    /// rather than hand-rolling `handle_begin_frame` + `handle_draw_frame` +
+    /// `end_frame` directly, so every caller gets the identical
+    /// single-`catch_unwind` recovery boundary this method's own doc
+    /// describes; a bare sequential call site here would silently reopen the
+    /// exact gap issue #1057 closed.
+    ///
+    /// Returns the [`FrameId`] `handle_begin_frame` minted alongside
+    /// `pipeline`'s own result: `drive_frame`/`drive_frame_with_lane` discard
+    /// it to keep their existing `-> R` signature, while
+    /// `execute_frame`/`execute_frame_with_lane` discard `R` (always `()`
+    /// there) and return the id instead.
     fn drive_frame_impl<R>(
         &self,
         vsync_time: Instant,
         deadline: IdleDeadline,
         pipeline: impl FnOnce() -> R,
         lane: Option<&crate::LocalPostFrameLane>,
-    ) -> R {
+    ) -> (FrameId, R) {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
-        let idle_deadline_guard = IdleDeadlineGuard {
-            slot: &self.inner.frame.idle_deadline,
-        };
 
-        self.handle_begin_frame(vsync_time);
-        self.handle_draw_frame();
-        // The deadline only ever needs to be visible for this frame's own
-        // `handle_draw_frame` call, immediately above; drop the guard now
-        // (rather than leaving it to this function's own end) so a caller
-        // that later drives `handle_begin_frame`/`handle_draw_frame` by hand
-        // never inherits a stale deadline, and so it is visibly gone before
-        // `pipeline` runs. The guard's `Drop` — not this explicit call alone
-        // — is what still clears the field if `handle_begin_frame` or
-        // `handle_draw_frame` above panics; see this method's own doc.
-        drop(idle_deadline_guard);
+        // ONE recovery boundary over the whole frame lifetime this method
+        // owns -- `handle_begin_frame`, `handle_draw_frame`, AND `pipeline`
+        // -- not merely `pipeline` alone (issue #1057). A transient
+        // callback, a mid-frame async poll, a persistent callback, or a
+        // priority task can panic just as the pipeline can, and every one
+        // of those phases runs before this frame would otherwise reach
+        // `end_frame`; leaving any of them outside this `catch_unwind` means
+        // its panic skips `abort_frame` entirely and leaves the phase
+        // machine, the `frame_scheduled` latch, and every completion waiter
+        // stuck wherever that phase left them.
+        let attempt = catch_unwind(AssertUnwindSafe(|| {
+            let idle_deadline_guard = IdleDeadlineGuard {
+                slot: &self.inner.frame.idle_deadline,
+            };
 
-        match catch_unwind(AssertUnwindSafe(pipeline)) {
-            Ok(result) => {
+            let frame_id = self.handle_begin_frame(vsync_time);
+            self.handle_draw_frame();
+            // The deadline only ever needs to be visible for this frame's
+            // own `handle_draw_frame` call, immediately above; drop the
+            // guard now (rather than leaving it to this closure's own end)
+            // so a caller that later drives `handle_begin_frame`/
+            // `handle_draw_frame` by hand never inherits a stale deadline,
+            // and so it is visibly gone before `pipeline` runs. The guard's
+            // `Drop` — not this explicit call alone — is what still clears
+            // the field if `handle_begin_frame` or `handle_draw_frame`
+            // above panics; see this method's own doc.
+            drop(idle_deadline_guard);
+
+            (frame_id, pipeline())
+        }));
+
+        match attempt {
+            Ok((frame_id, result)) => {
                 match lane {
                     Some(lane) => self.end_frame_with_lane(lane),
                     None => self.end_frame(),
                 }
-                result
+                (frame_id, result)
             }
             Err(payload) => {
-                self.abort_frame();
+                // `abort_frame` calls `notify_frame_completion`, which can
+                // itself panic (a completion waiter's waker) -- a SECOND,
+                // unrelated panic on top of `payload`. Contained here so
+                // that panic can never displace the original: without this,
+                // `self.abort_frame()` would panic with the waker's payload
+                // before `resume_unwind(payload)` below ever ran, and the
+                // caller would observe the waker's failure instead of
+                // whichever phase actually caused this frame to abort.
+                if let Err(secondary_payload) =
+                    catch_unwind(AssertUnwindSafe(|| self.abort_frame()))
+                {
+                    tracing::error!(
+                        panic_msg = flui_foundation::panic::payload_text(&*secondary_payload)
+                            .unwrap_or("(non-string panic payload)"),
+                        "abort_frame panicked while closing a frame that was already \
+                         panicking; resuming the ORIGINAL panic, not this one"
+                    );
+                }
                 resume_unwind(payload)
             }
         }
@@ -1175,20 +1363,31 @@ impl UpdateScheduler {
 
     /// Execute a complete frame (convenience method)
     ///
-    /// Calls handle_begin_frame and handle_draw_frame in sequence.
-    /// Use this for simple cases; for proper vsync integration,
-    /// call handle_begin_frame and handle_draw_frame separately.
+    /// begin → persistent → end, with a no-op pipeline, through the SAME
+    /// shared implementation [`drive_frame`](Self::drive_frame) uses — not
+    /// a second, hand-rolled `handle_begin_frame` + `handle_draw_frame` +
+    /// `end_frame` sequence. Use this for simple cases (warm-up frames,
+    /// tests); for proper vsync integration, call `drive_frame` with a real
+    /// pipeline.
+    ///
+    /// Preserves this method's original behavior on the clean path: the
+    /// frame completes and its post-frame callbacks run. On the panic path
+    /// it now shares `drive_frame`'s recovery contract too (issue #1057):
+    /// a transient callback, mid-frame async poll, persistent callback, or
+    /// priority task that panics closes the phase/`frame_scheduled`/
+    /// completion bookkeeping via `abort_frame` before the panic resumes,
+    /// rather than escaping past a bare sequential call site the way it did
+    /// before this method routed through the shared implementation.
     #[tracing::instrument(skip(self))]
     pub fn execute_frame(&self) -> FrameId {
-        // begin → persistent → end. The non-pipeline convenience path (warm-up
-        // frames, tests); `drive_frame` is the same sequence with a pipeline in
-        // the persistent slot. Preserves this method's original behavior: the
-        // frame completes and its post-frame callbacks run.
         let vsync_time = Instant::now();
-        let frame_id = self.handle_begin_frame(vsync_time);
-        self.handle_draw_frame();
-        self.end_frame();
-        frame_id
+        self.drive_frame_impl(
+            vsync_time,
+            IdleDeadline::far_future(vsync_time),
+            || {},
+            None,
+        )
+        .0
     }
 
     /// [`execute_frame`](Self::execute_frame), additionally draining `lane`'s
@@ -1196,10 +1395,13 @@ impl UpdateScheduler {
     #[tracing::instrument(skip(self, lane))]
     pub fn execute_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) -> FrameId {
         let vsync_time = Instant::now();
-        let frame_id = self.handle_begin_frame(vsync_time);
-        self.handle_draw_frame();
-        self.end_frame_with_lane(lane);
-        frame_id
+        self.drive_frame_impl(
+            vsync_time,
+            IdleDeadline::far_future(vsync_time),
+            || {},
+            Some(lane),
+        )
+        .0
     }
 
     /// Schedule a warm-up frame (synchronous, no vsync wait)
@@ -1231,13 +1433,29 @@ impl UpdateScheduler {
     ///
     /// Returns a `CallbackId` that can be used to cancel the callback before it
     /// fires.
+    ///
+    /// # Id order is structural, not incidental
+    ///
+    /// The id is minted INSIDE the same `transient` lock acquisition as the
+    /// push, not before it: `handle_begin_frame`'s id-watermark bound
+    /// (issue #1057) assumes the deque's push order and its ids' numeric
+    /// order always agree, and `UpdateScheduler` is `Sync` — two threads
+    /// racing this method with the mint OUTSIDE the lock could push
+    /// `[id6, id5]` (whichever thread reaches the lock first pushes,
+    /// regardless of which minted first). `back().id` (5) then sits BELOW
+    /// `front().id` (6), so the watermark loop's very first check fails and
+    /// NEITHER callback ever runs, every frame, until a later registration
+    /// happens to raise the watermark. Minting under the lock makes
+    /// whichever thread acquires it first also mint the smaller id first,
+    /// structurally, the same discipline `with_post_frame_registration`
+    /// already uses for post-frame registration.
     pub fn schedule_frame_callback(&self, callback: OneShotFrameCallback) -> CallbackId {
-        let id = self.inner.callbacks.id_gen.next();
-        self.inner
-            .callbacks
-            .transient
-            .lock()
-            .push(CancellableTransientCallback { id, callback });
+        let id = {
+            let mut cbs = self.inner.callbacks.transient.lock();
+            let id = self.inner.callbacks.id_gen.next();
+            cbs.push_back(CancellableTransientCallback { id, callback });
+            id
+        };
         // Registering a tick demands a frame to run it in (Flutter parity:
         // `scheduleFrameCallback` calls `scheduleFrame`). `request_frame`
         // wakes the platform on the false->true transition.
@@ -1277,7 +1495,7 @@ impl UpdateScheduler {
             callbacks
                 .iter()
                 .position(|callback| callback.id == id)
-                .map(|index| callbacks.remove(index))
+                .and_then(|index| callbacks.remove(index))
         };
 
         if let Some(callback) = removed {
@@ -1543,6 +1761,26 @@ impl UpdateScheduler {
     /// all transient callbacks have been processed.
     pub fn transient_callback_count(&self) -> usize {
         self.inner.callbacks.transient.lock().len()
+    }
+
+    /// Test-only probe: `true` iff every `CallbackId` in the transient
+    /// deque is strictly greater than the one before it.
+    ///
+    /// `handle_begin_frame`'s id-watermark bound (issue #1057) assumes the
+    /// deque's own queue order and its ids' numeric order always agree —
+    /// true only because `schedule_frame_callback` mints the id and pushes
+    /// the entry inside the SAME `transient` lock acquisition (issue
+    /// #1057's own follow-up). Minting outside that lock let two
+    /// concurrent registrations land as `[id6, id5]`: `back().id` (5) then
+    /// sits BELOW `front().id` (6), so the watermark loop's very first
+    /// check fails and NEITHER callback ever runs, every frame, until a
+    /// later registration happens to raise the watermark. This oracle
+    /// checks the invariant the fix restores directly, rather than relying
+    /// on timing to reproduce the stall itself.
+    #[cfg(test)]
+    pub(crate) fn transient_ids_are_strictly_ascending(&self) -> bool {
+        let cbs = self.inner.callbacks.transient.lock();
+        cbs.iter().zip(cbs.iter().skip(1)).all(|(a, b)| a.id < b.id)
     }
 
     /// Get current frame timing (if a frame is active)
@@ -1879,19 +2117,56 @@ impl UpdateScheduler {
         future
     }
 
-    /// Internal: Notify all frame completion waiters
+    /// Internal: notify all frame completion waiters.
+    ///
+    /// Each waiter's [`Waker`] is taken out from under its own
+    /// `notifier.state` lock and called only after that lock is released.
+    /// An inline-polling waker — one whose `wake()` immediately re-polls
+    /// this SAME [`FrameCompletionFuture`], rather than merely scheduling a
+    /// later poll — calls `FrameCompletionFuture::poll`, which locks that
+    /// identical `Arc<Mutex<FrameCompletionState>>`; held across the
+    /// `wake()` call, that self-relock on the non-reentrant
+    /// `parking_lot::Mutex` never returns (issue #1057).
+    ///
+    /// A waker that panics is caught and traced rather than aborting the
+    /// loop: every OTHER waiter still gets its `completed` value set and
+    /// its own waker called. The first such panic is re-raised
+    /// (`resume_unwind`) only after every waiter has been notified, so a
+    /// caller still observes it — matching `end_frame_impl`'s own
+    /// catch-then-resume shape for a panicking post-frame callback, just
+    /// upstream of it here.
     fn notify_frame_completion(&self, timing: &FrameTiming) {
         let waiters: Vec<_> = {
             let mut waiters = self.inner.frame.completion_waiters.lock();
             waiters.drain(..).collect()
         };
 
+        let mut first_panic: Option<Box<dyn std::any::Any + Send>> = None;
         for notifier in waiters {
-            let mut state = notifier.state.lock();
-            state.completed = Some(*timing);
-            if let Some(waker) = state.waker.take() {
-                waker.wake();
+            let waker = {
+                let mut state = notifier.state.lock();
+                state.completed = Some(*timing);
+                state.waker.take()
+            };
+            let Some(waker) = waker else { continue };
+
+            if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
+            {
+                tracing::error!(
+                    panic_msg = flui_foundation::panic::payload_text(&*payload)
+                        .unwrap_or("(non-string panic payload)"),
+                    "frame completion waker panicked; notifying remaining waiters before \
+                     propagating"
+                );
+                if first_panic.is_none() {
+                    first_panic = Some(payload);
+                }
             }
+        }
+
+        if let Some(payload) = first_panic {
+            std::panic::resume_unwind(payload);
         }
     }
 
@@ -2588,6 +2863,66 @@ mod tests {
         assert_eq!(received, vsync);
     }
 
+    /// Concurrent `schedule_frame_callback` registrations must not
+    /// interleave mint-then-push across threads (issue #1057's own
+    /// follow-up): minting the id BEFORE acquiring the `transient` lock let
+    /// two racing threads push `[id6, id5]` — `back().id` (5) then sits
+    /// BELOW `front().id` (6), so `handle_begin_frame`'s watermark loop's
+    /// very first check fails and NEITHER callback ever runs, every frame,
+    /// until a later registration happens to raise the watermark high
+    /// enough. A single race is not reliably reproducible on a timer, so
+    /// this repeats the race many times and checks BOTH the structural
+    /// invariant directly (`transient_ids_are_strictly_ascending`) and the
+    /// behavioral consequence (`handle_begin_frame` must still run every
+    /// registered callback in its own first frame).
+    #[test]
+    fn concurrent_transient_registrations_keep_the_deque_id_ascending() {
+        use std::sync::Barrier;
+        use std::sync::atomic::AtomicUsize;
+
+        const PER_THREAD: usize = 100;
+        const ITERATIONS: usize = 20;
+
+        for _ in 0..ITERATIONS {
+            let scheduler = UpdateScheduler::new();
+            let barrier = Arc::new(Barrier::new(2));
+            let ran = Arc::new(AtomicUsize::new(0));
+
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let scheduler = scheduler.clone();
+                    let barrier = Arc::clone(&barrier);
+                    let ran = Arc::clone(&ran);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        for _ in 0..PER_THREAD {
+                            let ran = Arc::clone(&ran);
+                            scheduler.schedule_frame_callback(Box::new(move |_| {
+                                ran.fetch_add(1, Ordering::SeqCst);
+                            }));
+                        }
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().expect("registration thread must not panic");
+            }
+
+            assert!(
+                scheduler.transient_ids_are_strictly_ascending(),
+                "concurrent registrations must not interleave mint order and push order"
+            );
+
+            scheduler.handle_begin_frame(Instant::now());
+            assert_eq!(
+                ran.load(Ordering::SeqCst),
+                2 * PER_THREAD,
+                "every registered callback must run in this one frame -- a stalled \
+                 watermark (front().id > back().id) would run none of them"
+            );
+        }
+    }
+
     /// The platform wake hook fires exactly once per `frame_scheduled`
     /// false→true transition: re-requesting a pending frame stays
     /// silent, and `handle_begin_frame` re-arms the edge. A ticker that
@@ -3073,6 +3408,130 @@ mod tests {
         assert!(r1.is_ready());
         assert!(r2.is_ready());
         assert!(r3.is_ready());
+    }
+
+    /// An inline-polling waker — one whose `wake()` re-polls the SAME
+    /// `FrameCompletionFuture` from inside the call, instead of merely
+    /// scheduling a later poll — must not deadlock `notify_frame_completion`
+    /// (issue #1057). The old implementation held `notifier.state`'s lock
+    /// across `waker.wake()`; `FrameCompletionFuture::poll` locks that exact
+    /// `Arc<Mutex<_>>`, so an inline re-poll self-relocked a non-reentrant
+    /// `parking_lot::Mutex`.
+    ///
+    /// A waker that actually performs that inline re-poll turns a
+    /// regression into a genuine hang, not a failing assertion — nextest's
+    /// `slow-timeout` only kills a truly stuck test after minutes (see
+    /// `.config/nextest.toml`), so this test would take that long to report
+    /// red instead of failing immediately. Probing with `try_lock` on the
+    /// EXACT lock a real inline poll would need — the same
+    /// lock-discipline-oracle shape `lock_discipline_tests.rs`'s
+    /// `assert_no_scheduler_lock_held` uses — gets the identical coverage
+    /// (a regression that holds the lock across `wake()` is caught) without
+    /// ever risking that hang.
+    #[test]
+    fn notify_frame_completion_tolerates_an_inline_polling_waker() {
+        use std::task::Wake;
+
+        struct LockFreedomOracleWaker {
+            // The exact `Arc<Mutex<_>>` `FrameCompletionFuture::poll` would
+            // lock from inside `wake()` if this waker really re-polled
+            // inline — reached directly (same-file access to a private
+            // field) rather than by actually performing that risky re-poll.
+            state: Arc<Mutex<FrameCompletionState>>,
+            observed_free: AtomicBool,
+        }
+
+        impl Wake for LockFreedomOracleWaker {
+            fn wake(self: Arc<Self>) {
+                self.observed_free
+                    .store(self.state.try_lock().is_some(), Ordering::SeqCst);
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let mut future = scheduler.end_of_frame();
+        let oracle = Arc::new(LockFreedomOracleWaker {
+            state: Arc::clone(&future.state),
+            observed_free: AtomicBool::new(false),
+        });
+
+        let waker = Waker::from(Arc::clone(&oracle));
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+
+        // `execute_frame` -> `end_frame` -> `notify_frame_completion` wakes
+        // the stored waker; `wake()` immediately probes the lock a real
+        // inline re-poll would need.
+        scheduler.execute_frame();
+
+        assert!(
+            oracle.observed_free.load(Ordering::SeqCst),
+            "notify_frame_completion must release notifier.state's lock before \
+             calling wake() -- an inline-polling waker's own re-lock would \
+             otherwise deadlock"
+        );
+    }
+
+    /// A waker that panics must not starve waiters registered after it: the
+    /// panic is caught, logged, and re-raised only once every waiter has
+    /// been notified (issue #1057).
+    #[test]
+    fn notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics() {
+        use std::sync::atomic::AtomicUsize;
+        use std::task::Wake;
+
+        struct PanicWaker;
+        impl Wake for PanicWaker {
+            fn wake(self: Arc<Self>) {
+                panic!("waker probe");
+            }
+        }
+
+        struct CountingWaker(AtomicUsize);
+        impl Wake for CountingWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let mut future_a = scheduler.end_of_frame();
+        let mut future_b = scheduler.end_of_frame();
+
+        let panic_waker = Waker::from(Arc::new(PanicWaker));
+        let mut cx_a = Context::from_waker(&panic_waker);
+        assert!(Pin::new(&mut future_a).poll(&mut cx_a).is_pending());
+
+        let woken_b = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let counting_waker = Waker::from(Arc::clone(&woken_b));
+        let mut cx_b = Context::from_waker(&counting_waker);
+        assert!(Pin::new(&mut future_b).poll(&mut cx_b).is_pending());
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.execute_frame();
+        }));
+        assert!(unwind.is_err(), "the waker's own panic must propagate");
+        assert_eq!(
+            unwind
+                .as_ref()
+                .err()
+                .and_then(|payload| flui_foundation::panic::payload_text(&**payload)),
+            Some("waker probe"),
+            "the original waker panic, not a secondary one"
+        );
+
+        assert_eq!(
+            woken_b.0.load(Ordering::SeqCst),
+            1,
+            "the second waiter must still be woken despite the first waker panicking"
+        );
+        assert_eq!(
+            scheduler.phase(),
+            SchedulerPhase::Idle,
+            "end_frame_impl catches notify_frame_completion's own panic alongside the \
+             post-frame callback's, so the phase reset still runs on this clean-pipeline \
+             path (issue #1057) instead of leaving the scheduler stuck at PostFrameCallbacks"
+        );
     }
 
     // Idle Callback Tests
