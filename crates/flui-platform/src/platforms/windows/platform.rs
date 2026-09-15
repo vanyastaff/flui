@@ -739,8 +739,9 @@ impl WindowsPlatform {
                         // Without this, the frame callback registered via
                         // `on_request_frame` — which in `flui-app`'s wiring
                         // owns this window's GPU renderer, whose
-                        // `wgpu::Surface` was built from this window's raw
-                        // handles — stays pinned forever: window (through
+                        // `wgpu::Surface` is built from the
+                        // `Arc<dyn PlatformWindow>` clone the renderer owns
+                        // (ADR-0063) — stays pinned forever: window (through
                         // its callback slots) → frame closure → raster lane
                         // → renderer → surface → `Arc<WindowsWindow>`, a
                         // cycle nothing else in this arm breaks. Calling it

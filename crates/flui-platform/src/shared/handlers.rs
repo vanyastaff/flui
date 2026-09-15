@@ -465,43 +465,59 @@ impl WindowCallbacks {
     /// Registered callbacks are the platform's only owning references to
     /// presentation-scoped embedder state — in `flui-app`'s wiring the
     /// frame callback owns the window's GPU renderer, whose `wgpu::Surface`
-    /// was created from this window's raw handles and must therefore be
-    /// destroyed while the native window is still alive (wgpu's
-    /// `SurfaceTargetUnsafe::RawHandle` validity contract). Three call
-    /// sites reach this at window close today: winit's
-    /// `complete_window_close` (the primary, in-loop path) plus
-    /// `WinitWindow::drop` (a last-resort guarantee for a window whose
-    /// final `Arc` unwinds anywhere else), Win32's `WM_DESTROY` arm, and
-    /// AppKit's `windowWillClose:` handler — so that destruction order is
-    /// pinned deterministically instead of left to struct field order.
+    /// is built from the `Arc<dyn PlatformWindow>` clone the renderer owns
+    /// (ADR-0063) and must therefore be destroyed while the native window
+    /// behind that clone is still alive. `rg -n
+    /// "callbacks\(\)\.clear\(\)|callbacks\.clear\(\)"
+    /// crates/flui-platform/src` finds every call site that reaches this
+    /// method at window close: winit's `complete_window_close`
+    /// (`platforms/winit/platform.rs`, the primary in-loop path),
+    /// `WinitWindow::drop` (`platforms/winit/window.rs`, a last-resort
+    /// guarantee for a window whose final `Arc` unwinds anywhere else), the
+    /// headless backend's `complete_close`
+    /// (`platforms/headless/platform.rs`), Win32's `WM_DESTROY` arm
+    /// (`platforms/windows/platform.rs`), and AppKit's `handle_close`
+    /// (`platforms/macos/window.rs`, reached from the `windowWillClose:`
+    /// delegate) — so that destruction order is pinned deterministically
+    /// instead of left to struct field order.
     ///
     /// **Drain-ordered, not immediate, when called while this window's FIFO
-    /// is already draining.** A `close()` issued from inside one of this
-    /// window's own callbacks (e.g. `on_input`) reaches one of the three
+    /// is already draining.** A close requested from inside one of this
+    /// window's own callbacks (e.g. `on_input` — a widget calling
+    /// `window.close()` from its own gesture handler) reaches one of the
     /// call sites above SYNCHRONOUSLY, while that callback's own dispatch
-    /// is still on the stack — so `dispatch_close()` (called from
-    /// `handle_close`/`WM_DESTROY`) finds the FIFO already dispatching and
-    /// only QUEUES `Close` rather than invoking `on_close` inline (see
-    /// [`DispatchDrain::begin`]). If `clear()` took every slot immediately
-    /// at that point, it would take `on_close` before the queued `Close`
-    /// event ever gets a chance to run it — dropping the callback silently
-    /// instead of firing it, which is how a widget's `close_this_window`
-    /// wiring would leak the window from `flui-app`'s registry forever
-    /// (issue #1043's SAFETY-GATE finding). So `clear()` itself goes
-    /// through the same FIFO: it queues a [`WindowCallbackEvent::Clear`]
-    /// exactly like any other event, and either drains it immediately (no
-    /// dispatch was in flight) or lets the ALREADY-running drain reach it
-    /// in causal order — after the `Close` queued ahead of it, and after
-    /// every other event queued ahead of that. The actual take-and-drop
-    /// body lives in [`Self::clear_now`], called either directly below or
-    /// from `drain_events`'s own `Clear` arm.
+    /// is still on the stack — so `dispatch_close()` finds the FIFO already
+    /// dispatching and only QUEUES `Close` rather than invoking `on_close`
+    /// inline (see `DispatchDrain::begin`). If `clear()` took every slot
+    /// immediately at that point, it would take `on_close` before the
+    /// queued `Close` event ever gets a chance to run it — dropping the
+    /// callback silently instead of firing it, which is how a widget's
+    /// `close_this_window` wiring would leak the window from `flui-app`'s
+    /// registry forever (issue #1043). So `clear()` itself goes through the
+    /// same FIFO: it queues a `WindowCallbackEvent::Clear` exactly like any
+    /// other event, and either drains it immediately (no dispatch was in
+    /// flight) or lets the ALREADY-running drain reach it in causal order —
+    /// after the `Close` queued ahead of it, and after every other event
+    /// queued ahead of that. The actual take-and-drop body lives in
+    /// `clear_now`, called either directly below or from `drain_events`'s
+    /// own `Clear` arm.
     ///
-    /// **Terminal.** The `cleared` latch `clear_now()` sets never resets:
-    /// any callback registered after this call returns — on this same
-    /// `WindowCallbacks` — is dropped by its own first lease instead of
-    /// ever running (see `CallbackLease::drop`). A backend that reopens a
-    /// window must construct a fresh `WindowCallbacks` for it, not reuse
-    /// one that has already been cleared.
+    /// **The `cleared` latch never resets once set, but that does not make
+    /// every slot permanently inert.** The nine slots `CallbackLease`
+    /// dispatches through (every one except `on_close`) still accept a
+    /// fresh registration after this call returns: that callback runs
+    /// exactly once, the next time its event is dispatched, and only then
+    /// does its lease's `Drop` see `cleared` set and discard it instead of
+    /// restoring it (`CallbackLease::drop`) — so it cannot run a second
+    /// time. `on_close` is untouched by the latch entirely: it is `FnOnce`,
+    /// so `drain_events`'s `Close` arm takes and calls it directly with no
+    /// lease to gate a restore, meaning a callback registered on it after
+    /// `clear()` returns would fire normally if `Close` were ever
+    /// dispatched again — a case no current call site produces (nothing
+    /// dispatches `Close` twice), but not prevented by this type either.
+    /// None of this is a registration path any backend should use: a
+    /// window that reopens must construct a fresh `WindowCallbacks`, never
+    /// reuse one that has already been cleared.
     pub fn clear(&self) {
         let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Clear)
         else {
@@ -872,11 +888,12 @@ mod tests {
         })
     }
 
-    /// The SAFETY-GATE liveness finding on issue #1043: a widget closing its
-    /// own window from inside a currently-dispatched callback (here,
-    /// `on_input`) reaches `dispatch_close()` while the FIFO is already
-    /// draining, so `dispatch_close()` only QUEUES `Close` instead of
-    /// invoking `on_close` inline. `clear()` called right after it (as every
+    /// A close requested from inside a callback the FIFO is already
+    /// draining (issue #1043): a widget closing its own window from inside
+    /// a currently-dispatched callback (here, `on_input`) reaches
+    /// `dispatch_close()` while that outer dispatch is still on the stack,
+    /// so `dispatch_close()` only QUEUES `Close` instead of invoking
+    /// `on_close` inline. `clear()` called right after it (as every
     /// real close arm does) must not take `on_close` out from under that
     /// still-queued event — `on_close` must still fire exactly once, and
     /// every slot must still end up empty once the drain finishes. Goes red
@@ -958,6 +975,36 @@ mod tests {
         assert!(
             callbacks.on_should_close.lock().is_some(),
             "an ordinary dispatch outside any clear() must restore its callback"
+        );
+    }
+
+    /// `clear()`'s own doc states this precisely: the `cleared` latch does
+    /// not refuse a fresh registration outright. `CallbackLease::take`
+    /// never consults the latch, only `CallbackLease::drop` does — so a
+    /// callback registered on a leased slot after `clear()` has already run
+    /// still fires exactly once, the next time its event is dispatched,
+    /// and only then does it get discarded instead of restored.
+    #[test]
+    fn a_callback_registered_after_clear_runs_once_then_its_lease_drops_it() {
+        let callbacks = WindowCallbacks::new();
+        callbacks.clear();
+
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_in_callback = Arc::clone(&ran);
+        callbacks.on_request_frame.lock().replace(Box::new(move || {
+            ran_in_callback.store(true, Ordering::SeqCst);
+        }));
+
+        callbacks.dispatch_request_frame();
+
+        assert!(
+            ran.load(Ordering::SeqCst),
+            "a callback registered after clear() must still run the one time \
+             its event is dispatched"
+        );
+        assert!(
+            callbacks.on_request_frame.lock().is_none(),
+            "and must not survive past that one dispatch"
         );
     }
 }

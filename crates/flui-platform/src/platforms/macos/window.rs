@@ -591,15 +591,6 @@ impl PlatformWindow for MacOSWindow {
     }
 }
 
-/// Whether [`MacOSWindow`]'s [`HasWindowHandle::window_handle`] may hand out
-/// a handle given whether `windowWillClose:` has already fired for this
-/// window. Pure so it is testable without a live `NSWindow` — see
-/// [`MacOSWindow::handle_close`]'s own doc for when `closed` is set.
-#[must_use]
-fn handle_available(closed: bool) -> bool {
-    !closed
-}
-
 // Implement raw-window-handle for wgpu integration
 impl HasWindowHandle for MacOSWindow {
     fn window_handle(
@@ -607,14 +598,15 @@ impl HasWindowHandle for MacOSWindow {
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use std::ptr::NonNull;
 
-        // Refuse once the window has closed. With `setReleasedWhenClosed:
-        // NO` set at construction, `-[NSWindow close]` no longer
-        // deallocates `ns_window`, so `contentView` below would otherwise
-        // keep answering long after the window is meaningless to hand a
-        // GPU handle for — a caller re-acquiring a handle from a retained
+        // Refuse once the window has closed (see `handle_close`'s own doc
+        // for when `closed` is set). With `setReleasedWhenClosed: NO` set
+        // at construction, `-[NSWindow close]` no longer deallocates
+        // `ns_window`, so `contentView` below would otherwise keep
+        // answering long after the window is meaningless to hand a GPU
+        // handle for — a caller re-acquiring a handle from a retained
         // `Arc<dyn PlatformWindow>` (issue #1043's recovery path) needs
         // this flag, not a nil check, to learn the window is gone.
-        if !handle_available(self.closed.load(Ordering::SeqCst)) {
+        if self.closed.load(Ordering::SeqCst) {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
 
@@ -1548,10 +1540,11 @@ impl MacOSWindow {
         // AppKit tears the window down further). Without this, the frame
         // callback registered via `on_request_frame` — which in
         // `flui-app`'s wiring owns this window's GPU renderer, whose
-        // `wgpu::Surface` was built from this window's raw handles — stays
-        // pinned forever: window (through its callback slots) → frame
-        // closure → raster lane → renderer → surface → `Arc<MacOSWindow>`,
-        // a cycle nothing else here breaks.
+        // `wgpu::Surface` is built from the `Arc<dyn PlatformWindow>` clone
+        // the renderer owns (ADR-0063) — stays pinned forever: window
+        // (through its callback slots) → frame closure → raster lane →
+        // renderer → surface → `Arc<MacOSWindow>`, a cycle nothing else
+        // here breaks.
         self.callbacks.clear();
 
         // Match winit's own `windowWillClose:` handling: nil the delegate
@@ -1611,26 +1604,5 @@ impl MacOSWindow {
                 self.handle_backing_properties_changed();
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod window_handle_availability_tests {
-    use super::handle_available;
-
-    // This module compiles and runs only on macOS (`MacOSWindow` lives
-    // under `#[cfg(target_os = "macos")]`), so on every other host it is
-    // proven sound only by `cross-typecheck`'s clippy pass — never linked,
-    // never executed there. `handle_available` is a one-line pure function;
-    // these two cases are its entire behavior.
-
-    #[test]
-    fn an_open_window_may_hand_out_a_handle() {
-        assert!(handle_available(false));
-    }
-
-    #[test]
-    fn a_closed_window_refuses_a_handle() {
-        assert!(!handle_available(true));
     }
 }

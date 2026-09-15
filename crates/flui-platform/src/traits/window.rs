@@ -531,8 +531,10 @@ pub trait PlatformWindow: Send + Sync {
     ///   for `AlreadyGone`/`StaleHandle` instead of handing out a handle
     ///   wrapping a destroyed or recycled `HWND`.
     /// - **AppKit** (`MacOSWindow`) — an explicit `closed` flag, set from the
-    ///   `windowWillClose:` delegate callback (and by `close()` itself, where
-    ///   that path can complete without the delegate firing).
+    ///   `windowWillClose:` delegate callback, which AppKit's own `-close`
+    ///   posts on every route through it regardless of the should-close
+    ///   veto (see `MacOSWindow::close`'s own doc), so no second call site
+    ///   needs to set it.
     /// - **Android** (`AndroidWindow`) — already conforms: `native_window()`
     ///   answers `None` between `MainEvent::Pause` and the next
     ///   `MainEvent::Resume`, and this method already maps that to
@@ -550,9 +552,19 @@ pub trait PlatformWindow: Send + Sync {
     /// `raw_window_handle::HasDisplayHandle` and delegate through this method.
     /// Headless windows return `HandleError::Unavailable`.
     ///
-    /// Same MUST as [`window_handle`](Self::window_handle):
-    /// `Err(HandleError::Unavailable)` once the native window is destroyed
-    /// or suspended, for the same reason and by the same per-backend means.
+    /// This MUST applies at minimum to [`window_handle`](Self::window_handle),
+    /// whose returned handle wraps a per-window native identity that
+    /// genuinely goes away. It is inert on the two native desktop backends
+    /// this repository implements today because their display-handle types
+    /// carry no such identity to go stale: `WindowsDisplayHandle` and
+    /// `AppKitDisplayHandle` are both zero-field placeholders (Windows and
+    /// AppKit multi-monitor enumeration happens through separate APIs, not
+    /// through this handle), so `WindowsWindow`/`MacOSWindow` return `Ok`
+    /// from `display_handle` unconditionally rather than gating it on the
+    /// same destroyed/closed check `window_handle` uses — there is nothing
+    /// in the handle itself for that check to protect. A future backend
+    /// whose display handle DOES wrap a live native reference must still
+    /// honor the MUST there.
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
