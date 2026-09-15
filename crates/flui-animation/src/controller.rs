@@ -1258,9 +1258,14 @@ impl AnimationController {
         // single chokepoint every run-start path funnels through.
         inner.run_generation = inner.run_generation.wrapping_add(1);
         if let Some(ticker) = &mut inner.ticker {
-            // Restart-safe: `Ticker::start` debug-asserts on the Active state, and
-            // controller methods can be called repeatedly, so stop a live run first.
-            if ticker.state().can_tick() {
+            // Restart-safe: `Ticker::start` refuses a start while a previous
+            // run's future is still installed and hands that future back
+            // instead, so a live run must be ended here or the restart is
+            // silently dropped. `is_running()`, not `can_tick()`: a Muted
+            // ticker still holds its run — and its future — so the narrower
+            // Active-only test skipped the stop and left the animation stuck.
+            // `stop()` on an Idle or Stopped ticker is already a no-op.
+            if ticker.state().is_running() {
                 ticker.stop();
             }
             let controller = self.clone();

@@ -3025,9 +3025,13 @@ contains = "pub struct Ticker"
 classification = "transitional"
 thread_affinity = "registered against an explicit `&UpdateScheduler` reference (never a singleton -- singleton retirement, #553, is complete); flui-animation holds a scoped Send + Sync exception"
 owner = "animation tick registration — re-homes to the realm's UpdateScheduler"
-failure_semantics = "TickerCanceled futures on cancellation"
-consumers = ["flui-animation controllers", "flui-widgets implicit animations"]
+failure_semantics = "a run ends by resolving its TickerFuture: stop() completes it, dispose()/reset() cancel it, and or_cancel() is the half that reports cancellation as Err(TickerCanceled) (the base future never resolves on cancel -- Flutter's _cancel semantics). A start that would orphan a still-installed future is refused in every build: it logs at error!, drops the supplied callback, and returns the live future. NO CONSUMER AWAITS EITHER FUTURE TODAY -- see `consumers`"
+consumers = [
+    "flui-animation controllers (AnimationController::restart_ticker calls start() as a bare statement and discards the TickerFuture; it holds no future field)",
+    "flui-widgets implicit animations (via AnimationController; the navigator's transition code documents in prose that no TickerFuture is available and hand-drives transitions instead)",
+]
 owner_issue = 556
+notes = "The `consumers` entries are real callers of `Ticker`, but neither awaits a `TickerFuture` -- a workspace-wide census found no `.await` on `TickerFuture`/`TickerFutureOrCancel` anywhere: not in production, examples, or tests. The async half is therefore a shipped seam with no awaiting consumer, and `failure_semantics` above describes a contract nothing currently observes. Recorded rather than trimmed because the contract is real and newly correct (issue #1161 fixed a lost wakeup that made any await hang permanently); the outstanding work is wiring the first consumer, not narrowing the entry. The output type of `TickerFutureOrCancel` (`Result<(), TickerCanceled>` versus a non-error `TickerEnd`) is deliberately left undecided until that first live call site exists to judge it against."
 
 [[surface]]
 path = "flui_scheduler::{PostFrameHandle, LocalPostFrameHandle, LocalPostFrameLane}"
