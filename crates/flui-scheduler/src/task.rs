@@ -749,6 +749,54 @@ mod tests {
         );
     }
 
+    /// The pin for "nothing popped may live in a local across user code": a
+    /// task enqueued reentrantly by A runs to completion even though a later
+    /// sibling in the same pass panics. A pass that parked above-budget pops
+    /// in a local buffer and re-pushed them afterwards would drop X together
+    /// with that buffer during B's unwind — X would never run at all.
+    #[test]
+    fn a_reentrantly_enqueued_task_survives_a_later_siblings_panic() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let queue = TaskQueue::new();
+        let ran: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let reentrant_queue = queue.clone();
+        let ran_for_a = Arc::clone(&ran);
+        queue.add(Priority::Build, move || {
+            ran_for_a.lock().push("a");
+            let ran = Arc::clone(&ran_for_a);
+            reentrant_queue.add(Priority::UserInput, move || ran.lock().push("x"));
+        }); // A
+        queue.add(Priority::Build, || panic!("b panics")); // B
+
+        // Pass 1 (budget 2): A runs and enqueues X; X outranks B and takes
+        // the second slot; B is displaced to the next pass, not lost.
+        let executed = queue.execute_until(Priority::Build);
+        assert_eq!(executed, 2);
+        assert_eq!(
+            *ran.lock(),
+            vec!["a", "x"],
+            "X ran in the pass that enqueued it"
+        );
+        assert_eq!(queue.len(), 1, "B is still queued");
+
+        // Pass 2: B panics. The panic propagates; nothing that already ran
+        // is repeated and nothing queued is lost.
+        let outcome = catch_unwind(AssertUnwindSafe(|| queue.execute_until(Priority::Build)));
+        assert!(outcome.is_err(), "B's panic propagates to the caller");
+        assert_eq!(
+            queue.len(),
+            0,
+            "B consumed its own slot and nothing else remained"
+        );
+        assert_eq!(
+            *ran.lock(),
+            vec!["a", "x"],
+            "X ran exactly once overall; a later sibling's panic never touches it"
+        );
+    }
+
     #[test]
     fn test_priority_count() {
         let queue = TaskQueue::new();
