@@ -153,13 +153,25 @@ impl TaskToken {
     }
 
     /// Cancel now rather than at drop. Idempotent.
+    ///
+    /// The removed task — and so the user future it owns — is dropped only
+    /// once `Inner::tasks` has been released. A future's destructor is user
+    /// code: it may cancel another task from this same driver (a nested
+    /// [`TaskToken`]), spawn cleanup work, or wake a sibling, all of which
+    /// take this same lock. Never held while that runs, or a reentrant
+    /// destructor deadlocks on the non-reentrant mutex.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
         if let Some(inner) = self.inner.upgrade() {
             // Dropping the future here runs its destructors on the caller's
             // thread. If the task is mid-poll its slot holds `None`, and
             // `poll_ready` will honour `cancelled` when it tries to re-queue.
-            inner.tasks.lock().remove(&self.id);
+            //
+            // Extracted in its own block so the lock guard (a statement
+            // temporary) is released at the `}` — before the removed task,
+            // now a named binding, is explicitly dropped below.
+            let removed = { inner.tasks.lock().remove(&self.id) };
+            drop(removed);
         }
     }
 }
@@ -204,11 +216,17 @@ impl AsyncDriver {
     ///
     /// Called once at wiring time. A driver with no hook still polls whenever a
     /// frame happens to run — headless tests rely on that.
+    ///
+    /// Nothing enforces "once": a later call replaces the hook, and the
+    /// displaced `Arc` is dropped only after `request_frame`'s lock is
+    /// released — the same discipline [`TaskToken::cancel`] uses — since a
+    /// hook's captured state is user code that may re-enter the driver.
     pub fn set_request_frame<F>(&self, hook: F)
     where
         F: Fn() + Send + Sync + 'static,
     {
-        *self.inner.request_frame.lock() = Some(Arc::new(hook));
+        let previous = { self.inner.request_frame.lock().replace(Arc::new(hook)) };
+        drop(previous);
     }
 
     /// Queue `future` for polling on the frame thread, and request a frame.
@@ -879,5 +897,234 @@ mod tests {
 
         driver.poll_ready(); // child runs
         assert!(spawned.load(Ordering::Acquire));
+    }
+
+    // ── cancellation must not hold the task lock across a user destructor ──
+    // (#1038)
+
+    /// `TaskToken::cancel` must drop the removed future only after releasing
+    /// `Inner::tasks`. A destructor is user code; running it under the lock
+    /// makes any reentrant destructor (see the two tests below) deadlock.
+    #[test]
+    fn cancel_drops_the_future_outside_the_task_lock() {
+        struct Probe {
+            inner: Weak<Inner>,
+            unlocked: Arc<AtomicBool>,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                let inner = self
+                    .inner
+                    .upgrade()
+                    .expect("the driver outlives the task being cancelled");
+                self.unlocked
+                    .store(inner.tasks.try_lock().is_some(), Ordering::Release);
+            }
+        }
+
+        let driver = AsyncDriver::new();
+        let unlocked = Arc::new(AtomicBool::new(false));
+        let probe = Probe {
+            inner: Arc::downgrade(&driver.inner),
+            unlocked: Arc::clone(&unlocked),
+        };
+
+        let token = driver.spawn_local(Box::pin(async move {
+            let _probe = probe;
+            std::future::pending::<()>().await;
+        }));
+        assert_eq!(driver.poll_ready(), 1);
+
+        token.cancel();
+
+        assert!(
+            unlocked.load(Ordering::Acquire),
+            "future destructor ran under the task mutex"
+        );
+    }
+
+    /// The public-API reproducer from #1038: a future that owns a second
+    /// [`TaskToken`] from the same driver. Cancelling the outer task drops
+    /// the inner future, whose `_child` field drops the nested token, which
+    /// re-enters `cancel()` — and so `Inner::tasks.lock()` — from inside the
+    /// outer cancellation's own destructor. Run off-thread with a bounded
+    /// wait: a deadlocked thread is leaked, not joined, and nextest gives
+    /// this test its own process, so a leaked thread costs nothing.
+    #[test]
+    fn cancelling_a_future_that_owns_another_token_terminates() {
+        let driver = AsyncDriver::new();
+        let child = driver.spawn_local(Box::pin(std::future::pending::<()>()));
+        let parent = driver.spawn_local(Box::pin(async move {
+            let _child = child;
+            std::future::pending::<()>().await;
+        }));
+        driver.poll_ready();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            parent.cancel();
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect(
+                "parent.cancel() deadlocked: the nested TaskToken::drop tried to \
+                 re-lock Inner::tasks while cancel()'s own guard was still held",
+            );
+        // Termination alone would also be satisfied by a cancel that never
+        // reached the child; the empty driver pins that the nested token's
+        // own cancellation ran to completion.
+        assert_eq!(
+            driver.pending_task_count(),
+            0,
+            "the parent's destructor must have cancelled the child it owned"
+        );
+    }
+
+    /// A cancelled future's destructor may re-enter the driver three
+    /// different ways — querying `pending_task_count`, spawning a new task,
+    /// and waking a sibling's stored [`Waker`] — none of which may deadlock
+    /// on `Inner::tasks`.
+    #[test]
+    fn destructor_reentry_through_query_spawn_and_sibling_wake_does_not_deadlock() {
+        let driver = AsyncDriver::new();
+
+        // A sibling task that stores its waker on every poll and stays
+        // pending until told to finish.
+        let (sibling, sibling_polls, sibling_finish, sibling_waker) = controlled();
+        // `ManuallyDrop`, not a plain binding: if the cancel below ever
+        // deadlocks again, the `expect` panics after 5 s and this thread
+        // unwinds — and a live `TaskToken` on the unwinding thread would run
+        // `cancel()` and block on the very guard the leaked thread still
+        // holds, turning a bounded failure into a hang. It is released only
+        // after the wait succeeds.
+        let sibling_token = std::mem::ManuallyDrop::new(driver.spawn_local(Box::pin(sibling)));
+        driver.poll_ready();
+        assert_eq!(sibling_polls.load(Ordering::Relaxed), 1, "waker stored");
+
+        let spawned_ran = Arc::new(AtomicBool::new(false));
+        let spawned_token: Arc<Mutex<Option<TaskToken>>> = Arc::new(Mutex::new(None));
+
+        /// Re-enters the driver from `Drop`: queries, spawns, and wakes a
+        /// sibling task, all of which lock `Inner::tasks`.
+        struct Reentrant {
+            driver: AsyncDriver,
+            spawned_ran: Arc<AtomicBool>,
+            spawned_token: Arc<Mutex<Option<TaskToken>>>,
+            sibling_waker: Arc<Mutex<Option<Waker>>>,
+        }
+
+        impl Drop for Reentrant {
+            fn drop(&mut self) {
+                // (a) query
+                let _ = self.driver.pending_task_count();
+                // (b) spawn — keep the token alive, or it would be cancelled
+                // (and dropped) again right here.
+                let ran = Arc::clone(&self.spawned_ran);
+                let token = self
+                    .driver
+                    .spawn_local(Box::pin(async move { ran.store(true, Ordering::Release) }));
+                *self.spawned_token.lock() = Some(token);
+                // (c) wake a sibling task.
+                if let Some(waker) = self.sibling_waker.lock().as_ref() {
+                    waker.wake_by_ref();
+                }
+            }
+        }
+
+        let reentrant = Reentrant {
+            driver: driver.clone(),
+            spawned_ran: Arc::clone(&spawned_ran),
+            spawned_token: Arc::clone(&spawned_token),
+            sibling_waker: Arc::clone(&sibling_waker),
+        };
+        let outer = driver.spawn_local(Box::pin(async move {
+            let _reentrant = reentrant;
+            std::future::pending::<()>().await;
+        }));
+        driver.poll_ready();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            outer.cancel();
+            let _ = done_tx.send(());
+        });
+
+        done_rx.recv_timeout(std::time::Duration::from_secs(5)).expect(
+            "cancel() deadlocked: destructor reentry (query/spawn/wake) blocked on the task mutex",
+        );
+        let _sibling_token = std::mem::ManuallyDrop::into_inner(sibling_token);
+
+        assert!(
+            spawned_token.lock().is_some(),
+            "the reentrant spawn_local did not register a task"
+        );
+        assert_eq!(
+            driver.pending_task_count(),
+            2,
+            "the sibling and the reentrant-spawned task remain; the cancelled \
+             outer task is gone"
+        );
+
+        // The sibling must be armed by the reentrant wake, and the
+        // reentrant-spawned task starts armed by construction: both poll
+        // (and, since the sibling is told to finish, both complete) on the
+        // very next frame.
+        sibling_finish.store(true, Ordering::Release);
+        assert_eq!(
+            driver.poll_ready(),
+            2,
+            "the woken sibling and the reentrant-spawned task both poll this frame"
+        );
+        assert_eq!(
+            sibling_polls.load(Ordering::Relaxed),
+            2,
+            "the sibling was actually polled again, not just left marked ready"
+        );
+        assert!(
+            spawned_ran.load(Ordering::Acquire),
+            "the reentrant-spawned task ran"
+        );
+    }
+
+    /// `set_request_frame`'s doc says "called once at wiring time", but
+    /// nothing enforces that, and it has the identical hazard shape as
+    /// `UpdateScheduler::set_on_frame_scheduled`: a single-slot `Option<Arc<dyn
+    /// Fn>>` hook, replaced with a bare assignment that drops the displaced
+    /// `Arc` while the guard is still live.
+    #[test]
+    fn replacing_the_request_frame_hook_drops_the_previous_hook_outside_the_lock() {
+        struct Probe {
+            inner: Weak<Inner>,
+            unlocked: Arc<AtomicBool>,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                let inner = self
+                    .inner
+                    .upgrade()
+                    .expect("the driver outlives the hook it holds");
+                self.unlocked
+                    .store(inner.request_frame.try_lock().is_some(), Ordering::Release);
+            }
+        }
+
+        let driver = AsyncDriver::new();
+        let unlocked = Arc::new(AtomicBool::new(false));
+        let probe = Probe {
+            inner: Arc::downgrade(&driver.inner),
+            unlocked: Arc::clone(&unlocked),
+        };
+
+        driver.set_request_frame(move || {
+            let _keep_alive = &probe;
+        });
+        driver.set_request_frame(|| {});
+
+        assert!(
+            unlocked.load(Ordering::Acquire),
+            "the previous request-frame hook's destructor ran under its own mutex"
+        );
     }
 }
