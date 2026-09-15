@@ -93,12 +93,13 @@ use std::{
 };
 
 use flui_foundation::{ClaimOutcome, ClaimSlot};
-use keyboard_types::Modifiers as KeyboardModifiers;
 use parking_lot::Mutex;
+use ui_events_winit::keyboard::from_winit_modifier_state;
 use winit::{
     application::ApplicationHandler,
     event::{StartCause, WindowEvent as WinitWindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::ModifiersState,
     window::{WindowAttributes, WindowId as WinitWindowId},
 };
 
@@ -258,8 +259,16 @@ struct WinitPlatformState {
     /// Current cursor position per window (physical)
     cursor_positions: HashMap<WindowId, winit::dpi::PhysicalPosition<f64>>,
 
-    /// Current keyboard modifiers
-    current_modifiers: KeyboardModifiers,
+    /// Current keyboard modifiers, held in winit's own raw form.
+    ///
+    /// Not pre-converted to `keyboard_types::Modifiers`: the keyboard path
+    /// hands this straight to `keyboard_event` → `from_winit_keyboard_event`
+    /// (which does its own `from_winit_modifier_state` conversion as part
+    /// of assembling the whole event), and the pointer paths convert it at
+    /// the point of use via `from_winit_modifier_state` — one native value,
+    /// converted once per read site rather than cached in a second form
+    /// that could drift from what `ModifiersChanged` actually reported.
+    current_modifiers: ModifiersState,
 
     /// Mouse buttons currently held, tracked as RAW winit buttons from
     /// `MouseInput` transitions — winit's `CursorMoved` carries no button
@@ -355,7 +364,7 @@ impl WinitPlatformState {
                 quit_requested: false,
             },
             cursor_positions: HashMap::new(),
-            current_modifiers: KeyboardModifiers::empty(),
+            current_modifiers: ModifiersState::empty(),
             pressed_buttons: std::collections::HashSet::new(),
             touch_contacts: std::collections::HashMap::new(),
             suppressed_buttons: std::collections::HashSet::new(),
@@ -1169,7 +1178,7 @@ impl ApplicationHandler for WinitApp {
                 let (modifiers, held_buttons) = self.platform.with_state(|state| {
                     state.cursor_positions.insert(platform_id, position);
                     (
-                        state.current_modifiers,
+                        from_winit_modifier_state(state.current_modifiers),
                         held_pointer_buttons(&state.pressed_buttons),
                     )
                 });
@@ -1216,7 +1225,7 @@ impl ApplicationHandler for WinitApp {
                             }
                         };
                         (
-                            s.current_modifiers,
+                            from_winit_modifier_state(s.current_modifiers),
                             cursor_pos,
                             held_pointer_buttons(&s.pressed_buttons),
                             suppressed,
@@ -1265,7 +1274,7 @@ impl ApplicationHandler for WinitApp {
                     .expect("BUG: the match guard just checked Some");
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
-                        s.current_modifiers,
+                        from_winit_modifier_state(s.current_modifiers),
                         s.cursor_positions.get(&platform_id).copied(),
                     )
                 });
@@ -1291,7 +1300,7 @@ impl ApplicationHandler for WinitApp {
             WinitWindowEvent::RotationGesture { delta, .. } => {
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
-                        s.current_modifiers,
+                        from_winit_modifier_state(s.current_modifiers),
                         s.cursor_positions.get(&platform_id).copied(),
                     )
                 });
@@ -1322,7 +1331,7 @@ impl ApplicationHandler for WinitApp {
                         (touch.device_id, touch.id),
                         touch.phase,
                     );
-                    (s.current_modifiers, pointer_id)
+                    (from_winit_modifier_state(s.current_modifiers), pointer_id)
                 });
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
@@ -1334,7 +1343,7 @@ impl ApplicationHandler for WinitApp {
                 tracing::debug!(?delta, "MouseWheel");
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
-                        s.current_modifiers,
+                        from_winit_modifier_state(s.current_modifiers),
                         s.cursor_positions.get(&platform_id).copied(),
                     )
                 });
@@ -1397,10 +1406,14 @@ impl ApplicationHandler for WinitApp {
                     );
                     return;
                 }
+                // Raw winit modifiers state, unconverted: `keyboard_event`
+                // hands it straight to `from_winit_keyboard_event`, which
+                // does its own `from_winit_modifier_state` conversion as
+                // part of assembling the whole `KeyboardEvent`.
                 let modifiers = self.platform.with_state(|s| s.current_modifiers);
 
                 if let Some(ref win) = window {
-                    let input = winit_events::keyboard_event(&event, modifiers);
+                    let input = winit_events::keyboard_event(event, modifiers);
                     win.callbacks().dispatch_input(input);
                 }
             }
@@ -1412,7 +1425,7 @@ impl ApplicationHandler for WinitApp {
             }
             WinitWindowEvent::ModifiersChanged(new_modifiers) => {
                 self.platform.with_state(|state| {
-                    state.current_modifiers = winit_events::convert_modifiers(new_modifiers);
+                    state.current_modifiers = new_modifiers.state();
                 });
             }
             WinitWindowEvent::CursorEntered { .. } => {
