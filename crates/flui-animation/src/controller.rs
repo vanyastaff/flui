@@ -1264,7 +1264,12 @@ impl AnimationController {
             // silently dropped. `is_running()`, not `can_tick()`: a Muted
             // ticker still holds its run — and its future — so the narrower
             // Active-only test skipped the stop and left the animation stuck.
-            // `stop()` on an Idle or Stopped ticker is already a no-op.
+            //
+            // The guard stays rather than stopping unconditionally: `stop()` is
+            // NOT a no-op on an Idle or Stopped ticker — it clears the callback
+            // slot — and the start below is the only thing that reinstalls one.
+            // Narrowing the stop to runs that actually exist keeps that
+            // coupling out of the picture.
             if ticker.state().is_running() {
                 ticker.stop();
             }

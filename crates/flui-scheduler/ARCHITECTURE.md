@@ -853,15 +853,34 @@ subscriber is arbitrary user code) and the rejected callback's `Drop` (likewise)
 would otherwise be able to re-enter a non-reentrant mutex. Rust's drop order
 already saves the callback — a function's body-scope locals, the guard included,
 drop before its parameters — so the subscriber is the half that genuinely needed
-hoisting; both are pinned by
-`a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free`.
+hoisting, and it is the half
+`a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free` actually
+pins. That test's callback oracle stays green with the explicit `drop(callback)`
+deleted, for the same drop-order reason, so the `drop` documents intent and
+nothing more; it must not be cited as test-defended.
+
+**The same rule, applied to the two sites in this file that were breaking it.**
+`start_inner`'s vacant-slot arm emitted `tracing::warn!` and returned from inside
+the guard scope — thirty lines below the comment declaring the rule — and
+`TickerLease::drop` emitted a `tracing::trace!` whose text says "outside the
+inner lock" from inside it, a claim that was true of the callback drop it
+describes and false of the event carrying it. Both now decide under the lock and
+report after it.
 
 **Cross-crate consequence, closed in the same change:**
 `AnimationController::restart_ticker` guarded its pre-start `stop()` on
 `TickerState::can_tick()` (Active only), so from `Muted` it skipped the stop —
 and with the refusal in place it would have received the *old* future back and
-silently failed to restart the animation. The guard is now `is_running()`;
-`stop()` on an Idle or Stopped ticker is already a no-op.
+silently failed to restart the animation. The guard is now `is_running()`.
+
+It stays a guard rather than becoming an unconditional `stop()`, because **`stop`
+and `reset` are not no-ops on a ticker that is not running**: both call
+`CallbackSlot::clear_if_ready`, so a callback pre-loaded by
+`TickerProvider::create_ticker` and never started is discarded by a bare
+`stop()`, and the next `start_default()` then warns and hands back an
+already-complete future. `restart_ticker` is unaffected either way — it always
+passes an explicit callback — but the claim is on `Ticker::start`'s public doc,
+where a reader who acts on it loses a callback, so it is stated there too.
 
 ### `when_complete_or_cancel` blocks, and refuses rather than lying on wasm
 

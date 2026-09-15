@@ -7,8 +7,13 @@
 //! - **regression pin** — passes before and after; it exists to redden if a
 //!   specific line this change authors (or inherits) is ever reverted, and the
 //!   line is named in the test's own doc;
-//! - **compile-time fence** / **contract documentation** — pins a trait bound
-//!   or records an observable contract; no production line reverts it.
+//! - **compile-time fence** — pins a trait bound; no production line reverts
+//!   it. Exactly one test here is in this class.
+//!
+//! A label is only worth having if it is kept honest in both directions: one
+//! test below was first labelled "pins nothing" and turned out to pin real
+//! production behaviour, which corrupts the inventory just as badly as an
+//! over-claim would.
 //!
 //! The wakers here are `std::task::Wake` implementors, not hand-rolled
 //! `RawWakerVTable`s: `Arc::strong_count` on the implementor is the oracle for
@@ -109,11 +114,28 @@ impl Wake for ChannelWaker {
     }
 }
 
+/// One `(target, inner_lock_was_free)` pair per `tracing` event seen.
+type EventLockLog = Arc<Mutex<Vec<(String, bool)>>>;
+
+/// The lock-freedom observations for events emitted from `ticker.rs` itself.
+///
+/// Filtered by target rather than counted raw: a probe that drives a real frame
+/// also sees the scheduler's own events, and "at least one event, all of them
+/// with the lock free" would then be satisfiable without the ticker having
+/// logged at all.
+fn ticker_event_lock_states(log: &EventLockLog) -> Vec<bool> {
+    log.lock()
+        .iter()
+        .filter(|(target, _)| target == "flui_scheduler::ticker")
+        .map(|(_, lock_free)| *lock_free)
+        .collect()
+}
+
 /// Records whether `Mutex<TickerInner>` was free each time a `tracing` event
 /// was emitted on this thread.
 struct InnerLockProbeSubscriber {
     ticker_inner: Arc<Mutex<TickerInner>>,
-    lock_free_per_event: Arc<Mutex<Vec<bool>>>,
+    events: EventLockLog,
 }
 
 impl tracing::Subscriber for InnerLockProbeSubscriber {
@@ -136,9 +158,11 @@ impl tracing::Subscriber for InnerLockProbeSubscriber {
 
     fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
 
-    fn event(&self, _event: &tracing::Event<'_>) {
+    fn event(&self, event: &tracing::Event<'_>) {
         let lock_free = self.ticker_inner.try_lock().is_some();
-        self.lock_free_per_event.lock().push(lock_free);
+        self.events
+            .lock()
+            .push((event.metadata().target().to_owned(), lock_free));
     }
 
     fn enter(&self, _span: &tracing::span::Id) {}
@@ -401,6 +425,59 @@ fn a_pending_await_is_woken_and_resolves_when_the_ticker_stops() {
     );
 }
 
+/// **Regression pin** (green before this change too — this is the one path in
+/// the file that already had the order right, and is where the fix's shape came
+/// from). Reverting `when_complete_or_cancel` to re-check the state *before*
+/// registering reddens the trace.
+///
+/// It exists because this method is a third copy of the same
+/// read → register → re-read → wait state machine, outside `poll_resolution`
+/// and therefore outside everything the two `Future` impls are pinned by. Its
+/// failure mode is also the worse of the two: a lost wakeup here blocks an OS
+/// thread in `Listener::wait`, not a parked task. Routing its two reads through
+/// `read_state` is what brings it under the same ordering probe.
+///
+/// The worker is never `join`ed, for the reason the stop-wakeup test gives.
+#[test]
+fn when_complete_or_cancel_registers_before_its_decisive_read_too() {
+    let future = TickerFuture::new();
+    let (called_tx, called_rx) = mpsc::channel::<()>();
+
+    let waiting = future.clone();
+    thread::spawn(move || {
+        waiting.when_complete_or_cancel(move || {
+            let _ = called_tx.send(());
+        });
+    });
+
+    // Wait until the worker's SECOND decisive read has begun. At that point its
+    // listener is provably linked (it is registered before that read), so the
+    // resolution below cannot be lost even if it lands before `wait()` is
+    // reached — `event-listener` latches a notification onto a registered entry.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while future.inner.read_trace.lock().len() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the blocking waiter must reach its post-registration re-read; it is \
+             stuck on its first read or never registered"
+        );
+        thread::yield_now();
+    }
+
+    future.set_complete();
+
+    called_rx.recv_timeout(Duration::from_secs(5)).expect(
+        "a blocking waiter must be woken by the resolution and run its callback; \
+         a timeout here is a permanently blocked OS thread",
+    );
+    assert_eq!(
+        future.inner.read_trace.lock().as_slice(),
+        &[0, 1],
+        "shape pin: the blocking path must register before the read that decides \
+         to park, exactly as both polling paths do"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // cancellation
 // ---------------------------------------------------------------------------
@@ -499,14 +576,15 @@ fn mute_then_start_does_not_orphan_the_pending_future() {
 /// whose subscriber is arbitrary user code, and dropping the caller's callback,
 /// whose `Drop` is arbitrary user code — happen with `Mutex<TickerInner>` free.
 ///
-/// Of those two, only the `tracing` event is actually at risk from where the
-/// refusal is written: Rust drops a function's body-scope locals (the guard)
-/// before its parameters (the callback), so the callback's `Drop` runs after
-/// the guard is released even when the `return` sits inside the guard's block.
-/// The callback oracle is kept anyway — it matches the sibling
-/// `stale_callback_is_dropped_outside_the_lock` and it would catch a refusal
-/// that re-binds the callback into the locked scope — but the subscriber oracle
-/// is the one that reddens if the `tracing::error!` moves back under the lock.
+/// Of those two, **only the subscriber oracle actually pins anything.** Rust
+/// drops a function's body-scope locals (the guard) before its parameters (the
+/// callback), so the callback's `Drop` runs after the guard is released even
+/// when the `return` sits inside the guard's block — which means deleting the
+/// explicit `drop(callback)` at the refusal leaves this test green. The
+/// callback oracle is kept because it matches the sibling
+/// `stale_callback_is_dropped_outside_the_lock` and would catch a refusal that
+/// re-binds the callback into the locked scope, but nothing in the shipped code
+/// depends on it, and it must not be cited as defending that `drop`.
 #[test]
 fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
     let mut ticker = Ticker::new();
@@ -514,7 +592,7 @@ fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
     ticker.mute();
 
     let ticker_inner = Arc::clone(&ticker.inner);
-    let lock_free_per_event = Arc::new(Mutex::new(Vec::new()));
+    let events: EventLockLog = Arc::new(Mutex::new(Vec::new()));
     let lock_free_at_drop = Arc::new(Mutex::new(Vec::new()));
 
     let canary = CallbackDropProbe {
@@ -526,7 +604,7 @@ fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
     let refused = tracing::subscriber::with_default(
         InnerLockProbeSubscriber {
             ticker_inner: Arc::clone(&ticker_inner),
-            lock_free_per_event: Arc::clone(&lock_free_per_event),
+            events: Arc::clone(&events),
         },
         || {
             ticker.start(move |_| {
@@ -540,7 +618,7 @@ fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
         "precondition: this must be the refusal path"
     );
 
-    let logged = lock_free_per_event.lock().clone();
+    let logged = ticker_event_lock_states(&events);
     assert!(
         !logged.is_empty(),
         "a refused start must be diagnosable: it has to emit a tracing event"
@@ -561,6 +639,90 @@ fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
     ticker.stop();
 }
 
+/// **Discriminating.** Hoisting the vacant-slot `tracing::warn!` back inside
+/// `start_inner`'s `inner.lock()` scope reddens it.
+///
+/// The refusal is not the only early return in that function that reports
+/// something: `start_default()` with nothing to dispatch warns too, and it was
+/// doing so from inside the guard, thirty lines below the comment stating the
+/// rule. A rule with one of its two sites pinned is how the other one drifts.
+#[test]
+fn a_start_with_nothing_to_dispatch_logs_with_the_inner_lock_free() {
+    let ticker = Ticker::new();
+    let ticker_inner = Arc::clone(&ticker.inner);
+    let events: EventLockLog = Arc::new(Mutex::new(Vec::new()));
+    let mut ticker = ticker;
+
+    flui_testing::disarm_interest_cache();
+    let no_op = tracing::subscriber::with_default(
+        InnerLockProbeSubscriber {
+            ticker_inner: Arc::clone(&ticker_inner),
+            events: Arc::clone(&events),
+        },
+        || ticker.start_default(),
+    );
+
+    assert!(
+        no_op.is_complete(),
+        "precondition: a start with no callback to dispatch is a no-op that \
+         returns an already-complete future"
+    );
+
+    let logged = ticker_event_lock_states(&events);
+    assert!(
+        !logged.is_empty(),
+        "a start that dispatches nothing must say so"
+    );
+    assert!(
+        logged.iter().all(|&lock_free| lock_free),
+        "that warning must be emitted with Mutex<TickerInner> free"
+    );
+}
+
+/// **Discriminating.** Moving the discard `tracing::trace!` back inside
+/// `TickerLease::drop`'s `inner.lock()` scope reddens it.
+///
+/// The event whose own text read "outside the inner lock" was itself emitted
+/// inside it — a claim that was true of the callback drop it describes and
+/// false of the event carrying it.
+#[test]
+fn a_discarded_lease_callback_logs_with_the_inner_lock_free() {
+    let scheduler = crate::scheduler::UpdateScheduler::new();
+    let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+    let ticker_inner = Arc::clone(&ticker.lock().inner);
+    let events: EventLockLog = Arc::new(Mutex::new(Vec::new()));
+    let weak = Arc::downgrade(&ticker);
+
+    // Stopping from inside the tick leaves the slot `CheckedOut` on a ticker
+    // that is no longer running, which is exactly the lease's discard arm.
+    ticker.lock().start(move |_| {
+        let owner = weak
+            .upgrade()
+            .expect("the outer Arc is held by this test for its whole duration");
+        owner.lock().stop();
+    });
+
+    flui_testing::disarm_interest_cache();
+    tracing::subscriber::with_default(
+        InnerLockProbeSubscriber {
+            ticker_inner: Arc::clone(&ticker_inner),
+            events: Arc::clone(&events),
+        },
+        || scheduler.execute_frame(),
+    );
+
+    let logged = ticker_event_lock_states(&events);
+    assert!(
+        !logged.is_empty(),
+        "discarding a superseded callback must be diagnosable"
+    );
+    assert!(
+        logged.iter().all(|&lock_free| lock_free),
+        "the discard's tracing event must be emitted with Mutex<TickerInner> \
+         free, like the callback drop it describes"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // contract fences
 // ---------------------------------------------------------------------------
@@ -576,10 +738,15 @@ fn ticker_future_auto_traits() {
     static_assertions::assert_impl_all!(TickerCanceled: Send, Sync, Copy, std::error::Error);
 }
 
-/// **Contract documentation; pins nothing.** Recorded because Flutter's
-/// `orCancel` is lazily created and, if accessed after the ticker has already
-/// resolved, completes immediately with the recorded outcome — and until now
-/// nothing here said whether FLUI matched that.
+/// **Regression pin** (green before this change too), not the contract record
+/// it was first labelled as. Mapping `Resolved::Canceled` to `Ok(())` in
+/// `TickerFutureOrCancel::poll`, or making `poll_resolution`'s `Canceled` arm
+/// register a listener instead of returning, reddens it.
+///
+/// Recorded because Flutter's `orCancel` is lazily created and, if accessed
+/// after the ticker has already resolved, completes immediately with the
+/// recorded outcome — and until now nothing here said whether FLUI matched
+/// that.
 #[test]
 fn or_cancel_accessed_after_resolution_resolves_immediately() {
     let future = TickerFuture::new();

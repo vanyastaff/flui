@@ -253,14 +253,17 @@ impl Drop for TickerLease {
                     // forever.
                     guard.slot = CallbackSlot::Vacant;
                 }
-                tracing::trace!(
-                    "TickerLease: discarding a superseded or stale callback outside the inner lock"
-                );
                 Some(callback)
             }
         };
-        // The guard above has already fallen by the time this drops: the
-        // callback's own `Drop` (user code) may re-enter the ticker.
+        // Both of these run only after the guard above has fallen, and for the
+        // same reason: a `tracing` subscriber and a callback's own `Drop` are
+        // both arbitrary user code that may re-enter this non-reentrant lock.
+        if discarded.is_some() {
+            tracing::trace!(
+                "TickerLease: discarding a superseded or stale callback outside the inner lock"
+            );
+        }
         drop(discarded);
     }
 }
@@ -470,8 +473,10 @@ impl Ticker {
     /// Dispose of the ticker — idempotent.
     ///
     /// Clears the callback, sets state to Stopped, cancels the active
-    /// [`TickerFuture`], cancels any pending transient frame callback
-    /// (auto-scheduling tickers), and marks disposed. Subsequent calls to
+    /// [`TickerFuture`], cancels the pending transient frame callback it can
+    /// observe (auto-scheduling tickers — see [`stop`](Self::stop) for the
+    /// in-flight-tick window where there is none to observe), and marks
+    /// disposed. Subsequent calls to
     /// `start`/`stop`/`mute`/`unmute`/`reset`/`tick` panic in debug builds via
     /// [`debug_assert!`] and emit a `tracing::warn!` + no-op in release.
     ///
@@ -539,8 +544,14 @@ impl Ticker {
     /// ending it — this call does not start anything. It logs at `error!`,
     /// drops the supplied callback, and returns that live future, so an
     /// existing awaiter stays valid. To genuinely restart, end the current run
-    /// first ([`stop`](Self::stop) or [`reset`](Self::reset)); both are no-ops
-    /// on a ticker that is not running.
+    /// first ([`stop`](Self::stop) or [`reset`](Self::reset)).
+    ///
+    /// Neither is a no-op on a ticker that is not running, despite having no
+    /// run to end: both clear the callback slot, so a callback pre-loaded by
+    /// [`TickerProvider::create_ticker`] and never started is discarded by a
+    /// bare `stop()`, and the next [`start_default`](Self::start_default) then
+    /// warns and returns an already-complete future. Pass the callback
+    /// explicitly to [`start`](Self::start) if a stop may have intervened.
     ///
     /// # Panics
     ///
@@ -605,7 +616,12 @@ impl Ticker {
             return live_future;
         }
         let future = TickerFuture::new();
-        let displaced = {
+        // `Some(displaced)` means this start armed a run and carries whatever
+        // the callback slot held before it; `None` means there was nothing to
+        // dispatch, which is reported AFTER the guard releases for the same
+        // reason the refusal above is — `tracing` dispatches synchronously to
+        // an arbitrary subscriber, which may re-enter this ticker.
+        let armed = {
             let mut inner = self.inner.lock();
             let displaced = if let Some(cb) = callback {
                 // Explicit callback overrides any pre-loaded one from
@@ -617,27 +633,31 @@ impl Ticker {
                 // way, whatever the slot held before (a real `Ready(old)`
                 // callback, or `CheckedOut` with nothing to drop here) is
                 // returned for the caller to drop AFTER this lock releases.
-                std::mem::replace(&mut inner.slot, CallbackSlot::Ready(cb))
+                Some(std::mem::replace(&mut inner.slot, CallbackSlot::Ready(cb)))
             } else if matches!(inner.slot, CallbackSlot::Vacant) {
                 // No explicit callback, and no pre-loaded/checked-out one —
-                // start is a no-op (tick has nothing to dispatch). Logged
-                // for diagnostic.
-                tracing::warn!(
-                    ticker_id = ?self.id,
-                    "Ticker::start_default called without a pre-loaded callback (no-op)"
-                );
-                return TickerFuture::complete();
+                // start is a no-op (tick has nothing to dispatch).
+                None
             } else {
                 // `Ready` (a pre-loaded callback exists) or `CheckedOut` (a
                 // reentrant `start_default()` resuming with the callback
-                // already in flight) — nothing to displace.
-                CallbackSlot::Vacant
+                // already in flight) — armed, nothing to displace.
+                Some(CallbackSlot::Vacant)
             };
-            inner.state = TickerState::Active;
-            inner.start_time = Some(Instant::now());
-            inner.muted_elapsed = Seconds::ZERO;
-            inner.active_future = Some(future.clone());
+            if displaced.is_some() {
+                inner.state = TickerState::Active;
+                inner.start_time = Some(Instant::now());
+                inner.muted_elapsed = Seconds::ZERO;
+                inner.active_future = Some(future.clone());
+            }
             displaced
+        };
+        let Some(displaced) = armed else {
+            tracing::warn!(
+                ticker_id = ?self.id,
+                "Ticker::start_default called without a pre-loaded callback (no-op)"
+            );
+            return TickerFuture::complete();
         };
         drop(displaced);
         // Auto-scheduling tickers register a transient frame callback now.
@@ -658,8 +678,20 @@ impl Ticker {
     /// Stop the ticker.
     ///
     /// This permanently stops the ticker and completes the active
-    /// [`TickerFuture`] normally. Cancels any pending transient frame callback
-    /// (auto-scheduling tickers). Call [`start`](Self::start) to restart.
+    /// [`TickerFuture`] normally. Call [`start`](Self::start) to restart.
+    ///
+    /// # Cancelling the pending transient frame callback is not unconditional
+    ///
+    /// For an auto-scheduling ticker this cancels the pending transient frame
+    /// callback it can *observe*, which is not the same as "there is none left".
+    /// An auto-tick already in flight clears the registration id at the top of
+    /// the tick and records its replacement at the tail; a stop landing between
+    /// those two points sees no id, cancels nothing, and the replacement is then
+    /// recorded against a ticker this call has already stopped. The same window
+    /// applies to [`dispose`](Self::dispose), [`reset`](Self::reset), and
+    /// [`mute`](Self::mute), all of which cancel through the same field. The
+    /// stale callback is inert when it fires — the tick path re-reads the state
+    /// and finds it not running — but it does keep one frame registration alive.
     pub fn stop(&mut self) {
         if !self.assert_not_disposed("stop") {
             return;
@@ -697,8 +729,9 @@ impl Ticker {
     /// Mute the ticker.
     ///
     /// This temporarily pauses the ticker without clearing the callback.
-    /// Time does not advance while muted. Cancels any pending transient
-    /// frame callback (auto-scheduling tickers) — matches Flutter
+    /// Time does not advance while muted. Cancels the pending transient frame
+    /// callback it can observe (auto-scheduling tickers — same window as
+    /// [`stop`](Self::stop)) — matches Flutter
     /// [`ticker.dart:124-128`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
     /// where `muted = true` calls `unscheduleTick()`.
     pub fn mute(&mut self) {
@@ -807,7 +840,18 @@ impl Ticker {
         self.inner.lock().state
     }
 
-    /// Check if ticker is active
+    /// Check if the ticker is currently ticking ([`TickerState::Active`]).
+    ///
+    /// **This is narrower than Flutter's `Ticker.isActive`**, which is
+    /// `_future != null` and stays true while the ticker is muted. Here a muted
+    /// ticker reports `false` even though its run — and its [`TickerFuture`] —
+    /// is still live, so the ported idiom
+    /// `if !ticker.is_active() { ticker.start(cb) }` will hit
+    /// [`start`](Self::start)'s refusal on a muted ticker and get the previous
+    /// run's future back instead of a new run. Use
+    /// [`is_running`](Self::is_running) — `Active | Muted` — wherever the
+    /// question is "does a run already exist"; that is the predicate `start`
+    /// itself refuses on.
     #[inline]
     pub fn is_active(&self) -> bool {
         self.state().can_tick()
@@ -844,9 +888,12 @@ impl Ticker {
 
     /// Reset the ticker to initial state.
     ///
-    /// Cancels the active [`TickerFuture`], cancels any pending transient
-    /// frame callback (auto-scheduling tickers), and clears all state. The
-    /// ticker can be re-armed via [`start`](Self::start) afterwards.
+    /// Cancels the active [`TickerFuture`], cancels the pending transient frame
+    /// callback it can observe (auto-scheduling tickers — same window as
+    /// [`stop`](Self::stop)), and clears all state, the callback slot included.
+    /// The ticker can be re-armed via [`start`](Self::start) afterwards, but
+    /// only with an explicitly supplied callback: a value pre-loaded by
+    /// [`TickerProvider::create_ticker`] does not survive this call.
     pub fn reset(&mut self) {
         if !self.assert_not_disposed("reset") {
             return;
@@ -1294,6 +1341,12 @@ struct TickerFutureInner {
     /// that decides to park" an asserted invariant rather than prose. A poll
     /// that parks must trace `[0, 1]`: one read with nothing registered, then
     /// a second read taken after registering.
+    ///
+    /// Test-only in the strict sense, and deliberately not paid for in a
+    /// shipped build: the `Vec` is unbounded (a long-lived future polled many
+    /// times grows it without limit) and `read_state` takes `event-listener`'s
+    /// internal list lock on every decisive read to sample the count. Neither
+    /// cost exists outside `cfg(test)`.
     #[cfg(test)]
     read_trace: Mutex<Vec<usize>>,
 }
@@ -1308,12 +1361,14 @@ impl TickerFutureInner {
         }
     }
 
-    /// Read the durable resolution state — the decisive read a poll parks on.
+    /// Read the durable resolution state — the decisive read a waiter parks on.
     ///
     /// The durable state is the source of truth and the notification is only a
-    /// hint to re-read it, so every polling path funnels through this one
-    /// accessor; that is also what gives the test-only ordering probe a single
-    /// place to observe.
+    /// hint to re-read it. All three waiting paths — both `Future` impls
+    /// through `poll_resolution`, and the blocking
+    /// [`TickerFuture::when_complete_or_cancel`] — funnel their decisive reads
+    /// through this one accessor, which is what gives the test-only ordering
+    /// probe a single place to observe all of them.
     fn read_state(&self) -> TickerFutureState {
         #[cfg(test)]
         {
@@ -1330,7 +1385,9 @@ impl TickerFutureInner {
 /// A terminal ticker outcome: [`TickerFutureState`] with `Pending` made
 /// unrepresentable, so a resolved value cannot be handled as if it might still
 /// be waiting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Carries no derives on purpose: it is constructed and matched, never
+/// compared, cloned, or formatted.
 enum Resolved {
     /// The ticker stopped normally.
     Complete,
@@ -1561,8 +1618,15 @@ impl TickerFuture {
     where
         F: FnOnce() + Send + 'static,
     {
-        // Fast path: already resolved — call immediately
-        if *self.inner.state.lock() != TickerFutureState::Pending {
+        // Fast path: already resolved — call immediately.
+        //
+        // Both reads here go through `read_state` for the same reason the
+        // polling paths do: this is a third copy of the same read → register →
+        // re-read → wait state machine, and routing it through the one accessor
+        // is what puts it under the ordering probe instead of leaving it as the
+        // copy nothing watches. Its failure mode is the worse of the two — a
+        // blocked OS thread rather than a parked task.
+        if self.inner.read_state() != TickerFutureState::Pending {
             callback();
             return;
         }
@@ -1571,7 +1635,7 @@ impl TickerFuture {
         let listener = self.inner.event.listen();
 
         // Re-check after registering (state may have changed)
-        if *self.inner.state.lock() != TickerFutureState::Pending {
+        if self.inner.read_state() != TickerFutureState::Pending {
             callback();
             return;
         }
@@ -1588,15 +1652,19 @@ impl TickerFuture {
         {
             drop(listener);
             drop(callback);
-            debug_assert!(
-                false,
-                "TickerFuture::when_complete_or_cancel cannot block on wasm; \
-                 use or_cancel().await"
-            );
+            // Log BEFORE the debug-assert: the assert aborts a debug build, so
+            // emitting after it would mean the diagnostic this method's doc
+            // promises never reaches a subscriber in exactly the build that is
+            // most likely to be watching.
             tracing::error!(
                 "TickerFuture::when_complete_or_cancel was called on a pending future on a \
                  wasm target, where there is no thread to park; the callback was NOT invoked \
                  — use or_cancel().await instead"
+            );
+            debug_assert!(
+                false,
+                "TickerFuture::when_complete_or_cancel cannot block on wasm; \
+                 use or_cancel().await"
             );
         }
     }
