@@ -252,12 +252,21 @@ impl Future for FrameCompletionFuture {
         let displaced_waker = {
             let mut state = self.state.lock();
 
-            // Re-check, because the guard was released across the clone. A
-            // frame completing in that window has already taken the OLD
-            // waker and woken it, and the executor may have replaced that
-            // waker precisely because it is no longer the one to wake.
-            // Returning `Pending` here on the strength of the first check
-            // would strand the task forever.
+            // Re-check, because the guard was released across the clone.
+            // The window is narrow and real: a frame completing in it has
+            // already taken the OLD waker and woken it, and the executor
+            // may have replaced that waker precisely because it is no
+            // longer the one to wake. Returning `Pending` here on the
+            // strength of the check before the clone would then strand the
+            // task forever, with the completion delivered to a waker
+            // nobody is listening on.
+            //
+            // Pinned by `a_frame_completing_while_poll_clones_the_waker_
+            // still_resolves_it` in `tests/integration_tests.rs`, which
+            // opens the window deterministically with a hand-rolled
+            // `RawWakerVTable` whose `clone` drives a frame. Nothing built
+            // from safe `Waker`s can reach it, so delete these lines
+            // without that test and the whole suite stays green.
             if let Some(timing) = state.completed.take() {
                 return Poll::Ready(timing);
             }
@@ -1818,7 +1827,9 @@ impl UpdateScheduler {
     /// would silently erase that signal — the exact starvation this method
     /// exists to prevent, just for a self-waking task instead of an
     /// externally-woken one.
-    /// # Clearing the latch now revokes frame demand, including a waiter's
+    ///
+    /// # Clearing the latch now revokes frame demand, including an
+    /// # `end_of_frame` waiter's
     ///
     /// A pending [`end_of_frame`](Self::end_of_frame) waiter IS frame
     /// demand: registering issues one, and every later registration stays

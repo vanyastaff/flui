@@ -203,7 +203,8 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
 ///
 /// Any demand gate that reads a scheduler phase, or a per-frame "a frame is
 /// already coming" flag, goes silent in exactly this window and hangs the
-/// fresh waiter forever. That is what this pins.///
+/// fresh waiter forever. That is what this pins.
+///
 /// # This oracle fails by HANGING, not by asserting
 ///
 /// The waker calls `end_of_frame()`, which takes a real
@@ -242,7 +243,8 @@ fn a_registration_from_inside_a_completion_waker_demands_the_next_frame() {
     );
 }
 
-/// Criterion 3 — the same, on the abort path, asserting EXACTLY one demand.///
+/// Criterion 3 — the same, on the abort path, asserting EXACTLY one demand.
+///
 /// # This oracle fails by HANGING, not by asserting
 ///
 /// The waker calls `end_of_frame()`, which takes a real
@@ -345,10 +347,16 @@ fn many_registrations_inside_one_frame_demand_at_most_one_wake() {
 /// registration lands with the latch DOWN and the first waiter still live.
 /// A demand issued there is visible.
 ///
-/// This passes against the unfixed `end_of_frame` too, which never demanded
-/// at all, so it is no evidence of issue #1055's defect. It is the pin on
-/// the branch the fix added: replace the predicate with a constant `false`
-/// and every other test in this crate stays green while this one fails.
+/// The *suppression assertion alone* would be satisfied by code that never
+/// demands at all, which is what makes the mid-frame latch clear above
+/// load-bearing rather than scene-setting. The setup around it is not:
+/// asserting `(true, 1)` after the first registration is exactly issue
+/// #1055's red, so this test does not pass against the unfixed
+/// `end_of_frame`.
+///
+/// What it uniquely pins is the suppressing branch. Replace the predicate
+/// with a constant `false` and every other test in this crate stays green
+/// while this one fails.
 #[test]
 fn a_registration_behind_a_live_waiter_issues_no_demand_of_its_own() {
     let scheduler = UpdateScheduler::new();
