@@ -46,59 +46,79 @@ silently reopen the same gap later.
 this scheduler drains before the pipeline runs now pops one entry at a time
 and invokes it OUTSIDE the queue's lock, rather than draining a whole
 matching batch into a local buffer before running any of it. Each is bounded
-by an id watermark, not a remaining-iteration COUNT: a count survives neither
-a reentrant registration nor a cancellation interleaved with one (both
-measured regressions, below), while an id — minted once, monotonically, at
-registration time — is a property of the entry itself that no sibling
-mutation can change out from under it.
+at entry, before invoking anything — but by two DIFFERENT mechanisms, chosen
+per queue rather than uniformly, after review found each one wrong on the
+other's queue (see the two per-queue entries below for the measured
+regressions each direction produced):
 
 - `handle_begin_frame`'s transient-callback loop pops from the front of
   `CallbackState::transient` (now a `VecDeque`, not a `Vec`, to make the pop
   O(1) — the same reason `flush_microtasks` already used one), bounded by
-  the id of the LAST (`back()`) entry queued at entry, read once before
-  invoking anything: `CallbackId`s are minted from this scheduler's own
-  monotonic `id_gen` in registration order, so `back().id` at entry is
-  exactly the highest id already queued, in O(1) — no scan needed, since a
-  `VecDeque` already keeps registration order. A callback that registers
-  another transient callback of its own from inside itself must still have
-  the new one deferred to the NEXT frame (issue #1058's reentrant-
-  registration contract): the fresh entry always gets a strictly greater id
-  and is excluded by `front().id <= watermark` regardless of where it lands.
-  A remaining-COUNT bound (tried first, and wrong) does not survive
-  cancellation: a callback that cancels a not-yet-run sibling
-  (`cancel_frame_callback` removes it from the live queue directly, #1156)
-  and registers a fresh one in its place leaves the queue's LENGTH
-  unchanged from that callback's own perspective, so a count budget still
-  reaches the fresh entry in the SAME call — measured: it ran in the same
-  frame it was registered in.
+  an id WATERMARK: the id of the LAST (`back()`) entry queued at entry, read
+  once before invoking anything. `CallbackId`s are minted from this
+  scheduler's own monotonic `id_gen` in registration order, so `back().id`
+  at entry is exactly the highest id already queued, in O(1) — no scan
+  needed, since a `VecDeque` already keeps registration order — but ONLY
+  because `schedule_frame_callback` mints that id INSIDE the same
+  `transient` lock acquisition as the push, making id order and push order
+  the same fact rather than two facts that could disagree. Minting the id
+  BEFORE acquiring the lock (tried first, and wrong) let two threads racing
+  this method push `[id6, id5]`: `back().id` (5) then sits BELOW
+  `front().id` (6), so the watermark loop's very first check fails and
+  NEITHER callback ever runs, every frame, until a later registration
+  happens to raise the watermark — a permanent stall from two lone tickers
+  registered concurrently, measured via a repeated two-thread race (a
+  single race is not reliably reproducible on a timer). A callback that
+  registers another transient callback of its own from inside itself must
+  still have the new one deferred to the NEXT frame (issue #1058's
+  reentrant-registration contract): the fresh entry always gets a strictly
+  greater id and is excluded by `front().id <= watermark` regardless of
+  where it lands. A remaining-COUNT bound (tried first, and wrong, for a
+  different reason) does not survive cancellation: a callback that cancels
+  a not-yet-run sibling (`cancel_frame_callback` removes it from the live
+  queue directly, #1156) and registers a fresh one in its place leaves the
+  queue's LENGTH unchanged from that callback's own perspective, so a count
+  budget still reaches the fresh entry in the SAME call — measured: it ran
+  in the same frame it was registered in.
 - [`TaskQueue::execute_until`](src/task.rs) pops the top of the heap only
   while it still meets the priority threshold, one task at a time, bounded
-  by the highest `Task::id` present in the heap at entry — read once, under
-  the SAME first lock acquisition, by scanning the heap (`BinaryHeap` does
-  not track insertion order the way a `VecDeque` does, so this one costs an
-  O(n) scan the transient-callback bound does not). Task ids are minted
-  from one process-wide monotonic counter, so a task enqueued reentrantly
-  during the call always exceeds the watermark. Because ids are independent
-  of priority, a fresh task of the SAME or a HIGHER priority than something
-  still-eligible does not end the scan early: an ineligible pop is set aside
-  in a side buffer and the scan continues past it, re-queuing everything set
-  aside only once the scan itself is done. A remaining-COUNT bound (tried
-  first, and wrong) does not survive genuine reentrancy at all: simply
-  re-peeking the live heap until its top drops below the threshold lets a
-  self-re-enqueuing task run without limit inside ONE call — measured: 500+
-  executions and no return, hanging the frame, because `handle_draw_frame`'s
-  own `MAX_BUILD_REENTRY_PASSES` cap only ever fires BETWEEN calls to this
+  by a COUNT: `queue.len()` at entry, read once under the first lock
+  acquisition, decremented once per pop, the loop stopping the moment
+  EITHER the budget is spent or the top's priority fails the threshold. A
+  count is sound here specifically because the heap has no mid-scan removal
+  API the way the transient deque's `cancel_frame_callback` does — nothing
+  can shrink the heap's contents out from under a budget read at entry
+  except this same call's own pops, so nothing can make a stale count lie.
+  An id watermark (tried first, and wrong) needed a side buffer to let a
+  reentrant task of the SAME or a HIGHER priority than something
+  still-eligible be popped, set aside, and skipped past without ending the
+  scan early — and that buffer is a plain local `Vec`, dropped on unwind
+  before it is ever re-queued: a LATER task in the same pass panicking lost
+  every task the scan had already set aside, measured (`A` enqueues `X`,
+  `B` panics → the heap is empty afterward, `X` never runs) as a NEW
+  regression the pre-#1057 batch drain never had, since nothing there ever
+  left the heap except what was already executing. The count budget has no
+  buffer to lose anything from, at the cost of a different, accepted
+  trade-off: a reentrant task of a HIGHER priority than a still-queued
+  sibling does not defer behind it the way an id watermark would — it
+  DISPLACES it, consuming the budget slot the sibling would otherwise have
+  used, pushing the sibling to the NEXT call rather than losing it. Simply
+  re-peeking the live heap with no bound at all (tried before either of
+  these) does not survive genuine reentrancy: a self-re-enqueuing task runs
+  without limit inside ONE call — measured: 500+ executions and no return,
+  hanging the frame, because `handle_draw_frame`'s own
+  `MAX_BUILD_REENTRY_PASSES` cap only ever fires BETWEEN calls to this
   method and never got the chance.
 - `flush_microtasks` already had a pop-one-under-lock shape (the model the
-  other two now follow for that part). It carries no id watermark: no
-  reentrant-registration contract is documented for microtasks the way
-  issue #1058 documents one for transient callbacks, and no test has found
-  a same-frame-reentrancy gap there. Not a claim that one could not exist —
-  only that this round measured two concrete regressions (transient,
-  `TaskQueue`) and fixed those; a microtask that registers another
-  microtask from inside itself running within the SAME `flush_microtasks`
-  call is the current, unaudited behavior, named here rather than silently
-  assumed correct.
+  other two now follow for that part). It carries no bound at all beyond
+  "until the queue is empty": no reentrant-registration contract is
+  documented for microtasks the way issue #1058 documents one for transient
+  callbacks, and no test has found a same-frame-reentrancy gap there. Not a
+  claim that one could not exist — only that review so far measured
+  concrete regressions on the other two queues and fixed those; a microtask
+  that registers another microtask from inside itself running within the
+  SAME `flush_microtasks` call is the current, unaudited behavior, named
+  here rather than silently assumed correct.
 
 The result: **the panicking entry itself is consumed; every entry still
 queued behind it is preserved and runs on the next completed frame — not
@@ -225,7 +245,13 @@ to become the one the caller observes.
 **Trade-off accepted:** an aborted frame is indistinguishable from a
 successful one through `end_of_frame()` alone (named above); a caller that
 needs to tell them apart must catch the panic itself, not rely on the
-completion future.
+completion future. `TaskQueue::execute_until`'s count budget also accepts
+that a reentrant HIGHER-priority task displaces a still-queued, lower-
+priority sibling to the next call rather than deferring behind it the way
+`handle_begin_frame`'s id watermark does for transient callbacks — named
+above, and covered by its own test
+(`execute_until_lets_a_higher_priority_reentrant_task_displace_a_lower_priority_sibling`)
+rather than left as an unstated difference between the two queues' bounds.
 
 ### No legacy, lock-tied frame-callback registration API
 

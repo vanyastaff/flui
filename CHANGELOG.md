@@ -712,6 +712,10 @@ file records the repo-consumer-visible summary.
   pipeline runs preserves a panicking entry's still-queued siblings, and a
   panicking async future no longer leaves a zombie task slot behind. See
   `crates/flui-scheduler/CHANGELOG.md` and `crates/flui-scheduler/ARCHITECTURE.md`.
+  A follow-up review round found and fixed two regressions the bound itself
+  introduced (a reentrant task's own buffer dropped on a later task's panic;
+  concurrent transient-callback registration racing id assignment against
+  queue order) — see the crate changelog.
 - **Held pointer terminal replay after an active `Down`** (#561): pointer
   `Move`/`Up`/`Cancel` events that arrive during an uncommitted-frame window
   now queue even when their matching `Down` was already dispatched before the

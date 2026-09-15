@@ -15,7 +15,7 @@ use std::{
     },
 };
 
-use flui_scheduler::{IdleDeadline, Instant, Priority, UpdateScheduler};
+use flui_scheduler::{IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, Priority, UpdateScheduler};
 
 /// Phase-order canary: the async driver must still refuse to poll while the
 /// scheduler is in `PersistentCallbacks` (build/layout/paint). This is the
@@ -133,34 +133,30 @@ fn build_work_enqueued_reentrantly_by_an_animation_task_runs_this_frame() {
     );
 }
 
-/// `MAX_BUILD_REENTRY_PASSES` (private to `scheduler.rs`, currently 32; see
-/// that constant's own doc for the "31 extra passes beyond the first
-/// ordinary drain" accounting). Hardcoded here rather than referencing the
-/// constant, which an integration test cannot see.
-const MAX_BUILD_REENTRY_PASSES: usize = 32;
-
 /// A Build task that unconditionally re-enqueues itself must not hang the
-/// frame: `TaskQueue::execute_until`'s id watermark bounds each call to
-/// exactly the tasks already queued when THAT call started, so a
+/// frame: `TaskQueue::execute_until`'s count budget (the number of tasks
+/// already queued when THAT call started, read once under its first lock
+/// acquisition) bounds each call to at most that many pops, so a
 /// self-re-enqueuing chain runs once per call, not without limit inside a
 /// single call — `handle_draw_frame`'s own reentrant-pass loop still gets to
-/// count passes and give up at `MAX_BUILD_REENTRY_PASSES`. Before the id
-/// watermark, a live re-peek of the heap absorbed the whole chain inside ONE
-/// `execute_until` call and never returned, so the outer loop's pass counter
-/// never advanced past 1 and this cap became unreachable dead code.
+/// count passes and give up at [`MAX_BUILD_REENTRY_PASSES`]. Before this
+/// bound existed, a live re-peek of the heap absorbed the whole chain
+/// inside ONE `execute_until` call and never returned, so the outer loop's
+/// pass counter never advanced past 1 and this cap became unreachable dead
+/// code.
 ///
 /// The observed run count is `MAX_BUILD_REENTRY_PASSES + 1`, not the cap
 /// itself: the reentry loop's 32nd pass warns and breaks with the
-/// 33rd-re-enqueued task still queued (deferred, past its own call's
-/// watermark) -- but `handle_draw_frame` falls through, right after, to an
+/// 33rd-re-enqueued task still queued (its own call's budget already spent)
+/// -- but `handle_draw_frame` falls through, right after, to an
 /// unconditional `execute_until(Priority::Idle)` sweep (skipped only once
 /// the Idle deadline has passed, which a `far_future` deadline never does).
 /// That threshold accepts ANY priority, so it picks up exactly that one
 /// leftover Build task and runs it too, re-enqueuing a 34th that stays
 /// queued for a genuinely next frame. This is not new: the same two-drain
-/// shape existed before the id watermark and would have caught the same
-/// leftover task the same way; the watermark only changes how the FIRST 32
-/// executions are bounded, not this trailing sweep.
+/// shape existed before this bound and would have caught the same leftover
+/// task the same way; the bound only changes how the FIRST 32 executions
+/// are contained, not this trailing sweep.
 #[test]
 fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever() {
     let scheduler = UpdateScheduler::new();
@@ -191,7 +187,7 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
          MAX_BUILD_REENTRY_PASSES executions; the trailing, unconditional \
          execute_until(Priority::Idle) sweep right after picks up the ONE \
          task the cap left queued (its threshold accepts any priority) -- \
-         see this test's own doc for why that +1 is not the id watermark's \
+         see this test's own doc for why that +1 is not the count budget's \
          doing"
     );
     assert_eq!(

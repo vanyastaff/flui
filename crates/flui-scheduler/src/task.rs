@@ -340,7 +340,7 @@ impl TaskQueue {
     }
 
     /// Execute tasks at or above `min_priority`, one at a time, bounded to
-    /// the tasks already queued when THIS call started.
+    /// the NUMBER of tasks already queued when THIS call started.
     ///
     /// Each iteration takes the queue lock only long enough to pop one
     /// eligible task and execute it OUTSIDE the lock — the same
@@ -355,7 +355,7 @@ impl TaskQueue {
     /// `add_task`/`pop`'s ordering, so a panic mid-loop cannot leave
     /// `len()` under- or over-reporting the heap's real size.
     ///
-    /// # The id watermark
+    /// # The count budget, and why not an id watermark
     ///
     /// Simply re-peeking the live heap until its top drops below
     /// `min_priority` is NOT equivalent to the batched version this
@@ -366,88 +366,58 @@ impl TaskQueue {
     /// times in one `execute_until` call and never returned, hanging the
     /// frame — the caller's own reentrant-pass cap in `handle_draw_frame`
     /// never got a chance to fire, since it only runs BETWEEN calls to this
-    /// method). Task ids are minted from one monotonic counter
-    /// (`next_task_id`), so this call reads the highest id currently
-    /// queued ONCE, under the first lock acquisition, before running
-    /// anything, and then only pops a task whose id is `<=` that watermark.
-    /// A task enqueued reentrantly during this call always gets a strictly
-    /// greater id and is left queued for the NEXT call to see — exactly
-    /// what the batched snapshot this replaced also guaranteed, since it
-    /// popped its whole matching run into a `Vec` before invoking any of
-    /// it. Because ids are independent of priority, a freshly-enqueued
-    /// task of the SAME or a HIGHER priority than something still-eligible
-    /// and lower in this call's own watermarked set does not stop the scan
-    /// early: it is popped, set aside, and the scan continues past it —
-    /// only the top's priority against `min_priority` ends the scan, same
-    /// as before.
+    /// method). This reads `queue.len()` ONCE, under the first lock
+    /// acquisition, as a budget, and decrements it once per pop; the loop
+    /// stops the moment EITHER the budget is spent OR the top no longer
+    /// meets `min_priority`. Unlike `handle_begin_frame`'s transient-
+    /// callback deque, this heap has no mid-scan removal API (nothing here
+    /// plays the role `cancel_frame_callback` plays there), so a plain
+    /// count is sound: the budget can only ever be spent on pops this call
+    /// itself performs, never invalidated out from under it by a sibling
+    /// mutation.
     ///
-    /// Preserves the priority-threshold semantics exactly: stops the
-    /// moment the highest remaining ELIGIBLE priority no longer meets
-    /// `min_priority`.
+    /// A first attempt at this used an id watermark instead — pop, and if
+    /// the popped task's id exceeded the watermark, set it aside in a local
+    /// buffer and keep scanning past it — to let a reentrant HIGHER-priority
+    /// task skip the scan without ending it early. That local buffer is
+    /// itself the bug this replaced: a later task's panic in the SAME call
+    /// unwound straight through it, dropping every task it had set aside
+    /// with no way back into the live heap — losing reentrant work the
+    /// pre-#1057 batch drain never lost, since nothing there ever left the
+    /// heap except what was already executing. The count budget has no such
+    /// buffer at all: a reentrant task, if it displaces anything, displaces
+    /// a PRE-EXISTING one to the next call (the reentrant task consumes a
+    /// budget slot a pre-existing task would otherwise have used), never a
+    /// task already popped and pending re-insertion.
     ///
     /// Returns the number of tasks executed before returning — a panic
     /// propagates past this method with that count short of the full
     /// matching run; the caller observes the panic, not a partial count.
     pub fn execute_until(&self, min_priority: Priority) -> usize {
-        // Read the watermark under its own lock acquisition, before
-        // anything runs. `None` means the queue was empty at entry -- no
-        // watermark, nothing to do.
-        let watermark = {
-            let queue = self.queue.lock();
-            queue.iter().map(|pt| pt.0.id.get()).max()
-        };
-        let Some(watermark) = watermark else {
-            return 0;
-        };
-
+        let mut budget = self.queue.lock().len();
         let mut executed = 0usize;
-        // Tasks popped past because they exceed `watermark` (reentrant
-        // additions from a task this call already ran) -- re-queued once,
-        // after the scan, rather than immediately: pushing back into the
-        // SAME heap we are still popping from would let a later iteration
-        // of this very call see it again if it happens to sort back to the
-        // top, defeating the watermark.
-        let mut deferred: Vec<PriorityTask> = Vec::new();
-        loop {
+        while budget > 0 {
             let task = {
                 let mut queue = self.queue.lock();
-                loop {
-                    match queue.peek() {
-                        Some(pt) if pt.0.priority >= min_priority => {
-                            let popped = queue.pop().expect(
-                                "BUG: peek returned Some under the same lock, so pop must \
-                                 succeed",
-                            );
-                            // Decrement inside the critical section —
-                            // matches add_task / pop ordering, regardless
-                            // of whether this pop turns out to be eligible
-                            // or deferred: either way it left the heap here.
-                            self.len.fetch_sub(1, AtomicOrdering::AcqRel);
-                            if popped.0.id.get() <= watermark {
-                                break Some(popped.0);
-                            }
-                            deferred.push(popped);
-                        }
-                        _ => break None,
+                match queue.peek() {
+                    Some(pt) if pt.0.priority >= min_priority => {
+                        let popped = queue.pop().expect(
+                            "BUG: peek returned Some under the same lock, so pop must succeed",
+                        );
+                        // Decrement inside the critical section — matches
+                        // add_task / pop ordering.
+                        self.len.fetch_sub(1, AtomicOrdering::AcqRel);
+                        Some(popped.0)
                     }
+                    _ => None,
                 }
             };
             let Some(task) = task else {
                 break;
             };
+            budget -= 1;
             task.execute();
             executed += 1;
-        }
-
-        if !deferred.is_empty() {
-            let mut queue = self.queue.lock();
-            let count = deferred.len();
-            for pt in deferred {
-                queue.push(pt);
-            }
-            // Re-added inside the critical section — matches add_task's
-            // own ordering.
-            self.len.fetch_add(count, AtomicOrdering::AcqRel);
         }
         executed
     }
@@ -691,6 +661,92 @@ mod tests {
         assert_eq!(executed, 1);
         assert_eq!(*ran.lock(), vec![1, 3]);
         assert_eq!(queue.len(), queue_len_before - 3);
+    }
+
+    /// A task reentrantly enqueued by an earlier task in the SAME pass must
+    /// not be lost when a LATER task in that pass panics. An id-watermark
+    /// implementation tried first set a too-high-id pop aside in a local
+    /// `deferred` buffer to keep scanning past it — and that buffer is
+    /// itself dropped on unwind before ever making it back into the live
+    /// heap, losing reentrant work the pre-#1057 batch drain never lost
+    /// (nothing there ever left the heap except what was already
+    /// executing). The count-budget version this replaced it with has no
+    /// such buffer to lose anything from: A runs and enqueues X at a LOWER
+    /// priority than B (so X cannot displace B's own turn — see the sibling
+    /// test below for what happens when it can), B panics, and X — never
+    /// popped at all this call — is simply still sitting in the live heap
+    /// afterward.
+    #[test]
+    fn execute_until_does_not_drop_a_reentrantly_enqueued_task_when_a_later_task_panics() {
+        let queue = TaskQueue::new();
+        let x_ran = Arc::new(Mutex::new(false));
+
+        let reentrant_queue = queue.clone();
+        let x_ran_for_a = Arc::clone(&x_ran);
+        queue.add(Priority::Build, move || {
+            let x_ran = Arc::clone(&x_ran_for_a);
+            reentrant_queue.add(Priority::Idle, move || {
+                *x_ran.lock() = true;
+            });
+        }); // A
+        queue.add(Priority::Build, || panic!("build task probe")); // B, higher priority than X
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            queue.execute_until(Priority::Build)
+        }));
+        assert!(unwind.is_err(), "B's panic must propagate");
+
+        assert_eq!(
+            queue.len(),
+            1,
+            "X, enqueued reentrantly by A, must still be queued after B panics -- not \
+             dropped along with a local buffer that never survives an unwind"
+        );
+
+        let executed = queue.execute_until(Priority::Idle);
+        assert_eq!(executed, 1, "X must run on the very next call");
+        assert!(*x_ran.lock());
+    }
+
+    /// The count budget's own accepted trade-off, named rather than
+    /// silently assumed correct: a reentrant task of a HIGHER priority than
+    /// a still-queued sibling does not defer to it (an id watermark's own
+    /// behavior) — it DISPLACES it, consuming the budget slot the sibling
+    /// would otherwise have used. A runs and enqueues X at a HIGHER
+    /// priority than B; X pops (and runs) in A's own call instead of B,
+    /// leaving B for the NEXT call rather than this one. No work is lost
+    /// either way -- B simply moves a whole call later than a naive
+    /// "reentrant work is always deferred" reading would expect.
+    #[test]
+    fn execute_until_lets_a_higher_priority_reentrant_task_displace_a_lower_priority_sibling() {
+        let queue = TaskQueue::new();
+        let ran: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let reentrant_queue = queue.clone();
+        let ran_for_a = Arc::clone(&ran);
+        queue.add(Priority::Build, move || {
+            ran_for_a.lock().push("a");
+            let ran = Arc::clone(&ran_for_a);
+            reentrant_queue.add(Priority::UserInput, move || ran.lock().push("x"));
+        }); // A
+        let ran_for_b = Arc::clone(&ran);
+        queue.add(Priority::Build, move || ran_for_b.lock().push("b")); // B
+
+        let executed = queue.execute_until(Priority::Build);
+        assert_eq!(
+            executed, 2,
+            "A and X run this call; B's budget slot went to X instead"
+        );
+        assert_eq!(*ran.lock(), vec!["a", "x"]);
+        assert_eq!(queue.len(), 1, "B is displaced, not lost");
+
+        let executed = queue.execute_until(Priority::Build);
+        assert_eq!(executed, 1);
+        assert_eq!(
+            *ran.lock(),
+            vec!["a", "x", "b"],
+            "B still runs, one call later"
+        );
     }
 
     #[test]

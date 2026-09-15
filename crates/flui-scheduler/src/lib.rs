@@ -194,7 +194,8 @@ pub use frame::{
 // Re-exports - ID types (unified with flui-foundation)
 pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
 pub use scheduler::{
-    FrameCompletionFuture, IdleDeadline, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler,
+    FrameCompletionFuture, IdleDeadline, MAX_BUILD_REENTRY_PASSES, SchedulerBuilder,
+    UpdateScheduler, WeakUpdateScheduler,
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{

@@ -100,19 +100,24 @@ use crate::{
 /// diagnosable trace rather than an unbounded loop.
 ///
 /// This counts CALLS to [`TaskQueue::execute_until`](crate::TaskQueue::execute_until)
-/// in this loop, each of which -- since issue #1057's id watermark -- runs
-/// exactly the tasks queued at that call's own start, not "until the queue
-/// is empty". A single self-re-enqueuing `Priority::Build` task therefore
-/// runs exactly this many times from THIS loop before the cap gives up and
-/// warns — but `handle_draw_frame` still ends with one more, UNCONDITIONAL
-/// `execute_until(Priority::Idle)` sweep, whose threshold accepts any
-/// priority: it picks up the one task this cap's own last pass left queued,
-/// so a task that survives the whole cap is actually observed running
-/// `MAX_BUILD_REENTRY_PASSES + 1` times in that frame, not this many — see
-/// `tests/update_scheduler_reshape.rs`'s
+/// in this loop, each of which -- since issue #1057's count budget -- pops
+/// at most as many tasks as were queued at that call's OWN start, not
+/// "until the queue is empty". A single self-re-enqueuing `Priority::Build`
+/// task therefore runs exactly this many times from THIS loop before the
+/// cap gives up and warns — but `handle_draw_frame` still ends with one
+/// more, UNCONDITIONAL `execute_until(Priority::Idle)` sweep, whose
+/// threshold accepts any priority: it picks up the one task this cap's own
+/// last pass left queued, so a task that survives the whole cap is
+/// actually observed running `MAX_BUILD_REENTRY_PASSES + 1` times in that
+/// frame, not this many — see `tests/update_scheduler_reshape.rs`'s
 /// `a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever`
 /// for the pinned count and why the `+ 1` is not this cap's own doing.
-const MAX_BUILD_REENTRY_PASSES: usize = 32;
+///
+/// `#[doc(hidden)] pub` rather than crate-private: an integration test
+/// cannot otherwise reference this exact value, and a hardcoded duplicate
+/// in that test would silently drift from a change made only here.
+#[doc(hidden)]
+pub const MAX_BUILD_REENTRY_PASSES: usize = 32;
 
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
@@ -737,12 +742,11 @@ impl UpdateScheduler {
         // even though `C`'s id exceeds the watermark (issue #1057's own
         // regression, measured: `C` ran in the same frame it was
         // registered in).
-        let watermark = {
+        let (watermark, pending) = {
             let cbs = self.inner.callbacks.transient.lock();
-            cbs.back().map(|c| c.id)
+            (cbs.back().map(|c| c.id), cbs.len())
         };
         if let Some(watermark) = watermark {
-            let pending = self.inner.callbacks.transient.lock().len();
             tracing::debug!(count = pending, "executing transient callbacks");
             loop {
                 let cancellable = {
@@ -1429,13 +1433,29 @@ impl UpdateScheduler {
     ///
     /// Returns a `CallbackId` that can be used to cancel the callback before it
     /// fires.
+    ///
+    /// # Id order is structural, not incidental
+    ///
+    /// The id is minted INSIDE the same `transient` lock acquisition as the
+    /// push, not before it: `handle_begin_frame`'s id-watermark bound
+    /// (issue #1057) assumes the deque's push order and its ids' numeric
+    /// order always agree, and `UpdateScheduler` is `Sync` — two threads
+    /// racing this method with the mint OUTSIDE the lock could push
+    /// `[id6, id5]` (whichever thread reaches the lock first pushes,
+    /// regardless of which minted first). `back().id` (5) then sits BELOW
+    /// `front().id` (6), so the watermark loop's very first check fails and
+    /// NEITHER callback ever runs, every frame, until a later registration
+    /// happens to raise the watermark. Minting under the lock makes
+    /// whichever thread acquires it first also mint the smaller id first,
+    /// structurally, the same discipline `with_post_frame_registration`
+    /// already uses for post-frame registration.
     pub fn schedule_frame_callback(&self, callback: OneShotFrameCallback) -> CallbackId {
-        let id = self.inner.callbacks.id_gen.next();
-        self.inner
-            .callbacks
-            .transient
-            .lock()
-            .push_back(CancellableTransientCallback { id, callback });
+        let id = {
+            let mut cbs = self.inner.callbacks.transient.lock();
+            let id = self.inner.callbacks.id_gen.next();
+            cbs.push_back(CancellableTransientCallback { id, callback });
+            id
+        };
         // Registering a tick demands a frame to run it in (Flutter parity:
         // `scheduleFrameCallback` calls `scheduleFrame`). `request_frame`
         // wakes the platform on the false->true transition.
@@ -1741,6 +1761,26 @@ impl UpdateScheduler {
     /// all transient callbacks have been processed.
     pub fn transient_callback_count(&self) -> usize {
         self.inner.callbacks.transient.lock().len()
+    }
+
+    /// Test-only probe: `true` iff every `CallbackId` in the transient
+    /// deque is strictly greater than the one before it.
+    ///
+    /// `handle_begin_frame`'s id-watermark bound (issue #1057) assumes the
+    /// deque's own queue order and its ids' numeric order always agree —
+    /// true only because `schedule_frame_callback` mints the id and pushes
+    /// the entry inside the SAME `transient` lock acquisition (issue
+    /// #1057's own follow-up). Minting outside that lock let two
+    /// concurrent registrations land as `[id6, id5]`: `back().id` (5) then
+    /// sits BELOW `front().id` (6), so the watermark loop's very first
+    /// check fails and NEITHER callback ever runs, every frame, until a
+    /// later registration happens to raise the watermark. This oracle
+    /// checks the invariant the fix restores directly, rather than relying
+    /// on timing to reproduce the stall itself.
+    #[cfg(test)]
+    pub(crate) fn transient_ids_are_strictly_ascending(&self) -> bool {
+        let cbs = self.inner.callbacks.transient.lock();
+        cbs.iter().zip(cbs.iter().skip(1)).all(|(a, b)| a.id < b.id)
     }
 
     /// Get current frame timing (if a frame is active)
@@ -2821,6 +2861,66 @@ mod tests {
 
         let received = received_time.lock().unwrap();
         assert_eq!(received, vsync);
+    }
+
+    /// Concurrent `schedule_frame_callback` registrations must not
+    /// interleave mint-then-push across threads (issue #1057's own
+    /// follow-up): minting the id BEFORE acquiring the `transient` lock let
+    /// two racing threads push `[id6, id5]` — `back().id` (5) then sits
+    /// BELOW `front().id` (6), so `handle_begin_frame`'s watermark loop's
+    /// very first check fails and NEITHER callback ever runs, every frame,
+    /// until a later registration happens to raise the watermark high
+    /// enough. A single race is not reliably reproducible on a timer, so
+    /// this repeats the race many times and checks BOTH the structural
+    /// invariant directly (`transient_ids_are_strictly_ascending`) and the
+    /// behavioral consequence (`handle_begin_frame` must still run every
+    /// registered callback in its own first frame).
+    #[test]
+    fn concurrent_transient_registrations_keep_the_deque_id_ascending() {
+        use std::sync::Barrier;
+        use std::sync::atomic::AtomicUsize;
+
+        const PER_THREAD: usize = 100;
+        const ITERATIONS: usize = 20;
+
+        for _ in 0..ITERATIONS {
+            let scheduler = UpdateScheduler::new();
+            let barrier = Arc::new(Barrier::new(2));
+            let ran = Arc::new(AtomicUsize::new(0));
+
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let scheduler = scheduler.clone();
+                    let barrier = Arc::clone(&barrier);
+                    let ran = Arc::clone(&ran);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        for _ in 0..PER_THREAD {
+                            let ran = Arc::clone(&ran);
+                            scheduler.schedule_frame_callback(Box::new(move |_| {
+                                ran.fetch_add(1, Ordering::SeqCst);
+                            }));
+                        }
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().expect("registration thread must not panic");
+            }
+
+            assert!(
+                scheduler.transient_ids_are_strictly_ascending(),
+                "concurrent registrations must not interleave mint order and push order"
+            );
+
+            scheduler.handle_begin_frame(Instant::now());
+            assert_eq!(
+                ran.load(Ordering::SeqCst),
+                2 * PER_THREAD,
+                "every registered callback must run in this one frame -- a stalled \
+                 watermark (front().id > back().id) would run none of them"
+            );
+        }
     }
 
     /// The platform wake hook fires exactly once per `frame_scheduled`

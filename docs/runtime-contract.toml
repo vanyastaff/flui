@@ -187,7 +187,7 @@ declarations = [
     "pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};",
     "pub use frame::{ AppLifecycleState, FrameId, FramePhase, FrameTiming, FrameTimingBuilder, LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase, };",
     "pub use id::{CallbackId, Id, IdGenerator, Marker, markers};",
-    "pub use scheduler::{ FrameCompletionFuture, IdleDeadline, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler, };",
+    "pub use scheduler::{ FrameCompletionFuture, IdleDeadline, MAX_BUILD_REENTRY_PASSES, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler, };",
     "pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};",
     "pub use ticker::{ Ticker, TickerCallback, TickerCanceled, TickerFuture, TickerFutureOrCancel, TickerGroup, TickerId, TickerProvider, TickerState, };",
     "pub mod prelude {",

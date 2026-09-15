@@ -109,6 +109,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two follow-up regressions in the #1057 panic-recovery bound, found by
+  review:** `TaskQueue::execute_until`'s first attempt at bounding a
+  reentrant pass parked tasks that outran its id watermark in a local
+  `Vec`, re-queuing them only after the whole pass returned — a LATER
+  task's panic in the same pass unwound straight through that `Vec`,
+  silently dropping every task it held (never seen before #1057, since the
+  batch drain it replaced never removed anything from the heap except what
+  it was already executing). Replaced with a plain count budget
+  (`queue.len()` at entry, decremented per pop): the heap has no mid-scan
+  removal API the way the transient callback deque does, so a count cannot
+  go stale the way it can there, and nothing is ever held outside the live
+  heap to lose on unwind. Separately, `schedule_frame_callback` minted its
+  `CallbackId` before acquiring the `transient` lock; two threads racing
+  it could push entries out of id order, which made `handle_begin_frame`'s
+  id-watermark bound (the transient callbacks' own bound, unaffected by
+  the change above) fail its very first check and run neither callback,
+  every frame, until a later registration happened to raise the
+  watermark — fixed by minting inside the same lock acquisition as the
+  push, the same discipline post-frame registration already used. See
+  `crates/flui-scheduler/ARCHITECTURE.md`'s mapping entry for the accepted
+  trade-off the count budget introduces (a higher-priority reentrant task
+  displaces a queued sibling to the next call rather than deferring behind
+  it) and both regressions' own tests.
 - **A panic before the pipeline slot ever opens now closes the frame** (#1057):
   `drive_frame`/`drive_frame_with_lane` used to `catch_unwind` only the
   caller-supplied pipeline closure, so a panic from a transient callback,
