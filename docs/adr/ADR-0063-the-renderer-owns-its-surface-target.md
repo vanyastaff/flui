@@ -221,6 +221,19 @@ backoff loop is the mechanism #1043 makes sound.
   orphaned. The X11 variant ran here; the Wayland variant runs in CI, where
   `weston` is installed.
 - The native backends' changes are compile-only verified (see decision 5).
+- **AppKit trades a use-after-free for a bounded leak, deliberately.** Both
+  native backends' window maps are only ever inserted into (`rg -n
+  '\.remove\(|\.retain\(' crates/flui-platform/src/platforms/{windows,macos}/platform.rs`
+  → 0 hits), so the wrapper's `Drop` — the only place `windows_map.remove`
+  and the `NSWindow` `release` live — never runs. Before this record,
+  AppKit's default `releasedWhenClosed` freed the `NSWindow` at `close`
+  while the leaked wrapper kept a dangling pointer to it; now the wrapper
+  keeps the window (and its view hierarchy) alive instead. Evicting the map
+  entry from the close path is #1147, and it must be owner-deferred rather
+  than done inside `windowWillClose:` — releasing our `+1` from within
+  AppKit's own `close` dispatch could deallocate the object mid-method,
+  which is why winit ties the release to its `Window`'s drop, not to the
+  delegate callback.
 
 ## Amendments to ADR-0045
 
