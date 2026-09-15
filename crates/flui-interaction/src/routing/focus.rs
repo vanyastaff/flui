@@ -51,11 +51,13 @@ pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 /// applications, the remaining queue is dropped with a single
 /// `tracing::warn!`. A listener that panics cannot leave this guard stuck
 /// open: `notification_depth` is held by a private RAII guard that
-/// decrements on unwind exactly as it
-/// does on a normal return, and — because the notification it was guarding
-/// never got to finish, so whatever it queued is only half a transaction —
-/// also discards the pending queue in that case, so a later, healthy call
-/// is never asked to replay a chain a panic interrupted partway through.
+/// decrements on unwind exactly as it does on a normal return, and —
+/// because the notification it was guarding never got to finish, so
+/// whatever it queued is only half a transaction — also discards the
+/// pending queue in that case (warning once, naming the count, if it was
+/// non-empty — an unwind must not silently erase requests a healthy
+/// caller had already had accepted), so a later, healthy call is never
+/// asked to replay a chain a panic interrupted partway through.
 /// See `## Mapping decisions` in `crates/flui-interaction/docs/ARCHITECTURE.md`
 /// for how this compares to Flutter's microtask-deferred model.
 pub struct FocusManager {
@@ -105,7 +107,20 @@ impl Drop for NotificationDepthGuard<'_> {
     fn drop(&mut self) {
         self.depth.set(self.depth.get() - 1);
         if std::thread::panicking() {
-            self.pending.borrow_mut().clear();
+            let mut pending = self.pending.borrow_mut();
+            if !pending.is_empty() {
+                // Unlike the drain-budget drop (which is a caller's own
+                // ping-pong exhausting a documented limit), this discard
+                // erases requests a healthy caller had already had
+                // accepted — silently losing them would be worse than the
+                // panic itself.
+                tracing::warn!(
+                    dropped_requests = pending.len(),
+                    "focus requests queued during a notification were discarded because \
+                     a listener panicked"
+                );
+            }
+            pending.clear();
         }
     }
 }
@@ -167,14 +182,17 @@ impl FocusManager {
     /// Returns `true` whenever the request is accepted, regardless of
     /// which of the two happens.
     pub(crate) fn request_focus(&self, node: &Rc<FocusNode>) -> bool {
-        if self.closed.get() || !node.is_attached() || !node.can_request_focus() {
-            return false;
-        }
+        // Ownership is checked first, ahead of `is_eligible`, purely so a
+        // foreign-manager request gets its own distinct warning rather than
+        // the generic silent rejection the other conditions share.
         if !self.owns(node) {
             tracing::warn!(
                 node = node.id().get(),
                 "focus request rejected because the node belongs to another manager"
             );
+            return false;
+        }
+        if !self.is_eligible(node) {
             return false;
         }
         self.set_primary_focus(Some(Rc::clone(node)));
@@ -191,11 +209,13 @@ impl FocusManager {
 
     /// Whether `node` may become primary focus on this manager right now.
     ///
-    /// The same predicate [`Self::request_focus`] checks before accepting a
-    /// request, re-run by [`Self::drain_pending_focus_transitions`]
-    /// immediately before a queued transition is applied: the world can
-    /// change while a request waits in the queue — a reentrant listener
-    /// earlier in the same chain can detach `node`, flip its
+    /// The single source of truth for that question: [`Self::request_focus`]
+    /// calls it directly (after its own `owns` check, evaluated first only
+    /// so a foreign-manager rejection gets its own distinct warning — see
+    /// that method), and [`Self::drain_pending_focus_transitions`] calls it
+    /// again immediately before a queued transition is applied, since the
+    /// world can change while a request waits in the queue — a reentrant
+    /// listener earlier in the same chain can detach `node`, flip its
     /// [`FocusNode::can_request_focus`], or reparent it under a different
     /// manager before its turn comes, and a stale queued target must be
     /// skipped rather than committed.
@@ -1960,6 +1980,81 @@ mod tests {
         assert_eq!(
             edges.borrow().as_slice(),
             &[(Some(nodes[1].id()), Some(nodes[0].id()))]
+        );
+    }
+
+    /// Companion to the test above: this one exercises the guard's OTHER
+    /// unwind responsibility — discarding a *non-empty* queue, not just
+    /// resetting the depth counter. B has two listeners: the first queues
+    /// a reentrant request for C (accepted, `Focused`, but not yet
+    /// applied); the second then panics. The panic must discard that
+    /// queued request rather than leave it for a later, unrelated call to
+    /// apply — proven through behavior (C never becomes primary, no
+    /// `(_, C)` edge ever publishes), not by reaching into the private
+    /// queue. It must also warn once, naming the drop, matching the
+    /// budget-exceeded drop's own warning discipline.
+    #[test]
+    fn pending_requests_queued_before_a_listener_panic_are_discarded() {
+        let (manager, nodes) = manager_with_nodes(4);
+        nodes[0].request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        // Both listeners are guarded on B still being primary: on the
+        // later, healthy transition below, B is the OUTGOING endpoint (no
+        // longer primary), so neither fires again — the guard is what
+        // keeps that second call from re-queuing C or re-panicking.
+        let c = Rc::clone(&nodes[2]);
+        let b_weak = Rc::downgrade(&nodes[1]);
+        nodes[1].add_listener(Rc::new(move || {
+            if b_weak.upgrade().unwrap().has_primary_focus() {
+                assert_eq!(c.request_focus(), FocusRequestOutcome::Focused);
+            }
+        }));
+        let b_weak = Rc::downgrade(&nodes[1]);
+        nodes[1].add_listener(Rc::new(move || {
+            assert!(
+                !b_weak.upgrade().unwrap().has_primary_focus(),
+                "boom: second listener under test panics"
+            );
+        }));
+
+        let (panicked, log) = flui_testing::log_capture::capture(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                nodes[1].request_focus();
+            }))
+        });
+        assert!(panicked.is_err(), "the listener panic must propagate");
+        assert_eq!(
+            log.count_containing("focus requests queued during a notification were discarded"),
+            1,
+            "the discard must warn exactly once, naming what it dropped: {log}"
+        );
+
+        nodes[3].request_focus();
+
+        assert!(nodes[3].has_primary_focus());
+        assert!(
+            !nodes[2].has_primary_focus(),
+            "the request the first listener queued before the second one panicked \
+             must not have survived to apply later"
+        );
+        // The interrupted A -> B transition's own manager-level edge never
+        // publishes either: `apply_focus_transition` runs node-level
+        // notification before manager-level notification, and L2 panics
+        // during the former, so `notify_listeners` for THIS transition
+        // never runs at all. Only the later, healthy transition publishes.
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[(Some(nodes[1].id()), Some(nodes[3].id()))],
+            "no (_, C) edge may appear: the discarded request never applied"
         );
     }
 
