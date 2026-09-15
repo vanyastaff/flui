@@ -1443,8 +1443,16 @@ impl UpdateScheduler {
     /// chain and the fix. Until it lands, a NEW hook should set a flag or push
     /// onto a channel the owner thread drains rather than reach a platform API
     /// from here.
+    ///
+    /// The *previous* hook is dropped only once this lock is released: if
+    /// its `Arc` is the last reference, `Drop` runs whatever the captured
+    /// closure's state destructs — user code, which may call back into the
+    /// scheduler (this method again, or anything that reads the hook, such
+    /// as `request_frame_impl`) and must not deadlock on this mutex.
     pub fn set_on_frame_scheduled(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
-        *self.inner.binding.on_frame_scheduled.lock() = hook;
+        let previous =
+            { std::mem::replace(&mut *self.inner.binding.on_frame_scheduled.lock(), hook) };
+        drop(previous);
     }
 
     /// Add a persistent frame callback.
@@ -2431,6 +2439,50 @@ mod tests {
             2,
             "a wake arriving after a PumpAsync cycle must re-fire on_frame_scheduled, not find \
              the frame_scheduled latch already set and silently coalesce away"
+        );
+    }
+
+    /// #1038: `set_on_frame_scheduled` must drop the *previous* hook only
+    /// after releasing `binding.on_frame_scheduled`. If that hook's `Arc` is
+    /// the last reference, its `Drop` runs whatever the captured closure's
+    /// state destructs — user code that may call back into this scheduler
+    /// (this method again, or anything that reads the hook, such as
+    /// `request_frame_impl`). Running that under the lock would deadlock.
+    #[test]
+    fn replacing_the_frame_scheduled_hook_drops_the_previous_hook_outside_the_lock() {
+        let scheduler = UpdateScheduler::new();
+
+        struct Probe {
+            inner: std::sync::Weak<SchedulerInner>,
+            unlocked: Arc<AtomicBool>,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                let inner = self
+                    .inner
+                    .upgrade()
+                    .expect("the scheduler outlives the hook it holds");
+                self.unlocked.store(
+                    inner.binding.on_frame_scheduled.try_lock().is_some(),
+                    Ordering::Release,
+                );
+            }
+        }
+
+        let unlocked = Arc::new(AtomicBool::new(false));
+        let probe = Probe {
+            inner: Arc::downgrade(&scheduler.inner),
+            unlocked: Arc::clone(&unlocked),
+        };
+
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            let _keep_alive = &probe;
+        })));
+        scheduler.set_on_frame_scheduled(None);
+
+        assert!(
+            unlocked.load(Ordering::Acquire),
+            "the previous frame-scheduled hook's destructor ran under its own mutex"
         );
     }
 
