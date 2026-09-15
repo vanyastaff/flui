@@ -73,7 +73,7 @@ use crate::{
     },
     duration::{FrameDuration, Milliseconds},
     frame::{
-        AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
+        AppLifecycleState, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
@@ -299,8 +299,6 @@ struct CallbackState {
     cancelled: DashMap<CallbackId, ()>,
     /// Callback ID generator
     id_gen: IdGenerator<flui_foundation::markers::FrameCallback>,
-    /// Legacy frame callbacks
-    frame: Mutex<Vec<FrameCallback>>,
     /// Persistent frame callbacks (every frame)
     persistent: Mutex<Vec<CancellablePersistentCallback>>,
     /// Post-frame callbacks (after frame completes)
@@ -536,7 +534,6 @@ impl UpdateScheduler {
                 transient: Mutex::new(Vec::new()),
                 cancelled: DashMap::new(),
                 id_gen: IdGenerator::new(),
-                frame: Mutex::new(Vec::new()),
                 persistent: Mutex::new(Vec::new()),
                 post_frame: Mutex::new(Vec::new()),
                 microtasks: Mutex::new(VecDeque::new()),
@@ -713,18 +710,6 @@ impl UpdateScheduler {
         // during transient callbacks (e.g. cancelling a post-frame callback)
         // must survive until handle_draw_frame checks them. The single clear()
         // at the end of handle_draw_frame is sufficient.
-
-        // Execute legacy frame callbacks
-        let callbacks: Vec<_> = {
-            let mut cbs = self.inner.callbacks.frame.lock();
-            cbs.drain(..).collect()
-        };
-
-        for callback in callbacks {
-            if let Some(timing) = self.inner.frame.current_frame.lock().as_ref() {
-                callback(timing);
-            }
-        }
 
         // Phase 2: MidFrameMicrotasks
         self.set_scheduler_phase(SchedulerPhase::MidFrameMicrotasks);
@@ -1278,24 +1263,37 @@ impl UpdateScheduler {
     /// scheduler.cancel_frame_callback(id);
     /// ```
     pub fn cancel_frame_callback(&self, id: CallbackId) -> bool {
-        // First, try to remove from pending callbacks
-        let mut callbacks = self.inner.callbacks.transient.lock();
-        let original_len = callbacks.len();
-        callbacks.retain(|c| c.id != id);
+        // Partition the matching entry out from under the lock instead of
+        // `Vec::retain`: `retain` drops what it removes in place, so the
+        // cancelled callback's `Drop` (a captured closure's captures going
+        // away) would run while `transient` is still held. A capture that
+        // touches this scheduler again — registering another callback, say
+        // — would then deadlock on the same mutex. Dropping `removed` after
+        // the guard falls closes that hole.
+        let removed = {
+            let mut callbacks = self.inner.callbacks.transient.lock();
+            let original_len = callbacks.len();
+            let mut kept = Vec::with_capacity(original_len);
+            let mut removed = None;
+            for callback in callbacks.drain(..) {
+                if callback.id == id {
+                    removed = Some(callback);
+                } else {
+                    kept.push(callback);
+                }
+            }
+            *callbacks = kept;
+            removed
+        };
 
-        if callbacks.len() < original_len {
+        if let Some(callback) = removed {
+            drop(callback);
             return true; // Found and removed
         }
 
         // If not found, mark as cancelled (in case it's about to be executed)
         self.inner.callbacks.cancelled.insert(id, ());
         false
-    }
-
-    /// Schedule a legacy frame callback
-    pub fn schedule_frame(&self, callback: FrameCallback) {
-        self.inner.callbacks.frame.lock().push(callback);
-        self.request_frame();
     }
 
     /// Request a frame (without callback).
@@ -1559,6 +1557,14 @@ impl UpdateScheduler {
     }
 
     /// Set the current frame phase (for rendering pipeline)
+    ///
+    /// The `current_frame` guard is held for this whole call — it is a
+    /// plain field write, never a callback invocation — and must stay that
+    /// way: this is exactly the shape `handle_begin_frame`'s retired legacy
+    /// callback loop got wrong (issue #1058), where the lock outlived a
+    /// `callback(timing)` call and a callback reading `current_frame()`
+    /// deadlocked on itself. No user code may run inside this method's
+    /// locked scope.
     pub fn set_phase(&self, phase: FramePhase) {
         if let Some(timing) = self.inner.frame.current_frame.lock().as_mut() {
             timing.phase = phase;
@@ -1805,10 +1811,32 @@ impl UpdateScheduler {
     ///
     /// Returns `true` if the listener was found and removed.
     pub fn remove_lifecycle_state_listener(&self, id: CallbackId) -> bool {
-        let mut listeners = self.inner.callbacks.lifecycle_listeners.lock();
-        let original_len = listeners.len();
-        listeners.retain(|l| l.id != id);
-        listeners.len() < original_len
+        // Same hazard `cancel_frame_callback` guards against: `retain` would
+        // drop the removed listener's `Arc<dyn Fn(..)>` — possibly the last
+        // reference, running the captured state's `Drop` — while
+        // `lifecycle_listeners` is still locked. A listener whose capture
+        // re-enters this scheduler (adding or removing another listener) on
+        // drop would deadlock. Partition it out and drop it after the guard
+        // falls instead.
+        let removed = {
+            let mut listeners = self.inner.callbacks.lifecycle_listeners.lock();
+            let original_len = listeners.len();
+            let mut kept = Vec::with_capacity(original_len);
+            let mut removed = None;
+            for listener in listeners.drain(..) {
+                if listener.id == id {
+                    removed = Some(listener);
+                } else {
+                    kept.push(listener);
+                }
+            }
+            *listeners = kept;
+            removed
+        };
+
+        let found = removed.is_some();
+        drop(removed);
+        found
     }
 
     /// Check if frames should be scheduled based on lifecycle state
@@ -2004,8 +2032,26 @@ impl UpdateScheduler {
 
     /// Remove a timings callback
     pub fn remove_timings_callback(&self, callback: &TimingsCallback) {
-        let mut callbacks = self.inner.binding.timings_callbacks.lock();
-        callbacks.retain(|c| !Arc::ptr_eq(c, callback));
+        // Same hazard as `cancel_frame_callback`/`remove_lifecycle_state_listener`:
+        // partition the matching `Arc<TimingsCallback>` out from under the
+        // lock so dropping it (potentially the last reference, running the
+        // captured state's `Drop`) happens after `timings_callbacks` is
+        // released, not while a re-entrant drop could deadlock on it.
+        let removed = {
+            let mut callbacks = self.inner.binding.timings_callbacks.lock();
+            let mut kept = Vec::with_capacity(callbacks.len());
+            let mut removed = Vec::new();
+            for existing in callbacks.drain(..) {
+                if Arc::ptr_eq(&existing, callback) {
+                    removed.push(existing);
+                } else {
+                    kept.push(existing);
+                }
+            }
+            *callbacks = kept;
+            removed
+        };
+        drop(removed);
     }
 
     /// Report pending frame timings to registered callbacks.
@@ -3107,6 +3153,447 @@ mod tests {
         let count = scheduler.execute_idle_callbacks();
         assert_eq!(count, 5);
         assert_eq!(*counter.lock(), 5);
+    }
+
+    // =========================================================================
+    // Lock discipline (#1058) — every callback family must run with NO
+    // scheduler storage lock held, so a callback can safely call back into
+    // the scheduler, including the read-only `current_frame()` accessor the
+    // retired legacy `schedule_frame` callback loop could not tolerate (its
+    // `if let Some(timing) = self.inner.frame.current_frame.lock().as_ref()
+    // { callback(timing); }` kept the guard alive across the call).
+    // =========================================================================
+
+    /// Try-locks every mutex a scheduler callback could legally observe from
+    /// inside its own invocation and asserts each one is free. Every
+    /// callback family drains, clones, or snapshots its queue before
+    /// invoking user code — see `handle_begin_frame`, `handle_draw_frame`,
+    /// `end_frame_impl`, `execute_idle_callbacks`, `flush_microtasks`,
+    /// `handle_app_lifecycle_state_change`, `report_timings`, and
+    /// `request_frame_impl`. This is the oracle proving that discipline
+    /// holds at the actual call site, not just in the source.
+    fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
+        let inner = &scheduler.inner;
+        assert!(
+            inner.frame.current_frame.try_lock().is_some(),
+            "current_frame is locked during a callback"
+        );
+        assert!(
+            inner.frame.current_vsync_time.try_lock().is_some(),
+            "current_vsync_time is locked during a callback"
+        );
+        assert!(
+            inner.frame.budget.try_lock().is_some(),
+            "budget is locked during a callback"
+        );
+        assert!(
+            inner.frame.idle_deadline.try_lock().is_some(),
+            "idle_deadline is locked during a callback"
+        );
+        assert!(
+            inner.frame.completion_waiters.try_lock().is_some(),
+            "completion_waiters is locked during a callback"
+        );
+        assert!(
+            inner.callbacks.post_frame_registration.try_lock().is_some(),
+            "post_frame_registration is locked during a callback"
+        );
+        assert!(
+            inner.callbacks.transient.try_lock().is_some(),
+            "transient is locked during a callback"
+        );
+        assert!(
+            inner.callbacks.persistent.try_lock().is_some(),
+            "persistent is locked during a callback"
+        );
+        assert!(
+            inner.callbacks.post_frame.try_lock().is_some(),
+            "post_frame is locked during a callback"
+        );
+        assert!(
+            inner.callbacks.microtasks.try_lock().is_some(),
+            "microtasks is locked during a callback"
+        );
+        assert!(
+            inner.callbacks.idle.try_lock().is_some(),
+            "idle is locked during a callback"
+        );
+        assert!(
+            inner.callbacks.lifecycle_listeners.try_lock().is_some(),
+            "lifecycle_listeners is locked during a callback"
+        );
+        assert!(
+            inner.binding.epoch_start.try_lock().is_some(),
+            "epoch_start is locked during a callback"
+        );
+        assert!(
+            inner.binding.timings_callbacks.try_lock().is_some(),
+            "timings_callbacks is locked during a callback"
+        );
+        assert!(
+            inner.binding.pending_timings.try_lock().is_some(),
+            "pending_timings is locked during a callback"
+        );
+        assert!(
+            inner.binding.last_timings_report.try_lock().is_some(),
+            "last_timings_report is locked during a callback"
+        );
+        assert!(
+            inner.binding.current_performance_mode.try_lock().is_some(),
+            "current_performance_mode is locked during a callback"
+        );
+        assert!(
+            inner.binding.on_frame_scheduled.try_lock().is_some(),
+            "on_frame_scheduled is locked during a callback"
+        );
+    }
+
+    #[test]
+    fn transient_callback_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+            assert_no_scheduler_lock_held(&probe);
+        }));
+        scheduler.handle_begin_frame(Instant::now());
+    }
+
+    #[test]
+    fn persistent_callback_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
+            assert_no_scheduler_lock_held(&probe);
+        }));
+        scheduler.execute_frame();
+    }
+
+    /// Also pins `current_frame().is_none()` inside the callback — the
+    /// frame's `FrameTiming` is `take()`n before post-frame callbacks run
+    /// (see `end_frame_impl`), so a shared post-frame callback observes no
+    /// "current" frame at all, not merely an unlocked one.
+    #[test]
+    fn shared_post_frame_callback_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        scheduler.add_post_frame_callback(Box::new(move |_timing| {
+            assert_no_scheduler_lock_held(&probe);
+            assert!(
+                probe.current_frame().is_none(),
+                "the frame's timing is taken before post-frame callbacks run"
+            );
+        }));
+        scheduler.execute_frame();
+    }
+
+    #[test]
+    fn local_post_frame_callback_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let probe = scheduler.clone();
+        lane.local_handle()
+            .schedule_local(move |_timing| {
+                assert_no_scheduler_lock_held(&probe);
+            })
+            .expect("lane is alive");
+        scheduler.execute_frame_with_lane(&lane);
+    }
+
+    #[test]
+    fn idle_callback_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        scheduler.schedule_idle_callback(move || {
+            assert_no_scheduler_lock_held(&probe);
+        });
+        assert_eq!(scheduler.execute_idle_callbacks(), 1);
+    }
+
+    #[test]
+    fn microtask_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        scheduler.schedule_microtask(Box::new(move || {
+            assert_no_scheduler_lock_held(&probe);
+        }));
+        scheduler.handle_begin_frame(Instant::now());
+    }
+
+    #[test]
+    fn lifecycle_listener_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        scheduler.add_lifecycle_state_listener(Arc::new(move |_state| {
+            assert_no_scheduler_lock_held(&probe);
+        }));
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+    }
+
+    #[test]
+    fn timings_callback_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_for_callback = Arc::clone(&ran);
+        scheduler.add_timings_callback(Arc::new(move |_timings| {
+            assert_no_scheduler_lock_held(&probe);
+            ran_for_callback.store(true, Ordering::Release);
+        }));
+
+        scheduler.execute_frame();
+        assert_eq!(scheduler.report_timings(), 1);
+        assert!(ran.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn frame_scheduled_hook_runs_with_no_scheduler_lock_held() {
+        let scheduler = UpdateScheduler::new();
+        let probe = scheduler.clone();
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            assert_no_scheduler_lock_held(&probe);
+        })));
+
+        scheduler.request_frame();
+        assert!(scheduler.is_frame_scheduled());
+    }
+
+    // =========================================================================
+    // Reentrant registration (#1058) — a callback that registers another
+    // callback of its own family from inside itself must have the new one
+    // deferred to the next frame, run exactly once (or every frame, for
+    // persistent), never lost and never run early.
+    // =========================================================================
+
+    #[test]
+    fn transient_callback_registering_another_transient_callback_defers_to_next_frame() {
+        let scheduler = UpdateScheduler::new();
+        let nested_ran = Arc::new(AtomicU32::new(0));
+
+        let outer_scheduler = scheduler.clone();
+        let nested_ran_for_outer = Arc::clone(&nested_ran);
+        scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+            let nested_ran = Arc::clone(&nested_ran_for_outer);
+            outer_scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+                nested_ran.fetch_add(1, Ordering::SeqCst);
+            }));
+        }));
+
+        // A full frame cycle (not a bare `handle_begin_frame`) between the
+        // two checks: `handle_begin_frame` alone leaves the phase machine at
+        // `MidFrameMicrotasks`, and a second call from there is an illegal
+        // `MidFrameMicrotasks -> TransientCallbacks` transition.
+        scheduler.execute_frame();
+        assert_eq!(
+            nested_ran.load(Ordering::SeqCst),
+            0,
+            "re-registration must not run in the same handle_begin_frame call"
+        );
+
+        scheduler.execute_frame();
+        assert_eq!(
+            nested_ran.load(Ordering::SeqCst),
+            1,
+            "it must run exactly once, on the very next begin-frame"
+        );
+    }
+
+    /// Persistent callbacks fire every frame for the lifetime of the
+    /// application (Flutter parity, `binding.dart:773`), so unlike the
+    /// transient/post-frame cases the freshly-registered callback below
+    /// keeps firing every frame after its first — this test pins the
+    /// deferral of its FIRST run, not a one-shot.
+    #[test]
+    fn persistent_callback_registering_another_persistent_callback_defers_to_next_frame() {
+        let scheduler = UpdateScheduler::new();
+        let outer_runs = Arc::new(AtomicU32::new(0));
+        let nested_runs = Arc::new(AtomicU32::new(0));
+
+        let outer_scheduler = scheduler.clone();
+        let outer_runs_for_cb = Arc::clone(&outer_runs);
+        let nested_runs_for_outer = Arc::clone(&nested_runs);
+        scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
+            // Register the nested callback on the first run only -- an
+            // unconditional registration would add one more persistent
+            // callback every single frame and the counts below would never
+            // settle.
+            if outer_runs_for_cb.fetch_add(1, Ordering::SeqCst) == 0 {
+                let nested_runs = Arc::clone(&nested_runs_for_outer);
+                outer_scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
+                    nested_runs.fetch_add(1, Ordering::SeqCst);
+                }));
+            }
+        }));
+
+        scheduler.execute_frame();
+        assert_eq!(
+            nested_runs.load(Ordering::SeqCst),
+            0,
+            "a persistent callback registered from inside a persistent callback \
+             must not run in the frame that registered it"
+        );
+
+        scheduler.execute_frame();
+        assert_eq!(
+            nested_runs.load(Ordering::SeqCst),
+            1,
+            "it must run starting the very next frame"
+        );
+
+        scheduler.execute_frame();
+        assert_eq!(
+            nested_runs.load(Ordering::SeqCst),
+            2,
+            "and keep running every frame after that, like any persistent callback"
+        );
+    }
+
+    /// `end_frame_impl`'s own comment documents this ordering ("a callback
+    /// registered *from* a post-frame callback runs on the next frame");
+    /// this is the direct test for it.
+    #[test]
+    fn shared_post_frame_callback_registering_another_defers_to_next_frame() {
+        let scheduler = UpdateScheduler::new();
+        let nested_ran = Arc::new(AtomicU32::new(0));
+
+        let outer_scheduler = scheduler.clone();
+        let nested_ran_for_outer = Arc::clone(&nested_ran);
+        scheduler.add_post_frame_callback(Box::new(move |_timing| {
+            let nested_ran = Arc::clone(&nested_ran_for_outer);
+            outer_scheduler.add_post_frame_callback(Box::new(move |_timing| {
+                nested_ran.fetch_add(1, Ordering::SeqCst);
+            }));
+        }));
+
+        scheduler.execute_frame();
+        assert_eq!(
+            nested_ran.load(Ordering::SeqCst),
+            0,
+            "a post-frame callback registered from inside a post-frame callback \
+             must not run in the frame that registered it"
+        );
+
+        scheduler.execute_frame();
+        assert_eq!(
+            nested_ran.load(Ordering::SeqCst),
+            1,
+            "it must run exactly once, on the very next completed frame"
+        );
+    }
+
+    // =========================================================================
+    // Lock-then-drop (#1058, sibling sites tracked with #1150) — a removed
+    // callback/listener's captured state can be the LAST reference at
+    // removal time (these two are addressed by opaque `CallbackId`, not a
+    // live handle the caller must keep, so nothing else clones the stored
+    // value). Dropping it while the owning `Mutex` is still held deadlocks
+    // a capture whose own `Drop` re-enters the scheduler. Each test below
+    // runs the removal on a spawned thread and bounds the wait so a
+    // regression fails fast instead of hanging the run; the test thread
+    // holds no scheduler-locking value across the wait.
+    // =========================================================================
+
+    #[test]
+    fn cancel_frame_callback_drops_the_cancelled_callback_outside_the_lock() {
+        let scheduler = UpdateScheduler::new();
+
+        struct ReregistersOnDrop(UpdateScheduler);
+        impl Drop for ReregistersOnDrop {
+            fn drop(&mut self) {
+                self.0.schedule_frame_callback(Box::new(|_| {}));
+            }
+        }
+
+        let probe = ReregistersOnDrop(scheduler.clone());
+        let id = scheduler.schedule_frame_callback(Box::new(move |_| {
+            let _keep_alive = &probe;
+        }));
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let cancelling_scheduler = scheduler.clone();
+        std::thread::spawn(move || {
+            cancelling_scheduler.cancel_frame_callback(id);
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect(
+                "cancel_frame_callback must not deadlock when the cancelled \
+                 callback's Drop re-registers another one",
+            );
+    }
+
+    #[test]
+    fn remove_lifecycle_state_listener_drops_the_removed_listener_outside_the_lock() {
+        let scheduler = UpdateScheduler::new();
+
+        struct ReregistersOnDrop(UpdateScheduler);
+        impl Drop for ReregistersOnDrop {
+            fn drop(&mut self) {
+                self.0.add_lifecycle_state_listener(Arc::new(|_state| {}));
+            }
+        }
+
+        let probe = Arc::new(ReregistersOnDrop(scheduler.clone()));
+        let id = scheduler.add_lifecycle_state_listener(Arc::new(move |_state| {
+            let _keep_alive = &probe;
+        }));
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let removing_scheduler = scheduler.clone();
+        std::thread::spawn(move || {
+            removing_scheduler.remove_lifecycle_state_listener(id);
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect(
+                "remove_lifecycle_state_listener must not deadlock when the removed \
+                 listener's Drop re-registers another one",
+            );
+    }
+
+    /// `remove_timings_callback` was rewritten alongside the two deadlock
+    /// tests above, for the same defensive shape (partition the matching
+    /// entry out, drop it after the guard falls, never under it) — but its
+    /// hazard is not reachable through the public API the way the other two
+    /// are: `remove_timings_callback` takes `&TimingsCallback`, so the
+    /// caller must hold a live clone for the whole call, and the copy this
+    /// function removes from its own `Vec` can therefore never be the LAST
+    /// strong reference at removal time (the caller's borrowed clone always
+    /// outlives it). No deadlock reproduction is claimed for this site; this
+    /// is a plain removal-correctness regression test instead, closing this
+    /// function's previous lack of scheduler-level coverage (`report_timings`
+    /// dispatch only, in `tests/integration_tests.rs`, asserted no effect).
+    #[test]
+    fn remove_timings_callback_removes_only_the_matching_callback() {
+        let scheduler = UpdateScheduler::new();
+        let kept_calls = Arc::new(AtomicU32::new(0));
+        let removed_calls = Arc::new(AtomicU32::new(0));
+
+        let kept_calls_for_cb = Arc::clone(&kept_calls);
+        let kept: TimingsCallback = Arc::new(move |_timings| {
+            kept_calls_for_cb.fetch_add(1, Ordering::SeqCst);
+        });
+        let removed_calls_for_cb = Arc::clone(&removed_calls);
+        let removed: TimingsCallback = Arc::new(move |_timings| {
+            removed_calls_for_cb.fetch_add(1, Ordering::SeqCst);
+        });
+
+        scheduler.add_timings_callback(kept.clone());
+        scheduler.add_timings_callback(removed.clone());
+        scheduler.remove_timings_callback(&removed);
+
+        scheduler.execute_frame();
+        assert_eq!(scheduler.report_timings(), 1);
+
+        assert_eq!(kept_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            removed_calls.load(Ordering::SeqCst),
+            0,
+            "the removed callback must not fire"
+        );
     }
 
     // =========================================================================

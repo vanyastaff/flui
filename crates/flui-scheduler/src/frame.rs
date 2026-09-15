@@ -715,10 +715,6 @@ impl Default for FrameTiming {
 /// Receives the vsync timestamp for synchronized timing.
 pub type OneShotFrameCallback = Box<dyn FnOnce(Instant) + Send>;
 
-/// Frame callback - executed at frame boundaries (legacy, prefer
-/// OneShotFrameCallback)
-pub type FrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;
-
 /// Recurring frame callback (runs every frame)
 ///
 /// These run during the PersistentCallbacks phase every frame.

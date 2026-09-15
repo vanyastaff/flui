@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Scheduler::set_on_frame_scheduled`** — platform wake hook fired on the
   `frame_scheduled` false→true transition (Flutter parity:
   `SchedulerBinding.scheduleFrame` → `platformDispatcher.scheduleFrame`).
-  `request_frame`, `schedule_frame` and `schedule_frame_callback` now route
-  through the transition so registering an animation ticker actually wakes an
-  idle event loop; previously they only set an atomic flag nobody read while
-  the platform slept, and animations starved after the first frame.
+  `request_frame` and `schedule_frame_callback` now route through the
+  transition so registering an animation ticker actually wakes an idle
+  event loop; previously they only set an atomic flag nobody read while the
+  platform slept, and animations starved after the first frame.
 - **Safe conversion methods**:
   - `SchedulerPhase::try_from_u8()` - fallible conversion from u8
   - `AppLifecycleState::try_from_u8()` - fallible conversion from u8
@@ -74,6 +74,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   production consumers; real frame pacing lives in the blocking Fifo
   present (ADR-0029), and per-presentation physical pacing is a future
   `FrameClock` (a later #556 slice), not this crate.
+
+### Breaking (issue #1058 — retire the legacy frame-callback API)
+
+- **`UpdateScheduler::schedule_frame`, `FrameCallback` are deleted, no
+  alias.** The retired API's dispatch loop in `handle_begin_frame` held the
+  `current_frame` mutex across every callback invocation
+  (`if let Some(timing) = self.inner.frame.current_frame.lock().as_ref() {
+  callback(timing); }`); a registered callback that read `current_frame()`
+  deadlocked on itself, and a bounded reproduction hung for 5 seconds.
+  Every other callback family already drains, clones, or snapshots its
+  queue before invoking user code, so this one was the sole holdout, and
+  Flutter's `SchedulerBinding` carries no equivalent second,
+  `&FrameTiming`-argument registration path to preserve: its one
+  production caller, `RenderingFlutterBinding::request_visual_update`,
+  passed an empty closure. Use `schedule_frame_callback` (transient,
+  vsync-timestamped) instead.
+- **`RenderingFlutterBinding::request_visual_update`** now calls
+  `UpdateScheduler::ensure_visual_update()` (the existing gated
+  `schedule_frame_if_enabled` pair) instead of the deleted `schedule_frame`,
+  so a binding with frames disabled no longer schedules a frame on every
+  pipeline request. Flutter parity: `ensureVisualUpdate`/`scheduleFrame`
+  both check `framesEnabled`.
+- **Lock-then-drop fixed on three sibling sites** (tracked with #1150):
+  `cancel_frame_callback`, `remove_lifecycle_state_listener`, and
+  `remove_timings_callback` used `Vec::retain`, which drops the removed
+  element while the collection's own lock is still held; a
+  callback/listener whose `Drop` re-entered the scheduler could deadlock
+  the same way. All three now partition the match out under the lock and
+  drop it only after the guard falls.
 
 ### Fixed
 
