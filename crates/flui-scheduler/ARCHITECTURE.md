@@ -27,11 +27,11 @@ under edition 2024's if-let rescoping. A registered callback that called
 5 seconds.
 
 **Choice:** delete the API outright rather than fix the lock scope in
-place. Flutter's `SchedulerBinding` has exactly one one-shot registration
-path, `scheduleFrameCallback`/transient callbacks (`scheduler/binding.dart`
-@ 3.44.0), with no second, "legacy" variant carrying different
-timing-argument semantics (`&FrameTiming` instead of the vsync `Instant`
-transient callbacks already receive). The retired API had no distinct
+place. Flutter's `SchedulerBinding` has no second, "legacy" transient
+registration path carrying different timing-argument semantics next to
+`scheduleFrameCallback` (`scheduler/binding.dart` @ 3.44.0): its transient
+callbacks receive the vsync `Instant`, and there is no `&FrameTiming`-argument
+sibling of that same family. The retired API had no distinct
 semantics to preserve: its only production caller
 (`RenderingFlutterBinding::request_visual_update`) passed an empty
 closure, and every other caller in the crate's own doctest/examples used it
@@ -42,20 +42,25 @@ narrower-purpose registration API standing.
 
 **Every remaining callback family already followed, and continues to
 follow, the no-lock-held rule.** This is proven by a shared test oracle
-(`scheduler.rs`'s `assert_no_scheduler_lock_held`, `#[cfg(test)]`) that
-`try_lock()`s every mutex a callback could legally observe and asserts each
-is free, invoked from inside a callback registered in every family:
-transient, persistent, shared post-frame, owner-local post-frame, idle,
-microtask, lifecycle listener, timings callback, and the
-`on_frame_scheduled` platform-wake hook. Three sibling sites shared a
+(`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`,
+`#[cfg(test)]`, exhaustively destructuring `FrameState`/`CallbackState`/
+`BindingState` plus a `TaskQueue`/`AsyncDriver` probe so a new lock cannot
+be added to any of them without this oracle noticing) that `try_lock()`s
+every mutex a callback could legally observe and asserts each is free,
+invoked from inside a callback registered in every family: transient,
+persistent, shared post-frame, owner-local post-frame, idle, microtask,
+lifecycle listener, timings callback, and the `on_frame_scheduled`
+platform-wake hook. Three sibling sites shared a
 related but distinct hazard: `Vec::retain` drops the *removed* element
 while the collection's lock is still held, so a cancelled/removed
 callback's `Drop` could deadlock the same way if it re-entered the
 scheduler. All three were fixed the same release
 (`cancel_frame_callback`, `remove_lifecycle_state_listener`, and, for
-consistency, `remove_timings_callback`) by partitioning the match out
-under the lock and dropping it only after the guard falls. Two of the
-three carry a bounded reproduction
+consistency, `remove_timings_callback`) by locating the match under the
+lock without a full-`Vec` copy (`position`+`remove` for the two
+`CallbackId`-addressed sites, `extract_if` for the `Arc::ptr_eq`-addressed
+one) and dropping it only after the guard falls. Two of the three carry a
+bounded reproduction
 (`cancel_frame_callback_drops_the_cancelled_callback_outside_the_lock`,
 `remove_lifecycle_state_listener_drops_the_removed_listener_outside_the_lock`);
 `remove_timings_callback`'s hazard is not reachable through its own public
@@ -80,12 +85,20 @@ production call site, itself replaced by the gated `ensure_visual_update`
 call described below, and no external consumer of this crate (pre-1.0,
 unpublished) depends on it.
 
-### `request_visual_update` routes through the gated pair, not the raw one
+### `request_visual_update` routes through the `frames_enabled` gate, not the raw one
 
 **Rule:** requesting a frame in response to pipeline work must honor
-`frames_enabled`, matching Flutter's `ensureVisualUpdate`
-(`scheduler/binding.dart` @ 3.44.0), which calls `scheduleFrame()` (itself
-gated on `framesEnabled`) and returns early mid-frame.
+`frames_enabled`. This adopts *part* of Flutter's `ensureVisualUpdate`
+(`scheduler/binding.dart` @ 3.44.0): it calls the equally
+`framesEnabled`-gated `scheduleFrame()`. It does **not** adopt
+`ensureVisualUpdate`'s other early-return: Flutter also no-ops while the
+scheduler is already mid-frame, inside `SchedulerPhase.transientCallbacks`,
+`.midFrameMicrotasks`, or `.persistentCallbacks`. `UpdateScheduler::ensure_visual_update`
+checks `frames_enabled` only, with no phase check at all — this is a named
+gap, not a hidden one (see **Recorded gap** below), and this crate's own
+`.flutter/` reference clone was unavailable while writing this entry, so
+the phase list above is recorded from the reviewing pass that found the
+gap, not independently re-verified against Flutter source here.
 
 **Conflict:** `RenderingFlutterBinding::request_visual_update`
 (`flui-app`'s `bindings/renderer_binding.rs`) called the retired
@@ -97,10 +110,11 @@ request.
 
 **Choice:** `request_visual_update` now calls
 `UpdateScheduler::ensure_visual_update()`, which already existed as the
-gated pair (`ensure_visual_update` calls `schedule_frame_if_enabled`,
-which calls `request_frame` only when `frames_enabled` is true) and needed
-no new code, only a caller. `crates/flui-app/src/bindings/renderer_binding.rs`'s
-test module pins both edges:
+`frames_enabled` gate (`ensure_visual_update` calls
+`schedule_frame_if_enabled`, which calls `request_frame` only when
+`frames_enabled` is true) and needed no new code, only a caller.
+`crates/flui-app/src/bindings/renderer_binding.rs`'s test module pins both
+edges:
 `request_visual_update_does_not_schedule_a_frame_while_frames_are_disabled`
 and `request_visual_update_schedules_a_frame_while_frames_are_enabled`.
 
@@ -113,6 +127,16 @@ and `request_visual_update_schedules_a_frame_while_frames_are_enabled`.
   crate's own `should_schedule_frame`/`schedule_frame_if_enabled` pair
   exists to prevent.
 
-**Trade-off accepted:** none. This is a pure bug fix (a previously ungated
-path adopts an existing, already-tested gate) with no behavior this crate
-intends to keep.
+**Recorded gap, deliberately not closed here:** Flutter's `ensureVisualUpdate`
+skips scheduling a *new* frame while one is already running
+(`transientCallbacks`/`midFrameMicrotasks`/`persistentCallbacks`), because a
+pipeline request arriving mid-frame is already going to be served by the
+frame in progress. `UpdateScheduler` has no such phase-based dedup for
+`request_frame`/`ensure_visual_update` today; it only coalesces on the
+`frame_scheduled` flag (see `request_frame_impl`). Implementing the phase
+check is a pacing/scheduling-topology change, out of scope for this fix
+(which closes the deadlock and the `frames_enabled` gap only) and is left
+as a follow-up rather than silently assumed done.
+
+**Trade-off accepted:** the `frames_enabled` fix ships now; the mid-frame
+phase check above does not, and is named rather than implied.

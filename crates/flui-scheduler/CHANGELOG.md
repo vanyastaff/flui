@@ -91,11 +91,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passed an empty closure. Use `schedule_frame_callback` (transient,
   vsync-timestamped) instead.
 - **`RenderingFlutterBinding::request_visual_update`** now calls
-  `UpdateScheduler::ensure_visual_update()` (the existing gated
-  `schedule_frame_if_enabled` pair) instead of the deleted `schedule_frame`,
-  so a binding with frames disabled no longer schedules a frame on every
-  pipeline request. Flutter parity: `ensureVisualUpdate`/`scheduleFrame`
-  both check `framesEnabled`.
+  `UpdateScheduler::ensure_visual_update()` (the existing `frames_enabled`
+  gate via `schedule_frame_if_enabled`) instead of the deleted
+  `schedule_frame`, so a binding with frames disabled no longer schedules a
+  frame on every pipeline request. This adopts only the `framesEnabled`
+  half of Flutter's `ensureVisualUpdate`; its additional mid-frame
+  early-return (`transientCallbacks`/`midFrameMicrotasks`/`persistentCallbacks`)
+  is not implemented here and is recorded as a follow-up in
+  `crates/flui-scheduler/ARCHITECTURE.md`'s `## Mapping decisions`.
 - **Lock-then-drop fixed on three sibling sites** (tracked with #1150):
   `cancel_frame_callback`, `remove_lifecycle_state_listener`, and
   `remove_timings_callback` used `Vec::retain`, which drops the removed
