@@ -222,9 +222,11 @@ impl Future for FrameCompletionFuture {
     type Output = FrameTiming;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // NO caller code runs under this guard, on either path. That is
-        // stronger than the registry's lock-order rule demands, and it is
-        // why this reads as two acquisitions rather than one: `Waker`'s
+        // NO caller code runs under this guard, on either path -- which
+        // rests on a drop-order dependency named at the slow path below,
+        // not on the structure alone. That is stronger than the registry's
+        // lock-order rule demands, and it is why this reads as two
+        // acquisitions rather than one: `Waker`'s
         // `clone`, `wake`, and `drop` are all vtable calls into executor
         // code, and any of them may re-enter this same future. `state` is a
         // non-reentrant `parking_lot::Mutex`, so a re-entrant one under the
@@ -254,6 +256,16 @@ impl Future for FrameCompletionFuture {
 
         // Slow path: first poll, or the executor handed us a different
         // waker. Clone outside the guard, then re-acquire to store it.
+        //
+        // `fresh_waker` outlives the block below, and on the early
+        // `Poll::Ready` return inside it the clone is dropped on the way
+        // out. That drop is caller code, and it lands OUTSIDE the guard
+        // only because `state` is declared in that inner block: locals drop
+        // innermost-scope-first, so the guard goes before this binding
+        // does. Hoisting `let mut state` to function scope in a later
+        // refactor silently reverses that order and runs `Waker::drop`
+        // under the lock -- issue #1057's hang, reintroduced by a change
+        // that looks like tidying.
         let fresh_waker = cx.waker().clone();
 
         let displaced_waker = {
@@ -447,14 +459,20 @@ impl FrameCompletionRegistry {
             self.compaction_scan_work += self.waiters.len();
         }
 
+        // Reset BEFORE the retain, not after. `retain` moves every
+        // surviving entry, so the old cursor indexes nothing meaningful
+        // once it runs -- and `parking_lot` does not poison, so if anything
+        // in that closure ever unwound (`Weak::strong_count` cannot today,
+        // but a `tracing` call added there with a panicking subscriber
+        // could), the next lock would find a partially-retained vec behind
+        // a stale cursor pointing at LIVE entries. That silently skips a
+        // live waiter and reproduces this issue's hang, from a site neither
+        // guarded path touches. Zero is unconditionally a valid cursor, so
+        // writing it first costs nothing and closes that ordering.
+        self.first_possibly_live = 0;
         self.waiters
             .retain(|notifier| notifier.state.strong_count() > 0);
         self.next_compaction = 2 * self.waiters.len() + COMPACTION_SLACK;
-        // `retain` moved every surviving entry, so the old cursor indexes
-        // nothing meaningful. Everything kept was live at this scan, so
-        // resuming from the front is both correct and O(1) for the next
-        // demand scan.
-        self.first_possibly_live = 0;
     }
 
     /// Whether any registration still has a live future, advancing the
@@ -472,6 +490,31 @@ impl FrameCompletionRegistry {
     /// `upgrade()` already fails at zero and the count can never rise
     /// again.
     fn has_live_waiter(&mut self) -> bool {
+        // The cursor's whole safety argument is that everything below it was
+        // observed dead. That holds only while the sole mutation between
+        // scans is an append -- and `end_of_frame` pushes through the
+        // `waiters` field directly, so nothing but this assertion stops a
+        // future index-shifting mutation from stranding the cursor over live
+        // entries. Debug-only, and invisible to the scan counter, so it
+        // changes neither the shipped cost nor what the bound test measures;
+        // what it buys is that the violation surfaces as a loud unit-test
+        // failure rather than as a silently skipped waiter that hangs.
+        debug_assert!(
+            self.first_possibly_live <= self.waiters.len(),
+            "BUG: the demand-scan cursor ({}) is past the end of the registry ({}); \
+             a mutation that shrank or moved entries did not reset it",
+            self.first_possibly_live,
+            self.waiters.len()
+        );
+        debug_assert!(
+            self.waiters[..self.first_possibly_live.min(self.waiters.len())]
+                .iter()
+                .all(|notifier| notifier.state.strong_count() == 0),
+            "BUG: the demand-scan cursor ({}) has passed a live waiter; every entry \
+             below it must already be a tombstone",
+            self.first_possibly_live
+        );
+
         while self.first_possibly_live < self.waiters.len() {
             #[cfg(test)]
             {
@@ -4003,10 +4046,13 @@ mod tests {
     /// to reach the one live entry behind it, under the registry mutex,
     /// which blocks registration and frame completion alike.
     ///
-    /// The scan cursor is what makes this linear. Without it the probe
-    /// count here is quadratic in the batch size: measured at 14,762 for
-    /// 242 registrations against the 726 this allows, and the shape grows
-    /// as the square, so a larger app pays far more.
+    /// The scan cursor is what makes this linear. Every count below is the
+    /// measured delta across the registrations this test makes behind the
+    /// dead prefix, which at the shipped slack is 121 of them. Without the
+    /// cursor that costs 14,641 probes, against the 726 this test allows;
+    /// with it, 241, which is the 121 of the single prefix walk plus one
+    /// apiece for the 120 registrations after it. The shape grows as the
+    /// square of the batch, so a larger app pays disproportionately more.
     #[test]
     fn the_demand_scan_does_not_rewalk_a_tombstone_prefix() {
         // Sized from the constant rather than written as a literal. The
@@ -4048,6 +4094,22 @@ mod tests {
 
         let registrations = 2 * BATCH;
         let demand_work = scheduler.completion_demand_scan_work() - demand_work_before;
+
+        // Lower bound first, because the upper one alone is satisfied by
+        // doing no work at all: swap `has_live_waiter()` for the unsound
+        // `!waiters.is_empty()` this design rejects and the scan never runs,
+        // leaving `demand_work == 0` comfortably under any ceiling. Nothing
+        // else in the suite discriminates either -- every other demand test
+        // starts from an empty registry, and the coalescing test sees one
+        // hook edge under both predicates because the swap edge coalesces
+        // regardless. The exact value here is `2 * BATCH - 1`: one full walk
+        // of the prefix, then one probe per later registration.
+        assert!(
+            demand_work >= BATCH,
+            "the demand scan probed only {demand_work} entries; walking the dead \
+             prefix once costs at least {BATCH}, so anything less means the live \
+             predicate was not consulted"
+        );
         assert!(
             demand_work <= 3 * registrations,
             "the demand scan probed {demand_work} entries across {BATCH} registrations \

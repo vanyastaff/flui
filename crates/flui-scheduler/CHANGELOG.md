@@ -149,9 +149,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threshold from them, cancel all but one, and every later registration walks
   the dead prefix to reach the survivor, with compaction unable to arrive
   because the threshold was set for the larger population that has since gone.
-  Measured at 14,641 probes for 242 registrations, down to 241 with the
-  cursor, all of it under the registry mutex that also blocks frame
-  completion.
+  Measured at 14,641 probes for the 121 registrations made behind the dead
+  prefix, down to 241 with the cursor, all of it under the registry mutex
+  that also blocks frame completion.
 - **`FrameCompletionFuture::poll` drops the waker it displaces outside the
   shared-state lock.** A `Waker`'s `Drop` is executor code, and one that
   re-polls the same future relocked a non-reentrant `parking_lot::Mutex` and

@@ -673,8 +673,10 @@ That predicate has two halves, and only the first belongs to the registry:
   so a run of tombstones in front of one live entry was re-walked per push
   (measured: 14,641 probes for 121 registrations, under the registry mutex).
   The registry now carries a cursor that retires the tombstones it walks past,
-  which makes the scan amortized O(1) and brought the same workload to 241
-  probes. `the_demand_scan_does_not_rewalk_a_tombstone_prefix` pins it.
+  which makes the scan amortized O(1) and brought the same 121 registrations to
+  241 probes. `the_demand_scan_does_not_rewalk_a_tombstone_prefix` pins it, at
+  both ends: an upper bound alone is satisfied by a predicate that does no
+  scanning at all.
 - Gating the demand on `phase() == Idle`, the closest reading of Flutter's own
   `endOfFrame`. Rejected: it goes silent in the post-drain window, where
   `notify_frame_completion` has already emptied the registry but the phase is
