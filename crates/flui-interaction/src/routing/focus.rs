@@ -6,7 +6,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     rc::Rc,
 };
 
@@ -24,6 +24,27 @@ pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusN
 pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 
 /// Presentation-owned focus state and root focus tree.
+///
+/// # Focus-change notification ordering
+///
+/// `request_focus`/[`Self::unfocus`] apply and publish a focus transition
+/// synchronously: commit the new primary, notify every focus-tree node
+/// whose focused ancestry changed, then publish `(previous, new)` to every
+/// [`FocusChangeCallback`] registered via [`Self::add_listener`]. A
+/// listener that itself calls `request_focus`/`unfocus` from inside that
+/// publication — a reentrant request — is never applied inline: it is
+/// queued and applied only after every currently in-flight notification
+/// has finished publishing, in the order it was requested (FIFO). By the
+/// time the outermost `request_focus`/`unfocus` call returns,
+/// [`Self::primary_focus`] and the last edge any listener observed always
+/// agree — no listener can observe a stale destination (issue #1040). The
+/// crate-internal node-replacement completion and [`Self::close`] publish
+/// under this same guard. A reentrant chain that never settles (two
+/// listeners that keep re-requesting each other) is bounded: past a fixed
+/// per-call budget of applications, the remaining queue is dropped with a
+/// single `tracing::warn!`. See `## Mapping decisions` in
+/// `crates/flui-interaction/docs/ARCHITECTURE.md` for how this compares to
+/// Flutter's microtask-deferred model.
 pub struct FocusManager {
     root_scope: Rc<FocusScopeNode>,
     primary_focus: RefCell<Option<Rc<FocusNode>>>,
@@ -31,9 +52,31 @@ pub struct FocusManager {
     next_listener_id: Cell<usize>,
     global_key_handlers: RefCell<Vec<KeyEventCallback>>,
     closed: Cell<bool>,
+    /// Depth of the commit+notify transaction currently publishing a focus
+    /// transition. Zero between transitions; `>0` while node or manager
+    /// listeners for that transition are running, including reentrant
+    /// nesting.
+    notification_depth: Cell<u32>,
+    /// Focus transitions requested while `notification_depth` is nonzero.
+    /// `None` means [`Self::unfocus`]. Drained FIFO by
+    /// [`Self::drain_pending_focus_transitions`] once the outermost
+    /// notification finishes.
+    pending_focus_transitions: RefCell<VecDeque<Option<Rc<FocusNode>>>>,
 }
 
 impl FocusManager {
+    /// Maximum reentrant focus transitions applied per outermost
+    /// `request_focus`/`unfocus`/`close` call.
+    ///
+    /// FLUI applies focus transitions synchronously, unlike Flutter's
+    /// microtask-scheduled `applyFocusChangesIfNeeded`
+    /// (`focus_manager.dart`), which merely yields a frame per bounce —
+    /// two listeners that keep redirecting focus to each other would
+    /// otherwise spin the caller forever. Past the budget,
+    /// [`Self::drain_pending_focus_transitions`] drops whatever is left
+    /// and warns once.
+    const REENTRANT_FOCUS_DRAIN_BUDGET: usize = 32;
+
     /// Create an isolated focus owner and its attached root scope.
     #[must_use]
     pub fn new() -> Rc<Self> {
@@ -44,6 +87,8 @@ impl FocusManager {
             next_listener_id: Cell::new(1),
             global_key_handlers: RefCell::new(Vec::new()),
             closed: Cell::new(false),
+            notification_depth: Cell::new(0),
+            pending_focus_transitions: RefCell::new(VecDeque::new()),
         })
     }
 
@@ -65,6 +110,10 @@ impl FocusManager {
         self.primary_focus.borrow().is_some()
     }
 
+    /// Accepts the request and either applies it immediately or, if a
+    /// notification is already in flight, queues it — see the type-level
+    /// ordering contract. Returns `true` whenever the request is accepted,
+    /// regardless of which of the two happens.
     pub(crate) fn request_focus(&self, node: &Rc<FocusNode>) -> bool {
         if self.closed.get() || !node.is_attached() || !node.can_request_focus() {
             return false;
@@ -83,15 +132,32 @@ impl FocusManager {
         true
     }
 
+    /// Request that `node` (or `None` for [`Self::unfocus`]) become the
+    /// committed primary focus.
+    ///
+    /// Queues the request instead of applying it when a notification is
+    /// already in flight — see the type-level ordering contract.
     fn set_primary_focus(&self, node: Option<Rc<FocusNode>>) {
+        if self.notification_depth.get() > 0 {
+            self.pending_focus_transitions.borrow_mut().push_back(node);
+            return;
+        }
+        self.apply_focus_transition(node);
+        self.drain_pending_focus_transitions();
+    }
+
+    /// Commit one focus transition and publish it.
+    ///
+    /// A no-op if `node` is already the committed primary. Otherwise
+    /// commits, refreshes focus history, then notifies focus-tree nodes
+    /// and manager listeners with `notification_depth` held above zero so
+    /// a reentrant `request_focus`/`unfocus` queues instead of applying
+    /// inline. The caller is responsible for draining
+    /// `pending_focus_transitions` once this returns at depth zero.
+    fn apply_focus_transition(&self, node: Option<Rc<FocusNode>>) {
         let previous = {
             let mut primary = self.primary_focus.borrow_mut();
-            let unchanged = match (&*primary, &node) {
-                (Some(previous), Some(next)) => Rc::ptr_eq(previous, next),
-                (None, None) => true,
-                (Some(_), None) | (None, Some(_)) => false,
-            };
-            if unchanged {
+            if Self::focus_identity_eq(primary.as_ref(), node.as_ref()) {
                 return;
             }
             std::mem::replace(&mut *primary, node.clone())
@@ -106,8 +172,56 @@ impl FocusManager {
         if let Some(node) = &node {
             Self::refresh_focus_history(node);
         }
+
+        self.notification_depth
+            .set(self.notification_depth.get() + 1);
         Self::notify_focus_nodes(previous.as_ref(), node.as_ref());
         self.notify_listeners(previous, node);
+        self.notification_depth
+            .set(self.notification_depth.get() - 1);
+    }
+
+    /// Whether `a` and `b` name the identical focus node (or both `None`).
+    fn focus_identity_eq(a: Option<&Rc<FocusNode>>, b: Option<&Rc<FocusNode>>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    /// Apply every focus transition queued by a reentrant listener, in the
+    /// order it was requested, until the queue is empty, the manager
+    /// closes, or [`Self::REENTRANT_FOCUS_DRAIN_BUDGET`] is exhausted.
+    fn drain_pending_focus_transitions(&self) {
+        let mut applied = 0usize;
+        loop {
+            if self.closed.get() {
+                self.pending_focus_transitions.borrow_mut().clear();
+                return;
+            }
+            let Some(node) = self.pending_focus_transitions.borrow_mut().pop_front() else {
+                return;
+            };
+            applied += 1;
+            if applied > Self::REENTRANT_FOCUS_DRAIN_BUDGET {
+                // `node` (the one that tripped the budget) plus whatever is
+                // still queued behind it are both dropped below — count
+                // both, so the warning is the one piece of evidence a
+                // ping-pong author will ever see for this drop.
+                let dropped = 1 + self.pending_focus_transitions.borrow().len();
+                tracing::warn!(
+                    budget = Self::REENTRANT_FOCUS_DRAIN_BUDGET,
+                    last_requested = ?node.as_ref().map(|node| node.id().get()),
+                    dropped_requests = dropped,
+                    "reentrant focus requests exceeded the drain budget; \
+                     dropping the rest of the queue"
+                );
+                self.pending_focus_transitions.borrow_mut().clear();
+                return;
+            }
+            self.apply_focus_transition(node);
+        }
     }
 
     /// Clear an exact primary node without exposing a half-mutated tree to
@@ -125,6 +239,17 @@ impl FocusManager {
 
     /// Refresh focus history and deliver the deferred half of an atomic node
     /// replacement.
+    ///
+    /// Publishes `(previous_primary, current)` to manager listeners only
+    /// when primary-focus identity actually changed across the
+    /// replacement — a replacement that leaves primary on the same node
+    /// (only its ancestry changed) is not a transition and publishes
+    /// nothing; the affected ancestors' node-level listeners still fire
+    /// via [`Self::notify_focus_path_change`]. Runs that node notification
+    /// with `notification_depth` held above zero, so a reentrant
+    /// `request_focus`/`unfocus` from one of those listeners is queued and
+    /// applied after this publication — see the type-level ordering
+    /// contract.
     pub(crate) fn finish_node_replacement(
         &self,
         previous_primary: Rc<FocusNode>,
@@ -139,19 +264,25 @@ impl FocusManager {
                 .chain(primary.ancestors())
                 .collect()
         });
+
+        self.notification_depth
+            .set(self.notification_depth.get() + 1);
         Self::notify_focus_path_change(previous_focus_path, current_focus_path);
-        let latest = self.primary_focus();
-        let focus_is_unchanged = match (&current, &latest) {
-            (Some(current), Some(latest)) => Rc::ptr_eq(current, latest),
-            (None, None) => true,
-            (Some(_), None) | (None, Some(_)) => false,
-        };
-        if focus_is_unchanged {
+        if !Self::focus_identity_eq(current.as_ref(), Some(&previous_primary)) {
             self.notify_listeners(Some(previous_primary), current);
+        }
+        let depth = self.notification_depth.get() - 1;
+        self.notification_depth.set(depth);
+        if depth == 0 {
+            self.drain_pending_focus_transitions();
         }
     }
 
     /// Release primary focus.
+    ///
+    /// Subject to the same reentrant-queueing contract as `request_focus`
+    /// when called from inside a focus-change listener: queued and applied
+    /// after the in-flight notification finishes rather than recursing.
     pub fn unfocus(&self) {
         if !self.closed.get() {
             self.set_primary_focus(None);
@@ -159,6 +290,14 @@ impl FocusManager {
     }
 
     /// Register a focus or focused-ancestry change listener.
+    ///
+    /// The callback receives `(previous, new)` in the order transitions
+    /// are committed. A reentrant `request_focus`/`unfocus` made from
+    /// inside a callback is applied only after every currently in-flight
+    /// notification finishes publishing, so `new` from one call this
+    /// listener observes is always `previous` on the next — no listener
+    /// ever sees a destination that a later, already-applied transition
+    /// has superseded.
     pub fn add_listener(&self, callback: FocusChangeCallback) -> ListenerId {
         let id = ListenerId::new(self.next_listener_id.get());
         let next = self
@@ -190,8 +329,16 @@ impl FocusManager {
 
     fn notify_listeners(&self, previous: Option<Rc<FocusNode>>, new: Option<Rc<FocusNode>>) {
         let listeners = self.listeners.borrow().clone();
-        for (_, listener) in listeners {
-            listener(previous.clone(), new.clone());
+        for (id, listener) in listeners {
+            // A listener already dispatched in this loop may have removed
+            // a later one (itself included) — skip it, matching Flutter's
+            // `_HighlightModeManager.notifyListeners`
+            // (`if (_listeners.contains(listener))`): once removed, a
+            // listener is never called again, even mid-dispatch.
+            let still_registered = self.listeners.borrow().iter().any(|(held, _)| *held == id);
+            if still_registered {
+                listener(previous.clone(), new.clone());
+            }
         }
     }
 
@@ -343,15 +490,26 @@ impl FocusManager {
     /// Closing is idempotent. It sends the final focus-loss notification,
     /// clears manager and node callbacks, and tombstones every owned node.
     /// Tombstoned nodes cannot later attach to a different manager.
+    ///
+    /// Primary focus is always cleared to `None`, even when `close` runs
+    /// reentrantly from inside a focus-change listener. Its own
+    /// manager-level publication, though, is skipped in that case rather
+    /// than interleaving out of order with the notification already in
+    /// flight — the same ordering contract `request_focus` and
+    /// [`Self::unfocus`] follow. Any request a reentrant listener queues
+    /// afterward is dropped, never applied, once closed.
     pub fn close(&self) {
         if self.closed.replace(true) {
             return;
         }
 
+        self.pending_focus_transitions.borrow_mut().clear();
         let previous = self.primary_focus.borrow_mut().take();
         if let Some(previous) = previous {
             Self::notify_focus_nodes(Some(&previous), None);
-            self.notify_listeners(Some(previous), None);
+            if self.notification_depth.get() == 0 {
+                self.notify_listeners(Some(previous), None);
+            }
         }
         self.listeners.borrow_mut().clear();
         self.global_key_handlers.borrow_mut().clear();
@@ -565,10 +723,12 @@ mod tests {
             "replacing an ancestor must not supersede a descendant's attachment"
         );
         assert!(leaf.has_primary_focus());
-        assert_eq!(
-            manager_edges.borrow().as_slice(),
-            &[(Some(leaf.id()), Some(leaf.id()))],
-            "focused ancestry changed while primary focus identity stayed stable"
+        assert!(
+            manager_edges.borrow().is_empty(),
+            "primary focus identity never moved (still `leaf`), so the manager-level \
+             contract publishes no edge; the ancestry change is carried by the \
+             node-level listeners asserted below (old_notifications / \
+             replacement_notifications), not by a same-identity manager edge"
         );
         assert_eq!(old_notifications.get(), 1);
         assert_eq!(replacement_notifications.get(), 1);
@@ -611,6 +771,15 @@ mod tests {
         assert!(!child.can_request_focus());
     }
 
+    /// The replacement itself does not move primary focus (`child` stays
+    /// primary throughout the structural swap), so `finish_node_replacement`
+    /// publishes no outer edge for it — see its ordering contract. The
+    /// reentrant `sibling.request_focus()` made from inside the node-level
+    /// replacement notification is queued (`notification_depth` is held
+    /// above zero for that notification) and applied only once it
+    /// completes, publishing exactly one edge, `(child, sibling)`, in the
+    /// order it was requested — never interleaved with, or preceding, a
+    /// transition that had not happened yet (issue #1040).
     #[test]
     fn replacement_notification_reentry_does_not_emit_a_stale_outer_edge() {
         let manager = FocusManager::new();
@@ -651,6 +820,49 @@ mod tests {
         assert_eq!(
             edges.borrow().as_slice(),
             &[(Some(child.id()), Some(sibling.id()))]
+        );
+    }
+
+    /// Companion to the test above: here the replaced node itself (`old`)
+    /// was primary, so the replacement genuinely releases focus (the
+    /// existing, unchanged contract — see `replacing_the_primary_node_releases_focus`)
+    /// and `finish_node_replacement` DOES publish that outer edge,
+    /// `(old, None)`. A reentrant `sibling.request_focus()` made from
+    /// `old`'s own node-level listener during that notification is still
+    /// queued and applied only afterward, publishing its own edge,
+    /// `(None, sibling)`, in order — the outer edge is not lost, and the
+    /// reentrant one is not interleaved ahead of it.
+    #[test]
+    fn replacement_reentry_after_a_real_outer_edge_orders_both_transitions() {
+        let manager = FocusManager::new();
+        let old = FocusNode::with_debug_label("old");
+        let old_attachment = manager.root_scope().attach_node(&old).unwrap();
+        let sibling = FocusNode::with_debug_label("sibling");
+        manager.root_scope().attach_node(&sibling).unwrap();
+        old.request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+        let replacement = FocusNode::with_debug_label("replacement");
+        let sibling_for_listener = Rc::clone(&sibling);
+        old.add_listener(Rc::new(move || {
+            sibling_for_listener.request_focus();
+        }));
+
+        old_attachment.replace_node(&replacement).unwrap();
+
+        assert!(sibling.has_primary_focus());
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[(Some(old.id()), None), (None, Some(sibling.id()))],
+            "the genuine outer edge (old released) publishes before the queued \
+             reentrant request (sibling gained), never interleaved or reordered"
         );
     }
 
@@ -1210,5 +1422,390 @@ mod tests {
             Some(FocusDetachOutcome::OwnerClosed)
         );
         assert_eq!(node.request_focus(), FocusRequestOutcome::OwnerClosed);
+    }
+
+    // ── Reentrant focus-notification ordering (issue #1040) ─────────────
+    //
+    // `set_primary_focus` commits and publishes synchronously. A listener
+    // that requests another focus change from inside that publication must
+    // not see its request applied out of turn, and no manager listener may
+    // ever observe a transition that a later, already-applied one has
+    // superseded. These tests pin the ordering contract documented on
+    // `FocusManager` and on `request_focus`/`unfocus`/`add_listener`.
+
+    /// Captures `tracing` output for the duration of `run`, thread-locally.
+    ///
+    /// Same technique as `processing::velocity`'s capture helper:
+    /// `with_default` redirects dispatch per-thread, but `tracing`'s
+    /// per-callsite interest cache is process-global, so this is only
+    /// race-free when each test owns its process — which is exactly what
+    /// `cargo nextest run` (what CI uses) provides.
+    fn capture_tracing<T>(run: impl FnOnce() -> T) -> (T, String) {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for CapturedLog {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("captured-log mutex")
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
+            type Writer = Self;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        // Disarm `tracing`'s process-global callsite-interest cache first: it is
+        // computed on whichever thread reaches a callsite FIRST, so without this a
+        // sibling test can have it cached as `never` and silently empty this capture.
+        flui_testing::log_capture::disarm_interest_cache();
+        let captured = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_max_level(tracing::level_filters::LevelFilter::TRACE)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+
+        let out = tracing::subscriber::with_default(subscriber, run);
+        let bytes = captured.0.lock().expect("captured-log mutex").clone();
+        (
+            out,
+            String::from_utf8(bytes).expect("tracing output is valid UTF-8"),
+        )
+    }
+
+    /// The issue #1040 reproducer: A is focused, B is requested, and B's
+    /// own node listener reentrantly requests C while B is (momentarily)
+    /// primary. The reentrant request must be applied only after the
+    /// outer A -> B notification finishes, and published in the order
+    /// requested — never the reversed `[(B, C), (A, B)]` the pre-fix code
+    /// produced.
+    #[test]
+    fn reentrant_request_during_notification_is_applied_after_and_published_in_order() {
+        let (manager, nodes) = manager_with_nodes(3);
+        nodes[0].request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        let next = Rc::clone(&nodes[2]);
+        let intermediate = Rc::downgrade(&nodes[1]);
+        nodes[1].add_listener(Rc::new(move || {
+            if intermediate.upgrade().unwrap().has_primary_focus() {
+                next.request_focus();
+            }
+        }));
+
+        nodes[1].request_focus();
+
+        assert!(nodes[2].has_primary_focus());
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[
+                (Some(nodes[0].id()), Some(nodes[1].id())),
+                (Some(nodes[1].id()), Some(nodes[2].id())),
+            ]
+        );
+    }
+
+    /// A reentrant `unfocus()` from inside a node listener is queued the
+    /// same way a reentrant `request_focus` is, and publishes its own
+    /// `(previous, None)` edge after the outer one.
+    #[test]
+    fn reentrant_unfocus_during_notification_is_applied_after_the_outer_edge() {
+        let (manager, nodes) = manager_with_nodes(2);
+        nodes[0].request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        let manager_for_listener = Rc::clone(&manager);
+        nodes[1].add_listener(Rc::new(move || {
+            manager_for_listener.unfocus();
+        }));
+
+        nodes[1].request_focus();
+
+        assert!(manager.primary_focus().is_none());
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[
+                (Some(nodes[0].id()), Some(nodes[1].id())),
+                (Some(nodes[1].id()), None),
+            ]
+        );
+    }
+
+    /// Two reentrant requests issued from the same listener call (C then
+    /// D) are applied and published FIFO, not last-wins and not reversed.
+    #[test]
+    fn two_reentrant_requests_are_applied_in_request_order() {
+        let (manager, nodes) = manager_with_nodes(4);
+        nodes[0].request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        let third = Rc::clone(&nodes[2]);
+        let fourth = Rc::clone(&nodes[3]);
+        let intermediate = Rc::downgrade(&nodes[1]);
+        nodes[1].add_listener(Rc::new(move || {
+            if intermediate.upgrade().unwrap().has_primary_focus() {
+                third.request_focus();
+                fourth.request_focus();
+            }
+        }));
+
+        nodes[1].request_focus();
+
+        assert!(nodes[3].has_primary_focus());
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[
+                (Some(nodes[0].id()), Some(nodes[1].id())),
+                (Some(nodes[1].id()), Some(nodes[2].id())),
+                (Some(nodes[2].id()), Some(nodes[3].id())),
+            ]
+        );
+    }
+
+    /// Two listeners that keep redirecting focus to each other cannot spin
+    /// the caller forever: FLUI applies transitions synchronously (unlike
+    /// Flutter's microtask-scheduled model, which merely yields a frame
+    /// per bounce), so the drain is bounded at
+    /// `FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET` applications and warns
+    /// once when it drops the rest.
+    #[test]
+    fn ping_pong_listeners_are_bounded_and_warned() {
+        let (manager, nodes) = manager_with_nodes(2);
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        // Each listener re-requests the other node only while it is itself
+        // the current primary, so every application enqueues exactly one
+        // more — a clean, unbounded ping-pong rather than one that would
+        // also waste applications re-requesting the already-current node.
+        let target_of_0 = Rc::clone(&nodes[1]);
+        let self_of_0 = Rc::downgrade(&nodes[0]);
+        nodes[0].add_listener(Rc::new(move || {
+            if self_of_0.upgrade().unwrap().has_primary_focus() {
+                target_of_0.request_focus();
+            }
+        }));
+        let target_of_1 = Rc::clone(&nodes[0]);
+        let self_of_1 = Rc::downgrade(&nodes[1]);
+        nodes[1].add_listener(Rc::new(move || {
+            if self_of_1.upgrade().unwrap().has_primary_focus() {
+                target_of_1.request_focus();
+            }
+        }));
+
+        let ((), log) = capture_tracing(|| {
+            nodes[0].request_focus();
+        });
+
+        assert_eq!(
+            edges.borrow().len(),
+            FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET + 1,
+            "the initial (non-reentrant) transition plus one published edge \
+             per budgeted drain application"
+        );
+        assert!(
+            log.contains("drain budget"),
+            "expected a latched warning once the ping-pong exhausts the drain budget: {log}"
+        );
+    }
+
+    /// Once the manager closes — even reentrantly, from inside a
+    /// notification already in flight — no further manager-level
+    /// publication happens and any request still queued by a reentrant
+    /// listener is dropped rather than applied.
+    #[test]
+    fn queued_requests_are_dropped_when_the_manager_closes_mid_drain() {
+        let (manager, nodes) = manager_with_nodes(3);
+        nodes[0].request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+
+        let manager_for_listener = Rc::clone(&manager);
+        let sibling = Rc::clone(&nodes[2]);
+        nodes[1].add_listener(Rc::new(move || {
+            manager_for_listener.close();
+            sibling.request_focus();
+        }));
+
+        nodes[1].request_focus();
+
+        assert!(
+            edges.borrow().is_empty(),
+            "closing mid-notification drops every pending and in-flight publication"
+        );
+        assert!(manager.primary_focus().is_none());
+        assert!(manager.is_closed());
+    }
+
+    /// A node listener observes the manager's already-committed state, not
+    /// a pending one: `has_primary_focus()` on the node just notified is
+    /// true, a reentrant request is accepted (`FocusRequestOutcome::Focused`)
+    /// but not yet applied, and only becomes visible on the target node
+    /// once the outermost call returns.
+    #[test]
+    fn node_listeners_observe_committed_state_during_notification() {
+        let (manager, nodes) = manager_with_nodes(3);
+        nodes[0].request_focus();
+
+        let observed = Rc::new(RefCell::new(None));
+        let observed_for_listener = Rc::clone(&observed);
+        let node_b = Rc::downgrade(&nodes[1]);
+        let node_c = Rc::clone(&nodes[2]);
+        nodes[1].add_listener(Rc::new(move || {
+            let b = node_b.upgrade().unwrap();
+            // `b` is also notified for the drained B -> C transition below
+            // (it is the "previous" endpoint of that one too); only the
+            // invocation where B is still the committed primary is the one
+            // this test cares about.
+            if !b.has_primary_focus() {
+                return;
+            }
+            let outcome = node_c.request_focus();
+            *observed_for_listener.borrow_mut() =
+                Some((b.has_primary_focus(), outcome, node_c.has_primary_focus()));
+        }));
+
+        nodes[1].request_focus();
+
+        let (b_had_focus_during, c_outcome, c_had_focus_during) =
+            (*observed.borrow()).expect("the listener ran");
+        assert!(
+            b_had_focus_during,
+            "the node listener observes the committed transition, not a pending one"
+        );
+        assert_eq!(c_outcome, FocusRequestOutcome::Focused);
+        assert!(
+            !c_had_focus_during,
+            "a reentrant request is accepted but only queued, not yet applied, \
+             during the outer notification"
+        );
+        assert!(
+            nodes[2].has_primary_focus(),
+            "the queued request is applied once the outer notification completes"
+        );
+        assert!(!manager.is_closed());
+    }
+
+    /// Matches Flutter's `_HighlightModeManager.notifyListeners`
+    /// (`if (_listeners.contains(listener))`): a listener that removes
+    /// another one (or itself) mid-dispatch must stop that listener from
+    /// being called for the rest of this same dispatch, and must not panic
+    /// on a re-borrow of the listener list.
+    #[test]
+    fn listener_removed_during_dispatch_is_not_called() {
+        let (manager, nodes) = manager_with_nodes(2);
+        nodes[0].request_focus();
+
+        let second_calls = Rc::new(Cell::new(0));
+        let second_calls_for_listener = Rc::clone(&second_calls);
+        let second_id: Rc<RefCell<Option<ListenerId>>> = Rc::new(RefCell::new(None));
+        let second_id_for_first_listener = Rc::clone(&second_id);
+        let manager_for_first_listener = Rc::clone(&manager);
+        manager.add_listener(Rc::new(move |_, _| {
+            if let Some(id) = *second_id_for_first_listener.borrow() {
+                manager_for_first_listener.remove_listener(id);
+            }
+        }));
+        let second_id_value = manager.add_listener(Rc::new(move |_, _| {
+            second_calls_for_listener.set(second_calls_for_listener.get() + 1);
+        }));
+        *second_id.borrow_mut() = Some(second_id_value);
+
+        nodes[1].request_focus();
+
+        assert_eq!(
+            second_calls.get(),
+            0,
+            "a manager listener removed by an earlier one in the same dispatch \
+             must not be called"
+        );
+        assert_eq!(manager.listener_count(), 1);
+    }
+
+    /// The node-level counterpart of
+    /// `listener_removed_during_dispatch_is_not_called`: `FocusNode`'s
+    /// listener dispatch follows the same contract.
+    #[test]
+    fn node_listener_removed_during_dispatch_is_not_called() {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        manager.root_scope().attach_node(&node).unwrap();
+
+        let second_calls = Rc::new(Cell::new(0));
+        let second_calls_for_listener = Rc::clone(&second_calls);
+        let second_id: Rc<RefCell<Option<ListenerId>>> = Rc::new(RefCell::new(None));
+        let second_id_for_first_listener = Rc::clone(&second_id);
+        let node_for_first_listener = Rc::clone(&node);
+        node.add_listener(Rc::new(move || {
+            if let Some(id) = *second_id_for_first_listener.borrow() {
+                node_for_first_listener.remove_listener(id);
+            }
+        }));
+        let second_id_value = node.add_listener(Rc::new(move || {
+            second_calls_for_listener.set(second_calls_for_listener.get() + 1);
+        }));
+        *second_id.borrow_mut() = Some(second_id_value);
+
+        node.request_focus();
+
+        assert_eq!(
+            second_calls.get(),
+            0,
+            "a node listener removed by an earlier one in the same dispatch must not be called"
+        );
+        assert_eq!(node.listener_count(), 1);
     }
 }

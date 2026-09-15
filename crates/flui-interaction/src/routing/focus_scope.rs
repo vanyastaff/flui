@@ -147,7 +147,7 @@ pub enum FocusDetachOutcome {
     OwnerClosed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ManagerBinding {
     Unbound,
     Bound(Weak<FocusManager>),
@@ -653,8 +653,15 @@ impl FocusNode {
 
     pub(crate) fn notify_listeners_after_tree_change(&self) {
         let listeners = self.listeners.borrow().clone();
-        for (_, listener) in listeners {
-            listener();
+        for (id, listener) in listeners {
+            // Mirrors `FocusManager::notify_listeners`: a listener removed
+            // by an earlier one in this same dispatch (itself included) is
+            // never called, matching Flutter's
+            // `_HighlightModeManager.notifyListeners` contract.
+            let still_registered = self.listeners.borrow().iter().any(|(held, _)| *held == id);
+            if still_registered {
+                listener();
+            }
         }
     }
 
@@ -712,7 +719,13 @@ impl FocusNode {
         if !self.can_request_focus() {
             return FocusRequestOutcome::Rejected;
         }
-        match &*self.manager_binding.borrow() {
+        // Clone the binding out of the `RefCell` before acting on it: the
+        // `Bound` arm below calls into the manager, which can (through a
+        // reentrant focus listener) close this same manager and tombstone
+        // this very node — a nested `manager_binding.borrow_mut()` while
+        // this match's scrutinee borrow were still held would panic.
+        let binding = self.manager_binding.borrow().clone();
+        match binding {
             ManagerBinding::Unbound => {
                 self.pending_focus_request.set(true);
                 FocusRequestOutcome::Queued
