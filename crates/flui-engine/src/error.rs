@@ -126,10 +126,17 @@ pub enum EngineError {
     /// Distinguished from [`EngineError::SurfaceCreation`] on purpose: wgpu's
     /// `CreateSurfaceError` boxes the `raw_window_handle::HandleError` it
     /// hits internally but does not expose it via `source()` — only the
-    /// formatted `Display` text survives (verified against
-    /// `wgpu-30.0.1/src/api/surface.rs`'s
-    /// `CreateSurfaceErrorKind::RawHandle(_)` arm). Without probing the
-    /// target directly first, "the owner says the window is gone/suspended"
+    /// formatted `Display` text survives. Verified against
+    /// `wgpu-30.0.1/src/api/surface.rs`'s `CreateSurfaceError::source()`:
+    /// its `CreateSurfaceErrorKind::RawHandle` arm returns `None` directly
+    /// when wgpu's own `std` feature is off (this workspace's resolved
+    /// feature set — confirmed via `cargo metadata`, wgpu carries no `std`
+    /// feature here); with that feature on it instead forwards to
+    /// `HandleError::source()`, which is `None` too (raw-window-handle's
+    /// `impl std::error::Error for HandleError {}` has no override) — either
+    /// way the `HandleError` itself never survives the `source()` chain.
+    /// Without probing the target directly first, "the owner says the
+    /// window is gone/suspended"
     /// and "the GPU driver refused for some unrelated reason" would collapse
     /// into one undifferentiated variant that a caller cannot tell apart —
     /// which matters because the first is often transient (wait for the next

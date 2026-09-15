@@ -266,18 +266,23 @@ where
                                         ..
                                     }) => {
                                         // The window owner reports its native
-                                        // handle is gone or suspended —
-                                        // `Recoverability::Recoverable` for
-                                        // `HandleError::Unavailable` (issue
-                                        // #1043): a backgrounded tab's canvas
-                                        // can report this transiently. Same
-                                        // retry wake as any other failure
-                                        // below, just logged at a lower
-                                        // severity since this is expected to
-                                        // clear on its own.
+                                        // handle is gone or suspended (issue
+                                        // #1043). `HandleError::Unavailable` is
+                                        // `Recoverability::Recoverable` — a
+                                        // backgrounded tab's canvas can report
+                                        // this transiently — but
+                                        // `HandleError::NotSupported` is
+                                        // `Fatal` (the owner can never answer
+                                        // this handle kind). This arm does not
+                                        // branch on that classification: the
+                                        // retry wake below fires either way,
+                                        // same as any other failure; only the
+                                        // log severity is lower, since the
+                                        // common case is expected to clear on
+                                        // its own.
                                         tracing::warn!(
                                             error = ?e,
-                                            "GPU device recovery deferred — window target unavailable; retry armed for the next wake"
+                                            "GPU device recovery failed — window target unavailable; retry armed for the next wake regardless"
                                         );
                                         wake();
                                     }

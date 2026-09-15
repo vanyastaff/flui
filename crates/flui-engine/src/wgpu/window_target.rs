@@ -1,8 +1,8 @@
-//! The abstraction a windowed [`Renderer`](super::Renderer) draws into.
+//! The abstraction a windowed [`Renderer`](crate::wgpu::Renderer) draws into.
 //!
 //! Issue #1043: the renderer used to extract raw handles from a *borrowed*
 //! window at construction time and keep the bytes for later reuse in
-//! [`Renderer::recover`](super::Renderer::recover). A `#![forbid(unsafe_code)]`
+//! [`Renderer::recover`](crate::wgpu::Renderer::recover). A `#![forbid(unsafe_code)]`
 //! consumer could write `Renderer::new(&window).await?; drop(window);` and it
 //! type-checked — the saved bytes then outlived the thing they pointed at, and
 //! the SAFETY argument that made the surface-creation `unsafe` block sound
@@ -73,16 +73,12 @@ mod tests {
         }
     }
 
-    fn assert_accepts<T: WindowTarget>(_: T) {}
-
-    /// Compile-time-only counterpart to the `renderer_new_rejects_borrowed_window`
-    /// compile-fail fixture: an `Arc<T>` — the shape every real call site
-    /// passes to `Renderer::new` (`Arc::clone(&window)`) — satisfies
-    /// `WindowTarget`. No GPU involved, and `Renderer::new` is never
-    /// actually called: `assert_accepts::<T: WindowTarget>` alone proves
-    /// the exact bound it requires.
-    #[test]
-    fn an_owned_arc_satisfies_window_target() {
-        assert_accepts(Arc::new(FakeWindow));
-    }
+    // Compile-time-only counterpart to the `renderer_new_rejects_borrowed_window`
+    // compile-fail fixture: an `Arc<T>` — the shape every real call site
+    // passes to `Renderer::new` (`Arc::clone(&window)`) — satisfies
+    // `WindowTarget`. A `#[test]` fn wrapping this would run at test time
+    // and prove nothing at runtime (the whole check is that it TYPE-CHECKS);
+    // `assert_impl_all!` states that directly, with no GPU and no
+    // `Renderer::new` call involved.
+    static_assertions::assert_impl_all!(Arc<FakeWindow>: WindowTarget);
 }

@@ -220,6 +220,56 @@ mod surface_acquisition_tests {
     }
 }
 
+#[cfg(test)]
+mod new_probes_before_gpu_work_tests {
+    use std::sync::Arc;
+
+    use super::Renderer;
+    use crate::error::EngineError;
+    use crate::wgpu::fake_window_target::FakeTarget;
+
+    /// Pins the production entry point, GPU-free: `Renderer::new` must fail
+    /// with `SurfaceTargetUnavailable` — and never touch `wgpu::Instance` —
+    /// when the target's very first probe call reports the native handle is
+    /// gone. `surface_lease::probe_target`'s own doc explains why this
+    /// distinction exists; this is the production-path counterpart to
+    /// `surface_lease.rs`'s `SurfaceLease`-level probe tests, which pin the
+    /// same contract one layer down.
+    ///
+    /// The call log asserts it is genuinely the PROBE that answered, not
+    /// `wgpu::Instance::create_surface` (which would also query
+    /// `window_handle`/`display_handle`, just after already constructing an
+    /// `Instance` and picking a backend) — `probe_target` calls
+    /// `window_handle()` first and short-circuits via `?` on `Unavailable`
+    /// without ever calling `display_handle()`, so a log of anything other
+    /// than exactly `["window_handle"]` means the probe ran further than it
+    /// should have, or something downstream of it ran at all.
+    #[test]
+    fn renderer_new_fails_before_instance_creation_when_target_is_unavailable() {
+        let target = Arc::new(FakeTarget::unavailable());
+
+        let result = pollster::block_on(Renderer::new(Arc::clone(&target)));
+
+        // `Renderer` carries no `Debug` impl (wgpu handles don't), so match
+        // explicitly instead of formatting the whole `Result`.
+        match result {
+            Err(EngineError::SurfaceTargetUnavailable { .. }) => {}
+            Err(other) => {
+                panic!("expected SurfaceTargetUnavailable, got a different error: {other:?}")
+            }
+            Ok(_) => panic!(
+                "expected SurfaceTargetUnavailable, got Ok(Renderer) — the probe never fired"
+            ),
+        }
+        assert_eq!(
+            target.call_log(),
+            vec!["window_handle"],
+            "the probe must fail on the first query (window_handle) and never reach \
+             display_handle, wgpu::Instance::new, or create_surface"
+        );
+    }
+}
+
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
 pub struct GpuCapabilities {
@@ -572,8 +622,9 @@ impl Renderer {
     /// stack per call, which is exactly the per-`Renderer` device
     /// duplication [`super::gpu_services::GpuServices`] exists to remove.
     /// `#[doc(hidden)]` as of this slice: kept working (its eight call sites
-    /// — three in `flui-app`'s `runner.rs`, one in `flui-app`'s `direct.rs`,
-    /// the Android demo example, and three in the root package's own
+    /// — three in `flui-app`'s `runner/{desktop,android,web}.rs`, one in
+    /// `flui-app`'s `direct.rs`, the Android demo example, and three in the
+    /// root package's own
     /// examples: `scene_render.rs`, `filter_demo.rs`, `color_filter_demo.rs`
     /// — still build their own private stack, unmigrated) but no longer
     /// advertised as the entry point for new integrations. Deleted in a
@@ -967,7 +1018,7 @@ impl Renderer {
 
     /// Rebuild the GPU device and surface after a device-lost event.
     ///
-    /// On the **windowed** path ([`GpuStackOrigin::OwnedWindowed`]) this
+    /// On the **windowed** path (`GpuStackOrigin::OwnedWindowed`) this
     /// re-probes the SAME retained [`WindowTarget`] the renderer was built
     /// from, then — only if that probe succeeds — rebuilds the entire GPU
     /// stack (instance → adapter → device → surface → painter → offscreen)
@@ -977,7 +1028,7 @@ impl Renderer {
     /// `self.config` (falling back to 800×600), so the window keeps its
     /// correct dimensions without a separate resize call.
     ///
-    /// On the **offscreen** path ([`GpuStackOrigin::OwnedOffscreen`]) only
+    /// On the **offscreen** path (`GpuStackOrigin::OwnedOffscreen`) only
     /// the device/queue are replaced; surface, painter, and offscreen are
     /// left as `None`.
     ///
@@ -1005,22 +1056,19 @@ impl Renderer {
     /// surface from the still-live target for some other reason.
     #[tracing::instrument(level = "warn", skip(self))]
     pub async fn recover(&mut self) -> EngineResult<()> {
-        match &self.gpu_stack_origin {
+        // Resolved before any `.await` so the borrow of `gpu_stack_origin`
+        // never needs to live across one; `target` is an owned `Arc` clone,
+        // not a borrow of `self`. One match, not two: `SharedServices`
+        // returns immediately, before touching any GPU state.
+        let windowed_target = match &self.gpu_stack_origin {
             GpuStackOrigin::SharedServices => {
                 return Err(EngineError::SharedServicesNotRecoverable);
             }
-            GpuStackOrigin::OwnedWindowed { .. } | GpuStackOrigin::OwnedOffscreen => {}
-        }
-
-        // Resolved before any `.await` so the borrow of `gpu_stack_origin`
-        // never needs to live across one; `target` is an owned `Arc` clone,
-        // not a borrow of `self`.
-        let windowed_target = match &self.gpu_stack_origin {
+            GpuStackOrigin::OwnedOffscreen => None,
             GpuStackOrigin::OwnedWindowed { lease } => {
                 lease.probe()?;
                 Some(Arc::clone(lease.target()))
             }
-            GpuStackOrigin::OwnedOffscreen | GpuStackOrigin::SharedServices => None,
         };
 
         if let Some(target) = windowed_target {
@@ -1051,9 +1099,14 @@ impl Renderer {
             {
                 self.gpu_profiler = stack.gpu_profiler;
             }
-            if let GpuStackOrigin::OwnedWindowed { lease } = &mut self.gpu_stack_origin {
-                lease.replace_surface(stack.surface);
-            }
+            let GpuStackOrigin::OwnedWindowed { lease } = &mut self.gpu_stack_origin else {
+                unreachable!(
+                    "BUG: windowed_target is Some only when the match above read \
+                     OwnedWindowed, and nothing between that read and here replaces \
+                     gpu_stack_origin with a different variant"
+                );
+            };
+            lease.replace_surface(stack.surface);
             // Force a full repaint so the first recovered frame is complete.
             self.damage_tracker.mark_full_repaint();
         } else {

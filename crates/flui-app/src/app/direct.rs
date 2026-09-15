@@ -215,13 +215,16 @@ pub fn run_direct(
                     }
                     Err(e @ EngineError::SurfaceTargetUnavailable { .. }) => {
                         // The window owner reports its native handle is gone
-                        // or suspended — `Recoverability::Recoverable` for
-                        // `HandleError::Unavailable` (issue #1043): wait for
-                        // the owner to report the target live again rather
-                        // than treating this like a driver-level failure.
+                        // or suspended (issue #1043). `HandleError::Unavailable`
+                        // is `Recoverability::Recoverable` (worth waiting out);
+                        // `HandleError::NotSupported` is `Fatal` (the owner can
+                        // never answer this handle kind) — but this frame loop
+                        // does not branch on that classification, so every
+                        // `Err` here is retried next frame regardless, same as
+                        // the fallback arm below.
                         tracing::warn!(
                             error = ?e,
-                            "GPU device recovery deferred — window target unavailable; will retry next frame"
+                            "GPU device recovery failed — window target unavailable; retried next frame regardless"
                         );
                     }
                     Err(e) => {

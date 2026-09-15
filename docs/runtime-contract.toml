@@ -3656,12 +3656,16 @@ owned-target path (`Instance::create_surface` over an `Arc<dyn \
 WindowTarget>`), not the unsafe raw-handle path — deleted from \
 `flui-engine` along with the `RawHandles` newtype and its `unsafe impl \
 Send` (the crate's `renderer.rs` no longer keeps a raw window/display \
-handle at all). Workspace-wide (no `scope`) so the unsafe path cannot \
-return in a different file within the crate. The two allow-listed files \
-are standalone demos that build their own private wgpu stack outside \
-`flui-engine`'s `Renderer` entirely and are not bound by this contract.\
+handle at all). No `scope`, so this covers every `crates/**/*.rs` file — \
+`scripts/check-runtime-conformance.sh` only ever scans that tree, so an \
+`allow_files` entry naming a path under `examples/` would be inert (never \
+a scan candidate to begin with), not a documented exception. Two root-level \
+demos, `examples/wgpu_window.rs` and `examples/painting_demo/src/lib.rs`, \
+still call `create_surface_unsafe` — legitimately, since each builds its own \
+private wgpu stack outside `flui-engine`'s `Renderer` entirely — but they \
+sit outside the scanned tree, not on an allow-list within it.\
 """
-allow_files = ["examples/wgpu_window.rs", "examples/painting_demo/src/lib.rs"]
+allow_files = []
 
 [[forbidden_pattern]]
 pattern = "debug_assert_owner"
