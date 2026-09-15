@@ -1,11 +1,10 @@
 //! Tests for the winit backend's keyboard-conversion delegation to
 //! `ui-events-winit`.
 //!
-//! Split out of `events.rs`'s inline test modules once that file passed
-//! 1600 lines with production code ending well before halfway (issue
-//! #1092), mirroring how `platform.rs`'s real-event-loop family moved to
-//! `platform/real_loop_tests.rs` (issue #923): one cohesive family, nothing
-//! else in the crate uses it.
+//! Kept beside, not inside, `events.rs`: one cohesive family large enough
+//! to dwarf the production code it tests, and nothing else in the crate
+//! uses it — the same shape as `platform.rs`'s real-event-loop family in
+//! `platform/real_loop_tests.rs`.
 //!
 //! Declared with `#[path]` from `events.rs` as a sibling of its inline
 //! test modules, so these tests read as

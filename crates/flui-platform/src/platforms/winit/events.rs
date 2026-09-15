@@ -804,11 +804,10 @@ mod ime_tests {
 // The winit-vs-ui-events-winit keyboard conversion tests live in their own
 // file: two cohesive families (completeness of the delegated conversion,
 // and cross-backend agreement with the Win32/AppKit hand-written tables)
-// that pushed this file past a size where production code sat in its first
-// quarter (issue #1092). A sibling module rather than a nested one, so its
-// tests sit beside `pointer_translation_tests`/`ime_tests` rather than two
-// segments below them — same shape as `platform.rs`'s `real_loop_tests`
-// (issue #923).
+// large enough that this file's production code should not sit in its
+// first quarter. A sibling module rather than a nested one, so its tests
+// sit beside `pointer_translation_tests`/`ime_tests` rather than two
+// segments below them — same shape as `platform.rs`'s `real_loop_tests`.
 #[cfg(test)]
 #[path = "events/keyboard_tests.rs"]
 mod keyboard_tests;

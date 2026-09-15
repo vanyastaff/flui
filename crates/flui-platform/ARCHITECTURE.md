@@ -60,10 +60,9 @@ translations and the delegated one cannot silently drift apart.
   `from_winit_key`, `from_winit_location`) and keep hand-assembling
   `KeyboardEvent`'s remaining fields (down/up state, `repeat`,
   `is_composing`, and a separately hand-written modifiers conversion) in
-  `keyboard_event`. This was the first shape landed for #1092 and was
-  rejected on review: `from_winit_keyboard_event` and
-  `from_winit_modifier_state` already do exactly that assembly, so the
-  hand-written half was byte-identical duplicate logic — the same
+  `keyboard_event`. Rejected: `from_winit_keyboard_event` and
+  `from_winit_modifier_state` already perform exactly that assembly, so a
+  hand-written half is byte-identical duplicate logic — the same
   re-derived-seam risk the issue exists to close, just smaller.
 - Vendor `ui-events-winit`'s tables directly into this crate (a `// PORT
   NOTE`-style copy). Rejected for the same reason as the first bullet, plus
@@ -116,8 +115,7 @@ duplicate-checked against the winit source — plus the issue's
 acceptance-criteria spot pairs and the location/logical-key spot checks) and
 `cross_backend_physical_key_agreement` (winit vs. Win32 vs. AppKit on a
 shared physical-key set). Before this change, `convert_physical_key`'s hand
-table mapped 71 of winit 0.30.13's 194 `KeyCode` variants to `Code`
-(`git show 374cca31:crates/flui-platform/src/platforms/winit/events.rs | rg
--c "KeyCode::\w+ => Code::"`) and `convert_winit_key` mapped 37 of 306
+table mapped 71 of winit 0.30.13's 194 `KeyCode` variants to `Code` (the
+count measured at issue #1092's baseline) and `convert_winit_key` mapped 37 of 306
 `NamedKey` variants to `Key`, falling through to `Unidentified` for the rest
 in both cases.
