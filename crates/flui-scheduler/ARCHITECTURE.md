@@ -514,18 +514,37 @@ allowed to restore.
   `a_panicking_tick_callback_leaves_the_slot_restored`, which asserts the
   slot's contents, not that ticking resumes.
 - **Register-outside-lock / store-id-under-lock is still a genuine
-  cross-thread TOCTOU.** `schedule_tick_if_active` and the auto-tick tail
-  both check `should_schedule_tick`, then upgrade the scheduler and
-  register, then re-lock ONLY to store the id — three separate lock
-  acquisitions with no lock held across any of them. A concurrent
+  cross-thread TOCTOU window; the concrete consequence it produced is
+  closed (issue #1166).** `schedule_tick_if_active` and the auto-tick
+  tail both check eligibility, then upgrade the scheduler and register,
+  then re-lock ONLY to decide whether to keep the id — three separate
+  lock acquisitions with no lock held across any of them, and that window
+  itself remains open. Both tails decide with
+  `TickerInner::may_record_registration` (`state == Active &&
+  scheduled_callback_id.is_none()`, re-read under the SAME lock as the
+  write, deliberately without `should_schedule_tick`'s slot term — see that
+  method's own doc for why a checked-out slot must not retract a
+  registration here), and self-cancel the id they just minted via
+  `UpdateScheduler::cancel_frame_callback` whenever a `stop`/`dispose`/
+  `reset`/`mute` raced them in that window and left the ticker anything
+  other than `Active` with no registration id on record. A concurrent
   cross-thread `mute()` immediately followed by `unmute()` racing this
-  window is a starvation/orphan hazard that predates this fix and is
-  unchanged by it: the new "never overwrite a `Some` id" guard traces and
-  cancels a losing registration rather than losing track of it, which
-  narrows the failure mode from "silently orphaned, never cancelled" to
-  "traced and cancelled", but does not close the window itself. Closing it
-  fully needs a single compare-and-set across upgrade+register+store, which
-  is a larger scheduler-API change than this fix's scope.
+  window is traced and cancelled the same way — it is NEITHER a starvation
+  hazard (the losing tail's self-cancel blocks nothing) NOR an orphan
+  hazard (nothing survives live and uncancelled); whichever tail's
+  registration lands in the re-lock first wins outright, and the other
+  cancels its own. Two residual gaps this fix does not touch, both
+  structural rather than part of #1166's scope: (a) the transient loop's
+  `cancelled` check (`handle_begin_frame`) is read outside the `transient`
+  lock, so a callback popped for execution in the same instant it is
+  cancelled can still run once — inert, since the tick path's own
+  top-of-dispatch `state` re-read is what makes it harmless; (b) the
+  top-of-tick unconditional `scheduled_callback_id = None` in
+  `tick_and_reschedule_static` assumes the firing closure is the one
+  currently on record — a stale closure firing concurrently with a fresh
+  registration's record on another thread could clobber that fresh id
+  instead of its own stale one. Both need two frames racing on two threads
+  to manifest.
 - **The `AnimationController` ↔ `Ticker` strong-clone reference cycle is
   unchanged and undocumented as a NEW risk by this fix.**
   `AnimationController::restart_ticker` captures `let controller =
