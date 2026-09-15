@@ -700,6 +700,18 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **Scheduler frame state closes before a pre-pipeline panic propagates** (#1057):
+  `flui-scheduler`'s `drive_frame`/`drive_frame_with_lane` used to catch only
+  a panicking pipeline; a panic from a transient callback, the mid-frame
+  async-driver poll, a persistent callback, or a priority task — every one
+  of which runs before the pipeline slot opens — escaped uncaught and left
+  the scheduler's phase, `frame_scheduled` latch, and frame-completion
+  waiters stuck. One recovery boundary now covers the whole frame lifetime
+  `drive_frame` owns, `execute_frame`/`execute_frame_with_lane` share it
+  instead of a second unguarded sequence, every queue drained before the
+  pipeline runs preserves a panicking entry's still-queued siblings, and a
+  panicking async future no longer leaves a zombie task slot behind. See
+  `crates/flui-scheduler/CHANGELOG.md` and `crates/flui-scheduler/ARCHITECTURE.md`.
 - **Held pointer terminal replay after an active `Down`** (#561): pointer
   `Move`/`Up`/`Cancel` events that arrive during an uncommitted-frame window
   now queue even when their matching `Down` was already dispatched before the

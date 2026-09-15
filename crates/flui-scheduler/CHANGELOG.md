@@ -109,6 +109,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A panic before the pipeline slot ever opens now closes the frame** (#1057):
+  `drive_frame`/`drive_frame_with_lane` used to `catch_unwind` only the
+  caller-supplied pipeline closure, so a panic from a transient callback,
+  the mid-frame async-driver poll, a persistent callback, or a
+  `Priority::Build`/`Animation`/`Idle` task — every one of which runs
+  BEFORE that closure — escaped past `abort_frame` entirely and left the
+  phase machine stuck (`TransientCallbacks`/`MidFrameMicrotasks`/
+  `PersistentCallbacks`), `frame_scheduled` unresolved, and every
+  `end_of_frame()` waiter hung forever. One `catch_unwind` now covers
+  `handle_begin_frame`, `handle_draw_frame`, and the pipeline together, and
+  `execute_frame`/`execute_frame_with_lane` route through the same
+  implementation instead of a second, unguarded sequence. Every queue
+  drained before the pipeline runs (transient callbacks,
+  `TaskQueue::execute_until`) now pops one entry at a time instead of
+  batch-draining, so a panicking entry's still-queued siblings survive to
+  the next frame rather than being lost with the batch. `AsyncDriver::poll_ready`
+  no longer leaves a zombie task slot behind when a future panics on
+  `poll`, and `notify_frame_completion` no longer holds a waiter's lock
+  across its `wake()` call (an inline-polling waker previously deadlocked)
+  and no longer lets one panicking waker starve the others. See
+  `crates/flui-scheduler/ARCHITECTURE.md`'s mapping entry for the full
+  per-queue policy and the named limitation (an aborted frame is not
+  distinguishable from a successful one through `end_of_frame()` alone).
 - `TickerFuture` is now wired to the `Ticker` lifecycle instead of existing as
   an unconnected async helper.
 - Thread spawn leak in `TickerFuture::when_complete_or_cancel` - threads no longer spin in a busy loop

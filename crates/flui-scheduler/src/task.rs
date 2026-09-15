@@ -339,39 +339,55 @@ impl TaskQueue {
         self.len() == 0
     }
 
-    /// Execute all tasks up to a certain priority
+    /// Execute tasks at or above `min_priority`, one at a time.
     ///
-    /// Drains matching tasks in a single lock acquisition, then executes
-    /// outside the lock to minimize contention on the hot path.
+    /// Each iteration takes the queue lock only long enough to peek the top
+    /// entry and, if it still meets `min_priority`, pop it — the same
+    /// pop-one-under-lock, execute-outside-it shape [`Self::pop`] and
+    /// `UpdateScheduler::flush_microtasks` use — rather than draining the
+    /// whole matching run into a batch before executing any of it. A task
+    /// that panics then loses only itself: every task still behind it in
+    /// the heap (same priority, queued later, or a HIGHER priority task a
+    /// sibling's own callback added mid-loop) stays queued for the next
+    /// call to see, instead of already being removed from the heap by this
+    /// call's own batch drain and lost with it (issue #1057). The atomic
+    /// `len` mirror is decremented per pop, inside the same critical
+    /// section as the pop itself — matching `add_task`/`pop`'s ordering, so
+    /// a panic mid-loop cannot leave `len()` under- or over-reporting the
+    /// heap's real size.
     ///
-    /// Returns number of tasks executed
+    /// Preserves the priority-threshold semantics exactly: stops the moment
+    /// the highest remaining priority in the heap no longer meets
+    /// `min_priority`, identically to the batched version this replaced.
+    ///
+    /// Returns the number of tasks executed before returning — a panic
+    /// propagates past this method with that count short of the full
+    /// matching run; the caller observes the panic, not a partial count.
     pub fn execute_until(&self, min_priority: Priority) -> usize {
-        let tasks = {
-            let mut queue = self.queue.lock();
-            let mut batch = Vec::with_capacity(queue.len());
-            while let Some(pt) = queue.peek() {
-                if pt.0.priority >= min_priority {
-                    let task = queue
-                        .pop()
-                        .expect("BUG: peek returned Some under the same lock, so pop must succeed");
-                    batch.push(task.0);
-                } else {
-                    break;
+        let mut executed = 0usize;
+        loop {
+            let task = {
+                let mut queue = self.queue.lock();
+                match queue.peek() {
+                    Some(pt) if pt.0.priority >= min_priority => {
+                        let popped = queue.pop().expect(
+                            "BUG: peek returned Some under the same lock, so pop must succeed",
+                        );
+                        // Decrement inside the critical section — matches
+                        // add_task / pop ordering.
+                        self.len.fetch_sub(1, AtomicOrdering::AcqRel);
+                        Some(popped.0)
+                    }
+                    _ => None,
                 }
-            }
-            // Atomic len decrement inside the critical section (still
-            // holding queue lock) — matches add_task / pop ordering.
-            if !batch.is_empty() {
-                self.len.fetch_sub(batch.len(), AtomicOrdering::AcqRel);
-            }
-            batch
-        };
-
-        let count = tasks.len();
-        for task in tasks {
+            };
+            let Some(task) = task else {
+                break;
+            };
             task.execute();
+            executed += 1;
         }
-        count
+        executed
     }
 
     /// Execute all tasks of a specific priority
@@ -572,6 +588,47 @@ mod tests {
         assert_eq!(executed, 3);
         assert_eq!(*counter.lock(), 3);
         assert_eq!(queue.len(), 2); // Build tasks remain
+    }
+
+    /// A panicking task must not take its queued siblings down with it: a
+    /// single-lock batch drain would already have removed every matching
+    /// task from the heap before running any of them, so a panic partway
+    /// through the batch loses the rest silently. Popping one task at a
+    /// time (issue #1057) means only the panicking task itself is ever
+    /// removed before it runs.
+    #[test]
+    fn execute_until_leaves_later_same_priority_tasks_queued_when_one_panics() {
+        let queue = TaskQueue::new();
+        let ran: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let ran_before = Arc::clone(&ran);
+        queue.add(Priority::Build, move || ran_before.lock().push(1));
+        queue.add(Priority::Build, || panic!("build task probe"));
+        let ran_after = Arc::clone(&ran);
+        queue.add(Priority::Build, move || ran_after.lock().push(3));
+
+        let queue_len_before = queue.len();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            queue.execute_until(Priority::Build)
+        }));
+        assert!(unwind.is_err(), "the panic must propagate");
+
+        assert_eq!(
+            *ran.lock(),
+            vec![1],
+            "only the task queued before the panic ran"
+        );
+        assert_eq!(
+            queue.len(),
+            queue_len_before - 2,
+            "the panicking task is gone; the task queued after it is still queued"
+        );
+
+        // The next call resumes exactly where the panic left off.
+        let executed = queue.execute_until(Priority::Build);
+        assert_eq!(executed, 1);
+        assert_eq!(*ran.lock(), vec![1, 3]);
+        assert_eq!(queue.len(), queue_len_before - 3);
     }
 
     #[test]

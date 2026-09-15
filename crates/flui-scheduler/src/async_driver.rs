@@ -182,6 +182,47 @@ impl Drop for TaskToken {
     }
 }
 
+/// Removes task `id`'s slot from `inner.tasks` if the poll it wraps unwinds.
+///
+/// [`AsyncDriver::poll_ready`] takes a task's future out of its slot
+/// (leaving `future: None`) before calling `poll`, precisely so no lock is
+/// held across user code. If `poll` panics, nothing on the normal
+/// `poll_ready` path ever revisits that slot again: it is not `ready`
+/// (cleared just before the take), and the only other remover is
+/// [`TaskToken::cancel`], which a caller holding a token dropped or never
+/// checked may never call. Left alone, the slot is a permanent zombie —
+/// counted by [`AsyncDriver::pending_task_count`] forever, polled never
+/// again (issue #1057).
+///
+/// This guard removes the slot on unwind; [`Self::disarm`] on the normal
+/// return path leaves the map update to `poll_ready`'s own match on the
+/// poll outcome, so on success this does nothing. Taking the map lock in
+/// `Drop` is safe here specifically: `poll_ready` never holds it across a
+/// poll, and the `Task` this removes already has `future: None` (taken
+/// above) — dropping it runs no user code, only the two `Arc<AtomicBool>`
+/// fields' reference-count decrements.
+struct RemoveZombieSlotOnUnwind<'a> {
+    inner: &'a Inner,
+    id: TaskId,
+    armed: bool,
+}
+
+impl RemoveZombieSlotOnUnwind<'_> {
+    /// Normal-return path: the slot's fate is `poll_ready`'s own match on
+    /// the poll outcome to decide, not this guard's `Drop`.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RemoveZombieSlotOnUnwind<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.inner.tasks.lock().remove(&self.id);
+        }
+    }
+}
+
 /// A frame-driven task driver.
 ///
 /// Cheap to clone; every clone refers to the same task set. Owned by
@@ -379,7 +420,21 @@ impl AsyncDriver {
                 inner: Arc::downgrade(&self.inner),
             }));
             let mut cx = Context::from_waker(&waker);
+            // Armed for the poll only: if `future.poll` panics, the slot at
+            // `id` is left holding `future: None` forever (nothing else ever
+            // revisits it — it is not `ready`, and the only other remover is
+            // `TaskToken::cancel`, which the caller may never call again) and
+            // `pending_task_count` counts a task that can neither be polled
+            // nor cancelled (issue #1057). `disarm` runs immediately after a
+            // normal return, before the `outcome` match below decides what
+            // the slot should hold next.
+            let mut zombie_guard = RemoveZombieSlotOnUnwind {
+                inner: &self.inner,
+                id,
+                armed: true,
+            };
             let outcome = future.as_mut().poll(&mut cx);
+            zombie_guard.disarm();
             polled += 1;
 
             let mut tasks = self.inner.tasks.lock();
@@ -526,6 +581,49 @@ mod tests {
         assert_eq!(driver.poll_ready(), 1);
         assert!(done.load(Ordering::Acquire));
         assert_eq!(driver.pending_task_count(), 0, "completed task is removed");
+    }
+
+    /// A future that panics on its very first poll.
+    struct PanicsOnPoll;
+
+    impl Future for PanicsOnPoll {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+            panic!("poll probe");
+        }
+    }
+
+    /// A panic inside `future.poll` must not leave a zombie slot behind
+    /// (issue #1057): the slot's `future` field is already `None` (taken
+    /// before polling) and nothing else on the normal path ever revisits
+    /// it, so without the guard `pending_task_count` would count this task
+    /// forever, and a later `poll_ready` would silently skip over it
+    /// (not `ready`, so never selected) rather than ever making progress
+    /// or erroring.
+    #[test]
+    fn async_driver_poll_panic_does_not_leave_a_zombie_slot() {
+        let driver = AsyncDriver::new();
+        let before = driver.pending_task_count();
+
+        let _token = driver.spawn_local(Box::pin(PanicsOnPoll));
+        assert_eq!(driver.pending_task_count(), before + 1);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| driver.poll_ready()));
+        assert!(
+            unwind.is_err(),
+            "the panic must propagate out of poll_ready"
+        );
+
+        assert_eq!(
+            driver.pending_task_count(),
+            before,
+            "the panicking task's slot must be removed, not left as a zombie"
+        );
+
+        // A later poll must not touch the removed slot.
+        assert_eq!(driver.poll_ready(), 0);
+        assert_eq!(driver.pending_task_count(), before);
     }
 
     /// A pending task is re-queued and not re-polled until woken.
