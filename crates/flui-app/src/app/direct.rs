@@ -45,7 +45,7 @@
 
 use std::sync::Arc;
 
-use flui_engine::{Recoverability, wgpu::Renderer};
+use flui_engine::{EngineError, Recoverability, wgpu::Renderer};
 use flui_layer::{LayerTree, Scene, SceneBuilder};
 use flui_platform::{
     WindowOptions,
@@ -142,9 +142,12 @@ pub fn run_direct(
             }
         };
 
-        // 2. Create GPU renderer
+        // 2. Create GPU renderer. `Renderer::new` takes ownership of a
+        // `WindowTarget` (issue #1043) — `Arc::clone(&window)` gives it its
+        // own strong ref rather than a borrow, so the renderer stays sound
+        // even if this scope's `window` binding is dropped first.
         let phys_size = window.physical_size();
-        let renderer = pollster::block_on(Renderer::new(window.as_ref()));
+        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {
@@ -209,6 +212,20 @@ pub fn run_direct(
                 match pollster::block_on(r.recover()) {
                     Ok(()) => {
                         tracing::warn!("GPU device lost — recovered successfully");
+                    }
+                    Err(e @ EngineError::SurfaceTargetUnavailable { .. }) => {
+                        // The window owner reports its native handle is gone
+                        // or suspended (issue #1043). `HandleError::Unavailable`
+                        // is `Recoverability::Recoverable` (worth waiting out);
+                        // `HandleError::NotSupported` is `Fatal` (the owner can
+                        // never answer this handle kind) — but this frame loop
+                        // does not branch on that classification, so every
+                        // `Err` here is retried next frame regardless, same as
+                        // the fallback arm below.
+                        tracing::warn!(
+                            error = ?e,
+                            "GPU device recovery failed — window target unavailable; retried next frame regardless"
+                        );
                     }
                     Err(e) => {
                         tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");

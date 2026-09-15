@@ -128,6 +128,13 @@ impl PlatformWindow for AndroidWindow {
         // Get the ANativeWindow pointer from the AndroidApp and construct the handle
         // manually. We can't delegate to NativeWindow::window_handle() because
         // that borrows a temporary.
+        //
+        // This already satisfies `PlatformWindow::window_handle`'s MUST
+        // (see that trait method's doc): `native_window()` answers `None`
+        // for the whole span between a `MainEvent::Pause` and the next
+        // `MainEvent::Resume` (`platforms/android/mod.rs`'s event loop,
+        // module doc's "Surface Lifecycle" section), and the `ok_or` below
+        // maps that straight to `Unavailable` — no separate flag needed.
         let native_window = self
             .app
             .native_window()

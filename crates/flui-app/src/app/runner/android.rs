@@ -166,9 +166,11 @@ where
             }
         };
 
-        // 2. Create GPU renderer (Vulkan backend on Android)
+        // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`
+        // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
+        // gives it its own strong ref rather than a borrow of `window`.
         let phys_size = window.physical_size();
-        let renderer = pollster::block_on(Renderer::new(window.as_ref()));
+        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {

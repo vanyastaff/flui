@@ -1,6 +1,12 @@
 //! macOS window (NSWindow) implementation
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use cocoa::{
     appkit::{NSBackingStoreType, NSWindowStyleMask},
@@ -42,6 +48,17 @@ pub struct MacOSWindow {
 
     /// Per-window callbacks (input, resize, close, ...)
     callbacks: Arc<WindowCallbacks>,
+
+    /// Set once `windowWillClose:` has fired for this window (or `close()`
+    /// completed without it firing — see `close()`'s own doc). Shared via
+    /// `Arc` like every other per-window field here, so every clone of this
+    /// wrapper sees the same window's closed state instead of each tracking
+    /// its own. Consulted by [`HasWindowHandle::window_handle`] because,
+    /// with `setReleasedWhenClosed:NO` set at construction, `-[NSWindow
+    /// close]` no longer deallocates `ns_window` — so `contentView` stays
+    /// answerable long after the window is meaningless to hand a GPU handle
+    /// for, and only this flag (not a nil check) can tell the two apart.
+    closed: Arc<AtomicBool>,
 
     /// Window configuration
     config: WindowConfiguration,
@@ -179,6 +196,18 @@ impl MacOSWindow {
                 });
             }
 
+            // AppKit's default for an alloc/init'd window is
+            // `releasedWhenClosed: YES`: `-[NSWindow close]` would then
+            // release the same +1 reference this constructor's `alloc`/
+            // `init` pair already owns, and `MacOSWindow::drop`'s `release`
+            // below would release it a second time — an over-release, and a
+            // dangling `ns_window` for every `msg_send!` this type sends
+            // afterward (including `window_handle()`'s `contentView`
+            // fetch). Opting out here makes the `alloc`/`init` +1 released
+            // exactly once, by `Drop`, matching winit's own
+            // `setReleasedWhenClosed(false)` for its wrapped `NSWindow`.
+            let _: () = msg_send![ns_window, setReleasedWhenClosed: NO];
+
             // Set window title
             let title = cocoa::foundation::NSString::alloc(nil);
             let title = cocoa::foundation::NSString::init_str(title, &options.title);
@@ -225,6 +254,7 @@ impl MacOSWindow {
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
+                closed: Arc::new(AtomicBool::new(false)),
                 config,
                 #[cfg(feature = "a11y")]
                 accessibility: std::sync::OnceLock::new(),
@@ -461,6 +491,14 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn close(&self) {
+        // No separate flag-set needed here: AppKit's `-[NSWindow close]`
+        // posts `NSWindowWillCloseNotification` (routing to the delegate's
+        // `windowWillClose:`, and so to `handle_close` below) whether or
+        // not `windowShouldClose:` was ever asked — the same notification a
+        // user-initiated close takes. `handle_close` is therefore reached
+        // by every route through this window's own `close`, and is where
+        // `closed` is actually set.
+        //
         // SAFETY: `ns_window` is alive for the lifetime of `self`.
         unsafe {
             let _: () = msg_send![self.ns_window, close];
@@ -560,6 +598,18 @@ impl HasWindowHandle for MacOSWindow {
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use std::ptr::NonNull;
 
+        // Refuse once the window has closed (see `handle_close`'s own doc
+        // for when `closed` is set). With `setReleasedWhenClosed: NO` set
+        // at construction, `-[NSWindow close]` no longer deallocates
+        // `ns_window`, so `contentView` below would otherwise keep
+        // answering long after the window is meaningless to hand a GPU
+        // handle for — a caller re-acquiring a handle from a retained
+        // `Arc<dyn PlatformWindow>` (issue #1043's recovery path) needs
+        // this flag, not a nil check, to learn the window is gone.
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+
         // raw-window-handle 0.6 AppKitWindowHandle expects the NSView, not
         // the NSWindow.
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
@@ -594,6 +644,7 @@ impl Clone for MacOSWindow {
             state: Arc::clone(&self.state),
             windows_map: Arc::clone(&self.windows_map),
             callbacks: Arc::clone(&self.callbacks),
+            closed: Arc::clone(&self.closed),
             config: self.config.clone(),
             // The clone shares the same window, so it shares the same
             // NSAccessibility bridge — one subclass per content view,
@@ -626,7 +677,11 @@ impl Drop for MacOSWindow {
             self.windows_map.lock().remove(&window_id);
 
             // SAFETY: this is the last wrapper referencing the NSWindow we
-            // alloc-init'ed in `new`, so releasing our +1 retain is balanced.
+            // alloc-init'ed in `new`, so releasing our +1 retain is
+            // balanced — true only because `new` also sends
+            // `setReleasedWhenClosed: NO`; without it, a prior `close()`
+            // would already have consumed this same +1 via AppKit's
+            // default, making this an over-release of a deallocated object.
             unsafe {
                 let _: () = msg_send![self.ns_window, release];
             }
@@ -1466,9 +1521,42 @@ impl MacOSWindow {
     }
 
     /// Handle window close event
+    ///
+    /// Fires from `windowWillClose:` while `ns_window` is still valid — the
+    /// delegate notification AppKit posts for every route through
+    /// `-[NSWindow close]`, vetoed or not (see [`close`](Self::close)'s own
+    /// doc). Order matters: `closed` is set BEFORE `dispatch_close` so that
+    /// a frame callback the close dispatch itself triggers observes the
+    /// window as already gone, and `callbacks.clear()` runs AFTER, so the
+    /// `on_close` callback registered above still fires normally before its
+    /// slot — and every other slot — is released.
     fn handle_close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
         self.callbacks.dispatch_close();
         tracing::debug!("Window closed");
+
+        // Release every remaining registered callback now, while
+        // `ns_window` is still valid (this delegate method runs before
+        // AppKit tears the window down further). Without this, the frame
+        // callback registered via `on_request_frame` — which in
+        // `flui-app`'s wiring owns this window's GPU renderer, whose
+        // `wgpu::Surface` is built from the `Arc<dyn PlatformWindow>` clone
+        // the renderer owns (ADR-0063) — stays pinned forever: window
+        // (through its callback slots) → frame closure → raster lane →
+        // renderer → surface → `Arc<MacOSWindow>`, a cycle nothing else
+        // here breaks.
+        self.callbacks.clear();
+
+        // Match winit's own `windowWillClose:` handling: nil the delegate
+        // so no further delegate method can fire against a window this
+        // wrapper now treats as closed. Harmless even without this today
+        // (the delegate holds only a `Weak<MacOSWindow>`), but this is the
+        // documented AppKit-recommended cleanup, not just a FLUI habit.
+        //
+        // SAFETY: `ns_window` is alive for the lifetime of `self`.
+        unsafe {
+            let _: () = msg_send![self.ns_window, setDelegate: nil];
+        }
     }
 
     /// Handle backing properties changed (Retina/DPI change)

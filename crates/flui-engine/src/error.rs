@@ -119,6 +119,42 @@ pub enum EngineError {
     #[error("Failed to create surface: {0}")]
     SurfaceCreation(#[source] Box<dyn Error + Send + Sync>),
 
+    /// The window target's owner reports its native handle is gone or
+    /// suspended (a destroyed window, a torn-down Wayland surface, an
+    /// Android activity between `onPause` and the next `onResume`).
+    ///
+    /// Distinguished from [`EngineError::SurfaceCreation`] on purpose: wgpu's
+    /// `CreateSurfaceError` boxes the `raw_window_handle::HandleError` it
+    /// hits internally but does not expose it via `source()` — only the
+    /// formatted `Display` text survives. Verified against
+    /// `wgpu-30.0.1/src/api/surface.rs`'s `CreateSurfaceError::source()`:
+    /// its `CreateSurfaceErrorKind::RawHandle` arm returns `None` directly
+    /// when wgpu's own `std` feature is off (this workspace's resolved
+    /// feature set — confirmed via `cargo metadata`, wgpu carries no `std`
+    /// feature here); with that feature on it instead forwards to
+    /// `HandleError::source()`, which is `None` too (raw-window-handle's
+    /// `impl std::error::Error for HandleError {}` has no override) — either
+    /// way the `HandleError` itself never survives the `source()` chain.
+    /// Without probing the target directly first, "the owner says the
+    /// window is gone/suspended"
+    /// and "the GPU driver refused for some unrelated reason" would collapse
+    /// into one undifferentiated variant that a caller cannot tell apart —
+    /// which matters because the first is often transient (wait for the next
+    /// resume) and the second usually is not. Use
+    /// [`EngineError::surface_target_unavailable`] to construct this from the
+    /// original, typed [`raw_window_handle::HandleError`].
+    #[error(
+        "surface target unavailable: the window owner reports its native handle is gone or \
+         suspended: {source}"
+    )]
+    SurfaceTargetUnavailable {
+        /// The owner's report — `Unavailable` for a destroyed/suspended
+        /// window, `NotSupported` when the owner never implements this
+        /// handle kind at all.
+        #[source]
+        source: raw_window_handle::HandleError,
+    },
+
     /// No suitable GPU adapter found (sentinel; carries no underlying error).
     ///
     /// Use this variant when `request_adapter` returns no underlying error
@@ -239,6 +275,21 @@ impl EngineError {
     pub fn recoverability(&self) -> Recoverability {
         match self {
             Self::SurfaceLost | Self::Timeout => Recoverability::Recoverable,
+            // `raw_window_handle::HandleError` is itself `#[non_exhaustive]`,
+            // so this inner match's wildcard is deliberate: a variant this
+            // crate has not classified yet is treated as `Fatal` rather than
+            // silently `Recoverable`. `Unavailable` means "wait and retry"
+            // (a suspended surface); `NotSupported` means the owner can
+            // never answer this handle kind, which retrying cannot fix.
+            Self::SurfaceTargetUnavailable { source } => match source {
+                raw_window_handle::HandleError::Unavailable => Recoverability::Recoverable,
+                // `NotSupported` is named explicitly for the reader even
+                // though it shares `_`'s outcome: retrying cannot fix an
+                // owner that can never answer this handle kind, and any
+                // variant this crate has not seen yet gets the same
+                // conservative answer.
+                raw_window_handle::HandleError::NotSupported | _ => Recoverability::Fatal,
+            },
             Self::DeviceLost
             | Self::SurfaceCreation(_)
             | Self::NoAdapter
@@ -275,6 +326,13 @@ impl EngineError {
         E: Error + Send + Sync + 'static,
     {
         EngineError::DeviceCreation(Box::new(error))
+    }
+
+    /// Create a surface-target-unavailable error from the window owner's
+    /// reported [`raw_window_handle::HandleError`].
+    #[must_use]
+    pub fn surface_target_unavailable(source: raw_window_handle::HandleError) -> Self {
+        EngineError::SurfaceTargetUnavailable { source }
     }
 
     /// Create an adapter-request error from any error type.
@@ -403,6 +461,16 @@ mod tests {
         );
         assert_eq!(
             EngineError::NotInitialized.recoverability(),
+            Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::surface_target_unavailable(raw_window_handle::HandleError::Unavailable)
+                .recoverability(),
+            Recoverability::Recoverable
+        );
+        assert_eq!(
+            EngineError::surface_target_unavailable(raw_window_handle::HandleError::NotSupported)
+                .recoverability(),
             Recoverability::Fatal
         );
         assert_eq!(

@@ -1203,7 +1203,19 @@ fi
 #   `GlobalWidgetsLocalizations`) behind the trait every `Localizations::of`
 #   caller depends on — Flutter parity: `Localizations.of<WidgetsLocalizations>`
 #   is keyed by the abstract interface, never the concrete runtime class.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|TreeObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations|HitTestProbe)\b'
+#   WindowTarget (issue #1043) — `Arc<dyn WindowTarget>` is how
+#   `flui-engine`'s `SurfaceLease`/`Renderer` retain an OWNED, `'static`
+#   handle source across `Renderer::new`/`recover`. Type erasure is
+#   required, not a convenience: the concrete platform window type
+#   (`flui_platform::PlatformWindow`) cannot be named in `flui-engine`
+#   without inverting the flui-platform → flui-engine edge
+#   (`docs/workspace-layers.toml`), and the trait is blanket-implemented
+#   (`impl<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static>
+#   WindowTarget for T`) so every construction/reacquire site in
+#   `renderer.rs`/`surface_lease.rs` — and this module's own GPU-free unit
+#   tests — names the erased form, not a handful of exceptional sites a
+#   per-line marker would suit.
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|TreeObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations|HitTestProbe|WindowTarget)\b'
 
 # `HitTestProbe` (issue #541) is a layer-INVERSION seam, and dyn is what makes
 # it one: `HitTestResult` is defined in flui-interaction, but the render tree

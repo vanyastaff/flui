@@ -15,7 +15,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -74,6 +74,17 @@ fn wait_for_running(platform: &WinitPlatform) {
 /// up) and that an unwind completed (count goes back down) — a
 /// deterministic condition, not a blind sleep, even though the exact
 /// wake-up latency is real wall-clock time.
+/// Bounded spin until `flag` is set. Used where a test must observe a side
+/// effect of a teardown step rather than a state the teardown reaches
+/// *before* that step (see `frame_callback_owner_is_released_by_complete_window_close`).
+fn wait_for_flag(flag: &AtomicBool, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !flag.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn wait_for_map_len(platform: &WinitPlatform, expected: usize, what: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -888,6 +899,276 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
          CloseRequested"
     );
     drop(kept_window.lock().take());
+}
+
+/// Reproduces the strong cycle `install_pre_present_hook`
+/// (`crates/flui-app/src/app/runner/frame_pacing.rs`) creates in
+/// production: the frame closure registered via `on_request_frame` owns an
+/// `Arc::clone` of the window itself (there, the renderer's retained
+/// target), so window -> callback slot -> closure -> `Arc<window>` is a
+/// strong cycle that only [`crate::shared::WindowCallbacks::clear`] can
+/// break (see the memory note `pre-present-hook-pins-the-window-in-a-cycle`).
+/// This test's `RendererProbe` stands in for the renderer; the programmatic
+/// close (`window.close()`, the #919 route this same file's
+/// `programmatic_close_runs_the_full_teardown_and_exits_the_loop` already
+/// pins) reaches `WinitApp::complete_window_close`, whose `callbacks()
+/// .clear()` must drop the probe. A `Weak` taken before the probe existed
+/// proves the window itself is not orphaned either, once every OTHER
+/// strong ref (the probe's own clone, this test's parked clone, and the
+/// platform's own tracking entry) is gone.
+///
+/// Goes red if `complete_window_close` stops calling `callbacks().clear()`.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "winit requires AppKit's event loop on the real main thread; \
+              the test harness runs this on an ordinary test thread"
+)]
+fn frame_callback_owner_is_released_by_complete_window_close() {
+    /// Owns a clone of the window `Arc`, the same shape the renderer's
+    /// pre-present hook captures in production, and records when it drops.
+    struct RendererProbe {
+        _window: Arc<dyn PlatformWindow>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for RendererProbe {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let platform = Arc::new(WinitPlatform::new());
+    let event_loop = build_test_event_loop();
+    let event_loop_proxy = event_loop.create_proxy();
+    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = event_loop_proxy.send_event(());
+    });
+    let (control, receiver) = control_lane(wake_owner);
+    let owner_thread = thread::current().id();
+    platform
+        .install_control_lane(owner_thread, control.clone())
+        .expect("first install succeeds");
+
+    let probe_dropped = Arc::new(AtomicBool::new(false));
+    // Parked here so the test controls exactly when its OWN external strong
+    // ref drops, separately from the probe's clone (released by
+    // `callbacks().clear()`) and the platform's own tracking entry
+    // (released by `complete_window_close`'s `state.windows.remove`).
+    let kept_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+    let weak_window: Arc<Mutex<Option<Weak<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+
+    let platform_for_worker = Arc::clone(&platform);
+    let control_for_worker = control;
+    let probe_dropped_for_worker = Arc::clone(&probe_dropped);
+    let kept_window_for_worker = Arc::clone(&kept_window);
+    let weak_window_for_worker = Arc::clone(&weak_window);
+    let worker = thread::spawn(move || {
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            wait_for_running(&platform_for_worker);
+
+            let handle = control_for_worker
+                .request_open_window(options("frame-callback-cycle"))
+                .expect("lane accepts the request");
+            let window = match handle.wait() {
+                ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
+                ClaimOutcome::AlreadyClaimed => {
+                    panic!("this handle is never polled by another caller before wait")
+                }
+                ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
+            };
+
+            *weak_window_for_worker.lock() = Some(Arc::downgrade(&window));
+
+            let probe = RendererProbe {
+                _window: Arc::clone(&window),
+                dropped: Arc::clone(&probe_dropped_for_worker),
+            };
+            window.on_request_frame(Box::new(move || {
+                let _ = &probe;
+            }));
+            *kept_window_for_worker.lock() = Some(Arc::clone(&window));
+
+            window.close();
+
+            wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
+
+            // Wait on the effect itself, not on the map: `complete_window_close`
+            // removes the tracking entry BEFORE it clears the callback slots,
+            // so a poll that observes the empty map can land in the gap before
+            // `clear()` has run. The claim stays as strong -- this wait ends
+            // before `request_quit()` below, so the quit path's own
+            // `release_open_window_callbacks` (which only visits windows still
+            // in `state.windows`, and this one is already out) cannot be what
+            // satisfies it.
+            wait_for_flag(
+                &probe_dropped_for_worker,
+                "complete_window_close's callbacks().clear() to drop the frame \
+                 callback's owned probe",
+            );
+        }));
+
+        control_for_worker.request_quit();
+        if let Err(payload) = outcome {
+            resume_unwind(payload);
+        }
+    });
+
+    let mut app = WinitApp {
+        platform: Arc::clone(&platform),
+        on_ready: None,
+        control: receiver,
+        quit_notified: false,
+        in_flight_replies: Vec::new(),
+        bootstrap_error: None,
+        self_close_deadline: None,
+        self_close_route: SelfCloseRoute::default(),
+    };
+    event_loop
+        .run_app(&mut app)
+        .expect("event loop runs to completion");
+    worker.join().expect("worker thread does not panic");
+
+    assert!(
+        probe_dropped.load(Ordering::SeqCst),
+        "the callback-owned probe must have been dropped by the close \
+         teardown itself, not merely by this test's own teardown afterward"
+    );
+
+    // Only now release this test's own external strong ref -- the probe
+    // (already dropped above) and the platform's tracking entry (removed by
+    // `complete_window_close`) are already gone.
+    drop(kept_window.lock().take());
+    let weak = weak_window
+        .lock()
+        .take()
+        .expect("window was opened before the probe ran");
+    assert!(
+        weak.upgrade().is_none(),
+        "no strong Arc<dyn PlatformWindow> should survive once the probe, \
+         the platform's own tracking entry, and this test's external \
+         reference are all gone"
+    );
+}
+
+/// AC7's second case (spec `1043-renderer-surface-ownership`): `owner.quit()`
+/// with a window that was never explicitly closed. Before
+/// `WinitApp::finish_shutdown` grew `release_open_window_callbacks`,
+/// nothing on this path ever visited an open window at all —
+/// `complete_pending_closes` only tears down windows whose `close()` was
+/// actually requested — so the frame callback (and everything it owns, the
+/// renderer's own `Arc<window>` included) leaked past the loop's exit. The
+/// sequence recorder pins that the probe drops from INSIDE the quit path,
+/// strictly before the point this test's own call sequence mirrors
+/// `Platform::run` returning to its caller (see
+/// `on_ready_failure_propagates_through_the_combined_shutdown_result`'s doc
+/// for why this file drives `event_loop.run_app` directly instead of
+/// `run_event_loop`) — not merely because the test's own locals went out of
+/// scope afterward.
+///
+/// Goes red if `finish_shutdown` stops calling
+/// `release_open_window_callbacks`.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "winit requires AppKit's event loop on the real main thread; \
+              the test harness runs this on an ordinary test thread"
+)]
+fn quit_with_open_window_releases_frame_callback_owner() {
+    /// Owns a clone of the window `Arc`, the same shape the renderer's
+    /// pre-present hook captures in production, and records ITS OWN drop
+    /// into a shared sequence so the test can order it against the point
+    /// `Platform::run` would return.
+    struct RendererProbe {
+        _window: Arc<dyn PlatformWindow>,
+        sequence: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl Drop for RendererProbe {
+        fn drop(&mut self) {
+            self.sequence.lock().push("dropped");
+        }
+    }
+
+    let platform = Arc::new(WinitPlatform::new());
+    let event_loop = build_test_event_loop();
+    let event_loop_proxy = event_loop.create_proxy();
+    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = event_loop_proxy.send_event(());
+    });
+    let (control, receiver) = control_lane(wake_owner);
+    let owner_thread = thread::current().id();
+    platform
+        .install_control_lane(owner_thread, control.clone())
+        .expect("first install succeeds");
+
+    let sequence: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let platform_for_worker = Arc::clone(&platform);
+    let control_for_worker = control;
+    let sequence_for_worker = Arc::clone(&sequence);
+    let worker = thread::spawn(move || {
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            wait_for_running(&platform_for_worker);
+
+            let handle = control_for_worker
+                .request_open_window(options("quit-with-open-window"))
+                .expect("lane accepts the request");
+            let window = match handle.wait() {
+                ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
+                ClaimOutcome::AlreadyClaimed => {
+                    panic!("this handle is never polled by another caller before wait")
+                }
+                ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
+            };
+
+            let probe = RendererProbe {
+                _window: Arc::clone(&window),
+                sequence: Arc::clone(&sequence_for_worker),
+            };
+            window.on_request_frame(Box::new(move || {
+                let _ = &probe;
+            }));
+
+            // The window is deliberately never closed -- only quit -- to
+            // reproduce the "quit skips per-window close" hole.
+        }));
+
+        control_for_worker.request_quit();
+        if let Err(payload) = outcome {
+            resume_unwind(payload);
+        }
+    });
+
+    let mut app = WinitApp {
+        platform: Arc::clone(&platform),
+        on_ready: None,
+        control: receiver,
+        quit_notified: false,
+        in_flight_replies: Vec::new(),
+        bootstrap_error: None,
+        self_close_deadline: None,
+        self_close_route: SelfCloseRoute::default(),
+    };
+    event_loop
+        .run_app(&mut app)
+        .expect("event loop runs to completion");
+    worker.join().expect("worker thread does not panic");
+
+    // Mirrors `run_event_loop`'s own post-`run_app` sequence: one more
+    // `finish_shutdown` after the loop has fully stopped, at the exact
+    // point `Platform::run` returns to its caller.
+    app.finish_shutdown();
+    sequence.lock().push("run_returned");
+
+    assert_eq!(
+        *sequence.lock(),
+        vec!["dropped", "run_returned"],
+        "the frame callback's owned probe must drop from inside the quit \
+         path itself -- before the point Platform::run returns to its \
+         caller -- not merely because the test's own locals went out of \
+         scope afterward"
+    );
 }
 
 /// `resumed`'s stashed `bootstrap_error` must survive all the way to the
