@@ -95,10 +95,8 @@ unpublished) depends on it.
 scheduler is already mid-frame, inside `SchedulerPhase.transientCallbacks`,
 `.midFrameMicrotasks`, or `.persistentCallbacks`. `UpdateScheduler::ensure_visual_update`
 checks `frames_enabled` only, with no phase check at all — this is a named
-gap, not a hidden one (see **Recorded gap** below), and this crate's own
-`.flutter/` reference clone was unavailable while writing this entry, so
-the phase list above is recorded from the reviewing pass that found the
-gap, not independently re-verified against Flutter source here.
+gap, not a hidden one (see **Recorded gap** below); the phase list is
+`scheduler/binding.dart::ensureVisualUpdate` at the pinned tag 3.44.0.
 
 **Conflict:** `RenderingFlutterBinding::request_visual_update`
 (`flui-app`'s `bindings/renderer_binding.rs`) called the retired

@@ -49,7 +49,17 @@ use super::*;
 /// `Mutex` -- a reentrant `RefCell` borrow panics rather than deadlocking,
 /// a different failure mode this oracle does not yet cover).
 fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
-    let inner = &scheduler.inner;
+    // Destructured without `..` on purpose: a `Mutex` added directly to
+    // `SchedulerInner` (beside the owned sub-objects) must fail to compile
+    // here until it is classified below, exactly like a field added to any
+    // of the three state structs.
+    let SchedulerInner {
+        frame,
+        callbacks,
+        binding,
+        task_queue,
+        async_driver,
+    } = &*scheduler.inner;
 
     let FrameState {
         scheduler_phase: _,
@@ -62,7 +72,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         warm_up_done: _,
         idle_deadline,
         completion_waiters,
-    } = &inner.frame;
+    } = frame;
     assert!(
         current_frame.try_lock().is_some(),
         "current_frame is locked during a callback"
@@ -94,7 +104,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         microtasks,
         idle,
         lifecycle_listeners,
-    } = &inner.callbacks;
+    } = callbacks;
     assert!(
         post_frame_registration.try_lock().is_some(),
         "post_frame_registration is locked during a callback"
@@ -134,7 +144,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         performance_mode_requests: _,
         current_performance_mode,
         on_frame_scheduled,
-    } = &inner.binding;
+    } = binding;
     assert!(
         epoch_start.try_lock().is_some(),
         "epoch_start is locked during a callback"
@@ -161,11 +171,11 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     );
 
     assert!(
-        inner.task_queue.is_unlocked(),
+        task_queue.is_unlocked(),
         "TaskQueue's lock is locked during a callback"
     );
     assert!(
-        inner.async_driver.is_unlocked(),
+        async_driver.is_unlocked(),
         "AsyncDriver's lock(s) are locked during a callback"
     );
 }
