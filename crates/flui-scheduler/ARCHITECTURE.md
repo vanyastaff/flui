@@ -382,3 +382,215 @@ as a follow-up rather than silently assumed done.
 
 **Trade-off accepted:** the `frames_enabled` fix ships now; the mid-frame
 phase check above does not, and is named rather than implied.
+
+### The ticker callback slot is a state machine, leased across user code
+
+**Rule:** a ticker dispatch (`Ticker::tick`, `Ticker::tick_and_reschedule_static`)
+must invoke the user callback with no lock held, and whatever that callback
+does to the SAME ticker — `stop`/`start`/`mute`/`unmute`/`dispose`/`reset`,
+called reentrantly — must be resolved against the run's actual outcome, not
+against a state re-read after the fact that cannot tell which run it belongs
+to.
+
+**Conflict:** issue #1059 found `TickerInner::callback: Option<TickerCallback>`
+conflated two different reasons for being `None` — "never installed, or the
+run stopped" and "checked out for an in-flight dispatch" — and that the
+auto-scheduling dispatch (`tick_and_reschedule_static`) resolved a checkout
+by re-reading `state == Active` alone, an ABA problem: that check cannot
+distinguish "still my run" from "a different run the callback itself just
+started". Two concrete failures followed, both with production call
+chains through `AnimationController::restart_ticker` (a status listener
+that calls `forward()`/`reverse()` again from inside the run it is reacting
+to is the ordinary "chain the next animation" idiom, not an edge case):
+
+- **Restart inside a tick.** A callback that calls `stop()` then
+  `start(new)` had `new` overwritten by the dispatch tail's own blind
+  `guard.callback = callback` (the OLD, checked-out closure) restore, and
+  the tail then registered ANOTHER transient callback on top of the one
+  `start()`'s own `schedule_tick_if_active()` had just registered — measured
+  before the fix: `(pending_after_restart, old_calls, new_calls) = (2, 3, 0)`
+  instead of `(1, 1, 1)`.
+- **Mute then unmute inside a tick.** `mute()` promised to retain the
+  callback, but during the dispatch the callback was held OUTSIDE the inner
+  slot entirely (checked out into a bare local, not a tracked state); the
+  old dispatch tail's restore condition (`state == Active`) never fires for
+  a ticker that ends the callback Muted, so `unmute()`'s own re-registration
+  was the only one — except a reentrant mute-then-unmute in the SAME tick
+  raced it against the tail's blind re-registration, orphaning one of the
+  two live ids (issue #1059's own reentrancy trace).
+
+**Choice:** replace the `Option` with an explicit three-state
+`CallbackSlot` (`Vacant` | `Ready(TickerCallback)` | `CheckedOut`), and check
+a `Ready` callback out into an RAII `TickerLease` for the duration of the
+dispatch — the same checkout/restore-or-discard shape as `flui-platform`'s
+`CallbackLease` (`crates/flui-platform/src/shared/handlers.rs`), adapted
+for a run-completion condition instead of a "window torn down" one. The
+lease's `Drop` (which runs on a panicking callback's unwind too, closing a
+latent bug where a panic left the slot checked out — i.e. empty — forever)
+restores the callback to `Ready` only if the slot is STILL exactly
+`CheckedOut` (nothing reentrant already replaced it with a fresh
+`Ready(new)`) AND the ticker is still running (`TickerState::is_running()`:
+`Active` or `Muted`); otherwise it drops the checked-out callback, always
+OUTSIDE the inner lock (a callback's own `Drop` — an `Arc`/`Box` capture's
+destructor — is user code that may call back into this same, non-reentrant
+ticker; see the workspace memory note `a-statement-lock-drops-its-guard-last`
+and the sibling fix in `flui-platform`'s `CallbackLease::drop`). This
+resolves both failures structurally rather than by re-checking more state
+after the fact:
+
+- A reentrant `start()` overwrites `CheckedOut` with `Ready(new)` directly,
+  so the lease finds the slot no longer `CheckedOut` when it drops and
+  discards the superseded callback instead of restoring it — an old run can
+  no longer overwrite a newer one.
+- A reentrant `mute()` leaves the slot `CheckedOut` untouched (mute never
+  touched the slot, before or after this fix — only `state`), so the lease
+  restores the SAME callback because `Muted` is still `is_running()`. The
+  callback is never held outside a tracked state at all.
+
+**One scheduling predicate, not one check per site:**
+`TickerInner::should_schedule_tick` (`state == Active && matches!(slot,
+Ready(_)) && scheduled_callback_id.is_none()`) is Flutter parity —
+[`ticker.dart:270`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+`shouldScheduleTick = !muted && isActive && !scheduled` — and is now the
+ONLY scheduling check, shared by `start_inner`, `unmute` (via
+`schedule_tick_if_active`), and the auto-tick tail. Checking the SLOT, not
+just `state`, is what closes the duplicate-registration failure above:
+while a callback is checked out, `slot` is `CheckedOut`, not `Ready`, so
+`should_schedule_tick` is false for the WHOLE reentrant window a
+mute()-then-unmute() runs inside — `unmute()`'s own scheduling attempt
+during that window is a correctly-refused no-op, leaving the dispatch
+tail's own (post-restore) attempt as the only one that can succeed. Every
+site that still registers a callback id after computing this predicate
+also refuses to overwrite an existing `Some` id — a residual defense (not
+required to make either measured failure disappear, since the predicate
+above already prevents both) against a caller registering between the
+predicate check and the id being stored, both of which run with no lock
+held; a redundant registration is traced and cancelled rather than
+orphaned.
+
+**Five sites hardened to drop a displaced callback outside the lock, none
+independently reproducible today (`stop`/`dispose`/`reset` already
+released the lock before this fix; `start_inner`'s explicit-callback
+overwrite and `set_pending_callback` were the two genuine
+statement-scoped-guard instances — memory note
+`a-statement-lock-drops-its-guard-last`):** `stop`, `dispose`, `reset`
+(`CallbackSlot::clear_if_ready` extracts a `Ready` callback and leaves a
+`CheckedOut` one for the dispatching lease to resolve, so a reentrant
+stop/dispose/reset never fights the lease over the same callback), and
+`start_inner`'s explicit-callback branch and `set_pending_callback` (both
+now `mem::replace` the slot and bind the displaced value out of the lock's
+block before dropping it).
+
+**Why FLUI needs a slot protocol Flutter does not:** Flutter's `Ticker`
+holds one `_onTick` for its entire life, assigned once at construction
+(`Ticker(this._onTick, ...)`); there is no `start(callback)` that installs
+a NEW callback per run, so Dart's own `_tick` has no "which run does this
+checked-out closure belong to" question to answer — `_animationId` alone
+(this crate's `scheduled_callback_id`) is Flutter's whole story. FLUI's
+`Ticker::start` accepts a fresh callback on every run (`TickerProvider`'s
+factory shape plus ad hoc `start(closure)` call sites), so the SAME ticker
+legitimately dispatches through a sequence of different closures over its
+life — the slot state machine is what tracks which one a given dispatch is
+allowed to restore.
+
+**Recorded divergences and limitations, not closed by this fix:**
+
+- **`start_inner` while `Muted` bypasses the `Idle`/`Stopped` contract.**
+  Flutter's `Ticker.isActive` is `_future != null` and its doc states that
+  a muted ticker "can be active" — muting gates `isTicking` and
+  `shouldScheduleTick`, never `isActive` — so `start` on a muted Flutter
+  ticker hits `'A ticker that is already active cannot be started again'`
+  and is REJECTED. `Ticker::start_inner`'s own `debug_assert!`/early-return
+  rejects only `TickerState::Active`, so FLUI accepts the call, silently
+  overwriting the muted run's callback and future and re-anchoring its
+  start time. Named here as a known gap; closing it is a `start_inner`
+  contract change outside this fix's scope.
+- **A panicking tick callback leaves the ticker unscheduled.** The lease
+  restores the callback on unwind, so the slot is `Ready` and the state is
+  still `Active` — but the registration id was cleared at dispatch entry
+  and the tail that would re-register never runs, so the ticker stays
+  active and idle until something external (a `mute()`/`unmute()` cycle, a
+  `stop()`+`start()`) re-arms scheduling. Pinned by
+  `a_panicking_tick_callback_leaves_the_slot_restored`, which asserts the
+  slot's contents, not that ticking resumes.
+- **Register-outside-lock / store-id-under-lock is still a genuine
+  cross-thread TOCTOU.** `schedule_tick_if_active` and the auto-tick tail
+  both check `should_schedule_tick`, then upgrade the scheduler and
+  register, then re-lock ONLY to store the id — three separate lock
+  acquisitions with no lock held across any of them. A concurrent
+  cross-thread `mute()` immediately followed by `unmute()` racing this
+  window is a starvation/orphan hazard that predates this fix and is
+  unchanged by it: the new "never overwrite a `Some` id" guard traces and
+  cancels a losing registration rather than losing track of it, which
+  narrows the failure mode from "silently orphaned, never cancelled" to
+  "traced and cancelled", but does not close the window itself. Closing it
+  fully needs a single compare-and-set across upgrade+register+store, which
+  is a larger scheduler-API change than this fix's scope.
+- **The `AnimationController` ↔ `Ticker` strong-clone reference cycle is
+  unchanged and undocumented as a NEW risk by this fix.**
+  `AnimationController::restart_ticker` captures `let controller =
+  self.clone();` into the ticker's callback closure — `Ticker` holds
+  `TickerCallback = Box<dyn FnMut(f64) + Send>`, so the controller's
+  `Arc<Mutex<AnimationControllerInner>>` is kept alive by its OWN ticker's
+  installed callback for as long as that callback is installed. This is
+  safe today only because every mutator that could otherwise deadlock or
+  leak reaches the controller through a borrowed `&self` (never taking a
+  second strong clone that would need dropping to break the cycle) and
+  `dispose()`/`stop()`/`reset()` all clear the ticker's callback (directly,
+  or via `Ticker::dispose`/`Ticker::stop`), which drops the closure and
+  with it the controller's self-reference. The invariant — every
+  `AnimationController` method that runs while its own ticker's callback
+  could still be installed must reach `self` through a borrow, never
+  through a second owned strong clone the callback itself would need to
+  outlive — is recorded here rather than changed.
+
+**Tests:** `flui-scheduler`'s `ticker::tests` module —
+`restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick` and
+`mute_then_unmute_inside_tick_delivers_next_frame_once` pin the two measured
+failures directly; `restart_between_ticks_preserves_new_callback` is a
+non-reentrant control; `dispose_inside_tick_drops_the_callback_and_does_not_reschedule`
+and `reset_inside_tick_drops_the_callback_and_does_not_reschedule` are
+controls too — both already passed before this fix (`dispose` cleared the
+registration id and the tail returned at its `disposed` check; `reset` left
+the state `Idle`, so the tail's restore and reschedule were already
+skipped) and guard against a regression rather than pinning one of the
+defects; `a_panicking_tick_callback_leaves_the_slot_restored` pins the
+panic-unwind fix; `stale_callback_is_dropped_outside_the_lock` proves the
+outside-the-lock drop with a non-blocking `try_lock` probe rather than a
+test whose failure mode would be a hang. The manual `Ticker::tick(&self,
+...)` path cannot support the SAME reentrant-restart probe: restarting
+needs `&mut Ticker` (`stop`/`start`), which — since `tick` takes only
+`&self` — is only reachable by wrapping the ticker in an outer lock the
+CALLER holds for `tick`'s entire duration, including the callback; a
+reentrant call back through that same non-reentrant lock self-deadlocks
+before it ever reaches `stop()`. `stop_between_two_manual_ticks_does_not_reinvoke_callback`
+pins the manual path's (non-reentrant) restore contract instead.
+`flui-animation`'s `controller::tests::status_listener_chaining_forward_ticks_once_per_frame_and_stop_fully_stops_it`
+reproduces the auto-scheduling "restart inside tick" failure through the
+real production call chain (a status listener chaining the next run) rather
+than a ticker-level probe, and pins that `stop()` afterward cancels the
+run fully rather than one half of a duplicated pair.
+
+**Alternatives considered:**
+
+- Keep `Option<TickerCallback>` and add a generation/epoch counter
+  (the issue's own "possible direction") checked alongside `state`.
+  Rejected: an epoch still answers "is this the same run", but does nothing
+  about the SECOND failure (mute/unmute retention while checked out) or the
+  panic-unwind leak, both of which are a missing STATE — "checked out" is
+  not representable in `Option` at all — rather than a missing identity
+  check. The slot state machine subsumes what an epoch would have bought
+  and closes the other two failures the same shape closes.
+- Hold the ticker's inner lock across the callback invocation, so no
+  reentrant call could observe an inconsistent slot. Rejected per the
+  issue's own explicit instruction and this crate's existing
+  no-lock-held-during-a-callback discipline (see this file's own "No
+  legacy, lock-tied frame-callback registration API" entry above): it would
+  prohibit the legitimate reentrancy (`AnimationController::restart_ticker`
+  IS a real, common call path) and reintroduce exactly the self-deadlock
+  class issue #1058 removed.
+
+**Trade-off accepted:** the two named limitations above (the `Muted`
+start-contract gap and the cross-thread register/store TOCTOU) ship
+unfixed, named rather than silently assumed closed; both predate this fix
+and are not measured to have widened under it.

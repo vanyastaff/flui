@@ -2294,4 +2294,107 @@ mod tests {
         );
         c.dispose();
     }
+
+    // ---- reentrant ticker restart via a status listener (issue #1059) ----
+
+    /// The canonical "chain the next animation" idiom: a status listener
+    /// calls `forward()` again once the run it is reacting to completes.
+    /// The controller starts at the UPPER bound and runs `reverse()` first —
+    /// calling `forward()` immediately after a forward run lands exactly on
+    /// the upper bound already (a real, zero-distance settle, Flutter
+    /// parity: see `forward_at_upper_bound_settles_immediately`), which
+    /// would never reach `restart_ticker` at all. `restart_ticker`'s
+    /// `ticker.start(new_callback)` then runs while the SAME ticker's own
+    /// callback is still the one dispatching — this run's own — tick
+    /// (`tick_time_based` already stopped the ticker before firing status,
+    /// so `restart_ticker`'s own `ticker.stop()` is a no-op, but
+    /// `ticker.start` is not: it installs the chained run's callback into a
+    /// slot a `TickerLease` still holds checked out). This is the SAME
+    /// "restart inside tick" scenario `flui-scheduler`'s own
+    /// `restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick`
+    /// pins directly on `Ticker`, reached here through the real production
+    /// call chain instead of a hand-rolled reentrant probe.
+    #[test]
+    fn status_listener_chaining_forward_ticks_once_per_frame_and_stop_fully_stops_it() {
+        let _serial = serial();
+        let scheduler = UpdateScheduler::new();
+        let c = AnimationController::new(Duration::from_millis(1), &scheduler);
+        c.set_value(1.0);
+
+        let tick_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&tick_count);
+        c.add_listener(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let restarted = Arc::new(AtomicUsize::new(0));
+        let restart_flag = Arc::clone(&restarted);
+        let chained = c.clone();
+        c.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Dismissed
+                && restart_flag.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                // A LONG chained run on purpose: the point of the second
+                // half of this test is that `stop()` cancels a chain that
+                // is still in flight. A chained run short enough to finish
+                // on the next frame stops itself (`tick_time_based` calls
+                // `ticker.stop()` before firing its status), which would
+                // leave nothing for `stop()` to cancel and make every
+                // assertion below hold with or without the fix.
+                chained
+                    .animate_to(1.0, Some(Duration::from_secs(10)))
+                    .unwrap();
+            }
+        }));
+
+        c.reverse().unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        scheduler.execute_frame();
+
+        assert_eq!(
+            restarted.load(Ordering::SeqCst),
+            1,
+            "sanity: the first run must complete and the status listener \
+             must have chained a restart"
+        );
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "the chained restart must leave exactly ONE live tick \
+             registration — not zero (the new run's callback lost) and not \
+             two (the old run's registration orphaned alongside it)"
+        );
+
+        std::thread::sleep(Duration::from_millis(5));
+        scheduler.execute_frame();
+
+        assert_eq!(
+            tick_count.load(Ordering::SeqCst),
+            2,
+            "exactly one value notification per frame across both runs — a \
+             duplicated tick chain would notify twice on the second frame"
+        );
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "the chained run is still in flight, so there is exactly one \
+             live registration for `stop()` to cancel below"
+        );
+
+        c.stop().unwrap();
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            0,
+            "stop() must fully cancel the single live tick chain, not just \
+             one half of a duplicated pair"
+        );
+        assert!(!c.is_animating());
+
+        // A surviving orphaned registration from a duplicated chain would
+        // still fire here even after `stop()`.
+        scheduler.execute_frame();
+        assert_eq!(tick_count.load(Ordering::SeqCst), 2);
+
+        c.dispose();
+    }
 }

@@ -145,11 +145,131 @@ impl TickerState {
     }
 }
 
+/// State of a ticker's installed callback.
+///
+/// Replaces a bare `Option<TickerCallback>`, which conflated two different
+/// reasons for being empty: "never installed, or the run stopped" and
+/// "checked out for an in-flight dispatch". A dispatch site (`Ticker::tick`,
+/// `Ticker::tick_and_reschedule_static`) checks a `Ready` callback out into a
+/// [`TickerLease`], leaving `CheckedOut` behind while user code runs with no
+/// lock held — the lease's `Drop` resolves the checkout back to `Ready` or
+/// `Vacant` once that code returns (issue #1059).
+enum CallbackSlot {
+    /// No callback installed.
+    Vacant,
+    /// Callback installed and idle — ready to be leased for the next dispatch.
+    Ready(TickerCallback),
+    /// A dispatch has taken the callback out; see [`TickerLease`].
+    CheckedOut,
+}
+
+impl CallbackSlot {
+    /// Clears an idle callback, returning it for the caller to drop AFTER
+    /// releasing whatever lock guards this slot — a callback's own `Drop` is
+    /// user code that may re-enter the (non-reentrant) ticker lock. Leaves a
+    /// `CheckedOut` slot untouched: an in-flight dispatch's [`TickerLease`]
+    /// owns that callback and is the only thing that resolves it, so
+    /// clearing it here would race the lease's own restore-or-discard
+    /// decision (see `TickerState::is_running` at the time the lease drops).
+    fn clear_if_ready(&mut self) -> Option<TickerCallback> {
+        if matches!(self, CallbackSlot::Ready(_)) {
+            match std::mem::replace(self, CallbackSlot::Vacant) {
+                CallbackSlot::Ready(callback) => Some(callback),
+                _ => unreachable!("just matched Ready above"),
+            }
+        } else {
+            None
+        }
+    }
+}
+
+/// RAII checkout of a ticker's callback for one dispatch.
+///
+/// Checks a [`CallbackSlot::Ready`] callback out to `CheckedOut` so the
+/// dispatching call (`Ticker::tick`, `Ticker::tick_and_reschedule_static`)
+/// can run it with **no lock held** — user code may reenter the ticker
+/// (`stop`/`start`/`mute`/`unmute`/`dispose`/`reset`) from inside its own
+/// callback (issue #1059). Dropping the lease — including on unwind, so a
+/// panicking callback is covered too — resolves the checkout:
+///
+/// - If the slot is still exactly `CheckedOut` (nothing reentrant replaced
+///   it) and the ticker is still running (`Active` or `Muted`), the
+///   callback is restored to `Ready`.
+/// - Otherwise — the ticker stopped/disposed/reset while checked out, or a
+///   reentrant `start` already installed a fresh `Ready(new)` callback in
+///   its place — the checked-out callback is dropped, OUTSIDE the inner
+///   lock (its own `Drop` is user code that may call back into this same
+///   ticker).
+struct TickerLease {
+    inner: Arc<Mutex<TickerInner>>,
+    callback: Option<TickerCallback>,
+}
+
+impl TickerLease {
+    /// Checks the callback out under an already-held `guard`, atomically
+    /// with whatever the caller just verified under the same lock (e.g.
+    /// `state == Active`).
+    fn checkout(inner: &Arc<Mutex<TickerInner>>, guard: &mut TickerInner) -> Self {
+        let callback = match std::mem::replace(&mut guard.slot, CallbackSlot::CheckedOut) {
+            CallbackSlot::Ready(callback) => Some(callback),
+            other => {
+                // Nothing to dispatch: put back what was actually there
+                // (`Vacant`, or an unexpected concurrent `CheckedOut` — this
+                // ticker's own contract never dispatches the same run
+                // twice, but a double checkout is handled rather than
+                // panicking).
+                guard.slot = other;
+                None
+            }
+        };
+        Self {
+            inner: Arc::clone(inner),
+            callback,
+        }
+    }
+
+    fn callback_mut(&mut self) -> Option<&mut TickerCallback> {
+        self.callback.as_mut()
+    }
+}
+
+impl Drop for TickerLease {
+    fn drop(&mut self) {
+        let Some(callback) = self.callback.take() else {
+            return;
+        };
+        let discarded = {
+            let mut guard = self.inner.lock();
+            let should_restore =
+                matches!(guard.slot, CallbackSlot::CheckedOut) && guard.state.is_running();
+            if should_restore {
+                guard.slot = CallbackSlot::Ready(callback);
+                None
+            } else {
+                if matches!(guard.slot, CallbackSlot::CheckedOut) {
+                    // The ticker stopped/disposed/reset while this callback
+                    // was checked out — normalize back to `Vacant` rather
+                    // than leaving the slot stuck reporting "checked out"
+                    // forever.
+                    guard.slot = CallbackSlot::Vacant;
+                }
+                tracing::trace!(
+                    "TickerLease: discarding a superseded or stale callback outside the inner lock"
+                );
+                Some(callback)
+            }
+        };
+        // The guard above has already fallen by the time this drops: the
+        // callback's own `Drop` (user code) may re-enter the ticker.
+        drop(discarded);
+    }
+}
+
 /// Shared inner state for a Ticker (single allocation, single lock)
 struct TickerInner {
     state: TickerState,
     start_time: Option<Instant>,
-    callback: Option<TickerCallback>,
+    slot: CallbackSlot,
     muted_elapsed: Seconds,
     /// Future for the currently active ticker run.
     ///
@@ -167,6 +287,27 @@ struct TickerInner {
     /// Flutter parity: `ticker.dart:254 _animationId` (sentinel for
     /// "already-scheduled").
     scheduled_callback_id: Option<CallbackId>,
+}
+
+impl TickerInner {
+    /// The single scheduling eligibility predicate, shared by every site
+    /// that may register a transient frame callback: `start_inner`,
+    /// `unmute` (via `schedule_tick_if_active`), and the auto-tick tail
+    /// (`tick_and_reschedule_static`). A callback checked out into a
+    /// [`TickerLease`] (`CallbackSlot::CheckedOut`) is not `Ready`, so this
+    /// is false for the whole duration of that dispatch — which is exactly
+    /// why a reentrant `mute()`-then-`unmute()` from inside the running
+    /// callback cannot register a second, orphaning transient callback: its
+    /// `unmute()` call reaches this predicate while the slot is still
+    /// `CheckedOut`, before the lease has restored it (issue #1059).
+    ///
+    /// Flutter parity: [`ticker.dart:270`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// `shouldScheduleTick = !muted && isActive && !scheduled`.
+    fn should_schedule_tick(&self) -> bool {
+        self.state == TickerState::Active
+            && matches!(self.slot, CallbackSlot::Ready(_))
+            && self.scheduled_callback_id.is_none()
+    }
 }
 
 /// Animation ticker with runtime state management
@@ -255,7 +396,7 @@ impl Ticker {
             inner: Arc::new(Mutex::new(TickerInner {
                 state: TickerState::Idle,
                 start_time: None,
-                callback: None,
+                slot: CallbackSlot::Vacant,
                 muted_elapsed: Seconds::ZERO,
                 active_future: None,
                 scheduled_callback_id: None,
@@ -285,7 +426,7 @@ impl Ticker {
             inner: Arc::new(Mutex::new(TickerInner {
                 state: TickerState::Idle,
                 start_time: None,
-                callback: None,
+                slot: CallbackSlot::Vacant,
                 muted_elapsed: Seconds::ZERO,
                 active_future: None,
                 scheduled_callback_id: None,
@@ -312,11 +453,18 @@ impl Ticker {
     ///
     /// Used by [`TickerProvider::create_ticker`] (Flutter factory shape) to
     /// vend a ticker preloaded with its tick callback. The callback is
-    /// installed into [`TickerInner::callback`] when [`start`](Self::start) is
-    /// next invoked without a callback argument; explicit `start(callback)`
-    /// overrides any preloaded value.
+    /// installed into the ticker's callback slot when [`start`](Self::start)
+    /// is next invoked without a callback argument; explicit
+    /// `start(callback)` overrides any preloaded value.
     pub(crate) fn set_pending_callback(&mut self, callback: TickerCallback) {
-        self.inner.lock().callback = Some(callback);
+        // The displaced slot value (a real `Ready(old)` callback if one was
+        // already pre-loaded) is bound out of the lock's block so its `Drop`
+        // — user code — never runs while the inner lock is held.
+        let displaced = {
+            let mut inner = self.inner.lock();
+            std::mem::replace(&mut inner.slot, CallbackSlot::Ready(callback))
+        };
+        drop(displaced);
     }
 
     /// Dispose of the ticker — idempotent.
@@ -334,16 +482,20 @@ impl Ticker {
         if self.disposed.swap(true, Ordering::Release) {
             return; // already disposed — idempotent
         }
-        let (pending_id, active_future) = {
+        let (pending_id, active_future, discarded) = {
             let mut inner = self.inner.lock();
             inner.state = TickerState::Stopped;
-            inner.callback = None;
+            let discarded = inner.slot.clear_if_ready();
             inner.start_time = None;
             (
                 inner.scheduled_callback_id.take(),
                 inner.active_future.take(),
+                discarded,
             )
         };
+        // Dropped only after the lock above has released (issue #1059
+        // hardening) — a callback's own `Drop` is user code.
+        drop(discarded);
         if let Some(future) = active_future {
             future.set_canceled();
         }
@@ -407,7 +559,7 @@ impl Ticker {
             return TickerFuture::canceled();
         }
         let future = TickerFuture::new();
-        {
+        let displaced = {
             let mut inner = self.inner.lock();
             debug_assert!(
                 inner.state != TickerState::Active,
@@ -424,23 +576,39 @@ impl Ticker {
                     .clone()
                     .unwrap_or_else(TickerFuture::canceled);
             }
-            if let Some(cb) = callback {
-                // Explicit callback overrides any pre-loaded one from create_ticker.
-                inner.callback = Some(cb);
-            } else if inner.callback.is_none() {
-                // No explicit callback, no pre-loaded callback — start is a no-op
-                // (tick has nothing to dispatch). Logged for diagnostic.
+            let displaced = if let Some(cb) = callback {
+                // Explicit callback overrides any pre-loaded one from
+                // `create_ticker`, OR — if this call is reentrant, made from
+                // inside the ticker's own checked-out callback — installs
+                // the replacement run's callback directly into the slot a
+                // `TickerLease` currently holds `CheckedOut` (issue #1059:
+                // an old, superseded run must never overwrite this). Either
+                // way, whatever the slot held before (a real `Ready(old)`
+                // callback, or `CheckedOut` with nothing to drop here) is
+                // returned for the caller to drop AFTER this lock releases.
+                std::mem::replace(&mut inner.slot, CallbackSlot::Ready(cb))
+            } else if matches!(inner.slot, CallbackSlot::Vacant) {
+                // No explicit callback, and no pre-loaded/checked-out one —
+                // start is a no-op (tick has nothing to dispatch). Logged
+                // for diagnostic.
                 tracing::warn!(
                     ticker_id = ?self.id,
                     "Ticker::start_default called without a pre-loaded callback (no-op)"
                 );
                 return TickerFuture::complete();
-            }
+            } else {
+                // `Ready` (a pre-loaded callback exists) or `CheckedOut` (a
+                // reentrant `start_default()` resuming with the callback
+                // already in flight) — nothing to displace.
+                CallbackSlot::Vacant
+            };
             inner.state = TickerState::Active;
             inner.start_time = Some(Instant::now());
             inner.muted_elapsed = Seconds::ZERO;
             inner.active_future = Some(future.clone());
-        }
+            displaced
+        };
+        drop(displaced);
         // Auto-scheduling tickers register a transient frame callback now.
         // Flutter parity: `ticker.dart:200-202 if (shouldScheduleTick)
         // scheduleTick()`.
@@ -465,15 +633,24 @@ impl Ticker {
         if !self.assert_not_disposed("stop") {
             return;
         }
-        let (pending_id, active_future) = {
+        let (pending_id, active_future, discarded) = {
             let mut inner = self.inner.lock();
             inner.state = TickerState::Stopped;
-            inner.callback = None;
+            let discarded = inner.slot.clear_if_ready();
             (
                 inner.scheduled_callback_id.take(),
                 inner.active_future.take(),
+                discarded,
             )
         };
+        // Dropped only after the lock above has released (issue #1059
+        // hardening) — a callback's own `Drop` is user code. If `stop()` was
+        // called reentrantly (from inside the ticker's own checked-out
+        // callback), the slot is `CheckedOut`, not `Ready`, so nothing is
+        // discarded here — the dispatching `TickerLease` resolves the
+        // checked-out callback itself once it observes this now-`Stopped`
+        // (not running) state.
+        drop(discarded);
         if let Some(future) = active_future {
             future.set_complete();
         }
@@ -560,35 +737,35 @@ impl Ticker {
     ///
     /// This should be called once per frame. It invokes the callback if the
     /// ticker is active.
+    ///
+    /// Uses the same internal `TickerLease` checkout/restore protocol as the
+    /// auto-scheduling dispatch path (issue #1059): the callback runs with
+    /// no lock held, so it may call `stop`/`start`/`mute`/`unmute`/
+    /// `dispose`/`reset` on this same ticker, and the lease resolves the
+    /// checkout — restore or discard — once the callback returns or unwinds.
     pub fn tick<T: TickerProvider>(&self, _provider: &T) {
         if !self.assert_not_disposed("tick") {
             return;
         }
-        let mut inner = self.inner.lock();
-
-        if inner.state != TickerState::Active {
-            return;
-        }
-
-        let Some(start) = inner.start_time else {
+        let (elapsed, mut lease) = {
+            let mut inner = self.inner.lock();
+            if inner.state != TickerState::Active {
+                return;
+            }
+            let Some(start) = inner.start_time else {
+                return;
+            };
+            let elapsed = start.elapsed().as_secs_f64();
+            let lease = TickerLease::checkout(&self.inner, &mut inner);
+            (elapsed, lease)
+        };
+        let Some(callback) = lease.callback_mut() else {
             return;
         };
-        let elapsed = start.elapsed().as_secs_f64();
-
-        // Take callback to avoid borrowing inner during invocation
-        let Some(mut callback) = inner.callback.take() else {
-            return;
-        };
-
-        // Release lock during callback invocation
-        drop(inner);
         callback(elapsed);
-
-        // Restore callback if still active
-        let mut inner = self.inner.lock();
-        if inner.state == TickerState::Active {
-            inner.callback = Some(callback);
-        }
+        // `lease`'s `Drop` (end of scope) restores the callback if the
+        // ticker is still running and nothing reentrant already replaced
+        // it, or drops it outside the lock otherwise.
     }
 
     /// Get current state
@@ -641,17 +818,21 @@ impl Ticker {
         if !self.assert_not_disposed("reset") {
             return;
         }
-        let (pending_id, active_future) = {
+        let (pending_id, active_future, discarded) = {
             let mut inner = self.inner.lock();
             inner.state = TickerState::Idle;
             inner.start_time = None;
-            inner.callback = None;
+            let discarded = inner.slot.clear_if_ready();
             inner.muted_elapsed = Seconds::ZERO;
             (
                 inner.scheduled_callback_id.take(),
                 inner.active_future.take(),
+                discarded,
             )
         };
+        // Dropped only after the lock above has released (issue #1059
+        // hardening) — same reentrant-`CheckedOut` handling as `stop`/`dispose`.
+        drop(discarded);
         if let Some(future) = active_future {
             future.set_canceled();
         }
@@ -672,11 +853,14 @@ impl Ticker {
         let Some(weak_scheduler) = self.scheduler.as_ref() else {
             return; // Manual ticker — no auto-schedule.
         };
-        // Check `shouldScheduleTick` and reserve the slot under the inner
-        // lock so two concurrent schedulers can't both register.
+        // Check `should_schedule_tick` and reserve the slot under the inner
+        // lock so two concurrent schedulers can't both register. This is the
+        // single predicate every scheduling site shares (issue #1059) — see
+        // `TickerInner::should_schedule_tick`'s own doc for why checking the
+        // callback slot's readiness here, not just `state`, is load-bearing.
         {
             let inner = self.inner.lock();
-            if inner.state != TickerState::Active || inner.scheduled_callback_id.is_some() {
+            if !inner.should_schedule_tick() {
                 return;
             }
         }
@@ -697,8 +881,24 @@ impl Ticker {
         let cb_id = scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
             Self::tick_and_reschedule_static(inner_arc, weak_next, disposed_arc);
         }));
-        // Record the ID so stop/mute/dispose can cancel.
-        self.inner.lock().scheduled_callback_id = Some(cb_id);
+        // Record the ID so stop/mute/dispose can cancel — but never clobber
+        // a registration a reentrant caller already installed while this
+        // one was in flight (issue #1059's own root cause was exactly this
+        // kind of blind overwrite, on the auto-tick tail below). Not
+        // reachable from a single-threaded caller of this method alone, but
+        // cheap to make structurally impossible rather than assumed absent.
+        let mut inner = self.inner.lock();
+        if inner.scheduled_callback_id.is_none() {
+            inner.scheduled_callback_id = Some(cb_id);
+        } else {
+            drop(inner);
+            tracing::trace!(
+                ticker_cb_id = ?cb_id,
+                "schedule_tick_if_active: a registration already exists; \
+                 cancelling the redundant one instead of orphaning it"
+            );
+            scheduler.cancel_frame_callback(cb_id);
+        }
     }
 
     /// Tick + auto-reschedule entry point invoked by the scheduler's
@@ -731,7 +931,7 @@ impl Ticker {
             return;
         }
 
-        let (elapsed, mut callback) = {
+        let (elapsed, mut lease) = {
             let mut guard = inner.lock();
             // Clear scheduled_callback_id — this callback just fired.
             guard.scheduled_callback_id = None;
@@ -743,30 +943,35 @@ impl Ticker {
                 return;
             };
             let elapsed = start.elapsed().as_secs_f64();
-            // Take callback to release the lock before invoking. Restore
-            // afterwards if still active.
-            (elapsed, guard.callback.take())
+            // Check the callback out into a lease and release the lock
+            // before invoking it — the lease resolves the checkout (restore
+            // or discard) when it drops, covering reentrant `stop`/`start`/
+            // `mute`/`unmute`/`dispose`/`reset` calls AND a panicking
+            // callback alike (issue #1059).
+            let lease = TickerLease::checkout(&inner, &mut guard);
+            (elapsed, lease)
         };
 
-        let Some(ref mut cb) = callback else {
+        let Some(cb) = lease.callback_mut() else {
             return;
         };
         cb(elapsed);
 
-        // Restore callback + reschedule if still active and not disposed.
-        // The user callback may have called `stop`/`dispose` — re-read
-        // state under the lock to honor that.
+        // Resolve the checkout BEFORE deciding whether to reschedule: a
+        // reentrant `start()` may have installed a brand-new `Ready`
+        // callback in the slot already (the "restart inside tick" case),
+        // and `should_schedule_tick` below must see that fresh state, not
+        // the pre-callback one.
+        drop(lease);
+
+        // The user callback may have called `dispose()` — re-check before
+        // touching the scheduler again.
         if disposed.load(Ordering::Acquire) {
             return;
         }
         let should_reschedule = {
-            let mut guard = inner.lock();
-            if guard.state == TickerState::Active {
-                guard.callback = callback;
-                true
-            } else {
-                false
-            }
+            let guard = inner.lock();
+            guard.should_schedule_tick()
         };
         if !should_reschedule {
             return;
@@ -784,10 +989,37 @@ impl Ticker {
         let cb_id = strong.schedule_frame_callback(Box::new(move |_vsync_time| {
             Self::tick_and_reschedule_static(inner_next, scheduler_next, disposed_next);
         }));
-        // Record the new ID — race-safe because we just cleared the slot at
-        // the top of this function and the stop/mute path takes the lock
-        // before clearing.
-        inner.lock().scheduled_callback_id = Some(cb_id);
+        // Record the new ID — but never clobber one a reentrant `unmute()`/
+        // `start()` already installed between the `should_schedule_tick`
+        // check above and this registration completing (both run with no
+        // lock held). Issue #1059's root cause was exactly this blind
+        // overwrite: an orphaned earlier registration that nothing ever
+        // cancels. Cancel the REDUNDANT one (ours) instead, so whichever
+        // registration a concurrent caller is tracking survives.
+        let mut guard = inner.lock();
+        if guard.scheduled_callback_id.is_none() {
+            guard.scheduled_callback_id = Some(cb_id);
+        } else {
+            drop(guard);
+            tracing::trace!(
+                ticker_cb_id = ?cb_id,
+                "tick_and_reschedule_static: a registration already exists; \
+                 cancelling the redundant one instead of orphaning it"
+            );
+            strong.cancel_frame_callback(cb_id);
+        }
+    }
+}
+
+#[cfg(test)]
+impl Ticker {
+    /// Test-only probe: `Some(state)` if the inner lock was free to
+    /// `try_lock` right now, `None` if it is held. Used to prove a
+    /// checked-out callback's `Drop` runs with no scheduler-owned lock held
+    /// (issue #1059), without risking a real hang if a regression
+    /// reintroduces one — unlike calling [`Self::state`], which blocks.
+    fn try_state(&self) -> Option<TickerState> {
+        self.inner.try_lock().map(|guard| guard.state)
     }
 }
 
@@ -1724,5 +1956,423 @@ mod tests {
                 panic!("or_cancel() must resolve immediately: the future is already Canceled")
             }
         }
+    }
+
+    // ---- callback slot / TickerLease reentrancy (issue #1059) ----
+
+    /// Probe #1: a tick callback that restarts the ticker (`stop()` then
+    /// `start(new)`) must never let the superseded callback run again, must
+    /// deliver the new callback exactly once on the following frame, and
+    /// must leave exactly one live transient registration behind — not two.
+    /// Before this fix: `(pending_after_restart, old_calls, new_calls)` was
+    /// `(2, 3, 0)` (issue #1059's own measured evidence).
+    #[test]
+    fn restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let weak = Arc::downgrade(&ticker);
+        let old_calls = Arc::new(AtomicU32::new(0));
+        let new_calls = Arc::new(AtomicU32::new(0));
+        let old_counter = Arc::clone(&old_calls);
+        let new_counter = Arc::clone(&new_calls);
+
+        ticker.lock().start(move |_| {
+            old_counter.fetch_add(1, Ordering::SeqCst);
+            let owner = weak
+                .upgrade()
+                .expect("the outer Arc is held by this test for its whole duration");
+            let mut t = owner.lock();
+            t.stop();
+            let counter = Arc::clone(&new_counter);
+            t.start(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+
+        scheduler.execute_frame();
+        let pending_after_restart = scheduler.transient_callback_count();
+        scheduler.execute_frame();
+
+        assert_eq!(
+            old_calls.load(Ordering::SeqCst),
+            1,
+            "the superseded callback must never run again"
+        );
+        assert_eq!(
+            new_calls.load(Ordering::SeqCst),
+            1,
+            "the new callback must run exactly once, on the frame after the restart"
+        );
+        assert_eq!(
+            pending_after_restart, 1,
+            "exactly one transient registration must exist after the restart frame"
+        );
+
+        ticker.lock().stop();
+    }
+
+    /// Probe #2: muting then unmuting from inside the running callback must
+    /// retain the callback (delivered on the next frame) and must not
+    /// duplicate the next-frame registration — `unmute()`'s own scheduling
+    /// attempt runs while the slot is still checked out (not yet `Ready`),
+    /// so it cannot register alongside the dispatch tail's own attempt.
+    /// Before this fix the callback count never advanced past 1 (issue
+    /// #1059's own measured evidence).
+    #[test]
+    fn mute_then_unmute_inside_tick_delivers_next_frame_once() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let weak = Arc::downgrade(&ticker);
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+
+        ticker.lock().start(move |_| {
+            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                let owner = weak
+                    .upgrade()
+                    .expect("the outer Arc is held by this test for its whole duration");
+                let mut t = owner.lock();
+                t.mute();
+                t.unmute();
+            }
+        });
+
+        scheduler.execute_frame();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "same-run mute/unmute inside the callback must not duplicate the \
+             next-frame registration"
+        );
+
+        scheduler.execute_frame();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the callback must be retained through mute and delivered on the next frame"
+        );
+
+        ticker.lock().stop();
+    }
+
+    /// Control: `stop()` then `start(new)` BETWEEN frames (no reentrancy)
+    /// already worked before this fix — a regression guard, not a probe.
+    #[test]
+    fn restart_between_ticks_preserves_new_callback() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
+        let old_calls = Arc::new(AtomicU32::new(0));
+        let new_calls = Arc::new(AtomicU32::new(0));
+
+        let counter = Arc::clone(&old_calls);
+        ticker.start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        scheduler.execute_frame();
+        ticker.stop();
+
+        let counter = Arc::clone(&new_calls);
+        ticker.start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        scheduler.execute_frame();
+
+        assert_eq!(old_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(new_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.transient_callback_count(), 1);
+
+        ticker.stop();
+    }
+
+    /// Control: this already passed before the lease landed — `dispose`
+    /// cleared the registration id and the dispatch tail returned at its
+    /// own `disposed` check, so neither the restore nor the reschedule was
+    /// reachable. It guards the hardening against a regression; it does not
+    /// pin one of the defects this fix closes.
+    #[test]
+    fn dispose_inside_tick_drops_the_callback_and_does_not_reschedule() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let weak = Arc::downgrade(&ticker);
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+
+        ticker.lock().start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let owner = weak
+                .upgrade()
+                .expect("the outer Arc is held by this test for its whole duration");
+            owner.lock().dispose();
+        });
+
+        scheduler.execute_frame();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            0,
+            "dispose() inside the tick must not leave a pending registration"
+        );
+
+        scheduler.execute_frame();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a disposed ticker must never tick again"
+        );
+        assert!(ticker.lock().is_disposed());
+    }
+
+    /// Control: this already passed before the lease landed — `reset` left
+    /// the state `Idle`, so the dispatch tail's `state == Active` restore
+    /// and its reschedule were both already skipped. It guards the
+    /// hardening against a regression; it does not pin one of the defects
+    /// this fix closes.
+    #[test]
+    fn reset_inside_tick_drops_the_callback_and_does_not_reschedule() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let weak = Arc::downgrade(&ticker);
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+
+        ticker.lock().start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let owner = weak
+                .upgrade()
+                .expect("the outer Arc is held by this test for its whole duration");
+            owner.lock().reset();
+        });
+
+        scheduler.execute_frame();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            0,
+            "reset() inside the tick must not leave a pending registration"
+        );
+        assert_eq!(ticker.lock().state(), TickerState::Idle);
+
+        scheduler.execute_frame();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a reset ticker must not tick again until restarted"
+        );
+
+        ticker.lock().stop();
+    }
+
+    /// A panicking callback must not leave the slot checked out forever —
+    /// before this fix, `tick_and_reschedule_static` took the callback with
+    /// a bare `Option::take()` and only restored it on the NORMAL return
+    /// path, so an unwind lost it permanently.
+    #[test]
+    fn a_panicking_tick_callback_leaves_the_slot_restored() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+
+        ticker.start(move |_| {
+            // Panics on the FIRST invocation only — the second call (after
+            // the re-arm below) must actually run to completion, proving
+            // the slot still holds a live, callable closure rather than
+            // one that merely exists but panics unconditionally.
+            assert!(
+                counter.fetch_add(1, Ordering::SeqCst) != 0,
+                "simulated panic inside a tick callback"
+            );
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.execute_frame();
+        }));
+        assert!(
+            result.is_err(),
+            "the panic must propagate out of execute_frame"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            ticker.state(),
+            TickerState::Active,
+            "a panicking callback must not change the ticker's own state"
+        );
+
+        // The panicking dispatch is consumed by the scheduler's own
+        // recovery (issue #1057) — nothing re-registers it automatically.
+        // Re-arm via mute/unmute (ordinary reentry, not what this test is
+        // about) and drive one more frame: if the callback were lost
+        // forever (the bug this test pins), `tick_and_reschedule_static`
+        // would find the slot empty and silently return without invoking
+        // anything, and `calls` would never move past 1 — the OLD
+        // `schedule_tick_if_active` predicate had no callback-presence
+        // check, so it would still (wrongly) register a transient callback
+        // that then dispatches into nothing.
+        ticker.mute();
+        ticker.unmute();
+        scheduler.execute_frame();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the callback must still be installed after an unwind — the \
+             lease restores it because the ticker was still Active when the \
+             lease dropped during the panic's unwind"
+        );
+
+        ticker.stop();
+    }
+
+    /// A callback superseded by a reentrant restart is dropped with no
+    /// scheduler-owned lock held. Proven with a `try_lock`-based probe
+    /// rather than a blocking one (`Ticker::state()`) so a regression that
+    /// reintroduces a held lock fails the assertion instead of hanging the
+    /// test process.
+    #[test]
+    fn stale_callback_is_dropped_outside_the_lock() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let weak = Arc::downgrade(&ticker);
+
+        struct Canary {
+            ticker: Arc<Mutex<Ticker>>,
+            observed: Arc<Mutex<Vec<Option<TickerState>>>>,
+        }
+        impl Drop for Canary {
+            fn drop(&mut self) {
+                let state = self.ticker.lock().try_state();
+                self.observed.lock().push(state);
+            }
+        }
+
+        let observed: Arc<Mutex<Vec<Option<TickerState>>>> = Arc::new(Mutex::new(Vec::new()));
+        let canary = Canary {
+            ticker: Arc::clone(&ticker),
+            observed: Arc::clone(&observed),
+        };
+
+        ticker.lock().start(move |_| {
+            let _keep_alive = &canary;
+            let owner = weak
+                .upgrade()
+                .expect("the outer Arc is held by this test for its whole duration");
+            let mut t = owner.lock();
+            t.stop();
+            t.start(|_| {});
+        });
+
+        scheduler.execute_frame();
+
+        assert_eq!(
+            observed.lock().as_slice(),
+            &[Some(TickerState::Active)],
+            "the superseded callback's Drop must observe a free inner lock \
+             (Some, not None) and the NEW run's Active state"
+        );
+
+        ticker.lock().stop();
+    }
+
+    /// The manual `tick(&self, ...)` path cannot support a reentrant
+    /// restart the way the auto-scheduling dispatch does. Restarting from
+    /// inside the callback needs `&mut Ticker` (`stop`/`start` both take
+    /// it), which — since `tick` itself takes only `&self` — is only
+    /// reachable through an outer wrapper like `Arc<Mutex<Ticker>>`, the
+    /// SAME shape the auto-scheduling probes above use. The difference:
+    /// `tick_and_reschedule_static` is a free function the scheduler
+    /// invokes directly on the ticker's *inner* `Arc<Mutex<TickerInner>>`
+    /// and never touches that outer wrapper, so a reentrant call through it
+    /// finds the outer mutex free. `tick()` has no such indirection — a
+    /// caller MUST already hold the outer `Mutex<Ticker>` (or `RefCell`) to
+    /// obtain the `&Ticker` it calls `tick` on in the first place, and that
+    /// guard is held for tick's entire call, callback included, because
+    /// nothing inside `tick()` owns it and can release it early. A
+    /// reentrant call back through that same non-reentrant lock therefore
+    /// self-deadlocks (or panics, for a `RefCell`) before it ever reaches
+    /// `stop()`. This is structural, not a gap to close, and not a test
+    /// this suite can run: a hanging test is worse than no test. The
+    /// manual path's restore contract is pinned below with a non-reentrant
+    /// regression test instead.
+    /// Control: the non-reentrant manual path already behaved this way; it
+    /// stands in for the reentrant probe the borrow checker makes unwritable.
+    #[test]
+    fn stop_between_two_manual_ticks_does_not_reinvoke_callback() {
+        let mut ticker = Ticker::new();
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+        ticker.start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let provider = MockProvider;
+        ticker.tick(&provider);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        ticker.stop();
+        // `stop()` clears the (idle, `Ready`) slot; `tick()`'s own
+        // `state != Active` guard then returns before checking anything out
+        // again.
+        ticker.tick(&provider);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a manually-stopped ticker must not tick again"
+        );
+    }
+
+    /// Mixed manual and automatic dispatch on one ticker, from two threads.
+    ///
+    /// The slot's own state is what serialises the two paths: a checkout
+    /// matches only `Ready`, so whichever dispatch arrives second finds
+    /// `CheckedOut`, leaves it untouched and returns without invoking
+    /// anything. Every other reentrancy test in this file drives that
+    /// protocol from a single thread, where the mutex is never contended;
+    /// this one contends it, so a future change that made the losing path
+    /// fall through (or that restored the slot from the wrong owner) shows
+    /// up as a double invocation for one logical tick rather than as
+    /// reasoning about the code.
+    ///
+    /// Mixing the two dispatch modes is not a supported pattern — nothing
+    /// in the workspace does it — so the assertion is deliberately the
+    /// safety property (never more invocations than ticks issued, never a
+    /// hang or a panic), not a schedule.
+    #[test]
+    fn manual_and_auto_dispatch_from_two_threads_never_double_invoke() {
+        const ROUNDS: u32 = 200;
+
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+
+        ticker.lock().start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let manual_ticker = Arc::clone(&ticker);
+        let manual = std::thread::spawn(move || {
+            let provider = MockProvider;
+            for _ in 0..ROUNDS {
+                manual_ticker.lock().tick(&provider);
+            }
+        });
+
+        for _ in 0..ROUNDS {
+            scheduler.execute_frame();
+        }
+        manual
+            .join()
+            .expect("the manual dispatch thread does not panic");
+
+        let observed = calls.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2 * ROUNDS,
+            "each dispatch may invoke the callback at most once: {observed} invocations for \
+             {ROUNDS} manual ticks and {ROUNDS} frames"
+        );
+        assert!(
+            observed > 0,
+            "the ticker must have ticked at least once across {ROUNDS} rounds"
+        );
     }
 }
