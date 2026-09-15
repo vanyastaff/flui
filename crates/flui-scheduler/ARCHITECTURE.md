@@ -496,13 +496,23 @@ allowed to restore.
 **Recorded divergences and limitations, not closed by this fix:**
 
 - **`start_inner` while `Muted` bypasses the `Idle`/`Stopped` contract.**
-  Flutter's `start` asserts `!isActive`, which is true while muted
-  (`isActive` is false when `muted`); `Ticker::start_inner`'s own
-  `debug_assert!`/early-return only rejects `TickerState::Active`, so
-  calling `start` on a `Muted` ticker is accepted today, silently
-  overwriting the muted run's callback and future rather than rejecting the
-  call the way Flutter would. Named here as a known gap; closing it is a
-  `start_inner` contract change outside this fix's scope.
+  Flutter's `Ticker.isActive` is `_future != null` and its doc states that
+  a muted ticker "can be active" — muting gates `isTicking` and
+  `shouldScheduleTick`, never `isActive` — so `start` on a muted Flutter
+  ticker hits `'A ticker that is already active cannot be started again'`
+  and is REJECTED. `Ticker::start_inner`'s own `debug_assert!`/early-return
+  rejects only `TickerState::Active`, so FLUI accepts the call, silently
+  overwriting the muted run's callback and future and re-anchoring its
+  start time. Named here as a known gap; closing it is a `start_inner`
+  contract change outside this fix's scope.
+- **A panicking tick callback leaves the ticker unscheduled.** The lease
+  restores the callback on unwind, so the slot is `Ready` and the state is
+  still `Active` — but the registration id was cleared at dispatch entry
+  and the tail that would re-register never runs, so the ticker stays
+  active and idle until something external (a `mute()`/`unmute()` cycle, a
+  `stop()`+`start()`) re-arms scheduling. Pinned by
+  `a_panicking_tick_callback_leaves_the_slot_restored`, which asserts the
+  slot's contents, not that ticking resumes.
 - **Register-outside-lock / store-id-under-lock is still a genuine
   cross-thread TOCTOU.** `schedule_tick_if_active` and the auto-tick tail
   both check `should_schedule_tick`, then upgrade the scheduler and
@@ -539,8 +549,12 @@ allowed to restore.
 `mute_then_unmute_inside_tick_delivers_next_frame_once` pin the two measured
 failures directly; `restart_between_ticks_preserves_new_callback` is a
 non-reentrant control; `dispose_inside_tick_drops_the_callback_and_does_not_reschedule`
-and `reset_inside_tick_drops_the_callback_and_does_not_reschedule` pin the
-hardening; `a_panicking_tick_callback_leaves_the_slot_restored` pins the
+and `reset_inside_tick_drops_the_callback_and_does_not_reschedule` are
+controls too — both already passed before this fix (`dispose` cleared the
+registration id and the tail returned at its `disposed` check; `reset` left
+the state `Idle`, so the tail's restore and reschedule were already
+skipped) and guard against a regression rather than pinning one of the
+defects; `a_panicking_tick_callback_leaves_the_slot_restored` pins the
 panic-unwind fix; `stale_callback_is_dropped_outside_the_lock` proves the
 outside-the-lock drop with a non-blocking `try_lock` probe rather than a
 test whose failure mode would be a hang. The manual `Ticker::tick(&self,

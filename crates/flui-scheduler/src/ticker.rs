@@ -2085,6 +2085,11 @@ mod tests {
         ticker.stop();
     }
 
+    /// Control: this already passed before the lease landed — `dispose`
+    /// cleared the registration id and the dispatch tail returned at its
+    /// own `disposed` check, so neither the restore nor the reschedule was
+    /// reachable. It guards the hardening against a regression; it does not
+    /// pin one of the defects this fix closes.
     #[test]
     fn dispose_inside_tick_drops_the_callback_and_does_not_reschedule() {
         let scheduler = crate::scheduler::UpdateScheduler::new();
@@ -2118,6 +2123,11 @@ mod tests {
         assert!(ticker.lock().is_disposed());
     }
 
+    /// Control: this already passed before the lease landed — `reset` left
+    /// the state `Idle`, so the dispatch tail's `state == Active` restore
+    /// and its reschedule were both already skipped. It guards the
+    /// hardening against a regression; it does not pin one of the defects
+    /// this fix closes.
     #[test]
     fn reset_inside_tick_drops_the_callback_and_does_not_reschedule() {
         let scheduler = crate::scheduler::UpdateScheduler::new();
@@ -2283,6 +2293,8 @@ mod tests {
     /// this suite can run: a hanging test is worse than no test. The
     /// manual path's restore contract is pinned below with a non-reentrant
     /// regression test instead.
+    /// Control: the non-reentrant manual path already behaved this way; it
+    /// stands in for the reentrant probe the borrow checker makes unwritable.
     #[test]
     fn stop_between_two_manual_ticks_does_not_reinvoke_callback() {
         let mut ticker = Ticker::new();

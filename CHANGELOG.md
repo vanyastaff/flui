@@ -705,7 +705,8 @@ file records the repo-consumer-visible summary.
   ticker was active, without asking whether that run was still the one that
   checked it out. Chaining the next animation from a status listener — the
   canonical idiom — therefore left two live tick chains on one controller
-  (ticking and notifying twice per frame, only one of them cancellable), muting
+  (ticking and notifying twice per frame while a run stayed in flight, only one
+  of them cancellable), muting
   from inside a tick discarded the callback that `mute()` promises to retain,
   and a panicking callback emptied the slot for good. The slot is now a
   three-state machine leased across the callback by an RAII guard, with one

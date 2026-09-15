@@ -2334,7 +2334,16 @@ mod tests {
             if status == AnimationStatus::Dismissed
                 && restart_flag.fetch_add(1, Ordering::SeqCst) == 0
             {
-                chained.forward().unwrap();
+                // A LONG chained run on purpose: the point of the second
+                // half of this test is that `stop()` cancels a chain that
+                // is still in flight. A chained run short enough to finish
+                // on the next frame stops itself (`tick_time_based` calls
+                // `ticker.stop()` before firing its status), which would
+                // leave nothing for `stop()` to cancel and make every
+                // assertion below hold with or without the fix.
+                chained
+                    .animate_to(1.0, Some(Duration::from_secs(10)))
+                    .unwrap();
             }
         }));
 
@@ -2364,6 +2373,12 @@ mod tests {
             2,
             "exactly one value notification per frame across both runs — a \
              duplicated tick chain would notify twice on the second frame"
+        );
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "the chained run is still in flight, so there is exactly one \
+             live registration for `stop()` to cancel below"
         );
 
         c.stop().unwrap();

@@ -119,8 +119,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwriting the new run's registration id, so the old id could never be
   cancelled. The live shape is a status listener chaining the next animation
   (`AnimationController::forward()` from a listener): it left two
-  self-perpetuating tick chains, ticking and notifying twice per frame for the
-  controller's life, with `stop()` able to cancel only one of them. A callback
+  self-perpetuating tick chains, ticking and notifying twice per frame for as
+  long as a run stayed in flight, with `stop()` able to cancel only one of them. A callback
   that muted its own ticker lost the callback entirely — `mute()` documents that
   it retains it — and a panicking callback left the slot empty forever.
   `TickerInner`'s `Option<TickerCallback>` is now a three-state slot
