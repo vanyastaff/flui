@@ -91,7 +91,10 @@ pub mod fonts;
 pub mod log_capture;
 pub mod replay;
 
-pub use a11y::{A11yNode, A11yQuery, A11yQueryError, A11yTree, NotTreeBound};
+pub use a11y::{
+    A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
+    InvokeActionError, NodeId, NotTreeBound, TreeId, invoke_semantics_action,
+};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use fonts::pin_font_faces;
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};

@@ -1,6 +1,7 @@
 //! Widget-level coverage for the accessibility semantics wrappers.
 
 use crate::common::{lay_out, loose, size};
+use flui_rendering::semantics::{SemanticsAction, SemanticsActionHandler, semantics_action_for};
 use flui_widgets::{ExcludeSemantics, MergeSemantics, Semantics, SizedBox};
 
 #[test]
@@ -1223,4 +1224,621 @@ fn exclude_semantics_removes_its_subtree_from_the_a11y_tree() {
          Tree was:\n{}",
         excluded_tree.describe()
     );
+}
+
+// ===========================================================================
+// Actions: a platform request, routed back to the widget's own callback
+// ===========================================================================
+
+use std::assert_matches;
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use flui_testing::a11y::A11yPoint;
+use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, invoke_semantics_action};
+
+/// Mounts `semantics` with semantics enabled and returns the single node
+/// carrying `label`, together with a live view of the a11y tree.
+///
+/// The tree is returned alongside its own description so a failing assertion
+/// can show what was actually there, matching this file's other a11y tests.
+fn pump_labelled(
+    semantics: Semantics,
+) -> (
+    flui_widgets::testing::LaidOut,
+    flui_testing::A11yTree,
+    NodeId,
+) {
+    let mut laid = lay_out(semantics, loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let node_id = tree
+        .find_by_label(LABEL)
+        .unwrap_or_else(|error| panic!("expected one node labelled {LABEL:?}: {error}"))
+        .id();
+    (laid, tree, node_id)
+}
+
+/// The label every action test mounts under; unique within its own tree.
+const LABEL: &str = "Action Host";
+
+/// Builds an `ActionRequest` addressed at `node_id`.
+fn request(action: Action, node_id: NodeId, data: Option<ActionData>) -> ActionRequest {
+    ActionRequest {
+        action,
+        target_tree: TreeId::ROOT,
+        target_node: node_id,
+        data,
+    }
+}
+
+/// A tap handler reaches its callback through a platform click request.
+///
+/// Two halves, and both are necessary: the node must *tell* the platform the
+/// action exists, and pressing it must *do* something. A node that passes only
+/// the first is the dead control this whole surface exists to rule out — an
+/// action advertised outbound that nothing routes inbound.
+#[test]
+fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
+    let activations = Arc::new(AtomicU32::new(0));
+    let counted = Arc::clone(&activations);
+
+    let (laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .on_tap(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("node was located a moment ago")
+            .supports_action(Action::Click),
+        "a node with an on_tap handler must advertise a click, or no assistive \
+         technology can reach it. Tree was:\n{}",
+        tree.describe()
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::Click, node_id, None),
+    )
+    .expect("a click on a node advertising one must resolve");
+
+    assert_eq!(
+        activations.load(Ordering::SeqCst),
+        1,
+        "the handler must have run exactly once",
+    );
+}
+
+/// Without a handler the platform is told nothing.
+///
+/// The control for the test above: it shows the advertised click comes from the
+/// handler and not from the annotation existing at all.
+#[test]
+fn a_semantics_node_with_no_tap_handler_advertises_no_click() {
+    let (_laid, tree, _node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    assert!(
+        !tree
+            .find_by_label(LABEL)
+            .expect("one node labelled")
+            .supports_action(Action::Click),
+        "a node with no tap handler must not advertise a click. Tree was:\n{}",
+        tree.describe()
+    );
+}
+
+/// `block_user_actions` refuses a click even though a handler is registered.
+///
+/// The handler stays in the configuration — blocking is not unregistering — so
+/// this is the case where a dispatch path that consulted the raw action set
+/// instead of the effective one would run the callback anyway.
+///
+/// Both halves are measured, and both are asserted: the request errors *and*
+/// the handler did not run, which is the refusal half; and the node does not
+/// advertise the click, which is the advertise half. The second is not
+/// incidental — `blocks_user_actions` narrows the effective action set that
+/// snapshot export and input dispatch both consult, so a blocked node is
+/// invisible to assistive technology rather than a control it can see and press
+/// to no effect.
+#[test]
+fn block_user_actions_refuses_a_click_the_node_still_holds_a_handler_for() {
+    let activations = Arc::new(AtomicU32::new(0));
+    let counted = Arc::clone(&activations);
+
+    let (laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .block_user_actions(true)
+            .on_tap(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    assert!(
+        !tree
+            .find_by_label(LABEL)
+            .expect("one node labelled")
+            .supports_action(Action::Click),
+        "a blocked node must not advertise the click either — measured, it does \
+         not, so the refusal is visible to the platform rather than only to a \
+         dispatch that reaches the node. Tree was:\n{}",
+        tree.describe()
+    );
+
+    let outcome = invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::Click, node_id, None),
+    );
+
+    assert_matches!(
+        outcome,
+        Err(flui_testing::InvokeActionError::Resolution(_)),
+        "a blocked node must refuse the request: the node still holds the \
+         handler, so the refusal is resolution's — an unroutable action or a \
+         malformed target would mean this test never reached the node at all",
+    );
+    assert_eq!(
+        activations.load(Ordering::SeqCst),
+        0,
+        "and the handler must not have run",
+    );
+}
+
+/// An argument-bearing action carries its payload through to the handler.
+///
+/// This is the half a no-argument round trip cannot see: the action can route
+/// correctly and the payload still be dropped on the floor, which for a text
+/// edit means the screen reader's input silently vanishes.
+#[test]
+fn a_set_text_request_carries_its_payload_into_the_handler() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+
+    let (laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .on_set_text(move |text| {
+                sink.lock()
+                    .expect("this test never poisons its own lock")
+                    .push(text.to_owned());
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("one node labelled")
+            .supports_action(Action::SetValue),
+        "an on_set_text handler must be advertised as a value change. Tree was:\n{}",
+        tree.describe()
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(
+            Action::SetValue,
+            node_id,
+            Some(ActionData::Value("hello".into())),
+        ),
+    )
+    .expect("a set-text request on a node advertising one must resolve");
+
+    assert_eq!(
+        seen.lock()
+            .expect("this test never poisons its own lock")
+            .as_slice(),
+        ["hello"],
+        "the handler must receive the payload the platform sent, not an empty string",
+    );
+}
+
+/// A set-text request that arrives without its payload is dropped, not emptied.
+///
+/// `""` is a thing a platform can legitimately mean — clear the field — so
+/// synthesizing one for a request that lost its payload would turn a failure to
+/// route into a silent erasure of whatever the field held. The request itself
+/// resolves: this is the payload being dropped, not the action being refused,
+/// which is why the outcome is asserted positive as well.
+#[test]
+fn a_set_text_request_without_a_payload_is_dropped_rather_than_emptied() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+
+    let (laid, _tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .on_set_text(move |text| {
+                sink.lock()
+                    .expect("this test never poisons its own lock")
+                    .push(text.to_owned());
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    // `SetValue` with no `data`: the action routes, the payload does not.
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::SetValue, node_id, None),
+    )
+    .expect(
+        "the request must resolve — the node advertises the action, so a \
+         rejection here would mean this test never reached the payload",
+    );
+
+    assert!(
+        seen.lock()
+            .expect("this test never poisons its own lock")
+            .is_empty(),
+        "the handler must not run: an empty string is an edit the platform \
+         never asked for",
+    );
+}
+
+/// A scroll-to-offset request carries its offset through to the handler.
+#[test]
+fn a_scroll_to_offset_request_carries_its_offset_into_the_handler() {
+    let seen: Arc<Mutex<Vec<(f64, f64)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+
+    let (laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .on_scroll_to_offset(move |x, y| {
+                sink.lock()
+                    .expect("this test never poisons its own lock")
+                    .push((x, y));
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("one node labelled")
+            .supports_action(Action::SetScrollOffset),
+        "an on_scroll_to_offset handler must be advertised as a scroll-offset \
+         action. Tree was:\n{}",
+        tree.describe()
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(
+            Action::SetScrollOffset,
+            node_id,
+            Some(ActionData::SetScrollOffset(A11yPoint { x: 3.0, y: -4.5 })),
+        ),
+    )
+    .expect("a scroll request on a node advertising one must resolve");
+
+    assert_eq!(
+        seen.lock()
+            .expect("this test never poisons its own lock")
+            .as_slice(),
+        [(3.0, -4.5)],
+        "the handler must receive the offset the platform sent, including its \
+         sign — a coordinate clamped or reordered in translation would show here",
+    );
+}
+
+/// A scroll-to-offset request without its payload is dropped, not sent to the
+/// origin.
+///
+/// The sibling of the set-text drop above, for the payload that is a
+/// coordinate: `(0.0, 0.0)` is a position a platform can mean, so defaulting to
+/// it would scroll the view somewhere the request never asked for.
+#[test]
+fn a_scroll_to_offset_request_without_a_payload_is_dropped_rather_than_origin() {
+    let seen: Arc<Mutex<Vec<(f64, f64)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+
+    let (laid, _tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .on_scroll_to_offset(move |x, y| {
+                sink.lock()
+                    .expect("this test never poisons its own lock")
+                    .push((x, y));
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::SetScrollOffset, node_id, None),
+    )
+    .expect(
+        "the request must resolve — the node advertises the action, so a \
+         rejection here would mean this test never reached the payload",
+    );
+
+    assert!(
+        seen.lock()
+            .expect("this test never poisons its own lock")
+            .is_empty(),
+        "the handler must not run: the origin is a scroll position the request \
+         never asked for",
+    );
+}
+
+/// The `on_action` escape hatch routes as well as the typed builders do.
+///
+/// Registration shape must not decide reachability. A caller who registers an
+/// action the typed builders do not cover gets a control a screen reader can
+/// press, and the handler sees the action it was registered under — the
+/// argument a typed builder already knows and drops, and the caller here does
+/// not.
+#[test]
+fn an_on_action_handler_round_trips_a_platform_click() {
+    let seen: Arc<Mutex<Vec<(SemanticsAction, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let handler: SemanticsActionHandler = Arc::new(move |action, arguments| {
+        sink.lock()
+            .expect("this test never poisons its own lock")
+            .push((action, arguments.is_some()));
+    });
+
+    let (laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .on_action(SemanticsAction::Tap, Arc::clone(&handler))
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("one node labelled")
+            .supports_action(Action::Click),
+        "a handler registered through on_action must be advertised like any \
+         other, or the escape hatch reaches no assistive technology. Tree \
+         was:\n{}",
+        tree.describe()
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::Click, node_id, None),
+    )
+    .expect("a click on a node advertising one must resolve");
+
+    assert_eq!(
+        seen.lock()
+            .expect("this test never poisons its own lock")
+            .as_slice(),
+        [(SemanticsAction::Tap, false)],
+        "the handler must run once, with the action it was registered under and \
+         no arguments, since a click carries none",
+    );
+}
+
+/// Every FLUI `SemanticsAction` variant, listed once.
+///
+/// Two different checks make this list mean what it claims, and neither of them
+/// is the array's length — that is a literal, and a literal accepts a duplicate
+/// that quietly drops a variant.
+///
+/// Exhaustiveness is checked where the enum lives, in `flui-semantics`: a
+/// variant added there must be named in a wildcard-free `match`, and the set
+/// comparison that runs over `SemanticsAction::values()` fails for a variant
+/// that reaches `values()` without reaching the sibling list there — so a new
+/// action cannot be published by `values()` without being classified.
+/// What *this* file owes is agreement with that published set, asserted by
+/// [`the_actions_classified_here_are_exactly_the_ones_the_enum_publishes`].
+const FLUI_ACTIONS: [flui_rendering::semantics::SemanticsAction; 24] = [
+    SemanticsAction::Tap,
+    SemanticsAction::LongPress,
+    SemanticsAction::ScrollLeft,
+    SemanticsAction::ScrollRight,
+    SemanticsAction::ScrollUp,
+    SemanticsAction::ScrollDown,
+    SemanticsAction::Increase,
+    SemanticsAction::Decrease,
+    SemanticsAction::ShowOnScreen,
+    SemanticsAction::MoveCursorForwardByCharacter,
+    SemanticsAction::MoveCursorBackwardByCharacter,
+    SemanticsAction::SetSelection,
+    SemanticsAction::Copy,
+    SemanticsAction::Cut,
+    SemanticsAction::Paste,
+    SemanticsAction::DidGainAccessibilityFocus,
+    SemanticsAction::DidLoseAccessibilityFocus,
+    SemanticsAction::CustomAction,
+    SemanticsAction::Dismiss,
+    SemanticsAction::MoveCursorForwardByWord,
+    SemanticsAction::MoveCursorBackwardByWord,
+    SemanticsAction::SetText,
+    SemanticsAction::Focus,
+    SemanticsAction::ScrollToOffset,
+];
+
+/// `FLUI_ACTIONS` classifies exactly the actions the enum publishes.
+///
+/// The drop-set assertion below can only ever see the actions listed here, so a
+/// variant that joined the enum and `SemanticsAction::values()` without joining
+/// this list would go unclassified while every other test in this file stayed
+/// green — the shipped framework would route 25 actions and this file would
+/// reason about 24. Compared as bitmasks rather than as slices: the order an
+/// action is published in is not part of the contract, the set of actions is.
+#[test]
+fn the_actions_classified_here_are_exactly_the_ones_the_enum_publishes() {
+    let classified: BTreeSet<u64> = FLUI_ACTIONS.iter().map(|action| action.value()).collect();
+    let published: BTreeSet<u64> = SemanticsAction::values()
+        .iter()
+        .map(|action| action.value())
+        .collect();
+
+    assert_eq!(
+        classified.len(),
+        FLUI_ACTIONS.len(),
+        "FLUI_ACTIONS lists one action twice under a pinned length, so the \
+         action it displaced is classified nowhere",
+    );
+    assert_eq!(
+        classified, published,
+        "an action the enum publishes is missing from FLUI_ACTIONS, or one it \
+         does not publish is listed: either way the drop-set assertion below is \
+         reasoning about a set that is not the framework's",
+    );
+}
+
+/// Every `accesskit::Action` variant, with FLUI's routing answer, written once.
+///
+/// The macro below emits **both** the enumerated `PLATFORM_ACTIONS` and the
+/// wildcard-free `flui_routes` match from this single invocation, so a variant
+/// cannot be classified without also joining the list. Two separate hand-written
+/// artifacts could: the agreement and drop-set tests above reason over
+/// `PLATFORM_ACTIONS`, while the compile-time gate is the match — so an arm
+/// added for a new upstream variant classified `true` would join neither the
+/// list nor either test's reasoning, and both would keep reasoning about the
+/// old count while the shipped framework routed one more action.
+///
+/// The match is deliberately wildcard-free over a foreign enum.
+/// `accesskit::Action` is not `#[non_exhaustive]`, so an upstream release that
+/// adds a variant stops this matching function from compiling; the arm the
+/// compiler then demands is written inside this same invocation, which is what
+/// puts it in the list. That gate is the only one that exists — the translation
+/// table's own `_ => None` arm would absorb a new platform action silently, and
+/// a maintainer would never be prompted to decide whether FLUI should route it.
+///
+/// A variant listed twice is caught at compile time, not at run time: the
+/// duplicate pattern makes the generated match emit `unreachable_patterns`,
+/// which the workspace lints deny.
+macro_rules! platform_actions {
+    ($($variant:ident => $routes:literal),+ $(,)?) => {
+        /// Every `accesskit::Action` variant, so the tests here have a complete
+        /// denominator to reason over.
+        const PLATFORM_ACTIONS: &[Action] = &[$(Action::$variant),+];
+
+        /// Whether FLUI routes `action` back from the platform.
+        fn flui_routes(action: Action) -> bool {
+            match action {
+                $(Action::$variant => $routes,)+
+            }
+        }
+    };
+}
+
+platform_actions! {
+    Click => true,
+    ShowContextMenu => true,
+    ScrollLeft => true,
+    ScrollRight => true,
+    ScrollUp => true,
+    ScrollDown => true,
+    Increment => true,
+    Decrement => true,
+    ScrollIntoView => true,
+    SetTextSelection => true,
+    SetValue => true,
+    SetScrollOffset => true,
+    Focus => true,
+    Blur => true,
+    CustomAction => true,
+    Collapse => false,
+    Expand => false,
+    HideTooltip => false,
+    ShowTooltip => false,
+    ReplaceSelectedText => false,
+    ScrollToPoint => false,
+    SetSequentialFocusNavigationStartingPoint => false,
+}
+
+/// The set of FLUI actions the platform cannot reach is exactly the documented
+/// one — and the one hole in it is asserted, not left to prose.
+///
+/// This is the "shipped seams never wired" guard. A builder that lets an author
+/// register a handler nothing can ever invoke is a lying API, and the only way
+/// to keep that from happening by accident is to name the unreachable set and
+/// fail when it changes.
+#[test]
+fn the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set() {
+    let reachable: Vec<SemanticsAction> = FLUI_ACTIONS
+        .iter()
+        .copied()
+        .filter(|action| {
+            // Reachable if any platform action translates back to it, which is
+            // the live table's answer rather than a restatement of it.
+            PLATFORM_ACTIONS
+                .iter()
+                .copied()
+                .any(|platform| semantics_action_for(platform) == Some(*action))
+        })
+        .collect();
+
+    let unreachable: Vec<SemanticsAction> = FLUI_ACTIONS
+        .iter()
+        .copied()
+        .filter(|action| !reachable.contains(action))
+        .collect();
+
+    // Eight are dropped on purpose — the four cursor moves and copy/cut/paste,
+    // none of which the platform vocabulary FLUI targets exposes, plus Dismiss.
+    // The ninth is the live defect: `DidGainAccessibilityFocus` is advertised
+    // outbound (folded into the platform's Focus action) but nothing inbound
+    // ever produces it, so a node registering only it advertises a control that
+    // does nothing. Asserted here so the hole stays visible until it is closed.
+    let expected = [
+        SemanticsAction::MoveCursorForwardByCharacter,
+        SemanticsAction::MoveCursorBackwardByCharacter,
+        SemanticsAction::MoveCursorForwardByWord,
+        SemanticsAction::MoveCursorBackwardByWord,
+        SemanticsAction::Copy,
+        SemanticsAction::Cut,
+        SemanticsAction::Paste,
+        SemanticsAction::Dismiss,
+        SemanticsAction::DidGainAccessibilityFocus,
+    ];
+
+    assert_eq!(
+        unreachable.len(),
+        expected.len(),
+        "the unreachable set changed size: {unreachable:?}"
+    );
+    for action in expected {
+        assert!(
+            unreachable.contains(&action),
+            "{action:?} is no longer unreachable — if the translation table gained \
+             a route for it, remove it from this list deliberately. Unreachable: {unreachable:?}"
+        );
+    }
+}
+
+/// The test's own `flui_routes` must agree with the production table.
+///
+/// Without this, `flui_routes` is a second, drifting copy of the translation
+/// table — a test that reimplements the predicate is not a pin. The list it runs
+/// over and the match answering it are expanded from one invocation above, so
+/// this asserts a property of the production table rather than of two
+/// hand-maintained copies of it.
+#[test]
+fn the_exhaustive_routing_list_agrees_with_the_translation_table() {
+    for &action in PLATFORM_ACTIONS {
+        assert_eq!(
+            flui_routes(action),
+            semantics_action_for(action).is_some(),
+            "the exhaustive list and the production table disagree about {action:?}",
+        );
+    }
 }

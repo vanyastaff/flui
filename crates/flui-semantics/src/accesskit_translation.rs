@@ -58,7 +58,46 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
     }
 
     let flags = data.flags;
-    if has_flag(flags, SemanticsFlag::IsButton) {
+    // The checkable/toggled states are tested before the broad `IsButton`, because
+    // they are strictly more specific: a control that reports a checked or toggled
+    // state is a checkable, whatever else it also is. The ordering matters because
+    // this cascade picks exactly one role from a union of flags, and an ancestor's
+    // flags can land on a descendant's node. `Semantics::new().button(true)` over a
+    // `Radio` is that shape, and so is `MergeSemantics` over a `ListTile` carrying a
+    // `Radio` — the reference's own `RadioListTile` composition: measured, each
+    // merged node resolves `Button` under the old order and `RadioButton` under
+    // this one.
+    //
+    // A bare `ListTile` over a `Radio` is a different shape: `ListTile` and `Radio`
+    // both set `HasEnabledState`, `is_compatible_with` treats the overlap as a
+    // conflict, so they form *separate* nodes — and because they do not merge, the
+    // radio keeps a node of its own, which announces as a radio under either
+    // order. This reorder is not load-bearing there; the widget publishing the
+    // group flag is. See `crates/flui-semantics/ARCHITECTURE.md`.
+    //
+    // Only the checkable states moved. The flags left below `IsButton` — link,
+    // slider, text field, image, header — carry the same theoretical argument, and
+    // the reference's corpus is *not* silent about all of them: it pins `isButton`
+    // beside `isTextField` (`test/material/dropdown_menu_test.dart`,
+    // `testWidgets('ensure exclude semantics for trailing button')`) and beside
+    // `isLink` (`test/widgets/semantics_merge_test.dart`, `testWidgets('LinkUri from
+    // child is passed up to the parent when merging nodes')`). FLUI's `Role` is
+    // single-valued where the reference publishes a flag set, so `IsButton`
+    // outranking them is a pre-existing divergence rather than an absence of
+    // coverage — recorded, with its replacement test, in
+    // `crates/flui-semantics/ARCHITECTURE.md` mapping decision 2. Reordering the
+    // rest is a precedence decision that entry has now had to make explicitly.
+    if has_flag(flags, SemanticsFlag::HasToggledState) {
+        Role::Switch
+    } else if has_flag(flags, SemanticsFlag::HasCheckedState) {
+        // A checkable inside a mutually-exclusive group is a radio, not a
+        // checkbox — the distinction changes how a screen reader reads the set.
+        if has_flag(flags, SemanticsFlag::IsInMutuallyExclusiveGroup) {
+            Role::RadioButton
+        } else {
+            Role::CheckBox
+        }
+    } else if has_flag(flags, SemanticsFlag::IsButton) {
         Role::Button
     } else if has_flag(flags, SemanticsFlag::IsLink) {
         Role::Link
@@ -80,16 +119,6 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
         Role::Image
     } else if has_flag(flags, SemanticsFlag::IsHeader) {
         Role::Header
-    } else if has_flag(flags, SemanticsFlag::HasToggledState) {
-        Role::Switch
-    } else if has_flag(flags, SemanticsFlag::HasCheckedState) {
-        // A checkable inside a mutually-exclusive group is a radio, not a
-        // checkbox — the distinction changes how a screen reader reads the set.
-        if has_flag(flags, SemanticsFlag::IsInMutuallyExclusiveGroup) {
-            Role::RadioButton
-        } else {
-            Role::CheckBox
-        }
     } else {
         Role::GenericContainer
     }
@@ -741,6 +770,94 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(translate(&data).role(), Role::RadioButton);
+    }
+
+    /// The precedence leg, and the one that a single-flag test cannot reach.
+    ///
+    /// An annotated ancestor absorbs its descendants' flags by union, so a radio
+    /// inside a button-like container arrives carrying the container's
+    /// `IsButton` beside its own checkable flags. The test above passes whether
+    /// or not the cascade tests `IsButton` first, because it never sets that
+    /// flag; this one fails the moment the checkable arm moves back below it.
+    #[test]
+    fn a_checkable_beside_is_button_still_resolves_to_the_checkable() {
+        let button_shaped_radio = SemanticsNodeData {
+            flags: flags(&[
+                SemanticsFlag::IsButton,
+                SemanticsFlag::HasCheckedState,
+                SemanticsFlag::IsInMutuallyExclusiveGroup,
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(translate(&button_shaped_radio).role(), Role::RadioButton);
+
+        let button_shaped_checkbox = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::HasCheckedState]),
+            ..Default::default()
+        };
+        assert_eq!(translate(&button_shaped_checkbox).role(), Role::CheckBox);
+
+        let button_shaped_switch = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::HasToggledState]),
+            ..Default::default()
+        };
+        assert_eq!(translate(&button_shaped_switch).role(), Role::Switch);
+
+        // The premise, so a reader can see the arm is not vacuous: the flag that
+        // loses precedence really is present on each node above.
+        let button_only = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsButton]),
+            ..Default::default()
+        };
+        assert_eq!(translate(&button_only).role(), Role::Button);
+    }
+
+    /// `IsButton` outranks `IsLink` and `IsTextField`, and keeps doing so.
+    ///
+    /// The two arms the reorder deliberately left below `IsButton`. This is a
+    /// recorded divergence rather than an oversight: the reference publishes both
+    /// flags on one node and lets the platform read what it wants
+    /// (`test/material/dropdown_menu_test.dart`'s `'ensure exclude semantics for
+    /// trailing button'`, `test/widgets/semantics_merge_test.dart`'s `'LinkUri
+    /// from child is passed up to the parent when merging nodes'`), where `Role`
+    /// is single-valued and has to choose. The choice is recorded in
+    /// `crates/flui-semantics/ARCHITECTURE.md` mapping decision 2, and this test
+    /// is what keeps a later reorder from changing the answer quietly.
+    #[test]
+    fn is_link_and_is_text_field_lose_to_is_button_as_they_always_have() {
+        let button_shaped_link = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::IsLink]),
+            ..Default::default()
+        };
+        // The losing flag is in the fixture rather than assumed: without it this
+        // is the `IsButton`-only case, which pins nothing.
+        assert!(has_flag(button_shaped_link.flags, SemanticsFlag::IsLink));
+        assert_eq!(translate(&button_shaped_link).role(), Role::Button);
+
+        let button_shaped_text_field = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::IsTextField]),
+            ..Default::default()
+        };
+        assert!(has_flag(
+            button_shaped_text_field.flags,
+            SemanticsFlag::IsTextField
+        ));
+        assert_eq!(translate(&button_shaped_text_field).role(), Role::Button);
+
+        // The premise: alone, each of the two flags does win, so the nodes above
+        // are resolving to `Button` because of `IsButton` and not because the
+        // losing flag went unset.
+        let link_only = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsLink]),
+            ..Default::default()
+        };
+        assert_eq!(translate(&link_only).role(), Role::Link);
+
+        let text_field_only = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsTextField]),
+            ..Default::default()
+        };
+        assert_eq!(translate(&text_field_only).role(), Role::TextInput);
     }
 
     #[test]
