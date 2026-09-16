@@ -155,7 +155,7 @@ pub use tween_types::{
 // inlined onto `UpdateScheduler` (see scheduler.rs section "Binding Methods
 // (formerly on SchedulerBinding trait)"). The animation crate now uses
 // `UpdateScheduler` directly.
-pub use flui_scheduler::ticker::TickerState;
+pub use flui_scheduler::ticker::{TickerCanceled, TickerFuture, TickerState};
 pub use flui_scheduler::{
     BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, TaskQueue, Ticker,
     TickerCallback, TickerProvider, UpdateScheduler,
@@ -185,7 +185,8 @@ pub mod prelude {
 
     // Re-export scheduler types
     pub use crate::{
-        FrameBudget, FramePhase, Priority, TaskQueue, Ticker, TickerProvider, UpdateScheduler,
+        FrameBudget, FramePhase, Priority, TaskQueue, Ticker, TickerCanceled, TickerFuture,
+        TickerProvider, UpdateScheduler,
     };
 }
 

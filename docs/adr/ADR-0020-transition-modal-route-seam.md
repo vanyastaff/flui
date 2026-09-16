@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Accepted — **U5.0, U5.1 and U5.2 landed 2026-07-09** (`RenderOffstage` parity fix; the route-animation binding seam; the private `TransitionRoute`). U5.3–U5.5 unstarted; no `ModalRoute`, no barrier, no public API. **Decision 2 was wrong twice (§7b) and Decision 1 needed correcting (§7c).**
+- **Status:** Accepted — **U5.0, U5.1 and U5.2 landed 2026-07-09** (`RenderOffstage` parity fix; the route-animation binding seam; the private `TransitionRoute`). U5.3–U5.5 unstarted; no `ModalRoute`, no barrier, no public API. **Decision 2 was wrong twice (§7b) and Decision 1 needed correcting (§7c).** §1.5 and the §2 push-deferral row superseded by [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md) (2026-09-15).
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult animation owner (ticker ownership: who is FLUI's `vsync:`), view owner (route → navigator and route → overlay-entry back-references, both of which ADR-0019 deliberately omitted), rendering owner (`RenderOffstage` correction, `maintainSize`), repository owner (any public API — `TransitionRoute`/`ModalRoute`/`PageRoute` shape, and whether `Overlay` becomes public), qa-lead (deterministic transition tests: driving a controller inside a headless frame).
 - **Relates to:** implements ADR-0019 §5 **U5**. Depends on the seams ADR-0019 U2 already carved out (`PushCompletion::Animating`, `Route::finished_when_popped`, `RouteHistory::notify_push_completed`) — all of which currently have **no production producer**.
@@ -108,6 +108,8 @@ So the sequence on a pop is: `TransitionRoute.didPop` starts the **reverse** ani
 `didPush()` (`:336-350`) returns `_controller.forward()`. `_RouteEntry.handlePush` (`navigator.dart:3274-3290`) parks the entry in `pushing` and attaches `routeFuture.whenCompleteOrCancel(...)`, which flips it to `idle` and re-flushes.
 
 **ADR-0019 U2 already models this**: `PushCompletion::Animating` parks in `Pushing`, and `RouteHistory::notify_push_completed(id)` is the `whenCompleteOrCancel` analogue. Both are implemented. `notify_push_completed` is `#[cfg(test)]` with **no production caller** — U5 is that caller.
+
+**Superseded by [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md):** `AnimationController::forward()` (and every other run-starting method) now returns a real `TickerFuture` the way `_controller.forward()` does here — the gap this section named ("FLUI's controller does not return a `TickerFuture`", §2) is closed. The navigator wiring for #1161, not yet landed, replaces `PushCompletion::Animating`'s payload with that future directly and retires `notify_push_completed`'s status-listener seam rather than giving it a production caller.
 
 Also: `didAdd` jumps to `upperBound` (no animation); `didReplace(old)` **inherits the replaced route's controller value** (`:363-374`), so a replacement does not restart the transition.
 
@@ -283,10 +285,12 @@ ADR-0019 U1 deferred these deliberately and pinned the deferral with `overlay_de
 | Rebuild-per-tick | `AnimatedView` (`listenable()`), `AnimatedBuilder` |
 | Barrier input blocking + tap | `AbsorbPointer`, `GestureDetector::on_tap` (needs a `GestureArenaScope`) |
 | `CurvedAnimation`, `ReverseAnimation`, `CompoundAnimation`, `Tween` | `flui-animation`, public |
-| The push-deferral seam | `PushCompletion::Animating` + `RouteHistory::notify_push_completed` (`#[cfg(test)]`) |
+| The push-deferral seam | `PushCompletion::Animating` + `RouteHistory::notify_push_completed` (`#[cfg(test)]`) — the navigator wiring for #1161, not yet landed, will replace this with `PushCompletion::Animating(TickerFuture)` awaited by `NavigatorShared::apply`, per [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md) |
 | The pop-deferral seam | `Route::finished_when_popped` → `handle_pop` sends to `Dispose` iff true |
 
 Two of these deserve emphasis. **`AnimationController` does not return a `TickerFuture` from `forward()`** (it returns `Result<(), AnimationError>`), and there is **no `whenCompleteOrCancel`**. Completion is observed only through a status listener. That is fine — `notify_push_completed` is a status-listener-driven seam by construction — but it means `did_push()` cannot return a future, and `PushCompletion::Animating` is the right shape rather than a workaround.
+
+**Superseded by [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md):** the premise of this paragraph no longer holds. `AnimationController::forward()` returns `Result<TickerFuture, AnimationError>`, and `TickerFuture::when_complete_or_cancel` is the non-blocking `whenCompleteOrCancel` analogue this paragraph found missing. Once the navigator wiring for #1161 lands, `did_push()` will return that future directly and `PushCompletion::Animating(TickerFuture)` will carry it, rather than standing in for its absence as it does today.
 
 And **`AnimationSwitch` was audited against `TrainHoppingAnimation` for this ADR, and is faithful.** It fixes a `SwitchMode::{Minimize, Maximize}` at construction from the initial values (`switch.rs:122-124`, matching `animations.dart:523-528`); it collapses to `next` *without* firing the callback when the values are already equal (`switch.rs:104`, matching `:520-522`); its hop predicate is the same crossing test (`switch.rs:237-238` vs `:571-574`); and `value`/`status` delegate to the current train (`switch.rs:329,334` vs `:562,596`). Its `status_listeners_survive_the_hop` test pins the listener re-attachment.
 

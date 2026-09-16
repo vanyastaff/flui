@@ -1,4 +1,5 @@
-//! Async-half coverage for [`TickerFuture`] and [`TickerFutureOrCancel`].
+//! Async-half coverage for [`TickerFuture`], [`TickerCompleter`], and
+//! [`TickerDelivery`].
 //!
 //! Every test here carries an explicit strength label, because a green suite
 //! over this family has previously been read as deeper coverage than it was:
@@ -8,7 +9,7 @@
 //!   specific line this change authors (or inherits) is ever reverted, and the
 //!   line is named in the test's own doc;
 //! - **compile-time fence** — pins a trait bound; no production line reverts
-//!   it. Exactly one test here is in this class.
+//!   it.
 //!
 //! A label is only worth having if it is kept honest in both directions: one
 //! test below was first labelled "pins nothing" and turned out to pin real
@@ -22,11 +23,8 @@
 //! this shape.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
-use std::thread;
-use std::time::Duration;
 
 use super::*;
 
@@ -51,66 +49,6 @@ impl CountingWaker {
 impl Wake for CountingWaker {
     fn wake(self: Arc<Self>) {
         self.wakes.fetch_add(1, Ordering::AcqRel);
-    }
-}
-
-/// Samples, from inside `wake()`, whether the two locks a resolution touches
-/// are free: the future's own state mutex and the ticker's `TickerInner` mutex.
-struct ResolutionLockProbe {
-    future_inner: Arc<TickerFutureInner>,
-    ticker_inner: Arc<Mutex<TickerInner>>,
-    /// One `(future_state_free, ticker_inner_free)` pair per `wake()`.
-    observed: Arc<Mutex<Vec<(bool, bool)>>>,
-}
-
-impl Wake for ResolutionLockProbe {
-    fn wake(self: Arc<Self>) {
-        let future_state_free = self.future_inner.state.try_lock().is_some();
-        let ticker_inner_free = self.ticker_inner.try_lock().is_some();
-        self.observed
-            .lock()
-            .push((future_state_free, ticker_inner_free));
-    }
-}
-
-/// Samples, from inside `wake()`, the state that has been published to the
-/// durable slot by the time the notification arrives. `None` means the state
-/// mutex was still held by the resolver.
-///
-/// Two deliberate choices, both about failing rather than hanging:
-///
-/// - `try_lock`, not `lock`. A resolver that notified while still holding the
-///   state guard would self-deadlock a blocking read here — the mutex is not
-///   reentrant and this runs on the resolver's own thread — and a hanging test
-///   is worse than no test. `None` turns that into a clean assertion failure.
-/// - records rather than asserts. An assertion failure here would unwind out of
-///   `event-listener`'s notify loop, which skips its notified-counter increment
-///   and turns a readable test failure into an arithmetic overflow inside the
-///   dependency's own `Drop`.
-struct PublishedBeforeNotifyProbe {
-    future_inner: Arc<TickerFutureInner>,
-    observed_states: Arc<Mutex<Vec<Option<TickerFutureState>>>>,
-}
-
-impl Wake for PublishedBeforeNotifyProbe {
-    fn wake(self: Arc<Self>) {
-        let published = self.future_inner.state.try_lock().map(|state| *state);
-        self.observed_states.lock().push(published);
-    }
-}
-
-/// Signals a blocked thread. The send is the whole body — it touches neither
-/// the ticker nor the event, which is what the `Future` impl's documented
-/// precondition on wakers requires.
-struct ChannelWaker {
-    woken: Mutex<mpsc::Sender<()>>,
-}
-
-impl Wake for ChannelWaker {
-    fn wake(self: Arc<Self>) {
-        // The receiver may already be gone if the poll resolved another way;
-        // a failed send is not this waker's problem to report.
-        let _ = self.woken.lock().send(());
     }
 }
 
@@ -142,16 +80,16 @@ impl tracing::field::Visit for MessageVisitor {
 /// The lock-freedom observations for the one `ticker.rs` event whose message
 /// contains `names_the_event`.
 ///
-/// Selected by message, not by target alone: `ticker.rs` emits six distinct
-/// events under the target `flui_scheduler::ticker`, so a target-only filter
-/// can be satisfied by a *different* one of them after a future edit — the same
-/// shape as the hole that let "at least one event" pass without the ticker
-/// having logged at all, one step narrower. Selecting by text rather than by
-/// line number also survives every edit above the call site, which a line
-/// literal would not.
+/// Selected by message, not by target alone: `ticker.rs` emits several
+/// distinct events under the target `flui_scheduler::ticker`, so a
+/// target-only filter can be satisfied by a *different* one of them after a
+/// future edit — the same shape as the hole that let "at least one event"
+/// pass without the ticker having logged at all, one step narrower. Selecting
+/// by text rather than by line number also survives every edit above the
+/// call site, which a line literal would not.
 ///
-/// The call sites are checked rather than returned: two sites emitting the same
-/// text would otherwise merge into one oracle silently.
+/// The call sites are checked rather than returned: two sites emitting the
+/// same text would otherwise merge into one oracle silently.
 fn lock_states_for_event(log: &EventLockLog, names_the_event: &str) -> Vec<bool> {
     let observed = log.lock();
     let matching: Vec<&ObservedEvent> = observed
@@ -235,6 +173,12 @@ impl Drop for CallbackDropProbe {
 /// **Discriminating.** Reverting the `continue;` that re-reads the durable
 /// state after registering turns the trace into `[0]`.
 ///
+/// This is the pin for the lost-wakeup defect #1161's first fix closed: a
+/// resolution landing between the first state read and `listen()` used to
+/// notify zero listeners and be lost forever. `poll_resolution` itself is
+/// unchanged by the controller-owned-future redesign, so this pin travels
+/// with it unmodified.
+///
 /// Three assertions, two different jobs:
 ///
 /// - `read_trace == [0, 1]` is a **shape** pin. It says this implementation
@@ -252,7 +196,7 @@ impl Drop for CallbackDropProbe {
 ///   back to 0 and the waker's strong count fall back to 1.
 #[test]
 fn a_poll_registers_its_listener_before_the_decisive_state_read() {
-    let mut future = TickerFuture::new();
+    let (_completer, mut future) = TickerFuture::pending();
     let probe = Arc::new(CountingWaker::default());
 
     {
@@ -260,7 +204,7 @@ fn a_poll_registers_its_listener_before_the_decisive_state_read() {
         let mut cx = Context::from_waker(&waker);
         assert!(
             Pin::new(&mut future).poll(&mut cx).is_pending(),
-            "a fresh TickerFuture has nothing to resolve to"
+            "a fresh pending future has nothing to resolve to"
         );
     }
 
@@ -285,60 +229,47 @@ fn a_poll_registers_its_listener_before_the_decisive_state_read() {
     assert_eq!(probe.wakes(), 0, "nothing has resolved yet");
 }
 
-/// **Discriminating**, same revert as the base-future test above.
-///
-/// This exists because the fix's premise is "one state machine written twice":
-/// a shared helper is only *proven* shared if both `Future` impls are driven
-/// through it.
-#[test]
-fn an_or_cancel_poll_registers_its_listener_before_the_decisive_state_read() {
-    let base = TickerFuture::new();
-    let mut or_cancel = base.or_cancel();
-    let probe = Arc::new(CountingWaker::default());
-
-    {
-        let waker = Waker::from(Arc::clone(&probe));
-        let mut cx = Context::from_waker(&waker);
-        assert!(
-            Pin::new(&mut or_cancel).poll(&mut cx).is_pending(),
-            "a fresh or_cancel() has nothing to resolve to"
-        );
-    }
-
-    assert_eq!(
-        base.inner.read_trace.lock().as_slice(),
-        &[0, 1],
-        "shape pin: or_cancel's poll must register before its decisive read too"
-    );
-    assert_eq!(
-        base.inner.event.total_listeners(),
-        1,
-        "invariant pin: or_cancel's parked poll must leave its listener linked"
-    );
-    assert_eq!(
-        Arc::strong_count(&probe),
-        2,
-        "invariant pin: or_cancel's parked poll must still hold the waker"
-    );
-}
-
 // ---------------------------------------------------------------------------
-// publication order and lock discipline at resolution
+// publication order and resolution shape
 // ---------------------------------------------------------------------------
 
-/// **Regression pin** (green before this change too). Reverting the resolution
-/// helper to notify *before* it writes the durable state reddens it, and so
-/// does notifying while the state guard is still held.
+/// **Discriminating**, on the *invariant* rather than the API: the ordering
+/// this pins (publish the durable state, THEN notify) predates this PR — it
+/// held for `TickerFuture::resolve` before `TickerCompleter::publish`
+/// replaced it — but this specific test is new, since it exercises the new
+/// completer/future pair. Reverting `TickerCompleter::publish` to notify
+/// before it writes the durable state — or to notify while the state guard
+/// is still held — reddens it.
 ///
 /// Register-then-recheck is correct only because the durable state is written
 /// first; nothing else in this file can fail if that order is ever reversed.
-/// The waker records rather than asserts — see [`PublishedBeforeNotifyProbe`].
+/// The waker records rather than asserts: an assertion failure here would
+/// unwind out of `event-listener`'s notify loop, which skips its
+/// notified-counter increment and turns a readable test failure into an
+/// arithmetic overflow inside the dependency's own `Drop`.
 #[test]
 fn the_resolution_is_published_before_the_notification() {
-    let mut future = TickerFuture::new();
+    let (completer, mut future) = TickerFuture::pending();
+    let future_inner = Arc::clone(&future.inner);
     let observed_states = Arc::new(Mutex::new(Vec::new()));
+
+    struct PublishedBeforeNotifyProbe {
+        future_inner: Arc<TickerFutureInner>,
+        observed_states: Arc<Mutex<Vec<Option<TickerFutureState>>>>,
+    }
+    impl Wake for PublishedBeforeNotifyProbe {
+        fn wake(self: Arc<Self>) {
+            let published = self
+                .future_inner
+                .state
+                .try_lock()
+                .map(|state| state.resolution);
+            self.observed_states.lock().push(published);
+        }
+    }
+
     let probe = Arc::new(PublishedBeforeNotifyProbe {
-        future_inner: Arc::clone(&future.inner),
+        future_inner,
         observed_states: Arc::clone(&observed_states),
     });
 
@@ -348,7 +279,7 @@ fn the_resolution_is_published_before_the_notification() {
         assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
     }
 
-    future.set_complete();
+    completer.complete().deliver();
 
     assert_eq!(
         observed_states.lock().as_slice(),
@@ -359,193 +290,14 @@ fn the_resolution_is_published_before_the_notification() {
     );
 }
 
-/// **Regression pin** (green before this change too). Reverting the `drop` of
-/// the state guard before the notification, or moving the resolution back
-/// inside the `Mutex<TickerInner>` scope in `stop`, reddens it.
+/// **Discriminating.** A pending future manually polled after its completer
+/// cancels (and delivers) must resolve `Err(TickerCanceled)` on the very next
+/// poll, with no listener left registered. Reverting `poll_resolution`'s
+/// `Canceled` arm (or `TickerFuture`'s `Future` impl) back to "the base
+/// future never resolves on cancellation" reddens this.
 #[test]
-fn an_awaiters_waker_runs_with_no_ticker_lock_held() {
-    let mut ticker = Ticker::new();
-    let mut future = ticker.start(|_| {});
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    let probe = Arc::new(ResolutionLockProbe {
-        future_inner: Arc::clone(&future.inner),
-        ticker_inner: Arc::clone(&ticker.inner),
-        observed: Arc::clone(&observed),
-    });
-
-    {
-        let waker = Waker::from(Arc::clone(&probe));
-        let mut cx = Context::from_waker(&waker);
-        assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
-    }
-
-    ticker.stop();
-
-    assert_eq!(
-        observed.lock().as_slice(),
-        &[(true, true)],
-        "an awaiter's waker must run with neither the future's state mutex nor \
-         Mutex<TickerInner> held — a waker is user code and may re-enter either"
-    );
-}
-
-/// **Regression pin** (green before this change too). Reverting the
-/// `if *state != Pending` guard in the resolution helper reddens it.
-///
-/// It also pins the invariant that makes "two resolutions cannot interleave"
-/// true at all: the transition is once-only, so a re-read after registering can
-/// never miss a resolution that a later notification would have to re-announce.
-#[test]
-fn a_second_resolution_is_ignored_and_the_first_outcome_stands() {
-    let future = TickerFuture::new();
-
-    future.set_complete();
-    future.set_canceled();
-
-    assert!(
-        future.is_complete(),
-        "the first resolution stands; the second is a no-op"
-    );
-    assert!(!future.is_canceled());
-}
-
-// ---------------------------------------------------------------------------
-// wakeup delivery
-// ---------------------------------------------------------------------------
-
-/// **Regression pin** (green before this change too, because it synchronises on
-/// an observed `Poll::Pending` and so never enters the racy window). Removing
-/// the notification from the resolution helper reddens it.
-///
-/// Two deliberate shapes:
-///
-/// - the worker signals only *after* it has observed `Poll::Pending`, so the
-///   listener is provably registered before `stop()` is called;
-/// - the worker is never `join`ed. If a wakeup is genuinely lost the worker
-///   parks forever; `recv_timeout` then fails this test in five seconds and the
-///   process exits with the thread abandoned. A `join` would convert that into
-///   a hang bounded only by nextest's slow-timeout, which is minutes.
-#[test]
-fn a_pending_await_is_woken_and_resolves_when_the_ticker_stops() {
-    let mut ticker = Ticker::new();
-    let future = ticker.start(|_| {});
-
-    let (parked_tx, parked_rx) = mpsc::channel::<()>();
-    let (resolved_tx, resolved_rx) = mpsc::channel::<bool>();
-
-    thread::spawn(move || {
-        let (wake_tx, wake_rx) = mpsc::channel::<()>();
-        let waker = Waker::from(Arc::new(ChannelWaker {
-            woken: Mutex::new(wake_tx),
-        }));
-        let mut cx = Context::from_waker(&waker);
-        let mut future = future;
-
-        if Pin::new(&mut future).poll(&mut cx).is_ready() {
-            let _ = resolved_tx.send(false);
-            return;
-        }
-        // Only now is the listener provably registered.
-        let _ = parked_tx.send(());
-
-        if wake_rx.recv().is_err() {
-            return;
-        }
-        let _ = resolved_tx.send(Pin::new(&mut future).poll(&mut cx).is_ready());
-    });
-
-    parked_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the worker must reach a parked poll before the ticker stops");
-
-    ticker.stop();
-
-    let resolved = resolved_rx.recv_timeout(Duration::from_secs(5)).expect(
-        "a parked awaiter must be woken by stop() and resolve; a timeout here is \
-         the lost wakeup itself",
-    );
-    assert!(
-        resolved,
-        "the re-poll after the wakeup must observe the published Complete state"
-    );
-}
-
-/// **Regression pin** (green before this change too — this is the one path in
-/// the file that already had the order right, and is where the fix's shape came
-/// from). Reverting `when_complete_or_cancel` to re-check the state *before*
-/// registering reddens the trace.
-///
-/// It exists because this method is a third copy of the same
-/// read → register → re-read → wait state machine, outside `poll_resolution`
-/// and therefore outside everything the two `Future` impls are pinned by. Its
-/// failure mode is also the worse of the two: a lost wakeup here blocks an OS
-/// thread in `Listener::wait`, not a parked task. Routing its two reads through
-/// `read_state` is what brings it under the same ordering probe.
-///
-/// The worker is never `join`ed, for the reason the stop-wakeup test gives.
-#[test]
-fn when_complete_or_cancel_registers_before_its_decisive_read_too() {
-    let future = TickerFuture::new();
-    let (called_tx, called_rx) = mpsc::channel::<()>();
-
-    let waiting = future.clone();
-    thread::spawn(move || {
-        waiting.when_complete_or_cancel(move || {
-            let _ = called_tx.send(());
-        });
-    });
-
-    // Wait until the worker's SECOND decisive read has begun. At that point its
-    // listener is provably linked (it is registered before that read), so the
-    // resolution below cannot be lost even if it lands before `wait()` is
-    // reached — `event-listener` latches a notification onto a registered entry.
-    //
-    // `sleep`, not `yield_now`: under fully-parallel nextest on a small runner a
-    // spin burns a core against the very worker it is waiting for. 50 µs is far
-    // below the 5 s budget and weakens no assertion.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while future.inner.read_trace.lock().len() < 2 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the blocking waiter must reach its post-registration re-read; it is \
-             stuck on its first read or never registered"
-        );
-        thread::sleep(Duration::from_micros(50));
-    }
-
-    future.set_complete();
-
-    called_rx.recv_timeout(Duration::from_secs(5)).expect(
-        "a blocking waiter must be woken by the resolution and run its callback; \
-         a timeout here is a permanently blocked OS thread",
-    );
-    assert_eq!(
-        future.inner.read_trace.lock().as_slice(),
-        &[0, 1],
-        "shape pin: the blocking path must register before the read that decides \
-         to park, exactly as both polling paths do"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// cancellation
-// ---------------------------------------------------------------------------
-
-/// **Discriminating.** Reverting the base future's `Canceled` arm to fall
-/// through into the listener-registering path reddens it.
-///
-/// The base future deliberately never resolves on cancellation — that is
-/// Flutter's `_cancel`, which completes only the secondary future — but
-/// "never resolves" must mean *parked with nothing held*, not *parked on a
-/// listener for an event that can never fire again* plus a pinned executor
-/// waker.
-///
-/// The second poll is load-bearing: after the first one the cancellation has
-/// only marked the existing entry `Notified`, and it is still linked, so the
-/// listener count reads 1 either way.
-#[test]
-fn a_canceled_base_future_holds_no_waker_and_no_listener() {
-    let mut future = TickerFuture::new();
+fn a_pending_future_resolves_err_on_cancel() {
+    let (completer, mut future) = TickerFuture::pending();
     let probe = Arc::new(CountingWaker::default());
 
     {
@@ -554,76 +306,316 @@ fn a_canceled_base_future_holds_no_waker_and_no_listener() {
         assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
     }
 
-    future.set_canceled();
-    assert_eq!(probe.wakes(), 1, "the parked poll must have been woken");
+    completer.cancel().deliver();
 
-    {
-        let waker = Waker::from(Arc::clone(&probe));
-        let mut cx = Context::from_waker(&waker);
-        assert!(
-            Pin::new(&mut future).poll(&mut cx).is_pending(),
-            "the base future does not resolve on cancellation (or_cancel does)"
-        );
-    }
-
+    let waker = Waker::from(Arc::clone(&probe));
+    let mut cx = Context::from_waker(&waker);
+    assert_eq!(
+        Pin::new(&mut future).poll(&mut cx),
+        Poll::Ready(Err(TickerCanceled)),
+        "a canceled future must resolve Err(TickerCanceled), not park forever"
+    );
     assert_eq!(
         future.inner.event.total_listeners(),
         0,
-        "a canceled base future must hold no listener: the event can never fire \
-         again, so a registration here is a leak that outlives its purpose"
-    );
-    assert_eq!(
-        Arc::strong_count(&probe),
-        1,
-        "a canceled base future must hold no executor waker"
+        "a resolved future must hold no listener once it has reported Ready"
     );
 }
 
 // ---------------------------------------------------------------------------
-// mute -> start must not orphan a live future
+// continuations
 // ---------------------------------------------------------------------------
 
-/// **Discriminating.** Reverting `start_inner`'s refusal — the
-/// `active_future.is_some()` check — reddens it: the muted ticker accepts the
-/// start, overwrites `active_future`, and the first run's future is never
-/// resolved by anything, ever.
+/// **Discriminating.** A continuation registered on a pending future must run
+/// exactly once, with the published outcome, once the completer resolves.
+/// Reverting `TickerCompleter::publish`'s `mem::take` of the continuation
+/// `Vec` (so nothing is ever handed to `TickerDelivery`) reddens this.
 #[test]
-fn mute_then_start_does_not_orphan_the_pending_future() {
-    let mut ticker = Ticker::new();
-    let first_run = ticker.start(|_| {});
-    ticker.mute();
+fn a_continuation_on_a_pending_future_runs_once_with_the_outcome() {
+    let (completer, future) = TickerFuture::pending();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::new(Mutex::new(None));
 
-    let refused = ticker.start(|_| {});
+    let calls2 = Arc::clone(&calls);
+    let observed2 = Arc::clone(&observed);
+    future.when_complete_or_cancel(move |outcome| {
+        calls2.fetch_add(1, Ordering::SeqCst);
+        *observed2.lock() = Some(outcome);
+    });
+
+    completer.complete().deliver();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "must run exactly once");
+    assert_eq!(*observed.lock(), Some(Ok(())));
+}
+
+/// **Discriminating.** Registering on an already-resolved future must invoke
+/// the callback immediately, on the calling thread, without ever touching the
+/// continuation `Vec`. Reverting the fast-path arms of
+/// `TickerFuture::when_complete_or_cancel` back to unconditionally pushing
+/// onto `state.continuations` reddens this (the callback would never run: the
+/// future is already resolved, so no future `TickerCompleter` call remains to
+/// drain it).
+#[test]
+fn when_complete_or_cancel_on_a_resolved_future_runs_immediately() {
+    let future = TickerFuture::complete();
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran2 = Arc::clone(&ran);
+
+    future.when_complete_or_cancel(move |outcome| {
+        assert_eq!(outcome, Ok(()));
+        ran2.store(true, Ordering::SeqCst);
+    });
 
     assert!(
-        Arc::ptr_eq(&first_run.inner, &refused.inner),
-        "a refused start must hand back the live future, not a fresh one"
+        ran.load(Ordering::SeqCst),
+        "an already-resolved future must run the callback synchronously, before \
+         when_complete_or_cancel returns"
     );
+}
+
+/// **Discriminating.** Dropping a [`TickerCompleter`] without ever calling
+/// `complete`/`cancel` must still resolve its future — as a cancellation, so
+/// a run nobody explicitly ended settles rather than hanging its awaiters
+/// forever. Deleting `impl Drop for TickerCompleter` reddens this.
+#[test]
+fn dropping_a_completer_without_resolving_cancels_the_future() {
+    let (completer, mut future) = TickerFuture::pending();
+    drop(completer);
+
+    assert!(future.is_canceled());
+
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    assert_eq!(
+        Pin::new(&mut future).poll(&mut cx),
+        Poll::Ready(Err(TickerCanceled))
+    );
+}
+
+/// **Discriminating.** Reverting `TickerCompleter::publish` to run
+/// continuations *inside* the `state.lock()` critical section — rather than
+/// draining into a `Vec` and running them after the guard drops — reddens
+/// this.
+#[test]
+fn a_continuation_sees_the_state_lock_free() {
+    let (completer, future) = TickerFuture::pending();
+    let inner = Arc::clone(&future.inner);
+    let observed = Arc::new(Mutex::new(None));
+    let observed2 = Arc::clone(&observed);
+
+    future.when_complete_or_cancel(move |_outcome| {
+        *observed2.lock() = Some(inner.state.try_lock().is_some());
+    });
+
+    completer.complete().deliver();
+
+    assert_eq!(
+        observed.lock().as_ref(),
+        Some(&true),
+        "a continuation must see the future's own state lock free — the guard \
+         that published the resolution must already be released"
+    );
+}
+
+/// **Discriminating.** A continuation must run *before* any waker is
+/// notified — reverting `deliver_now`'s order (notify, then run
+/// continuations) reddens this: the continuation below would observe one
+/// wake already delivered instead of zero.
+#[test]
+fn continuations_run_before_wakers_are_notified() {
+    let (completer, mut future) = TickerFuture::pending();
+    let probe = Arc::new(CountingWaker::default());
+
+    {
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+    }
+
+    let probe_in_continuation = Arc::clone(&probe);
+    let wakes_seen_by_continuation = Arc::new(AtomicUsize::new(usize::MAX));
+    let observed = Arc::clone(&wakes_seen_by_continuation);
+    future.when_complete_or_cancel(move |_outcome| {
+        observed.store(probe_in_continuation.wakes(), Ordering::SeqCst);
+    });
+
+    completer.complete().deliver();
+
+    assert_eq!(
+        wakes_seen_by_continuation.load(Ordering::SeqCst),
+        0,
+        "the continuation must run before the waker is notified"
+    );
+    assert_eq!(
+        probe.wakes(),
+        1,
+        "the waker must be notified once delivery completes"
+    );
+}
+
+/// **Discriminating.** Two panicking continuations, with distinct messages,
+/// bracket a third that must still run — a panicking continuation must not
+/// stop its siblings — and the payload re-raised once delivery finishes must
+/// be the FIRST one caught, not the last. Removing the per-continuation
+/// `catch_unwind` in `deliver_now` reddens the "siblings still run" half
+/// (the middle continuation would never fire); replacing
+/// `first_payload.get_or_insert(payload)` with an unconditional overwrite
+/// (`Option::insert`) reddens the "first, not last" half — the re-raised
+/// text would read "second continuation panics" instead.
+#[test]
+fn a_panicking_continuation_does_not_starve_its_siblings_and_the_first_payload_is_reraised() {
+    let (completer, future) = TickerFuture::pending();
+    let middle_ran = Arc::new(AtomicBool::new(false));
+    let middle_ran2 = Arc::clone(&middle_ran);
+
+    future.when_complete_or_cancel(|_outcome| panic!("first continuation panics"));
+    future.when_complete_or_cancel(move |_outcome| {
+        middle_ran2.store(true, Ordering::SeqCst);
+    });
+    future.when_complete_or_cancel(|_outcome| panic!("second continuation panics"));
+
+    let delivery = completer.complete();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| delivery.deliver()));
+
+    assert!(
+        middle_ran.load(Ordering::SeqCst),
+        "a panicking continuation must not prevent its siblings from running"
+    );
+    let payload =
+        result.expect_err("the first caught payload must be re-raised once delivery has finished");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("first continuation panics"),
+        "the FIRST caught payload must be the one re-raised, not the last"
+    );
+}
+
+/// **Fast-path re-entrancy pin, not discriminating on its own** — the same
+/// production line `when_complete_or_cancel_on_a_resolved_future_runs_immediately`
+/// (the fast path itself) already reddens on. Splitting
+/// `TickerCompleter::publish`'s one lock into two would NOT redden this: a
+/// registration from inside a continuation always runs after both locks have
+/// finished either way, so this test cannot tell a one-lock publish from a
+/// two-lock one — only that a reentrant `when_complete_or_cancel` call
+/// during delivery does not get lost. Kept anyway for the re-entrancy shape
+/// itself, which nothing else in this file drives.
+#[test]
+fn a_continuation_registered_from_inside_a_continuation_runs() {
+    let (completer, future) = TickerFuture::pending();
+    let reentrant_ran = Arc::new(AtomicBool::new(false));
+    let reentrant_ran2 = Arc::clone(&reentrant_ran);
+    let future_for_reentry = future.clone();
+
+    future.when_complete_or_cancel(move |_outcome| {
+        let reentrant_ran3 = Arc::clone(&reentrant_ran2);
+        future_for_reentry.when_complete_or_cancel(move |_outcome| {
+            reentrant_ran3.store(true, Ordering::SeqCst);
+        });
+    });
+
+    completer.complete().deliver();
+
+    assert!(
+        reentrant_ran.load(Ordering::SeqCst),
+        "a continuation registered while the future is already resolving must \
+         still run"
+    );
+}
+
+/// **Discriminating**, and the one test in this file with a process-survival
+/// stake: reverting `deliver_now`'s `std::thread::panicking()` gate — always
+/// `resume_unwind`ing the first caught payload — turns this into a
+/// panic-during-panic, which the Rust runtime aborts rather than unwinds. A
+/// `Drop for TickerCompleter` that runs mid-unwind is exactly the shape a
+/// caller's own panicking `Drop` produces in production.
+#[test]
+fn a_completer_dropped_mid_unwind_with_a_panicking_continuation_does_not_abort() {
+    let (completer, future) = TickerFuture::pending();
+    future.when_complete_or_cancel(|_outcome| panic!("continuation panics"));
+
+    let (result, log) = flui_testing::log_capture::capture(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _completer = completer;
+            panic!("outer panic drops the completer while already unwinding");
+        }))
+    });
+
+    assert!(
+        result.is_err(),
+        "the outer panic must still propagate to catch_unwind"
+    );
+    assert!(
+        future.is_canceled(),
+        "Drop for TickerCompleter must still resolve the future, even mid-unwind"
+    );
+    assert!(
+        log.count_containing("already unwinding") >= 1,
+        "the continuation's panic must be logged rather than silently lost: {log}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// mute -> start must still be refused
+// ---------------------------------------------------------------------------
+
+/// **Discriminating.** A muted ticker is still running a (paused) turn, so
+/// `start` must refuse exactly as it would on an `Active` ticker: the ticker
+/// stays `Muted`, the original callback is the one that keeps firing once
+/// unmuted, and the replacement callback the refused call supplied never
+/// fires at all. Widening `start_inner`'s refusal predicate back down to
+/// `state == Active` reddens this — the muted ticker would accept the second
+/// `start`, silently replacing the paused run's callback.
+#[test]
+fn mute_then_start_is_refused_and_keeps_the_muted_run() {
+    let scheduler = crate::scheduler::UpdateScheduler::new();
+    let mut ticker = Ticker::new_with_scheduler(&scheduler);
+    let original_calls = Arc::new(AtomicUsize::new(0));
+    let original = Arc::clone(&original_calls);
+    ticker.start(move |_| {
+        original.fetch_add(1, Ordering::SeqCst);
+    });
+    ticker.mute();
+    assert_eq!(ticker.state(), TickerState::Muted);
+
+    let replacement_calls = Arc::new(AtomicUsize::new(0));
+    let replacement = Arc::clone(&replacement_calls);
+    ticker.start(move |_| {
+        replacement.fetch_add(1, Ordering::SeqCst);
+    });
     assert_eq!(
         ticker.state(),
         TickerState::Muted,
         "a refused start must not half-apply: the ticker stays where it was"
     );
 
-    drop(refused);
-    ticker.stop();
+    ticker.unmute();
+    scheduler.execute_frame();
 
-    assert!(
-        first_run.is_complete(),
-        "the first run's future must still be the one stop() resolves; an \
-         orphaned future is a permanent hang for anyone awaiting it"
+    assert_eq!(
+        original_calls.load(Ordering::SeqCst),
+        1,
+        "the original run's callback must still be the one installed"
     );
+    assert_eq!(
+        replacement_calls.load(Ordering::SeqCst),
+        0,
+        "the refused replacement callback must never fire"
+    );
+
+    ticker.stop();
 }
 
 /// **Discriminating on `main`**, but not for the reason the shape suggests, and
 /// the difference is worth stating because it is easy to mis-read this test as
 /// stronger than it is.
 ///
-/// On the code this change replaces there is no refusal at all, so both oracles
-/// below are empty and the test fails. What it pins *going forward* is that the
-/// refusal's two pieces of user-visible work — emitting a `tracing` event,
-/// whose subscriber is arbitrary user code, and dropping the caller's callback,
-/// whose `Drop` is arbitrary user code — happen with `Mutex<TickerInner>` free.
+/// On the code this change replaces there is no refusal at all, so the
+/// tracing oracle below is empty and the test fails. What it pins *going
+/// forward* is that the refusal's two pieces of user-visible work — emitting
+/// a `tracing` event, whose subscriber is arbitrary user code, and dropping
+/// the caller's callback, whose `Drop` is arbitrary user code — happen with
+/// `Mutex<TickerInner>` free.
 ///
 /// Of those two, **only the subscriber oracle actually pins anything.** Rust
 /// drops a function's body-scope locals (the guard) before its parameters (the
@@ -637,7 +629,7 @@ fn mute_then_start_does_not_orphan_the_pending_future() {
 #[test]
 fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
     let mut ticker = Ticker::new();
-    let first_run = ticker.start(|_| {});
+    ticker.start(|_| {});
     ticker.mute();
 
     let ticker_inner = Arc::clone(&ticker.inner);
@@ -650,7 +642,7 @@ fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
     };
 
     flui_testing::disarm_interest_cache();
-    let refused = tracing::subscriber::with_default(
+    tracing::subscriber::with_default(
         InnerLockProbeSubscriber {
             ticker_inner: Arc::clone(&ticker_inner),
             events: Arc::clone(&events),
@@ -658,16 +650,17 @@ fn a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free() {
         || {
             ticker.start(move |_| {
                 let _keep_alive = &canary;
-            })
+            });
         },
     );
 
-    assert!(
-        Arc::ptr_eq(&first_run.inner, &refused.inner),
+    assert_eq!(
+        ticker.state(),
+        TickerState::Muted,
         "precondition: this must be the refusal path"
     );
 
-    let logged = lock_states_for_event(&events, "previous run's future is still live");
+    let logged = lock_states_for_event(&events, "a run is already installed");
     assert!(
         !logged.is_empty(),
         "a refused start must be diagnosable: it has to emit a tracing event"
@@ -703,7 +696,7 @@ fn a_start_with_nothing_to_dispatch_logs_with_the_inner_lock_free() {
     let mut ticker = ticker;
 
     flui_testing::disarm_interest_cache();
-    let no_op = tracing::subscriber::with_default(
+    tracing::subscriber::with_default(
         InnerLockProbeSubscriber {
             ticker_inner: Arc::clone(&ticker_inner),
             events: Arc::clone(&events),
@@ -711,10 +704,10 @@ fn a_start_with_nothing_to_dispatch_logs_with_the_inner_lock_free() {
         || ticker.start_default(),
     );
 
-    assert!(
-        no_op.is_complete(),
-        "precondition: a start with no callback to dispatch is a no-op that \
-         returns an already-complete future"
+    assert_eq!(
+        ticker.state(),
+        TickerState::Idle,
+        "precondition: a start with no callback to dispatch is a no-op"
     );
 
     let logged = lock_states_for_event(&events, "without a pre-loaded callback");
@@ -777,43 +770,17 @@ fn a_discarded_lease_callback_logs_with_the_inner_lock_free() {
 // ---------------------------------------------------------------------------
 
 /// **Compile-time fence.** No production line reverts this; it exists so that
-/// losing `Send`/`Sync` on either future — which would make the cross-thread
-/// resolve/await shape this crate's own tests use stop compiling — is a
-/// deliberate act rather than a side effect.
+/// losing `Send`/`Sync` on any of these types — which would make the
+/// cross-thread resolve/await shape this crate's own tests use stop compiling
+/// — is a deliberate act rather than a side effect. `TickerCompleter` and
+/// `TickerDelivery` are also pinned `!Clone`: cloning either would let two
+/// handles race the once-only resolution or the once-only delivery.
 #[test]
-fn ticker_future_auto_traits() {
+fn ticker_future_completer_and_delivery_auto_traits() {
     static_assertions::assert_impl_all!(TickerFuture: Send, Sync, Unpin, Clone);
-    static_assertions::assert_impl_all!(TickerFutureOrCancel: Send, Sync, Unpin);
+    static_assertions::assert_impl_all!(TickerCompleter: Send, Sync);
+    static_assertions::assert_not_impl_any!(TickerCompleter: Clone);
+    static_assertions::assert_impl_all!(TickerDelivery: Send, Sync);
+    static_assertions::assert_not_impl_any!(TickerDelivery: Clone);
     static_assertions::assert_impl_all!(TickerCanceled: Send, Sync, Copy, std::error::Error);
-}
-
-/// **Regression pin** (green before this change too), not the contract record
-/// it was first labelled as. Mapping `Resolved::Canceled` to `Ok(())` in
-/// `TickerFutureOrCancel::poll`, or making `poll_resolution`'s `Canceled` arm
-/// register a listener instead of returning, reddens it.
-///
-/// Recorded because Flutter's `orCancel` is lazily created and, if accessed
-/// after the ticker has already resolved, completes immediately with the
-/// recorded outcome — and until now nothing here said whether FLUI matched
-/// that.
-#[test]
-fn or_cancel_accessed_after_resolution_resolves_immediately() {
-    let future = TickerFuture::new();
-    future.set_canceled();
-
-    let mut or_cancel = future.or_cancel();
-    let probe = Arc::new(CountingWaker::default());
-    let waker = Waker::from(Arc::clone(&probe));
-    let mut cx = Context::from_waker(&waker);
-
-    assert_eq!(
-        Pin::new(&mut or_cancel).poll(&mut cx),
-        Poll::Ready(Err(TickerCanceled)),
-        "or_cancel() accessed after resolution must resolve on its first poll"
-    );
-    assert_eq!(
-        future.inner.event.total_listeners(),
-        0,
-        "an already-resolved poll must not register a listener at all"
-    );
 }

@@ -199,8 +199,8 @@ pub use scheduler::{
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{
-    Ticker, TickerCallback, TickerCanceled, TickerFuture, TickerFutureOrCancel, TickerGroup,
-    TickerId, TickerProvider, TickerState,
+    Ticker, TickerCallback, TickerCanceled, TickerCompleter, TickerDelivery, TickerFuture,
+    TickerGroup, TickerId, TickerProvider, TickerState,
 };
 
 /// Prelude for common scheduler types

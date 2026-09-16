@@ -120,15 +120,18 @@ fn demo_auto_scheduling_ticker() {
 }
 
 fn demo_ticker_future() {
-    println!("Creating TickerFuture...");
+    println!("Creating a TickerFuture and its completer...");
 
-    // Create a pending future
-    let future = TickerFuture::new();
+    // A fresh run creates its future/completer pair together — the
+    // completer is the write half a caller (an `AnimationController`, in
+    // production) resolves once the run it represents ends.
+    let (completer, future) = TickerFuture::pending();
     println!("Is pending: {}", future.is_pending());
     println!("Is complete: {}", future.is_complete());
     println!("Is canceled: {}", future.is_canceled());
 
-    // Create a pre-completed future
+    // Create a pre-completed future — useful for a run that settles
+    // synchronously (a zero-duration animation, for example).
     let complete_future = TickerFuture::complete();
     println!("\nPre-completed future:");
     println!("Is pending: {}", complete_future.is_pending());
@@ -138,23 +141,23 @@ fn demo_ticker_future() {
     let _future_clone = future.clone();
     println!("\nFuture cloned successfully");
 
-    // Get the or_cancel derivative
-    let _or_cancel = future.or_cancel();
-    println!("Created or_cancel derivative future");
-
-    // Demonstrate when_complete_or_cancel
+    // Demonstrate when_complete_or_cancel: it never blocks, and runs
+    // immediately on an already-resolved future.
     let callback_called = Arc::new(AtomicU32::new(0));
     let cc = Arc::clone(&callback_called);
 
-    complete_future.when_complete_or_cancel(move || {
+    complete_future.when_complete_or_cancel(move |outcome| {
+        println!("Completion outcome: {outcome:?}");
         cc.fetch_add(1, Ordering::SeqCst);
     });
-
-    // Give time for callback to execute
-    std::thread::sleep(Duration::from_millis(10));
 
     println!(
         "Completion callback called: {} time(s)",
         callback_called.load(Ordering::SeqCst)
     );
+
+    // Resolving the pending future's completer runs any continuation
+    // registered on `future` and wakes anyone polling it.
+    completer.complete().deliver();
+    println!("Pending future resolved via its completer: {future:?}");
 }
