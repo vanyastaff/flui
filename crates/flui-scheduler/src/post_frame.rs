@@ -79,6 +79,22 @@ impl LocalPostFrameLane {
         self.inner.queue.take()
     }
 
+    /// Whether this lane's queue is currently borrowable -- i.e. not mid
+    /// `borrow()`/`borrow_mut()` somewhere up the call stack.
+    ///
+    /// Mirrors [`TaskQueue::is_unlocked`](crate::task::TaskQueue::is_unlocked):
+    /// the lock-discipline oracle probes this lane through this method
+    /// rather than reaching into the private `RefCell` directly. A
+    /// reentrant `RefCell` borrow panics rather than deadlocking, a
+    /// different failure mode than the `Mutex` family the rest of the
+    /// oracle covers, but a callback that runs with its own lane's queue
+    /// still borrowed is exactly as wrong: it cannot register another
+    /// local callback of its own without panicking.
+    #[cfg(test)]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        self.inner.queue.try_borrow_mut().is_ok()
+    }
+
     /// Drain this lane's queue for `scheduler`'s frame drive — but only if
     /// `scheduler` is genuinely the one this lane was minted from.
     ///
@@ -314,6 +330,18 @@ mod tests {
     /// shared callback at all (a compile error, not a runtime check) — that
     /// structurally rules out the "shared schedules local" direction the
     /// thread-local ticket registry used to have to arbitrate at runtime.
+    ///
+    /// The outer callback also probes `LocalPostFrameLane::is_unlocked()`
+    /// before re-registering, so a regression fails fast with an assertion
+    /// instead of the `BorrowMutError` panic the re-registration below would
+    /// otherwise surface a level down. `take_queue`'s `RefCell::take()`
+    /// (swapping in a fresh, empty `Vec` and returning the drained one) is
+    /// the line that keeps this green: it releases the borrow before any
+    /// callback in the snapshot runs, so `schedule_local`'s own
+    /// `queue.borrow_mut()` call below succeeds. Iterating the queue in
+    /// place with a live `borrow_mut()` instead would still hold that borrow
+    /// while the callback ran, and this same re-registration would panic
+    /// with `BorrowMutError`.
     #[test]
     fn local_then_local_nested_registration_defers() {
         let scheduler = UpdateScheduler::new();
@@ -322,8 +350,15 @@ mod tests {
         let fired = Rc::new(Cell::new(0));
         let nested_handle = handle.clone();
         let nested = Rc::clone(&fired);
+        let probe_lane = lane.clone();
         handle
             .schedule_local(move |_| {
+                assert!(
+                    probe_lane.is_unlocked(),
+                    "the lane's queue must already be released by the time \
+                     its own callback runs, or the re-registration below \
+                     would panic with BorrowMutError instead of deferring"
+                );
                 nested_handle
                     .schedule_local(move |_| {
                         nested.set(nested.get() + 1);

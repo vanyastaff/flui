@@ -771,6 +771,31 @@ struct FrameState {
     /// [`FrameCompletionRegistry`] for the lock order this field imposes on
     /// everything that touches it.
     completion_waiters: Mutex<FrameCompletionRegistry>,
+    /// The thread driving the currently-open (or most recently opened)
+    /// frame, recorded by [`UpdateScheduler::handle_begin_frame`] at the
+    /// same point it clears `frame_scheduled`, and load-bearing on the
+    /// ORDER of that store relative to the phase transition: see
+    /// `handle_begin_frame`'s own comment at the store site for why it
+    /// must happen before the phase leaves `Idle`.
+    ///
+    /// `None` only until the first `handle_begin_frame` call; from then on
+    /// it always names the most recently opened frame's driver and is
+    /// never cleared back to `None`. That is sound because it is read only
+    /// from [`ensure_visual_update`](UpdateScheduler::ensure_visual_update),
+    /// and only while `phase()` reports a mid-frame phase, which itself
+    /// implies a frame is currently in flight on the thread this field
+    /// names — so a value left over from a PREVIOUS frame is never read as
+    /// if it were the current one, even though the field itself is never
+    /// reset between frames.
+    ///
+    /// `UpdateScheduler` is `Send + Sync` and documented as reachable from
+    /// any thread; this field is what lets `ensure_visual_update`
+    /// distinguish "I am the thread already driving this frame" (safe to
+    /// trust Flutter's phase classification) from "some other thread is
+    /// mid-frame and I am not it" (must request regardless of phase, since
+    /// nothing on this thread will otherwise observe what prompted the
+    /// call).
+    frame_thread: Mutex<Option<std::thread::ThreadId>>,
 }
 
 /// Callback registration and cancellation state
@@ -786,7 +811,8 @@ struct CallbackState {
     /// silently dropped with the batch a single-lock drain would already
     /// have removed it into (issue #1057).
     transient: Mutex<VecDeque<CancellableTransientCallback>>,
-    /// Cancelled callback IDs (lock-free)
+    /// Cancelled callback IDs. `DashMap`: a sharded `RwLock`, not
+    /// lock-free; `contains_key` releases its shard before returning.
     cancelled: DashMap<CallbackId, ()>,
     /// Callback ID generator
     id_gen: IdGenerator<flui_foundation::markers::FrameCallback>,
@@ -1144,6 +1170,7 @@ impl UpdateScheduler {
                 warm_up_done: AtomicBool::new(false),
                 idle_deadline: Mutex::new(None),
                 completion_waiters: Mutex::new(FrameCompletionRegistry::new()),
+                frame_thread: Mutex::new(None),
             },
             callbacks: CallbackState {
                 post_frame_registration: Mutex::new(()),
@@ -1298,6 +1325,19 @@ impl UpdateScheduler {
             .frame
             .frame_scheduled
             .store(false, Ordering::Release);
+        // Recorded at the same point `frame_scheduled` clears: this thread
+        // is now the one driving the frame `ensure_visual_update`'s
+        // same-thread arms trust (see `frame_thread`'s own doc). This store
+        // MUST happen before the phase transition below takes it out of
+        // `Idle` -- a foreign thread that observes a mid-frame phase
+        // (`Acquire` on `scheduler_phase`) and then locks `frame_thread`
+        // must already observe THIS frame's driver, never a stale one from
+        // whatever frame preceded it. Reordered, a thread that drove the
+        // PREVIOUS frame could read the new mid-frame phase together with
+        // its own (now stale) id still in `frame_thread`, mistake itself
+        // for the current driver, and drop a cross-thread wake for the
+        // frame actually in flight.
+        *self.inner.frame.frame_thread.lock() = Some(std::thread::current().id());
         self.inner.frame.frame_count.fetch_add(1, Ordering::Relaxed);
 
         // Phase 1: TransientCallbacks (animation tickers)
@@ -1350,7 +1390,9 @@ impl UpdateScheduler {
                     break;
                 };
 
-                // Skip if cancelled (DashMap provides lock-free contains_key)
+                // Skip if cancelled. DashMap: sharded `RwLock`; `contains_key`
+                // releases its shard before returning, so nothing is held
+                // across the callback invocation below.
                 if self.inner.callbacks.cancelled.contains_key(&cancellable.id) {
                     continue;
                 }
@@ -3146,12 +3188,69 @@ impl UpdateScheduler {
         self.request_frame();
     }
 
-    /// Ensure a visual update is scheduled
+    /// Ensure a visual update is scheduled.
     ///
-    /// Calls `schedule_frame_if_enabled()` to guarantee a frame will be
-    /// processed.
+    /// Flutter parity: `SchedulerBinding.ensureVisualUpdate`
+    /// (`scheduler/binding.dart`). [`SchedulerPhase::Idle`] and
+    /// [`SchedulerPhase::PostFrameCallbacks`] request one, through
+    /// [`schedule_frame_if_enabled`](Self::schedule_frame_if_enabled) (which
+    /// keeps the `frames_enabled` gate); a call from `PostFrameCallbacks`
+    /// requests the NEXT frame, since this frame's own pipeline has already
+    /// run by that phase. The three mid-frame phases
+    /// ([`SchedulerPhase::TransientCallbacks`],
+    /// [`SchedulerPhase::MidFrameMicrotasks`],
+    /// [`SchedulerPhase::PersistentCallbacks`]) are a no-op **only for the
+    /// thread already driving this frame** (see `frame_thread`'s own doc).
+    /// A caller on any OTHER thread always requests, regardless of phase:
+    /// `UpdateScheduler` is `Send + Sync` and documented as reachable from
+    /// any thread, so a lost cross-thread wake would be the worst failure
+    /// class this crate names, and only the driving thread's own later
+    /// phases are guaranteed to observe what prompted a same-thread call.
+    ///
+    /// This is not a blanket "the in-flight frame will pick up your
+    /// change" promise even for the driving thread: it holds for
+    /// `TransientCallbacks`/`MidFrameMicrotasks`, which precede the
+    /// pipeline in the frame's slot order, but not for
+    /// `PersistentCallbacks`, where the pipeline itself runs — a call made
+    /// after paint has already happened would have its demand dropped,
+    /// same as in Flutter. (A raw `handle_begin_frame`/`handle_draw_frame`
+    /// sequence outside `drive_frame_impl`'s panic boundary whose callback
+    /// panics leaves the phase stuck exactly where it panicked, and this
+    /// gate stays silent on that thread until something resets the phase
+    /// machine; production always drives frames through
+    /// `drive_frame`/`drive_frame_with_lane`, both of which wrap
+    /// `drive_frame_impl`.) What actually keeps a same-thread caller's
+    /// demand from being lost is two carriers outside this method
+    /// entirely: pipeline visual-update demand travels
+    /// `PipelineOwner::request_visual_update`
+    /// (`flui-rendering/src/pipeline/owner/accessors.rs`) to the
+    /// presentation's own wake closure and `window.request_redraw()`
+    /// (`flui-app/src/app/presentation.rs`), never through this method;
+    /// ticker/animation demand travels `Ticker::schedule_tick_if_active`
+    /// (`ticker.rs`) to `schedule_frame_callback`, whose own registration
+    /// ends in an ungated `self.request_frame()` call, independent of this
+    /// method's phase gate.
+    ///
+    /// Spelled out as a `match` with every phase named, not a wildcard arm,
+    /// so a phase added to [`SchedulerPhase`] fails to compile here until
+    /// it is classified.
     pub fn ensure_visual_update(&self) {
-        self.schedule_frame_if_enabled();
+        match self.phase() {
+            SchedulerPhase::Idle | SchedulerPhase::PostFrameCallbacks => {
+                self.schedule_frame_if_enabled();
+            }
+            SchedulerPhase::TransientCallbacks
+            | SchedulerPhase::MidFrameMicrotasks
+            | SchedulerPhase::PersistentCallbacks => {
+                // Own statement, released before deciding: no scheduler
+                // lock may be held across `schedule_frame_if_enabled`'s own
+                // `on_frame_scheduled` hook call.
+                let frame_thread = *self.inner.frame.frame_thread.lock();
+                if frame_thread != Some(std::thread::current().id()) {
+                    self.schedule_frame_if_enabled();
+                }
+            }
+        }
     }
 
     /// Reset the epoch for time dilation calculations
@@ -3528,6 +3627,13 @@ impl Default for SchedulerBuilder {
 // rather than two segments below it.
 #[cfg(test)]
 mod lock_discipline_tests;
+
+// Sibling module for the same reason as `lock_discipline_tests` above: one
+// cohesive test family (every test built on `ensure_visual_update`'s phase
+// `match`) that nothing else in the crate uses, kept out of the already
+// large inline `tests` module below.
+#[cfg(test)]
+mod visual_update_tests;
 
 #[cfg(test)]
 mod tests {
