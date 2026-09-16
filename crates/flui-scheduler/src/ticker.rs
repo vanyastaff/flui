@@ -311,6 +311,33 @@ impl TickerInner {
             && matches!(self.slot, CallbackSlot::Ready(_))
             && self.scheduled_callback_id.is_none()
     }
+
+    /// Commit-side predicate for the two registration tails
+    /// (`schedule_tick_if_active`, `tick_and_reschedule_static`): may the
+    /// callback id just minted be recorded, or must the tail cancel its own
+    /// registration instead?
+    ///
+    /// Deliberately NOT [`should_schedule_tick`](Self::should_schedule_tick):
+    /// that predicate DECIDES whether to schedule in the first place, and
+    /// its slot term means "no dispatch is currently in flight to re-arm
+    /// this ticker on its own". At a commit site the decision to schedule
+    /// was already taken and the id already registered with the scheduler —
+    /// a slot checked out by a concurrent manual [`tick`](Ticker::tick) is
+    /// not a reason to retract that registration. `tick()` itself never
+    /// schedules anything, so retracting here would leave the ticker
+    /// `Active` with nothing left to wake it, permanently — this predicate
+    /// must never gain a slot term for exactly that reason (issue #1166).
+    ///
+    /// So: is the run this id was registered for still `Active`, and did no
+    /// other registration record an id while ours was in flight with no
+    /// lock held? A `stop`/`dispose`/`reset`/`mute` that raced the
+    /// registration and left the id `None` (nothing existed yet to cancel)
+    /// fails the first clause; a reentrant caller that already installed a
+    /// fresh id in the same window fails the second — either way the tail
+    /// must self-cancel the id it just minted rather than record it.
+    fn may_record_registration(&self) -> bool {
+        self.state == TickerState::Active && self.scheduled_callback_id.is_none()
+    }
 }
 
 /// Animation ticker with runtime state management
@@ -474,8 +501,10 @@ impl Ticker {
     ///
     /// Clears the callback, sets state to Stopped, cancels the active
     /// [`TickerFuture`], cancels the pending transient frame callback it can
-    /// observe (auto-scheduling tickers — see [`stop`](Self::stop) for the
-    /// in-flight-tick window where there is none to observe), and marks
+    /// observe (auto-scheduling tickers — the registration tails self-cancel
+    /// when they find this ticker no longer [`Active`](TickerState::Active),
+    /// so no tick is ever delivered to a disposed run; see
+    /// [`stop`](Self::stop) for the window and its residuals), and marks
     /// disposed. Subsequent calls to
     /// `start`/`stop`/`mute`/`unmute`/`reset`/`tick` panic in debug builds via
     /// [`debug_assert!`] and emit a `tracing::warn!` + no-op in release.
@@ -686,21 +715,29 @@ impl Ticker {
     /// callback it can *observe*, which is not quite the same as "there is none
     /// left". An auto-tick already in flight clears the registration id at the
     /// top of the tick and records its replacement at the tail, and a stop
-    /// arriving in between sees no id and cancels nothing.
+    /// arriving in between sees no id and cancels nothing itself. The same
+    /// window applies to [`dispose`](Self::dispose), [`reset`](Self::reset),
+    /// and [`mute`](Self::mute), all of which cancel through the same field.
     ///
-    /// For nearly all of that interval that is simply correct: the tail's
-    /// decision to re-register is `should_schedule_tick()`, re-read under the
-    /// lock and requiring `state == Active`, so a stop landing any time before
-    /// that read produces no replacement registration at all. The window that
-    /// actually leaks is the narrow one between that read returning true and the
-    /// id being written back — a replacement registered there lands on a ticker
-    /// this call has already stopped. The same window applies to
-    /// [`dispose`](Self::dispose), [`reset`](Self::reset), and
-    /// [`mute`](Self::mute), all of which cancel through the same field.
+    /// The replacement registration does not outlive this call's effect:
+    /// every registration tail re-checks, under the same lock this call
+    /// takes, that the run it registered for is still
+    /// [`Active`](TickerState::Active) with no other id already on record,
+    /// and self-cancels its own fresh registration the instant it finds
+    /// otherwise. This ticker never *delivers* a tick to a stopped run: the
+    /// pending callback is either cancelled by this call, cancelled by the
+    /// racing tail's own self-cancel, or inert on entry (the callback
+    /// re-reads `state` at the top of its own dispatch and returns as soon
+    /// as it finds anything other than `Active`, which also covers
+    /// [`Muted`](TickerState::Muted) — a state that *is* running).
     ///
-    /// The stale callback is inert when it fires — the tick path re-reads the
-    /// state and finds it not `Active` (which also covers `Muted`, a state that
-    /// *is* running) — but it does keep one frame registration alive.
+    /// The register-then-decide window itself remains open; only its
+    /// consequence is closed: `stop` can still return before the racing
+    /// tail's self-cancel has run, and the transient queue's own
+    /// cancellation check is read outside the lock that guards it, so a
+    /// callback popped for execution in the same instant it is cancelled
+    /// can still run once — harmlessly, since it is exactly the re-read
+    /// above that makes it inert.
     pub fn stop(&mut self) {
         if !self.assert_not_disposed("stop") {
             return;
@@ -972,22 +1009,35 @@ impl Ticker {
         let cb_id = scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
             Self::tick_and_reschedule_static(inner_arc, weak_next, disposed_arc);
         }));
-        // Record the ID so stop/mute/dispose can cancel — but never clobber
-        // a registration a reentrant caller already installed while this
-        // one was in flight (issue #1059's own root cause was exactly this
-        // kind of blind overwrite, on the auto-tick tail below). Not
-        // reachable from a single-threaded caller of this method alone, but
-        // cheap to make structurally impossible rather than assumed absent.
+        // Commit the ID under `may_record_registration` — never clobber a
+        // registration a reentrant caller already installed while this one
+        // was in flight (issue #1059's own root cause was exactly this kind
+        // of blind overwrite, on the auto-tick tail below), and never leave
+        // this one live against a ticker a concurrent `stop`/`dispose`/
+        // `reset`/`mute` already moved off `Active` in the same unlocked gap
+        // (issue #1166 — that race sees no id here to cancel, because none
+        // was recorded yet; this tail must notice on its own instead).
         let mut inner = self.inner.lock();
-        if inner.scheduled_callback_id.is_none() {
+        if inner.may_record_registration() {
             inner.scheduled_callback_id = Some(cb_id);
         } else {
+            let state = inner.state;
             drop(inner);
-            tracing::trace!(
-                ticker_cb_id = ?cb_id,
-                "schedule_tick_if_active: a registration already exists; \
-                 cancelling the redundant one instead of orphaning it"
-            );
+            if state == TickerState::Active {
+                tracing::trace!(
+                    ticker_cb_id = ?cb_id,
+                    "schedule_tick_if_active: a registration already exists; \
+                     cancelling the redundant one instead of orphaning it"
+                );
+            } else {
+                tracing::trace!(
+                    ticker_cb_id = ?cb_id,
+                    ?state,
+                    "schedule_tick_if_active: the ticker is no longer active; \
+                     self-cancelling this registration instead of leaving it \
+                     live against a run that is no longer active"
+                );
+            }
             scheduler.cancel_frame_callback(cb_id);
         }
     }
@@ -1080,23 +1130,38 @@ impl Ticker {
         let cb_id = strong.schedule_frame_callback(Box::new(move |_vsync_time| {
             Self::tick_and_reschedule_static(inner_next, scheduler_next, disposed_next);
         }));
-        // Record the new ID — but never clobber one a reentrant `unmute()`/
-        // `start()` already installed between the `should_schedule_tick`
-        // check above and this registration completing (both run with no
-        // lock held). Issue #1059's root cause was exactly this blind
-        // overwrite: an orphaned earlier registration that nothing ever
-        // cancels. Cancel the REDUNDANT one (ours) instead, so whichever
-        // registration a concurrent caller is tracking survives.
+        // Commit the new ID under `may_record_registration` — never clobber
+        // one a reentrant `unmute()`/`start()` already installed between the
+        // `should_schedule_tick` check above and this registration
+        // completing (both run with no lock held; issue #1059's root cause
+        // was exactly this blind overwrite, an orphaned earlier registration
+        // nothing ever cancels), and never leave this one live against a
+        // ticker a concurrent `stop`/`dispose`/`reset`/`mute` already moved
+        // off `Active` in the same gap (issue #1166 — that race sees no id
+        // here to cancel, because none was recorded yet; this tail must
+        // notice on its own instead). Either way, cancel OUR registration
+        // rather than orphaning it or leaving it live against a dead run.
         let mut guard = inner.lock();
-        if guard.scheduled_callback_id.is_none() {
+        if guard.may_record_registration() {
             guard.scheduled_callback_id = Some(cb_id);
         } else {
+            let state = guard.state;
             drop(guard);
-            tracing::trace!(
-                ticker_cb_id = ?cb_id,
-                "tick_and_reschedule_static: a registration already exists; \
-                 cancelling the redundant one instead of orphaning it"
-            );
+            if state == TickerState::Active {
+                tracing::trace!(
+                    ticker_cb_id = ?cb_id,
+                    "tick_and_reschedule_static: a registration already exists; \
+                     cancelling the redundant one instead of orphaning it"
+                );
+            } else {
+                tracing::trace!(
+                    ticker_cb_id = ?cb_id,
+                    ?state,
+                    "tick_and_reschedule_static: the ticker is no longer active; \
+                     self-cancelling this registration instead of leaving it \
+                     live against a run that is no longer active"
+                );
+            }
             strong.cancel_frame_callback(cb_id);
         }
     }
@@ -1806,7 +1871,7 @@ mod future_tests;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     use super::*;
 
@@ -2611,5 +2676,290 @@ mod tests {
             observed > 0,
             "the ticker must have ticked at least once across {ROUNDS} rounds"
         );
+    }
+
+    // ---- commit predicate at the registration tails (issue #1166) ----
+    //
+    // `schedule_tick_if_active` (via `start`/`unmute`) and
+    // `tick_and_reschedule_static`'s own tail both register a fresh transient
+    // callback with the scheduler, THEN re-lock `TickerInner` only to decide
+    // whether to keep the id they just minted. A `stop`/`dispose`/`reset`/
+    // `mute` landing in that unlocked gap sees no id to cancel (nothing has
+    // been recorded yet) and the tail must notice on its own, at the re-lock,
+    // that the run it registered for is no longer live.
+    //
+    // `UpdateScheduler::set_on_frame_scheduled`'s hook fires synchronously,
+    // on the same thread, from inside `schedule_frame_callback` on the
+    // `frame_scheduled` false->true edge (`request_frame_impl`); a hook
+    // installed after the FIRST registration and pumped through
+    // `execute_frame()` (which clears that latch at frame entry, in
+    // `handle_begin_frame`, before the transient drain) therefore runs
+    // exactly inside the next registration's own unlocked gap, deterministically,
+    // with no scheduler or ticker lock held.
+
+    /// A `stop()` racing the auto-tick tail's re-registration
+    /// (`tick_and_reschedule_static`) must leave no live transient
+    /// registration behind a stopped ticker.
+    ///
+    /// Red on `main` (tail predicate `scheduled_callback_id.is_none()`
+    /// alone, no re-check of `state`): `transient_callback_count() == 1` —
+    /// the tail's fresh registration survives the stop that raced it.
+    #[test]
+    fn a_stop_racing_the_tick_tail_leaves_no_live_registration() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+
+        ticker.lock().start(|_| {});
+
+        // Installed AFTER `start()`, whose own registration already spent
+        // the first false->true edge — this hook only fires on the auto-tick
+        // tail's re-registration inside the frame driven below. One-shot so
+        // a second, unrelated edge inside the same frame can't call `stop()`
+        // twice.
+        let fired = AtomicBool::new(false);
+        let ticker_in_hook = Arc::clone(&ticker);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            if fired.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            assert!(
+                ticker_in_hook
+                    .lock()
+                    .inner
+                    .lock()
+                    .scheduled_callback_id
+                    .is_none(),
+                "hook must fire inside the register->record gap, before the \
+                 tail has recorded its fresh id — otherwise this test does \
+                 not exercise the race it claims to"
+            );
+            ticker_in_hook.lock().stop();
+        })));
+
+        scheduler.execute_frame();
+
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            0,
+            "a stop racing the tick tail's re-registration must leave no live \
+             transient callback behind"
+        );
+    }
+
+    /// A `mute()`/`unmute()` pair run from a hook installed to fire inside
+    /// the auto-tick tail's own register->record gap must land ITS fresh
+    /// registration, and the tail's own late-arriving one must be the one
+    /// cancelled — not the other way around, and not both left live.
+    /// `unmute()` re-enters `schedule_tick_if_active` from inside the gap
+    /// (the slot is `Ready`, because the dispatch's `TickerLease` already
+    /// restored it before this tail runs), so it registers and commits a
+    /// fresh id from the SAME unlocked window the outer tail is still
+    /// deciding in — the reentrant-registration race issue #1059's
+    /// no-clobber clause exists for, exercising the tail's "a registration
+    /// already exists" arm, which the other three tests in this section
+    /// never reach.
+    ///
+    /// This pins `may_record_registration`'s `scheduled_callback_id.is_none()`
+    /// clause specifically: reducing the predicate to `state == Active`
+    /// alone reddens it — the tail's own redundant registration is never
+    /// cancelled (nothing else in that branch removes it from the queue),
+    /// so both the reentrant registration and the tail's stale one survive
+    /// into the second frame, and both fire, delivering the tick twice.
+    #[test]
+    fn a_reentrant_registration_landing_in_the_tail_gap_is_kept_and_ours_is_cancelled() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
+        let calls = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&calls);
+
+        ticker.lock().start(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        // Installed AFTER `start()`, one-shot, the same shape as
+        // `a_stop_racing_the_tick_tail_leaves_no_live_registration` above —
+        // but the body re-enters the ticker with `mute()` then `unmute()`
+        // instead of `stop()`, landing a fresh registration from inside the
+        // tail's own gap rather than cancelling through it.
+        let fired = AtomicBool::new(false);
+        let ticker_in_hook = Arc::clone(&ticker);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            if fired.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            ticker_in_hook.lock().mute();
+            ticker_in_hook.lock().unmute();
+        })));
+
+        scheduler.execute_frame();
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "the reentrant registration must be kept and the tail's own \
+             redundant one cancelled instead of leaving both live"
+        );
+
+        let calls_after_first_frame = calls.load(Ordering::SeqCst);
+        scheduler.execute_frame();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            calls_after_first_frame + 1,
+            "the second frame must deliver exactly one tick, not one per \
+             surviving stale registration"
+        );
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "the second frame's own re-registration must land cleanly too"
+        );
+
+        ticker.lock().stop();
+    }
+
+    /// A `stop()` racing `schedule_tick_if_active`'s own tail (the one
+    /// `start()`/`unmute()` use — the auto-tick tail above never runs on a
+    /// ticker's very first frame) must leave no live registration either.
+    ///
+    /// This race lands DURING the first `start()` call: that call's own
+    /// registration is what trips the `frame_scheduled` false->true edge the
+    /// hook rides, so the test thread is still inside `start(&mut self)`,
+    /// which holds an exclusive `&mut Ticker` borrow for the whole
+    /// statement below — no real `stop(&mut self)` call is reachable from
+    /// the hook while that borrow is live (the borrow checker refuses it,
+    /// not a runtime lock). The hook instead field-simulates `stop()`'s
+    /// locked block directly against `TickerInner` (mirroring all four of
+    /// its writes — state, the callback slot, the registration id, the
+    /// future), which only needs the INNER `Arc<Mutex<TickerInner>>` cloned
+    /// out ahead of time.
+    ///
+    /// Red on `main` (tail predicate `scheduled_callback_id.is_none()`
+    /// alone): `transient_callback_count() == 1`.
+    #[test]
+    fn a_stop_racing_the_start_tail_leaves_no_live_registration() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
+        let inner_arc = Arc::clone(&ticker.inner);
+
+        let fired = AtomicBool::new(false);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            if fired.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            // Simulation, not a real `stop()` call — see this test's doc for
+            // why a real one is not reachable from the hook here.
+            let (pending_id, discarded, active_future) = {
+                let mut guard = inner_arc.lock();
+                guard.state = TickerState::Stopped;
+                let discarded = guard.slot.clear_if_ready();
+                let pending_id = guard.scheduled_callback_id.take();
+                (pending_id, discarded, guard.active_future.take())
+            };
+            assert!(
+                pending_id.is_none(),
+                "hook must fire inside the register->record gap, before the \
+                 tail has recorded its fresh id — otherwise this test does \
+                 not exercise the race it claims to"
+            );
+            drop(discarded);
+            if let Some(future) = active_future {
+                future.set_complete();
+            }
+        })));
+
+        ticker.start(|_| {});
+
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            0,
+            "a stop racing the start tail's registration must leave no live \
+             transient callback behind"
+        );
+    }
+
+    /// A manual `Ticker::tick()` in flight on another thread — checked out
+    /// to `CheckedOut`, state still `Active` — must NOT make the auto-tick
+    /// tail retract the registration it just minted. `tick()` never
+    /// schedules anything itself, so treating a checked-out slot as a reason
+    /// to self-cancel here would leave the ticker `Active` with nothing left
+    /// to wake it, permanently.
+    ///
+    /// This already passes on `main`: it pins the commit predicate's
+    /// deliberate absence of a slot term, not a defect #1166 fixes. Its
+    /// revert is the predicate gaining one (becoming `should_schedule_tick()`,
+    /// which retracts a live registration whenever a concurrent dispatch
+    /// holds the slot checked out — a permanent active-but-unscheduled
+    /// stall) — verify that revert reddens this once, then restore it.
+    #[test]
+    fn a_concurrent_checkout_at_the_tail_does_not_retract_the_registration() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
+        let inner_arc = Arc::clone(&ticker.inner);
+
+        ticker.start(|_| {});
+
+        let stolen: Arc<Mutex<Option<TickerCallback>>> = Arc::new(Mutex::new(None));
+        let stolen_in_hook = Arc::clone(&stolen);
+        let inner_in_hook = Arc::clone(&inner_arc);
+        let fired = AtomicBool::new(false);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            if fired.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            // Simulates a manual `Ticker::tick()` on another thread checking
+            // the callback out (`TickerLease::checkout`'s own effect)
+            // right as the auto-tick tail is deciding whether to keep the
+            // registration it just minted. The stolen callback is held
+            // OUTSIDE this lock, and outside this hook, until the test
+            // restores it once `execute_frame()` returns — exactly like a
+            // real in-flight checkout's callback lives outside the ticker
+            // lock for the whole dispatch.
+            let mut guard = inner_in_hook.lock();
+            let previous = std::mem::replace(&mut guard.slot, CallbackSlot::CheckedOut);
+            match previous {
+                CallbackSlot::Ready(callback) => {
+                    drop(guard);
+                    *stolen_in_hook.lock() = Some(callback);
+                }
+                other => {
+                    // Not reachable at this call site today — the lease
+                    // always restores to `Ready` before the reschedule
+                    // decision runs — but put back whatever was actually
+                    // there instead of silently leaving the slot stuck
+                    // `CheckedOut` if that ever changes.
+                    guard.slot = other;
+                }
+            }
+        })));
+
+        scheduler.execute_frame();
+
+        // Restore the callback before anything else: a second frame pumped
+        // while the slot is still `CheckedOut` would find it that way at the
+        // top of `tick_and_reschedule_static` and return with no re-arm, by
+        // this simulation's own construction rather than a real defect.
+        {
+            let mut guard = inner_arc.lock();
+            let callback = stolen.lock().take().expect(
+                "the hook must steal the Ready callback into `stolen` before \
+                 execute_frame() returns",
+            );
+            guard.slot = CallbackSlot::Ready(callback);
+        }
+
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "a concurrent checkout at the tail must not retract the tail's \
+             own fresh registration"
+        );
+        assert!(
+            inner_arc.lock().scheduled_callback_id.is_some(),
+            "the tail's registration id must still be recorded past a \
+             concurrent checkout, not cleared as though nothing were \
+             scheduled"
+        );
+
+        ticker.stop();
     }
 }
