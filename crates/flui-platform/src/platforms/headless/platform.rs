@@ -913,6 +913,17 @@ impl MockWindow {
         self.callbacks.dispatch_visibility_status_change(visible);
     }
 
+    /// Simulate a GPU-surface availability change for testing.
+    /// Fires the registered `on_surface_status_change` callback.
+    ///
+    /// No backend in this workspace emits this signal but Android, so this is
+    /// the only way a host-run test can drive the seam the released-surface
+    /// path hangs off: `false` asks the callback to release its surface,
+    /// `true` asks it to rebuild one.
+    pub fn simulate_surface_status(&self, has_surface: bool) {
+        self.callbacks.dispatch_surface_status_change(has_surface);
+    }
+
     /// Simulate close request for testing.
     /// Fires `on_should_close`, then `on_close` if allowed, then (real,
     /// production behavior — not a test-only shortcut) removes this window
@@ -1909,6 +1920,42 @@ mod tests {
 
         window.simulate_visibility(true);
         assert!(visible.load(Ordering::SeqCst));
+    }
+
+    /// The wire test for `on_surface_status_change`: registration goes through
+    /// the `PlatformWindow` trait method, the `simulate_*` affordance drives
+    /// the platform's own dispatch, and the closure must observe the value.
+    ///
+    /// That combination is the point. A backend whose setter is missing from
+    /// `impl_window_callback_setters!` still compiles the registration and
+    /// silently drops it — a direct `dispatch_surface_status_change` test
+    /// cannot see that, because it bypasses the setter entirely. A backend
+    /// that emits `false` and never `true` leaves the presentation released
+    /// forever with a blank window, which is why both edges are asserted.
+    #[test]
+    fn test_on_surface_status_change() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
+
+        let has_surface = Arc::new(AtomicBool::new(true));
+        let has_surface_clone = has_surface.clone();
+
+        window.on_surface_status_change(Box::new(move |has_surface_now| {
+            has_surface_clone.store(has_surface_now, Ordering::SeqCst);
+        }));
+
+        window.simulate_surface_status(false);
+        assert!(
+            !has_surface.load(Ordering::SeqCst),
+            "the release edge must reach the closure registered through the trait method"
+        );
+
+        window.simulate_surface_status(true);
+        assert!(
+            has_surface.load(Ordering::SeqCst),
+            "the rebuild edge must reach the same closure"
+        );
     }
 
     // ==================== US2 Tests ====================

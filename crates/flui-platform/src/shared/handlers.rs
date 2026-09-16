@@ -271,6 +271,18 @@ pub struct WindowCallbacks {
     /// Called when the system appearance (light/dark) changes.
     pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
+    /// Called when the GPU surface's availability changes. Parameter:
+    /// `has_surface` (`false` means the surface must be released before this
+    /// callback returns).
+    ///
+    /// Distinct from the lifecycle callbacks above: a window can be resumed
+    /// and still have no usable swapchain, and Android's `Pause` does not
+    /// clear `AndroidApp::native_window()` at all. See
+    /// [`crate::traits::PlatformWindow::on_surface_status_change`] for the contract and for
+    /// why a backend that never emits it is harmless while one that emits only
+    /// `false` is not.
+    pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+
     event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
     should_close_dispatching: Mutex<bool>,
 
@@ -298,6 +310,7 @@ enum WindowCallbackEvent {
     Visibility(bool),
     Hover(bool),
     AppearanceChanged,
+    SurfaceStatus(bool),
     /// A deferred [`WindowCallbacks::clear`]: queued instead of run inline
     /// when `clear()` is called while this window's FIFO is already
     /// draining (a `close()` issued from inside one of this window's own
@@ -454,6 +467,7 @@ impl WindowCallbacks {
             on_visibility_status_change: Mutex::new(None),
             on_hover_status_change: Mutex::new(None),
             on_appearance_changed: Mutex::new(None),
+            on_surface_status_change: Mutex::new(None),
             event_dispatch: Mutex::new(DispatchState::new()),
             should_close_dispatching: Mutex::new(false),
             cleared: AtomicBool::new(false),
@@ -503,7 +517,7 @@ impl WindowCallbacks {
     /// own `Clear` arm.
     ///
     /// **The `cleared` latch never resets once set, but that does not make
-    /// every slot permanently inert.** The nine slots `CallbackLease`
+    /// every slot permanently inert.** The ten slots `CallbackLease`
     /// dispatches through (every one except `on_close`) still accept a
     /// fresh registration after this call returns: that callback runs
     /// exactly once, the next time its event is dispatched, and only then
@@ -555,6 +569,7 @@ impl WindowCallbacks {
             self.on_visibility_status_change.lock().take(),
             self.on_hover_status_change.lock().take(),
             self.on_appearance_changed.lock().take(),
+            self.on_surface_status_change.lock().take(),
         );
         drop(dropped);
     }
@@ -622,6 +637,13 @@ impl WindowCallbacks {
                     let mut lease = CallbackLease::take(&self.on_appearance_changed, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback();
+                    }
+                }
+                WindowCallbackEvent::SurfaceStatus(has_surface) => {
+                    let mut lease =
+                        CallbackLease::take(&self.on_surface_status_change, &self.cleared);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback(has_surface);
                     }
                 }
                 WindowCallbackEvent::Clear => {
@@ -752,6 +774,24 @@ impl WindowCallbacks {
         };
         self.drain_events(drain);
     }
+
+    /// Dispatch a GPU-surface availability change. Parameter: `has_surface`
+    /// (`false` asks the owner to release its surface before returning).
+    ///
+    /// The `false` edge is the one with a real deadline behind it: it runs
+    /// while the platform has the native window in hand and is about to lose
+    /// it, so the callback it reaches must drop the surface synchronously
+    /// rather than schedule the drop for later. See
+    /// [`crate::traits::PlatformWindow::on_surface_status_change`] for the full contract.
+    pub fn dispatch_surface_status_change(&self, has_surface: bool) {
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::SurfaceStatus(has_surface),
+        ) else {
+            return;
+        };
+        self.drain_events(drain);
+    }
 }
 
 impl Default for WindowCallbacks {
@@ -760,7 +800,7 @@ impl Default for WindowCallbacks {
     }
 }
 
-/// Emits the ten `PlatformWindow` `on_*` callback-registration trait methods.
+/// Emits the eleven `PlatformWindow` `on_*` callback-registration trait methods.
 ///
 /// Every backend window stores its callbacks in a [`WindowCallbacks`] — either
 /// as a bare field or behind an `Arc` (auto-deref makes one body cover both) —
@@ -831,6 +871,10 @@ macro_rules! impl_window_callback_setters {
         fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
             *self.$callbacks_field.on_appearance_changed.lock() = Some(callback);
         }
+
+        fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+            *self.$callbacks_field.on_surface_status_change.lock() = Some(callback);
+        }
     };
 }
 // Textual-scope escape: `pub(crate) use` gives the macro a normal path
@@ -862,6 +906,10 @@ impl std::fmt::Debug for WindowCallbacks {
             .field(
                 "on_appearance_changed",
                 &self.on_appearance_changed.lock().is_some(),
+            )
+            .field(
+                "on_surface_status_change",
+                &self.on_surface_status_change.lock().is_some(),
             )
             .finish_non_exhaustive()
     }
@@ -939,6 +987,7 @@ mod tests {
         assert!(callbacks.on_visibility_status_change.lock().is_none());
         assert!(callbacks.on_hover_status_change.lock().is_none());
         assert!(callbacks.on_appearance_changed.lock().is_none());
+        assert!(callbacks.on_surface_status_change.lock().is_none());
     }
 
     /// The #919-class hazard from the other direction: `close()` requested
@@ -1005,6 +1054,66 @@ mod tests {
         assert!(
             callbacks.on_request_frame.lock().is_none(),
             "and must not survive past that one dispatch"
+        );
+    }
+
+    /// The surface-status slot carries its parameter through the FIFO to the
+    /// callback, and — like every other leased slot — survives the dispatch
+    /// that ran it, so a resume/release cycle can repeat without the owner
+    /// re-registering.
+    #[test]
+    fn surface_status_change_reaches_its_callback_with_the_parameter() {
+        let callbacks = WindowCallbacks::new();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let seen_in_callback = Arc::clone(&seen);
+        callbacks
+            .on_surface_status_change
+            .lock()
+            .replace(Box::new(move |has_surface| {
+                seen_in_callback
+                    .lock()
+                    .expect("BUG: test-only mutex is never poisoned")
+                    .push(has_surface);
+            }));
+
+        callbacks.dispatch_surface_status_change(false);
+        callbacks.dispatch_surface_status_change(true);
+
+        assert_eq!(
+            seen.lock()
+                .expect("BUG: test-only mutex is never poisoned")
+                .clone(),
+            vec![false, true],
+            "both edges reach the callback in order, with the released edge first"
+        );
+        assert!(
+            callbacks.on_surface_status_change.lock().is_some(),
+            "an ordinary dispatch outside any clear() must restore this callback too"
+        );
+    }
+
+    /// The `cleared` latch covers this slot as well: a release callback that
+    /// ends up clearing its own window (a close racing a suspend) must not be
+    /// resurrected by its own lease's `Drop`. This goes red if
+    /// `on_surface_status_change` is left out of `clear_now`'s take-all list.
+    #[test]
+    fn surface_status_change_cleared_from_inside_is_not_resurrected() {
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let inner = Arc::clone(&callbacks);
+        callbacks
+            .on_surface_status_change
+            .lock()
+            .replace(Box::new(move |_has_surface| {
+                inner.clear();
+            }));
+
+        callbacks.dispatch_surface_status_change(false);
+
+        assert!(
+            callbacks.on_surface_status_change.lock().is_none(),
+            "a surface-status callback that clears its window from inside \
+             itself must not be resurrected by its own lease's Drop"
         );
     }
 }

@@ -3381,6 +3381,7 @@ markers = [
     "pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool)",
     "pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool)",
     "pub on_appearance_changed: Mutex<Option<Box<dyn FnMut()",
+    "pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool)",
 ]
 
 # =============================================================================

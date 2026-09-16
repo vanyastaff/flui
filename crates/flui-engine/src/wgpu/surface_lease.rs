@@ -14,6 +14,19 @@ use crate::error::{EngineError, EngineResult};
 /// Ties a surface to the [`WindowTarget`] it was built from, for as long as
 /// the surface needs to exist.
 ///
+/// # A lease may hold no surface at all
+///
+/// `surface` is an `Option` because a backend can report that the native
+/// handle behind it is about to die, and a presentation that keeps a surface
+/// built from a dead handle is the use-after-free class this lease's field
+/// order exists to prevent. [`SurfaceLease::release`] takes the surface out
+/// and drops it there and then; [`SurfaceLease::replace_surface`] puts a
+/// newly built one back. The [`Arc`] of the target is retained across the
+/// released span, which is what makes a re-acquire need no new ownership:
+/// [`WindowTarget`]'s `HasWindowHandle`/`HasDisplayHandle` methods both take
+/// `&self`, so the retained `Arc` answers with whatever handle is current
+/// when it is asked again.
+///
 /// # Field order is load-bearing
 ///
 /// `surface` is declared **before** `target`, so it is dropped **before**
@@ -24,9 +37,12 @@ use crate::error::{EngineError, EngineResult};
 /// struct's last field is also its last-declared one) — both orderings agree
 /// that the handle source must outlive the surface built from it. Swapping
 /// this order would drop the window target while the surface built from it
-/// may still be mid-teardown.
+/// may still be mid-teardown. An `Option` field drops what it holds at the
+/// same point in the sequence, so a released lease keeps this property: the
+/// surface taken out by [`SurfaceLease::release`] is already gone by the time
+/// the target is dropped.
 pub(crate) struct SurfaceLease<S> {
-    surface: S,
+    surface: Option<S>,
     target: Arc<dyn WindowTarget>,
 }
 
@@ -40,11 +56,16 @@ impl<S> SurfaceLease<S> {
     /// `compatible_surface`)
     /// and commit it into the lease LAST, so a failed adapter or device
     /// request after a successful probe leaves the previous, still-usable
-    /// surface in place rather than tearing it down speculatively. A single
-    /// combined method taking both the target and a rebuild closure would
-    /// conflate those two steps into one call the production caller cannot
-    /// actually make in that order, so no such method exists here — `probe`
-    /// and `replace_surface` are the seam production uses directly.
+    /// surface in place rather than tearing it down speculatively. The same
+    /// split governs the release path: build the fresh surface FIRST, and
+    /// commit-or-release LAST, because a probe that succeeds and a build that
+    /// then fails must leave the lease exactly as it was rather than holding
+    /// neither surface. A single combined method taking both the target and a
+    /// rebuild closure would conflate those two steps into one call the
+    /// production caller cannot actually make in that order, so no such
+    /// method exists here — `probe` and `replace_surface` are the seam
+    /// production uses directly, and [`SurfaceLease::release`] is the second
+    /// commit-side verb beside `replace_surface`.
     ///
     /// # Errors
     ///
@@ -58,8 +79,28 @@ impl<S> SurfaceLease<S> {
     /// from [`SurfaceLease::target`] (see [`SurfaceLease::probe`]'s doc for
     /// why this is a separate, later step rather than folded into `probe`
     /// itself).
+    ///
+    /// The commit-side partner of [`SurfaceLease::release`]: `release` takes
+    /// the surface out, this puts one back, and a caller that holds a newly
+    /// built surface commits it here rather than calling `release` first —
+    /// assignment is not a drop plus an insert, it drops the old value on the
+    /// spot, so the released span `release` opens is not a precondition of
+    /// this call.
     pub(crate) fn replace_surface(&mut self, surface: S) {
-        self.surface = surface;
+        self.surface = Some(surface);
+    }
+
+    /// Drop the held surface and hold none.
+    ///
+    /// Call this at the last moment the native handle behind the surface is
+    /// still valid — dropping a configured [`wgpu::Surface`] releases its
+    /// swapchain, so it must not outlive the handle it was built from.
+    /// Idempotent: a lease that already holds no surface stays that way. The
+    /// target is deliberately **not** released, so a later
+    /// [`SurfaceLease::probe`] plus [`SurfaceLease::replace_surface`] needs no
+    /// new ownership.
+    pub(crate) fn release(&mut self) {
+        self.surface = None;
     }
 
     /// The window target this lease keeps alive.
@@ -67,9 +108,18 @@ impl<S> SurfaceLease<S> {
         &self.target
     }
 
-    /// The current surface.
-    pub(crate) fn surface(&self) -> &S {
-        &self.surface
+    /// The current surface, or `None` while [`SurfaceLease::release`] holds.
+    pub(crate) fn surface(&self) -> Option<&S> {
+        self.surface.as_ref()
+    }
+
+    /// Whether a surface is held right now.
+    ///
+    /// Distinct from "the target is available": a released lease whose target
+    /// answers [`raw_window_handle::HandleError::Unavailable`] is exactly the
+    /// state a suspend leaves behind.
+    pub(crate) fn has_surface(&self) -> bool {
+        self.surface.is_some()
     }
 
     /// Wrap an already-probed target and its freshly built surface into a
@@ -79,7 +129,10 @@ impl<S> SurfaceLease<S> {
     /// [`probe_target`] before doing the async work that produced `surface`
     /// — re-probing here would only duplicate that check.
     pub(crate) fn from_parts(target: Arc<dyn WindowTarget>, surface: S) -> Self {
-        Self { surface, target }
+        Self {
+            surface: Some(surface),
+            target,
+        }
     }
 }
 
@@ -147,6 +200,7 @@ impl<S> Drop for SurfaceLease<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::c_ulong;
     use std::sync::Mutex;
 
     use raw_window_handle::{
@@ -174,55 +228,82 @@ mod tests {
         );
     }
 
-    #[test]
-    fn drop_order_is_surface_before_target() {
-        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    /// Where the recording fixtures below write the order in which they are
+    /// dropped.
+    type DropLog = Arc<Mutex<Vec<&'static str>>>;
 
-        struct RecordingSurface(Arc<Mutex<Vec<&'static str>>>);
-        impl Drop for RecordingSurface {
-            fn drop(&mut self) {
-                self.0
-                    .lock()
-                    .expect("BUG: test-only mutex is never poisoned")
-                    .push("surface");
-            }
-        }
+    /// A surface that appends `"surface"` to the shared log when dropped.
+    struct RecordingSurface(DropLog);
 
-        struct RecordingTarget {
-            inner: FakeTarget,
-            order: Arc<Mutex<Vec<&'static str>>>,
+    impl Drop for RecordingSurface {
+        fn drop(&mut self) {
+            self.0
+                .lock()
+                .expect("BUG: test-only mutex is never poisoned")
+                .push("surface");
         }
-        impl Drop for RecordingTarget {
-            fn drop(&mut self) {
-                self.order
-                    .lock()
-                    .expect("BUG: test-only mutex is never poisoned")
-                    .push("target");
-            }
-        }
-        impl HasWindowHandle for RecordingTarget {
-            fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-                self.inner.window_handle()
-            }
-        }
-        impl HasDisplayHandle for RecordingTarget {
-            fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-                self.inner.display_handle()
-            }
-        }
+    }
 
+    /// A target that appends `"target"` to the shared log when dropped, and
+    /// otherwise answers like [`FakeTarget`].
+    struct RecordingTarget {
+        inner: FakeTarget,
+        log: DropLog,
+    }
+
+    impl Drop for RecordingTarget {
+        fn drop(&mut self) {
+            self.log
+                .lock()
+                .expect("BUG: test-only mutex is never poisoned")
+                .push("target");
+        }
+    }
+
+    impl HasWindowHandle for RecordingTarget {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            self.inner.window_handle()
+        }
+    }
+
+    impl HasDisplayHandle for RecordingTarget {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            self.inner.display_handle()
+        }
+    }
+
+    /// A lease over both recording fixtures, plus the log they write to. The
+    /// lease is returned rather than dropped here so each test can arrange the
+    /// release it is about before the final drop.
+    fn recording_lease() -> (SurfaceLease<RecordingSurface>, DropLog) {
+        let log: DropLog = Arc::new(Mutex::new(Vec::new()));
         let target: Arc<dyn WindowTarget> = Arc::new(RecordingTarget {
             inner: FakeTarget::new(1),
-            order: Arc::clone(&order),
+            log: Arc::clone(&log),
         });
-        let lease = SurfaceLease::from_parts(target, RecordingSurface(Arc::clone(&order)));
+        (
+            SurfaceLease::from_parts(target, RecordingSurface(Arc::clone(&log))),
+            log,
+        )
+    }
+
+    /// The log's contents, cloned out of the lock before it is returned: an
+    /// assertion that panicked while holding the guard would poison the mutex
+    /// and turn a clean test failure into a destructor panic during unwinding.
+    fn drop_log(log: &DropLog) -> Vec<&'static str> {
+        log.lock()
+            .expect("BUG: test-only mutex is never poisoned")
+            .clone()
+    }
+
+    #[test]
+    fn drop_order_is_surface_before_target() {
+        let (lease, log) = recording_lease();
 
         drop(lease);
 
         assert_eq!(
-            *order
-                .lock()
-                .expect("BUG: test-only mutex is never poisoned"),
+            drop_log(&log),
             vec!["surface", "target"],
             "the surface must be released before the target it was built from"
         );
@@ -235,7 +316,7 @@ mod tests {
 
         let initial = xlib_window_id(&target).expect("fake target starts available");
         let mut lease = SurfaceLease::from_parts(Arc::clone(&target), initial);
-        assert_eq!(*lease.surface(), 1);
+        assert_eq!(held_surface(&lease), 1);
         assert_eq!(
             concrete.call_log(),
             vec!["window_handle"],
@@ -249,7 +330,7 @@ mod tests {
             Err(EngineError::SurfaceTargetUnavailable { .. })
         ));
         assert_eq!(
-            *lease.surface(),
+            held_surface(&lease),
             1,
             "a failed probe must not disturb the still-live surface"
         );
@@ -276,7 +357,7 @@ mod tests {
             "a successful probe queries both window_handle and display_handle, in that order"
         );
         assert_eq!(
-            *lease.surface(),
+            held_surface(&lease),
             1,
             "probe() alone must not have touched the surface yet — only replace_surface commits"
         );
@@ -284,7 +365,7 @@ mod tests {
         let fresh = xlib_window_id(&target).expect("target is available");
         lease.replace_surface(fresh);
         assert_eq!(
-            *lease.surface(),
+            held_surface(&lease),
             2,
             "the rebuilt surface must be built from the fresh handle value"
         );
@@ -299,6 +380,82 @@ mod tests {
             ],
             "the final rebuild is a separate window_handle query, made only after probe() \
              committed to the target being live"
+        );
+    }
+
+    /// The surface the lease holds, for tests that are asserting a value
+    /// rather than the released-lease behavior.
+    fn held_surface(lease: &SurfaceLease<c_ulong>) -> c_ulong {
+        *lease
+            .surface()
+            .expect("BUG: this assertion is only meaningful while a surface is held")
+    }
+
+    #[test]
+    fn release_drops_the_surface_and_keeps_the_target() {
+        let (mut lease, log) = recording_lease();
+
+        lease.release();
+
+        let after_release = drop_log(&log);
+        assert!(
+            !lease.has_surface(),
+            "release leaves the lease holding none"
+        );
+        assert!(
+            lease.surface().is_none(),
+            "surface() answers None once released"
+        );
+        assert_eq!(
+            after_release,
+            vec!["surface"],
+            "release drops the held surface there and then, not at lease drop"
+        );
+        assert!(
+            lease.target().window_handle().is_ok(),
+            "the retained target survives the release, so a re-acquire needs no new ownership"
+        );
+    }
+
+    #[test]
+    fn releasing_twice_releases_once_and_a_replacement_is_held_again() {
+        let target: Arc<dyn WindowTarget> = Arc::new(FakeTarget::new(1));
+        let mut lease = SurfaceLease::from_parts(target, 1u64);
+
+        lease.release();
+        lease.release();
+        assert!(!lease.has_surface(), "a second release is the same state");
+
+        lease.replace_surface(7);
+        assert!(lease.has_surface(), "replace_surface holds the new surface");
+        assert_eq!(*lease.surface().expect("just replaced"), 7);
+    }
+
+    #[test]
+    fn dropping_a_released_lease_releases_only_the_target() {
+        let (mut lease, log) = recording_lease();
+
+        lease.release();
+        assert_eq!(
+            drop_log(&log),
+            vec!["surface"],
+            "release drops the surface while the lease — and so the target — is still alive"
+        );
+
+        // Cleared so the assertion below is exclusive to what this lease drops
+        // from here on: with the surface already gone there is no order left to
+        // observe between two entries, only which single entry a released
+        // lease's drop produces.
+        log.lock()
+            .expect("BUG: test-only mutex is never poisoned")
+            .clear();
+
+        drop(lease);
+
+        assert_eq!(
+            drop_log(&log),
+            vec!["target"],
+            "a released lease's drop releases the target and nothing else"
         );
     }
 }

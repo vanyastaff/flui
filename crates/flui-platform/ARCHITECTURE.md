@@ -119,3 +119,107 @@ table mapped 71 of winit 0.30.13's 194 `KeyCode` variants to `Code` (the
 count measured at issue #1092's baseline) and `convert_winit_key` mapped 37 of 306
 `NamedKey` variants to `Key`, falling through to `Unidentified` for the rest
 in both cases.
+
+### The surface-availability signal is a per-window `bool` callback, not a polled query
+
+**Rule:** a backend that learns the GPU surface's native backing is about to go
+away must say so through `PlatformWindow::on_surface_status_change` **before** the
+handle behind any surface built from it dies, so the presentation can drop that
+surface at the right moment. A backend that never emits the signal is harmless:
+the surface is never released, which is the pre-#1146 behavior and the same shape
+the visibility callback already documents. A backend that emits `false` and never
+`true` is not harmless, because the presentation stays released, every later frame
+is a skipped one, and the window paints nothing forever.
+
+**Choice:** `on_surface_status_change(Box<dyn FnMut(bool) + Send>)`, a defaulted
+no-op, following the `on_active_status_change`/`on_visibility_status_change`
+family's shape: stored in `shared::handlers::WindowCallbacks`, dispatched through
+the same FIFO and `CallbackLease`. `false` means "release the surface before this
+callback returns"; `true` means "a surface valid for the handle available now must
+exist", which the runner acts on unconditionally rather than by comparing it
+against what it already holds — that statelessness is the point, since a `false`
+can be lost and an "already present, do nothing" rule would then keep a surface
+built from a dead window for the rest of the process's life. The parameter is a
+`bool`, not an enum: a third state of the *surface* belongs in its own callback,
+per ADR-0035's split of this family by signal rather than by arity. Android is the
+only backend that emits it — `Pause` and `TerminateWindow` send `false`, `Resume`
+and `InitWindow` send `true` — and `platforms/android/mod.rs`'s module doc carries
+why that pair, and not `Pause` alone, is the correct mapping.
+
+**Alternatives considered:**
+
+- A polled query on the window (a `surface_is_available()` the runner reads each
+  iteration). Rejected: a poll cannot carry this deadline. The drop has to happen
+  while the native handle is still valid, which on Android means inside the
+  `TerminateWindow` callback; a query consulted at the next loop iteration reports
+  a window that is already gone.
+- A `#[non_exhaustive] enum WindowSurfaceStatus` parameter instead of `bool`.
+  Rejected for the parameter, not for the concept: it is the shape this crate uses
+  for input and owner status, but every consumer of this signal branches on two
+  states, and a callback's parameter type is a one-way door that changing later
+  breaks for every registrant.
+- Delegating the surface to the platform, the shape Leptos reaches on Android by
+  hosting a Tauri v2 WebView. Rejected as unavailable rather than inferior: it
+  requires giving up the adapter, the swapchain, and any ability to composite
+  native-rendered content into the framework's own UI. It would not escape the
+  problem either, since a wgpu surface inside a WebView is canvas-backed and
+  wgpu's wasm backend does not recover from `webglcontextlost` (gfx-rs/wgpu#3679).
+
+**Market lineage:** [bevy#6830](https://github.com/bevyengine/bevy/pull/6830), where
+an `android-activity` maintainer states that only the top-level render target needs
+recreating, not the wgpu stack; [bevy#9937](https://github.com/bevyengine/bevy/pull/9937),
+which first despawned the window on suspend and was revised to "keep Bevy window,
+only recreate Winit window and wgpu surface"; and
+[winit#3786](https://github.com/rust-windowing/winit/pull/3786), which forwards
+Android's `suspended()`/`resumed()` and is a named second emitter for this same
+`false`/`true` pair, since winit is already a workspace dependency with a backend
+here. Flutter asks for the same contract under another name:
+[flutter#160933](https://github.com/flutter/flutter/issues/160933) requested an
+`onSurfaceDestroying` that precedes the engine's `cleanup()`, having found the
+after-the-fact callback fires once the native surface is gone. The spelling that
+landed upstream is not that one: the API that exists is
+`SurfaceProducer.onSurfaceCleanup`, the before-signal that replaced
+`onSurfaceDestroyed` because another thread could still touch the surface after
+the fact, so a grep for the requested name finds the request rather than the
+implementation (ADR-0063 names both spellings). One divergence from
+winit and bevy is deliberate: winit 0.30.13 keys on the window events alone —
+`src/platform_impl/android/mod.rs` maps `MainEvent::InitWindow` to `Resumed`
+and `MainEvent::TerminateWindow` to `Suspended`, while its `Start` and `Stop`
+arms are `warn!("TODO: forward …")` stubs that forward nothing — and bevy
+consumes those same two events. This backend keys on `Pause`/`Resume` *as
+well as* `TerminateWindow`/`InitWindow`: the window pair is where the handle
+actually dies and returns, and the lifecycle pair is where the framework is
+told the app is going away, so emitting on both is the more conservative
+choice, at the cost the trade-off below books.
+
+**Trade-off:** releasing on `Pause` unconditionally makes the cost per-edge rather
+than per-defect. Android maps `false` to both `Pause` and `TerminateWindow` and
+`true` to both `Resume` and `InitWindow`, and the seam attempts a recreation on
+every `true`, so every `Pause`/`Resume` pair pays a release, a create/configure,
+a lane generation mint and a full repaint — including the pauses where the native
+window was never destroyed, such as a dialog over the activity or a multi-window
+deactivation. A second `true` over a surface still held on the same window is not
+paid twice but refused: Vulkan allows one `VkSurfaceKHR` per `ANativeWindow`, so
+the second create fails, the held surface stays, and no second mint or repaint
+follows (ADR-0063 decision 6 books what that refusal costs under the vendored
+`wgpu-hal`, and marks the ordering that could produce it as unverified). Dropping
+a configured `wgpu::Surface` is
+not cheap either: it reaches `vkDeviceWaitIdle` before destroying anything, which is
+an unbounded wait on whichever thread runs the callback. That is why the release is
+a synchronous, surface-only operation that performs no lane handoff, no probe and no
+submit, and why the `TerminateWindow` release that follows `Pause` in the ordinary
+cycle is an idempotent no-op — while its caller holds the raster lane's guard across
+it by design, so the wait does happen with the lane held.
+
+**Replacement coverage:** `platforms/headless/platform.rs`'s
+`test_on_surface_status_change` is the wire test — registration goes through the
+`PlatformWindow` trait method, the `simulate_surface_status` affordance drives the
+platform's own dispatch, and the closure asserts both edges — because a backend left
+out of `impl_window_callback_setters!` still compiles the registration and silently
+drops it, which a direct `dispatch_surface_status_change` test cannot see.
+`shared/handlers.rs`'s `surface_status_change_reaches_its_callback_with_the_parameter`
+and `surface_status_change_cleared_from_inside_is_not_resurrected` cover the slot's
+FIFO and lease behavior. The Android arms themselves are **type-checked by
+`just cross-typecheck` and executed by nothing**: no gate on this host runs the
+Android backend, so their mapping is an inference from `android-activity`'s
+documented contract, recorded rather than measured.

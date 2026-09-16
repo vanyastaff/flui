@@ -46,8 +46,10 @@ pub trait RasterBackend: Send {
     /// Traverses the scene's `LayerTree` and dispatches each layer's
     /// display-list commands through the GPU backend. Returns whether the
     /// frame actually reached `present()` — `false` covers every skip path
-    /// (no damage, occluded surface) that returns successfully without
-    /// presenting, and therefore without a vsync block.
+    /// that returns successfully without presenting, and therefore without a
+    /// vsync block: no damage, an occluded surface, or a surface the owner has
+    /// released for the duration of a suspend. See the concrete backend's own
+    /// doc for which of those it can report.
     fn render_scene(&mut self, scene: &Scene) -> Result<bool, EngineError>;
 
     /// Resize the surface to the given physical pixel dimensions.
@@ -80,6 +82,15 @@ pub trait RasterBackend: Send {
     /// Called automatically by `render_scene` on `Outdated`/`Lost`, but
     /// may also be called manually when the surface needs reconfiguration
     /// (e.g. format change).
+    ///
+    /// While a windowed backend holds no surface because it released one, the
+    /// call is a no-op rather than an error: there is nothing to reconfigure
+    /// and the release is deliberate. That clause covers the released state
+    /// only. A backend with no window at all is a different state with a
+    /// different answer — the wgpu `Renderer` returns
+    /// [`EngineError::NotInitialized`] for an offscreen or shared-services
+    /// origin, because reaching a reconfigure from one is a program error
+    /// rather than a lifecycle state.
     fn reconfigure_surface(&mut self) -> Result<(), EngineError>;
 
     /// Install the hook this backend runs immediately before every present

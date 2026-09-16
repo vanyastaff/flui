@@ -10,17 +10,36 @@
 //! android_main(AndroidApp)
 //!   -> AndroidPlatform::new(app)
 //!   -> Platform::run()  [poll_events loop]
-//!     -> MainEvent::Resumed  -> on_ready(), create surface
-//!     -> MainEvent::Paused   -> surface becomes invalid
-//!     -> MainEvent::Destroy  -> break loop
-//!     -> each tick            -> dispatch_request_frame()
+//!     -> MainEvent::Resume           -> resumed = true
+//!     -> MainEvent::InitWindow       -> on_ready(), create surface
+//!     -> MainEvent::TerminateWindow  -> surface released
+//!     -> MainEvent::Pause            -> lifecycle gate only
+//!     -> MainEvent::Destroy          -> break loop
+//!     -> each tick                   -> dispatch_request_frame()
 //! ```
 //!
 //! # Surface Lifecycle
 //!
-//! On Android, the native window (ANativeWindow) is only valid between
-//! `Resumed` and `Paused` events. The wgpu surface must be created on Resume
-//! and dropped on Pause.
+//! The native window (ANativeWindow) is valid between `InitWindow` and
+//! `TerminateWindow`, and nowhere else: `AppCmd::InitWindow` is applied before
+//! its callback runs, `AppCmd::TermWindow` is applied after its callback
+//! returns, and `MainEvent::Pause` does not touch the window at all. A wgpu
+//! surface built from a handle into that window therefore has to be gone
+//! before the handle is, which is what the `false` edge of
+//! [`PlatformWindow::on_surface_status_change`] asks the presentation to do.
+//!
+//! Both ends of the pair carry the signal: `Pause` and `TerminateWindow` emit
+//! `false`, `Resume` and `InitWindow` emit `true`. `Pause` alone would be the
+//! wrong place to stop, because the handle it would protect outlives it;
+//! `TerminateWindow` is the event that actually ends the handle's life, so
+//! dropping the surface inside that callback is the first moment the
+//! surface's lifetime has a defined end at all. Emitting on `Pause` as well
+//! moves the drop off it in the ordinary cycle, where the release is then an
+//! idempotent no-op at `TerminateWindow`.
+//!
+//! The initial `on_ready` waits for the first `InitWindow`, not the first
+//! `Resume`: `native_window()` is `None` until then, so a bootstrap that
+//! needs a window has nothing to build a surface from before it.
 
 pub mod input;
 pub mod memory;
@@ -311,30 +330,88 @@ impl Platform for AndroidPlatform {
                 if let PollEvent::Main(main_event) = event {
                     match main_event {
                         MainEvent::Resume { .. } => {
-                            tracing::info!("Android: Resumed — native window available");
+                            tracing::info!(
+                                "Android: Resumed — lifecycle transition, native window untouched"
+                            );
                             resumed = true;
 
-                            if on_ready.is_some() {
-                                should_call_ready = true;
-                            }
-
-                            // Notify window of activation
+                            // Notify window of activation. The surface signal
+                            // rides along: a `Resume` with no window yet (the
+                            // startup order) or with the previous surface still
+                            // released asks for one, and a `true` that finds a
+                            // live surface simply replaces it — see
+                            // `PlatformWindow::on_surface_status_change`.
                             if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_active_status_change(true);
+                                w.callbacks().dispatch_surface_status_change(true);
                                 w.request_redraw();
                             }
                         }
                         MainEvent::Pause => {
-                            tracing::info!("Android: Paused — native window may become invalid");
+                            tracing::info!(
+                                "Android: Paused — releasing the surface; the native window \
+                                 outlives this"
+                            );
                             resumed = false;
 
-                            // Notify window of deactivation
+                            // Release BEFORE deactivating: the drop is the one
+                            // step here with a validity window behind it, and
+                            // `on_active_status_change` runs arbitrary embedder
+                            // code.
                             if let Some(ref w) = *platform.window.lock() {
+                                w.callbacks().dispatch_surface_status_change(false);
                                 w.callbacks().dispatch_active_status_change(false);
+                            }
+                        }
+                        MainEvent::InitWindow { .. } => {
+                            tracing::debug!(
+                                "Android: InitWindow — a new native window is ready, \
+                                 requesting a surface"
+                            );
+
+                            // The bootstrap waits for the WINDOW, not for the
+                            // resume: `native_window()` is `None` until this
+                            // event, so an `on_ready` keyed on `Resume` would
+                            // build its surface from nothing. On the first
+                            // `InitWindow` no window exists yet, so the
+                            // dispatch below finds no registrant — the
+                            // bootstrap's own acquire is that acquire.
+                            if on_ready.is_some() {
+                                should_call_ready = true;
+                            }
+
+                            if let Some(ref w) = *platform.window.lock() {
+                                w.callbacks().dispatch_surface_status_change(true);
+                            }
+                        }
+                        MainEvent::TerminateWindow { .. } => {
+                            tracing::debug!(
+                                "Android: TerminateWindow — the native window is going away, \
+                                 releasing the surface"
+                            );
+
+                            // The last moment the handle behind a surface is
+                            // still valid: `AppCmd::TermWindow` is applied
+                            // after this callback returns, so a surface that
+                            // outlives it does too.
+                            if let Some(ref w) = *platform.window.lock() {
+                                w.callbacks().dispatch_surface_status_change(false);
                             }
                         }
                         MainEvent::Destroy => {
                             tracing::info!("Android: Destroy — shutting down");
+
+                            // A window that never arrived leaves `on_ready`
+                            // untaken, and exiting clean here would report a
+                            // presentation that never started as success.
+                            if on_ready.is_some() {
+                                bootstrap_error = Some(
+                                    "Android: the event loop shut down before any \
+                                     MainEvent::InitWindow, so the presentation was never \
+                                     bootstrapped"
+                                        .into(),
+                                );
+                            }
 
                             // Dispatch close before stopping
                             if let Some(ref w) = *platform.window.lock() {
@@ -376,11 +453,14 @@ impl Platform for AndroidPlatform {
             });
 
             // Call on_ready outside of poll_events (FnOnce can't be called in
-            // closure). Fires once, at the first `Resume` — the module doc's
-            // `Resumed -> on_ready() -> create surface` sequence (ADR-0039
-            // slice 2: the pre-run bootstrap that used to run before this
-            // loop started now runs from here, in `flui-app`'s `on_ready`
-            // migration). No owner lane on this backend: every
+            // closure). Fires once, at the first `MainEvent::InitWindow` — the
+            // module doc's `InitWindow -> on_ready() -> create surface`
+            // sequence (ADR-0039 slice 2: the pre-run bootstrap that used to
+            // run before this loop started now runs from here, in `flui-app`'s
+            // `on_ready` migration). The `InitWindow` arm is what makes that
+            // acquire legal: it is the first event at which
+            // `AndroidApp::native_window()` returns a window, and `Resume`
+            // precedes it at startup. No owner lane on this backend: every
             // `OwnerPlatform::open_window` call creates directly and is
             // always `Ready`.
             if should_call_ready && let Some(ready) = on_ready.take() {

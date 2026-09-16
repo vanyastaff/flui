@@ -9,10 +9,12 @@ it with ownership, and recovery asks the live owner instead of reading bytes.*
 - **Status:** Accepted
 - **Date:** 2026-09-14
 - **Deciders:** @vanyastaff
-- **Scope:** `flui-engine`'s `wgpu::Renderer` construction and recovery
-  (`WindowTarget`, the private `SurfaceLease<S>`), `EngineError`, and the
-  `PlatformWindow::window_handle`/`display_handle` contract every
-  `flui-platform` backend owes. Amends ADR-0045 decision 1 and §7 (below).
+- **Scope:** `flui-engine`'s `wgpu::Renderer` construction, recovery, and
+  surface release/rebuild (`WindowTarget`, the private `SurfaceLease<S>`),
+  `EngineError`, and the `PlatformWindow` contracts every `flui-platform`
+  backend owes — `window_handle`/`display_handle`, and the
+  `on_surface_status_change` availability signal. Amends ADR-0045 decision 1
+  and §7 (below).
 
 ---
 
@@ -34,11 +36,19 @@ compiles `let r = Renderer::new(&window).await?; drop(window); r.recover().await
 Re-reading the code before designing the fix turned the contract proof into
 two shipped defects:
 
-- **Android.** `AndroidWindow::window_handle()` answers
-  `HandleError::Unavailable` between `Paused` and `Resumed`, and a *different*
-  `ANativeWindow` after resume. Device-loss recovery
-  (`runner/device_recovery.rs` → `recover()`) rebuilt the surface against the
-  pointer captured at construction.
+- **Android.** `AndroidWindow::window_handle()` was recorded as answering
+  `HandleError::Unavailable` *between `Paused` and `Resumed`*, and as being
+  rebuilt by device-loss recovery "against the pointer captured at
+  construction". Both halves are wrong, and the correction is decision 6's
+  premise. `MainEvent::Pause` does not touch the window at all: the pointer is
+  cleared only by `AppCmd::TermWindow`, which `android-activity` 0.6.1 applies
+  *after* the `MainEvent::TerminateWindow` callback returns, so an ordinary
+  pause leaves `native_window()` answering `Some`. And nothing captures a
+  pointer in FLUI: `window_handle()` re-queries `native_window()` and rebuilds
+  the raw handle on every call. What holds an old handle is the
+  `wgpu::Surface` created once from whichever handle it was handed — which is
+  why releasing it at the right moment, rather than rebuilding later, is the
+  fix.
 - **Win32.** `WindowsWindow::window_handle()`'s own SAFETY comment recorded
   that the handle it hands out is tied to the `Arc<WindowsWindow>`, not to
   the HWND, which `PlatformWindow::close()` destroys synchronously — "a real
@@ -118,12 +128,190 @@ ownership discipline.
      again at `close`), a `closed` flag set from `windowWillClose:` before the
      callbacks are cleared, `window_handle()` → `Unavailable` when closed.
    - `WindowCallbacks::clear()` now latches; a `CallbackLease` returning after
-     the clear drops its callback instead of restoring it (the #919 hazard,
-     closed structurally on every backend).
-   - Android already conforms (`native_window()` is `None` while paused).
+     the clear drops its callback instead of restoring it. That is the #919
+     hazard's structural close **on every backend that has a clear site** —
+     `platforms/{macos,windows,winit,headless}` all do, and the census is
+     `rg -n 'callbacks(\(\))?\.clear\(\)' crates/flui-platform/src/platforms`
+     — the optional `()` matters, because winit reaches the slots through the
+     `callbacks()` accessor while macOS, Windows and headless call
+     `callbacks.clear()` on the field, and a regex that requires the
+     parentheses reports only the winit files. Run today it prints hits under
+     `headless/`, `macos/`, `windows/` and `winit/` and none under `android/`.
+     Android has none, so the registration cycle stays closed there; that gap
+     is a boundary of this record rather than a claim it closes (see the
+     Android bullet below and decision 6).
+   - Android reports `Unavailable` for a *terminated* window, and only then:
+     `native_window()` is `Some` across an ordinary pause and `None` between
+     `MainEvent::TerminateWindow` and the next `InitWindow`. A backend that
+     only ever released on a pause would therefore still present through a
+     surface whose handle the activity destroyed, which is why the release is
+     driven by decision 6's signal rather than by a `window_handle()` probe.
+   - **The one registration cycle that is still closed is Android's.** It
+     registers `on_request_frame` (`runner/android.rs`) and nothing clears
+     those slots: window → callbacks → frame callback → raster lane →
+     renderer → surface → `Arc<Window>`, exactly the cycle the four clear-site
+     comments describe. Adding the site is deliberately not part of this
+     change — it changes behavior on a path no gate here executes, it
+     interacts with activity recreation, and `MainEvent::Destroy` (the
+     candidate site) sits one line away from the callback registration
+     decision 6 adds, which `clear()` would silently break for the rest of the
+     window's life. Filed as a follow-up.
    - **Win32, AppKit, and Android are clippy-clean under `cross-typecheck`
      and never executed here.** Those three sentences are verification
      claims of that strength and no more.
+6. **The renderer releases its surface on a signal, and rebuilds it
+   unconditionally when a window returns.** `SurfaceLease::surface` becomes
+   `Option<S>` (`release()`/`surface()`/`has_surface()`), `Renderer` gains
+   `release_surface()` and `recreate_surface() -> EngineResult<()>`, and
+   `SurfaceAcquireOutcome::Released` is the disposition a frame sees while
+   released — distinct from `SurfaceLost`, which would churn a generation
+   through a surface that is deliberately gone. `flui-platform` carries the
+   signal as the per-window `on_surface_status_change(Box<dyn FnMut(bool) +
+   Send>)` callback: `false` before the handle dies, `true` when one is
+   available again. A backend that never emits it conforms by absence — the
+   surface is never released, which is the pre-#1146 behavior — and the method
+   defaults to a no-op, so all nine implementors compile unchanged. `flui-app`
+   owns the response in `runner/surface_lifecycle.rs`'s `ensure_surface`, which
+   returns `SurfaceLifecycleOutcome::{Released, Recreated, Failed(EngineError)}`;
+   a `Recreated` obliges the caller to mint a surface generation on its raster
+   lane and mark a full repaint. `#[must_use]` on the outcome buys a warning at
+   the call site for a value that is dropped without being read, which is what
+   turns a forgotten `Recreated` into a compile-time diagnostic instead of a
+   silent omission; it buys no more than that, since `let _ = ...` silences it,
+   and it says nothing about the obligation itself being discharged: a caller
+   that reads the variant and then ignores it still compiles clean.
+   - **Only the surface is rebuilt, never the stack**, and the target is the
+     retained `Arc<dyn WindowTarget>`: both of its methods take `&self`, so it
+     answers with whatever handle is current at the moment it is asked. The
+     width/height are kept rather than re-derived (a resize can arrive while
+     released); `usage`, `format`, `present_mode` and `alpha_mode` are
+     re-derived from the new surface's capabilities, because
+     `Surface::configure` panics on a stale one. `format` is the one of those
+     four with consumers inside the renderer: the pipelines and the offscreen
+     pool bake the format they are constructed with, so `recreate_surface`
+     rebuilds both when the freshly derived format differs from the one they
+     hold. Without that, the render attachment and the pipelines would
+     disagree on every frame, and the mismatch surfaces only as a logged
+     validation error on the uncaptured-error handler, which is a blank window
+     rather than a failure. `release()`/`resize()`
+     therefore keep the authoritative size while released, and
+     `reconfigure_surface` is a documented no-op in that state.
+   - **The two directions are asymmetric on purpose.** `false` asks for a
+     post-state that can already hold, so releasing twice is one release;
+     `true` asks about the present and never consults what is held, so it
+     rebuilds even when a surface exists and never short-circuits. That is
+     what removes the "a missed release strands a surface built from a dead
+     window for the rest of the process's life" failure mode: the next `true`
+     re-asks instead of being mistaken for a redundant one, so correctness
+     does not depend on having received every `false` — which matters because
+     a `false` can be lost (a registration in a slot nothing dispatches, an
+     event order the arms do not map). What that statelessness covers is the
+     stranded-surface failure mode only. A lost `false` still leaves a cost
+     behind: the configured `wgpu::Surface` built from the dying handle is then
+     dropped at the *next* `true` instead, inside `recreate_surface`'s
+     `replace_surface`: after the `ANativeWindow` behind it is gone, which is
+     the ordering this decision exists to avoid. Nothing on this side
+     dereferences the handle along that path (the surface is dropped, not
+     presented or reconfigured). On the Vulkan backend, which is the one this
+     renderer selects on Android, the late drop is not a use-after-free
+     either: the specification for `vkCreateAndroidSurfaceKHR` says a
+     successful create "increments the `ANativeWindow`'s reference count, and
+     `vkDestroySurfaceKHR` will decrement it", so the surface keeps the window
+     it was built from alive for as long as the surface exists, and the late
+     `vkDestroySurfaceKHR` decrements a count on memory the surface itself
+     held. What the lost `false` leaves on Vulkan is a disconnect from a dead
+     producer — a logic error of the class this record already names for
+     Win32, not freed memory. The EGL path (`wgpu-hal`'s `gles` backend, not
+     selected on Android here) is **unverified**: nobody has read whether
+     `eglDestroySurface` on a window the app no longer holds dereferences it.
+     That residual is what makes a lost `false` a degraded path rather than a
+     sound one.
+   - **The release's unbounded wait is `vkDeviceWaitIdle`, and it is
+     accepted.** Dropping a *configured* `wgpu::Surface` runs `wgpu-core`'s
+     `Drop for Surface` into `unconfigure`, which reaches `wgpu-hal`'s
+     `Swapchain::release_resources` and calls `vkDeviceWaitIdle` before
+     destroying anything — wgpu-hal's own comment: "there is no way to
+     portably wait until the presentation work is done, we are forced to wait
+     until the device is idle." Two threads are involved, and the wait sits on
+     the one that did not ask for the transition. `set_window` runs on the
+     Java/Android UI thread: it writes `AppCmd::TermWindow`, then parks in a
+     timeout-free `cond.wait` until that command has been applied. The
+     release, and with it `vkDeviceWaitIdle`, runs inside the
+     `TerminateWindow` callback that `pre_exec_cmd`/`post_exec_cmd` bracket, on
+     the thread executing the event loop (`poll_events`), the app's own main
+     thread. So the Java UI thread stays blocked until that callback returns,
+     which puts an unbounded device-idle wait on the Java UI thread's blocking
+     path, bounded only by the driver finishing its presentation work.
+     **Unverified:** neither wait's duration is measured here, there being no
+     Android device on this host and the live-smoke harnesses exercising the
+     desktop backends. It is the price of dropping while the
+     handle is still valid, which is the whole point: the alternative —
+     deferring to a later event — is the `onSurfaceCleanup`-vs-
+     `onSurfaceDestroyed` lesson above. What the release can avoid, it does:
+     it is a synchronous, surface-only act with no lane handoff of its own, no
+     probe and no submit. What it cannot avoid is that its caller holds the
+     raster lane's guard across it, deliberately, because the drop has to
+     complete before the callback that asked for it returns.
+   - **The cost is per edge, not per defect, and a second `true` on the same
+     window is refused rather than paid twice.** Android maps `false` to both
+     `Pause` and `TerminateWindow` and `true` to both `Resume` and
+     `InitWindow`, and the seam attempts a recreation on every `true` (the
+     asymmetry in the bullet above), so the count is per signal rather than
+     per activity cycle. What a second `true` costs depends on whether a
+     surface is still held. When it is not (the ordinary cycle, where the
+     `false` between them released it), the second `true` rebuilds. When it is
+     — a `true` arriving over a surface still bound to the *same*
+     `ANativeWindow` — the platform refuses the rebuild instead of running a
+     second create/configure pair: the Vulkan specification for
+     `vkCreateAndroidSurfaceKHR` states that "only one `VkSurfaceKHR` can
+     exist at a time for a given window" and returns
+     `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` for the second, and
+     `recreate_surface` creates before it commits, so the held surface is
+     still alive at that moment. The old surface stays in place and stays
+     valid; no second mint and no second repaint occur, because a refused
+     create never reaches the mint. What the refusal costs is decided by the
+     `wgpu-hal` in the lockfile rather than by this design: the seam's
+     `Failed` arm would log it once at `warn` as a `SurfaceCreation` error,
+     but `wgpu-hal` 30.0.1's `create_surface_android`
+     (`src/vulkan/instance.rs`) `expect`s the `vkCreateAndroidSurfaceKHR`
+     result ("AndroidSurface failed"), so under that version the refusal is a
+     panic on the callback thread, not the `warn`. Two routes reach it, and
+     neither is the ordinary cycle, where every `true` follows a `false` that
+     released: a `false` missed on a window that survived, and two `true`s
+     with no `false` between them, which is the `InitWindow`-before-`Resume`
+     ordering. It is the price of recreating without consulting what is
+     held; a held-surface short-circuit is deliberately not added, because it
+     would reintroduce the state the asymmetry bullet exists to avoid. On the
+     cold-launch ordering (`Resume` first) the first `true` finds no window
+     and its probe reports `SurfaceTargetUnavailable`, so only the
+     `InitWindow` rebuild lands. Whether the other ordering, `InitWindow`
+     before `Resume`, occurs at all is **unverified**: `android-activity`
+     0.6.1's glue emits `Resume` before `InitWindow` on every path traced
+     here, so the second route may describe an ordering that never happens.
+     The `false` half is
+     cheaper by the same asymmetry: the second release reaches a lease that
+     already holds nothing and is a no-op. Both directions cover
+     the pauses where the window is never destroyed (a dialog over the
+     activity, a multi-window deactivation); in those cases
+     the surface's contents were still valid and only incremental damage was
+     needed, so the full repaint is a cost this decision adds. Keying on
+     `Pause` alone would not be enough, and keying on `TerminateWindow` alone
+     would be too late in the other direction: the pair is required because
+     `TerminateWindow` is where the handle actually dies and `Pause` is where
+     the framework is told the app is going away. **This closes the "Android
+     does not drop its surface on `Paused`/`TerminateWindow`" follow-up this
+     record used to carry.**
+   - **The executed evidence is partial, and says so.** The lease, the
+     `Released` disposition and `ensure_surface` are host unit tests; the
+     Android arms that emit the signal are **type-checked by
+     `just cross-typecheck` and executed by nothing**, and the `Renderer`-side
+     mechanics need a GPU. Both live-smoke harnesses run the desktop demo,
+     where no backend emits the signal, so the lease-drop line they assert
+     still fires exactly once at window close; the explicit release and the
+     rebuild carry their own distinctly named events
+     (`surface_released_by_owner`, `surface_recreated`) rather than reusing
+     the drop line, so the harness oracle keeps its meaning instead of being
+     re-pointed at a path it does not exercise.
 
 ## Why the obvious alternatives were rejected
 
@@ -208,9 +396,9 @@ backoff loop is the mechanism #1043 makes sound.
 - **Still open, named rather than absorbed:** a surface created earlier is
   alive during `DestroyWindow` when the Win32 close is requested from inside
   a leased callback (rwh's contract calls a deleted HWND a logic error — the
-  swapchain fails — not memory unsafety); Android does not drop its surface
-  on `Paused`/`TerminateWindow` (the market shape — filed as a follow-up
-  with the survey's citations); a quit that skips per-window close leaks
+  swapchain fails — not memory unsafety); the Android backend still carries no
+  `callbacks().clear()` site, so its registration cycle stays closed (decision
+  5, last bullet); a quit that skips per-window close leaks
   window + surface silently — closed for the quit route by clearing every
   still-tracked window's callback slots in the winit shutdown path, pinned by
   a real-loop test. Both live-smoke harnesses asserted only the exit code

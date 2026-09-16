@@ -54,6 +54,21 @@ enum SurfaceAcquireOutcome<T> {
     Outdated,
     Lost,
     Validation,
+    /// A windowed renderer whose surface is deliberately released right now
+    /// ([`Renderer::release_surface`]), so there is nothing to present into
+    /// and nothing wrong.
+    ///
+    /// This is a legitimate state, not a failure: a windowed renderer that
+    /// owns no frame at this instant is exactly what a suspend looks like
+    /// from here, and the next [`Renderer::recreate_surface`] restores it.
+    ///
+    /// Deliberately **not** unified with [`SurfaceAcquireOutcome::Lost`]'s
+    /// use for a renderer that owns no window (the `OwnedOffscreen` and
+    /// `SharedServices` origins). Reaching presentation there is a program
+    /// error and staying loud is the point, so that path keeps
+    /// [`EngineError::SurfaceLost`]. Collapsing the two would make the
+    /// mistake silent in exchange for one arm.
+    Released,
 }
 
 impl From<wgpu::CurrentSurfaceTexture> for SurfaceAcquireOutcome<wgpu::SurfaceTexture> {
@@ -93,6 +108,15 @@ where
             SurfaceAcquireOutcome::Timeout => return Err(EngineError::Timeout),
             SurfaceAcquireOutcome::Occluded => {
                 tracing::trace!("Surface occluded; skipping frame");
+                return Ok(None);
+            }
+            SurfaceAcquireOutcome::Released => {
+                // Not an error and not a retry: the windowed renderer holds
+                // no surface right now because its owner released it, and
+                // there is nothing to present into until the owner recreates
+                // one. Reconfiguring would be meaningless (there is no
+                // surface to configure) and a retry would spin.
+                tracing::trace!("Surface released by its owner; skipping frame");
                 return Ok(None);
             }
             SurfaceAcquireOutcome::Outdated | SurfaceAcquireOutcome::Lost if may_retry => {
@@ -217,6 +241,30 @@ mod surface_acquisition_tests {
             assert!(matches!(result, Err(EngineError::SurfaceLost)));
             assert_eq!(surface.reconfigure_count, 1);
         }
+    }
+
+    #[test]
+    fn a_released_surface_skips_the_frame_without_a_reconfigure() {
+        let mut surface = FakeSurface::new(vec![
+            SurfaceAcquireOutcome::Released,
+            SurfaceAcquireOutcome::Success(4),
+        ]);
+
+        let result = acquire_surface_texture_with(&mut surface);
+
+        assert!(
+            matches!(result, Ok(None)),
+            "a released surface yields no frame and no error, got {result:?}"
+        );
+        assert_eq!(
+            surface.reconfigure_count, 0,
+            "there is no surface to reconfigure while it is released"
+        );
+        assert_eq!(
+            surface.outcomes.len(),
+            1,
+            "the released arm returned before consuming the next outcome — it is a skip, not a retry"
+        );
     }
 }
 
@@ -564,7 +612,22 @@ impl SurfaceAcquireBackend for Renderer {
     type Frame = wgpu::SurfaceTexture;
 
     fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
-        let surface = self.surface().ok_or(EngineError::SurfaceLost)?;
+        // Matched directly on the origin rather than through a
+        // `is_windowed()`-style predicate: "windowed with no surface held" is
+        // a legitimate state that must skip the present, and "owns no window"
+        // is a program error that must stay loud, so the two cases need
+        // different answers and the enum is where the difference lives.
+        let surface = match &self.gpu_stack_origin {
+            GpuStackOrigin::OwnedWindowed { lease } => {
+                let Some(surface) = lease.surface() else {
+                    return Ok(SurfaceAcquireOutcome::Released);
+                };
+                surface
+            }
+            GpuStackOrigin::OwnedOffscreen | GpuStackOrigin::SharedServices => {
+                return Err(EngineError::SurfaceLost);
+            }
+        };
         // Under `Fifo` with a frame latency of 1 this is where the vsync
         // block lands (ADR-0045 decision 3), so its duration is the one
         // number that says whether the display is pacing this thread.
@@ -674,6 +737,134 @@ impl Renderer {
         })
     }
 
+    /// Derive the surface-dependent half of a [`wgpu::SurfaceConfiguration`]
+    /// from a freshly created surface.
+    ///
+    /// Returns the config — with `width`/`height` threaded in from the
+    /// caller, since only the caller knows which size is authoritative — and
+    /// whether the surface supports `COPY_SRC` (which both picks `usage` here
+    /// and is mirrored on `Renderer` for mid-frame texture copies).
+    ///
+    /// There are exactly two callers and they must agree: `new`/
+    /// `recover`'s [`Self::build_windowed_gpu_stack`], and
+    /// [`Renderer::recreate_surface`], which rebuilds a surface against the
+    /// same device. That second site is the reason this is a helper rather
+    /// than a block inside the builder: a recreated surface can report
+    /// different capabilities, and `Surface::configure` panics on a stale
+    /// `format`/`color_space`/`present_mode`/`alpha_mode` (see its own
+    /// `# Panics` list), so every one of those is re-derived here rather than
+    /// carried over. Re-deriving is necessary but not sufficient for
+    /// `format`, the one field of the four with consumers inside
+    /// [`Renderer`]: the pipelines and the offscreen pool bake the format
+    /// they are built with, so [`Renderer::recreate_surface`] rebuilds both
+    /// when this derivation returns a different one — see that method's own
+    /// doc for why leaving them would blank the window rather than fail
+    /// loudly. Keeping the derivation in one function is also what
+    /// keeps `desired_maximum_frame_latency`'s long comment below true, since
+    /// a second construction site would be a second place for that literal to
+    /// drift.
+    fn derive_surface_config(
+        surface: &wgpu::Surface<'_>,
+        adapter: &wgpu::Adapter,
+        capabilities: &GpuCapabilities,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::SurfaceConfiguration, bool) {
+        let surface_caps = surface.get_capabilities(adapter);
+        let surface_format = Self::select_surface_format(&surface_caps, capabilities);
+
+        let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
+        if !supports_copy_src {
+            tracing::warn!(
+                "Surface does not support COPY_SRC; backdrop blur will use fallback path"
+            );
+        }
+
+        let surface_usage = if supports_copy_src {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: surface_usage,
+            format: surface_format,
+            // `Auto` is wgpu's own pre-30 behaviour, made explicit when wgpu 30
+            // added the field: sRGB for every format this engine configures, and
+            // extended-linear-sRGB only for an `Rgba16Float` surface that supports
+            // it. Naming a wide-gamut or HDR space instead would change how the
+            // shaders must encode their output, which is a rendering decision with
+            // its own colour-management work — not something a version bump gets
+            // to make.
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width,
+            height,
+            present_mode: Self::select_present_mode(&surface_caps),
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            // 1 (not 2): during a live resize the displayed frame must track the
+            // window size as tightly as possible. A latency of 2 lets the present
+            // queue hold frames rendered for an older size, which the compositor
+            // then stretches to the current window → visible resize jitter.
+            //
+            // Pinned regardless of `flui_engine::RasterOptions::max_frames_in_flight`
+            // (issue #556): that number is a CLOCK-side produce-capacity threshold
+            // only (`flui_scheduler::FrameClock::set_max_in_flight`) — it is never
+            // threaded into this field, and this field is never derived from it.
+            // Re-coupling the two is a separate decision that needs its own
+            // resize-jitter regression test, not something to slip in by widening
+            // this literal. Two implementer notes worth having in one place: (a)
+            // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
+            // backend (live here — `Backends::GL` is selectable via the `gles`
+            // feature), so on GL the clock-side in-flight counter is the ONLY
+            // in-flight bound that exists; (b) this field only takes effect at
+            // `Surface::configure` — every reconfigure must resupply it. `resize`
+            // and `reconfigure_surface` below both mutate and re-`configure` THIS
+            // SAME `SurfaceConfiguration` value (so it never needs resupplying —
+            // it was never removed), and `recover` and `recreate_surface`
+            // rebuild through this exact function again rather than a second
+            // constructor — the first the whole stack, the second the surface
+            // plus whatever bakes its format — so the literal is written in
+            // exactly one place in the source, not scattered across call sites
+            // that could drift out of sync.
+            desired_maximum_frame_latency: 1,
+        };
+
+        (config, supports_copy_src)
+    }
+
+    /// Build the two objects that bake a surface `format`: the painter (whose
+    /// `PipelineSet` and glyph atlas are constructed against it) and the
+    /// offscreen pool (whose textures are sized from it).
+    ///
+    /// One construction site on purpose, for the same reason
+    /// [`Self::derive_surface_config`] is one: the pair is built at
+    /// [`Self::build_windowed_gpu_stack`] (`new` and `recover`) and rebuilt
+    /// by [`Renderer::recreate_surface`] when the re-derived format differs
+    /// from the one the painter holds, and a format consumer added to only
+    /// one of those two sites would be the exact blank-window defect the
+    /// rebuild exists to remove. A third consumer belongs in this function,
+    /// where both callers pick it up together.
+    fn build_format_consumers(
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) -> (
+        super::painter::WgpuPainter,
+        super::offscreen::OffscreenRenderer,
+    ) {
+        let painter = super::painter::WgpuPainter::with_shared_device(
+            Arc::clone(device),
+            Arc::clone(queue),
+            format,
+            size,
+        );
+        let offscreen =
+            super::offscreen::OffscreenRenderer::new(Arc::clone(device), Arc::clone(queue), format);
+        (painter, offscreen)
+    }
+
     /// Build the full windowed GPU stack from an owned [`WindowTarget`].
     ///
     /// Factored out of `new` so `recover` can rebuild the SAME stack shape
@@ -772,76 +963,15 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = Self::select_surface_format(&surface_caps, &capabilities);
-
-        let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
-        if !supports_copy_src {
-            tracing::warn!(
-                "Surface does not support COPY_SRC; backdrop blur will use fallback path"
-            );
-        }
-
-        let surface_usage = if supports_copy_src {
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
-        } else {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-        };
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: surface_usage,
-            format: surface_format,
-            // `Auto` is wgpu's own pre-30 behaviour, made explicit when wgpu 30
-            // added the field: sRGB for every format this engine configures, and
-            // extended-linear-sRGB only for an `Rgba16Float` surface that supports
-            // it. Naming a wide-gamut or HDR space instead would change how the
-            // shaders must encode their output, which is a rendering decision with
-            // its own colour-management work — not something a version bump gets
-            // to make.
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            width,
-            height,
-            present_mode: Self::select_present_mode(&surface_caps),
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
-            // 1 (not 2): during a live resize the displayed frame must track the
-            // window size as tightly as possible. A latency of 2 lets the present
-            // queue hold frames rendered for an older size, which the compositor
-            // then stretches to the current window → visible resize jitter.
-            //
-            // Pinned regardless of `flui_engine::RasterOptions::max_frames_in_flight`
-            // (issue #556): that number is a CLOCK-side produce-capacity threshold
-            // only (`flui_scheduler::FrameClock::set_max_in_flight`) — it is never
-            // threaded into this field, and this field is never derived from it.
-            // Re-coupling the two is a separate decision that needs its own
-            // resize-jitter regression test, not something to slip in by widening
-            // this literal. Two implementer notes worth having in one place: (a)
-            // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
-            // backend (live here — `Backends::GL` is selectable via the `gles`
-            // feature), so on GL the clock-side in-flight counter is the ONLY
-            // in-flight bound that exists; (b) this field only takes effect at
-            // `Surface::configure` — every reconfigure must resupply it. `resize`
-            // and `reconfigure_surface` below both mutate and re-`configure` THIS
-            // SAME `SurfaceConfiguration` value (so it never needs resupplying —
-            // it was never removed), and `recover` rebuilds the whole GPU stack
-            // through this exact function again rather than a second constructor,
-            // so the literal is written in exactly one place in the source, not
-            // scattered across call sites that could drift out of sync.
-            desired_maximum_frame_latency: 1,
-        };
+        let (config, supports_copy_src) =
+            Self::derive_surface_config(&surface, &adapter, &capabilities, width, height);
         surface.configure(&device, &config);
 
-        let painter = super::painter::WgpuPainter::with_shared_device(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            surface_format,
+        let (painter, offscreen) = Self::build_format_consumers(
+            &device,
+            &queue,
+            config.format,
             (config.width, config.height),
-        );
-
-        let offscreen = super::offscreen::OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            surface_format,
         );
 
         // Create the GPU profiler if the feature is enabled AND the adapter
@@ -1377,6 +1507,13 @@ impl Renderer {
     }
 
     /// Resize the surface
+    ///
+    /// While the surface is released the size still lands in the configuration
+    /// (and on the painter), because a window resize can arrive during a
+    /// released span and the size the recreate builds at must be the current
+    /// one. Only the `Surface::configure` call is skipped: there is no surface
+    /// to configure, and `Surface::configure` panics on a zero dimension, so a
+    /// zero-size resize is refused outright either way.
     pub fn resize(&mut self, width: u32, height: u32) {
         // Direct field projections (not the `self.surface()` accessor, which
         // borrows all of `&self`) so this coexists with the `&mut
@@ -1394,7 +1531,9 @@ impl Renderer {
 
         config.width = width;
         config.height = height;
-        lease.surface().configure(&self.device, config);
+        if let Some(surface) = lease.surface() {
+            surface.configure(&self.device, config);
+        }
 
         if let Some(painter) = &mut self.painter {
             painter.resize(width, height);
@@ -1420,10 +1559,20 @@ impl Renderer {
         &self.queue
     }
 
-    /// Get reference to wgpu surface (if available)
+    /// Get reference to wgpu surface, if this renderer holds one right now.
+    ///
+    /// `None` now means either of two things: this renderer owns no window
+    /// (`new_offscreen`/`from_offscreen_services`), **or** it is windowed and
+    /// its surface is currently released ([`Renderer::release_surface`]). The
+    /// return type cannot carry the difference, and growing the API to
+    /// express it would add a state the only consumer already knows — a
+    /// lifecycle-aware caller holds the fact itself, because it is the one
+    /// that called `release_surface` or [`Renderer::recreate_surface`]. Every
+    /// in-crate caller wants the surface object or nothing, which is what
+    /// this returns.
     pub fn surface(&self) -> Option<&wgpu::Surface<'_>> {
         match &self.gpu_stack_origin {
-            GpuStackOrigin::OwnedWindowed { lease } => Some(lease.surface()),
+            GpuStackOrigin::OwnedWindowed { lease } => lease.surface(),
             GpuStackOrigin::OwnedOffscreen | GpuStackOrigin::SharedServices => None,
         }
     }
@@ -1481,6 +1630,12 @@ impl Renderer {
     /// `CurrentSurfaceTexture::Outdated`, `CurrentSurfaceTexture::Lost`, or
     /// `CurrentSurfaceTexture::Validation` is encountered, but can also be
     /// called manually if needed.
+    ///
+    /// While the surface is released this is a no-op that returns `Ok(())`,
+    /// and deliberately not [`EngineError::NotInitialized`]: a released
+    /// surface has nothing to reconfigure and its owner will configure the
+    /// fresh one when it recreates. `NotInitialized` stays the answer for a
+    /// renderer that owns no window at all, which is a program error.
     pub fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
         let GpuStackOrigin::OwnedWindowed { lease } = &self.gpu_stack_origin else {
             return Err(EngineError::NotInitialized);
@@ -1488,9 +1643,218 @@ impl Renderer {
         let Some(config) = &self.config else {
             return Err(EngineError::NotInitialized);
         };
-        lease.surface().configure(&self.device, config);
+        let Some(surface) = lease.surface() else {
+            tracing::trace!("Surface released; reconfigure is a no-op until it is recreated");
+            return Ok(());
+        };
+        surface.configure(&self.device, config);
         self.damage_tracker.mark_full_repaint();
         tracing::info!("Surface reconfigured ({}x{})", config.width, config.height);
+        Ok(())
+    }
+
+    /// Drop the held surface, keeping the instance, adapter, device, queue and
+    /// the window target.
+    ///
+    /// Call this at the last moment the native handle behind the surface is
+    /// still valid. On Android that moment is inside the platform's
+    /// `TerminateWindow` callback, which is delivered before `poll_events`
+    /// returns and before `NativeWindow` is cleared — a surface that outlives
+    /// its native handle is the use-after-free class the lease's field order
+    /// exists to prevent, and there is no later event that still has a valid
+    /// handle to drop against.
+    ///
+    /// # Cost on the calling thread
+    ///
+    /// Dropping a *configured* `wgpu::Surface` releases its swapchain, and on
+    /// Vulkan that path calls `vkDeviceWaitIdle` before destroying anything —
+    /// wgpu-hal's own comment says there is no portable way to wait only for
+    /// presentation work. On the Android release path that wait therefore
+    /// lands on the paused UI thread. It is accepted, because the alternative
+    /// is dropping the surface after the handle is gone; what is not
+    /// negotiable is that nothing else happens here: no probe, no submit, no
+    /// wait on any Flutter lock beyond this renderer's own.
+    ///
+    /// Idempotent, and a no-op for a renderer that owns no window — there the
+    /// requested post-state ("no surface is held") is already true, and this
+    /// runs on a lifetime-critical path where a branch is preferable to an
+    /// error the caller would have to ignore. The `SurfaceLease`'s `Arc` of
+    /// the target is retained, so [`Renderer::recreate_surface`] needs no new
+    /// ownership.
+    pub fn release_surface(&mut self) {
+        let GpuStackOrigin::OwnedWindowed { lease } = &mut self.gpu_stack_origin else {
+            return;
+        };
+        if !lease.has_surface() {
+            return;
+        }
+        lease.release();
+        // Distinct from `SurfaceLease`'s own `surface_released` event, which
+        // fires when the lease is dropped: this one says the owner asked for
+        // the release, and a reader of a log needs to tell those apart.
+        tracing::debug!(
+            target: "flui.gpu",
+            event = "surface_released_by_owner",
+            "surface released at its owner's request; target and GPU stack retained"
+        );
+    }
+
+    /// Build a fresh surface for a windowed renderer whose surface was
+    /// released, keeping the instance, adapter, device and queue.
+    ///
+    /// This is the resume half of [`Renderer::release_surface`], and it is
+    /// **stateless**: it always attempts to build a surface, it never consults
+    /// whether one is already held. A caller cannot know whether the matching
+    /// release arrived — a signal can be lost — and "skip if a surface is
+    /// present" would then preserve a surface built from a handle that is
+    /// already gone for the rest of the process's life. A held surface is
+    /// dropped as part of this call, at the commit below, after the new one
+    /// has been built.
+    ///
+    /// "Attempts", not "builds", because the platform gets a say. The Vulkan
+    /// specification allows only one `VkSurfaceKHR` per `ANativeWindow` at a
+    /// time and refuses a second at `vkCreateAndroidSurfaceKHR` with
+    /// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, and this method creates the new
+    /// surface *before* dropping the held one. So on Android a `true` that
+    /// finds a surface still bound to the same, still-connected window is
+    /// refused: the held surface stays in place and stays valid, and nothing
+    /// is committed. Build-first/commit-last is sound exactly when the native
+    /// handle changed, which is the lost-`false` path this method is stateless
+    /// for. How the refusal surfaces here is the vendored `wgpu-hal`'s call,
+    /// not this method's: the design is a [`EngineError::SurfaceCreation`]
+    /// that the caller logs once, but `wgpu-hal` 30.0.1's
+    /// `create_surface_android` `expect`s the create result
+    /// ("AndroidSurface failed", `src/vulkan/instance.rs`), which turns that
+    /// refusal into a panic on the calling thread under that version. It is
+    /// reachable only outside the ordinary cycle, where every `true` follows
+    /// a `false` that released: through a missed `false` on a window that
+    /// survived, or through two `true`s with no `false` between them (ADR-0063
+    /// decision 6 books both, and marks whether the second ordering occurs at
+    /// all as unverified).
+    ///
+    /// Only the surface is rebuilt. [`Renderer::recover`] stays the device-loss
+    /// path and rebuilds the whole stack; a suspend never sets the device-lost
+    /// flag, so routing a resume through it would discard a perfectly good
+    /// device. The new surface is created from the lease's retained
+    /// [`WindowTarget`], so it binds to whatever native handle is current now,
+    /// which after a real activity recreation is a different one from the
+    /// released surface's.
+    ///
+    /// Every capability-dependent configuration field (`usage`, `format`,
+    /// `present_mode`, `alpha_mode`) is re-derived from the fresh surface,
+    /// because a recreated surface on a new window can report different
+    /// capabilities and `Surface::configure` panics on a stale one.
+    /// `format` is the one of the four with consumers other than
+    /// `self.config`: `PipelineSet`'s nine pipelines and the offscreen
+    /// texture pool are both built from a format and bake it, so a fresh
+    /// format rebuilds `painter` and `offscreen` here, in the body below.
+    /// `width`/`height` are deliberately **not** re-derived: a resize may
+    /// have arrived while the surface was released, and [`Renderer::resize`]
+    /// keeps updating them for exactly this reason.
+    ///
+    /// A successful recreation marks a full repaint — a fresh surface has
+    /// undefined contents while the damage tracker is incremental, so damage
+    /// carried over from before the release would repaint one region and
+    /// leave garbage around it.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NotInitialized`] when this renderer owns no window: only
+    /// a windowed renderer has a lifecycle that can ask for a recreation, so
+    /// reaching here from an offscreen or shared-services renderer is a
+    /// program error and stays loud. Otherwise the probe's
+    /// [`EngineError::SurfaceTargetUnavailable`] (the target has no handle
+    /// right now) or [`EngineError::SurfaceCreation`] propagates, and the
+    /// renderer is left released rather than holding a half-built surface.
+    pub fn recreate_surface(&mut self) -> EngineResult<()> {
+        let GpuStackOrigin::OwnedWindowed { lease } = &mut self.gpu_stack_origin else {
+            return Err(EngineError::NotInitialized);
+        };
+        let Some(config) = &self.config else {
+            return Err(EngineError::NotInitialized);
+        };
+        let (width, height) = (config.width, config.height);
+
+        // Probe first: "the target has no handle right now" is a recoverable,
+        // typed condition from here, and asking wgpu to create a surface
+        // against a dead handle would collapse it into a `SurfaceCreation`
+        // failure (see `surface_lease::probe_target`'s doc).
+        lease.probe()?;
+
+        let surface = self
+            .instance
+            .create_surface(Arc::clone(lease.target()))
+            .map_err(EngineError::surface_creation)?;
+        let (fresh_config, supports_copy_src) =
+            Self::derive_surface_config(&surface, &self.adapter, &self.capabilities, width, height);
+
+        // Whether the fresh surface moved the format away from the one the
+        // pipelines and the offscreen pool were built with. Read off the
+        // painter rather than off the old `self.config`, because the painter
+        // is the consumer that bakes it: the two agree today (nothing but the
+        // two commit sites below ever writes `self.config.format`), and
+        // binding the condition to the thing that actually has to change is
+        // what keeps them agreeing.
+        let pipelines_format = self
+            .painter
+            .as_ref()
+            .map(super::painter::WgpuPainter::surface_format);
+
+        // Build FIRST, commit LAST (the lease's two-step protocol): a
+        // configure that fails must leave the lease released rather than
+        // holding a surface this call never finished preparing.
+        surface.configure(&self.device, &fresh_config);
+
+        if pipelines_format != Some(fresh_config.format) {
+            // `format` is baked into every pipeline (`PipelineSet::new` is
+            // handed it once) and into the offscreen pool's textures, while
+            // the per-frame target format is read from `self.config` — so
+            // committing a fresh format without rebuilding these two would
+            // leave every pipeline declaring a target format the render
+            // attachment does not have. wgpu raises that as a validation
+            // error per frame and this backend's `on_uncaptured_error` handler
+            // only logs it (it does not set `device_lost`), so nothing here
+            // would self-heal: the window stays blank with one `error!` per
+            // frame, which is the defect class this whole path exists to
+            // remove. `recover` rebuilds both unconditionally; only the
+            // format actually moving obliges it here, so a resume that
+            // re-derives the format it already had pays nothing for this.
+            //
+            // What it costs when the format did move: this is the one
+            // mid-life path that constructs nine pipelines and a glyph atlas
+            // synchronously, on the callback thread, under the caller's held
+            // lane — the startup cost, paid again. It neither submits nor
+            // waits on the GPU; shader compilation is the whole of it.
+            let (painter, offscreen) = Self::build_format_consumers(
+                &self.device,
+                &self.queue,
+                fresh_config.format,
+                (width, height),
+            );
+            self.painter = Some(painter);
+            self.offscreen = Some(offscreen);
+            tracing::info!(
+                target: "flui.gpu",
+                event = "surface_format_changed",
+                previous = ?pipelines_format,
+                current = ?fresh_config.format,
+                "recreated surface selected a different format; pipelines and offscreen pool rebuilt"
+            );
+        }
+
+        lease.replace_surface(surface);
+
+        self.config = Some(fresh_config);
+        self.supports_copy_src = supports_copy_src;
+        self.damage_tracker.mark_full_repaint();
+
+        tracing::debug!(
+            target: "flui.gpu",
+            event = "surface_recreated",
+            width,
+            height,
+            "surface rebuilt against the current native handle; full repaint marked"
+        );
         Ok(())
     }
 
@@ -1505,9 +1869,10 @@ impl Renderer {
     /// Renders `scene` and returns whether it actually reached `present()`.
     ///
     /// `Ok(false)` covers every path that skips presentation without error —
-    /// no damage, or the surface reporting `Occluded` — and carries no vsync
-    /// signal: Fifo's blocking present never engaged, so the caller got no
-    /// pacing out of this call. `Ok(true)` means `present()` ran, which
+    /// no damage, the surface reporting `Occluded`, or the surface being
+    /// released by its owner ([`Renderer::release_surface`]) — and carries no
+    /// vsync signal: Fifo's blocking present never engaged, so the caller got
+    /// no pacing out of this call. `Ok(true)` means `present()` ran, which
     /// (under the default Fifo present mode) blocked until the next vsync —
     /// the steady-state pacing the frame loop relies on.
     pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<bool, EngineError> {
