@@ -2535,15 +2535,18 @@ evidence = [
 [[contract]]
 key = "clipboard-stays-thread-safe"
 statement = """
-`Clipboard` keeps `Send + Sync` and gets no owner-affinity asserts anywhere \
-— plain-text pasteboard operations are documented off-main-safe, and \
-asserting them would panic legitimate existing cross-thread callers. This \
-supersedes the earlier suggested `MacOSClipboard` debug assertion.\
+`Clipboard` keeps `Send + Sync`. `MacOSClipboard` routes every NSPasteboard \
+operation to the AppKit main thread through the main dispatch queue — Apple \
+documents NSPasteboard as main-thread-only, and the main lane is the one all \
+other process pasteboard traffic already serializes on. No owner-affinity \
+assert anywhere: the lane enforces ordering, and an assert would panic the \
+legitimate cross-thread callers the proxy serves (a background caller may \
+use clipboard only once the owner lane is live and must not deadlock it).\
 """
 state = "implemented"
 domain = "platform"
 mechanical = true
-mechanism = "forbidden_pattern below keeps affinity asserts out of the macOS clipboard implementation"
+mechanism = "`forbidden_pattern` below (must-not-exist) pins the no-affinity-assert guarantee on the macOS clipboard implementation"
 evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/traits/platform.rs", contains = "pub trait Platform: Send + Sync + 'static" },
     { kind = "source-gate", file = "crates/flui-platform/src/platforms/macos/clipboard.rs", contains = "Clipboard" },
@@ -3674,7 +3677,7 @@ allow_files = []
 [[forbidden_pattern]]
 pattern = "debug_assert_owner"
 scope = "crates/flui-platform/src/platforms/macos/clipboard.rs"
-why = "the clipboard ownership contract: clipboard operations are documented off-main-safe; an affinity assert would panic legitimate existing cross-thread callers"
+why = "the clipboard ownership contract: `MacOSClipboard` routes every NSPasteboard operation to the owner lane (the AppKit main dispatch queue), so ordering is enforced by the lane itself; an affinity assert would panic the legitimate cross-thread callers the proxy serves"
 allow_files = []
 
 [[forbidden_pattern]]

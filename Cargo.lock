@@ -2121,6 +2121,7 @@ dependencies = [
  "console_error_panic_hook",
  "crossbeam-channel",
  "cursor-icon",
+ "dispatch",
  "dpi",
  "flui-foundation",
  "flui-types",

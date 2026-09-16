@@ -244,6 +244,27 @@ The vocabulary starts at exactly the two verbs with real consumers today — `Op
 
 `Clipboard: Send + Sync` (`traits/platform.rs:473`) is unchanged, and this ADR takes one consistent position: **clipboard resolution and the plain-text operations are thread-safe and get no owner asserts** — not in slice 1, not later. The X11/arboard implementation is genuinely thread-safe, and `NSPasteboard` is a process-wide singleton documented safe for off-main reads (ADR-0034, "What is deferred"). Reversing ADR-0034 (which deliberately stashes `Arc<dyn Clipboard>` in `AppBinding`, `binding.rs:110`, resolved pre-`run()` on Android/web where no later resolution point exists, `runner/android.rs` and `runner/web.rs` resolve it pre-`run()`) would churn a just-landed seam for no safety gain. This **supersedes ADR-0034's suggestion** of a future `debug_assert!` inside `MacOSClipboard` methods: asserting main-thread affinity on operations the same paragraph documents as off-main-safe is a contradiction, and a worker legitimately reading the sanctioned `AppBinding` clipboard slot must not panic in debug. Where pasteboard affinity is real — rich clipboard *items*, promised/lazy pasteboard data — the obligation lands structurally when the data-transfer design (audit U6/U18, designed separately) ships those operations: either on `OwnerPlatform`, where the `!Send` type carries the guarantee, or inside a marshaling `Clipboard` implementation that crosses to the owner via the lane internally rather than pushing the obligation onto callers. This ADR only fixes where the *calls* may run; `write_to_clipboard`/`read_from_clipboard` stay untouched on `Platform` (§2) and their fate — re-home, replace, or delete — is that design's decision.
 
+> **Update (2026-09-16) — the off-main-safe basis for §5's position is retracted; the marshaling design this section sketches is what landed for plain-text operations (issue #1124).**
+>
+> `NSPasteboard` is **not** documented safe for off-main reads: the AppKit
+> Thread Safety Summary lists no exception, and Apple's position
+> (FB14885505) is main-thread-only; the claim was also empirically
+> falsified — the macOS clipboard unit tests SIGSEGV/SIGBUS under parallel
+> libtest execution (see the ADR-0034 "What is deferred" update). The
+> marshaling design this section already sketched — a `Clipboard`
+> implementation that crosses to the owner via the lane internally — is
+> exactly what landed: `MacOSClipboard` routes every NSPasteboard operation
+> to the AppKit main thread through the main dispatch queue (test instances
+> use a process-wide shared serial queue). No assert is added anywhere:
+> the lane enforces ordering, and an assert would panic the legitimately
+> cross-thread callers §7's slice-1 item 2 lists — exactly the same callers
+> this section was written to protect. The §7 parenthetical pointing to §5's
+> "documented off-main-safe" basis stands only as history; the operative
+> mechanism is the lane, per `docs/runtime-contract.toml`
+> (`clipboard-stays-thread-safe`). What did **not** land is the rich-item
+> half: promised/lazy pasteboard data still awaits the data-transfer
+> design, whose options §5 records.
+
 ### 6. Realm composition (ADR-0027/0037)
 
 The capability *is* the platform-facing half of realm affinity, not a competitor to it:
