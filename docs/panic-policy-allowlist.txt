@@ -119,4 +119,3 @@ crates/flui-widgets/src/interaction/gesture_detector.rs 1
 crates/flui-widgets/src/navigator/hero.rs 1
 crates/flui-widgets/src/navigator/transition_route.rs 1
 crates/flui-widgets/src/overlay/mod.rs 1
-crates/flui-widgets/src/scroll/scrollable.rs 1

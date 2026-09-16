@@ -33,10 +33,25 @@ pub enum AnimationError {
     #[error("AnimationController has been disposed")]
     Disposed,
 
-    /// Invalid animation bounds were provided.
+    /// Invalid animation bounds, or an invalid `repeat`/`repeat_with` range,
+    /// were provided.
     ///
-    /// This error occurs when `lower_bound >= upper_bound` in
-    /// [`AnimationController::with_bounds()`](crate::AnimationController::with_bounds).
+    /// Returned by [`with_bounds`](crate::AnimationController::with_bounds)/
+    /// [`without_ticker_bounds`](crate::AnimationController::without_ticker_bounds)/
+    /// [`with_detached_ticker_bounds`](crate::AnimationController::with_detached_ticker_bounds)
+    /// and [`AnimationControllerBuilder::bounds`](crate::builder::AnimationControllerBuilder::bounds)
+    /// unless both bounds are finite, `lower_bound < upper_bound`, AND
+    /// `upper_bound - lower_bound` itself fits in `f32` — two finite
+    /// endpoints do not by themselves make a finite range
+    /// (`(-f32::MAX, f32::MAX)` has a span of `f32::INFINITY`).
+    ///
+    /// Also returned by [`repeat_with`](crate::AnimationController::repeat_with)
+    /// for a range-SHAPE error: a caller-supplied `min`/`max` that is `NaN`,
+    /// or an inverted/equal pair, on ANY controller. Distinct from
+    /// [`NonFiniteTarget`](Self::NonFiniteTarget), which `repeat_with`
+    /// returns instead when the range shape is fine but its EFFECTIVE value
+    /// (after defaulting an unset endpoint to this controller's own bound)
+    /// is still non-finite.
     #[error("Invalid animation bounds: {0}")]
     InvalidBounds(String),
 
@@ -55,6 +70,28 @@ pub enum AnimationError {
     /// for oscillating springs.
     #[error("Invalid spring configuration: {0}")]
     InvalidSpring(String),
+
+    /// A caller-supplied value-space input (a `target`, a `from`, a fling
+    /// `velocity`, or a simulation's initial sample) was not finite, or
+    /// clamps to a bound this controller does not have.
+    ///
+    /// `NaN` is always refused — there is no finite value to repair toward.
+    /// A `+-inf` input is refused only when the bound it would clamp to is
+    /// itself non-finite (an [`unbounded`](crate::AnimationController::unbounded)-family
+    /// controller); on a bounded controller it clamps to that bound instead
+    /// (unchanged Flutter-parity "go to the end" idiom).
+    ///
+    /// Returned by [`forward`](crate::AnimationController::forward)/[`forward_from`](crate::AnimationController::forward_from),
+    /// [`reverse`](crate::AnimationController::reverse)/[`reverse_from`](crate::AnimationController::reverse_from),
+    /// [`animate_to`](crate::AnimationController::animate_to)/[`animate_back`](crate::AnimationController::animate_back)
+    /// (and their `_curved` variants), [`fling`](crate::AnimationController::fling)/[`fling_with`](crate::AnimationController::fling_with),
+    /// [`animate_with`](crate::AnimationController::animate_with)/[`animate_back_with`](crate::AnimationController::animate_back_with),
+    /// and [`repeat`](crate::AnimationController::repeat)/[`repeat_with`](crate::AnimationController::repeat_with)
+    /// when its *effective* range (after defaulting) is not finite. Every
+    /// refusal is also emitted as a `tracing::warn!` — see
+    /// `crates/flui-animation/docs/ARCHITECTURE.md`'s mapping entry for why.
+    #[error("Non-finite target: {0}")]
+    NonFiniteTarget(String),
 }
 
 #[cfg(test)]
