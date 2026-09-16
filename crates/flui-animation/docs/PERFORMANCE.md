@@ -38,6 +38,63 @@ the old ~5e-3 residual). All curves are comfortably within a 60fps frame budget.
 > in favour of the measured table above; the remaining size/complexity notes are
 > derived from the types and may drift — verify against the code.
 
+## Vsync registry indexing (#1060)
+
+`Vsync::tick_all` resolves each registration through a `BTreeMap` keyed by
+registration id instead of a linear `Vec` scan; see `vsync.rs`'s `tick_all`
+doc for the cursor-walk design. Measured with the committed Criterion bench
+(`benches/vsync_registry.rs`); run `cargo bench -p flui-animation --bench
+vsync_registry` to reproduce.
+
+Host: 13th Gen Intel Core i9-13900K, rustc 1.98.1 (48a229cea 2026-09-01),
+Linux x86_64 — not CPU-isolated, so treat these as a distribution and a
+regression baseline, not a hardware promise.
+
+Acceptance is the scaling ratio between the two tables below, not either
+table's wall time.
+
+### Before: linear `Vec` scan (`iter_mut().find`)
+
+| Bench | N | Criterion estimate (low / median / high) |
+|-------|---:|---|
+| `stopped_vsync_registry` | 100 | 3.1351 / 3.1489 / 3.1636 µs |
+| `stopped_vsync_registry` | 1,000 | 115.93 / 115.96 / 116.00 µs |
+| `stopped_vsync_registry` | 5,000 | 2.5790 / 2.5802 / 2.5822 ms |
+| `stopped_vsync_registry` | 10,000 | 10.021 / 10.036 / 10.055 ms |
+| `running_vsync_registry` | 100 | 6.4585 / 6.6842 / 6.8430 µs |
+| `running_vsync_registry` | 1,000 | 171.39 / 204.23 / 261.10 µs |
+| `mixed_vsync_registry` | 1,000 (10% running) | 123.48 / 125.84 / 129.69 µs |
+| `unregister_all` | 1,000 | 443.93 / 488.79 / 547.90 µs |
+| `unregister_all` | 10,000 | 32.559 / 34.293 / 36.710 ms |
+
+### After: `BTreeMap`, cursor walk over `range_mut(cursor..fence)`
+
+| Bench | N | Criterion estimate (low / median / high) |
+|-------|---:|---|
+| `stopped_vsync_registry` | 100 | 2.9094 / 2.9253 / 2.9363 µs |
+| `stopped_vsync_registry` | 1,000 | 34.483 / 34.720 / 34.854 µs |
+| `stopped_vsync_registry` | 5,000 | 264.20 / 265.13 / 265.88 µs |
+| `stopped_vsync_registry` | 10,000 | 541.13 / 542.65 / 543.93 µs |
+| `running_vsync_registry` | 100 | 6.3262 / 6.3521 / 6.4244 µs |
+| `running_vsync_registry` | 1,000 | 69.581 / 69.773 / 69.948 µs |
+| `mixed_vsync_registry` | 1,000 (10% running) | 37.981 / 38.077 / 38.230 µs |
+| `unregister_all` | 1,000 | 152.51 / 158.30 / 160.97 µs |
+| `unregister_all` | 10,000 | 1.5686 / 1.6182 / 1.6409 ms |
+
+### Scaling ratio, 10,000 / 1,000 (the acceptance criterion)
+
+| Bench | Before (≈N²) | After (≈N log N) |
+|-------|---:|---:|
+| `stopped_vsync_registry` | ×86.6 | ×15.6 |
+| `unregister_all` | ×70.2 | ×10.2 |
+
+An N² scan scales ×100 over a 10× population growth; N log N scales
+×(10,000·log₂10,000)/(1,000·log₂1,000) ≈ ×13.3. Both ratios above land an
+order of magnitude below the N² baseline and close to the N log N estimate,
+consistent with the indexed registry rather than the quadratic scan it
+replaced. `has_running` is unaffected by this change and stays O(N); it is
+not part of either table.
+
 ## Memory Layout
 
 ### Type Sizes
