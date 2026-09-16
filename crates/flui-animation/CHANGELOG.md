@@ -52,6 +52,11 @@ Versioning: per `docs/release.md` policy.
 
 ### Fixed
 
+- `Vsync::tick_all` re-reads `muted` on every registration it visits instead
+  of only once at entry: a status listener that mutes the registry mid-walk
+  (e.g. a `TickerMode` toggling off) now stops the rest of that frame's
+  controllers from ticking, instead of letting the in-flight walk finish
+  against stale state (Refs #1060).
 - `TweenAnimation` never subscribed to its parent, so listeners on any tween
   combinator silently never fired (`AnimatedBuilder`-class breakage).
 - `ProxyAnimation` status listeners were orphaned on the old parent after
