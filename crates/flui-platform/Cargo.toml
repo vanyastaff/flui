@@ -101,6 +101,10 @@ windows = { version = "0.62", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26.0"
 objc = "0.2"
+# Grand Central Dispatch: the owner lane (AppKit main queue, or a test serial
+# queue) every NSPasteboard operation is routed through. Zero-dep crate;
+# 0.2.0 is already pinned in Cargo.lock transitively via objc2-foundation.
+dispatch = "0.2"
 
 # Android platform
 [target.'cfg(target_os = "android")'.dependencies]

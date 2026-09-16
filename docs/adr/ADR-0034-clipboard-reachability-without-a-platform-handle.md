@@ -79,6 +79,25 @@ The three desktop/mobile/web bootstrap shapes extract the clipboard at different
 - **`reveal_path`/`open_path`/save-and-open prompts.** No `flui-platform` backend exposes these today and nothing calls them. Same reasoning as `open_url` — no plumbing ahead of a real consumer.
 - **macOS main-thread pasteboard affinity — a doc'd hazard, not a fix.** `clipboard()` makes the platform clipboard reachable from `AppBinding`'s `'static`-per-thread singleton, which in practice is read from whichever thread owns the running realm — today, always the platform's main/owner thread, since that is the only thread that calls `bootstrap_desktop`/`run_android`/`run_web`. `NSPasteboard` access is documented by Apple as safe off the main thread for reads, but `MacOSClipboard` currently makes no assertion either way. A future macOS `Clipboard` implementation, or a future caller that reaches `AppBinding::clipboard()` from a background thread (a worker completing an async paste operation, for instance), should `debug_assert!` main-thread affinity at the point `MacOSClipboard`'s methods run, rather than silently relying on every future call site staying on the owner thread by convention. No such assertion exists yet; this is named so it is not rediscovered as a production crash.
 
+> **Update (2026-09-16) — the "documented safe off the main thread for reads" premise here is false; the hazard is fixed by routing, not by an assert.**
+>
+> Apple does not document NSPasteboard as safe off the main thread for
+> reads: the AppKit Thread Safety Summary lists no NSPasteboard exception,
+> and an Apple engineer's statement (feedback FB14885505, shared
+> 2024-09-12) was that NSPasteboard is not safe off the main thread — the
+> claim this paragraph relayed is uncitable. It was also empirically
+> falsified on a Mac: the macOS clipboard unit tests crashed (SIGSEGV /
+> SIGBUS) under parallel libtest execution and passed only with
+> `--test-threads=1`. That serial-pass was evidence the crash is a
+> concurrency bug, not a defense of off-main usage. `MacOSClipboard` is now
+> an owner-routed proxy: every NSPasteboard operation is dispatched to the
+> AppKit main thread through the main dispatch queue (test instances use a
+> process-wide shared serial queue), so the ordering this paragraph asked an
+> assert to enforce is enforced by the lane itself. The suggested future
+> `debug_assert!` is superseded by the lane — ADR-0039 §5's marshaling
+> design, which shipped for the plain-text operations. See
+> `docs/runtime-contract.toml` (`clipboard-stays-thread-safe`).
+
 ## Resolved follow-up
 
 - **Window-scoped cursor ownership (2026-07-23).** The parallel
