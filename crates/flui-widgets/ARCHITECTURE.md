@@ -1184,3 +1184,35 @@ own). The differential carries the matching pair of cases too, and
 reason it is on `RenderContainer` — a composed tree that always inserted a
 zero-inset `Padding` level would silently endorse the divergence instead of
 detecting it.
+
+### 16. A push's entrance-transition future is awaited outside the flush that installed it
+
+**Rule:** Prime Directive #1 — a Flutter contract carried over a flush-timing
+constraint the reference never has, so the mapping decision belongs here
+beside the local placement it governs; [ADR-0064](../../docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)
+records the cross-crate design this decision consumes.
+
+**Oracle:** `handlePush` (`navigator.dart:3273-3290`) parks an entry in
+`pushing` and attaches `routeFuture.whenCompleteOrCancel(...)`, which always
+arrives on a later microtask — Flutter can never observe that callback firing
+while `_flushHistoryUpdates` itself is still on the stack.
+
+**Choice:** `PushCompletion::Animating(TickerFuture)` carries the future
+`AnimationController::forward()` (or an equivalent run-starting call) returns,
+but the continuation that awaits it is registered from `NavigatorShared::apply`
+— after the flush that produced the entry has released the history lock —
+never from inside `RouteEntry::handle_push` itself. `RouteHistory::flush()`
+re-drains any `RouteCommand`s a route raised between its own passes, so a
+continuation registered mid-flush on an already-resolved future (a
+zero-duration push, or one canceled before the flush even returns) would
+settle within that same flush rather than on the next one — a timing FLUI can
+reach and Flutter's microtask model cannot. The continuation itself may only
+push `RouteCommand::PushCompleted(id)` onto the `Send` route-command queue and
+schedule the Navigator's rebuild through `NavigatorShared::settle_wake`, read
+at the moment the continuation fires rather than captured at registration:
+`NavigatorHandle::push` flushes immediately, so a route pushed before the
+Navigator mounts registers its continuation while that slot is still empty,
+and only a later mount fills it. Cancellation settles the entry exactly like
+completion — there is no separate "the push was canceled" state at this
+layer, only whichever lifecycle state the entry has moved to by the time the
+queued command is drained.

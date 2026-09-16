@@ -44,6 +44,16 @@
 //! `BUG: flush_history_updates re-entered` assert stays reachable for a genuinely
 //! recursive `flush()` — which is what it was always guarding.
 //!
+//! **Superseded, `notify_push_completed()` half only (ADR-0064).** A route no
+//! longer raises its own `PushCompleted` command: `AnimationController`'s
+//! run-starting methods now return the `TickerFuture` the entrance transition
+//! ends on, `Route::did_push` hands it out as
+//! [`PushCompletion::Animating`](super::route::PushCompletion::Animating),
+//! and `NavigatorShared::apply` registers a continuation on it directly —
+//! pushing straight onto the same [`RouteCommandQueue`], with no `RouteBinding`
+//! and no `wake` closure in between. `finalize()` below is unaffected and
+//! still takes the queue-plus-`wake` shape this section describes.
+//!
 //! # Correction 2 to ADR-0020: `install(&mut self, binding)` cannot be
 //!
 //! `Route` is public. Threading a `&RouteBinding` through
@@ -84,8 +94,11 @@ use crate::overlay::OverlayEntry;
 /// flush's walk, which then re-runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RouteCommand {
-    /// The entrance transition finished. Flutter's `whenCompleteOrCancel`
-    /// callback (`navigator.dart:3276-3290`): `pushing` → `idle`, then re-flush.
+    /// The entrance transition's `TickerFuture` resolved, complete or
+    /// canceled alike — Flutter's `whenCompleteOrCancel` callback
+    /// (`navigator.dart:3276-3290`): `pushing` → `idle`, then re-flush. Raised
+    /// by `NavigatorShared::await_push`'s continuation (ADR-0064), not by a
+    /// route through this binding.
     PushCompleted(RouteId),
     /// The route is finished and may be disposed. Flutter's `finalizeRoute`
     /// (`navigator.dart:5798-5834`): `entry.finalize()`, then flush unless one is
@@ -417,14 +430,6 @@ impl RouteBinding {
     /// Flutter's `nextRoute is TransitionRoute` test (`routes.dart:429`).
     pub(crate) fn peer(&self, route: RouteId) -> Option<TransitionPeer> {
         self.registries.peers.lock().get(&route).cloned()
-    }
-
-    /// The entrance transition finished — Flutter's `whenCompleteOrCancel`.
-    ///
-    /// Safe to call from inside a flush (a zero-duration transition) or from an
-    /// owner-runtime animation status bridge.
-    pub(crate) fn notify_push_completed(&self) {
-        self.raise(RouteCommand::PushCompleted(self.route));
     }
 
     /// The route is finished; dispose it — Flutter's `navigator.finalizeRoute`.

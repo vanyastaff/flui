@@ -336,9 +336,11 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self.modal.handle()
     }
 
-    /// The animation handle, for driving a transition by hand. Test-facing:
-    /// FLUI's controller returns no `TickerFuture`, so a unit test cannot await
-    /// one. `tests/routes.rs` drives the real clock instead.
+    /// The animation handle, for driving a transition by hand. Test-facing: a
+    /// unit test drives the transition with `set_value` through this handle
+    /// rather than awaiting the `TickerFuture` `did_push` returns; the real
+    /// awaited-clock coverage lives in `tests/routes.rs`, which drives a real
+    /// `Vsync` instead.
     #[cfg(test)]
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()

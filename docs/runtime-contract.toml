@@ -3027,7 +3027,7 @@ thread_affinity = "registered against an explicit `&UpdateScheduler` reference (
 owner = "animation tick registration — re-homes to the realm's UpdateScheduler"
 failure_semantics = "the ticker resolves no future of its own -- start()/stop()/dispose()/reset() are fire-and-forget (Ticker::start's own doc names the reason: a future the ticker resolved would run wakers and continuations under the caller's lock, since every ticker.stop() in AnimationController runs under the controller's own guard). A start while a run is already installed (Active or Muted -- muting pauses a run without ending it) is refused in every build: it logs at error! and drops the supplied callback. The one-future primitive lives on as TickerFuture/TickerCompleter/TickerDelivery: TickerFuture::pending() hands back a completer/future pair whose owner resolves it -- complete() or cancel() publish the outcome and return a TickerDelivery that runs registered continuations then wakes pollers. TickerFuture resolves Ok(()) on a normal end and Err(TickerCanceled) when superseded or torn down; TickerCanceled is #[non_exhaustive]"
 consumers = [
-    "AnimationController owns and resolves the run future; the navigator wiring for #1161 (not yet landed) will await it",
+    "AnimationController owns and resolves the run future; PushCompletion::Animating carries it and NavigatorShared::apply awaits it (#1161)",
 ]
 owner_issue = 556
 notes = "ADR-0064 records why resolution moved from the ticker to the controller (lock order, not a Flutter divergence) and the publish/deliver design (docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)."

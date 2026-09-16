@@ -3387,6 +3387,10 @@ struct DeferredEntranceRoute {
     settings: RouteSettings,
     builder: RouteContentBuilder,
     current_result: i32,
+    /// Held for the route's whole lifetime: dropping it would cancel and
+    /// settle the very push this fixture exists to leave unresolved
+    /// (`Drop for TickerCompleter` publishes `Canceled` and delivers).
+    completer: Option<flui_scheduler::TickerCompleter>,
 }
 
 impl DeferredEntranceRoute {
@@ -3395,6 +3399,7 @@ impl DeferredEntranceRoute {
             settings: RouteSettings::named(name),
             builder: Rc::new(leaf),
             current_result,
+            completer: None,
         }
     }
 }
@@ -3410,9 +3415,12 @@ impl Route for DeferredEntranceRoute {
         Some(self.current_result)
     }
 
-    /// The whole point of this fixture.
+    /// The whole point of this fixture: hold the completer, hand out the
+    /// future, and never resolve it.
     fn did_push(&mut self) -> PushCompletion {
-        PushCompletion::Animating
+        let (completer, future) = flui_scheduler::TickerFuture::pending();
+        self.completer = Some(completer);
+        PushCompletion::Animating(future)
     }
 }
 
@@ -3504,6 +3512,53 @@ fn deferred_entrance_push_replacement_named() {
         "the new route is what a caller sees on top; the replaced entry lingers in \
          `Removing` only because this fixture never finishes a transition"
     );
+}
+
+/// `DeferredEntranceRoute` holds its completer for the route's whole
+/// lifetime, so the future `did_push` hands out never resolves — the fixture
+/// every other test in this section depends on. Proven directly, across
+/// several pumps rather than one: a route it replaces cannot be disposed,
+/// because disposing anything below an animating top route needs that top
+/// route to reach `Idle` first (`navigator.dart:4499-4512`), and this one
+/// never does.
+///
+/// Red-check: let `did_push` discard the completer instead of storing it —
+/// `Drop for TickerCompleter` cancels and delivers immediately, and the
+/// replaced route disposes on the very next pump.
+#[test]
+fn deferred_entrance_route_stays_pushing_while_its_completer_lives() {
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(DeferredEntranceRoute::new("/", 0));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root = handle.current().expect("seeded");
+
+    let replaced = handle.push(DeferredEntranceRoute::new("first", 1));
+    laid.tick();
+    let replaced_id = handle.current().expect("mid-entrance");
+
+    let _arriving = handle.push_replacement(DeferredEntranceRoute::new("second", 2));
+    let arrived = handle.current().expect("replaced");
+
+    for _ in 0..5 {
+        laid.tick();
+    }
+
+    assert!(
+        replaced.is_completed(),
+        "the replaced route's result resolved at replacement time"
+    );
+    let ids = handle.route_ids();
+    assert_eq!(
+        ids.len(),
+        3,
+        "the replaced route is still held after five pumps: {ids:?}"
+    );
+    assert!(ids.contains(&root));
+    assert!(
+        ids.contains(&replaced_id),
+        "disposing it needs `arrived` to reach `Idle`, which never happens"
+    );
+    assert!(ids.contains(&arrived));
 }
 
 /// A route whose `popDisposition` is `DoNotPop` — the third arm of

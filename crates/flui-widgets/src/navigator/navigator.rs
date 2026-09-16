@@ -55,13 +55,16 @@ use std::time::Duration;
 
 use flui_animation::Curve;
 use flui_foundation::ChangeNotifier;
+use flui_scheduler::TickerFuture;
 use flui_view::BuildContextExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_view::{RebuildHandle, RebuildReason};
 use parking_lot::Mutex;
 
 use super::binding::{
-    PopPacing, RouteBinding, RouteRegistries, RouteVsync, TransitionGroup, TransitionPeer,
+    PopPacing, RouteBinding, RouteCommand, RouteRegistries, RouteVsync, TransitionGroup,
+    TransitionPeer,
 };
 use super::hero::{HeroRegistry, HeroScope, NestedHeroSource};
 use super::hero_controller::HeroController;
@@ -211,6 +214,24 @@ struct NavigatorShared {
     /// once, for its whole life, to replay a terminal status update parked
     /// mid-gesture (`_handleAnimationUpdate`, `heroes.dart:622-650`).
     user_gesture_in_progress_notifier: ChangeNotifier,
+
+    /// What a push's
+    /// [`PushCompletion::Animating`](super::route::PushCompletion::Animating)
+    /// continuation schedules the Navigator's rebuild through, once its
+    /// future resolves — Flutter's
+    /// analogue is `handlePush`'s `whenCompleteOrCancel` reaching straight
+    /// back into `NavigatorState`; FLUI's continuation instead holds only this
+    /// `Arc` (and a clone of the route-command queue), so it structurally
+    /// cannot touch the history or anything else `NavigatorShared` owns.
+    ///
+    /// Resolved from `BuildContext::rebuild_handle` in
+    /// [`NavigatorState::init_state`](struct@NavigatorState), cleared in
+    /// `dispose`, and — this is the part that matters — **read at the moment
+    /// the continuation fires**, not captured when it is registered:
+    /// `push_with_id` flushes before the Navigator ever mounts (`history.rs`),
+    /// so a route pushed pre-mount registers its continuation while this slot
+    /// is still `None`, and only a later mount fills it.
+    settle_wake: Arc<Mutex<Option<RebuildHandle>>>,
 }
 
 impl NavigatorShared {
@@ -246,16 +267,35 @@ impl NavigatorShared {
         //    straight back into this navigator, and even a `can_pop()` read
         //    would deadlock on the non-reentrant history mutex.
         if !outcome.deferred.is_empty() {
-            let modals = self.registries.modals.lock().clone();
-            for effect in &outcome.deferred {
-                let (DeferredEffect::PopInvoked(route, _)
-                | DeferredEffect::LocalHistoryPopped(route)) = effect;
-                let Some(modal) = modals.get(route) else {
-                    continue;
-                };
+            // Cloned lazily, on the first `PopInvoked`/`LocalHistoryPopped`:
+            // an animated push's own `AwaitPush` effect (the common case,
+            // since every push produces one) never needs this map at all.
+            let mut modals: Option<HashMap<RouteId, ModalHandle>> = None;
+            for effect in std::mem::take(&mut outcome.deferred) {
                 match effect {
-                    DeferredEffect::PopInvoked(_, did_pop) => modal.notify_pop_invoked(*did_pop),
-                    DeferredEffect::LocalHistoryPopped(_) => modal.drain_local_history(),
+                    DeferredEffect::PopInvoked(route, did_pop) => {
+                        let modals =
+                            modals.get_or_insert_with(|| self.registries.modals.lock().clone());
+                        if let Some(modal) = modals.get(&route) {
+                            modal.notify_pop_invoked(did_pop);
+                        }
+                    }
+                    DeferredEffect::LocalHistoryPopped(route) => {
+                        let modals =
+                            modals.get_or_insert_with(|| self.registries.modals.lock().clone());
+                        if let Some(modal) = modals.get(&route) {
+                            modal.drain_local_history();
+                        }
+                    }
+                    // **Load-bearing placement (ADR-0064).** Registered here,
+                    // after the flush that produced `future` has released the
+                    // history lock — never from inside that flush. `flush()`
+                    // re-drains queued `RouteCommand`s between passes, so a
+                    // continuation registered mid-flush on an
+                    // already-resolved future (a zero-duration push) would
+                    // settle within that same flush instead of on the next
+                    // one.
+                    DeferredEffect::AwaitPush(route, future) => self.await_push(route, future),
                 }
             }
         }
@@ -316,7 +356,43 @@ impl NavigatorShared {
         self.overlay.rearrange(&ordered);
     }
 
-    /// Apply any [`RouteCommand`](super::binding::RouteCommand)s a route raised,
+    /// Register the continuation a
+    /// [`PushCompletion::Animating`](super::route::PushCompletion::Animating)
+    /// future settles through — the whole of what a push's entrance transition
+    /// gets to do to this navigator.
+    ///
+    /// Called only from [`apply`](Self::apply), with the history lock already
+    /// released; see that call site's comment for why the placement itself is
+    /// load-bearing. The registered closure captures nothing but a clone of
+    /// the route-command queue and this `settle_wake` slot's `Arc` — never
+    /// `self` — so it is structurally incapable of touching the history or
+    /// any other field, no matter which thread resolves `future` or how long
+    /// from now.
+    fn await_push(&self, route: RouteId, future: TickerFuture) {
+        let queue = self.history.lock().command_queue();
+        let settle_wake = Arc::clone(&self.settle_wake);
+        future.when_complete_or_cancel(move |_outcome| {
+            // Complete and cancel settle the entry the same way: there is no
+            // separate "the push was canceled" state at this layer, only
+            // "Pushing" and "Idle" (or whatever the entry has since moved to
+            // — the `state == Pushing` guard in `apply_pending_commands`
+            // handles a stale command, e.g. a pop that raced this future).
+            queue.lock().push_back(RouteCommand::PushCompleted(route));
+            // Read now, not at registration: a route pushed before this
+            // navigator mounted registers this closure while the slot is
+            // still `None`, and only a later mount fills it. Cloned out and
+            // dropped before `schedule` runs — an if-let-scrutinee guard held
+            // across `schedule` is the shape #1177 eliminated elsewhere in
+            // the workspace; `RebuildHandle::schedule` is documented
+            // non-reentrant today, but nothing here should depend on that.
+            let handle = settle_wake.lock().clone();
+            if let Some(handle) = handle {
+                handle.schedule(RebuildReason::AsyncCompletion);
+            }
+        });
+    }
+
+    /// Apply any [`RouteCommand`]s a route raised,
     /// and settle the history — the `wake` half of the route-binding seam.
     ///
     /// **`try_lock`, deliberately.** If the history mutex is held we are inside a
@@ -821,6 +897,7 @@ impl NavigatorHandle {
             nested_hero_registration: Mutex::new(None),
             user_gestures_in_progress: Arc::new(AtomicU32::new(0)),
             user_gesture_in_progress_notifier: ChangeNotifier::new(),
+            settle_wake: Arc::new(Mutex::new(None)),
         });
         let command_target = register_command_target(&shared);
         Self {
@@ -2543,8 +2620,10 @@ impl ViewState<Navigator> for NavigatorState {
     /// the rearrange only fills the overlay's entry list; its first `build` reads
     /// it. Mutating an unmounted `OverlayHandle` is defined behavior.
     ///
-    /// No `rebuild_handle()` is acquired here or anywhere in this file: the
-    /// overlay owns its own rebuild, so trigger #22 has nothing to guard.
+    /// Acquires the rebuild capability a push's entrance-transition
+    /// continuation later schedules through (`settle_wake`, ADR-0064) —
+    /// lifecycle-only, per trigger #22 — alongside the other three
+    /// lifecycle-only captures below.
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         // The navigator owns the clock its route transitions
         // register with — the FLUI shape of Flutter's `vsync: navigator!`. Read
@@ -2555,6 +2634,7 @@ impl ViewState<Navigator> for NavigatorState {
         // fires them from a post-frame callback, never from a frame phase.
         *self.shared.post_frame.lock() = ctx.local_post_frame_handle();
         *self.shared.render_tree.lock() = ctx.pipeline_owner();
+        *self.shared.settle_wake.lock() = Some(ctx.rebuild_handle());
 
         // Resolve the ambient `HeroControllerScope` and settle which
         // controller (if any) observes this navigator — before `attach_observers`, so
@@ -2600,7 +2680,17 @@ impl ViewState<Navigator> for NavigatorState {
     /// matters here (`navigator.dart:5984-5990`); its `HeroControllerScope`,
     /// `NavigationNotification` listener, pointer-cancelling `Listener` and
     /// `FocusTraversalGroup` all belong to features deferred for now.
+    ///
+    /// Drains any queued `RouteCommand`s first: this build is frequently the
+    /// very rebuild a push-completion continuation scheduled (ADR-0064), and
+    /// the settled state must be what the rest of this build (and anything it
+    /// reads through the handle) sees. The only command that can reach a
+    /// build is a settle of an already-parked entry, so the flush walk here
+    /// runs no user code; an already-resolved future's immediate settle
+    /// costs exactly one extra rebuild, not a loop.
     fn build(&self, _view: &Navigator, ctx: &dyn BuildContext) -> impl IntoView {
+        self.shared.pump_route_commands();
+
         // Re-resolved every build, not just once at mount — see
         // `sync_nested_hero_registration`'s doc for why `init_state` cannot do this.
         self.sync_nested_hero_registration(ctx);
@@ -2631,9 +2721,11 @@ impl ViewState<Navigator> for NavigatorState {
     fn dispose(&mut self) {
         self.shared.detach_observers();
         // The capabilities die with the tree they name, so a `HeroController` that
-        // outlives its navigator schedules nothing and measures nothing.
+        // outlives its navigator schedules nothing and measures nothing, and a
+        // push-completion continuation that outlives it finds no one to wake.
         *self.shared.post_frame.lock() = None;
         *self.shared.render_tree.lock() = None;
+        *self.shared.settle_wake.lock() = None;
         // The mirror of `sync_nested_hero_registration`'s publish: a disposed
         // navigator's heroes must never be visited by an outer flight again.
         if let Some((registry, source)) = self.shared.nested_hero_registration.lock().take() {

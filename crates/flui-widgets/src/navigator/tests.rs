@@ -15,6 +15,7 @@
 
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
+use flui_scheduler::TickerFuture;
 use parking_lot::Mutex;
 
 use super::binding::{CompletedSignal, RouteBinding, RouteCommand};
@@ -95,7 +96,7 @@ impl Route for Probe {
 
     fn did_push(&mut self) -> PushCompletion {
         self.record(Event::DidPush);
-        self.push
+        self.push.clone()
     }
 
     fn did_add(&mut self) {
@@ -638,7 +639,7 @@ fn remove_route_on_an_already_removing_route_is_a_noop() {
     let spy = spy();
 
     let mut incoming = Probe::new(&log);
-    incoming.push = PushCompletion::Animating;
+    incoming.push = PushCompletion::Animating(TickerFuture::complete());
     let (new_top, _r2) = history.push_replacement(incoming, None);
 
     assert_eq!(history.state_of(old), Some(RouteLifecycle::Removing));
@@ -980,7 +981,7 @@ fn pop_of_an_animating_route_parks_in_popping_but_still_completes() {
 }
 
 // ============================================================================
-// PUSHING / notify_push_completed
+// PUSHING / RouteCommand::PushCompleted
 // ============================================================================
 
 /// An `Animating` push parks in `Pushing`, which — unlike `Idle` — does **not**
@@ -997,7 +998,7 @@ fn animating_push_defers_disposal_of_the_replaced_route_until_it_completes() {
     let (_old, old_result) = history.push(Probe::new(&old_log));
 
     let mut incoming = Probe::new(&Log::default());
-    incoming.push = PushCompletion::Animating;
+    incoming.push = PushCompletion::Animating(TickerFuture::complete());
     let (new_top, _r) = history.push_replacement(incoming, Some(boxed(11)));
 
     assert_eq!(history.state_of(new_top), Some(RouteLifecycle::Pushing));
@@ -1018,8 +1019,13 @@ fn animating_push_defers_disposal_of_the_replaced_route_until_it_completes() {
     assert_eq!(history.len(), 3, "still deferred after a redundant flush");
     assert!(!old_log.lock().contains(&Event::Dispose));
 
-    // The seam's only path: raise the command, then settle.
-    binding_for(&history, new_top).notify_push_completed();
+    // Stand in for the continuation `NavigatorShared::apply` would have
+    // registered on `new_top`'s (already-resolved) `TickerFuture`: raise the
+    // command directly, then settle.
+    history
+        .command_queue()
+        .lock()
+        .push_back(RouteCommand::PushCompleted(new_top));
     history.flush(true);
     settle_unobserved(&mut history);
 
@@ -1157,11 +1163,16 @@ fn reentrant_flush_panics_with_bug() {
 
 /// A route that raises a `RouteCommand` from one of its lifecycle callbacks —
 /// the shape of a zero-duration `TransitionRoute`.
+///
+/// `did_push` no longer has any seam of its own to raise `PushCompleted`
+/// through — that command is now raised only by the continuation
+/// `NavigatorShared::apply` registers on the future `did_push` hands out
+/// (ADR-0064), never by a route calling back into its own binding. So an
+/// `Animating` push here — zero-duration or not — parks in `Pushing` until
+/// the test raises `PushCompleted` itself, standing in for that continuation.
 struct SeamRoute {
     settings: RouteSettings,
     binding: Option<RouteBinding>,
-    /// Raised from `did_push`, i.e. **inside** the flush that pushes this route.
-    complete_push_on_install: bool,
     /// Raised from `did_pop`, i.e. inside the flush that pops it — Flutter's
     /// `OverlayRoute.didPop` → `navigator.finalizeRoute` (`routes.dart:87-94`).
     finalize_on_pop: bool,
@@ -1174,17 +1185,16 @@ impl SeamRoute {
         Self {
             settings: RouteSettings::default(),
             binding: None,
-            complete_push_on_install: false,
             finalize_on_pop: false,
             push: PushCompletion::Immediate,
             finished_when_popped: true,
         }
     }
 
-    /// A zero-duration transition: parks in `Pushing`, then completes at once.
+    /// A zero-duration transition: the future `did_push` hands out is already
+    /// resolved by the time it returns.
     fn zero_duration_push(mut self) -> Self {
-        self.push = PushCompletion::Animating;
-        self.complete_push_on_install = true;
+        self.push = PushCompletion::Animating(TickerFuture::complete());
         self
     }
 
@@ -1208,12 +1218,7 @@ impl Route for SeamRoute {
     }
 
     fn did_push(&mut self) -> PushCompletion {
-        if self.complete_push_on_install
-            && let Some(binding) = &self.binding
-        {
-            binding.notify_push_completed();
-        }
-        self.push
+        self.push.clone()
     }
 
     fn did_pop(&mut self) -> bool {
@@ -1272,7 +1277,7 @@ fn route_binding_wake_accepts_owner_local_rc_state() {
         },
     );
 
-    binding.notify_push_completed();
+    binding.finalize();
 
     assert_eq!(
         wake_calls.get(),
@@ -1336,33 +1341,54 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
     assert!(!history.has_pending_commands());
 }
 
-/// A zero-duration entrance transition: the route parks in `Pushing` and raises
-/// `notify_push_completed()` from `did_push`, inside the push's own flush.
+/// A zero-duration entrance transition — a push whose `TickerFuture` is
+/// already resolved by the time `did_push` hands it out — still parks in
+/// `Pushing` at this layer, and stays there until an explicit
+/// `RouteCommand::PushCompleted` arrives.
 ///
-/// Flutter never sees this — `whenCompleteOrCancel` asserts `!_debugLocked` and
-/// always arrives on a later microtask (`navigator.dart:3277-3279`). FLUI has no
-/// microtask, so the command is deferred to a second pass of the same `flush`.
-/// The end state is identical: `Idle`, settled, before `push` returns.
+/// Flutter never sees a zero-duration push settle *before* `handlePush`
+/// returns either — `whenCompleteOrCancel` asserts `!_debugLocked` and always
+/// arrives on a later microtask (`navigator.dart:3277-3279`). FLUI reaches
+/// the same end state through a different route: a route's own `did_push`
+/// has no seam to raise `PushCompleted` for itself (`RouteBinding` has no
+/// such method — ADR-0064); the continuation that settles a push is
+/// registered one layer up, in `NavigatorShared::apply`, which this
+/// pure-history layer has no equivalent of. So the command has to be raised
+/// from outside — exactly as it would be raised by that continuation in
+/// production — and it costs a flush of its own, not a second pass of the
+/// same one.
 ///
-/// Red-check: drop the `while self.apply_pending_commands()` loop in `flush`; the
-/// entry is stranded in `Pushing`.
+/// Red-check: give `SeamRoute::did_push` back a `RouteBinding` seam that
+/// raises `PushCompleted` for itself; the entry would then be `Idle` with no
+/// explicit command needed at all.
 #[test]
-fn route_binding_notify_push_completed_during_flush_is_deferred() {
+fn a_zero_duration_push_still_needs_an_explicit_command_to_settle() {
     let log: Log = Log::default();
     let mut history = RouteHistory::new();
     history.add_initial(Probe::new(&log));
 
     let id = RouteId::next();
-    let mut route = SeamRoute::new().zero_duration_push();
-    route.binding = Some(binding_for(&history, id));
+    let route = SeamRoute::new().zero_duration_push();
     let (top, _result) = history.push_with_id(id, route);
 
     assert_eq!(
         history.state_of(top),
-        Some(RouteLifecycle::Idle),
-        "a zero-duration push settles before `push` returns"
+        Some(RouteLifecycle::Pushing),
+        "an already-resolved future settles nothing on its own"
     );
-    assert_eq!(history.last_flush_passes(), 2);
+    assert_eq!(
+        history.last_flush_passes(),
+        1,
+        "nothing was raised to defer"
+    );
+
+    history
+        .command_queue()
+        .lock()
+        .push_back(RouteCommand::PushCompleted(top));
+    history.flush(true);
+
+    assert_eq!(history.state_of(top), Some(RouteLifecycle::Idle));
     assert!(!history.has_pending_commands());
 }
 
@@ -1390,7 +1416,12 @@ fn zero_duration_push_then_pop_settles_lifecycle_and_overlay_outcome() {
     let mut route = SeamRoute::new().zero_duration_push().finalizing_on_pop();
     route.binding = Some(binding_for(&history, id));
     let (top, result) = history.push_with_id(id, route);
-    assert_eq!(history.state_of(top), Some(RouteLifecycle::Idle));
+    // Parks in `Pushing`, not `Idle`: nothing at this layer drains the
+    // `PushCompleted` command a zero-duration push still needs (see
+    // `a_zero_duration_push_still_needs_an_explicit_command_to_settle`). The
+    // pop below runs on a `Pushing` entry exactly as it would on an `Idle`
+    // one — `handle_pop` treats every present state alike.
+    assert_eq!(history.state_of(top), Some(RouteLifecycle::Pushing));
 
     history.pop(None);
     let outcome = history.take_outcome().expect("the pop flushed");
@@ -1454,13 +1485,16 @@ fn commands_raised_between_flushes_apply_at_the_head_of_the_next_one() {
 
     let id = RouteId::next();
     let mut animating = Probe::new(&log);
-    animating.push = PushCompletion::Animating;
+    animating.push = PushCompletion::Animating(TickerFuture::complete());
     let (top, _result) = history.push_with_id(id, animating);
     assert_eq!(history.state_of(top), Some(RouteLifecycle::Pushing));
     assert_eq!(history.last_flush_passes(), 1, "nothing was deferred");
 
-    // Raise it out-of-flush, as an animation listener would.
-    binding_for(&history, top).notify_push_completed();
+    // Raise it out-of-flush, as the push-completion continuation would.
+    history
+        .command_queue()
+        .lock()
+        .push_back(RouteCommand::PushCompleted(top));
     assert!(history.has_pending_commands());
 
     history.flush(true);
@@ -1486,7 +1520,13 @@ fn a_command_for_a_vanished_route_is_dropped() {
     assert_eq!(history.len(), 1);
 
     stale.finalize();
-    stale.notify_push_completed();
+    // Stands in for the continuation `NavigatorShared::apply` would raise
+    // this through in production — `RouteBinding` itself has no
+    // `notify_push_completed` seam any more (ADR-0064).
+    history
+        .command_queue()
+        .lock()
+        .push_back(RouteCommand::PushCompleted(top));
     history.flush(true);
 
     assert_eq!(history.len(), 1, "the stale commands changed nothing");
@@ -1495,6 +1535,11 @@ fn a_command_for_a_vanished_route_is_dropped() {
 
 /// `RouteCommand` is a plain value: the queue is data, not a callback into the
 /// navigator. This is what keeps `route_stack_flush_is_pure_data` true.
+///
+/// `Finalize` is the only command `RouteBinding` can still raise —
+/// `PushCompleted` is now raised directly by `NavigatorShared::await_push`'s
+/// continuation, never through a binding (ADR-0064) — but the property this
+/// test pins (a binding can only ever name its own route) is unaffected.
 #[test]
 fn route_commands_are_pre_bound_to_one_route() {
     let history = RouteHistory::new();
@@ -1503,12 +1548,11 @@ fn route_commands_are_pre_bound_to_one_route() {
 
     assert_eq!(binding.route_id(), id);
     binding.finalize();
-    binding.notify_push_completed();
 
     let queued: Vec<RouteCommand> = history.command_queue().lock().iter().copied().collect();
     assert_eq!(
         queued,
-        vec![RouteCommand::Finalize(id), RouteCommand::PushCompleted(id)],
+        vec![RouteCommand::Finalize(id)],
         "a binding can only ever name its own route"
     );
 }
@@ -1535,6 +1579,23 @@ fn route_commands_are_pre_bound_to_one_route() {
 /// Red-check: add `use crate::overlay::OverlayEntry;` to `history.rs`,
 /// `use super::navigator::NavigatorHandle;` to `route.rs`, or give `RouteHistory`
 /// back its `observers: Vec<Arc<dyn NavigatorObserver>>` field.
+///
+/// # `flui_scheduler::TickerFuture`/`TickerCanceled` are not a scheduler edge
+///
+/// `PushCompletion::Animating` (`route.rs`) and `DeferredEffect::AwaitPush`
+/// (`history.rs`) both carry a `TickerFuture` — a plain, inert value a route
+/// hands in from *outside* this layer (ADR-0064), never fetched by it. Holding
+/// one is exactly as pure as holding the `RouteResult`/`Completer` values
+/// `result.rs` already carries. `NAVIGATOR_EDGE` therefore bans the
+/// capability tokens a genuine scheduler dependency would need
+/// (`UpdateScheduler`, `TickerProvider`, `PostFrameHandle`, `Vsync`, the bare
+/// `Ticker` type) rather than the crate path itself — and separately bans
+/// `when_complete_or_cancel`, `TickerCompleter`, `TickerDelivery`, and
+/// `TickerFuture::pending`, which encode the placement rule this layer must
+/// not implement: registering a continuation, or minting a completer/future
+/// pair, are both `NavigatorShared::apply`'s job (ADR-0064), never this
+/// layer's — it only ever receives an already-pending `TickerFuture` a route
+/// handed it and carries it out through `DeferredEffect::AwaitPush`.
 #[test]
 fn route_stack_flush_is_pure_data() {
     /// Tokens that would mean this layer had grown a dependency on the framework.
@@ -1549,22 +1610,48 @@ fn route_stack_flush_is_pure_data() {
         "crate::overlay",
     ];
     /// …and, for the four files that are pure *data*, anything that reaches the
-    /// navigator, the scheduler, or an id minted by either tree.
+    /// navigator, an id minted by either tree, a scheduler *capability* (as
+    /// opposed to the inert `TickerFuture`/`TickerCanceled` values — see this
+    /// test's own doc), or the placement rule ADR-0064 reserves for
+    /// `NavigatorShared::apply`: registering a continuation
+    /// (`when_complete_or_cancel`) or minting a completer/future pair
+    /// (`TickerCompleter`, `TickerDelivery`, `TickerFuture::pending`).
     ///
     /// `NavigatorObserver` joined this list because an observer holds a
     /// `NavigatorHandle`, so a `RouteHistory` that could *call* one could deadlock
     /// on its own mutex. It now computes `Notification`s and hands them to the
     /// navigator, which delivers them with the lock released.
-    const NAVIGATOR_EDGE: [&str; 8] = [
+    const NAVIGATOR_EDGE: [&str; 13] = [
         "super::navigator",
         "NavigatorHandle",
         "NavigatorObserver",
         "OverlayHandle",
-        "flui_scheduler",
+        "UpdateScheduler",
+        "TickerProvider",
         "PostFrameHandle",
         "SubtreeAnchor",
         "RouteSubtree",
+        "Vsync",
+        "when_complete_or_cancel",
+        "TickerCompleter",
+        "TickerDelivery",
     ];
+    /// `TickerFuture::pending` names the *minting* call this layer must never
+    /// make; a plain substring ban on `"TickerFuture"` would also catch the
+    /// type name itself, which this layer legitimately carries as a value.
+    const TICKER_FUTURE_PENDING: &str = "TickerFuture::pending";
+    /// The bare `Ticker` type — `str::contains` alone would also match the
+    /// two identifiers this guard deliberately allows (`TickerFuture`,
+    /// `TickerCanceled`), since `"Ticker"` is their prefix.
+    fn contains_bare_ticker(code: &str) -> bool {
+        const ALLOWED_SUFFIXES: [&str; 2] = ["Future", "Canceled"];
+        code.match_indices("Ticker").any(|(index, _)| {
+            let after = &code[index + "Ticker".len()..];
+            !ALLOWED_SUFFIXES
+                .iter()
+                .any(|suffix| after.starts_with(suffix))
+        })
+    }
 
     /// Line comments are prose: `history.rs` may *name* `NavigatorHandle` while
     /// explaining what it deliberately does not do. A dependency is an import or a
@@ -1595,6 +1682,16 @@ fn route_stack_flush_is_pure_data() {
                 "{name} references `{token}`: the route stack must stay pure data"
             );
         }
+        assert!(
+            !code.contains(TICKER_FUTURE_PENDING),
+            "{name} references `{TICKER_FUTURE_PENDING}`: minting a completer/future \
+             pair is `NavigatorShared::apply`'s job, never this layer's"
+        );
+        assert!(
+            !contains_bare_ticker(&code),
+            "{name} references the bare `Ticker` type: this layer only ever carries a \
+             `TickerFuture` a route already produced"
+        );
     }
 
     let (name, source) = OBSERVER;
@@ -1606,4 +1703,82 @@ fn route_stack_flush_is_pure_data() {
              `NavigatorHandle` it is handed"
         );
     }
+}
+
+/// Two invariants of the push-completion seam, checked together since both
+/// are "no source file outside the sanctioned ones may spell this out" scans
+/// over the same directory (ADR-0064):
+///
+/// 1. `RouteBinding::notify_push_completed` is deleted — nothing under
+///    `src/navigator/` should still *define or call* it. Historical prose
+///    naming it (this ADR's own paper trail, in `binding.rs`'s module doc and
+///    elsewhere) is not what this pins; only a live definition or call site
+///    is.
+/// 2. "No route can raise `PushCompleted` for itself" — an identifier-absence
+///    grep alone is defeated by a rename, so this also bans *constructing*
+///    `RouteCommand::PushCompleted(` outside the sanctioned sites:
+///    `binding.rs` (declares the variant), `history.rs` (drains it), and
+///    `navigator.rs` (the continuation raises it). `tests.rs` is a fourth,
+///    test-only exemption: several pure-`RouteHistory` tests construct it
+///    directly to stand in for the continuation `NavigatorShared::apply`
+///    would raise in production — that layer has no `NavigatorShared` to
+///    drive it any other way.
+///
+/// Comment lines are stripped before scanning (the same discipline
+/// `route_stack_flush_is_pure_data` uses), and every needle is built from
+/// concatenated halves so this file's own source — which necessarily spells
+/// them out, right here — never trips its own check.
+///
+/// Red-check: reintroduce `notify_push_completed` (even dead code, even
+/// `#[cfg(test)]`) or a call to it anywhere under `src/navigator/`; or have
+/// some route's lifecycle hook construct `RouteCommand::PushCompleted`
+/// directly instead of returning a `TickerFuture` for the navigator to await.
+#[test]
+fn no_route_can_report_its_own_push_completion() {
+    fn code_only(source: &str) -> String {
+        source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let notify_fn_needle = format!("fn {}", "notify_push_completed");
+    let notify_call_needle = format!(".{}(", "notify_push_completed");
+    let push_completed_construction_needle = format!("RouteCommand::{}(", "PushCompleted");
+    /// Files allowed to construct `RouteCommand::PushCompleted` — the three
+    /// production sites, plus the pure-data layer's own test suite (see this
+    /// test's own doc, point 2).
+    const PUSH_COMPLETED_CONSTRUCTION_EXEMPT: [&str; 4] =
+        ["binding.rs", "navigator.rs", "history.rs", "tests.rs"];
+
+    let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/navigator"));
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("src/navigator must exist") {
+        let path = entry.expect("readable directory entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("navigator source files have utf-8 names")
+            .to_owned();
+        let source = std::fs::read_to_string(&path).expect("readable source file");
+        let code = code_only(&source);
+
+        if code.contains(&notify_fn_needle) || code.contains(&notify_call_needle) {
+            offenders.push(format!(
+                "{file_name}: notify_push_completed still defined or called"
+            ));
+        }
+        if !PUSH_COMPLETED_CONSTRUCTION_EXEMPT.contains(&file_name.as_str())
+            && code.contains(&push_completed_construction_needle)
+        {
+            offenders.push(format!(
+                "{file_name}: constructs RouteCommand::PushCompleted directly"
+            ));
+        }
+    }
+    assert!(offenders.is_empty(), "{offenders:#?}");
 }

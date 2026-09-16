@@ -126,8 +126,8 @@ fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
 /// Run the modal's entrance transition to completion, then settle the owner
 /// status bridge and the overlay rebuild it schedules.
 ///
-/// FLUI's `AnimationController` returns no `TickerFuture`, so a test drives the
-/// transition by hand — `set_value(1.0)` fires the `Completed` status, which is
+/// This drives the transition by hand rather than awaiting the `TickerFuture`
+/// `did_push` returns — `set_value(1.0)` fires the `Completed` status, which is
 /// queued by the animation listener and drained from owner-local `ModalScope`
 /// build. The resulting `OverlayEntry.opaque` write schedules the overlay
 /// rebuild that applies occlusion on the following tick.
