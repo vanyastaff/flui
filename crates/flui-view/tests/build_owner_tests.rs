@@ -634,5 +634,14 @@ fn test_build_owner_memory_size() {
     // without changing this count). The paired
     // typed lifecycle-panic handoff costs nothing extra because existing
     // padding absorbs it.
-    assert!(size < 632, "BuildOwner is too large: {size} bytes");
+    //
+    // It moved again, 624 -> 680, for issue #1180's mid-drain absorb
+    // accounting: `mid_drain_absorbs_left: usize` (8) and
+    // `built_this_frame: HashSet<ElementId>` (48, the hashbrown `RawTable`
+    // header) are measured at +56 bytes together; `mid_drain_cap_streak:
+    // bool` costs nothing extra because existing padding absorbs it.
+    // `built_this_frame` is empty on every frame that never lands a
+    // mid-drain re-entry, so this is inline scratch state, not a
+    // per-element cost.
+    assert!(size < 688, "BuildOwner is too large: {size} bytes");
 }

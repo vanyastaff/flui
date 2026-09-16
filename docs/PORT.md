@@ -1178,7 +1178,7 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | [`flui-engine`](../crates/flui-engine/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-hot-reload` | Not yet templated | Active |
 | `flui-objects` | [`ARCHITECTURE.md`](../crates/flui-objects/ARCHITECTURE.md) (partial: Mapping decisions for non-finite sliver scroll windows; full template deferred) | Active |
-| `flui-view` | `crates/flui-view/UNIFIED_ELEMENT.md` (companion; not templated) | Active |
+| [`flui-view`](../crates/flui-view/ARCHITECTURE.md) | (partial: Mapping decisions for issue #1180's mid-drain absorb budget; full template deferred); `crates/flui-view/UNIFIED_ELEMENT.md` remains a companion appendix | Active |
 | `flui-widgets` | Not yet templated | Active |
 | `flui-localizations` | Not yet templated | Active |
 | `flui-material` | [`ARCHITECTURE.md`](../crates/flui-material/ARCHITECTURE.md) (partial: Mapping decisions for Checkbox mode enum + TabController release index bounds; full template deferred) | Active |

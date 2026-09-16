@@ -20,7 +20,8 @@ use flui_types::{Alignment, Offset};
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{
-    AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, SizedBox, VsyncScope,
+    AnimatedAlign, AnimatedBuilder, AnimatedContainer, AnimatedOpacity, AnimatedPadding, SizedBox,
+    VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -594,6 +595,28 @@ impl ViewState<ZeroDurationContainerProbe> for ZeroDurationContainerProbeState {
     }
 }
 
+/// Counts `element_rebuilt` observations for `AnimatedBuilder` specifically —
+/// `element_rebuilt` fires only with a `TreeObserver` installed, and this is
+/// the "built exactly once" oracle the same-drain-absorption fix needs.
+#[derive(Default)]
+struct AnimatedBuilderRebuildCounter {
+    count: AtomicUsize,
+}
+
+impl AnimatedBuilderRebuildCounter {
+    fn count(&self) -> usize {
+        self.count.load(Ordering::Relaxed)
+    }
+}
+
+impl flui_foundation::observe::TreeObserver for AnimatedBuilderRebuildCounter {
+    fn element_rebuilt(&self, event: &flui_foundation::observe::ElementRebuilt) {
+        if event.view_type_id == std::any::TypeId::of::<AnimatedBuilder>() {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// A `Duration::ZERO` implicit animation retargeted in a rebuild (issue
 /// #1171's synchronous settle) lays out the new target on the SAME pump
 /// that observes the widget's new configuration — `did_update_view`'s
@@ -602,18 +625,20 @@ impl ViewState<ZeroDurationContainerProbe> for ZeroDurationContainerProbeState {
 /// widget tree `build()` produces already reflects it, with no extra frame
 /// needed.
 ///
-/// **The redundant rebuild, named rather than hidden.** The synchronous
-/// settle still fires a value notification (the value DID move), and
+/// **The one-frame deferral is gone (issue #1180).** The synchronous settle
+/// still fires a value notification (the value DID move), and
 /// `AnimatedBuilder`'s listener schedules its own rebuild the same way any
 /// out-of-frame `Listenable` change would — through the owner's external
-/// inbox, which FLUI's `drain_build_scope` drains once at the start of a
-/// drain, so a schedule landing mid-drain waits for the next frame. Flutter
-/// builds it in the same `buildScope` (`markNeedsBuild`'s in-scope rule:
-/// a dirty descendant is always built in the current pass); closing that
-/// gap is a tracked follow-up. So after the retargeting pump: layout already shows
-/// the new target, `has_dirty_elements()` is true, and exactly one rebuild
-/// is queued — a real cost, but not a stuck animation, and it clears on the
-/// very next pump with the layout unchanged and nothing left running.
+/// inbox. That inbox used to be drained only once, at the START of a drain,
+/// so a schedule landing mid-drain (this one: the container's retargeting
+/// build runs first, and its synchronous settle notifies `AnimatedBuilder`
+/// AFTER that initial drain already happened) sat until the NEXT
+/// `build_scope` — a whole extra frame for a widget that, on paper, "lays out
+/// the new target on the same pump." `BuildOwner::drain_build_scope` now
+/// absorbs the inbox at the top of EVERY heap pop, not just the first, so
+/// the retargeting pump's own drain reaches `AnimatedBuilder` too: this
+/// test is the pin for that fix — it flips from "one rebuild left queued for
+/// the next pump" to "built once, same pump, nothing left".
 ///
 /// Red-check: gate `forward_from`'s settle on distance alone (drop
 /// `run_duration.is_zero()`) — the FIRST `assert_eq!` below (layout on the
@@ -636,6 +661,11 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
         "sanity: nothing is animating before the retarget"
     );
 
+    let animated_builder_rebuilds = Arc::new(AnimatedBuilderRebuildCounter::default());
+    laid.build_owner_mut()
+        .set_tree_observer(Arc::clone(&animated_builder_rebuilds)
+            as Arc<dyn flui_foundation::observe::TreeObserver>);
+
     *side.lock() = 100.0;
     laid.pump();
 
@@ -646,33 +676,37 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
         width(&laid)
     );
     assert_eq!(
-        laid.build_owner_mut().pending_external_builds(),
+        animated_builder_rebuilds.count(),
         1,
-        "the synchronous value notify still schedules the redundant \
-         AnimatedBuilder rebuild through the external inbox, deferred to \
-         the next build_scope"
+        "the mid-drain notification must build AnimatedBuilder exactly once, \
+         in the SAME pump — issue #1180's fix"
     );
-    assert!(
-        laid.build_owner_mut().has_dirty_elements(),
-        "that queued rebuild is real dirty work, not a no-op"
-    );
-
-    laid.tick();
-
     assert_eq!(
         laid.build_owner_mut().pending_external_builds(),
         0,
-        "the next pump drains the redundant rebuild"
+        "same-drain absorption must leave nothing queued for the next pump"
     );
     assert!(
-        (width(&laid) - 100.0).abs() < 1e-3,
-        "layout is unchanged by draining the redundant rebuild, got {}",
-        width(&laid)
+        !laid.build_owner_mut().has_dirty_elements(),
+        "nothing should be left dirty after the retargeting pump"
     );
     assert!(
         !vsync.has_running(),
         "a synchronous zero-duration settle must leave nothing running for \
          the frame loop to keep the window open for"
+    );
+
+    // A further tick is a genuine no-op: nothing queued, nothing running,
+    // layout unchanged.
+    laid.tick();
+    assert_eq!(
+        animated_builder_rebuilds.count(),
+        1,
+        "no extra rebuild from an idle tick"
+    );
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-3,
+        "layout unchanged by the idle tick"
     );
 }
 

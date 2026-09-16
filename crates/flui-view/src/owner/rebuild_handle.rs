@@ -17,8 +17,12 @@
 //! [`RebuildReason`] into `BuildOwner::external_inbox`.
 //! A burst of calls between frames collapses to one entry while retaining every
 //! distinct cause; only the first asks the binding for a frame.
-//! `BuildOwner::build_scope` drains that inbox at frame start, marks each
-//! drained element dirty, and rebuilds it on the frame thread.
+//! `BuildOwner::build_scope` absorbs that inbox throughout the drain — at the
+//! top of every heap pop, not only once at the start (issue #1180) — so a
+//! `schedule` call made from a build already in progress joins that SAME
+//! drain instead of waiting for the next frame. Either way, the element is
+//! marked dirty and rebuilt on the frame thread, never inline at `schedule`
+//! time.
 //!
 //! So `schedule(reason)` **never touches the element tree, the render tree, or the
 //! pipeline**. It writes to a mutex-guarded map and calls one `Fn()`. Everything
@@ -106,13 +110,23 @@ impl RebuildHandle {
         Self { inner: None }
     }
 
-    /// Schedule the owning element for rebuild on the next frame, and request a
-    /// frame if one is not already pending.
+    /// Schedule the owning element for rebuild, and request a frame if one is
+    /// not already pending.
     ///
-    /// Callable from **any thread**. Idempotent between frames: repeated calls
-    /// collapse to a single queued rebuild and a single frame request, because
-    /// the inbox is a map keyed by element id. Distinct reasons are retained
-    /// even though the element itself is rebuilt only once.
+    /// Called between frames, the rebuild runs on the next `build_scope`.
+    /// Called from a build already in progress (this handle's owner, or any
+    /// other element, calling it synchronously on the owner thread), the
+    /// rebuild joins that SAME `build_scope` drain instead — absorbed at the
+    /// top of the drain's next heap pop, not deferred a whole frame (issue
+    /// #1180). Either way this call itself only writes to the shared inbox
+    /// and (on a fresh entry) fires the frame-request hook; it never mutates
+    /// the tree inline.
+    ///
+    /// Callable from **any thread**. Idempotent within one absorption window:
+    /// repeated calls collapse to a single queued rebuild and a single frame
+    /// request, because the inbox is a map keyed by element id. Distinct
+    /// reasons are retained even though the element itself is rebuilt only
+    /// once per absorption.
     ///
     /// Inert when the handle is inert, and harmless when the element has since
     /// been unmounted — `build_scope` skips ids whose node is gone.
