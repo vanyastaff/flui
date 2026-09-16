@@ -159,23 +159,6 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **Repeat sampling is a pure function of elapsed time** (#1078): `AnimationController::repeat`/
-  `repeat_with`'s `value`/`status`/`direction` at any `tick_at` are now computed from the elapsed
-  time since the run started, the range, period, `reverse`, and `count` alone, in integer
-  nanoseconds — the frame partition no longer changes the answer (`tick_at(1.25)` now equals
-  `tick_at(1.0); tick_at(1.25)`, for any number of cycles a long frame spans). Behavior changes:
-  a repeat now starts from the CURRENT value clamped into `[min, max]`, not from `min` (Flutter
-  parity — a `repeat()` issued fresh on every build progresses instead of snapping back);
-  `repeat_period` is resolved ONCE at the call (`period.unwrap_or(duration)`), so a later
-  `set_duration` no longer retimes an active repeat and both legs of a bounce always share one
-  period; a finite repeat's exhaustion now lands on its last cycle's own endpoint with that leg's
-  settled status, instead of Flutter's `% 1.0` wrap (an intentional divergence — see
-  `crates/flui-animation/docs/ARCHITECTURE.md`'s "Repeat sampling" mapping entry); a zero
-  effective period now settles synchronously at the call (Android's skip-to-end rule) instead of
-  ticking a run that could never advance; and a leftover `animate_to_curved` easing curve no
-  longer leaks into a following repeat, which always interpolates linearly. `AnimationControllerInner`
-  drops `repeat_done`/`run_epoch_secs` (both now always zero — repeat state no longer advances
-  incrementally) for a new `repeat_initial_ns: u128` phase offset.
 - **Build-side lifecycle and reconciliation failures are contained at the
   failing child** (#561): a parented state whose `init_state` or
   `did_change_dependencies` panics is finalized and replaced by an `ErrorView`

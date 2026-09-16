@@ -71,6 +71,52 @@ pub(crate) struct WalkProbe {
     pub(crate) live_running: bool,
 }
 
+/// The configuration a live `repeat`/`repeat_with` run needs to sample its
+/// value/status/direction as a pure function of elapsed time — see
+/// [`AnimationControllerInner::repeat_sample`]. Constructed only after
+/// `repeat_with`'s zero-period and zero-count degenerate cases have already
+/// settled synchronously and returned, so `period_ns` is **always nonzero
+/// here** — no live `RepeatRun` ever needs a zero-period guard downstream.
+#[derive(Debug, Clone, Copy)]
+struct RepeatRun {
+    /// Bounce back and forth (`true`) instead of restarting each cycle.
+    reverse: bool,
+    /// Lower endpoint of the repeat range.
+    min: f32,
+    /// Upper endpoint of the repeat range.
+    max: f32,
+    /// Per-cycle duration, resolved ONCE at the call
+    /// (`period.unwrap_or(duration)`) — never re-read from the live
+    /// `duration`/`reverse_duration`, so `set_duration` mid-repeat and a
+    /// bounce's reverse leg both leave it alone. Always `> 0`.
+    period_ns: u128,
+    /// Number of cycles to run; `None` repeats indefinitely. `Some(0)`
+    /// (zero cycles) is handled by `repeat_with` before a `RepeatRun` is
+    /// ever constructed — see that method's own doc.
+    count: Option<u32>,
+    /// Phase offset, in nanoseconds into the period, that the value at the
+    /// call sits at: `total_ns = elapsed_ns_since_the_run_started +
+    /// initial_ns` is what every leg/phase/exhaustion computation samples,
+    /// so a long frame that spans several cycles at once needs no
+    /// incremental bookkeeping.
+    initial_ns: u128,
+}
+
+/// A repeat's value/direction/leg-endpoints at one instant, sampled by
+/// [`AnimationControllerInner::repeat_sample`] — the one place this parity
+/// math lives, called from both `repeat_with`'s at-call state and
+/// `AnimationController::tick_repeat`'s running state.
+struct RepeatSample {
+    /// The interpolated value at this instant.
+    value: f32,
+    /// The leg's direction (`Forward` unless bouncing on an odd-indexed leg).
+    direction: AnimationDirection,
+    /// This leg's start endpoint (`min` or `max`, by direction).
+    start: f32,
+    /// This leg's end endpoint (the opposite of `start`).
+    target: f32,
+}
+
 /// Controls an animation, driving it forward/backward.
 ///
 /// `AnimationController` is a **PERSISTENT OBJECT** that survives widget rebuilds.
@@ -187,33 +233,13 @@ struct AnimationControllerInner {
     /// Next status-listener ID.
     next_listener_id: usize,
 
-    /// Is the animation in repeat mode?
-    is_repeating: bool,
-
-    /// Should repeat bounce back and forth (reverse) rather than restart?
-    repeat_reverse: bool,
-
-    /// Lower endpoint of the repeat range (defaults to `lower_bound`).
-    repeat_min: f32,
-
-    /// Upper endpoint of the repeat range (defaults to `upper_bound`).
-    repeat_max: f32,
-
-    /// Per-cycle duration for repeat (overrides `duration` when set).
-    repeat_period: Option<Duration>,
-
-    /// Number of repeat cycles to run; `None` repeats indefinitely.
-    repeat_count: Option<u32>,
-
-    /// Phase offset, in nanoseconds into the repeat period, that the value at
-    /// the call to `repeat`/`repeat_with` sits at — the pure-time-sampling
-    /// model's only piece of repeat state:
-    /// [`tick_repeat`](AnimationController::tick_repeat) computes
-    /// `total_ns = elapsed_ns_since_the_run_started + repeat_initial_ns` and
-    /// derives leg, phase, and exhaustion from `total_ns` alone, so a long
-    /// frame that spans several cycles at once needs no incremental
-    /// bookkeeping (the field this replaces, `repeat_done`, required it).
-    repeat_initial_ns: u128,
+    /// The active repeat, if any. `None` outside a `repeat`/`repeat_with`
+    /// run — `is_repeating` used to be a separate `bool` that could drift
+    /// from the other repeat fields; folding it into the `Option` makes
+    /// "repeating with no configuration" unrepresentable. Every field a
+    /// repeat needs to sample its value as a pure function of elapsed time
+    /// lives on [`RepeatRun`] — see that type's own doc.
+    repeat: Option<RepeatRun>,
 
     /// Active physics simulation (if using fling/animate_with).
     simulation: Option<Box<dyn Simulation>>,
@@ -428,13 +454,7 @@ impl AnimationController {
             run_duration: None,
             disposed: false,
             next_listener_id: 1,
-            is_repeating: false,
-            repeat_reverse: false,
-            repeat_min: lower_bound,
-            repeat_max: upper_bound,
-            repeat_period: None,
-            repeat_count: None,
-            repeat_initial_ns: 0,
+            repeat: None,
             simulation: None,
             run_curve: None,
             last_reported_status: AnimationStatus::Dismissed,
@@ -461,7 +481,7 @@ impl AnimationController {
     /// the *next* run. It does not retime an in-flight run (the active run keeps
     /// the duration it started with, since `tick_at` scales against the
     /// already-captured `run_duration`/`duration`); the new value is read when
-    /// the next `forward`/`reverse` re-establishes the run epoch.
+    /// the next `forward`/`reverse` begins the run at elapsed zero.
     pub fn set_duration(&self, duration: Duration) {
         let mut inner = self.inner.lock();
         inner.duration = duration;
@@ -944,9 +964,12 @@ impl AnimationController {
     /// Repeat the animation, bouncing if `reverse` is true. Repeats forever.
     ///
     /// An infinite repeat's [`TickerFuture`] resolves only by cancellation —
-    /// it has no natural end. A finite [`repeat_with`](Self::repeat_with)
-    /// count completes normally once exhausted. See
-    /// [`forward`](Self::forward) for the returned future's general contract.
+    /// it has no natural end — EXCEPT that a zero effective period settles
+    /// synchronously at the call with an already-complete future; see
+    /// [`repeat_with`](Self::repeat_with)'s `period` bullet. A finite
+    /// [`repeat_with`](Self::repeat_with) count completes normally once
+    /// exhausted. See [`forward`](Self::forward) for the returned future's
+    /// general contract.
     ///
     /// # Errors
     ///
@@ -978,9 +1001,19 @@ impl AnimationController {
     /// * `reverse` - Bounce back and forth instead of restarting each cycle
     /// * `period` - Per-cycle duration (defaults to the forward duration);
     ///   resolved once at this call — a later [`set_duration`](Self::set_duration)
-    ///   does not retime an active repeat, and both legs of a bounce share it
+    ///   does not retime an active repeat, and both legs of a bounce share it.
+    ///   A zero EFFECTIVE period (an explicit [`Duration::ZERO`], or a
+    ///   defaulted zero `duration`) settles SYNCHRONOUSLY at the call instead
+    ///   of installing a run that could never advance (Android's rule for a
+    ///   0-duration animator: skip to the end; Compose rejects it, Flutter
+    ///   asserts)
     /// * `count` - Number of cycles; `None` repeats indefinitely (see
-    ///   [`repeat`](Self::repeat) for what that means for the returned future)
+    ///   [`repeat`](Self::repeat) for what that means for the returned
+    ///   future). `Some(0)` also settles SYNCHRONOUSLY at the call, at the
+    ///   CURRENT (clamped) value with no landing jump — zero cycles run, so
+    ///   there is nothing to land on (Web Animations semantics for an
+    ///   empty active interval; Flutter asserts `count > 0`, Compose throws
+    ///   for `iterations < 1`)
     ///
     /// # Errors
     ///
@@ -1021,18 +1054,10 @@ impl AnimationController {
         // A leftover per-run mode (an `animate_to_curved` curve, a fling
         // simulation) must not shape a following repeat — Flutter's `repeat`
         // applies no curve at all, and `tick_repeat` applies none either.
+        // The curve specifically can never leak (`tick_repeat` never reads
+        // `run_curve`), but a leftover `simulation`/`run_duration` would
+        // still leak into `velocity()`/`current_duration()` without this.
         inner.clear_run_modes();
-        inner.repeat_reverse = reverse;
-        inner.repeat_min = lo;
-        inner.repeat_max = hi;
-        // Resolved ONCE, not read live on every tick: a later `set_duration`
-        // must not retime an active repeat (Flutter parity — `period ??=
-        // duration`, captured by the simulation at the call), and one period
-        // for both legs of a bounce keeps the modular-nanosecond arithmetic
-        // in `tick_repeat` exact.
-        let resolved_period = period.unwrap_or(inner.duration);
-        inner.repeat_period = Some(resolved_period);
-        inner.repeat_count = count;
 
         // The value at the call is the pure function sampled at elapsed
         // time zero — NOT a bare `lo`: from `value == max` in restart mode
@@ -1043,14 +1068,38 @@ impl AnimationController {
         // ~60ns of quantization at a 1s period, harmless to the phase this
         // computes.
         let v = inner.value.clamp(lo, hi);
-        let period_ns = resolved_period.as_nanos();
+
+        // `count: Some(0)` is a degenerate case distinct from a zero
+        // period: zero cycles run AT ALL, regardless of period, so the
+        // value at the call is the plain clamp with no landing jump —
+        // there is no cycle to land on. Checked before `RepeatRun` even
+        // exists; the run never reaches `tick_repeat`.
+        if count == Some(0) {
+            inner.direction = AnimationDirection::Forward;
+            inner.target_value = v;
+            return Ok(self.settle_at_target(entry_value, inner));
+        }
+
+        // Resolved ONCE, not read live on every tick: a later `set_duration`
+        // must not retime an active repeat (Flutter parity — `period ??=
+        // duration`, captured by the simulation at the call), and one period
+        // for both legs of a bounce keeps the modular-nanosecond arithmetic
+        // in `tick_repeat` exact.
+        let period_ns = period.unwrap_or(inner.duration).as_nanos();
         let initial_ns = if period_ns == 0 {
             0
         } else {
             let ratio = (f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo));
             (ratio * period_ns as f64).round() as u128
         };
-        inner.repeat_initial_ns = initial_ns;
+        let run = RepeatRun {
+            reverse,
+            min: lo,
+            max: hi,
+            period_ns,
+            count,
+            initial_ns,
+        };
 
         if period_ns == 0 {
             // ZERO EFFECTIVE PERIOD, any count: settle SYNCHRONOUSLY at the
@@ -1062,27 +1111,25 @@ impl AnimationController {
             // forever doing nothing, so it settles instead — a documented
             // exception to "an infinite repeat's future resolves only by
             // cancellation". `count.saturating_sub(1)` treats an explicit
-            // `Some(0)` the same as `Some(1)`: landing on cycle 0's end
-            // rather than underflowing.
+            // `Some(0)` the same as `Some(1)` (`Some(0)` alone is already
+            // handled above and never reaches here); landing on cycle 0's
+            // end rather than underflowing.
             let landing_index = u128::from(count.map_or(0, |c| c.saturating_sub(1)));
-            let (value, direction) = inner.repeat_landing(landing_index);
+            let (value, direction) = AnimationControllerInner::repeat_landing(&run, landing_index);
             inner.direction = direction;
             inner.target_value = value;
             return Ok(self.settle_at_target(entry_value, inner));
         }
 
-        inner.is_repeating = true;
-        let i0 = initial_ns / period_ns;
-        let direction = AnimationControllerInner::repeat_leg(reverse, i0);
-        inner.direction = direction;
-        inner.status = direction.running_status();
-        let (start, target) = match direction {
-            AnimationDirection::Forward => (lo, hi),
-            AnimationDirection::Reverse => (hi, lo),
-        };
-        inner.start_value = start;
-        inner.target_value = target;
-        inner.value = v;
+        // `RepeatRun` is live from here on — `period_ns > 0` by
+        // construction, so nothing downstream needs to guard it again.
+        let sample = AnimationControllerInner::repeat_sample(&run, initial_ns);
+        inner.repeat = Some(run);
+        inner.direction = sample.direction;
+        inner.status = sample.direction.running_status();
+        inner.start_value = sample.start;
+        inner.target_value = sample.target;
+        inner.value = sample.value;
         // `restart_ticker` runs BEFORE the completer replaces `active_run` —
         // see its own doc for why the order is load-bearing.
         let has_ticker = self.restart_ticker(&mut inner);
@@ -1093,9 +1140,9 @@ impl AnimationController {
             .map(TickerCompleter::cancel);
 
         // Flutter parity: `_startSimulation` sets `_value` directly, without
-        // `notifyListeners()` (`animation_controller.dart:865` @ 3.44.0) —
-        // the value-at-the-call jump is real but reported on the run's first
-        // tick, not synchronously here.
+        // `notifyListeners()` (`AnimationController._startSimulation` @
+        // 3.44.0) — the value-at-the-call jump is real but reported on the
+        // run's first tick, not synchronously here.
         let status = inner.status;
         self.finish(status, ValueChange::Unchanged, displaced_delivery, inner);
         Self::warn_if_no_ticker(has_ticker);
@@ -1272,7 +1319,7 @@ impl AnimationController {
     /// A monotonically increasing run-generation counter, bumped once each time
     /// a fresh run begins — every `forward`/`reverse`/`animate_to`/`animate_back`/
     /// `repeat`/`fling`/`animate_with` (i.e. every internal `restart_ticker`
-    /// that re-zeros the run epoch).
+    /// that begins the run at elapsed zero).
     ///
     /// An external, deterministic frame driver (e.g. `flui-testing`'s
     /// `HeadlessBinding`) reads this to detect that a new run's `t = 0` was just
@@ -1283,11 +1330,12 @@ impl AnimationController {
     ///
     /// The counter is **stable across [`tick_at`](Self::tick_at)** (ticking
     /// advances a run, it does not start one), and the settle-without-restart
-    /// paths (`stop`/`reset`/`set_value`, and `forward`/`reverse`/`animate_to`/
-    /// `animate_back` whose distance or duration is trivial and so settle
-    /// through the private `settle_at_target` chokepoint) leave it untouched.
-    /// It wraps on `u64` overflow — only its *change* is observed, so the
-    /// wrap is harmless.
+    /// paths (`stop`/`reset`/`set_value`; `forward`/`reverse`/`animate_to`/
+    /// `animate_back` whose distance or duration is trivial; and
+    /// `repeat_with`'s own zero-effective-period and zero-`count` settles —
+    /// all of which settle through the private `settle_at_target`
+    /// chokepoint) leave it untouched. It wraps on `u64` overflow — only
+    /// its *change* is observed, so the wrap is harmless.
     #[must_use]
     pub fn run_generation(&self) -> u64 {
         self.inner.lock().run_generation
@@ -1366,8 +1414,8 @@ impl AnimationController {
         // run started — no per-run epoch to subtract.
         let cycle = (raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE)).max(0.0);
 
-        if inner.is_repeating {
-            self.tick_repeat(inner, cycle);
+        if let Some(run) = inner.repeat {
+            self.tick_repeat(inner, run, cycle);
         } else if inner.simulation.is_some() {
             self.tick_simulation(inner, narrow_f32(cycle));
         } else {
@@ -1411,8 +1459,8 @@ impl AnimationController {
     }
 
     /// Time-based (tween) branch of [`tick_at`](Self::tick_at). Never called
-    /// while `is_repeating` — [`tick_at`](Self::tick_at) dispatches a repeat
-    /// to [`tick_repeat`](Self::tick_repeat) instead.
+    /// while a repeat is active — [`tick_at`](Self::tick_at) dispatches a
+    /// repeat to [`tick_repeat`](Self::tick_repeat) instead.
     fn tick_time_based(
         &self,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
@@ -1463,56 +1511,65 @@ impl AnimationController {
         self.finish(status, ValueChange::Notify, delivery, inner);
     }
 
-    /// Repeat branch of [`tick_at`](Self::tick_at).
+    /// Repeat branch of [`tick_at`](Self::tick_at). `run` is a snapshot of
+    /// `inner.repeat` taken by the caller's `if let Some(run) = inner.repeat`
+    /// match — [`RepeatRun`] is `Copy`, so this never needs to re-read (or
+    /// `expect`) the `Option` field itself.
     ///
     /// `value`/`status`/`direction` are a pure function of `cycle` (elapsed
-    /// time since the run started), `repeat_period`, `repeat_min`/`repeat_max`,
-    /// `repeat_reverse`, `repeat_initial_ns` (the phase the run started at),
-    /// and `repeat_count` — the frame partition never changes the answer:
-    /// `tick_at(1.25)` gives the same result whether or not an intervening
-    /// `tick_at(1.0)` happened, for any number of cycles a long frame spans.
-    /// All arithmetic is integer nanoseconds — Compose's
-    /// `VectorizedRepeatableSpec` and GPUI both reduce modulo the period in
-    /// nanos before any float conversion, because the f64 predicate `total >=
-    /// count * period` is unsound at an exact boundary (`0.3 >= 3.0 * 0.1` is
-    /// `false`), which would land an exhaustion a frame late.
+    /// time since the run started) and `run` — the frame partition never
+    /// changes the answer: `tick_at(1.25)` gives the same result whether or
+    /// not an intervening `tick_at(1.0)` happened, for any number of cycles
+    /// a long frame spans. All arithmetic is integer nanoseconds —
+    /// Compose's `VectorizedRepeatableSpec` and GPUI both reduce modulo the
+    /// period in nanos before any float conversion, because the f64
+    /// predicate `total >= count * period` is unsound at an exact boundary
+    /// (`0.3 >= 3.0 * 0.1` is `false`), which would land an exhaustion a
+    /// frame late.
     ///
-    /// [`AnimationControllerInner::repeat_leg`]/`repeat_landing` are the only
-    /// place the leg/landing parity math lives; this function calls them
-    /// instead of hand-copying it.
+    /// [`AnimationControllerInner::repeat_leg`]/`repeat_landing`/
+    /// `repeat_sample` are the only place the leg/landing/phase parity math
+    /// lives; this function calls them instead of hand-copying it.
     fn tick_repeat(
         &self,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        run: RepeatRun,
         cycle: f64,
     ) {
-        let period_ns = inner
-            .repeat_period
-            .expect("BUG: is_repeating implies repeat_with already resolved repeat_period")
+        // The at-call state (`repeat_with`) and a running tick both sample
+        // through `repeat_sample`/`repeat_landing`, so a tick whose
+        // `total_ns` coincides with the call's (elapsed zero — the very
+        // first tick after `repeat_with`) recomputes the IDENTICAL value.
+        // Compare against the value at entry rather than notifying
+        // unconditionally, so that genuinely uneventful tick reports no
+        // discontinuity.
+        let entry_value = inner.value;
+
+        // `tick_at` already clamps `cycle` to `.max(0.0)`, and NaN cannot
+        // reach it (`f64::max` returns the non-NaN operand), so the only
+        // remaining failure is `Err` on an out-of-range `cycle` (e.g.
+        // `f64::INFINITY`, or `raw_elapsed_secs / time_dilation` overflowing
+        // under an extreme dilation). That must saturate the SAME direction
+        // real time does — to a very large elapsed time, not to zero: a
+        // zero-rewind would let a pathological input never exhaust a finite
+        // repeat while `forward()` on the same input completes normally.
+        // `Duration::MAX`'s nanoseconds plus `run.initial_ns` (at most a
+        // `u64`-scale period) still fits comfortably in `u128`.
+        let elapsed_ns = Duration::try_from_secs_f64(cycle)
+            .unwrap_or(Duration::MAX)
             .as_nanos();
-        if period_ns == 0 {
-            // `repeat_with`'s own zero-period branch settles synchronously
-            // at the call and never sets `is_repeating`, so this cannot be
-            // reached today — guarded, not `expect`ed, since a u128 division
-            // by zero panics and this guards a value read from state rather
-            // than an invariant this function alone maintains.
-            return;
-        }
+        let total_ns = elapsed_ns + run.initial_ns;
 
-        let elapsed_ns = Duration::try_from_secs_f64(cycle.max(0.0)).map_or(0, |d| d.as_nanos());
-        let total_ns = elapsed_ns + inner.repeat_initial_ns;
-        let i = total_ns / period_ns;
-
-        let exhausted = inner
-            .repeat_count
-            .is_some_and(|count| total_ns >= u128::from(count) * period_ns);
-        if exhausted {
-            let count = inner
-                .repeat_count
-                .expect("BUG: `exhausted` above requires repeat_count to be Some");
-            // `saturating_sub(1)` treats a degenerate `count == 0` the same
-            // as `count == 1` (lands on cycle 0's end) rather than
-            // underflowing a u128 index.
-            let (value, direction) = inner.repeat_landing(u128::from(count.saturating_sub(1)));
+        // `saturating_sub(1)` treats a degenerate `count == 0` the same as
+        // `count == 1` (lands on cycle 0's end) rather than underflowing a
+        // u128 index — `repeat_with` already settles a true `Some(0)`
+        // synchronously at the call, so this is defense in depth, not a
+        // reachable path today.
+        if let Some(count) = run.count
+            && total_ns >= u128::from(count) * run.period_ns
+        {
+            let (value, direction) =
+                AnimationControllerInner::repeat_landing(&run, u128::from(count.saturating_sub(1)));
             inner.value = value;
             inner.start_value = value;
             inner.target_value = value;
@@ -1520,30 +1577,38 @@ impl AnimationController {
             if let Some(ticker) = &mut inner.ticker {
                 ticker.stop();
             }
-            inner.is_repeating = false;
+            inner.repeat = None;
             let status = direction.settled_status();
             inner.status = status;
             let delivery = inner.active_run.take().map(TickerCompleter::complete);
-            self.finish(status, ValueChange::Notify, delivery, inner);
+            let value_change = if (value - entry_value).abs() < BOUND_EPSILON {
+                ValueChange::Unchanged
+            } else {
+                ValueChange::Notify
+            };
+            self.finish(status, value_change, delivery, inner);
             return;
         }
 
-        let phase = (total_ns % period_ns) as f64 / period_ns as f64;
-        let direction = AnimationControllerInner::repeat_leg(inner.repeat_reverse, i);
-        inner.direction = direction;
-        let (start, target) = match direction {
-            AnimationDirection::Forward => (inner.repeat_min, inner.repeat_max),
-            AnimationDirection::Reverse => (inner.repeat_max, inner.repeat_min),
-        };
-        inner.start_value = start;
-        inner.target_value = target;
+        let sample = AnimationControllerInner::repeat_sample(&run, total_ns);
+        inner.direction = sample.direction;
+        inner.start_value = sample.start;
+        inner.target_value = sample.target;
         // `take_status_change` dedups repeated same-status writes, so a leg
         // flip fires exactly one status change and an even number of
-        // skipped bounce cycles in one long frame fires none.
-        inner.value = start + (target - start) * narrow_f32(phase);
-        let status = direction.running_status();
+        // skipped bounce cycles in one long frame fires none. Value
+        // notification is likewise conditional on real movement — see this
+        // function's own doc for why a tick can coincide exactly with the
+        // at-call sample.
+        inner.value = sample.value;
+        let status = sample.direction.running_status();
         inner.status = status;
-        self.finish(status, ValueChange::Notify, None, inner);
+        let value_change = if (sample.value - entry_value).abs() < BOUND_EPSILON {
+            ValueChange::Unchanged
+        } else {
+            ValueChange::Notify
+        };
+        self.finish(status, value_change, None, inner);
     }
 
     /// Set the value directly without animating; recomputes status and notifies.
@@ -1746,7 +1811,7 @@ impl AnimationControllerInner {
     /// Clear repeat/simulation/per-run-duration/curve modes (used when a new
     /// explicit run begins).
     fn clear_run_modes(&mut self) {
-        self.is_repeating = false;
+        self.repeat = None;
         self.run_duration = None;
         self.simulation = None;
         self.run_curve = None;
@@ -1795,10 +1860,13 @@ impl AnimationControllerInner {
         if let Some(run) = self.run_duration {
             return run;
         }
-        if self.is_repeating
-            && let Some(period) = self.repeat_period
-        {
-            return period;
+        if let Some(repeat) = &self.repeat {
+            // `RepeatRun::period_ns` is always `> 0` by construction (see
+            // its own doc), so this never returns a zero duration while
+            // repeating. `Duration::from_nanos` truncates a `u128` past
+            // `u64::MAX` nanoseconds (~584 years) — no real period reaches
+            // that, but the fallback saturates rather than panicking.
+            return Duration::from_nanos(u64::try_from(repeat.period_ns).unwrap_or(u64::MAX));
         }
         match self.direction {
             AnimationDirection::Forward => self.duration,
@@ -1902,11 +1970,10 @@ impl AnimationControllerInner {
 
     /// The direction of repeat cycle `index` (0-based): `Forward` unless the
     /// repeat bounces and `index` is odd. The single owner of this parity —
-    /// every leg/landing computation in this file (`repeat_with`'s
-    /// value-at-the-call sample, [`repeat_landing`](Self::repeat_landing),
-    /// and [`AnimationController::tick_repeat`]'s running leg) calls this
-    /// instead of hand-copying the arithmetic; two copies is how one path
-    /// ships wrong.
+    /// every leg/landing computation in this file
+    /// ([`repeat_sample`](Self::repeat_sample),
+    /// [`repeat_landing`](Self::repeat_landing)) calls this instead of
+    /// hand-copying the arithmetic; two copies is how one path ships wrong.
     fn repeat_leg(reverse: bool, index: u128) -> AnimationDirection {
         if reverse && index % 2 == 1 {
             AnimationDirection::Reverse
@@ -1916,16 +1983,43 @@ impl AnimationControllerInner {
     }
 
     /// The value/direction at the END of repeat cycle `index` (0-based): a
-    /// `Reverse` leg lands on `repeat_min`, a `Forward` leg on `repeat_max`.
-    /// The single landing rule every exhaustion (finite count run out) and
-    /// zero-period settle reports.
-    fn repeat_landing(&self, index: u128) -> (f32, AnimationDirection) {
-        let direction = Self::repeat_leg(self.repeat_reverse, index);
+    /// `Reverse` leg lands on `run.min`, a `Forward` leg on `run.max`. The
+    /// single landing rule every exhaustion (finite count run out) and
+    /// zero-period settle reports. Takes `run` by reference rather than
+    /// `&self` because `repeat_with`'s zero-period/zero-count settle paths
+    /// call this BEFORE a [`RepeatRun`] is ever stored in `self.repeat`.
+    fn repeat_landing(run: &RepeatRun, index: u128) -> (f32, AnimationDirection) {
+        let direction = Self::repeat_leg(run.reverse, index);
         let value = match direction {
-            AnimationDirection::Reverse => self.repeat_min,
-            AnimationDirection::Forward => self.repeat_max,
+            AnimationDirection::Reverse => run.min,
+            AnimationDirection::Forward => run.max,
         };
         (value, direction)
+    }
+
+    /// The value/direction/leg-endpoints at `total_ns` nanoseconds since a
+    /// repeat's run started — the ONE place the running-leg math lives,
+    /// called by both `repeat_with`'s at-call sample (`total_ns =
+    /// run.initial_ns`) and [`AnimationController::tick_repeat`]'s running
+    /// sample (`total_ns = elapsed_ns + run.initial_ns`), replacing the
+    /// `Forward => (min, max) / Reverse => (max, min)` match that used to
+    /// exist at both call sites independently. Takes `run` by reference for
+    /// the same reason [`repeat_landing`](Self::repeat_landing) does.
+    fn repeat_sample(run: &RepeatRun, total_ns: u128) -> RepeatSample {
+        let index = total_ns / run.period_ns;
+        let phase = (total_ns % run.period_ns) as f64 / run.period_ns as f64;
+        let direction = Self::repeat_leg(run.reverse, index);
+        let (start, target) = match direction {
+            AnimationDirection::Forward => (run.min, run.max),
+            AnimationDirection::Reverse => (run.max, run.min),
+        };
+        let value = start + (target - start) * narrow_f32(phase);
+        RepeatSample {
+            value,
+            direction,
+            start,
+            target,
+        }
     }
 }
 
@@ -2593,9 +2687,8 @@ mod tests {
     /// reverse), landing on leg 2's endpoint `0.2` — so the run's direction
     /// at exhaustion is `Reverse`, ending `Dismissed`.
     ///
-    /// Red-check: delete the `inner.direction = if last_forward { .. }`
-    /// assignment in `tick_time_based`'s exhaustion branch (leaving
-    /// `inner.direction` at its stale entry value, `Forward`) — status reads
+    /// Red-check: make `repeat_landing` ignore parity (e.g. always return
+    /// the `Forward` leg's `max` regardless of `index`) — status reads
     /// `Completed`, not `Dismissed`.
     #[test]
     fn bounce_repeat_over_an_interior_range_exhausts_on_the_final_legs_status() {
@@ -2649,6 +2742,20 @@ mod tests {
         let c = controller(100);
         // min >= max (within bounds) is rejected like `with_bounds` does.
         let r = c.repeat_with(Some(0.8), Some(0.2), false, None, None);
+        assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
+        c.dispose();
+    }
+
+    /// The `min == max` equality case, distinct from `repeat_with_rejects_inverted_range`'s
+    /// `min > max` — Flutter permits this degenerate range (its own dropped
+    /// `min: 1.0, max: 1.0` oracle sub-case, `animation_controller_test.dart`
+    /// "calling repeat with specified min and max values" @ 3.44.0); FLUI
+    /// rejects it, the mapping entry's rationale.
+    #[test]
+    fn repeat_with_rejects_equal_min_and_max() {
+        let _serial = serial();
+        let c = controller(100);
+        let r = c.repeat_with(Some(0.5), Some(0.5), false, None, None);
         assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
         c.dispose();
     }
@@ -2804,12 +2911,54 @@ mod tests {
         c.dispose();
     }
 
+    /// The at-call value for a RESTART repeat starting exactly at `max`
+    /// must be the pure function sampled at elapsed time zero (the phase
+    /// wraps to `min`, exactly Flutter's `_startSimulation` setting
+    /// `_value = x(0.0)`), not the bare clamped current value. Storing `v`
+    /// directly contradicted the model, its own comment, AND Flutter: it
+    /// read `1.0` at the call, then `tick_at(0.0)` — the very first tick,
+    /// no time elapsed — recomputed via the sampler and got `0.0`, a
+    /// one-frame discontinuity the whole change exists to remove. This
+    /// tick must fire NO value notification: nothing actually changed
+    /// between the call and this tick once both agree.
+    #[test]
+    fn repeat_restart_at_call_value_from_max_has_no_discontinuity_at_the_first_tick() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(1.0);
+        c.repeat(false).unwrap();
+        assert!(
+            (c.value() - 0.0).abs() < 1e-6,
+            "the phase wraps at the call itself: value={}",
+            c.value()
+        );
+        assert_eq!(c.status(), AnimationStatus::Forward);
+
+        let value_fires = Arc::new(AtomicUsize::new(0));
+        let vf = Arc::clone(&value_fires);
+        c.add_listener(Arc::new(move || {
+            vf.fetch_add(1, Ordering::SeqCst);
+        }));
+        c.tick_at(0.0);
+        assert!(
+            (c.value() - 0.0).abs() < 1e-6,
+            "no discontinuity: the first tick must agree with the at-call value"
+        );
+        assert_eq!(
+            value_fires.load(Ordering::SeqCst),
+            0,
+            "nothing changed between the call and this tick, so no value notification fires"
+        );
+        c.dispose();
+    }
+
     /// The value/status at the call are the pure function sampled at
     /// elapsed time zero, computed BEFORE any tick — a bounce starting
-    /// exactly at `max` reports the reverse leg immediately. Flutter
-    /// parity: `_startSimulation` runs `x(0.0)` (which flips direction)
-    /// before `_status` is computed (`animation_controller.dart:861-871`
-    /// @ 3.44.0).
+    /// exactly at `max` reports the reverse leg immediately (unaffected by
+    /// the restart-mode fix above: bounce mode's phase wrap lands back on
+    /// `max`, not `min`). Flutter parity: `_startSimulation` runs `x(0.0)`
+    /// (which flips direction) before `_status` is computed
+    /// (`AnimationController._startSimulation` @ 3.44.0).
     #[test]
     fn repeat_bounce_from_max_reports_reverse_status_at_the_call() {
         let _serial = serial();
@@ -3024,6 +3173,25 @@ mod tests {
         c.dispose();
     }
 
+    /// `Duration::try_from_secs_f64` returning `Err` (an out-of-range
+    /// `cycle`, e.g. `tick_at(f64::INFINITY)` or an extreme `time_dilation`
+    /// overflowing the division) must saturate to a very large elapsed
+    /// time, never to zero — a zero-rewind would let a pathological input
+    /// never exhaust a finite repeat while `forward()` on the same input
+    /// completes normally. Red-check: `.map_or(0, |d| d.as_nanos())`
+    /// instead of `.unwrap_or(Duration::MAX)` — this repeat never exhausts.
+    #[test]
+    fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
+        let _serial = serial();
+        let c = controller(100);
+        c.repeat_with(None, None, false, Some(Duration::from_millis(100)), Some(2))
+            .unwrap();
+        c.tick_at(f64::INFINITY);
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+    }
+
     /// A zero effective period settles SYNCHRONOUSLY at the call — Android's
     /// rule ("0 duration animator, ignore the repeat count and skip to the
     /// end"); Compose rejects it, Flutter asserts. A later `tick_at`
@@ -3064,9 +3232,46 @@ mod tests {
         c2.dispose();
     }
 
-    /// A leftover per-run easing curve must not shape a following repeat.
-    /// Flutter's `repeat` applies no curve at all, and `tick_repeat` never
-    /// reads `run_curve` — interpolation is always linear.
+    /// `count: Some(0)` is a degenerate case distinct from a zero
+    /// PERIOD: zero cycles run AT ALL, regardless of period, so there is no
+    /// cycle to land on — the value at the call is the CLAMPED CURRENT
+    /// value, unchanged, not a landing jump. Web Animations semantics (an
+    /// empty active interval finishes at once); Flutter asserts
+    /// `count > 0`, Compose throws for `iterations < 1`. Repair, not
+    /// reject, is the house rule.
+    #[test]
+    fn repeat_with_zero_count_settles_at_the_current_value_with_no_landing_jump() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(0.3);
+        let generation_before = c.run_generation();
+        let future = c
+            .repeat_with(None, None, true, Some(Duration::from_millis(100)), Some(0))
+            .unwrap();
+        assert!(future.is_complete());
+        assert!(
+            (c.value() - 0.3).abs() < 1e-6,
+            "zero cycles must not jump the value: {}",
+            c.value()
+        );
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        assert_eq!(c.run_generation(), generation_before);
+        c.tick_at(1.0);
+        assert!(
+            (c.value() - 0.3).abs() < 1e-6,
+            "a later tick must change nothing"
+        );
+        c.dispose();
+    }
+
+    /// `tick_repeat` NEVER reads `run_curve` at all — this pins that a
+    /// repeat interpolates linearly regardless of what a prior
+    /// `animate_to_curved` leaves behind, not that `repeat_with`'s
+    /// `clear_run_modes()` call is what protects it (that call stays green
+    /// even with the call deleted, since the curve field is structurally
+    /// unreachable from `tick_repeat`; see
+    /// `a_leftover_fling_simulation_does_not_leak_into_a_following_repeats_velocity`
+    /// below for what `clear_run_modes()` actually protects).
     #[test]
     fn a_leftover_curve_does_not_shape_a_following_repeat() {
         use crate::curve::Curves;
@@ -3093,6 +3298,29 @@ mod tests {
         c.dispose();
     }
 
+    /// `repeat_with`'s `clear_run_modes()` call IS pinned by this: a
+    /// leftover `simulation` from a prior `fling` would short-circuit
+    /// `velocity()` (`sim.dx(cycle)` instead of `range / duration`) if it
+    /// survived into the repeat. Red-check: delete the `clear_run_modes()`
+    /// call in `repeat_with` — `velocity()` reads the stale fling spring's
+    /// `dx` instead of the repeat's own `range / period`.
+    #[test]
+    fn a_leftover_fling_simulation_does_not_leak_into_a_following_repeats_velocity() {
+        let _serial = serial();
+        let c = controller(100);
+        c.fling(1.0).unwrap(); // installs `simulation`
+        c.repeat_with(None, None, false, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        c.tick_at(0.25);
+        assert!((c.value() - 0.25).abs() < 1e-6, "value={}", c.value());
+        assert!(
+            (c.velocity() - 1.0).abs() < 1e-6,
+            "a leftover fling simulation must not leak into the repeat's velocity: {}",
+            c.velocity()
+        );
+        c.dispose();
+    }
+
     /// `set_duration` must not retime an ACTIVE repeat: the period is
     /// resolved ONCE at `repeat_with` (`period.unwrap_or(duration)`), not
     /// read live on every tick — Flutter parity (`period ??= duration`,
@@ -3110,6 +3338,33 @@ mod tests {
             (c.value() - 0.5).abs() < 1e-6,
             "set_duration mid-repeat must not retime the running period: value={}",
             c.value()
+        );
+        c.dispose();
+    }
+
+    /// `velocity()` on a reverse leg is SIGNED (a deliberate divergence
+    /// from Flutter's `_RepeatingSimulation.dx`, which is always positive)
+    /// — see `docs/ARCHITECTURE.md`'s "Repeat sampling" mapping entry, (g).
+    /// Previously uncited/untested: the mapping entry's citation of
+    /// `reverse_mid_flight_keeps_full_range_velocity` as this behavior's
+    /// "sibling repeat coverage" named a test that has no `.velocity()`
+    /// call at all.
+    #[test]
+    fn repeat_reverse_leg_velocity_is_negative() {
+        let _serial = serial();
+        let c = controller(100);
+        c.repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        c.tick_at(1.5); // cycle index 1 (odd) -> reverse leg, mid-cycle
+        assert!(
+            (c.value() - 0.5).abs() < 1e-6,
+            "sanity: reverse leg mid-cycle value={}",
+            c.value()
+        );
+        assert!(
+            (c.velocity() - (-1.0)).abs() < 1e-6,
+            "a reverse leg's velocity must be negative: {}",
+            c.velocity()
         );
         c.dispose();
     }
