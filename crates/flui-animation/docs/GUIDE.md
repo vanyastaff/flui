@@ -85,10 +85,10 @@ controller.set_value(0.5);
 
 ```rust,ignore
 // Loop: 0→1, 0→1, 0→1, ...
-controller.repeat()?;
+controller.repeat(false)?;
 
 // Bounce: 0→1→0→1→0, ...
-controller.repeat_with_reverse(true)?;
+controller.repeat(true)?;
 
 // Stop repeating
 controller.stop();

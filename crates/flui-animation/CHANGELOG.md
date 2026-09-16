@@ -35,6 +35,23 @@ Versioning: per `docs/release.md` policy.
 
 ### Changed
 
+- **Repeat sampling is a pure function of elapsed time** (#1078):
+  `AnimationController::repeat`/`repeat_with`'s `value`/`status`/`direction` at any `tick_at` are
+  now computed from the elapsed time since the run started, the range, period, `reverse`, and
+  `count` alone, in integer nanoseconds — the frame partition no longer changes the answer
+  (`tick_at(1.25)` now equals `tick_at(1.0); tick_at(1.25)`, for any number of cycles a long
+  frame spans). Behavior changes: a repeat now starts from the CURRENT value clamped into
+  `[min, max]`, not from `min` (Flutter parity — a `repeat()` issued fresh on every build
+  progresses instead of snapping back); `period` is resolved ONCE at the call
+  (`period.unwrap_or(duration)`), so a later `set_duration` no longer retimes an active repeat
+  and both legs of a bounce always share one period; a finite repeat's exhaustion now lands on
+  its last cycle's own endpoint with that leg's settled status, instead of Flutter's `% 1.0`
+  wrap (an intentional divergence — see `crates/flui-animation/docs/ARCHITECTURE.md`'s "Repeat
+  sampling" mapping entry); a zero effective period, or an explicit `count: Some(0)`, now settle
+  synchronously at the call instead of ticking a run that could never advance; and a leftover
+  `animate_to_curved` easing curve no longer leaks into a following repeat, which always
+  interpolates linearly. `cargo public-api`/`cargo semver-checks` report no diff against the
+  pre-change baseline — every change here is behavior-only, no signature moved.
 - `forward()`/`reverse()`/`forward_from`/`reverse_from` and
   `animate_to`/`animate_back` with no explicit duration now scale the run's
   duration by the remaining fraction of the range (Flutter parity:
