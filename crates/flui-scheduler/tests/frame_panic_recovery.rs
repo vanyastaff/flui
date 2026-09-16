@@ -46,7 +46,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use flui_scheduler::{
-    FrameCompletionFuture, IdleDeadline, Instant, Priority, SchedulerPhase, UpdateScheduler,
+    FrameCompletionFuture, FrameOutcome, IdleDeadline, Instant, Priority, SchedulerPhase,
+    UpdateScheduler,
 };
 
 fn far_deadline() -> IdleDeadline {
@@ -147,9 +148,13 @@ fn assert_recovered_from_panic(
     );
     let waker = Waker::noop();
     let mut cx = Context::from_waker(waker);
+    let resolved = Pin::new(&mut completion_future).poll(&mut cx);
+    let Poll::Ready(outcome) = resolved else {
+        panic!("an aborted frame still resolves end_of_frame -- it finished, badly");
+    };
     assert!(
-        Pin::new(&mut completion_future).poll(&mut cx).is_ready(),
-        "an aborted frame still resolves end_of_frame -- it finished, badly"
+        matches!(outcome, Ok(FrameOutcome::Aborted { .. })),
+        "abort_frame must resolve Aborted, not {outcome:?}"
     );
 }
 
@@ -590,6 +595,49 @@ fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_rec
     );
 }
 
+// ── A post-frame callback's own panic is not an aborted frame ──────────
+
+/// A post-frame callback's panic runs through `end_frame_impl`, never
+/// `abort_frame`: the pipeline already committed layout and paint before
+/// this callback ran, and only the callback itself failed. The completion
+/// future must resolve `Completed`, never `Aborted`, even though the panic
+/// still propagates to the caller (issue #1162; this distinction did not
+/// exist before it -- both paths resolved the same bare `FrameTiming`).
+#[test]
+fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
+    let scheduler = UpdateScheduler::new();
+    let (mut completion_future, completion_counter) = armed_completion_probe(&scheduler);
+
+    scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
+
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        scheduler.drive_frame(Instant::now(), far_deadline(), || {});
+    }))
+    .expect_err("the post-frame callback's panic must still propagate");
+
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("post-frame probe"),
+        "the original panic must propagate"
+    );
+    assert_eq!(
+        completion_counter.count(),
+        1,
+        "the pre-registered waiter must still be woken"
+    );
+
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    let Poll::Ready(outcome) = Pin::new(&mut completion_future).poll(&mut cx) else {
+        panic!("a post-frame callback's own panic must still resolve the completion future");
+    };
+    assert!(
+        matches!(outcome, Ok(FrameOutcome::Completed { .. })),
+        "the pipeline committed; only the post-frame callback failed -- this must not read \
+         as Aborted, got {outcome:?}"
+    );
+}
+
 // ── A secondary panic during abort must not displace the original one ──
 
 struct PanicWaker;
@@ -633,5 +681,58 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
         SchedulerPhase::Idle,
         "the phase reset inside abort_frame happens before notify_frame_completion \
          runs, so it must hold regardless of the waker's own panic"
+    );
+}
+
+struct PoisonPill;
+
+impl Drop for PoisonPill {
+    fn drop(&mut self) {
+        panic!("poison pill dropped");
+    }
+}
+
+struct PoisonWaker;
+
+impl Wake for PoisonWaker {
+    fn wake(self: Arc<Self>) {
+        std::panic::panic_any(PoisonPill);
+    }
+}
+
+/// The same class of bug as the test above, one step further: the secondary
+/// panic `drive_frame_impl`'s `catch_unwind(|| self.abort_frame())` catches
+/// can itself carry a payload whose own `Drop` panics (a payload can own any
+/// type, including one with a panicking destructor). An ordinary `drop` of
+/// that payload would let a THIRD panic escape uncontained, displacing the
+/// ORIGINAL pipeline panic `resume_unwind(payload)` is about to carry out
+/// right below it -- the same bug this issue already fixed in
+/// `notify_frame_completion` and `end_frame_impl`, at this third site.
+#[test]
+fn the_original_pipeline_panic_survives_a_panicking_wakers_own_drop_panic_during_abort() {
+    let scheduler = UpdateScheduler::new();
+    let mut future = scheduler.end_of_frame();
+    let poison_waker = Waker::from(Arc::new(PoisonWaker));
+    let mut cx = Context::from_waker(&poison_waker);
+    assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        scheduler.drive_frame(Instant::now(), far_deadline(), || {
+            panic!("probe frame panic")
+        })
+    }))
+    .expect_err("a panic must still escape drive_frame");
+
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("probe frame panic"),
+        "the ORIGINAL pipeline panic must survive a completion waker whose own panic \
+         payload's Drop ALSO panics, not be displaced by either secondary panic"
+    );
+    assert_eq!(
+        scheduler.phase(),
+        SchedulerPhase::Idle,
+        "the phase reset inside abort_frame happens before notify_frame_completion runs, \
+         so it must hold regardless of the waker's panic or its payload's own Drop panic"
     );
 }

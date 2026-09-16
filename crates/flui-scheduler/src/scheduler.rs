@@ -119,6 +119,14 @@ use crate::{
 #[doc(hidden)]
 pub const MAX_BUILD_REENTRY_PASSES: usize = 32;
 
+/// Total outer passes [`UpdateScheduler::flush_microtasks`] runs before
+/// giving up on a chain and, if work is still queued, tracing a warning —
+/// see that method's own doc for what the bound does and does not mean.
+/// Crate-private, unlike
+/// [`MAX_BUILD_REENTRY_PASSES`]: its pinning test lives in this same module,
+/// which is the only place that needs to name this exact value.
+const MAX_MICROTASK_REENTRY_PASSES: usize = 32;
+
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
     id: CallbackId,
@@ -143,10 +151,118 @@ struct LifecycleListener {
     callback: Arc<dyn Fn(AppLifecycleState) + Send + Sync>,
 }
 
+/// How a frame that an [`end_of_frame`](UpdateScheduler::end_of_frame) waiter
+/// was pending for finished.
+///
+/// `Completed` and `Aborted` carry the SAME [`FrameTiming`] shape but are
+/// distinguished on purpose: a post-frame callback's own panic still closes
+/// via [`end_frame`](UpdateScheduler::end_frame) and resolves
+/// `Completed` (the pipeline already committed layout and paint; only the
+/// callback failed), while `Aborted` is the outcome of
+/// [`abort_frame`](UpdateScheduler::abort_frame) alone -- a frame whose
+/// post-frame callbacks never ran at all. Both variants are struct-shaped
+/// and carry variant-level `#[non_exhaustive]`, symmetrically: `Aborted`'s
+/// field set can grow (`abort_frame` records nothing else about how the
+/// frame ended today, and a reason or phase is a plausible additive field
+/// later), and even where `Completed` has no such field pending, leaving it
+/// as a plain tuple variant would reopen exactly the hole variant-level
+/// `#[non_exhaustive]` closes: an external caller constructing its own
+/// `FrameOutcome::Completed(fabricated_timing)` out of thin air. Values of
+/// this type are constructed only by the scheduler itself; external code
+/// matches them -- through [`timing`](Self::timing) for the field both
+/// variants share, or a `{ .. }` pattern for the tag alone -- but can never
+/// build one, and there is no public API that takes a `FrameOutcome` as
+/// input. `#[non_exhaustive]` at the enum level, too: a caller must not
+/// assume these are the only two ways a frame can end.
+///
+/// Divergence from Flutter, recorded rather than silently improved:
+/// `SchedulerBinding.endOfFrame` (`scheduler/binding.dart` @ 3.44.0) resolves
+/// a bare `Future<void>` with no outcome at all -- Dart has no signal here
+/// for "the frame aborted" either. See this crate's `ARCHITECTURE.md`
+/// `## Mapping decisions` entry for #1162.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub enum FrameOutcome {
+    /// The frame closed through [`end_frame`](UpdateScheduler::end_frame):
+    /// its post-frame callbacks ran (even if one of them panicked -- see the
+    /// type's own doc).
+    #[non_exhaustive]
+    Completed {
+        /// The timing for the frame that just completed.
+        timing: FrameTiming,
+    },
+    /// The frame closed through [`abort_frame`](UpdateScheduler::abort_frame):
+    /// a panic before the pipeline's post-frame slot, so its post-frame
+    /// callbacks never ran.
+    #[non_exhaustive]
+    Aborted {
+        /// The timing as it stood when the frame was cut, not a completed
+        /// frame's: per [`FrameTiming::phase_duration`]'s own contract, a
+        /// phase's entry is only ever populated once that phase actually
+        /// completes, and a phase this frame never reached (or was midway
+        /// through when it panicked) never gets that chance.
+        timing: FrameTiming,
+    },
+}
+
+impl FrameOutcome {
+    /// The timing this outcome carries, whichever variant it turns out to
+    /// be.
+    ///
+    /// Both variants carry a [`FrameTiming`] (see this type's own doc for
+    /// why `Aborted`'s is not a completed frame's), so this is the way to
+    /// reach it without matching the variant first -- the only way at all
+    /// from a `#[non_exhaustive]` catch-all arm, which cannot bind a
+    /// variant's fields.
+    #[must_use]
+    pub fn timing(&self) -> FrameTiming {
+        match self {
+            Self::Completed { timing } | Self::Aborted { timing } => *timing,
+        }
+    }
+}
+
+/// The scheduler backing an [`end_of_frame`](UpdateScheduler::end_of_frame)
+/// future was dropped before this frame's completion could be delivered.
+///
+/// Only a frame -- or the scheduler's own teardown -- resolves that future,
+/// so a caller holding one across the scheduler's last strong reference
+/// being dropped would otherwise wait forever; the scheduler's `Drop`
+/// implementation resolves every registered waiter with this error instead.
+/// Not `#[non_exhaustive]`: this is a plain unit value with nothing else it
+/// could ever carry, mirroring
+/// [`ticker::TickerCanceled`](crate::ticker::TickerCanceled)'s own shape.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_scheduler::SchedulerClosed;
+///
+/// let error = SchedulerClosed;
+/// assert_eq!(
+///     error.to_string(),
+///     "the scheduler was dropped before this frame's completion could be delivered"
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchedulerClosed;
+
+impl std::fmt::Display for SchedulerClosed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the scheduler was dropped before this frame's completion could be delivered"
+        )
+    }
+}
+
+impl std::error::Error for SchedulerClosed {}
+
 /// Shared state for frame completion future
 struct FrameCompletionState {
-    /// Completed frame timing (Some if frame is done)
-    completed: Option<FrameTiming>,
+    /// Resolved outcome (`Some` once a frame closed this waiter, one way or
+    /// the other -- see [`FrameCompletionFuture::poll`]).
+    completed: Option<Result<FrameOutcome, SchedulerClosed>>,
     /// Waker to notify when frame completes
     waker: Option<Waker>,
 }
@@ -171,39 +287,59 @@ struct FrameCompletionState {
 /// already `take()`n out by then, so what that iteration finally drops is
 /// an empty state and never caller code under a lock.
 ///
-/// # Polling it again after it resolved is a silent hang
+/// # Fused: polling again after `Ready` repeats the same value
 ///
-/// This future is **not fused**. `poll` `take()`s the completed timing and
-/// the drain has already removed the registry entry, so a second poll after
-/// `Poll::Ready` stores a waker nothing will ever call and returns
-/// `Poll::Pending` forever. Await it once, and drop it.
+/// `Output` is `Result<FrameOutcome, SchedulerClosed>`, and both arms are
+/// `Copy` (`FrameTiming` is `Copy`; `SchedulerClosed` is a unit struct) --
+/// so `poll` peeks the stored value by copy rather than `take()`-ing it.
+/// Nothing removes it once written, so a second poll after `Poll::Ready`
+/// returns that same value again instead of hanging forever, mirroring
+/// [`TickerFutureOrCancel`](crate::ticker::TickerFutureOrCancel)'s own
+/// `poll_resolution` shape in this crate. There is still no reason to poll
+/// it more than once: nothing changes between polls, and every ordinary
+/// executor stops polling a future the moment it returns `Ready`.
 ///
-/// # A future outliving its scheduler never resolves
+/// # A dropped scheduler resolves the future, it does not strand it
 ///
-/// Only a frame resolves this future, and only the scheduler runs frames.
-/// If the last `UpdateScheduler` handle is dropped while this future is
-/// pending, nothing will ever complete it and awaiting it blocks the task
-/// forever. There is no sentinel to resolve with while `Output` is
-/// `FrameTiming`; issue #1162 carries the outcome type that would let
-/// teardown report itself.
+/// Only a frame, or the scheduler's own teardown, resolves this future. If
+/// the last `UpdateScheduler` handle is dropped while this future is
+/// pending, the scheduler's `Drop` implementation resolves every registered
+/// waiter with `Err(SchedulerClosed)` and wakes it -- see that
+/// implementation's own doc for the one case it cannot reach (a live strong
+/// clone another owner still holds defers the drop, the same as any other
+/// `Arc`).
 ///
 /// # Example
 ///
 /// ```rust,no_run
-/// use flui_scheduler::UpdateScheduler;
+/// use flui_scheduler::{FrameOutcome, UpdateScheduler};
 ///
 /// async fn do_end_of_frame_work(scheduler: &UpdateScheduler) {
-///     // Wait for frame to complete
-///     let timing = scheduler.end_of_frame().await;
-///
-///     // Now safe to do post-frame cleanup
-///     println!(
-///         "Frame {} completed in {}ms",
-///         timing.id.get(),
-///         timing.elapsed().value()
-///     );
+///     match scheduler.end_of_frame().await {
+///         Ok(FrameOutcome::Completed { timing, .. }) => {
+///             // Now safe to do post-frame cleanup
+///             println!(
+///                 "Frame {} completed in {}ms",
+///                 timing.id.get(),
+///                 timing.elapsed().value()
+///             );
+///         }
+///         Ok(FrameOutcome::Aborted { timing, .. }) => {
+///             println!("frame {} aborted before its post-frame callbacks ran", timing.id.get());
+///         }
+///         // A variant added later still carries a timing -- `.timing()`
+///         // reaches it here without knowing which one this is, the only
+///         // way to from a `#[non_exhaustive]` catch-all arm.
+///         Ok(outcome) => {
+///             println!("frame {} ended some other way", outcome.timing().id.get());
+///         }
+///         Err(_closed) => {
+///             println!("the scheduler was dropped before this frame completed");
+///         }
+///     }
 /// }
 /// ```
+#[must_use = "an unbound FrameCompletionFuture drops immediately and cancels its wait"]
 pub struct FrameCompletionFuture {
     state: Arc<Mutex<FrameCompletionState>>,
 }
@@ -219,7 +355,7 @@ impl std::fmt::Debug for FrameCompletionFuture {
 }
 
 impl Future for FrameCompletionFuture {
-    type Output = FrameTiming;
+    type Output = Result<FrameOutcome, SchedulerClosed>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // NO caller code runs under this guard, on either path -- which
@@ -239,10 +375,15 @@ impl Future for FrameCompletionFuture {
         // case of a repeatedly-polled pending future does no executor-owned
         // work at all.
         {
-            let mut state = self.state.lock();
+            let state = self.state.lock();
 
-            if let Some(timing) = state.completed.take() {
-                return Poll::Ready(timing);
+            // Peeked by copy, not `.take()`n: `Result<FrameOutcome,
+            // SchedulerClosed>` is `Copy` (both arms are), so nothing is
+            // lost by leaving it in place, and a second poll after `Ready`
+            // returns the same value again instead of hanging -- see this
+            // type's own doc.
+            if let Some(outcome) = state.completed {
+                return Poll::Ready(outcome);
             }
 
             if state
@@ -288,8 +429,8 @@ impl Future for FrameCompletionFuture {
             // thread; the hand-built one only makes it happen on every run
             // instead of occasionally. Delete these lines without that
             // test and the whole suite stays green.
-            if let Some(timing) = state.completed.take() {
-                return Poll::Ready(timing);
+            if let Some(outcome) = state.completed {
+                return Poll::Ready(outcome);
             }
 
             // Store waker for notification when frame completes
@@ -714,6 +855,95 @@ struct SchedulerInner {
     async_driver: crate::AsyncDriver,
 }
 
+/// Resolves every still-pending [`end_of_frame`](UpdateScheduler::end_of_frame)
+/// waiter with `Err(`[`SchedulerClosed`]`)` when the last strong
+/// [`UpdateScheduler`] handle is dropped, so a caller awaiting one never
+/// hangs forever with no frame left to run and resolve it.
+///
+/// # Why `get_mut`, not `lock()`, is sound with no runtime check
+///
+/// `Drop::drop` hands this `&mut SchedulerInner`, and the reason that is
+/// sound is `Arc`, not the borrow: this runs only once the strong count has
+/// reached zero, and `Arc`'s own release/acquire ordering means this
+/// destructor observes every prior mutation through any dropped clone — no
+/// other thread can be mid-registration or mid-notification against this
+/// same registry at this point. So teardown takes no lock at all.
+///
+/// # Why the `Some(Err(SchedulerClosed))` write below needs no `is_none()` guard
+///
+/// `drain()` performs `mem::take`, removing every entry it returns from the
+/// registry — so every entry this loop reaches is, by construction, one
+/// `notify_frame_completion` never reached first (a delivered completion
+/// already took its entry out of the registry, via that same `drain`, long
+/// before this ran). `completed` is therefore always `None` here; a runtime
+/// check would be dead code testing a fact the type already proves.
+///
+/// # May run on a foreign thread
+///
+/// `Waker::wake()` can itself be the call that drops the async driver's own
+/// `upgrade()`d temporary strong reference — making THIS the final release,
+/// on whichever thread that wake happened to run on. Everything this touches
+/// (`FrameCompletionRegistry`, `FrameCompletionState`, `Waker`) is
+/// `Send + Sync`, so that is sound, but it means this must never assume it
+/// runs on the scheduler's "home" thread.
+///
+/// # Never `resume_unwind`
+///
+/// A panic raised from a destructor while the thread is already unwinding
+/// aborts the process with no diagnostic. Every waker's `wake()` — and, in
+/// turn, a panicking wake payload's own possibly-panicking `Drop` — is
+/// caught and traced via [`discard_panic_payload`]; nothing here ever
+/// propagates.
+///
+/// # What this cannot reach
+///
+/// This runs only once every strong [`UpdateScheduler`] reference is gone —
+/// the ordinary `Arc` rule, nothing special to this type. A task holding its
+/// OWN strong clone (captured into an `async` block passed to
+/// [`UpdateScheduler::spawn_local`](UpdateScheduler::spawn_local), say) defers
+/// this for as long as that task is still pending, and a live strong clone
+/// anywhere else — an embedder holding one, another thread's handle — does
+/// the same. The scheduler's OWN internals never cause that: the async
+/// driver's wake hook captures only a `Weak<SchedulerInner>` (see
+/// [`UpdateScheduler::with_budget_target_and_task_queue`]'s constructor doc),
+/// precisely so a pending task cannot keep the scheduler it belongs to alive
+/// through this destructor. See this crate's `ARCHITECTURE.md` "the teardown
+/// guarantee is partial" paragraph in the #1162 mapping entry for the full
+/// argument.
+impl Drop for SchedulerInner {
+    fn drop(&mut self) {
+        let waiters = self.frame.completion_waiters.get_mut().drain();
+
+        for notifier in waiters {
+            // A failed upgrade means the future was already dropped
+            // (cancelled) before teardown reached it — an ordinary outcome,
+            // not an error, exactly as in `notify_frame_completion`.
+            let Some(state) = notifier.state.upgrade() else {
+                continue;
+            };
+
+            let waker = {
+                let mut state = state.lock();
+                state.completed = Some(Err(SchedulerClosed));
+                state.waker.take()
+            };
+            let Some(waker) = waker else { continue };
+
+            if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
+            {
+                tracing::error!(
+                    panic_msg = flui_foundation::panic::payload_text(&*payload)
+                        .unwrap_or("(non-string panic payload)"),
+                    "frame completion waker panicked while the scheduler was being dropped; \
+                     discarding rather than unwinding out of Drop"
+                );
+                discard_panic_payload(payload, "SchedulerInner::drop (waker panic, traced above)");
+            }
+        }
+    }
+}
+
 /// Main scheduler for frame and task management
 ///
 /// Implements Flutter-like scheduling with proper phase separation:
@@ -824,12 +1054,48 @@ impl std::fmt::Debug for UpdateScheduler {
 /// scheme predates the single-`Arc` `SchedulerInner` and no longer describes
 /// what the hook actually captures.
 fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
-    let was_scheduled = frame.frame_scheduled.swap(true, Ordering::AcqRel);
+    let was_scheduled = frame.frame_scheduled.swap(true, Ordering::SeqCst);
     if !was_scheduled {
         let hook = binding.on_frame_scheduled.lock().clone();
         if let Some(hook) = hook {
             hook();
         }
+    }
+}
+
+/// Discards a panic payload that its call site does not (or no longer can)
+/// propagate, containing the possibility that the payload's own `Drop` impl
+/// itself panics.
+///
+/// A panic payload is `Box<dyn Any + Send>` — it can own, or itself be, any
+/// type, including one whose `Drop` panics. An ordinary `drop(payload)`
+/// would let that second panic escape uncontained: during an unwind that is
+/// a double panic (an abort with no diagnostic); outside one, it replaces
+/// the failure this call site actually meant to report. Every call site
+/// this exists for has already traced the original panic before calling
+/// this; it only adds a SECOND trace, and only if dropping the payload
+/// panics too.
+///
+/// The SECOND-order payload -- what `panic_any` inside the first payload's
+/// own `Drop::drop` raised -- is contained the same way it got here in the
+/// first place: leaked, never dropped. It is itself `Box<dyn Any + Send>`
+/// and so can just as well own a type whose `Drop` ALSO panics; an ordinary
+/// `drop` of it here would only move the uncontained-second-panic problem
+/// this function exists to close down one more level instead of closing it.
+fn discard_panic_payload(payload: Box<dyn std::any::Any + Send>, context: &'static str) {
+    if let Err(drop_payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+    {
+        tracing::error!(
+            context,
+            panic_msg = flui_foundation::panic::payload_text(&*drop_payload)
+                .unwrap_or("(non-string panic payload)"),
+            "a discarded panic payload's own Drop panicked; containing it here rather than \
+             letting a second panic escape"
+        );
+        // A payload whose own Drop panics cannot be dropped safely -- leaking
+        // it is the only containment left; see this function's own doc.
+        std::mem::forget(drop_payload);
     }
 }
 
@@ -1372,7 +1638,7 @@ impl UpdateScheduler {
             // with `current_vsync_time` still set, reachable through
             // `drive_frame`'s `Ok` arm rather than its `Err` one.
             let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.notify_frame_completion(&timing);
+                self.notify_frame_completion(FrameOutcome::Completed { timing });
             }));
 
             if callback_result.is_err() || notify_result.is_err() {
@@ -1381,16 +1647,29 @@ impl UpdateScheduler {
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
                 *self.inner.frame.current_vsync_time.lock() = None;
-                // The post-frame callback's panic happened first in this
-                // frame's own order; prefer surfacing it when both panicked
-                // (`notify_frame_completion` already traced its own panic
-                // via `tracing::error!` before propagating it here, so it is
-                // not silently lost either way).
-                let payload = callback_result
-                    .err()
-                    .or(notify_result.err())
-                    .expect("BUG: at least one of callback_result/notify_result is Err here");
-                std::panic::resume_unwind(payload);
+            }
+            // The post-frame callback's panic happened first in this frame's
+            // own order, so it is what a caller observes when both panicked;
+            // `notify_frame_completion` already traced its own panic via
+            // `tracing::error!` above, so a discarded notify payload here is
+            // not silently lost, only not the one that propagates. Matching
+            // on both `Result`s (rather than `Option::or`-ing their errors
+            // together) is what routes the DISCARDED side through
+            // `discard_panic_payload` instead of an uncontained `drop` --
+            // the payload can itself be a type whose own `Drop` panics.
+            match (callback_result, notify_result) {
+                (Ok(()), Ok(())) => {}
+                (Err(payload), Ok(())) | (Ok(()), Err(payload)) => {
+                    std::panic::resume_unwind(payload);
+                }
+                (Err(callback_payload), Err(notify_payload)) => {
+                    discard_panic_payload(
+                        notify_payload,
+                        "end_frame_impl (superseded by the post-frame callback's own panic \
+                         in the same close)",
+                    );
+                    std::panic::resume_unwind(callback_payload);
+                }
             }
         }
 
@@ -1428,9 +1707,10 @@ impl UpdateScheduler {
     ///
     /// Completion waiters **are** notified: an aborted frame is a frame that
     /// finished, badly. Leaving them queued would hang `end_of_frame()` forever.
-    /// The completion future does not distinguish an aborted frame from a
-    /// successful one — a known limitation, not an oversight (see
-    /// `flui-scheduler/ARCHITECTURE.md`'s mapping entry for issue #1057).
+    /// They resolve with [`FrameOutcome::Aborted`], distinct from
+    /// [`FrameOutcome::Completed`] — see that type's own doc for exactly what
+    /// the distinction does and does not mean, and this crate's
+    /// `ARCHITECTURE.md` `## Mapping decisions` entry for the rationale.
     ///
     /// # `frame_scheduled` is already closed; a catcher that wants another frame
     /// # must ask for one
@@ -1465,7 +1745,7 @@ impl UpdateScheduler {
         self.inner.callbacks.cancelled.clear();
 
         if let Some(timing) = timing {
-            self.notify_frame_completion(&timing);
+            self.notify_frame_completion(FrameOutcome::Aborted { timing });
         }
 
         tracing::warn!("frame aborted; its post-frame callbacks were not run");
@@ -1678,6 +1958,17 @@ impl UpdateScheduler {
                             .unwrap_or("(non-string panic payload)"),
                         "abort_frame panicked while closing a frame that was already \
                          panicking; resuming the ORIGINAL panic, not this one"
+                    );
+                    // A plain `drop` here would be the same class of bug this
+                    // issue fixes at the other two sites: `secondary_payload`
+                    // can itself own a type whose `Drop` panics, and letting
+                    // THAT escape uncontained would displace the ORIGINAL
+                    // frame panic `resume_unwind(payload)` is about to carry
+                    // out, right below.
+                    discard_panic_payload(
+                        secondary_payload,
+                        "drive_frame_impl (abort_frame panicked while closing an already-\
+                         panicking frame, traced above)",
                     );
                 }
                 resume_unwind(payload)
@@ -1946,31 +2237,88 @@ impl UpdateScheduler {
     /// exists to prevent, just for a self-waking task instead of an
     /// externally-woken one.
     ///
-    /// # Clearing the latch now revokes frame demand, including an
-    /// # `end_of_frame` waiter's
+    /// # Clearing the latch must not strand a live `end_of_frame` waiter
     ///
     /// A pending [`end_of_frame`](Self::end_of_frame) waiter IS frame
     /// demand: registering issues one, and every later registration stays
     /// silent while that waiter is live. This method clears the latch
-    /// without draining the completion registry, so calling it outside the
-    /// frames-disabled `PumpAsync` arm revokes that demand with the waiter
-    /// still queued. Nothing re-issues it except a frames-enabled edge
-    /// (`handle_app_lifecycle_state_change`'s resume leg, or
-    /// [`set_frames_enabled`](Self::set_frames_enabled)), so until one of
-    /// those arrives, that waiter and every registration behind it wait
-    /// forever.
+    /// without draining the completion registry, so a naive clear here
+    /// would revoke that demand with the waiter still queued, and nothing
+    /// short of a frames-enabled edge re-issuing a demand it never recorded
+    /// as lost would ever wake it again (issue #1162). Reachable, but not
+    /// off a runner's own decide-then-pump order: every `flui-app` runner
+    /// calls this method only from `wake_action`'s `PumpAsync` arm, chosen
+    /// iff `!frames_enabled` at that same read, with this call following
+    /// immediately on the same thread and no application code in between
+    /// (`frame_pacing.rs`'s `wake_action`) — so a register → disable →
+    /// enable → pump order can never land here with `frames_enabled` back
+    /// to `true`. What DOES reach this method's live-waiter re-check with
+    /// `frames_enabled` true: this `pub fn` called directly, out of
+    /// `wake_action`'s order (an embedder or a test bypassing it), or a
+    /// cross-thread enable landing in the store-buffering window the next
+    /// section names. Even on that reachable path, a plain disable→enable
+    /// edge in between would not help on its own: `frame_scheduled` was
+    /// already latched `true` from the waiter's own registration and never
+    /// cleared by disabling frames, so `request_frame_impl`'s own
+    /// false→true edge does not fire on re-enable and the hook stays
+    /// silent — this method's own re-check is what recovers it.
     ///
-    /// This is reachable, not theoretical: frames enabled, a waiter
-    /// registered and its demand issued, the app goes `Hidden`, a pump tick
-    /// lands here and revokes the latch, and the waiters are stranded until
-    /// the resume edge. This method is `pub` and takes `&self` on a
-    /// `Clone + Send + Sync` scheduler, so an embedder can reach it from any
-    /// thread; call it only from the wake arm it documents above.
+    /// So this method re-checks for a live waiter itself, at the exact point
+    /// it would otherwise drop the demand, rather than trusting an earlier
+    /// edge to have covered it: if frames are enabled and the completion
+    /// registry still holds a live entry once the latch is clear, it
+    /// re-issues the demand right here. This method is `pub` and takes
+    /// `&self` on a `Clone + Send + Sync` scheduler, so an embedder can
+    /// reach it from any thread; call it only from the wake arm it
+    /// documents above.
+    ///
+    /// # A store-buffering hazard makes `SeqCst` load-bearing here
+    ///
+    /// This method's `frame_scheduled` swap and `frames_enabled` read race a
+    /// frames-enabled edge's own `frames_enabled` swap and (via
+    /// `request_frame_impl`) `frame_scheduled` swap, on another thread, with
+    /// no reads-from edge between the two calls to synchronize on. Under
+    /// `Acquire`/`Release` alone, "this thread's load of `frames_enabled`
+    /// still sees the OLD value AND the edge thread's swap of
+    /// `frame_scheduled` still sees the OLD value too" is a legal outcome —
+    /// a real store-buffering effect on hardware like x86, where a plain
+    /// store can sit in the executing core's store buffer while a
+    /// subsequent plain load on the SAME thread already executes — not
+    /// merely a hypothetical one. Any single race instance touches four
+    /// accesses: this method's swap and load, plus whichever edge fired
+    /// (`set_frames_enabled`'s or `handle_app_lifecycle_state_change`'s
+    /// `frames_enabled` swap) and `request_frame_impl`'s `frame_scheduled`
+    /// swap. `SeqCst` marks all five code sites -- both edge swaps count
+    /// separately even though only one of them runs per race instance --
+    /// which puts every access on one global total order and rules that
+    /// outcome out. No single-threaded test can redden a reversion of this;
+    /// only a `loom` model could prove it, and none exists yet.
+    ///
+    /// # Calling this from a hook that itself pumps recurses
+    ///
+    /// The platform wake hook this method's own demand re-issue can fire
+    /// already forbids re-entering the scheduler (see
+    /// [`set_on_frame_scheduled`](Self::set_on_frame_scheduled)'s contract);
+    /// concretely here, a hook that called back into `finish_async_pump`
+    /// would recurse (pump → clear → re-check → hook → pump → ...), which a
+    /// bare unconditional clear never could.
     pub fn finish_async_pump(&self) {
         self.inner
             .frame
             .frame_scheduled
-            .store(false, Ordering::Release);
+            .swap(false, Ordering::SeqCst);
+
+        // The `completion_waiters` guard `has_live_waiter()` takes is a
+        // temporary of this `if`'s condition, so it drops at the end of the
+        // condition, before the block below runs -- `request_frame()` is
+        // never reached with it still held, honoring this crate's lock
+        // order (`completion_waiters` never held across `request_frame`,
+        // which fires the wake hook synchronously).
+        if self.inner.binding.frames_enabled.load(Ordering::SeqCst)
+            && self.inner.frame.completion_waiters.lock().has_live_waiter()
+        {
+            self.request_frame();
+        }
     }
 
     /// Number of tasks the async driver holds.
@@ -2058,13 +2406,101 @@ impl UpdateScheduler {
         self.inner.callbacks.microtasks.lock().push_back(task);
     }
 
-    /// Flush all pending microtasks
-    fn flush_microtasks(&self) {
-        loop {
+    /// One bounded pass over the microtask queue: run up to as many
+    /// microtasks as were queued when this pass began, one at a time,
+    /// outside the queue's own lock.
+    ///
+    /// Mirrors [`TaskQueue::execute_until`](crate::task::TaskQueue::execute_until)'s
+    /// count-budget shape: the budget is `queue.len()` read once, under the
+    /// first lock acquisition, and decremented once per pop, so a microtask
+    /// enqueued reentrantly DURING this pass gets no budget of its own here
+    /// -- it is left queued for the NEXT pass rather than absorbed into an
+    /// unbounded live re-peek of the queue.
+    ///
+    /// Returns the number of microtasks executed.
+    fn flush_microtasks_pass(&self) -> usize {
+        let mut budget = self.inner.callbacks.microtasks.lock().len();
+        let mut executed = 0usize;
+        while budget > 0 {
             let task = self.inner.callbacks.microtasks.lock().pop_front();
-            match task {
-                Some(t) => t(),
-                None => break,
+            let Some(task) = task else {
+                break;
+            };
+            budget -= 1;
+            task();
+            executed += 1;
+        }
+        executed
+    }
+
+    /// Flush all pending microtasks.
+    ///
+    /// Bounded by [`MAX_MICROTASK_REENTRY_PASSES`] outer passes, mirroring
+    /// the Build/Animation reentrant-pass loop in
+    /// [`handle_draw_frame`](Self::handle_draw_frame): a microtask enqueued
+    /// reentrantly by another one in the SAME pass is invisible to
+    /// [`flush_microtasks_pass`](Self::flush_microtasks_pass) and instead
+    /// runs in the NEXT pass, one pass later -- Dart's own nested-microtask
+    /// semantics are preserved for a chain no deeper than the cap (a
+    /// microtask scheduled from inside another still runs before THIS flush
+    /// call returns), just spread over one extra pass rather than Dart's
+    /// live re-peek. **This is only true up to the cap.** A FINITE chain
+    /// deeper than [`MAX_MICROTASK_REENTRY_PASSES`] passes -- 33 levels of
+    /// nesting, say, with no genuinely unbounded re-enqueuing anywhere in
+    /// it -- is deferred exactly like an unbounded one: whatever the cap
+    /// leaves queued waits for the NEXT `flush_microtasks` call (the
+    /// following frame's `handle_begin_frame`), not this one. This bounds
+    /// reentrancy *depth*, not *width*: a pass whose every popped microtask
+    /// enqueues two more still finishes in [`MAX_MICROTASK_REENTRY_PASSES`]
+    /// passes, not because the fan-out is bounded, but because passes are
+    /// (mirrors [`MAX_BUILD_REENTRY_PASSES`]'s own caveat). The cap cannot
+    /// tell a genuinely unbounded, self-re-enqueuing chain apart from a
+    /// merely deep finite one that is still queuing work when the cap
+    /// trips -- both pay the same one-frame deferral and the same warning
+    /// at the same depth, and only the unbounded case would otherwise hang
+    /// the frame (issue #1159). A finite chain that happens to land
+    /// EXACTLY on the cap boundary -- its last level runs on the very pass
+    /// that trips the threshold and enqueues nothing further -- is not in
+    /// that group: the queue is empty afterward, nothing was deferred, and
+    /// [`flush_microtasks`](Self::flush_microtasks) does not warn for it.
+    ///
+    /// A capped flush leaves its unrun leftovers queued, requesting nothing
+    /// of its own: [`schedule_microtask`](Self::schedule_microtask) never
+    /// calls `request_frame` (unlike `TaskQueue::add` for Build-or-higher
+    /// priority), so a leftover simply waits for the next frame's
+    /// `handle_begin_frame` to flush it -- unchanged, pre-existing behavior,
+    /// not something this cap adds.
+    ///
+    /// Hitting the pass count and having something left to warn about are
+    /// two different facts: a chain exactly [`MAX_MICROTASK_REENTRY_PASSES`]
+    /// levels deep empties the queue on the very pass that trips the
+    /// threshold, so nothing was actually cut off, and this does not warn
+    /// -- only a nonempty queue after the capped pass means real deferred
+    /// work. (The Build/Animation cap in
+    /// [`handle_draw_frame`](Self::handle_draw_frame) shares this same
+    /// unconditional-on-count shape; narrowing it the same way is out of
+    /// scope here.)
+    fn flush_microtasks(&self) {
+        let mut passes = 0usize;
+        loop {
+            let executed = self.flush_microtasks_pass();
+            if executed == 0 {
+                break;
+            }
+            passes += 1;
+            if passes >= MAX_MICROTASK_REENTRY_PASSES {
+                let deferred = self.inner.callbacks.microtasks.lock().len();
+                if deferred > 0 {
+                    tracing::warn!(
+                        passes,
+                        deferred,
+                        "microtask queue kept yielding new work across \
+                         {MAX_MICROTASK_REENTRY_PASSES} reentrant flush passes in one frame -- \
+                         a microtask is likely re-enqueuing itself every pass; stopping here \
+                         rather than hanging this frame"
+                    );
+                }
+                break;
             }
         }
     }
@@ -2317,11 +2753,16 @@ impl UpdateScheduler {
             new_state,
             AppLifecycleState::Resumed | AppLifecycleState::Inactive
         );
+        // `SeqCst`, not `AcqRel`: this swap and `finish_async_pump`'s own
+        // `frame_scheduled` swap+`frames_enabled` read form a
+        // store-buffering (Dekker/SB) litmus pair across two threads with
+        // no reads-from edge between them -- see `finish_async_pump`'s own
+        // doc for the full argument. `AcqRel` alone does not close it.
         let frames_were_enabled = self
             .inner
             .binding
             .frames_enabled
-            .swap(should_render, Ordering::AcqRel);
+            .swap(should_render, Ordering::SeqCst);
 
         // Flutter's `_setFramesEnabledState(true)` (binding.dart @ 3.44.0)
         // schedules a frame on exactly the disabled→enabled edge —
@@ -2436,17 +2877,17 @@ impl UpdateScheduler {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use flui_scheduler::UpdateScheduler;
+    /// use flui_scheduler::{FrameOutcome, UpdateScheduler};
     ///
     /// async fn wait_for_frame(scheduler: &UpdateScheduler) {
     ///     // Wait for the current/next frame to complete
-    ///     let timing = scheduler.end_of_frame().await;
-    ///
-    ///     println!(
-    ///         "Frame {} completed in {}ms",
-    ///         timing.id.get(),
-    ///         timing.elapsed().value()
-    ///     );
+    ///     if let Ok(FrameOutcome::Completed { timing, .. }) = scheduler.end_of_frame().await {
+    ///         println!(
+    ///             "Frame {} completed in {}ms",
+    ///             timing.id.get(),
+    ///             timing.elapsed().value()
+    ///         );
+    ///     }
     /// }
     /// ```
     ///
@@ -2563,8 +3004,11 @@ impl UpdateScheduler {
     /// (`resume_unwind`) only after every waiter has been notified, so a
     /// caller still observes it — matching `end_frame_impl`'s own
     /// catch-then-resume shape for a panicking post-frame callback, just
-    /// upstream of it here.
-    fn notify_frame_completion(&self, timing: &FrameTiming) {
+    /// upstream of it here. A SECOND (or later) waker's panic cannot be
+    /// re-raised too -- `resume_unwind` takes one payload -- so it is routed
+    /// through [`discard_panic_payload`] instead, which additionally
+    /// contains the possibility that the payload's own `Drop` panics.
+    fn notify_frame_completion(&self, outcome: FrameOutcome) {
         let waiters = self.inner.frame.completion_waiters.lock().drain();
 
         let mut first_panic: Option<Box<dyn std::any::Any + Send>> = None;
@@ -2585,7 +3029,7 @@ impl UpdateScheduler {
 
             let waker = {
                 let mut state = state.lock();
-                state.completed = Some(*timing);
+                state.completed = Some(Ok(outcome));
                 // Taken, not read: with the waker moved out, the temporary
                 // `Arc`'s own drop at the end of this iteration has no
                 // caller code left to run even when it is the last
@@ -2612,6 +3056,19 @@ impl UpdateScheduler {
                 );
                 if first_panic.is_none() {
                     first_panic = Some(payload);
+                } else {
+                    // A second (or later) panic in the same drain: only the
+                    // FIRST one can be `resume_unwind`n below, so this one
+                    // is discarded -- and discarding it safely means
+                    // containing the possibility that ITS OWN `Drop` panics
+                    // too (a payload can own a type whose destructor
+                    // panics), rather than an ordinary `drop` that would
+                    // propagate that straight out of this loop.
+                    discard_panic_payload(
+                        payload,
+                        "notify_frame_completion (superseded by an earlier waker's panic \
+                         in the same drain)",
+                    );
                 }
             }
         }
@@ -2662,11 +3119,13 @@ impl UpdateScheduler {
     /// public setter cannot reach a stranded state the lifecycle path
     /// recovers from.
     pub fn set_frames_enabled(&mut self, enabled: bool) {
+        // `SeqCst`: see `finish_async_pump`'s doc for the store-buffering
+        // hazard this ordering closes against that method's own swap+load.
         let was_enabled = self
             .inner
             .binding
             .frames_enabled
-            .swap(enabled, Ordering::AcqRel);
+            .swap(enabled, Ordering::SeqCst);
 
         if !was_enabled && enabled {
             self.request_frame();
@@ -3268,6 +3727,61 @@ mod tests {
         );
     }
 
+    /// #1162: a live `end_of_frame` waiter whose demand survives a
+    /// disable->enable edge with `frame_scheduled` already latched `true`
+    /// must not be silently dropped by a LATER `PumpAsync` cycle that clears
+    /// that same latch. The disable->enable edge itself fires no NEW wake
+    /// here: `frame_scheduled` was already `true` from the waiter's own
+    /// registration and disabling frames never clears it, so
+    /// `request_frame_impl`'s own false->true edge does not occur on
+    /// re-enable -- which is exactly the trap this pins:
+    /// `finish_async_pump` must re-check for a live waiter itself rather
+    /// than trust that earlier, silent edge to have covered it.
+    ///
+    /// Not asserted before the `finish_async_pump()` call: this test pins
+    /// that THAT call is what re-issues the demand, not the disable/enable
+    /// sequence on its own.
+    ///
+    /// Red-check (reverted `finish_async_pump`): `(is_frame_scheduled(),
+    /// hook_fires) == (false, 1)`, not `(true, 2)`.
+    #[test]
+    fn finish_async_pump_reissues_a_stranded_live_waiters_demand() {
+        let mut scheduler = UpdateScheduler::new();
+        let hook_fires = Arc::new(AtomicU64::new(0));
+        let hook_fires_for_hook = Arc::clone(&hook_fires);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            hook_fires_for_hook.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        // Bound, not `let _ =`: an unbound future drops immediately, and a
+        // dropped waiter is no longer live -- the whole point being pinned
+        // here needs it to survive past this statement.
+        let _waiter = scheduler.end_of_frame();
+        assert_eq!(hook_fires.load(Ordering::Relaxed), 1);
+
+        scheduler.set_frames_enabled(false);
+        scheduler.set_frames_enabled(true);
+        assert_eq!(
+            hook_fires.load(Ordering::Relaxed),
+            1,
+            "the re-enable edge must fire no NEW wake here -- frame_scheduled was already \
+             true from the waiter's own registration, so request_frame_impl's own \
+             false->true edge does not occur on this re-enable"
+        );
+
+        scheduler.finish_async_pump();
+
+        assert_eq!(
+            (
+                scheduler.is_frame_scheduled(),
+                hook_fires.load(Ordering::Relaxed)
+            ),
+            (true, 2),
+            "finish_async_pump must re-issue the stranded waiter's demand itself, rather \
+             than trust the disable->enable edge to have covered it"
+        );
+    }
+
     /// #1038: `set_on_frame_scheduled` must drop the *previous* hook only
     /// after releasing `binding.on_frame_scheduled`. If that hook's `Arc` is
     /// the last reference, its `Drop` runs whatever the captured closure's
@@ -3484,6 +3998,170 @@ mod tests {
 
         scheduler.execute_frame();
         assert!(*executed.lock());
+    }
+
+    /// A microtask that unconditionally re-enqueues itself must not hang the
+    /// frame: `flush_microtasks`'s outer pass loop bounds it to
+    /// `MAX_MICROTASK_REENTRY_PASSES` passes, warning once, rather than
+    /// looping until the queue empties -- which, for a chain like this one,
+    /// it never would (issue #1159). Mirrors
+    /// `a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever`
+    /// in `tests/update_scheduler_reshape.rs`, but lives here because
+    /// `MAX_MICROTASK_REENTRY_PASSES` is crate-private.
+    ///
+    /// Unlike the Build cap, the run count is exactly the cap, not
+    /// `+ 1`: `flush_microtasks` has no trailing, unconditional second sweep
+    /// the way `handle_draw_frame` does for `Priority::Idle`.
+    #[test]
+    fn a_self_reenqueuing_microtask_is_bounded_by_the_reentry_cap_not_hung_forever() {
+        use std::sync::atomic::AtomicUsize;
+
+        let scheduler = UpdateScheduler::new();
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        // A named fn, not a closure capturing itself: each execution
+        // re-enqueues one more instance of itself, unconditionally.
+        fn requeue(scheduler: UpdateScheduler, runs: Arc<AtomicUsize>) {
+            let next_scheduler = scheduler.clone();
+            let next_runs = Arc::clone(&runs);
+            scheduler.schedule_microtask(Box::new(move || {
+                next_runs.fetch_add(1, Ordering::SeqCst);
+                requeue(next_scheduler, next_runs);
+            }));
+        }
+        requeue(scheduler.clone(), Arc::clone(&runs));
+
+        let (_frame_id, log) = flui_testing::log_capture::capture(|| scheduler.execute_frame());
+
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            MAX_MICROTASK_REENTRY_PASSES,
+            "the reentry cap bounds the microtask flush loop to exactly \
+             MAX_MICROTASK_REENTRY_PASSES executions -- unlike the Build cap, nothing \
+             sweeps up a trailing leftover afterward"
+        );
+        assert_eq!(
+            log.count_containing("reentrant flush"),
+            1,
+            "the reentry-cap warning must fire exactly once: {log}"
+        );
+    }
+
+    /// The cap does not distinguish a genuinely unbounded chain from a
+    /// merely deep FINITE one: a chain one level deeper than
+    /// `MAX_MICROTASK_REENTRY_PASSES` (never re-enqueuing past that point)
+    /// still trips the cap at pass `MAX_MICROTASK_REENTRY_PASSES` and defers
+    /// its one remaining level to the NEXT `flush_microtasks` call -- being
+    /// finite does not, on its own, guarantee finishing inside the SAME
+    /// flush call.
+    #[test]
+    fn a_finite_microtask_chain_deeper_than_the_cap_is_deferred_to_the_next_flush() {
+        use std::sync::atomic::AtomicUsize;
+
+        let scheduler = UpdateScheduler::new();
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        // A FINITE chain: each execution enqueues one more only while
+        // `remaining` is still positive, so this terminates on its own --
+        // never a genuinely unbounded, self-re-enqueuing microtask. Seeded
+        // with `MAX_MICROTASK_REENTRY_PASSES`, the chain is
+        // `MAX_MICROTASK_REENTRY_PASSES + 1` levels deep in total (this
+        // first enqueue is level 1).
+        fn requeue(scheduler: UpdateScheduler, runs: Arc<AtomicUsize>, remaining: usize) {
+            let next_scheduler = scheduler.clone();
+            let next_runs = Arc::clone(&runs);
+            scheduler.schedule_microtask(Box::new(move || {
+                next_runs.fetch_add(1, Ordering::SeqCst);
+                if remaining > 0 {
+                    requeue(next_scheduler, next_runs, remaining - 1);
+                }
+            }));
+        }
+        requeue(
+            scheduler.clone(),
+            Arc::clone(&runs),
+            MAX_MICROTASK_REENTRY_PASSES,
+        );
+
+        let (_frame_id, log) = flui_testing::log_capture::capture(|| scheduler.execute_frame());
+
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            MAX_MICROTASK_REENTRY_PASSES,
+            "a finite chain one level deeper than the cap must still be cut off at exactly \
+             the cap boundary within this one flush call -- the cap cannot tell it apart \
+             from an unbounded chain"
+        );
+        assert_eq!(
+            log.count_containing("reentrant flush"),
+            1,
+            "the SAME warning fires for this finite chain as for a genuinely unbounded \
+             one: {log}"
+        );
+
+        // The one level the cap left queued must still be there, and must
+        // run on the very next flush -- deferred, never dropped.
+        scheduler.execute_frame();
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            MAX_MICROTASK_REENTRY_PASSES + 1,
+            "the deferred leftover level must run on the NEXT flush_microtasks call"
+        );
+    }
+
+    /// A FINITE chain exactly [`MAX_MICROTASK_REENTRY_PASSES`] levels deep
+    /// empties the queue on the very pass that trips `passes >=
+    /// MAX_MICROTASK_REENTRY_PASSES`: there is nothing left queued, so this
+    /// is not the "still yielding new work" case the warning exists to
+    /// report. Distinguishes hitting the pass-count threshold from actually
+    /// having deferred work: the cap counter and the queue's contents are
+    /// two different facts, and only the second one means anything was cut
+    /// off.
+    #[test]
+    fn a_chain_exactly_as_deep_as_the_cap_that_empties_the_queue_does_not_warn() {
+        use std::sync::atomic::AtomicUsize;
+
+        let scheduler = UpdateScheduler::new();
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        // Seeded with `MAX_MICROTASK_REENTRY_PASSES - 1`, so the chain is
+        // exactly `MAX_MICROTASK_REENTRY_PASSES` levels deep in total (this
+        // first enqueue is level 1) -- one level shallower than the
+        // "deeper than the cap" test above, which seeds `remaining =
+        // MAX_MICROTASK_REENTRY_PASSES` for `MAX_MICROTASK_REENTRY_PASSES +
+        // 1` levels. The last level here enqueues nothing further, so the
+        // queue is empty the moment pass `MAX_MICROTASK_REENTRY_PASSES`
+        // finishes.
+        fn requeue(scheduler: UpdateScheduler, runs: Arc<AtomicUsize>, remaining: usize) {
+            let next_scheduler = scheduler.clone();
+            let next_runs = Arc::clone(&runs);
+            scheduler.schedule_microtask(Box::new(move || {
+                next_runs.fetch_add(1, Ordering::SeqCst);
+                if remaining > 0 {
+                    requeue(next_scheduler, next_runs, remaining - 1);
+                }
+            }));
+        }
+        requeue(
+            scheduler.clone(),
+            Arc::clone(&runs),
+            MAX_MICROTASK_REENTRY_PASSES - 1,
+        );
+
+        let (_frame_id, log) = flui_testing::log_capture::capture(|| scheduler.execute_frame());
+
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            MAX_MICROTASK_REENTRY_PASSES,
+            "the full, exactly-cap-deep chain must run within this one flush call"
+        );
+        assert_eq!(
+            log.count_containing("reentrant flush"),
+            0,
+            "a chain that finishes exactly at the cap boundary with nothing left queued must \
+             not warn -- the warning is for work still pending, not for hitting the pass \
+             count: {log}"
+        );
     }
 
     #[test]
@@ -3887,9 +4565,54 @@ mod tests {
         let result3 = Pin::new(&mut future2).poll(&mut cx);
         assert!(result3.is_ready());
 
-        if let Poll::Ready(timing) = result3 {
-            assert!(timing.id.get() > 0);
-        }
+        let Poll::Ready(outcome) = result3 else {
+            unreachable!("just asserted is_ready() above");
+        };
+        let Ok(FrameOutcome::Completed { timing }) = outcome else {
+            panic!("a clean execute_frame() must resolve Completed, not {outcome:?}");
+        };
+        assert!(timing.id.get() > 0);
+    }
+
+    /// #1162: `Result<FrameOutcome, SchedulerClosed>` is `Copy`, and `poll`
+    /// peeks it rather than `.take()`-ing it, so the future is fused for
+    /// free -- polling again after `Ready` repeats the same value instead of
+    /// hanging. Asserted on the SAME resolved value across two separate
+    /// polls, not merely "both are Ready", so a `.take()` regression that
+    /// resolves the SECOND poll with a stale `None`-turned-`Pending` (the
+    /// pre-#1162 contract) fails here, not merely produces a different
+    /// value.
+    #[test]
+    fn polling_after_ready_returns_the_same_value_again() {
+        let scheduler = UpdateScheduler::new();
+        let mut future = scheduler.end_of_frame();
+        let mut cx = Context::from_waker(Waker::noop());
+
+        assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+        scheduler.execute_frame();
+
+        let first = Pin::new(&mut future).poll(&mut cx);
+        let second = Pin::new(&mut future).poll(&mut cx);
+
+        let (Poll::Ready(first), Poll::Ready(second)) = (first, second) else {
+            panic!("both polls after the frame ran must be Ready");
+        };
+        let (
+            Ok(FrameOutcome::Completed {
+                timing: first_timing,
+            }),
+            Ok(FrameOutcome::Completed {
+                timing: second_timing,
+            }),
+        ) = (first, second)
+        else {
+            panic!("both polls must resolve Completed: {first:?}, {second:?}");
+        };
+        assert_eq!(
+            first_timing.id, second_timing.id,
+            "a second poll after Ready must repeat the SAME resolved value, not hang or \
+             resolve something else"
+        );
     }
 
     #[test]
@@ -4332,6 +5055,27 @@ mod tests {
         );
     }
 
+    /// Counts `wake()` calls; shared by several tests below that assert
+    /// exactly how many times a stored waker fired.
+    struct CountingWaker(std::sync::atomic::AtomicUsize);
+
+    impl std::task::Wake for CountingWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// A value whose own `Drop` panics; shared by the tests below that prove
+    /// a discarded panic payload's secondary panic-on-drop is contained
+    /// rather than left to escape.
+    struct PoisonPill;
+
+    impl Drop for PoisonPill {
+        fn drop(&mut self) {
+            panic!("poison pill dropped");
+        }
+    }
+
     /// A waker that panics must not starve waiters registered after it: the
     /// panic is caught, logged, and re-raised only once every waiter has
     /// been notified (issue #1057).
@@ -4344,13 +5088,6 @@ mod tests {
         impl Wake for PanicWaker {
             fn wake(self: Arc<Self>) {
                 panic!("waker probe");
-            }
-        }
-
-        struct CountingWaker(AtomicUsize);
-        impl Wake for CountingWaker {
-            fn wake(self: Arc<Self>) {
-                self.0.fetch_add(1, Ordering::SeqCst);
             }
         }
 
@@ -4391,6 +5128,294 @@ mod tests {
             "end_frame_impl catches notify_frame_completion's own panic alongside the \
              post-frame callback's, so the phase reset still runs on this clean-pipeline \
              path (issue #1057) instead of leaving the scheduler stuck at PostFrameCallbacks"
+        );
+    }
+
+    // ── SchedulerInner teardown (#1162) ─────────────────────────────────────
+
+    /// A pending `end_of_frame()` waiter must not hang forever just because
+    /// the scheduler that would have resolved it is gone: dropping the last
+    /// strong `UpdateScheduler` handle must resolve every registered waiter
+    /// with `Err(SchedulerClosed)` and wake it exactly once.
+    #[test]
+    fn scheduler_drop_resolves_a_pending_waiter_with_scheduler_closed() {
+        use std::sync::atomic::AtomicUsize;
+
+        let scheduler = UpdateScheduler::new();
+        let mut future = scheduler.end_of_frame();
+        let woken = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&woken));
+        assert!(
+            Pin::new(&mut future)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+
+        drop(scheduler);
+
+        assert_eq!(
+            woken.0.load(Ordering::SeqCst),
+            1,
+            "teardown must wake the waiter exactly once"
+        );
+
+        let resolved = Pin::new(&mut future).poll(&mut Context::from_waker(&waker));
+        let Poll::Ready(outcome) = resolved else {
+            panic!("a dropped scheduler must resolve every pending waiter, not leave it Pending");
+        };
+        assert!(
+            matches!(outcome, Err(SchedulerClosed)),
+            "must resolve Err(SchedulerClosed), got {outcome:?}"
+        );
+    }
+
+    /// A waker that panics during teardown must not starve a waiter
+    /// registered after it, and `Drop for SchedulerInner` must never itself
+    /// panic (that would be a panic from a destructor, aborting the
+    /// process) — mirrors
+    /// `notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics`
+    /// for the teardown path.
+    #[test]
+    fn scheduler_drop_wakes_a_later_waiter_when_an_earlier_waker_panics() {
+        use std::sync::atomic::AtomicUsize;
+        use std::task::Wake;
+
+        struct PanicWaker(Arc<AtomicBool>);
+        impl Wake for PanicWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::SeqCst);
+                panic!("teardown waker probe");
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let mut future_a = scheduler.end_of_frame();
+        let mut future_b = scheduler.end_of_frame();
+
+        let panicked = Arc::new(AtomicBool::new(false));
+        let panic_waker = Waker::from(Arc::new(PanicWaker(Arc::clone(&panicked))));
+        assert!(
+            Pin::new(&mut future_a)
+                .poll(&mut Context::from_waker(&panic_waker))
+                .is_pending()
+        );
+
+        let woken_b = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let counting_waker = Waker::from(Arc::clone(&woken_b));
+        assert!(
+            Pin::new(&mut future_b)
+                .poll(&mut Context::from_waker(&counting_waker))
+                .is_pending()
+        );
+
+        // Must return normally: a panic escaping a destructor here would be
+        // a double panic during unwind (abort) or, outside one, a panic out
+        // of an ordinary `drop()` call -- `Drop for SchedulerInner` must
+        // never let either happen.
+        drop(scheduler);
+
+        assert!(
+            panicked.load(Ordering::SeqCst),
+            "waker A must actually have run and panicked, or this test proves nothing"
+        );
+        assert_eq!(
+            woken_b.0.load(Ordering::SeqCst),
+            1,
+            "waker B must still be woken despite waker A's panic during teardown"
+        );
+
+        // The wake count alone does not pin the production write of
+        // `Err(SchedulerClosed)` -- a regression that woke every waker but
+        // wrote the wrong value (or nothing at all) into `completed` would
+        // still pass the assertion above.
+        let resolved = Pin::new(&mut future_b).poll(&mut Context::from_waker(&counting_waker));
+        assert!(
+            matches!(resolved, Poll::Ready(Err(SchedulerClosed))),
+            "teardown must resolve a still-pending waiter with Err(SchedulerClosed), \
+             got {resolved:?}"
+        );
+    }
+
+    /// The sibling test above has no red oracle for `Drop for
+    /// SchedulerInner`'s own `discard_panic_payload` call: its waker A
+    /// panics with a plain `panic!("...")` string, whose `Drop` cannot
+    /// itself panic, so reverting that call site's containment back to a
+    /// bare `drop(payload)` would still pass it. Waker A panics with
+    /// `panic_any(PoisonPill)` instead -- `PoisonPill::drop` itself panics
+    /// -- so teardown must survive a SECOND-order panic here, not just
+    /// trace a first-order one.
+    #[test]
+    fn scheduler_drop_survives_a_panicking_wakers_own_drop_panic() {
+        use std::sync::atomic::AtomicUsize;
+        use std::task::Wake;
+
+        struct PoisonWaker;
+        impl Wake for PoisonWaker {
+            fn wake(self: Arc<Self>) {
+                std::panic::panic_any(PoisonPill);
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let mut future_a = scheduler.end_of_frame();
+        let mut future_b = scheduler.end_of_frame();
+
+        let poison_waker = Waker::from(Arc::new(PoisonWaker));
+        assert!(
+            Pin::new(&mut future_a)
+                .poll(&mut Context::from_waker(&poison_waker))
+                .is_pending()
+        );
+
+        let woken_b = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let counting_waker = Waker::from(Arc::clone(&woken_b));
+        assert!(
+            Pin::new(&mut future_b)
+                .poll(&mut Context::from_waker(&counting_waker))
+                .is_pending()
+        );
+
+        // Must return normally: a panic escaping a destructor here would be
+        // a double panic during unwind (abort) or, outside one, a panic out
+        // of an ordinary `drop()` call -- `Drop for SchedulerInner` must
+        // never let either happen, even when the panicking waker's OWN
+        // payload panics again on drop.
+        drop(scheduler);
+
+        assert_eq!(
+            woken_b.0.load(Ordering::SeqCst),
+            1,
+            "waker B must still be woken despite waker A's poison-pill panic during teardown"
+        );
+
+        let resolved = Pin::new(&mut future_b).poll(&mut Context::from_waker(&counting_waker));
+        assert!(
+            matches!(resolved, Poll::Ready(Err(SchedulerClosed))),
+            "teardown must resolve a still-pending waiter with Err(SchedulerClosed) even when \
+             an earlier waker's panic payload's own Drop also panics, got {resolved:?}"
+        );
+    }
+
+    /// #1162: a SECOND waker's panic during `notify_frame_completion`
+    /// must not escape uncontained even when the panic payload's own `Drop`
+    /// impl ALSO panics — the discarded payload routes through
+    /// `discard_panic_payload`, which contains that second-order panic too
+    /// rather than letting it escape from an ordinary `drop`.
+    ///
+    /// Two distinct payload TYPES, not one conditional guarding a single
+    /// type: waker A's payload is a plain `panic!` string, never touched
+    /// again once `resume_unwind` carries it out of this test; waker B's is
+    /// `PoisonPill`, whose own `Drop` panics, which the fix must discard
+    /// safely. Reusing one type for both would make the test's OWN final
+    /// drop of the RESUMED payload (A's) re-trigger the very Drop panic the
+    /// fix is supposed to contain on B's side, conflating the two.
+    #[test]
+    fn notify_frame_completion_survives_a_panicking_payloads_own_drop_panic() {
+        use std::sync::atomic::AtomicUsize;
+        use std::task::Wake;
+
+        struct WakerA;
+        impl Wake for WakerA {
+            fn wake(self: Arc<Self>) {
+                panic!("waker A probe");
+            }
+        }
+
+        struct WakerB;
+        impl Wake for WakerB {
+            fn wake(self: Arc<Self>) {
+                std::panic::panic_any(PoisonPill);
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let mut future_a = scheduler.end_of_frame();
+        let mut future_b = scheduler.end_of_frame();
+        let mut future_c = scheduler.end_of_frame();
+
+        let waker_a = Waker::from(Arc::new(WakerA));
+        assert!(
+            Pin::new(&mut future_a)
+                .poll(&mut Context::from_waker(&waker_a))
+                .is_pending()
+        );
+
+        let waker_b = Waker::from(Arc::new(WakerB));
+        assert!(
+            Pin::new(&mut future_b)
+                .poll(&mut Context::from_waker(&waker_b))
+                .is_pending()
+        );
+
+        let woken_c = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let waker_c = Waker::from(Arc::clone(&woken_c));
+        assert!(
+            Pin::new(&mut future_c)
+                .poll(&mut Context::from_waker(&waker_c))
+                .is_pending()
+        );
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.execute_frame();
+        }));
+
+        let payload = unwind.expect_err("waker A's own panic must still propagate");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("waker A probe"),
+            "the FIRST waker's panic must be the one that escapes -- never the second \
+             waker's, and never its payload's own Drop panic either"
+        );
+        assert_eq!(
+            woken_c.0.load(Ordering::SeqCst),
+            1,
+            "the third waiter must still be woken despite two earlier wakers panicking"
+        );
+    }
+
+    /// The same shape one level up: `end_frame_impl`'s own
+    /// `callback_result`/`notify_result` merge must discard a panicking
+    /// notify payload through `discard_panic_payload`, not an uncontained
+    /// `drop`, when the post-frame callback ALSO panicked and so is what
+    /// actually propagates.
+    #[test]
+    fn end_frame_impl_survives_a_panicking_notify_payloads_own_drop_panic() {
+        use std::task::Wake;
+
+        struct PoisonWaker;
+        impl Wake for PoisonWaker {
+            fn wake(self: Arc<Self>) {
+                std::panic::panic_any(PoisonPill);
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let mut future = scheduler.end_of_frame();
+        let waker = Waker::from(Arc::new(PoisonWaker));
+        assert!(
+            Pin::new(&mut future)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+
+        scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.execute_frame();
+        }));
+
+        let payload = unwind.expect_err("the post-frame callback's panic must still propagate");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("post-frame probe"),
+            "the callback panicked first in this frame's own order, so its payload -- not \
+             the notify step's poison-pill one -- must be what escapes"
+        );
+        assert_eq!(
+            scheduler.phase(),
+            SchedulerPhase::Idle,
+            "the phase reset must still run even though discarding the notify side's own \
+             panic-on-drop payload could itself have panicked"
         );
     }
 

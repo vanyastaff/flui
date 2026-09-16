@@ -121,7 +121,7 @@ fn explicit_frame_completes_waiter_and_releases_waker() {
 
 use std::sync::Mutex;
 
-use flui_scheduler::{FrameCompletionFuture, IdleDeadline, Instant};
+use flui_scheduler::{FrameCompletionFuture, FrameOutcome, IdleDeadline, Instant};
 
 /// Installs a wake hook that only counts `frame_scheduled` false→true edges.
 fn counting_wake_hook(scheduler: &UpdateScheduler) -> Arc<AtomicUsize> {
@@ -190,8 +190,11 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
 
     let frame_id = scheduler.execute_frame();
     let resolved = Pin::new(&mut waiter).poll(&mut Context::from_waker(Waker::noop()));
-    let Poll::Ready(timing) = resolved else {
+    let Poll::Ready(outcome) = resolved else {
         panic!("the frame the registration demanded must resolve it");
+    };
+    let Ok(FrameOutcome::Completed { timing, .. }) = outcome else {
+        panic!("a clean execute_frame() must resolve Completed, not {outcome:?}");
     };
     assert_eq!(
         timing.id, frame_id,
