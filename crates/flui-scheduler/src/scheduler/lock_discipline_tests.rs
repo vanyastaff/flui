@@ -11,6 +11,8 @@
 //! `FrameState`, `CallbackState`, `BindingState`, and
 //! `UpdateScheduler::inner` itself) exactly as the inline module did.
 
+use std::sync::OnceLock;
+
 use super::*;
 
 // =========================================================================
@@ -35,19 +37,36 @@ use super::*;
 /// `BindingState` are destructured below with no trailing `..`, so a field
 /// added to any of them is a compile error here until this oracle
 /// explicitly classifies it -- a `Mutex` gets a `try_lock` assertion;
-/// anything else (an atomic, an id generator, a lock-free `DashMap`) is
-/// bound `_` deliberately, so the classification decision is visible, not
-/// silently skipped. `TaskQueue` and `AsyncDriver` hold their own mutexes
-/// behind fields private to their own modules, so they are probed through
-/// their own `#[cfg(test)] is_unlocked()` methods instead of a field
-/// destructure here.
+/// anything else (an atomic, an id generator, a sharded-`RwLock`
+/// `DashMap`) is bound `_` deliberately, so the classification decision is
+/// visible, not silently skipped. `TaskQueue` and `AsyncDriver` hold their
+/// own mutexes behind fields private to their own modules, so they are
+/// probed through their own `#[cfg(test)] is_unlocked()` methods instead
+/// of a field destructure here.
 ///
-/// Left for a follow-up, not probed here: `callbacks.cancelled` (a
-/// lock-free `DashMap` -- it cannot deadlock a reentrant caller the way a
-/// `Mutex` can, so it is a different, lower-priority risk) and
-/// `LocalPostFrameLane`'s owner-local queue (an `Rc<RefCell<_>>`, not a
-/// `Mutex` -- a reentrant `RefCell` borrow panics rather than deadlocking,
-/// a different failure mode this oracle does not yet cover).
+/// `callbacks.cancelled` and `LocalPostFrameLane`'s owner-local queue are
+/// covered by their own standalone tests instead of being folded into this
+/// destructure -- neither is a `Mutex`, but each is still a real
+/// reentrancy hazard with its own different failure mode, not a lesser
+/// one: `DashMap` (6.2.1) is a SHARDED `RwLock`, not lock-free --
+/// `contains_key`/`get`/`get_mut` release their shard's lock immediately
+/// when a key is absent, but a `Ref`/`RefMut`/`Entry` held alive across a
+/// reentrant call into the SAME shard deadlocks exactly like the `Mutex`
+/// family above (`entry()` holds its shard write-locked for its entire
+/// life, vacant or occupied, regardless of whether the caller binds the
+/// payload to a name); a reentrant `RefCell` borrow panics rather than
+/// deadlocking, a third failure mode again.
+/// [`cancelled_dashmap_not_locked_on_reentrant_cancel_of_a_settled_id`]
+/// probes the running callback's own key with `try_get_mut` (a `try_write`
+/// attempt, so it fails on ANY existing holder, reader or writer) BEFORE
+/// making any other call into the map -- DashMap 6.2.1 has no all-shards
+/// "is anything locked" API, so this is a completeness pin on the one key
+/// a reentrant dispatch actually touches, not an exhaustive per-shard
+/// sweep. `LocalPostFrameLane::is_unlocked` is asserted directly inside
+/// `post_frame.rs`'s `local_then_local_nested_registration_defers`, since
+/// a lane is never a field of `SchedulerInner` for this destructure to see
+/// in the first place -- each `new_local_post_frame_lane()` call hands the
+/// caller its own, held separately from the scheduler's own storage.
 fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     // Destructured without `..` on purpose: a `Mutex` added directly to
     // `SchedulerInner` (beside the owned sub-objects) must fail to compile
@@ -72,6 +91,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         warm_up_done: _,
         idle_deadline,
         completion_waiters,
+        frame_thread,
     } = frame;
     assert!(
         current_frame.try_lock().is_some(),
@@ -84,6 +104,10 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     assert!(
         budget.try_lock().is_some(),
         "budget is locked during a callback"
+    );
+    assert!(
+        frame_thread.try_lock().is_some(),
+        "frame_thread is locked during a callback"
     );
     assert!(
         idle_deadline.try_lock().is_some(),
@@ -380,6 +404,97 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
         ran.load(Ordering::Acquire),
         "the completion waker must actually have run"
     );
+}
+
+/// Completeness pin for the `callbacks.cancelled` DashMap named in
+/// [`assert_no_scheduler_lock_held`]'s own doc. DashMap 6.2.1 is a sharded
+/// `RwLock`, not lock-free: a `Ref`/`RefMut`/`Entry` held alive across a
+/// reentrant call into the SAME shard deadlocks, exactly like the `Mutex`
+/// family the rest of this oracle covers (empirically confirmed:
+/// `entry()` holds its shard's write-lock for its ENTIRE lifetime, vacant
+/// or occupied, even matched into `Entry::Vacant(_)`/`Entry::Occupied(_)`
+/// with the payload left unbound; `get()`/`get_mut()` release their
+/// shard's lock immediately when the key is ABSENT, but hold it as long as
+/// a bound `Some(..)` result stays alive when the key is PRESENT).
+///
+/// This probes the transient dispatch loop's own "skip if cancelled"
+/// check (`contains_key`, in `handle_begin_frame`): it captures the
+/// CURRENTLY DISPATCHING callback's own id (`own_id`, via an
+/// `Arc<OnceLock<CallbackId>>` set right after `schedule_frame_callback`
+/// returns, since the id is not known until then) and, as the very first
+/// thing the callback does, asserts `!cancelled.try_get_mut(&own_id).is_locked()`
+/// -- proving the dispatch loop released whatever guard its own lookup
+/// produced BEFORE invoking this callback, not merely that some later,
+/// unrelated call succeeds. Reddens if the dispatch loop is ever
+/// "improved" into
+/// `match self.inner.callbacks.cancelled.entry(cancellable.id) { Occupied(_)
+/// => continue, Vacant(_) => (cancellable.callback)(vsync_time) }`: an
+/// unbound `Vacant(_)` arm still holds `own_id`'s shard write-locked for
+/// the whole match body, exactly where this probe trips.
+///
+/// The second half keeps the original test's purpose:
+/// `cancel_frame_callback` (scheduler.rs) takes `position`+`remove` for a
+/// still-queued id and never touches `cancelled`; `.insert(id, ())` fires
+/// only on the not-found branch (already-fired or never-registered). From
+/// inside the same callback, cancel an id that has already fired
+/// (`settled_id`), assert its shard is not locked afterward (a per-key/
+/// shard pin -- DashMap 6.2.1 has no all-shards "is anything locked" API),
+/// and additionally assert `try_get(&settled_id)` is `Present` afterward,
+/// so the insert branch is known to have actually run rather than this
+/// assertion passing vacuously against the OTHER (`position`+`remove`)
+/// branch.
+#[test]
+fn cancelled_dashmap_not_locked_on_reentrant_cancel_of_a_settled_id() {
+    let scheduler = UpdateScheduler::new();
+    let probe = scheduler.clone();
+
+    // Registered first, so the one-shot transient queue pops and runs this
+    // before the probing callback below -- "settled" by the time it is
+    // cancelled.
+    let settled_id = scheduler.schedule_frame_callback(Box::new(|_| {}));
+
+    let own_id: Arc<OnceLock<CallbackId>> = Arc::new(OnceLock::new());
+    let own_id_for_callback = Arc::clone(&own_id);
+    let registered_id = scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+        let own_id = own_id_for_callback
+            .get()
+            .copied()
+            .expect("set immediately after schedule_frame_callback returns, below");
+
+        assert!(
+            !probe
+                .inner
+                .callbacks
+                .cancelled
+                .try_get_mut(&own_id)
+                .is_locked(),
+            "the dispatch loop's own cancellation check must release its \
+             guard on this callback's id BEFORE invoking it"
+        );
+
+        assert!(
+            !probe.cancel_frame_callback(settled_id),
+            "the earlier callback must already have run (and been removed \
+             from the queue) by the time this one does"
+        );
+        let result = probe.inner.callbacks.cancelled.try_get(&settled_id);
+        assert!(
+            !result.is_locked(),
+            "cancel_frame_callback's DashMap insert on a settled id must \
+             not leave that id's shard locked for a reentrant caller"
+        );
+        assert!(
+            result.is_present(),
+            "the not-found branch's insert must have actually run -- \
+             otherwise the assertion above passes vacuously against the \
+             OTHER branch"
+        );
+    }));
+    own_id
+        .set(registered_id)
+        .expect("set exactly once, before the callback can possibly run");
+
+    scheduler.execute_frame();
 }
 
 // =========================================================================

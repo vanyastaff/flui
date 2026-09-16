@@ -21,7 +21,9 @@ Frame scheduling, task prioritization, and animation coordination.
 ## Key constraints
 
 - Uses `web-time` (maintained replacement for `instant` crate) for cross-platform time
-- Uses `dashmap` for lock-free concurrent collections
+- Uses `dashmap` for sharded-lock concurrent collections (a sharded `RwLock`,
+  not lock-free; a `Ref`/`RefMut`/`Entry` held across a reentrant call into
+  the same shard deadlocks)
 - Uses `event-listener` for async completion callbacks
 - `serde` feature for serialization support
 - Shared and local post-frame registration is linearized by one gate and one ID
