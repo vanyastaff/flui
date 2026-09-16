@@ -733,7 +733,7 @@ def self_test() -> int:
     # walks them exactly as it would a real crate, then run the gate against
     # two synthetic allowlists that plant one violation in each direction.
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_root = Path(tmp)
+        tmp_root = Path(tmp).resolve()
         crate_src = tmp_root / "crates" / "fixture_crate" / "src"
         crate_src.mkdir(parents=True)
         for f in fixtures.glob("*.rs.fixture"):
