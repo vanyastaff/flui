@@ -49,8 +49,7 @@ bench's current shape, which keeps one extra clone of every controller alive
 per batch so a removal's `Arc` drop only decrements a refcount instead of
 deallocating a whole `AnimationController` — both the "before" and "after"
 `unregister_all` rows were re-measured under that shape so they compare like
-for like (see the bench file's doc comment for why an earlier shape without
-that clone conflated map-removal cost with deallocation cost).
+for like.
 
 Host: 13th Gen Intel Core i9-13900K, rustc 1.98.1 (48a229cea 2026-09-01),
 Linux x86_64 — not CPU-isolated, so treat these as a distribution and a
@@ -100,6 +99,34 @@ An N² scan scales ×100 over a 10× population growth; N log N scales
 ~20% of the ×13.3 N log N estimate, consistent with the indexed registry
 rather than the quadratic scan it replaced. `has_running` is unaffected by
 this change and stays O(N); it is not part of either table.
+
+### Where the remaining per-controller cost goes
+
+A stopped controller costs ~54 ns per pump after the change (10,000 → ~540 µs).
+A scratch decomposition bench on the same host attributed it as: the
+`BTreeMap` seek (`range_mut(cursor..fence).next()` re-walks from the root on
+every iteration, since the registry lock — and so the map borrow — is dropped
+between steps) ≈ 55 %; the registry lock pair ≈ 17 %; the two controller-lock
+pairs `run_generation()` + `status()` ≈ 28 %. The release assembly
+(`cargo asm -p flui-animation --lib --release tick_all`) shows six inlined
+`lock cmpxchg` fast-path operations per stopped iteration and no allocation on
+that path (the children `Vec` clone is skipped when there are no children).
+`has_running` adds ~8 ns per controller under a single registry lock, so a
+frame driver that calls `has_running` and then `tick_all` every pump spends
+~630 µs per 10,000 resident stopped controllers doing no animation work.
+
+The "exceeds 1 ms per pump" point for stopped controllers moved from
+N ≈ 2,900 (quadratic scan, fitted) to N ≈ 17,000–18,000 (measured directly:
+836 µs at 15,000, 1.14 ms at 20,000, 1.84 ms at 30,000). An active-set index
+is not worth building until a real tree is observed carrying that many
+resident controllers; reading generation and status under one controller lock
+instead of two was prototyped at ~11 ns per controller (~20 %) and is the
+cheaper next step.
+
+Criterion's regression/improvement annotation is not trustworthy at N = 100
+with `sample_size(10)`: three back-to-back runs of an identical binary
+reported −70 % / +3 % / +20 % "changes". Read the N ≥ 1,000 rows for
+signal; the N = 100 row exists to show the small-registry cost is unchanged.
 
 ## Memory Layout
 
