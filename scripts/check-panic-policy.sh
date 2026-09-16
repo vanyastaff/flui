@@ -385,18 +385,36 @@ def production_code(raw: str) -> str:
 _MOD_DECL_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;\s*$")
 _ATTR_LINE_RE = re.compile(r"^\s*#!?\[(.*)\]\s*$")
 _DOC_RE = re.compile(r"^\s*///.*$|^\s*//!.*$")
+_PATH_ATTR_RE = re.compile(r'^path\s*=\s*"([^"]+)"$')
 
 
-def find_test_support_modules(rs_file: Path) -> list[str]:
+def find_test_support_modules(rs_file: Path) -> list[tuple[str, str | None]]:
+    """Out-of-line `#[cfg(test)] mod NAME;` declarations in `rs_file`, paired
+    with an explicit `#[path = "..."]` override when the declaration carries
+    one (e.g. `#[cfg(test)] #[path = "name_tests.rs"] mod tests;`, which
+    points at a FLAT SIBLING file rather than Rust's default out-of-line
+    convention `<decl_dir>/NAME.rs`) — `None` when no such override is
+    present, so the caller falls back to that convention.
+
+    The override is honored only for a TOP-LEVEL declaration (the `mod`
+    line and its attributes start at column 0): `#[path]`'s relative base
+    shifts with each enclosing INLINE `mod NAME { .. }` the declaration
+    sits inside (each one adds an implicit `NAME/` segment), which this
+    line-scan does not track. A nested declaration's override is silently
+    skipped, falling back to the plain `<decl_dir>/NAME.rs` convention
+    below -- the same guess this function made before it understood
+    `#[path]` at all, which is what every nested call site in this
+    workspace already resolves under today."""
     try:
         lines = rs_file.read_text().splitlines()
     except (OSError, UnicodeDecodeError):
         return []
-    names: list[str] = []
+    found: list[tuple[str, str | None]] = []
     for idx, line in enumerate(lines):
         m = _MOD_DECL_RE.match(line.split("//", 1)[0])
         if not m:
             continue
+        top_level = line == line.lstrip()
         name = m.group(1)
         j = idx - 1
         attrs: list[str] = []
@@ -410,6 +428,8 @@ def find_test_support_modules(rs_file: Path) -> list[str]:
                 continue
             am = _ATTR_LINE_RE.match(lines[j])
             if am:
+                if lines[j] != lines[j].lstrip():
+                    top_level = False
                 attrs.append(am.group(1))
                 j -= 1
                 continue
@@ -420,18 +440,40 @@ def find_test_support_modules(rs_file: Path) -> list[str]:
             if a.strip().startswith("cfg(") and a.strip().endswith(")")
         )
         if gated:
-            names.append(name)
-    return names
+            path_override = (
+                next(
+                    (pm.group(1) for a in attrs if (pm := _PATH_ATTR_RE.match(a.strip()))),
+                    None,
+                )
+                if top_level
+                else None
+            )
+            found.append((name, path_override))
+    return found
 
 
 def test_support_paths_for_crate(crate_src: Path) -> set[Path]:
     excluded: set[Path] = set()
     for rs_file in crate_src.rglob("*.rs"):
-        names = find_test_support_modules(rs_file)
-        if not names:
+        modules = find_test_support_modules(rs_file)
+        if not modules:
             continue
         decl_dir = rs_file.parent if rs_file.name in ("lib.rs", "mod.rs", "main.rs") else rs_file.parent / rs_file.stem
-        for name in names:
+        for name, path_override in modules:
+            if path_override is not None:
+                # `#[path = "..."]` is resolved relative to the directory of
+                # the file carrying the `mod` declaration, not the
+                # convention-derived `decl_dir` above. `.resolve()` collapses
+                # a `../` in the override (e.g. `#[path =
+                # "../sibling_tests.rs"]`) before comparing against `root`
+                # (itself already resolved) -- an unresolved path's parts
+                # would carry the literal `..` segment and never match the
+                # scanned file's own (normalized) relative path in
+                # `excluded`, silently failing to exclude it.
+                cand_file = (rs_file.parent / path_override).resolve()
+                if cand_file.is_file():
+                    excluded.add(cand_file.relative_to(root))
+                continue
             cand_file = decl_dir / f"{name}.rs"
             cand_dir = decl_dir / name
             if cand_dir.is_dir():
@@ -837,6 +879,34 @@ def self_test() -> int:
                 )
             else:
                 print(f"  FAIL: expected only lib.rs's violation flagged, got errors={ool_errors} counts={ool_counts}")
+                status = 1
+
+            print("self-test: `#[cfg(test)] #[path = \"...\"] mod NAME;` excludes the named sibling, not a same-named guess")
+            po_fixtures = fixtures / "path_override_test_mod"
+            po_crate_src = tmp_root / "crates" / "path_override_crate" / "src"
+            po_crate_src.mkdir(parents=True)
+            for f in po_fixtures.glob("*.rs.fixture"):
+                shutil.copy(f, po_crate_src / f.name.replace(".fixture", ""))
+            po_rel_prefix = "crates/path_override_crate/src"
+
+            po_excluded = test_support_paths_for_crate(po_crate_src)
+            expected_po_excluded = {Path(f"{po_rel_prefix}/sibling_with_a_different_name.rs")}
+            if po_excluded == expected_po_excluded:
+                print("  ok: the #[path]-named sibling is excluded, by its actual name, not <mod-name>.rs")
+            else:
+                print(f"  FAIL: expected excluded == {expected_po_excluded}, got {po_excluded}")
+                status = 1
+
+            po_errors, po_counts = run_check(po_crate_src.parent.parent, {})
+            if any(
+                f"{po_rel_prefix}/lib.rs" in e and "not on" in e for e in po_errors
+            ) and not any("sibling_with_a_different_name.rs" in e for e in po_errors):
+                print(
+                    "  ok: the production fn after the path-override mod declaration is still "
+                    "scanned and flagged; the #[path]-named sibling is not"
+                )
+            else:
+                print(f"  FAIL: expected only lib.rs's violation flagged, got errors={po_errors} counts={po_counts}")
                 status = 1
         finally:
             root = real_root

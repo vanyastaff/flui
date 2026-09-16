@@ -1,0 +1,16 @@
+//! Fixture: the OUT-OF-LINE `#[cfg(test)] mod NAME;` shape with an explicit
+//! `#[path = "..."]` override pointing at a FLAT SIBLING whose file name
+//! does not match `NAME` (`crates/flui-animation/src/controller.rs`'s own
+//! `#[cfg(test)] #[path = "controller_tests.rs"] mod tests;` is the real
+//! shape this covers). `test_support_paths_for_crate` must resolve the
+//! override relative to THIS file's own directory, not the
+//! `<decl_dir>/NAME.rs` convention (`decl_dir / "renamed_tests.rs"` does
+//! not exist here at all, only `sibling_with_a_different_name.rs` does).
+
+#[cfg(test)]
+#[path = "sibling_with_a_different_name.rs"]
+mod renamed_tests;
+
+pub fn production_after_declaration(slot: Option<u32>) -> u32 {
+    slot.expect("must be flagged -- the path-override module must not swallow this")
+}

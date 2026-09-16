@@ -33,10 +33,25 @@ pub enum AnimationError {
     #[error("AnimationController has been disposed")]
     Disposed,
 
-    /// Invalid animation bounds were provided.
+    /// Invalid animation bounds, or an invalid `repeat`/`repeat_with` range,
+    /// were provided.
     ///
-    /// This error occurs when `lower_bound >= upper_bound` in
-    /// [`AnimationController::with_bounds()`](crate::AnimationController::with_bounds).
+    /// Returned by [`with_bounds`](crate::AnimationController::with_bounds)/
+    /// [`without_ticker_bounds`](crate::AnimationController::without_ticker_bounds)/
+    /// [`with_detached_ticker_bounds`](crate::AnimationController::with_detached_ticker_bounds)
+    /// and [`AnimationControllerBuilder::bounds`](crate::builder::AnimationControllerBuilder::bounds)
+    /// unless both bounds are finite, `lower_bound < upper_bound`, AND
+    /// `upper_bound - lower_bound` itself fits in `f32` — two finite
+    /// endpoints do not by themselves make a finite range
+    /// (`(-f32::MAX, f32::MAX)` has a span of `f32::INFINITY`).
+    ///
+    /// Also returned by [`repeat_with`](crate::AnimationController::repeat_with)
+    /// for a range-SHAPE error: a caller-supplied `min`/`max` that is `NaN`,
+    /// or an inverted/equal pair, on ANY controller. Distinct from
+    /// [`NonFiniteTarget`](Self::NonFiniteTarget), which `repeat_with`
+    /// returns instead when the range shape is fine but its EFFECTIVE value
+    /// (after defaulting an unset endpoint to this controller's own bound)
+    /// is still non-finite.
     #[error("Invalid animation bounds: {0}")]
     InvalidBounds(String),
 
@@ -72,9 +87,9 @@ pub enum AnimationError {
     /// (and their `_curved` variants), [`fling`](crate::AnimationController::fling)/[`fling_with`](crate::AnimationController::fling_with),
     /// [`animate_with`](crate::AnimationController::animate_with)/[`animate_back_with`](crate::AnimationController::animate_back_with),
     /// and [`repeat`](crate::AnimationController::repeat)/[`repeat_with`](crate::AnimationController::repeat_with)
-    /// when its *effective* range (after defaulting) is not finite. Because
-    /// every production caller of these methods discards the `Result`
-    /// today, a refusal also reaches `tracing::warn!` on its own.
+    /// when its *effective* range (after defaulting) is not finite. Every
+    /// refusal is also emitted as a `tracing::warn!` — see
+    /// `crates/flui-animation/docs/ARCHITECTURE.md`'s mapping entry for why.
     #[error("Non-finite target: {0}")]
     NonFiniteTarget(String),
 }

@@ -502,8 +502,8 @@ impl ViewState<Scrollable> for ScrollableState {
             self.vsync_registration = Some(registration);
         }
         // If no VsyncScope is present, the fling controller has no ticker at
-        // all (built via `without_ticker_bounds`) and simply never advances —
-        // there is no wall-clock fallback.
+        // all (built via `unbounded_without_ticker`) and simply never
+        // advances — there is no wall-clock fallback.
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {

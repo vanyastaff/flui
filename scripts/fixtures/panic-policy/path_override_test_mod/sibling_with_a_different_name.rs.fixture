@@ -1,0 +1,12 @@
+//! Fixture: the sibling file `lib.rs.fixture` declares
+//! `#[cfg(test)] #[path = "sibling_with_a_different_name.rs"] mod renamed_tests;`.
+//! Its bare (non-`BUG:`) expect() must never be scanned -- this file is
+//! test-support, excluded by `test_support_paths_for_crate` via the
+//! `#[path]` override, not the `<decl_dir>/NAME.rs` naming convention
+//! (its own file name does not match the module name `renamed_tests`).
+
+#[test]
+fn some_test() {
+    let value: Option<u32> = Some(1);
+    let _ = value.expect("test-only, never scanned");
+}

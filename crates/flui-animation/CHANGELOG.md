@@ -35,7 +35,7 @@ Versioning: per `docs/release.md` policy.
   the Material 3 `EaseInOutCubicEmphasized` and `FastEaseInToSlowEaseOut`
   constants, and the `Split` curve (track-finger-then-fling transitions).
 
-### Breaking (issue #556 — `flui-scheduler`'s `UpdateScheduler` reshape)
+### Breaking (issue #556: `flui-scheduler`'s `UpdateScheduler` reshape; issue #1183 — bounded constructors reject non-finite bounds)
 
 - This crate's re-export of `flui_scheduler::Scheduler` is renamed
   `UpdateScheduler` (hard rename, no alias, matching the rename in
@@ -44,53 +44,70 @@ Versioning: per `docs/release.md` policy.
   `flui-scheduler` deleted that fixed-rate vsync simulator outright (zero
   production consumers; not to be confused with this crate's own,
   unrelated `Vsync` per-presentation tick registry, which is unaffected).
+- `with_bounds`/`without_ticker_bounds`/`with_detached_ticker_bounds` (and
+  `AnimationControllerBuilder::bounds`) now reject `InvalidBounds` for a
+  `NaN` endpoint, an infinite endpoint, a half-open pair (one finite bound,
+  one infinite), or two finite endpoints whose RANGE overflows `f32`
+  (`(-f32::MAX, f32::MAX)`). Flutter's own constructor is far more
+  permissive: it asserts only `upperBound >= lowerBound` (`debug`-only,
+  compiled out in `release`), which accepts an infinite pair and an equal
+  pair. Since the assert is gone in `release`, it silently accepts an
+  inverted pair there too. `cargo public-api`/`cargo semver-checks` cannot
+  see a signature-preserving `Ok` -> `Err` narrowing like this, so
+  `### Breaking` is the only mechanized signal that a previously-accepted
+  call now returns `Err`.
 
 ### Changed
 
-- **Bounded constructors reject non-finite bounds; unbounded runs on it are
-  refused; no path reads NaN** (issue #1183, flutter/flutter#76014).
-  `with_bounds`/`without_ticker_bounds`/`with_detached_ticker_bounds` (and
-  `AnimationControllerBuilder::bounds`) now reject `NaN`, an infinite bound,
-  or a half-open pair with `InvalidBounds` — a declared behavior CHANGE:
-  Flutter's own constructor accepts any pair. A wide-open
-  `(NEG_INFINITY, INFINITY)` pair, which `scrollable.rs`/
+- **Unbounded is a constructor fact; bound-targeting runs on it are
+  refused; no path reads NaN** (issue #1183, flutter/flutter#76014). The
+  bounded-constructor rejection itself is listed under `### Breaking`
+  above; this entry covers the rest of the change.
+- A wide-open `(NEG_INFINITY, INFINITY)` pair, which `scrollable.rs`/
   `scroll_controller.rs`/`refresh_indicator.rs` all used to spell as
   `without_ticker_bounds(1ms, NEG_INFINITY, INFINITY).expect(..)`, now
-  migrates to `unbounded_without_ticker(1ms)` instead (see `### Added`). On
-  an unbounded controller, `forward`/`forward_from`/`reverse`/`reverse_from`/
-  `fling`/`fling_with`, and `repeat`/`repeat_with` whose effective range is
-  still non-finite, now return `Err(NonFiniteTarget)` instead of installing
-  a run toward an infinite value; `repeat_with(Some(finite), Some(finite),
-  ..)` is unaffected. On ANY controller (bounded too), `animate_to`/
-  `animate_back`(`_curved`)/`forward_from`/`reverse_from` now refuse a `NaN`
-  `target`/`from` instead of letting it through `clamp` unchanged (a
-  `+-inf` `target`/`from` still clamps to a finite bound exactly as before;
-  it is refused only when that bound is itself infinite). `repeat_with`'s
-  range-inversion check now also catches a `NaN` endpoint
-  (`repeat_with(Some(f32::NAN), ..)` used to reach `f32::clamp`'s own
-  `assert!(min <= max)` and PANIC). `fling`/`fling_with` refuse a
-  non-finite `velocity`, and no longer corrupt `direction` on a refused
-  fling (a pre-existing ordering bug: `direction` was written before the
-  `InvalidSpring` check). `animate_to`/`animate_back` refuse when
-  `target - value` overflows `f32`. `set_value` and a running simulation's
-  sample keep their existing NaN canonicalization on a BOUNDED controller
-  (pinned); on an UNBOUNDED one, a non-finite `set_value` input is now a
-  full no-op (was: canonicalized against `-inf`/`+inf`, which is exactly
-  the bug this issue reports), and a simulation that goes non-finite
-  MID-RUN now ends the run at its last finite value instead of continuing
-  with a stale value forever. `reset()` on an unbounded controller now
-  lands on `0.0` (flutter#76014's requested defined beginning), not `-inf`.
-  `tick_time_based` now reads `start_value`/`target_value` directly at the
+  migrates to `unbounded_without_ticker(1ms)` instead (see `### Added`).
+- On an unbounded controller, `forward`/`forward_from`/`reverse`/
+  `reverse_from`/`fling`/`fling_with`, and `repeat`/`repeat_with` whose
+  effective range is still non-finite, now return `Err(NonFiniteTarget)`
+  instead of installing a run toward an infinite value.
+  `repeat_with(Some(finite), Some(finite), ..)` is unaffected.
+- On ANY controller (bounded too), `animate_to`/`animate_back`(`_curved`)/
+  `forward_from`/`reverse_from` now refuse a `NaN` `target`/`from` instead
+  of letting it through `clamp` unchanged. A `+-inf` `target`/`from` still
+  clamps to a finite bound exactly as before; it is refused only when that
+  bound is itself infinite.
+- `repeat_with`'s range-inversion check now also catches a `NaN` endpoint:
+  `repeat_with(Some(f32::NAN), ..)` used to reach `f32::clamp`'s own
+  `assert!(min <= max)` and PANIC, not merely install a broken run.
+- `fling`/`fling_with` refuse a non-finite `velocity`, and no longer
+  corrupt `direction` on a refused fling — a pre-existing ordering bug
+  where `direction` was written before the `InvalidSpring` check.
+- `animate_to`/`animate_back` refuse when `target - value` overflows
+  `f32`.
+- `set_value`'s existing `NaN` canonicalization on a BOUNDED controller is
+  unchanged (pinned). On an UNBOUNDED one, a non-finite `set_value` input
+  is now a full no-op — was: canonicalized against `-inf`/`+inf`, exactly
+  the bug this issue reports.
+- A running simulation's sample going non-finite MID-RUN now ends the run
+  at its last finite value, on ANY controller. This is new behavior, not a
+  preserved pin: previously the sample had no non-finite handling at all
+  and reached `clamp` unchanged, which returns `NaN` as-is (a `NaN` bound
+  panics `clamp`; a `NaN` self does not), silently poisoning `value`.
+- `reset()` on an unbounded controller now lands on `0.0`
+  (flutter#76014's requested defined beginning), not `-inf`.
+- `tick_time_based` now reads `start_value`/`target_value` directly at the
   exact endpoints instead of computing `start + range * eased_t` there, so
   `range` being non-finite can no longer produce `inf * 0.0 = NaN`.
-  `scroll_controller.rs`'s `service_pending_command` now raises
+- `scroll_controller.rs`'s `service_pending_command` now raises
   `is_scrolling(true)` only after the run start returns `Ok` AND is still
   running, instead of unconditionally before the call, so a refused (or
   synchronously-settled) start no longer parks the scrollable in
-  "scrolling" forever. Two tests inverted: `…_bounds_rejects_invalid_bounds_and_accepts_wide_open_ones`
-  (both the `without_ticker` and `with_detached_ticker` variants) used to
-  assert a wide-open pair was ACCEPTED at `value() == NEG_INFINITY`; they
-  now assert it is REJECTED, and that the unbounded constructor starts at
+  "scrolling" forever.
+- Two tests inverted: `…_bounds_rejects_wide_open_ones` (both the
+  `without_ticker` and `with_detached_ticker` variants) used to assert a
+  wide-open pair was ACCEPTED at `value() == NEG_INFINITY`. They now
+  assert it is REJECTED, and that the unbounded constructor starts at
   `0.0`.
 - **Repeat sampling is a pure function of elapsed time** (#1078):
   `AnimationController::repeat`/`repeat_with`'s `value`/`status`/`direction` at any `tick_at` are

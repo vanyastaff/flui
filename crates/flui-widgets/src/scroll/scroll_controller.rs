@@ -1101,15 +1101,31 @@ mod tests {
         // fling controller must be a complete no-op, not silently start the
         // stale animation.
         let fling = fling_stub();
+        let completed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&completed_count);
+        let _id = fling.add_status_listener(Arc::new(move |status| {
+            if status == flui_animation::AnimationStatus::Completed {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+
         controller.service_pending_command(&fling);
+
+        // The preceding `jump_to` re-queued `Cancel` instead (see `jump_to`'s
+        // own doc), which services as `fling.stop()` -- on a fresh,
+        // never-run unbounded controller, `stop()` reports `Completed`
+        // (direction defaults Forward, and neither infinite bound is ever
+        // "at" on an unbounded range). Either way, the queued animate_to
+        // must not start. A COUNTING listener (not a bare `status()` read)
+        // proves `stop()` fired a real transition rather than the queued
+        // animate_to silently starting and separately landing on the same
+        // status.
+        assert_eq!(fling.status(), flui_animation::AnimationStatus::Completed);
         assert_eq!(
-            fling.status(),
-            flui_animation::AnimationStatus::Completed,
-            "clear_pending_command must drop the queued animate_to; the preceding jump_to \
-             re-queued Cancel instead (see jump_to's own doc), which services as \
-             fling.stop() -- on a fresh, never-run UNBOUNDED controller that reports \
-             Completed (direction defaults Forward, and neither infinite bound is ever \
-             \"at\": #1183's v3 delta 6). Either way, the queued animate_to must not start"
+            completed_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "clear_pending_command must drop the queued animate_to; servicing must emit \
+             exactly one Completed transition (fling.stop()'s), not the animate_to starting"
         );
     }
 }

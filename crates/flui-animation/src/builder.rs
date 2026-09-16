@@ -102,9 +102,12 @@ impl AnimationControllerBuilder {
     /// # Errors
     ///
     /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
-    /// finite and `lower < upper` — bounded means finite; an
-    /// [`AnimationController::unbounded`] controller is not reachable
-    /// through this builder (it has no bound to configure).
+    /// finite, `lower < upper`, AND `upper - lower` itself fits in `f32` —
+    /// bounded means finite endpoints AND a finite span
+    /// (`(-f32::MAX, f32::MAX)` has finite endpoints but a span of
+    /// `f32::INFINITY`). An [`AnimationController::unbounded`] controller
+    /// is not reachable through this builder (it has no bound to
+    /// configure).
     ///
     /// # Examples
     ///
@@ -128,10 +131,17 @@ impl AnimationControllerBuilder {
         // clippy's `neg_cmp_op_on_partial_ord` flags on a `PartialOrd`-only
         // type): NaN makes the two diverge, but NaN is caught by the
         // `is_finite` clauses below regardless of which form this takes.
-        if lower >= upper || !lower.is_finite() || !upper.is_finite() {
+        // The span check mirrors `AnimationController::with_bounds_inner`'s
+        // own rule: two finite endpoints do not make a finite range.
+        if lower >= upper
+            || !lower.is_finite()
+            || !upper.is_finite()
+            || !(upper - lower).is_finite()
+        {
             return Err(AnimationError::InvalidBounds(format!(
                 "lower_bound ({lower}) and upper_bound ({upper}) must both be finite, with \
-                 lower_bound < upper_bound"
+                 lower_bound < upper_bound, and the range (upper_bound - lower_bound) must fit \
+                 in f32"
             )));
         }
         self.lower_bound = lower;
@@ -332,10 +342,16 @@ mod tests {
     #[test]
     fn bounds_rejects_non_finite_endpoints() {
         let scheduler = UpdateScheduler::new();
+        // Same list `controller::tests::bounds_constructors_reject_non_finite_bounds`
+        // uses, plus the finite-endpoints-infinite-range case.
         let cases: &[(f32, f32)] = &[
             (f32::NAN, 1.0),
             (0.0, f32::NAN),
             (f32::NEG_INFINITY, f32::INFINITY),
+            (f32::NEG_INFINITY, 5.0),
+            (5.0, f32::INFINITY),
+            (f32::NEG_INFINITY, f32::NEG_INFINITY),
+            (-f32::MAX, f32::MAX),
         ];
         for &(lower, upper) in cases {
             let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
