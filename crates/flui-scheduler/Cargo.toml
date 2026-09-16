@@ -61,5 +61,9 @@ serde = ["dep:serde"]
 name = "frame_clock_gate"
 harness = false
 
+[[bench]]
+name = "async_driver_pump"
+harness = false
+
 [lints]
 workspace = true

@@ -159,6 +159,11 @@ duration of the `poll` call and disarmed immediately on a normal return:
 on unwind it removes the slot. Taking the map lock in that `Drop` is safe
 specifically because `poll_ready` never holds it across a poll, and the
 removed `Task` already has `future: None` — dropping it runs no user code.
+**Superseded:** issue #1056's ready-index rewrite deleted this guard;
+`PumpGuard`'s `in_flight` arm (see "`AsyncDriver` indexes ready tasks
+instead of scanning every resident one" below) does this same slot-removal
+half, plus what this guard never had to do — restore the unreached tail of
+the pump's own ready batch.
 
 **`notify_frame_completion` no longer holds a waiter's lock across
 `wake()`:** the previous implementation locked `notifier.state` and called
@@ -935,3 +940,122 @@ during an unwind — something a per-call-site split cannot see.
 `impl Drop for Ticker` → `dispose` → `notify` → a panicking waker is exactly that
 shape. Issue #1162 carries the decision for `SchedulerInner`; whichever way it
 lands applies here for the same reason.
+
+### `AsyncDriver` indexes ready tasks instead of scanning every resident one
+
+**Rule:** `AsyncDriver::poll_ready`'s cost scales with **ready** work (`R`),
+never with resident tasks (`N`). An idle driver holding 100,000 dormant tasks
+touches none of them; a mid-pump panic must not lose a sibling task that pump
+never reached; and a genuinely-ready-but-stale index entry (a cancelled or
+already-processed id, or a self-wake landing on a task that then panics)
+self-heals within one pump rather than needing to be scrubbed eagerly.
+
+**Conflict:** issue #1056 found `poll_ready` filtering `inner.tasks`'s entire
+`BTreeMap` on every pump to find the (possibly zero) ready ids — an O(N) scan
+that measured 0.77–0.91 ms at N=100,000 with R=0, spent before a single future
+runs. (That figure is the issue's own reproducer: an external scratch crate
+built under cargo's default release profile, no LTO, 16 codegen units. The
+208.18 µs "before" and 22.93 ns "after" in the table below are a different
+measurement — this workspace's own `cargo bench`, under `[profile.release]`'s
+`lto = "thin"`, `codegen-units = 1`, on the same CPU — so the two "before"
+numbers are not directly comparable; the table's own before/after pair is,
+since both sides share that one methodology.) Readiness was recorded per task
+(an `AtomicBool`) but never indexed independently of storage, so discovering
+it meant re-deriving it from every task, every time.
+
+**Choice:** `Inner` holds one field, `store: Mutex<TaskStore { tasks:
+BTreeMap<TaskId, Task>, ready: Vec<TaskId>, spare: Vec<TaskId> }>` — one
+mutex guarding an index beside the map it indexes. Every path that sets a
+task's `ready` flag `true` (`spawn_local`,
+`TaskWaker::wake_by_ref`'s false→true edge, `spawn_local_eager`'s post-poll
+check) also pushes the id into `store.ready` in the same locked section, so
+`poll_ready` only ever drains that `Vec` — an idle driver drains an empty one.
+`ready` is wake-arrival order, sorted and deduplicated once per drain (the
+dedup exists because `spawn_local_eager`'s inline poll and a concurrent
+`wake_by_ref` can both observe the pre-poll flag and each push the same id
+before either sees the other's write — a real race, not a hypothetical one).
+
+**`PumpGuard` owns one pump's whole drained batch, not just the id being
+polled.** The naive fix — take a future out of its slot, poll it with no lock
+held (unchanged discipline), reinsert on the outcome — loses every unreached
+sibling to a mid-pump panic: the ids after the panicking one were already
+removed from `store.ready` by the initial drain and are gone if nothing
+restores them. `PumpGuard` holds the pump's `remaining` ids and a `cursor`
+(advanced *before* each poll, so it always means "ids consumed" regardless of
+which of a poll's two distinct unwind sites panics — the poll itself, or a
+completed/cancelled task's own destructor, which runs later with `in_flight`
+already cleared); its `Drop` restores `remaining[cursor..]` into `store.ready`
+on any unwind, and removes the in-flight slot only when `in_flight` was
+actually `Some` (a mid-poll panic), never when a later destructor panics (that
+slot's fate was already committed under lock). This is what an O(N)-rescan
+design never needed — it re-derives readiness from ground truth every call and
+cannot strand a sibling — and what an index-based one owes back in return for
+not scanning.
+
+**Stale index entries are tolerated, not prevented.** `store.ready` is never
+proactively purged on cancel, nor scrubbed for a self-woken id whose task then
+panics: both go stale for at most one pump and self-heal via `poll_ready`'s
+existing "id not found in `tasks` ⇒ skip" arm — cheaper than an O(R) scan on
+every cancel, and the residue is bounded (at most one entry per spawn or wake
+since the last drain; nothing spawns or wakes without eventually requesting a
+frame).
+
+**`spare` (capacity donation, not just correctness):** draining `store.ready`
+with a bare `mem::take` at the top of every pump would install a *cold*,
+zero-capacity `Vec` in its place, and a self-waking task's mid-pump push (its
+waker fires synchronously, inside `poll`) would land in exactly that cold
+`Vec`, regrowing it from empty every single pump, forever, for any steady
+`R > 0` workload. `TaskStore` instead carries a second, always-empty `spare`
+buffer that `poll_ready`'s drain step `mem::swap`s with `ready` (not
+`mem::take`s): `ready` receives whatever `spare` warmed up to two pumps ago,
+and `spare` receives this pump's actual batch, taken out via `mem::take`
+(cold is fine here, since `spare` isn't touched again until this pump's own
+end). `recycle`, called on both `poll_ready`'s normal return and
+`PumpGuard::drop`'s unwind path, clears the drained batch and stores it as
+the *next* `spare`, leaving `store.ready` itself untouched — it already
+correctly holds this pump's discovered-ready ids. Measured via a
+counting-allocator test (`tests/async_driver_ready_index_allocation.rs`):
+the bare-`mem::take` shape costs a steady 64 self-re-waking tasks 69
+allocations/pump (64 per-poll `Arc<TaskWaker>` constructions plus ~5 from
+`Vec` regrowing 0→64); the `spare`-buffer fix costs exactly 64, the waker
+cost alone. The remaining 64/pump is a **separate, pre-existing,
+out-of-scope** cost (a fresh `Arc<TaskWaker>` per poll, unchanged from
+before this issue); reusing a per-task waker across polls is a distinct
+optimization this change does not make, named here so it is not mistaken
+for a regression.
+
+**Allocation gate, not just a bench:** `just ci` has no bench step, so two
+`#[cfg(test)]`-gated oracles carry the CI-run complexity proof:
+`tests/async_driver_ready_index_allocation.rs` (a dedicated-binary,
+counting-`#[global_allocator]` test, following `frame_telemetry_allocation.rs`'s
+convention) asserts R=0 at N∈{0, 100,000} costs zero allocations once warm,
+and steady R=64 self-re-waking tasks cost zero *extra* allocations once warm
+(exactly the per-poll waker count, never more) — but an allocation count
+cannot discriminate an O(N) scan from an O(R) drain when R=0, since
+collecting zero ready ids allocates nothing either way. The crate's own
+`#[cfg(test)]` unit test `an_empty_pump_touches_no_dormant_task_flags` closes
+that gap: it wraps each task's own readiness flag in a `ReadyFlag` newtype
+whose `load` increments a `#[cfg(test)]`-only counter (zero cost outside
+tests), then asserts an idle pump makes zero such loads — an O(N) filter-scan
+calls `.load()` once per resident task per pump regardless of readiness, so
+reverting to one reddens this test with a nonzero count (1,000 tasks × 20
+pumps = 20,000, measured).
+
+`benches/async_driver_pump.rs` (criterion) is evidence attached to the PR, not
+a gate. CI's `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`,
+so this file is type-checked and lint-checked on every PR; what CI never
+does is link or run it (`bench-compile` only `cargo bench -p flui-rendering
+--no-run`s). Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
+13th Gen Intel Core i9-13900K (32 threads) running `rustc 1.98.1 (48a229cea
+2026-09-01)`:
+
+| Group | N/R | `main` (before) | this branch (after) |
+|---|---:|---:|---:|
+| `empty_pump` | 0 | 9.84 ns | 20.63 ns |
+| `empty_pump` | 100,000 | 208.18 µs | 22.93 ns (**~9,080× faster**) |
+| `ready_heavy` | 1,000 | 124.95 µs | 122.92 µs |
+| `ready_heavy` | 10,000 | 1.5846 ms | 1.3314 ms |
+
+`ready_heavy` (R=N, every resident task genuinely polled) is essentially
+unchanged, as expected: it was never the O(N)-scan problem this issue fixes,
+so there is no O(N)-vs-O(R) gap for it to close.
