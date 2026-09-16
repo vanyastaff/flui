@@ -378,22 +378,21 @@ fn an_already_dismissed_controller_finalizes_synchronously_without_double_finali
 /// `TransitionRoute` end to end, asserted with NO driven frame in between.
 ///
 /// **Push** settles the CONTROLLER synchronously: `did_push` calls
-/// `AnimationController::forward()`, which now snaps to `Completed` at the
-/// call instead of installing a ticker run. The ROUTE's own bookkeeping
-/// (`RouteLifecycle::Pushing` → `Idle`) still needs one pump regardless —
-/// that transition is driven by a continuation `NavigatorShared::apply`
-/// registers on the returned `TickerFuture` post-flush, and merely running
-/// early (because the future is already resolved) only queues a command;
-/// nothing drains it until the next pump
+/// `AnimationController::forward()`, which snaps to `Completed` at the call,
+/// with no ticker run installed. The ROUTE's own bookkeeping
+/// (`RouteLifecycle::Pushing` → `Idle`) still needs one pump regardless: that
+/// transition is driven by a continuation `NavigatorShared::apply` registers
+/// on the returned `TickerFuture` post-flush, and running early (because the
+/// future is already resolved) only queues a command, which nothing drains
+/// until the next pump
 /// (`an_already_resolved_push_future_still_needs_one_pump_to_settle`,
-/// `navigator_tests.rs`) — that half of the state machine is unchanged by
-/// this issue.
+/// `navigator_tests.rs`).
 ///
 /// **Pop** settles the ROUTE too, with no pump at all: `did_pop` calls
-/// `reverse()`, which now snaps to `Dismissed` at the call; `handle_pop`
+/// `reverse()`, which snaps to `Dismissed` at the call; `handle_pop`
 /// (`history.rs`) reads `finished_when_popped()` synchronously, in the same
-/// function, right after `did_pop` returns — no continuation, no queued
-/// command — so the entry disposes inside `pop()` itself.
+/// function, right after `did_pop` returns, with no continuation and no
+/// queued command, so the entry disposes inside `pop()` itself.
 ///
 /// Red-check: read distance alone (drop `run_duration.is_zero()`) from
 /// `forward`/`reverse`'s settle gate — the controller stays `Forward`/never

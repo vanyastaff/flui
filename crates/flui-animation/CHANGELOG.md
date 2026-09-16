@@ -72,23 +72,45 @@ Versioning: per `docs/release.md` policy.
   `animate_back`/`animate_back_curved` always run `Reverse`, regardless of
   whether `target` is above or below the current value (previously derived
   from travel, an unrecorded divergence from Flutter's own documented
-  contract). The one production-visible consequence: the unbounded scroll
+  contract). Two production-visible consequences: the unbounded scroll
   controller's ballistic `animate_to` toward a SMALLER pixel value now
   reports `Forward`/`Completed` instead of `Reverse`/`Dismissed` (its only
   consumer treats `Completed`/`Dismissed` identically, so this changes
-  nothing observable there).
+  nothing observable there); and `flui-cupertino`'s `CupertinoButton` release
+  fade, which also calls `animate_to_curved` (kept for oracle parity), now
+  reports `Completed` at both the press-in and release ends. That second
+  consumer is fixed in the same change: the release used to chain off a
+  status listener watching `Completed`, which could no longer tell "the
+  press landed" from "the release landed" and re-triggered itself; it now
+  chains on the press fade's own `TickerFuture` instead (`Ok`-only,
+  one-shot).
 - A run's end status is now its direction's settled status with no bound
   check, so `animate_to(lower_bound)` from mid-range ends `Completed`, not
-  `Dismissed` (Flutter's `_tick` rule). `stop()`/`set_value` are unchanged:
-  both still report the bound actually reached, falling back to direction
-  only for a non-bound stop.
+  `Dismissed` (Flutter's `_tick` rule). The same applies through
+  `tick_simulation`: `animate_with(sim)` landing on a bounded controller's
+  lower bound now also ends `Completed`, not `Dismissed` — a `fling`'s own
+  end is unaffected, since `fling`/`fling_with` pick direction from the sign
+  of `velocity`, never from where the simulation lands. `stop()`/`set_value`
+  are unchanged: both still report the bound actually reached, falling back
+  to direction only for a non-bound stop.
 - A settle whose value does not actually move (e.g. `forward_from(Some(x))`
   landing on the value it already held) no longer fires a spurious value
-  notification.
+  notification. The same entry-value rule now also applies to a REAL
+  (non-settling) run that still applies `from`: it notifies iff `from`
+  actually moved the value, narrower than Flutter's `forward`/`reverse`
+  (whose `value=` setter always notifies).
 - `Vsync::has_running`/`tick_all` now skip a controller `dispose()`d mid-run
   instead of ticking it forever: `dispose()` still leaves `status` untouched
   (unchanged, and still Flutter parity), so the two consumers instead read a
   disposed flag folded into the walk's per-controller probe.
+- Fixed: a `Vsync`-driven controller's `set_value` mid-run no longer gets
+  silently overwritten by the next `tick_all`. `Vsync`/`tick_at` used to
+  treat `status().is_running()` as "a run is installed", but `set_value` at
+  an interior value reports a directional running status (Flutter parity)
+  even though it already stopped the run and cleared `active_run` — the
+  walk kept ticking it from the stale, already-stopped run's own
+  `start_value`/`target_value`. Both now read `active_run.is_some()`
+  instead.
 
 ### Fixed
 

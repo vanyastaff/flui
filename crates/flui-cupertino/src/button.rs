@@ -52,7 +52,7 @@ use std::time::Duration;
 use flui_animation::ext::AnimatableExt;
 use flui_animation::ext::AnimationExt;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, FloatTween, UpdateScheduler, Vsync,
+    Animation, AnimationController, Curves, FloatTween, TickerFuture, UpdateScheduler, Vsync,
     VsyncRegistration,
 };
 use flui_types::geometry::{EdgeInsets, Pixels, px};
@@ -422,10 +422,11 @@ fn resolve_foreground_color(
     }
 }
 
-/// Starts the press-in fade on tap — `true` if it actually started a run.
-/// Extracted from the `on_tap` closure so "does a tap with `pressed_opacity:
-/// None` actually start the controller" is unit-testable without mounting a
-/// render tree (see the tests below).
+/// Starts the press-in fade on tap, returning the run's [`TickerFuture`] so
+/// the caller can chain the release fade onto it — `None` if it did not
+/// start a run at all. Extracted from the `on_tap` closure so "does a tap
+/// with `pressed_opacity: None` actually start the controller" is
+/// unit-testable without mounting a render tree (see the tests below).
 ///
 /// `pressed_opacity: None` means [`CupertinoButton::pressed_opacity`]'s
 /// contract — "disables the fade animation entirely" — a stronger,
@@ -435,26 +436,56 @@ fn resolve_foreground_color(
 /// `null` (the tween's begin/end both collapse to `1.0`, so the run ticks
 /// invisibly). Skipping the run here has no observable paint difference —
 /// `build`'s `opacity` `FloatTween` also collapses to `1.0..=1.0` in that
-/// case — it only removes wasted ticking, rebuild-scheduling, and
-/// status-listener work, so this does not diverge from the oracle's visible
-/// behavior, only from its incidental cost.
+/// case — it only removes wasted ticking and rebuild-scheduling, so this
+/// does not diverge from the oracle's visible behavior, only from its
+/// incidental cost.
 fn start_press_fade(
     controller: &AnimationController,
     pressed_opacity: Option<f32>,
     rebuild: Option<&RebuildHandle>,
-) -> bool {
-    if pressed_opacity.is_none() {
-        return false;
-    }
+) -> Option<TickerFuture> {
+    pressed_opacity?;
     let curve: Arc<dyn flui_animation::Curve + Send + Sync> =
         Arc::new(Curves::EaseInOutCubicEmphasized);
-    if let Err(error) = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve) {
+    let outcome = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve);
+    if let Err(error) = &outcome {
         tracing::debug!(?error, "CupertinoButton press fade failed to start");
     }
     if let Some(rebuild) = rebuild {
         rebuild.schedule(flui_view::RebuildReason::StateChange);
     }
-    true
+    outcome.ok()
+}
+
+/// Starts the release fade once `press_fade` genuinely completes — never on
+/// cancellation (a second tap superseding this one must not start a
+/// release for the one it displaced). Extracted from the `on_tap` closure
+/// for the same reason as [`start_press_fade`]: a direct, controller-only
+/// unit test proves "the release starts exactly once per tap" without
+/// mounting a render tree.
+///
+/// Chained on `press_fade`'s own [`TickerFuture`] (ADR-0064), not a status
+/// listener: a status listener has no way to tell "the press fade just
+/// landed" from "the release fade just landed" now that direction is chosen
+/// by the method (`animate_to_curved` reports `Completed` at BOTH ends,
+/// issue #1171) — a listener watching `Completed` unconditionally
+/// re-triggers itself once the release it started lands. The oracle's own
+/// `_animate()`'s `ticker.then(...)` has the same one-shot shape: it chains
+/// off the return of the leg it just started, not off a persistent
+/// listener.
+fn chain_release_fade(controller: &AnimationController, press_fade: TickerFuture) {
+    let release_controller = controller.clone();
+    press_fade.when_complete_or_cancel(move |outcome| {
+        if outcome.is_ok() {
+            let curve: Arc<dyn flui_animation::Curve + Send + Sync> =
+                Arc::new(Curves::EaseOutCubic);
+            if let Err(error) =
+                release_controller.animate_to_curved(0.0, Some(K_FADE_IN_DURATION), curve)
+            {
+                tracing::debug!(?error, "CupertinoButton release fade failed to start");
+            }
+        }
+    });
 }
 
 /// Persistent state behind [`CupertinoButton`] — see [`StatefulView`]/
@@ -492,8 +523,9 @@ impl StatefulView for CupertinoButton {
 
 impl ViewState<CupertinoButton> for CupertinoButtonState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        // ADR-0018: `rebuild_handle()` acquired here, fired later from the
-        // status listener below — never called from `build`.
+        // ADR-0018: `rebuild_handle()` acquired here, fired later from
+        // `start_press_fade` (called from the `on_tap` handler in `build`,
+        // never from `build` itself).
         self.rebuild = Some(ctx.rebuild_handle());
 
         let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) else {
@@ -507,24 +539,6 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         let controller =
             AnimationController::new(Duration::from_millis(200), &UpdateScheduler::new());
         let registration = vsync.register(controller.clone());
-
-        // Oracle: `_animate()`'s `ticker.then(...)` re-invokes `_animate` if
-        // `_buttonHeldDown` changed mid-run. This port's single `on_tap`
-        // event has only one transition to chain: once the press-in fade
-        // reaches its target (`AnimationStatus::Completed` == reached the
-        // upper bound), start the release fade back down automatically.
-        let release_controller = controller.clone();
-        controller.add_status_listener(Arc::new(move |status| {
-            if status == AnimationStatus::Completed {
-                let curve: Arc<dyn flui_animation::Curve + Send + Sync> =
-                    Arc::new(Curves::EaseOutCubic);
-                if let Err(error) =
-                    release_controller.animate_to_curved(0.0, Some(K_FADE_IN_DURATION), curve)
-                {
-                    tracing::debug!(?error, "CupertinoButton release fade failed to start");
-                }
-            }
-        }));
 
         self.controller = Some(controller);
         self.vsync = Some(vsync);
@@ -610,8 +624,11 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
                 gesture_detector = gesture_detector.on_tap(move || {
-                    if let Some(controller) = &controller {
-                        start_press_fade(controller, pressed_opacity, rebuild.as_ref());
+                    if let Some(controller) = &controller
+                        && let Some(future) =
+                            start_press_fade(controller, pressed_opacity, rebuild.as_ref())
+                    {
+                        chain_release_fade(controller, future);
                     }
                     on_pressed();
                 });
@@ -636,6 +653,8 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     // ---- const-table geometry (oracle-diffed) ---------------------------
@@ -766,7 +785,7 @@ mod tests {
         let controller = fresh_controller();
         let started = start_press_fade(&controller, None, None);
         assert!(
-            !started,
+            started.is_none(),
             "pressed_opacity(None) must not start the press-fade run"
         );
         assert!(
@@ -780,12 +799,86 @@ mod tests {
         let controller = fresh_controller();
         let started = start_press_fade(&controller, Some(0.4), None);
         assert!(
-            started,
-            "pressed_opacity(Some(_)) must start the press-fade run"
+            started.is_some(),
+            "pressed_opacity(Some(_)) must start the press-fade run and return its TickerFuture"
         );
         assert!(
             controller.is_animating(),
             "animate_to_curved should leave the controller animating immediately after starting"
         );
+    }
+
+    /// The release fade starts exactly once per tap, and nothing is chained
+    /// on the release's own completion.
+    ///
+    /// A prior shape chained the release off a permanently registered
+    /// status listener watching `AnimationStatus::Completed` —
+    /// harmless-looking under travel-derived direction, but under the
+    /// method-chosen direction rule `animate_to_curved` (the release's own
+    /// call, kept for oracle parity) reports `Completed` at BOTH ends, so
+    /// the listener re-triggered itself once the release it started landed:
+    /// a second, spurious `animate_to_curved(0.0, …)` call from value `0.0`
+    /// to `0.0`. Chaining on the press fade's own `TickerFuture` instead
+    /// removes the possibility structurally: nothing is chained on the
+    /// RELEASE's own future, so its completion has nothing left to trigger.
+    ///
+    /// **Measured, not assumed:** that spurious call is a zero-distance
+    /// settle, and `AnimationControllerInner::take_status_change`'s
+    /// same-status dedup (status is already `Completed` going in and
+    /// `Completed` coming out) suppresses it from firing ANY status
+    /// listener — confirmed by reverting this fix in place of the old
+    /// listener shape and rerunning this exact test: `forward_count` still
+    /// reads 1, not 2. The spurious call is real (traced through the lock/
+    /// `restart_ticker`/`finish` path by hand) but leaves no status, value,
+    /// or `run_generation` trace for a single press+release cycle — the
+    /// fix is a structural correctness/oracle-parity fix (no persistent
+    /// listener misreading a now-ambiguous status), not one this test can
+    /// red-check numerically. This test instead pins the CORRECT observable
+    /// shape as a regression guard.
+    #[test]
+    fn release_fade_starts_exactly_once_per_tap() {
+        let controller = fresh_controller();
+        let future = start_press_fade(&controller, Some(0.4), None)
+            .expect("pressed_opacity(Some(_)) starts the press fade");
+        chain_release_fade(&controller, future);
+
+        let forward_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&forward_count);
+        controller.add_status_listener(Arc::new(move |status| {
+            if status == flui_animation::AnimationStatus::Forward {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        // Complete the press (its own run epoch, freshly zeroed by
+        // `start_press_fade`'s `animate_to_curved`): `chain_release_fade`'s
+        // continuation fires synchronously and starts the release, the ONE
+        // `Forward` transition this test counts.
+        controller.tick_at(K_FADE_OUT_DURATION.as_secs_f64());
+        // Complete the release (its own run epoch, freshly zeroed when it
+        // started above).
+        controller.tick_at(K_FADE_IN_DURATION.as_secs_f64());
+
+        assert_eq!(
+            forward_count.load(Ordering::SeqCst),
+            1,
+            "the release must start exactly once per tap"
+        );
+        assert!(
+            !controller.is_animating(),
+            "the controller must be idle once press + release both settle"
+        );
+
+        // A further tick must not restart anything — the old bug's spurious
+        // restart was a zero-distance settle, invisible in status, but this
+        // still proves nothing further is chained on the release's own future.
+        let value_before = controller.value();
+        controller.tick_at(K_FADE_IN_DURATION.as_secs_f64() + 1.0);
+        assert_eq!(
+            forward_count.load(Ordering::SeqCst),
+            1,
+            "no further restart after the release settles"
+        );
+        assert_eq!(controller.value(), value_before);
     }
 }

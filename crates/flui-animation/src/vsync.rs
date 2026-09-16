@@ -737,6 +737,50 @@ mod tests {
         );
     }
 
+    /// `set_value` mid-run must hold against the NEXT `tick_all` — it calls
+    /// `stop_running()` (clearing `active_run`), but reports a directional
+    /// *running* status at an interior value (Flutter parity,
+    /// `settled_status_keep_direction`). Reading `status().is_running()` as
+    /// "a run is installed" (the bug this pins) let the walk recompute the
+    /// value from the stale, already-stopped run's `start_value`/
+    /// `target_value` on the very next call.
+    ///
+    /// Red-check: read `probe.live_running` (or `has_running`) off
+    /// `status().is_running()` instead of `active_run.is_some()` — the final
+    /// `tick_all(0.10)` below overwrites `0.2` back to `~0.8` (100ms run,
+    /// 100ms elapsed since the ORIGINAL anchor).
+    #[test]
+    fn set_value_mid_run_holds_against_the_next_tick_all() {
+        let vsync = Vsync::new();
+        let controller = controller(100);
+        vsync.register(controller.clone());
+
+        controller.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0); // anchor
+        vsync.tick_all(0.05); // halfway through the 100ms run
+        assert!(
+            (controller.value() - 0.5).abs() < 1e-3,
+            "sanity: halfway through the run, got {}",
+            controller.value()
+        );
+
+        controller.set_value(0.2);
+        assert!(
+            !vsync.has_running(),
+            "a set_value-stopped controller must not hold the frame loop open, \
+             even though status() still reads a directional running status"
+        );
+
+        vsync.tick_all(0.10);
+        assert_eq!(
+            controller.value(),
+            0.2,
+            "tick_all must not recompute the value from the run set_value stopped"
+        );
+
+        controller.dispose();
+    }
+
     /// A status listener that unregisters its own controller — what a route does
     /// when its exit transition reaches `dismissed` and it disposes itself — must
     /// not deadlock.

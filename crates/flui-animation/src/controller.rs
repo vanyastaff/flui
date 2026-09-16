@@ -66,12 +66,9 @@ enum ValueChange {
 
 /// Single-lock snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk:
 /// the run-generation counter and whether this controller currently holds
-/// the frame loop open. Returned by
-/// [`AnimationController::walk_probe`], which reads both under ONE lock
-/// instead of the two separate locks (`run_generation()` then `status()`)
-/// the walk used before — measured at ~28% of the ~54ns-per-stopped-
-/// controller-per-pump cost; see `docs/PERFORMANCE.md`'s Vsync section for
-/// the before/after numbers.
+/// the frame loop open, both read under ONE controller lock by
+/// [`AnimationController::walk_probe`]. See `docs/PERFORMANCE.md`'s Vsync
+/// section for the measured per-controller cost.
 pub(crate) struct WalkProbe {
     /// The controller's [`AnimationController::run_generation`] at the time
     /// of the probe.
@@ -558,6 +555,18 @@ impl AnimationController {
 
         inner.status = AnimationStatus::Forward;
         inner.run_duration = Some(run_duration);
+        // `from` may have jumped `value` above without a settle (a real run
+        // still starts). Flutter's `forward`'s `if (from != null) { value =
+        // from; }` goes through the `value=` setter, which notifies
+        // UNCONDITIONALLY — FLUI narrows that to "iff it actually moved"
+        // (the same entry-value rule `settle_at_target` uses), so
+        // `forward_from(Some(x))` from `x` itself does not fire a spurious
+        // notification for a value that never changed.
+        let value_change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
+            ValueChange::Unchanged
+        } else {
+            ValueChange::Notify
+        };
         // `restart_ticker` runs BEFORE the completer replaces `active_run` —
         // see its own doc for why the order is load-bearing.
         let has_ticker = self.restart_ticker(&mut inner);
@@ -569,7 +578,7 @@ impl AnimationController {
 
         self.finish(
             AnimationStatus::Forward,
-            ValueChange::Unchanged,
+            value_change,
             displaced_delivery,
             inner,
         );
@@ -627,6 +636,13 @@ impl AnimationController {
 
         inner.status = AnimationStatus::Reverse;
         inner.run_duration = Some(run_duration);
+        // See `forward_from`'s own comment: notify iff `from` actually moved
+        // the value, narrower than Flutter's unconditional `value=` notify.
+        let value_change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
+            ValueChange::Unchanged
+        } else {
+            ValueChange::Notify
+        };
         // `restart_ticker` runs BEFORE the completer replaces `active_run` —
         // see its own doc for why the order is load-bearing.
         let has_ticker = self.restart_ticker(&mut inner);
@@ -638,7 +654,7 @@ impl AnimationController {
 
         self.finish(
             AnimationStatus::Reverse,
-            ValueChange::Unchanged,
+            value_change,
             displaced_delivery,
             inner,
         );
@@ -815,17 +831,17 @@ impl AnimationController {
     /// `target`, easing through `curve` (`None` = linear).
     ///
     /// `direction` is the METHOD's, not derived from `target`'s relation to
-    /// the current value — Flutter parity: `animateTo`/`animateBack` assign
+    /// the current value — Flutter parity: `AnimationController.animateTo`/
+    /// `animateBack` (`animation_controller.dart` @ 3.44.0) assign
     /// `_direction` from which method was called, before `target` is even
-    /// looked at (`animation_controller.dart:585`/`:635` @ 3.44.0). It
-    /// drives both the run's status (Forward/Reverse while running,
-    /// Completed/Dismissed at the end — [`AnimationDirection::settled_status`])
-    /// and, when `duration` is `None`, which base duration
-    /// (`self.duration`/`self.reverse_duration`) the remaining-fraction
-    /// scaling starts from — again Flutter parity: `_animateToInternal`
-    /// picks `directionDuration` off `_direction`, which by that point is
-    /// already the method's choice, not a travel comparison
-    /// (`animation_controller.dart:657-661`).
+    /// looked at. It drives both the run's status (Forward/Reverse while
+    /// running, Completed/Dismissed at the end —
+    /// [`AnimationDirection::settled_status`]) and, when `duration` is
+    /// `None`, which base duration (`self.duration`/`self.reverse_duration`)
+    /// the remaining-fraction scaling starts from — again Flutter parity:
+    /// `_animateToInternal`'s `directionDuration` local (same file) picks it
+    /// off `_direction`, which by that point is already the method's
+    /// choice, not a travel comparison.
     fn drive_to(
         &self,
         target: f32,
@@ -1211,19 +1227,37 @@ impl AnimationController {
     /// One-lock snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk —
     /// see [`WalkProbe`]'s own doc for the perf rationale.
     ///
-    /// `live_running` folds in `disposed`: [`dispose`](Self::dispose)
-    /// deliberately leaves `status` untouched (see its own doc), so a
-    /// controller disposed mid-run keeps whatever running status it had —
-    /// `status().is_running()` alone cannot tell that apart from a genuinely
-    /// live run. Without this, a disposed-but-not-yet-unregistered
-    /// controller would keep ticking (via [`tick_at`](Self::tick_at)) and
-    /// keep [`Vsync::has_running`](crate::vsync::Vsync::has_running)
-    /// reporting `true`, holding the frame loop open forever.
+    /// `live_running` is `!disposed && active_run.is_some()` — **not**
+    /// `status.is_running()`, which is the wrong "is a run installed"
+    /// predicate for two independent reasons:
+    /// - [`dispose`](Self::dispose) deliberately leaves `status` untouched
+    ///   (see its own doc), so a controller disposed mid-run keeps whatever
+    ///   running status it had.
+    /// - [`set_value`](Self::set_value) reports a *directional* running
+    ///   status at an interior value (Flutter parity —
+    ///   [`settled_status_keep_direction`](AnimationControllerInner::settled_status_keep_direction))
+    ///   even though it already called `stop_running()` and cleared
+    ///   `active_run`. A `Vsync`-driven controller that receives a
+    ///   `set_value` mid-run would otherwise still read `status.is_running()
+    ///   == true`, and the NEXT `tick_all` would recompute its value from
+    ///   the stale, already-stopped run's `start_value`/`target_value`,
+    ///   silently overwriting what `set_value` had just set.
+    ///
+    /// `active_run.is_some()` is the actual, always-consistent fact: every
+    /// run-starting method installs it in the same locked region it sets a
+    /// running status in, and every run-ending path (`stop_running` for
+    /// `stop`/`set_value`/`reset`, and `dispose`) clears it. Folding in
+    /// `!disposed` this way is also what keeps a disposed-but-not-yet-
+    /// unregistered controller from ticking (via
+    /// [`tick_at`](Self::tick_at)) or keeping
+    /// [`Vsync::has_running`](crate::vsync::Vsync::has_running) reporting
+    /// `true`, holding the frame loop open forever.
+    #[must_use]
     pub(crate) fn walk_probe(&self) -> WalkProbe {
         let inner = self.inner.lock();
         WalkProbe {
             generation: inner.run_generation,
-            live_running: !inner.disposed && inner.status.is_running(),
+            live_running: !inner.disposed && inner.active_run.is_some(),
         }
     }
 
@@ -1247,11 +1281,13 @@ impl AnimationController {
     /// after the inner lock is released.
     pub fn tick_at(&self, raw_elapsed_secs: f64) {
         let mut inner = self.inner.lock();
-        // `disposed` is checked separately from `status.is_running()`:
-        // `dispose()` leaves `status` untouched (parity — see its own doc),
-        // so a controller disposed mid-run would otherwise keep reporting a
-        // running status and keep ticking forever after disposal.
-        if inner.disposed || !inner.status.is_running() {
+        // `active_run.is_none()`, not `!status.is_running()`: `active_run`
+        // is the actual "is there a run installed to advance" fact (see
+        // `walk_probe`'s doc for the two ways `status.is_running()` diverges
+        // from it — a mid-run `dispose()`, and a mid-run `set_value()`).
+        // Advancing on a stale `status` alone let a `set_value` mid-run be
+        // silently overwritten by the run it had just stopped.
+        if inner.disposed || inner.active_run.is_none() {
             return;
         }
         inner.last_raw_elapsed_secs = raw_elapsed_secs;
@@ -1427,12 +1463,12 @@ impl AnimationController {
             return;
         }
 
-        // Non-repeating completion. Flutter parity: `_tick` reports the
-        // settled status BY DIRECTION — completed after a forward run,
-        // dismissed after a reverse one — with no at-a-bound requirement
-        // (`animation_controller.dart:940-944`). Keeping the running status
-        // for a mid-range stop (the previous behavior) starved every status
-        // listener of the run's end: on an unbounded controller (a
+        // Non-repeating completion. Flutter parity: `AnimationController._tick`
+        // (`animation_controller.dart` @ 3.44.0) reports the settled status
+        // BY DIRECTION — completed after a forward run, dismissed after a
+        // reverse one — with no at-a-bound requirement. Keeping the running
+        // status for a mid-range stop (the previous behavior) starved every
+        // status listener of the run's end: on an unbounded controller (a
         // scrollable's pixel-space fling controller) a driven `animate_to`
         // NEVER lands on a bound, so its completion was silent.
         if let Some(ticker) = &mut inner.ticker {
@@ -1785,7 +1821,11 @@ impl AnimationControllerInner {
     /// [`settled_status_directed`](Self::settled_status_directed): a 120Hz
     /// gesture drag calling `set_value` every frame must report the bound it
     /// is actually at, not a manufactured settle for an interior value still
-    /// under a live gesture.
+    /// under a live gesture. This is also exactly why a *running* status
+    /// (`AnimationStatus::is_running`) is not proof that a run is
+    /// installed: `set_value` reaches this branch at an interior value
+    /// AFTER `stop_running()` has already cleared `active_run` — see
+    /// [`walk_probe`](AnimationController::walk_probe)'s doc.
     fn settled_status_keep_direction(&self) -> AnimationStatus {
         if self.is_at_upper_bound() {
             AnimationStatus::Completed
@@ -2393,6 +2433,50 @@ mod tests {
         c.dispose();
     }
 
+    /// `forward_from(Some(x))` jumps `value` to `x` before starting a REAL
+    /// (non-settling) run — that jump must notify exactly once, at the
+    /// call, same as Flutter's `forward(from:)` going through the `value=`
+    /// setter. Plain `forward()` (no `from`) does not jump the value at all,
+    /// so it must not notify at the call — only later ticks do.
+    ///
+    /// Red-check: pass `ValueChange::Unchanged` unconditionally at
+    /// `forward_from`'s real-run `finish` call (its pre-fix shape) — the
+    /// first assertion reads `0`, not `1`.
+    #[test]
+    fn forward_from_notifies_once_at_the_call_iff_from_moved_the_value() {
+        let _serial = serial();
+        let c = controller(100);
+        let fires = Arc::new(AtomicUsize::new(0));
+        let f2 = Arc::clone(&fires);
+        c.add_listener(Arc::new(move || {
+            f2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        c.forward_from(Some(0.5)).unwrap();
+        assert_eq!(
+            fires.load(Ordering::SeqCst),
+            1,
+            "the from-jump (0.0 -> 0.5) must notify exactly once at the call"
+        );
+        assert!((c.value() - 0.5).abs() < 1e-6);
+        c.dispose();
+
+        let c2 = controller(100);
+        let fires2 = Arc::new(AtomicUsize::new(0));
+        let f2b = Arc::clone(&fires2);
+        c2.add_listener(Arc::new(move || {
+            f2b.fetch_add(1, Ordering::SeqCst);
+        }));
+        c2.forward().unwrap();
+        assert_eq!(
+            fires2.load(Ordering::SeqCst),
+            0,
+            "forward() with no `from` does not jump the value, so it must not \
+             notify at the call — only a later tick does"
+        );
+        c2.dispose();
+    }
+
     // ---- repeat with a finite count stops + completes ----
 
     #[test]
@@ -2429,6 +2513,55 @@ mod tests {
             c.status(),
             AnimationStatus::Completed,
             "all four cycles retired in one long frame -> exhausted"
+        );
+        c.dispose();
+    }
+
+    /// A bounce repeat over a CUSTOM interior range (not the controller's
+    /// true bounds) must exhaust on the FINAL retired leg's direction, not
+    /// whichever leg was active when the exhausting tick began.
+    /// `settled_status` has no bound check, so the old bounds-first fallback
+    /// that used to mask a stale `inner.direction` here no longer does.
+    ///
+    /// `repeat_with(0.2, 0.8, reverse: true, period: 100ms, count: 2)`
+    /// starts at `0.2`, direction `Forward` (leg 1: `0.2 -> 0.8`). A single
+    /// 250ms tick spans both retired cycles at once (leg 1 forward, leg 2
+    /// reverse), landing on leg 2's endpoint `0.2` — so the run's direction
+    /// at exhaustion is `Reverse`, ending `Dismissed`.
+    ///
+    /// Red-check: delete the `inner.direction = if last_forward { .. }`
+    /// assignment in `tick_time_based`'s exhaustion branch (leaving
+    /// `inner.direction` at its stale entry value, `Forward`) — status reads
+    /// `Completed`, not `Dismissed`.
+    #[test]
+    fn bounce_repeat_over_an_interior_range_exhausts_on_the_final_legs_status() {
+        let _serial = serial();
+        let c = controller(100);
+        c.repeat_with(
+            Some(0.2),
+            Some(0.8),
+            true,
+            Some(Duration::from_millis(100)),
+            Some(2),
+        )
+        .unwrap();
+        assert_eq!(
+            c.status(),
+            AnimationStatus::Forward,
+            "sanity: leg 1 starts forward"
+        );
+
+        c.tick_at(0.25);
+
+        assert!(
+            (c.value() - 0.2).abs() < 1e-6,
+            "value should land on leg 2's endpoint (repeat_min), got {}",
+            c.value()
+        );
+        assert_eq!(
+            c.status(),
+            AnimationStatus::Dismissed,
+            "the exhausting leg (leg 2) ran Reverse, so the run must end Dismissed"
         );
         c.dispose();
     }
@@ -3066,6 +3199,46 @@ mod tests {
         );
     }
 
+    /// `tick_at` after a mid-run `set_value` must be a no-op — `set_value`
+    /// calls `stop_running()` (clearing `active_run`) but reports a
+    /// directional *running* status at an interior value (Flutter parity,
+    /// `settled_status_keep_direction`), so `status.is_running()` alone
+    /// cannot tell "a run is installed" from "set_value just stopped one and
+    /// reported a running-looking status anyway". `tick_at`'s guard must
+    /// read `active_run.is_none()`, not `!status.is_running()`.
+    ///
+    /// Red-check: revert `tick_at`'s guard to `!inner.status.is_running()` —
+    /// the final assertion sees `1.0`, not `0.2` (the stopped run's own
+    /// `start_value..target_value` recomputed at `t = 1.0`).
+    #[test]
+    fn tick_at_after_set_value_mid_run_is_a_no_op() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        c.forward().unwrap();
+        c.tick_at(0.05);
+        assert!(
+            (c.value() - 0.5).abs() < 1e-3,
+            "sanity: halfway through the run, got {}",
+            c.value()
+        );
+
+        c.set_value(0.2);
+        assert_eq!(
+            c.status(),
+            AnimationStatus::Forward,
+            "sanity: set_value at an interior value keeps the directional running status"
+        );
+
+        c.tick_at(0.10);
+        assert_eq!(
+            c.value(),
+            0.2,
+            "tick_at after a mid-run set_value must be a no-op, not recompute \
+             from the run set_value already stopped"
+        );
+        c.dispose();
+    }
+
     /// flutter#1913: status coalescing must not swallow an intermediate
     /// status. `forward()` from the lower bound with no tick between calls
     /// reports `Forward` (a real run: distance and duration are both
@@ -3379,12 +3552,11 @@ mod tests {
     fn when_complete_or_cancel_chaining_ticks_once_per_frame_and_stop_fully_stops_it() {
         let _serial = serial();
         let scheduler = UpdateScheduler::new();
-        // A REAL (1ms) base duration, not `Duration::ZERO`: under the
-        // zero-duration synchronous settle (issue #1171), a zero-duration
-        // `reverse()` now completes AT THE CALL and fires this
-        // `when_complete_or_cancel` continuation at REGISTRATION time —
+        // A REAL (1ms) base duration, not `Duration::ZERO`: a zero-duration
+        // `reverse()` completes AT THE CALL (issue #1171) and fires this
+        // `when_complete_or_cancel` continuation at REGISTRATION time,
         // before `execute_frame()` ever runs (see
-        // `zero_duration_reverse_settles_dismissed_at_the_call`) — which
+        // `zero_duration_reverse_settles_dismissed_at_the_call`), which
         // would collapse the two-frame structure this test relies on
         // (per-frame tick counts, `stop()` canceling a chain still in
         // flight). A short real duration keeps the first leg genuinely
