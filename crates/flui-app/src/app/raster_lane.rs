@@ -35,7 +35,13 @@
 //! - a mid-render surface loss mints inside the pump's render-failure path;
 //!   the lane observes the rejection ([`PumpOutcome::SurfaceOutdated`]) and
 //!   re-adopts [`flui_engine::SurfaceState::required_generation`] before the retry;
-//! - device-loss recovery recreates the surface, so
+//! - device-loss recovery recreates the surface, and so does the platform's
+//!   surface-availability signal (`PlatformWindow::on_surface_status_change`'s
+//!   `false`/`true` pair, which Android emits from four arms: `false` on
+//!   `MainEvent::Pause` and `MainEvent::TerminateWindow`, `true` on
+//!   `MainEvent::Resume` and `MainEvent::InitWindow` — a `Resume` whose
+//!   window survived the pause recreates and mints with no `InitWindow` at
+//!   all), so
 //!   [`RasterLane::note_surface_recreated`] mints through the same resize
 //!   entry point at the platform's latest known size.
 //!
@@ -265,11 +271,22 @@ impl<B: RasterBackend> RasterLane<B> {
         self.owner.with_backend(|backend| backend.is_device_lost())
     }
 
-    /// Records that device-loss recovery rebuilt the surface: mints a fresh
+    /// Records that the surface was rebuilt under this lane and mints a fresh
     /// generation through the same mailbox counter a resize uses (ADR-0045
-    /// decision 4 names recovery's surface recreation as a mint site), at
-    /// the platform's latest known size — NOT the backend's readback, which
-    /// predates any resize that arrived while the device was down.
+    /// decision 4 names surface recreation as a mint site), at the platform's
+    /// latest known size — NOT the backend's readback, which predates any
+    /// resize that arrived while the old surface was gone.
+    ///
+    /// Two production causes reach here, and the caller is the one that knows
+    /// which: device-loss recovery (`Renderer::recover`) on every backend, and
+    /// the platform's surface-availability signal — `false` then `true` from
+    /// `PlatformWindow::on_surface_status_change` — which today only Android
+    /// emits, from four arms: `false` on `MainEvent::Pause` and
+    /// `MainEvent::TerminateWindow`, `true` on `MainEvent::Resume` and
+    /// `MainEvent::InitWindow` (`flui-app`'s Android runner). The window pair
+    /// is the activity-recreation path; the lifecycle pair means a `Resume`
+    /// whose window survived the pause also lands here, with no `InitWindow`
+    /// involved.
     pub(crate) fn note_surface_recreated(&mut self) {
         let (width, height) = self.stamp.physical_size();
         let generation = self.handle.resize(width, height);
@@ -278,7 +295,7 @@ impl<B: RasterBackend> RasterLane<B> {
             width,
             height,
             surface_generation = ?generation,
-            "raster lane: surface recreated by device recovery, generation re-minted"
+            "raster lane: surface recreated, generation re-minted"
         );
     }
 

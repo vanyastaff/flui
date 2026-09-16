@@ -498,6 +498,63 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
+    /// Register a callback for the GPU surface's availability.
+    ///
+    /// Called with `false` when the surface behind this window is about to
+    /// become invalid and must be released **before this callback returns**,
+    /// and with `true` when a surface valid for the window's current native
+    /// handle must exist. The signal is a request about the present, not a
+    /// report about the past: a `true` asks for a live surface whatever
+    /// happened before, so an implementation may receive more of either than
+    /// it needs.
+    ///
+    /// This is not [`on_active_status_change`](Self::on_active_status_change)
+    /// with a different name. That one also fires on focus changes, and the
+    /// surface must not be dropped because a window lost focus; the two
+    /// signals coincide on some backends and diverge on the ones that report
+    /// focus at all.
+    ///
+    /// # Delivery is backend-conditional, and the asymmetry costs
+    ///
+    /// **Android** is the only emitter today: `MainEvent::TerminateWindow`
+    /// and `MainEvent::Pause` produce `false`, `MainEvent::InitWindow` and
+    /// `MainEvent::Resume` produce `true`. Winit's own Android support
+    /// forwards `suspended()`/`resumed()` for the same pair, so a second
+    /// emitter is available to the winit backend.
+    ///
+    /// A backend that never emits either signal is harmless: the surface is
+    /// never released and the window is always treated as available. A
+    /// backend that emits `false` and never `true` is not — the presentation
+    /// stays released, every later frame is a skipped one, and the window
+    /// stays blank while the loop reports "nothing to present" forever. An
+    /// implementation that overrides no setter at all (a test double built
+    /// from this trait's defaults) therefore accepts a registration and
+    /// silently drops it. Inside this crate the mitigation is a convention
+    /// rather than a mechanism: `shared::impl_window_callback_setters!` is
+    /// `pub(crate)`, so only an in-crate backend can use it, and every one of
+    /// them does — that macro is the single place this family's setters are
+    /// written, so a backend *inside this crate* cannot override this method
+    /// without storing its callback. An implementor outside this crate is not
+    /// covered by that and has to store the callback itself; `flui-app`'s
+    /// `TestWindow` (`window_test_support.rs`) implements this trait and
+    /// overrides no setter, which is the live counterexample to reading that
+    /// macro as a guarantee.
+    ///
+    /// # Why `bool`
+    ///
+    /// The signal is genuinely two-state, and every sibling in this family is
+    /// `bool` (`on_active_status_change`, `on_visibility_status_change`,
+    /// `on_hover_status_change`). A callback's parameter type is a one-way
+    /// door — changing it later breaks every registrant's closure — so the
+    /// alternative considered was a `#[non_exhaustive] enum` (the shape these
+    /// crates use for input and owner status). A third state would be a third
+    /// state of the *surface*, which belongs in its own callback rather than
+    /// in a widened parameter here (ADR-0035 splits this callback family by
+    /// signal, not by arity).
+    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        let _ = callback;
+    }
+
     // ==================== Window Handles (for GPU integration)
     // ====================
 
@@ -509,18 +566,35 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// # Contract: MUST answer `Unavailable` once the native window is gone
     ///
-    /// [`raw_window_handle::HasWindowHandle`]'s own contract ties the
-    /// returned handle's validity to the borrow of `self` — winit's `impl
-    /// HasWindowHandle for Window` states it plainly in its own SAFETY
-    /// comment ("never deallocated while the window is alive"). An engine
-    /// holding a long-lived `Arc<dyn PlatformWindow>` (issue #1043) relies on
-    /// that: it re-queries this method on recovery rather than reusing a
-    /// handle captured earlier, and a stale `Ok` handed back for a destroyed
-    /// or suspended window is exactly the unsound escape that design closes.
-    /// So every implementor **must** return `Err(HandleError::Unavailable)`
-    /// once its native window is destroyed or suspended (Android between
-    /// `Paused` and `Resumed`) — never a handle whose pointee no longer
-    /// exists, or exists but is temporarily unusable.
+    /// [`raw_window_handle::HasWindowHandle`]'s own contract is an
+    /// object-lifetime claim, not a borrow-lifetime one: the returned handle
+    /// "should last for the lifetime of the object", and the implementation
+    /// "should return an error if the application is inactive" (that trait's
+    /// doc, `raw-window-handle` 0.6.2). The `'_` in this signature is the
+    /// borrow of `self`, which is a different bound and does not encode the
+    /// pointer's validity — the Android backend below demonstrates the gap:
+    /// its `AndroidWindow` is held across a pause and answers `Ok` there,
+    /// while the `ANativeWindow` the returned handle wraps is released by the
+    /// command applied *after* the `TerminateWindow` callback returns.
+    /// Upstream also makes a type-level claim beyond that prose: the
+    /// `WindowHandle<'a>` type's doc says all pointers within it "are
+    /// guaranteed to be valid and not dangling for the lifetime of the
+    /// handle", and that is the claim `WindowHandle::borrow_raw`'s `# Safety`
+    /// answers to. The Android backend cannot meet that claim by
+    /// construction, because the handle's `'a` is the borrow of `self` and
+    /// nothing ties the pointer's life to it; the SAFETY block on
+    /// `AndroidWindow::window_handle` says so and names the consumer-enforced
+    /// obligation that stands in for it.
+    ///
+    /// So this trait states the contract the engine needs, and it is stricter
+    /// than upstream's: an engine holding a long-lived `Arc<dyn PlatformWindow>`
+    /// (issue #1043) relies on it, re-querying this method on recovery rather
+    /// than reusing a handle captured earlier, and a stale `Ok` handed back
+    /// for a destroyed or suspended window is exactly the unsound escape that
+    /// design closes. Every implementor **must** return
+    /// `Err(HandleError::Unavailable)` once its native window is destroyed or
+    /// otherwise unusable — never a handle whose pointee no longer exists, or
+    /// exists but is temporarily unusable.
     ///
     /// How each backend satisfies this:
     /// - **winit** — delegates to the wrapped `winit::Window`, which owns the
@@ -535,10 +609,22 @@ pub trait PlatformWindow: Send + Sync {
     ///   posts on every route through it regardless of the should-close
     ///   veto (see `MacOSWindow::close`'s own doc), so no second call site
     ///   needs to set it.
-    /// - **Android** (`AndroidWindow`) — already conforms: `native_window()`
-    ///   answers `None` between `MainEvent::Pause` and the next
-    ///   `MainEvent::Resume`, and this method already maps that to
-    ///   `Unavailable`.
+    /// - **Android** (`AndroidWindow`) — answers `Unavailable` exactly when
+    ///   `AndroidApp::native_window()` is `None`, and `android-activity`
+    ///   0.6.1 leaves that `Some` across an ordinary pause: the command that
+    ///   clears it is applied after the `TerminateWindow` callback returns,
+    ///   and the new window is set before the `InitWindow` callback runs. So
+    ///   across an ordinary pause — one with no `TerminateWindow` inside it —
+    ///   this method keeps answering `Ok` for the whole span between the
+    ///   `Pause` and the matching `Resume`; a `TerminateWindow` inside that
+    ///   span flips the answer to `Unavailable` from
+    ///   `post_exec_cmd(TermWindow)` until `pre_exec_cmd(InitWindow)`. Either
+    ///   way the answer is **not** the same thing as the surface's validity:
+    ///   the swapchain dies with the window, at `TerminateWindow`, and a
+    ///   pause that keeps the window keeps the swapchain too. The release is
+    ///   driven by
+    ///   [`on_surface_status_change`](Self::on_surface_status_change), not by
+    ///   this method's answer.
     /// - **Headless** — always `Unavailable` (no native handle exists).
     fn window_handle(
         &self,

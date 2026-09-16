@@ -21,6 +21,10 @@ mod host;
 mod lifecycle_ladder;
 mod realm_dispatch;
 mod secondary_window;
+// Unconditional, like `device_recovery` above: the seam's trait and outcome
+// are portable and its tests are host-run, so a `cfg(target_os = "android")`
+// here would hide the whole file from every gate this host can run.
+mod surface_lifecycle;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

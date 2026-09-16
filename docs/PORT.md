@@ -1169,7 +1169,7 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-tree` | Not yet templated | Active |
 | `flui-macros` | Not yet templated | Active |
 | `flui-log` | Not yet templated | Active |
-| `flui-platform` | [`ARCHITECTURE.md`](../crates/flui-platform/ARCHITECTURE.md) (partial: Mapping decisions for winit keyboard conversion delegating to `ui-events-winit`; full template deferred) | Active |
+| `flui-platform` | [`ARCHITECTURE.md`](../crates/flui-platform/ARCHITECTURE.md) (partial: Mapping decisions for winit keyboard conversion delegating to `ui-events-winit`, and for the per-window surface-availability callback; full template deferred) | Active |
 | [`flui-painting`](../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-semantics` | Not yet templated | Active |
 | `flui-scheduler` | Not yet templated | Active |

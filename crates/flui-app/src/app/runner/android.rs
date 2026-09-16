@@ -14,6 +14,7 @@ use super::realm_dispatch::{
     PlatformToUi, RealmTask, dispatch_platform_realm, drain_owner_inbox, install_platform_realm,
     install_surface_applier, teardown_platform_realm,
 };
+use super::surface_lifecycle::{SurfaceLifecycleOutcome, ensure_surface};
 use crate::app::AppConfig;
 
 // ============================================================================
@@ -98,16 +99,19 @@ where
 
     /// The actual Android bootstrap: window, GPU, realm, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
-    /// backend delivers at the first `Resume` (module doc,
-    /// `platforms/android/mod.rs:13`: "Resumed -> on_ready() -> create
-    /// surface"). Migrated here from before `run()` (ADR-0039 slice 2):
-    /// `on_ready` is `FnOnce` and fires exactly once, matching today's
-    /// once-only pre-run bootstrap semantics exactly — no behavior change
-    /// is intended or made on the subsequent-Resume/surface-recreation
-    /// path, which flows through the backend's existing window/surface
-    /// code untouched by this migration. **Unvalidated on-device**: no
-    /// device and no CI compile target for `target_os = "android"` verify
-    /// this; stated here and in the registry rather than assumed.
+    /// backend delivers at the first `MainEvent::InitWindow`, not at the
+    /// first `Resume` (module doc, `platforms/android/mod.rs`'s
+    /// "# Surface Lifecycle": `Resume` arrives before any window exists, so
+    /// only `InitWindow` can carry a presentation). Migrated here from
+    /// before `run()` (ADR-0039 slice 2): `on_ready` is `FnOnce` and fires
+    /// exactly once, matching the once-only pre-run bootstrap semantics it
+    /// replaced. **The surface-recreation path is no longer untouched**: this
+    /// bootstrap registers `on_surface_status_change`, which releases the
+    /// renderer's surface on `Pause`/`TerminateWindow` and rebuilds it when a
+    /// window returns — see that registration below. **Unvalidated
+    /// on-device**: no device and no CI compile target for
+    /// `target_os = "android"` verify this; stated here and in the registry
+    /// rather than assumed.
     ///
     /// Returns `Err` on bootstrap failure — `on_ready` itself is fallible
     /// now, so the Android backend's `run` loop stops (and propagates the
@@ -508,6 +512,163 @@ where
             );
         }));
 
+        // 8b. Surface availability (issue #1146): the release that has to
+        // happen before the native window behind the surface dies, and the
+        // rebuild for the window that replaces it. `flui-platform` reports
+        // both as one bool out of its own event loop — `false` on
+        // `Pause`/`TerminateWindow`, `true` on `Resume`/`InitWindow`, with
+        // the mapping and its reason in `flui-platform`'s
+        // `platforms/android/mod.rs`, "# Surface Lifecycle".
+        //
+        // The lock below is BLOCKING, unlike the frame closure's `try_lock`
+        // above, and the difference is the failure mode: a skipped frame
+        // retries on the next wake and heals itself, while a skipped release
+        // is exactly the defect this callback exists to fix — the surface has
+        // to be gone before `TerminateWindow`'s callback returns, because
+        // that callback is the last moment the handle behind it is valid.
+        //
+        // That hold carries the release's own unbounded cost, so the guard is
+        // not free either: dropping a configured `wgpu::Surface` reaches
+        // `vkDeviceWaitIdle`, which means the driver's device-idle wait is
+        // paid under this guard, on this thread (`SurfaceLifecycle::
+        // release_surface`'s doc names it as the price of the verb). Accepted
+        // for the same reason the lock is blocking at all: the wait has to
+        // finish before the callback returns. **Unverified:** the wait's length
+        // is the driver's and there is no Android device here to measure it;
+        // the contingent risk is Android's input-dispatch watchdog, since the
+        // thread that asked for this transition stays parked until the callback
+        // returns, which turns a wait past the watchdog's budget into an ANR
+        // rather than a skipped frame.
+        //
+        // Blocking here is only safe while ONE invariant holds: **nothing
+        // off-thread ever holds this lane**. Today that follows from this
+        // backend's shape — the lane is taken inside `dispatch_request_frame`,
+        // which `AndroidPlatform::run`'s loop calls after `poll_events`
+        // returns, on this same thread, and no event arm drives a frame. A
+        // second lane consumer on another thread (a worker service, a
+        // pipelined presentation) would make this lock a real deadlock, which
+        // is why the invariant is named here and not just its local
+        // consequences: this is the one path where a wrong assumption about
+        // it is not self-healing.
+        //
+        // The off-thread invariant is not the only hazard here, and it does not
+        // cover the same-thread one: `dispatch_platform_realm` drains the realm
+        // queue inline, so it can run a `RealmTask::Frame` right here, on this
+        // thread, where the frame path takes this same lane with `try_lock` and
+        // self-skips. Holding the guard across that costs a dropped frame
+        // rather than a deadlock, but it is a frame dropped for no reason,
+        // because nothing after the mint needs the lane. So the guard's scope
+        // ends at the mint and the dispatch runs outside it; the realm half is
+        // documented as deferrable below, so the ordering does not change.
+        //
+        // Two more invariants this registration rests on, stated where it is
+        // made rather than assumed:
+        //
+        // * It is idempotent-by-absence. Nothing clears `WindowCallbacks` on
+        //   this backend — no `callbacks().clear()` call exists anywhere under
+        //   `flui-platform/src/platforms/android/`, unlike every other
+        //   windowed backend's window-destroy path — so a second
+        //   `bootstrap_android` on the same window would leave two live leases
+        //   and release/rebuild the surface twice per event.
+        // * Adding that clear is NOT part of this change. `MainEvent::Destroy`
+        //   in `flui-platform`'s `platforms/android/mod.rs` is one line away
+        //   from becoming a clear site, and `WindowCallbacks::clear` forbids
+        //   re-registration, so adding it there would silently break this
+        //   callback for the rest of the window's life. Whether Android should
+        //   gain the site is a follow-up (recorded as a stated boundary in
+        //   ADR-0063), not an oversight here.
+        let lane_surface = Arc::clone(&lane);
+        window.on_surface_status_change(Box::new(move |has_surface| {
+            let mut lane = lane_surface.lock();
+            let outcome = lane.with_backend(|renderer| ensure_surface(renderer, has_surface));
+            if matches!(&outcome, SurfaceLifecycleOutcome::Recreated) {
+                // A fresh surface's contents are undefined while the
+                // damage tracker is incremental, so the first frame after
+                // the rebuild owes a full repaint. The engine marks its own
+                // tracker inside `recreate_surface`; this is the realm
+                // half. The mint happens HERE, inside the same lane lock
+                // scope, so no stale in-flight work stays addressed to the
+                // destroyed surface — the same act device-loss recovery
+                // performs, through the same mailbox counter.
+                lane.note_surface_recreated();
+            }
+            // The guard ends before the realm dispatch — see the same-thread
+            // hazard named above, which is what puts the `drop` here.
+            drop(lane);
+            match outcome {
+                // Nothing to do: the engine already logs the release
+                // (`surface_released_by_owner`) and a released renderer skips
+                // its frames while its authoritative size keeps advancing.
+                SurfaceLifecycleOutcome::Released => {}
+                SurfaceLifecycleOutcome::Recreated => {
+                    // The realm half is deferrable, so it goes through the
+                    // realm dispatch rather than running inline: unlike the
+                    // release, its ordering cannot affect completeness (the
+                    // engine's tracker mark already ran above, and the mint
+                    // with it), and the dispatcher may queue it when it is
+                    // mid-phase.
+                    let _ = dispatch_platform_realm(
+                        realm_dispatch,
+                        RealmTask::Frame(Box::new(|realm| {
+                            realm.mark_primary_needs_full_repaint();
+                        })),
+                    );
+                }
+                SurfaceLifecycleOutcome::Failed(source) => {
+                    // This one classification is decided by the error, not by
+                    // which event produced the request — the callback only
+                    // sees the bool. `SurfaceTargetUnavailable` is the
+                    // expected outcome of the acquire half: `Resume` reaches
+                    // this callback before any window exists (the backend
+                    // writes `Resume` independently of the window), so there is
+                    // nothing to build from and the probe classifies the target
+                    // as suspended. Logged at `trace`, not `debug`, because it
+                    // happens on every cycle — a line at `debug` there is
+                    // guaranteed noise on a path working as designed.
+                    if matches!(
+                        source,
+                        flui_engine::EngineError::SurfaceTargetUnavailable { .. }
+                    ) {
+                        tracing::trace!(
+                            ?source,
+                            "Android: no window to rebuild the surface from yet; the next \
+                             InitWindow brings one"
+                        );
+                    } else {
+                        // Unexpected: the window was reported available and the
+                        // rebuild failed for another reason. The engine logs
+                        // its own act; this is the app-side record of the
+                        // cause.
+                        //
+                        // No retry, and the residual that leaves is named here
+                        // rather than left to read as self-healing: the
+                        // presentation stays released, every frame after this
+                        // is a skipped one, and nothing re-asks until another
+                        // `true` arrives — and the only `true` emitters on this
+                        // backend are `Resume` and `InitWindow`. So the window
+                        // stays blank until the next lifecycle event. A retry
+                        // is declined deliberately: the signal that got us here
+                        // is delivered with the window already set (`InitWindow`
+                        // sets it before the callback runs), so a failure at
+                        // this point is genuine rather than a timing race, and
+                        // a poll is the wrong answer to a genuine failure —
+                        // it would mean re-arming the wake hook and a backoff.
+                        // The class that does recover on its own is the
+                        // device-loss one, and it is a different path:
+                        // `device_recovery` sees the renderer's device-lost
+                        // flag, retries under its backoff and wakes the loop.
+                        // The seam's statelessness covers a *missed signal*,
+                        // not a reported failure.
+                        tracing::warn!(
+                            source = ?source,
+                            "Android: the wgpu surface could not be rebuilt after a window was \
+                             reported available"
+                        );
+                    }
+                }
+            }
+        }));
+
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
         // marking the lifecycle Resumed or requesting the initial redraw.
         // Both of those can synchronously run the first frame through
@@ -540,7 +701,11 @@ where
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
     let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner);
-        bootstrap_android(root, config, hot_reload)
+        // `?` converts `bootstrap_android`'s `anyhow::Error` into the
+        // callback's opaque `BootstrapError` (anyhow's own `From` impl),
+        // exactly as `run_desktop`'s closure does.
+        bootstrap_android(root, config, hot_reload)?;
+        Ok(())
     }));
     teardown_platform_realm();
 

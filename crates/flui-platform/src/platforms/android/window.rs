@@ -131,10 +131,19 @@ impl PlatformWindow for AndroidWindow {
         //
         // This already satisfies `PlatformWindow::window_handle`'s MUST
         // (see that trait method's doc): `native_window()` answers `None`
-        // for the whole span between a `MainEvent::Pause` and the next
-        // `MainEvent::Resume` (`platforms/android/mod.rs`'s event loop,
-        // module doc's "Surface Lifecycle" section), and the `ok_or` below
-        // maps that straight to `Unavailable` — no separate flag needed.
+        // exactly when no ANativeWindow is live, and the `ok_or` below maps
+        // that straight to `Unavailable` — no separate flag needed. The span
+        // where it is `None` runs from `MainEvent::TerminateWindow` to the
+        // next `MainEvent::InitWindow` (`platforms/android/mod.rs`'s event
+        // loop, module doc's "Surface Lifecycle" section), and that span is
+        // open at both ends *inside* those callbacks: the field is still
+        // `Some` while the `TerminateWindow` callback runs (the applier clears
+        // it in `post_exec_cmd` once the callback has returned) and already
+        // `Some` while the `InitWindow` callback runs (it is set in
+        // `pre_exec_cmd` before the callback). Note what that span is
+        // NOT: an ordinary `MainEvent::Pause` leaves `native_window()`
+        // `Some`, because `AppCmd::TermWindow` is what clears it and a pause
+        // does not apply that command.
         let native_window = self
             .app
             .native_window()
@@ -144,8 +153,32 @@ impl PlatformWindow for AndroidWindow {
         let ptr = native_window.ptr().cast();
         let handle = raw_window_handle::AndroidNdkWindowHandle::new(ptr);
         let raw = raw_window_handle::RawWindowHandle::AndroidNdk(handle);
-        // SAFETY: The ANativeWindow pointer is valid as long as we are between Resume
-        // and Pause. AndroidWindow is only used within that lifecycle window.
+        // SAFETY: `ptr` is the ANativeWindow `AndroidApp` currently holds,
+        // re-queried immediately above. The bound on that pointer is the
+        // ANativeWindow refcount, and it is NOT this borrow. `ndk::NativeWindow`
+        // is a refcounted wrapper (`Clone` calls `ANativeWindow_acquire`,
+        // `Drop` calls `ANativeWindow_release`); `AndroidApp::native_window()`
+        // returns a clone of the glue guard's field
+        // (`android-activity` 0.6.1, `native_activity/mod.rs`); and the guard
+        // holds the last strong clone the Rust side keeps, dropping it in
+        // `post_exec_cmd(AppCmd::TermWindow)` — `guard.window = None`,
+        // `native_activity/glue.rs` — which the main loop applies *after* the
+        // `MainEvent::TerminateWindow` callback returns (`pre_exec_cmd` →
+        // callback → `post_exec_cmd`). The `'_` on the returned handle is the
+        // borrow of `self` and does not encode that bound: `AndroidPlatform`
+        // keeps holding its `AndroidWindow` across a pause, nothing clears
+        // that field on a termination, so `self` — and the borrow — outlives
+        // the pointer.
+        //
+        // The obligation that carries the weight is therefore
+        // consumer-enforced, not type-enforced: nothing may dereference the
+        // handle once the window has been terminated, and this type cannot
+        // express that, because `native_window()` keeps answering `Some`
+        // through the very callback that precedes the release. `flui-app`'s
+        // Android runner discharges it by releasing the wgpu surface built
+        // from this handle inside `on_surface_status_change(false)`, which
+        // `MainEvent::Pause` and `MainEvent::TerminateWindow` both deliver —
+        // the second one still inside the callback, before the release above.
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }

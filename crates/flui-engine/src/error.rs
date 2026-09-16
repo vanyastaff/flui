@@ -121,7 +121,8 @@ pub enum EngineError {
 
     /// The window target's owner reports its native handle is gone or
     /// suspended (a destroyed window, a torn-down Wayland surface, an
-    /// Android activity between `onPause` and the next `onResume`).
+    /// Android window between `MainEvent::TerminateWindow` and the next
+    /// `MainEvent::InitWindow`).
     ///
     /// Distinguished from [`EngineError::SurfaceCreation`] on purpose: wgpu's
     /// `CreateSurfaceError` boxes the `raw_window_handle::HandleError` it
