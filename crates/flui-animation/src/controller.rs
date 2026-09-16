@@ -88,7 +88,11 @@ struct RepeatRun {
     /// Per-cycle duration, resolved ONCE at the call
     /// (`period.unwrap_or(duration)`) — never re-read from the live
     /// `duration`/`reverse_duration`, so `set_duration` mid-repeat and a
-    /// bounce's reverse leg both leave it alone. Always `> 0`.
+    /// bounce's reverse leg both leave it alone. Never zero: the zero-period
+    /// case settles at the call before a `RepeatRun` is constructed.
+    period: Duration,
+    /// `period.as_nanos()`, cached because every sample divides by it.
+    /// Always `> 0` (see `period`).
     period_ns: u128,
     /// Number of cycles to run; `None` repeats indefinitely. `Some(0)`
     /// (zero cycles) is handled by `repeat_with` before a `RepeatRun` is
@@ -234,11 +238,9 @@ struct AnimationControllerInner {
     next_listener_id: usize,
 
     /// The active repeat, if any. `None` outside a `repeat`/`repeat_with`
-    /// run — `is_repeating` used to be a separate `bool` that could drift
-    /// from the other repeat fields; folding it into the `Option` makes
-    /// "repeating with no configuration" unrepresentable. Every field a
-    /// repeat needs to sample its value as a pure function of elapsed time
-    /// lives on [`RepeatRun`] — see that type's own doc.
+    /// run, so "repeating with no configuration" is unrepresentable. Every
+    /// field a repeat needs to sample its value as a pure function of
+    /// elapsed time lives on [`RepeatRun`] — see that type's own doc.
     repeat: Option<RepeatRun>,
 
     /// Active physics simulation (if using fling/animate_with).
@@ -1085,21 +1087,8 @@ impl AnimationController {
         // duration`, captured by the simulation at the call), and one period
         // for both legs of a bounce keeps the modular-nanosecond arithmetic
         // in `tick_repeat` exact.
-        let period_ns = period.unwrap_or(inner.duration).as_nanos();
-        let initial_ns = if period_ns == 0 {
-            0
-        } else {
-            let ratio = (f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo));
-            (ratio * period_ns as f64).round() as u128
-        };
-        let run = RepeatRun {
-            reverse,
-            min: lo,
-            max: hi,
-            period_ns,
-            count,
-            initial_ns,
-        };
+        let period = period.unwrap_or(inner.duration);
+        let period_ns = period.as_nanos();
 
         if period_ns == 0 {
             // ZERO EFFECTIVE PERIOD, any count: settle SYNCHRONOUSLY at the
@@ -1115,14 +1104,27 @@ impl AnimationController {
             // handled above and never reaches here); landing on cycle 0's
             // end rather than underflowing.
             let landing_index = u128::from(count.map_or(0, |c| c.saturating_sub(1)));
-            let (value, direction) = AnimationControllerInner::repeat_landing(&run, landing_index);
+            let (value, direction) =
+                AnimationControllerInner::repeat_landing(reverse, lo, hi, landing_index);
             inner.direction = direction;
             inner.target_value = value;
             return Ok(self.settle_at_target(entry_value, inner));
         }
 
-        // `RepeatRun` is live from here on — `period_ns > 0` by
-        // construction, so nothing downstream needs to guard it again.
+        // Every degenerate case has returned: a `RepeatRun` is constructed
+        // only here, so `period_ns > 0` holds by construction for every live
+        // run and nothing downstream needs to guard it again.
+        let ratio = (f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo));
+        let initial_ns = (ratio * period_ns as f64).round() as u128;
+        let run = RepeatRun {
+            reverse,
+            min: lo,
+            max: hi,
+            period,
+            period_ns,
+            count,
+            initial_ns,
+        };
         let sample = AnimationControllerInner::repeat_sample(&run, initial_ns);
         inner.repeat = Some(run);
         inner.direction = sample.direction;
@@ -1544,8 +1546,9 @@ impl AnimationController {
         // real time does — to a very large elapsed time, not to zero: a
         // zero-rewind would let a pathological input never exhaust a finite
         // repeat while `forward()` on the same input completes normally.
-        // `Duration::MAX`'s nanoseconds plus `run.initial_ns` (at most a
-        // `u64`-scale period) still fits comfortably in `u128`.
+        // `Duration::MAX`'s nanoseconds (~1.8e28) plus `run.initial_ns`
+        // (bounded by `run.period_ns`, itself at most `Duration::MAX`'s
+        // nanoseconds) is at most ~3.7e28, well inside `u128`.
         let elapsed_ns = Duration::try_from_secs_f64(cycle)
             .unwrap_or(Duration::MAX)
             .as_nanos();
@@ -1559,8 +1562,12 @@ impl AnimationController {
         if let Some(count) = run.count
             && total_ns >= u128::from(count) * run.period_ns
         {
-            let (value, direction) =
-                AnimationControllerInner::repeat_landing(&run, u128::from(count.saturating_sub(1)));
+            let (value, direction) = AnimationControllerInner::repeat_landing(
+                run.reverse,
+                run.min,
+                run.max,
+                u128::from(count.saturating_sub(1)),
+            );
             inner.value = value;
             inner.start_value = value;
             inner.target_value = value;
@@ -1844,12 +1851,8 @@ impl AnimationControllerInner {
             return run;
         }
         if let Some(repeat) = &self.repeat {
-            // `RepeatRun::period_ns` is always `> 0` by construction (see
-            // its own doc), so this never returns a zero duration while
-            // repeating. `Duration::from_nanos` truncates a `u128` past
-            // `u64::MAX` nanoseconds (~584 years) — no real period reaches
-            // that, but the fallback saturates rather than panicking.
-            return Duration::from_nanos(u64::try_from(repeat.period_ns).unwrap_or(u64::MAX));
+            // Resolved once at the call and never zero (see `RepeatRun`).
+            return repeat.period;
         }
         match self.direction {
             AnimationDirection::Forward => self.duration,
@@ -1966,16 +1969,17 @@ impl AnimationControllerInner {
     }
 
     /// The value/direction at the END of repeat cycle `index` (0-based): a
-    /// `Reverse` leg lands on `run.min`, a `Forward` leg on `run.max`. The
-    /// single landing rule every exhaustion (finite count run out) and
-    /// zero-period settle reports. Takes `run` by reference rather than
-    /// `&self` because `repeat_with`'s zero-period/zero-count settle paths
-    /// call this BEFORE a [`RepeatRun`] is ever stored in `self.repeat`.
-    fn repeat_landing(run: &RepeatRun, index: u128) -> (f32, AnimationDirection) {
-        let direction = Self::repeat_leg(run.reverse, index);
+    /// `Reverse` leg lands on `min`, a `Forward` leg on `max`. The single
+    /// landing rule every exhaustion (finite count run out) and zero-period
+    /// settle reports. Takes the range as scalars rather than a
+    /// [`RepeatRun`] because `repeat_with`'s zero-period settle runs BEFORE
+    /// any `RepeatRun` exists — a `RepeatRun` is never constructed with a
+    /// zero period.
+    fn repeat_landing(reverse: bool, min: f32, max: f32, index: u128) -> (f32, AnimationDirection) {
+        let direction = Self::repeat_leg(reverse, index);
         let value = match direction {
-            AnimationDirection::Reverse => run.min,
-            AnimationDirection::Forward => run.max,
+            AnimationDirection::Reverse => min,
+            AnimationDirection::Forward => max,
         };
         (value, direction)
     }

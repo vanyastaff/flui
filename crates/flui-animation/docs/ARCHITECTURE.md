@@ -171,8 +171,7 @@ struct AnimationControllerInner {
     simulation: Option<Box<dyn Simulation>>,
     
     // Repeat: `None` outside a repeat run, so "repeating with no
-    // configuration" is unrepresentable (`is_repeating` used to be a
-    // separate bool that could drift from the rest). value/status/direction
+    // configuration" is unrepresentable. value/status/direction
     // are a pure function of elapsed time since the run started
     // (`RepeatRun::initial_ns`, the phase the run started at, plus that
     // elapsed time, reduced modulo `RepeatRun::period_ns` in integer
@@ -445,7 +444,7 @@ interpolated to `0.25` on the second call. Same elapsed time, different
 answer depending on the caller's frame partition: #1078's own reproduction
 probes. `AnimationController::tick_repeat` replaces the incremental model
 with one computation: `total_ns` (elapsed nanoseconds since the run
-started, plus `repeat_initial_ns`) reduced modulo `repeat_period_ns` gives
+started, plus `RepeatRun::initial_ns`) reduced modulo `RepeatRun::period_ns` gives
 the cycle index and phase directly, so `tick_at(1.25)` gives the identical
 answer regardless of whether an intervening `tick_at(1.0)` happened.
 `AnimationControllerInner::repeat_leg`/`repeat_landing`/`repeat_sample` are
@@ -509,7 +508,7 @@ Animations semantics for an empty active interval; Flutter asserts
 `count > 0`, Compose throws for `iterations < 1`).
 
 **One period for both legs of a bounce; `set_duration` does not retime an
-active repeat.** `repeat_period` is resolved ONCE at the call
+active repeat.** `RepeatRun::period` is resolved ONCE at the call
 (`period.unwrap_or(duration)`), not read live on every tick — Flutter
 parity, `AnimationController.repeat`'s `period ??= duration` captured by
 the simulation. The previous behavior fell through to
