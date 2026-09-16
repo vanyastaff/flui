@@ -25,7 +25,7 @@ use std::{
 };
 
 use flui_scheduler::{
-    FrameBudget,
+    FrameBudget, FrameOutcome,
     config::PerformanceMode,
     duration::{FrameDuration, Milliseconds},
     frame::{AppLifecycleState, SchedulerPhase},
@@ -2854,7 +2854,7 @@ fn a_frame_completing_while_poll_clones_the_waker_still_resolves_it() {
     use std::{
         future::Future,
         pin::Pin,
-        task::{Context, RawWaker, RawWakerVTable, Waker},
+        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
     };
 
     /// A waker whose `clone` drives a whole frame before returning, landing
@@ -2905,10 +2905,15 @@ fn a_frame_completing_while_poll_clones_the_waker_still_resolves_it() {
         "the waker's clone must actually have driven a frame, or this test \
          never opens the window it exists to probe"
     );
+    let Poll::Ready(outcome) = resolved else {
+        panic!(
+            "poll must re-check `completed` after re-acquiring the guard: the frame \
+             that completed while the waker was being cloned already took and woke \
+             the PREVIOUS waker, so returning Pending here strands the task forever"
+        );
+    };
     assert!(
-        resolved.is_ready(),
-        "poll must re-check `completed` after re-acquiring the guard: the frame \
-         that completed while the waker was being cloned already took and woke \
-         the PREVIOUS waker, so returning Pending here strands the task forever"
+        matches!(outcome, Ok(FrameOutcome::Completed { .. })),
+        "the scheduler committed a clean frame -- this must resolve Completed, not {outcome:?}"
     );
 }

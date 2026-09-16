@@ -110,15 +110,45 @@ regressions each direction produced):
   `MAX_BUILD_REENTRY_PASSES` cap only ever fires BETWEEN calls to this
   method and never got the chance.
 - `flush_microtasks` already had a pop-one-under-lock shape (the model the
-  other two now follow for that part). It carries no bound at all beyond
-  "until the queue is empty": no reentrant-registration contract is
+  other two now follow for that part). Before issue #1159 it carried no
+  bound at all beyond "until the queue is empty" — an unaudited state, not
+  silently assumed correct, since no reentrant-registration contract was
   documented for microtasks the way issue #1058 documents one for transient
-  callbacks, and no test has found a same-frame-reentrancy gap there. Not a
-  claim that one could not exist — only that review so far measured
-  concrete regressions on the other two queues and fixed those; a microtask
-  that registers another microtask from inside itself running within the
-  SAME `flush_microtasks` call is the current, unaudited behavior, named
-  here rather than silently assumed correct.
+  callbacks. Issue #1159 closed that gap: `flush_microtasks` is now an outer
+  loop over `flush_microtasks_pass`, a private helper with the SAME
+  count-budget shape as `TaskQueue::execute_until` (`queue.len()` read once,
+  under the first lock acquisition, decremented once per pop), capped at
+  `MAX_MICROTASK_REENTRY_PASSES` (32) outer passes with a `tracing::warn!`
+  fired once per call on the cap with work still queued, not a
+  process-wide latch. A microtask
+  enqueued reentrantly BY another one in the same pass still runs, one pass
+  later, before this flush call returns — Dart's own nested-microtask
+  semantics are preserved — **but only up to the cap.** A FINITE chain
+  deeper than 32 passes (33 levels of nesting, no genuinely unbounded
+  re-enqueuing anywhere in it) is deferred exactly like an unbounded one:
+  whatever the cap leaves queued waits for the NEXT `flush_microtasks` call
+  (the following frame's `handle_begin_frame`), not this one. The cap
+  cannot tell a genuinely unbounded, self-re-enqueuing chain apart from a
+  merely deep finite one — both trip the SAME warning at the SAME depth,
+  and only the unbounded case would otherwise hang the frame. This bounds
+  reentrancy *depth*, not *width* — the same caveat `MAX_BUILD_REENTRY_PASSES`
+  states for the Build/Animation drain: a pass whose every popped microtask
+  enqueues two more still finishes in 32 passes, not because the fan-out is
+  bounded, but because passes are. Unlike the Build cap, there is no
+  trailing, unconditional second sweep here (`handle_draw_frame`'s own
+  `execute_until(Priority::Idle)` has no microtask analogue), so a capped
+  chain's observed run count is exactly the cap, not `+ 1`. A capped flush's
+  unrun leftovers stay queued and request nothing of their own —
+  `schedule_microtask` has never called `request_frame` the way `TaskQueue::add`
+  does for Build-or-higher priority, and this cap does not change that
+  pre-existing contract; a leftover simply waits for the next frame's
+  `handle_begin_frame` to flush it. Divergence from Dart, recorded rather
+  than silently improved: Dart's own microtask queue has no such outer
+  cap at all — a browser or VM microtask that re-enqueues itself forever
+  genuinely starves that isolate, and even a merely deep FINITE chain runs
+  to completion in the SAME turn there; FLUI trades a one-frame deferral on
+  that legitimate-but-deep case, plus a small chance of under-running a
+  genuinely pathological one, for the guarantee that no single frame hangs.
 
 The result: **the panicking entry itself is consumed; every entry still
 queued behind it is preserved and runs on the next completed frame — not
@@ -130,12 +160,13 @@ one that panicked) simply runs again next frame, same as always.
 
 **The frame's post-frame callbacks do not run** for an aborted frame —
 unchanged from before this issue; see `abort_frame`'s own doc. **Completion
-waiters are woken with the aborted frame's timing** — an aborted frame is a
+waiters are woken with the aborted frame's outcome** — an aborted frame is a
 frame that finished, badly, and `end_of_frame()` must not hang forever
-because of it. This is a **named limitation, not an oversight**: the
-completion future's `Poll::Ready` value carries no success/failure
-distinction, so a caller cannot tell an aborted frame apart from a
-successful one purely by observing `end_of_frame()` resolve.
+because of it. It resolves `Ok(FrameOutcome::Aborted { timing })`, distinct
+from a successful frame's `Ok(FrameOutcome::Completed { timing })`: see this
+file's own `end_of_frame` resolves an outcome, and a dropped scheduler
+resolves `Err(SchedulerClosed)` entry below for the full contract and why
+issue #1162 shaped it this way.
 
 **The `frame_scheduled` contract for a catcher:** by the time any callback
 this recovery could be catching a panic from has even run,
@@ -247,10 +278,7 @@ to become the one the caller observes.
   isolation here would be a policy change well beyond this issue's scope,
   not a bookkeeping fix.
 
-**Trade-off accepted:** an aborted frame is indistinguishable from a
-successful one through `end_of_frame()` alone (named above); a caller that
-needs to tell them apart must catch the panic itself, not rely on the
-completion future. `TaskQueue::execute_until`'s count budget also accepts
+**Trade-off accepted:** `TaskQueue::execute_until`'s count budget also accepts
 that a reentrant HIGHER-priority task displaces a still-queued, lower-
 priority sibling to the next call rather than deferring behind it the way
 `handle_begin_frame`'s id watermark does for transient callbacks — named
@@ -659,28 +687,56 @@ That predicate has two halves, and only the first belongs to the registry:
   the vec's contents at push time, so there is no bit written at one time and
   read at another.
 - **Survival.** No registry predicate can decide whether an issued demand
-  still stands. A demand is revoked without any drain when frames are disabled
-  at request time, and `frame_scheduled` has a second clearer besides
-  `handle_begin_frame`: the public `finish_async_pump`. If a live waiter's
-  demand is revoked, a later push sees that live entry, stays silent, and both
-  wait forever. Only a frames-enabled edge can re-issue a demand that nothing
-  recorded as lost, which makes that edge the other half of this liveness
-  argument rather than a consistency nicety.
+  still stands. A demand is revoked without any drain when `frame_scheduled`
+  is cleared with a live waiter still registered, and it has a second
+  clearer besides `handle_begin_frame`: the public `finish_async_pump`. If
+  nothing else acted, a later push would then see that live entry, stay
+  silent, and both wait forever. Two independent mechanisms recover it,
+  covering the two ways the revoke is reached:
 
-  **The production carrier is `handle_app_lifecycle_state_change`**, whose
-  `if !frames_were_enabled && should_render { self.request_frame(); }` leg
-  predates this issue and is pinned by
-  `lifecycle_reenable_edge_schedules_exactly_one_frame`. That is the edge a
-  real app crosses, and the sequence is reachable rather than theoretical:
-  frames enabled, a demand issued, lifecycle goes `Hidden`, a `PumpAsync`
-  tick revokes the latch through `finish_async_pump` with no drain, later
-  registrations stay silent behind the still-live waiter, and the resume edge
-  is what recovers them. `set_frames_enabled(true)` gained the same re-request
-  so the public setter mirrors the lifecycle path rather than being a second
-  way to reach the stranded state. It has **zero production callers** today
-  (the only non-test call in the workspace passes `false`, and it is itself
-  inside a `#[cfg(test)]` module), so do not read its caller count as a
-  measure of whether this argument holds.
+  - **`finish_async_pump` re-issues the demand itself (issue #1162)**, at
+    the exact point that would otherwise drop it: once the latch is clear,
+    it checks `frames_enabled` and the registry's own `has_live_waiter()`
+    and calls `request_frame()` if both hold. This is the leg that matters
+    when frames are ALREADY enabled at the moment the pump runs — no
+    disable→enable edge ever happens for such a waiter to ride, so nothing
+    but the pump's own re-check can recover it. Not reachable off a
+    runner's own decide-then-pump order, though: every `flui-app` runner
+    calls `finish_async_pump` only from `wake_action`'s `PumpAsync` arm,
+    chosen iff `!frames_enabled` at that same read, immediately followed by
+    this call on the same thread with nothing in between — so `frames_enabled`
+    still reads false when the runner's own pump reaches the re-check. What
+    DOES reach this leg with `frames_enabled` true: `finish_async_pump`
+    called directly, out of `wake_action`'s order (an embedder or a test
+    bypassing it), or a cross-thread enable landing in the store-buffering
+    window this doc's own **Ordering:** note names below. See the
+    `end_of_frame` resolves an outcome, and a dropped scheduler resolves
+    `Err(SchedulerClosed)` entry's own **Ordering:** note for why this needs
+    `SeqCst`, not `Acquire`/`Release`.
+  - **A frames-enabled edge re-issues a demand the pump left for dead while
+    frames were disabled** — the case the pump's own re-check cannot reach,
+    since it reads `frames_enabled` false there and stays silent on purpose
+    (Dart's `scheduleFrame()` carries the identical enablement gate).
+    **The production carrier is `handle_app_lifecycle_state_change`**, whose
+    `if !frames_were_enabled && should_render { self.request_frame(); }` leg
+    predates issue #1162 and is pinned by
+    `lifecycle_reenable_edge_schedules_exactly_one_frame`. That is the edge a
+    real app crosses, and the sequence is reachable rather than theoretical:
+    frames enabled, a demand issued, lifecycle goes `Hidden`, a `PumpAsync`
+    tick revokes the latch through `finish_async_pump` with no drain, later
+    registrations stay silent behind the still-live waiter, and the resume
+    edge is what recovers them. `set_frames_enabled(true)` gained the same
+    re-request so the public setter mirrors the lifecycle path rather than
+    being a second way to reach the stranded state. It has **zero production
+    callers** today (the only non-test call in the workspace passes `false`,
+    and it is itself inside a `#[cfg(test)]` module), so do not read its
+    caller count as a measure of whether this argument holds.
+
+  Before issue #1162, only the second leg existed, which is why a live
+  waiter stranded while frames stayed enabled the whole time (no disable, no
+  re-enable, just a `PumpAsync` cycle) had no recovery path at all — named
+  as a reachable, not theoretical, gap on `finish_async_pump`'s own doc and
+  closed by the first leg above.
 
 **Alternatives considered:**
 
@@ -742,18 +798,143 @@ is the same standing demand an animation ticker creates, and it is what asking
 for a frame every frame means rather than a runaway; the point is that "one
 surplus frame" describes a burst, not a repeating caller.
 
-**Recorded gap, deliberately not closed here:** a `FrameCompletionFuture` whose
-scheduler is dropped while it is pending never resolves, because only a frame
-resolves it and only the scheduler runs frames. There is no sentinel to resolve
-with while `Output` is `FrameTiming`, so closing it is a breaking change to the
-output type; issue #1162 carries it. A panicking `on_frame_scheduled` hook also
-loses its demand permanently, since `request_frame` sets the latch before firing
-the hook, and FLUI defines no recovery transition for that (Compose does: a
-throwing `onNewAwaiters` permanently fails the clock and resumes every current
-and future awaiter with the error). The dropped-scheduler and not-fused notes
-are on `FrameCompletionFuture`'s own doc, where a caller holding the future
-will meet them; the panicking-hook note is on `end_of_frame`, which is the call
-that can reach the hook.
+**Closed by issue #1162, previously recorded here as an open gap:** a
+`FrameCompletionFuture` whose scheduler was dropped while it was pending used
+to never resolve, because only a frame resolved it and only the scheduler ran
+frames, and `Output` being a bare `FrameTiming` left no sentinel to resolve
+with. See the `end_of_frame` resolves an outcome, and a dropped scheduler
+resolves `Err(SchedulerClosed)` entry below for how. **Still open:** a
+panicking `on_frame_scheduled` hook loses its demand permanently, since
+`request_frame` sets the latch before firing the hook, and FLUI defines no
+recovery transition for that (Compose does: a throwing `onNewAwaiters`
+permanently fails the clock and resumes every current and future awaiter with
+the error). That note is on `end_of_frame`, which is the call that can reach
+the hook.
+
+### `end_of_frame` resolves an outcome, and a dropped scheduler resolves `Err(SchedulerClosed)`
+
+**Rule:** [`FrameCompletionFuture::Output`](src/scheduler.rs) is
+`Result<FrameOutcome, SchedulerClosed>`, never a bare `FrameTiming`. A frame
+that closed through `end_frame_impl` resolves `Ok(FrameOutcome::Completed { timing })`;
+one that closed through `abort_frame` resolves `Ok(FrameOutcome::Aborted { timing })`;
+and every waiter still registered when the scheduler's last strong handle
+drops resolves `Err(SchedulerClosed)`. Polling again after `Ready` repeats the
+same value rather than hanging.
+
+**Conflict:** the two gaps the entries above named as open — "a caller cannot
+tell an aborted frame apart from a successful one" and "a
+`FrameCompletionFuture` whose scheduler is dropped never resolves" — both
+trace to the same root cause: `Output` carried no room for anything but a
+successful frame's timing.
+
+**Choice, and why `Result<FrameOutcome, SchedulerClosed>` rather than the
+issue's own flat three-variant enum**
+(`Completed`/`Aborted`/`SchedulerClosed` in one type): `SchedulerClosed` is
+categorically different from the other two — it is "this future will never
+be resolved by a frame at all," not "a frame resolved it, badly." Splitting
+it into the `Result` error channel lets ordinary `?`/`.await?` composition
+work the way it would for any other fallible async operation, and keeps
+`FrameOutcome` free to grow more *frame* outcomes later (it is
+`#[non_exhaustive]` for exactly that) without also having to reason about
+where a teardown sentinel sits among them. `Completed`/`Aborted` are `Debug,
+Clone, Copy` only — `FrameTiming` itself has no `PartialEq`/`Eq`. Both are
+struct-shaped (`{ timing: FrameTiming }`) and each carries its own
+variant-level `#[non_exhaustive]`, so outcomes are constructed only by the
+scheduler and matched outside it with `{ .. }`: `abort_frame` records nothing
+else about how a frame ended, so `Aborted`'s field is the only surface an
+aborted frame's data reaches, and a reason or phase is a plausible additive
+field later. A plain tuple `Completed(FrameTiming)` would have let external
+code fabricate an outcome, and `#[non_exhaustive]` on a *tuple* variant is no
+middle ground — it makes the variant fully opaque cross-crate, not even
+matchable as `Completed(..)`; the struct shape is the one form that is both
+sealed for construction and open for matching. `SchedulerClosed` is a plain
+unit struct, not `#[non_exhaustive]`, mirroring this crate's closest sibling,
+`ticker::TickerCanceled`.
+
+**Fused for free, not by a new mechanism:** `poll` used to `take()` the
+resolved timing, so a second poll after `Ready` found `None` again and hung
+forever — a real "polling it again after it resolved is a silent hang" trap,
+named on the future's own doc before this issue. `Result<FrameOutcome,
+SchedulerClosed>` is `Copy` (both arms are), so `poll` now peeks the stored
+value by copy instead, and a second poll simply repeats it. This mirrors
+`TickerFutureOrCancel`'s own `poll_resolution` shape in this crate (`ticker.rs`)
+rather than introducing a second fusing mechanism.
+
+**Teardown mechanism:** `impl Drop for SchedulerInner` drains the completion
+registry with `Mutex::get_mut` — no lock, sound because `Drop::drop` runs
+only once the `Arc`'s strong count reaches zero, and `Arc`'s own
+release/acquire ordering means the destructor observes every prior mutation
+through any dropped clone. Every drained entry's `completed` is unconditionally
+written `Some(Err(SchedulerClosed))` with no `is_none()` guard: `drain()`
+performs `mem::take`, so an entry reaching this loop was, by construction,
+never reached by `notify_frame_completion` first (a delivered completion
+already left the registry through that same `drain`) — the guard would be
+dead code testing a fact the type already proves, not a real defense. Every
+waker's `wake()`, and a panicking wake payload's own possibly-panicking
+`Drop`, is caught and traced via `tracing::error!`; teardown never
+`resume_unwind`s — a panic from a destructor while already unwinding aborts
+the process with no diagnostic, and `abort_frame`'s own doc already states
+this rule for this crate. The same `discard_panic_payload` helper introduced
+for this contains a second (or later) waker's panic during an ordinary,
+non-teardown `notify_frame_completion` drain, and the symmetric case one
+level up in `end_frame_impl`'s own `callback_result`/`notify_result` merge —
+previously an uncontained `Option::or`-selected `drop`.
+
+**The teardown guarantee is partial, and this does not widen it:** any live
+strong `UpdateScheduler` handle defers `Drop for SchedulerInner`, the same as
+any other `Arc`. A task on an external executor that owns a clone does not
+hang — dropping the executor drops the task, the clone, then the scheduler —
+but the scheduler's own async driver holding a task future that captured a
+clone is a true self-cycle no `Drop` impl here can break.
+
+**Ordering: the same issue also closed a `finish_async_pump` wake-loss hazard,
+and it needed `SeqCst`, not `Acquire`/`Release`.** A live `end_of_frame`
+waiter whose demand survives a disable→enable edge with `frame_scheduled`
+already latched `true` fires no NEW wake on that edge (the false→true
+transition `request_frame_impl` needs never happens, since the latch was
+never cleared by disabling frames), so a LATER `finish_async_pump` cycle that
+unconditionally clears the same latch would silently drop the demand with no
+mechanism left to re-issue it. The fix is `finish_async_pump`
+re-checking `frames_enabled && completion_waiters.has_live_waiter()` after
+clearing the latch and re-issuing the demand itself — see the "Survival"
+paragraph above for the full mechanism and its sibling (the frames-enabled
+edge covers the case this can't reach). That re-check races a concurrent
+frames-enabled edge's own writes with **no reads-from edge between the two
+threads** — a store-buffering (Dekker/SB) litmus pair: pump thread's
+`frame_scheduled.swap(false, _)` then `frames_enabled.load(_)`, against edge
+thread's `frames_enabled.swap(true, _)` then (via `request_frame_impl`)
+`frame_scheduled.swap(true, _)`. Under `Acquire`/`Release` alone, "the pump's
+load still sees the OLD `frames_enabled` AND the edge's swap still sees the
+OLD `frame_scheduled`" is a legal outcome and observable on real hardware
+(x86's store buffering: a plain store can sit buffered while a later plain
+load on the SAME thread already executes) — not merely a theoretical
+interleaving. `SeqCst` on all four accesses this race instance touches — the
+pump's `frame_scheduled` swap AND its `frames_enabled` load; the edge's
+`frames_enabled` swap AND (via `request_frame_impl`) its `frame_scheduled`
+swap — puts them on one global total order, which rules that outcome out.
+Marked at five code sites in total, since `frames_enabled`'s swap has two
+production carriers (`set_frames_enabled` and
+`handle_app_lifecycle_state_change`) even though only one of them fires per
+race instance. No single-threaded test can redden a regression from
+`SeqCst` back to `Acquire`/`Release` here; only a `loom` model could prove
+it, and none exists in this crate yet.
+
+**Divergence from Flutter, recorded rather than silently improved:**
+`SchedulerBinding.endOfFrame` (`scheduler/binding.dart` @ 3.44.0) resolves a
+bare `Future<void>` — Dart has no outcome signal here at all, successful or
+otherwise, and no teardown sentinel either (`SchedulerBinding` is a
+process-lifetime singleton in Dart; there is no analogue of dropping it).
+FLUI's per-realm `UpdateScheduler` can be dropped mid-flight, so it needs an
+answer Dart's own binding never had to give.
+
+**Alternatives considered:** a flat `enum FrameCompletionOutcome { Completed,
+Aborted, SchedulerClosed }` (the issue's own sketch) — rejected above for
+conflating a frame outcome with "no frame will ever resolve this," which the
+`Result` split keeps separate and composable. A sentinel `FrameTiming` value
+(e.g. all-zero) for the closed case — rejected: it is indistinguishable from
+a real frame's timing by construction, exactly the "cannot tell them apart"
+defect this issue exists to close, just moved to a new field instead of
+solved.
 
 ### A ticker future's poll registers before the read that decides to park
 
