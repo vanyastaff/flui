@@ -1536,15 +1536,6 @@ impl AnimationController {
         run: RepeatRun,
         cycle: f64,
     ) {
-        // The at-call state (`repeat_with`) and a running tick both sample
-        // through `repeat_sample`/`repeat_landing`, so a tick whose
-        // `total_ns` coincides with the call's (elapsed zero — the very
-        // first tick after `repeat_with`) recomputes the IDENTICAL value.
-        // Compare against the value at entry rather than notifying
-        // unconditionally, so that genuinely uneventful tick reports no
-        // discontinuity.
-        let entry_value = inner.value;
-
         // `tick_at` already clamps `cycle` to `.max(0.0)`, and NaN cannot
         // reach it (`f64::max` returns the non-NaN operand), so the only
         // remaining failure is `Err` on an out-of-range `cycle` (e.g.
@@ -1581,12 +1572,7 @@ impl AnimationController {
             let status = direction.settled_status();
             inner.status = status;
             let delivery = inner.active_run.take().map(TickerCompleter::complete);
-            let value_change = if (value - entry_value).abs() < BOUND_EPSILON {
-                ValueChange::Unchanged
-            } else {
-                ValueChange::Notify
-            };
-            self.finish(status, value_change, delivery, inner);
+            self.finish(status, ValueChange::Notify, delivery, inner);
             return;
         }
 
@@ -1597,18 +1583,15 @@ impl AnimationController {
         // `take_status_change` dedups repeated same-status writes, so a leg
         // flip fires exactly one status change and an even number of
         // skipped bounce cycles in one long frame fires none. Value
-        // notification is likewise conditional on real movement — see this
-        // function's own doc for why a tick can coincide exactly with the
-        // at-call sample.
+        // listeners fire on every tick, as they do for the time-based and
+        // simulation branches (Flutter's `_tick` calls `notifyListeners()`
+        // unconditionally): a tick is a frame, and a listener that repaints
+        // per frame must not be starved by a sample that happens to repeat
+        // the previous value.
         inner.value = sample.value;
         let status = sample.direction.running_status();
         inner.status = status;
-        let value_change = if (sample.value - entry_value).abs() < BOUND_EPSILON {
-            ValueChange::Unchanged
-        } else {
-            ValueChange::Notify
-        };
-        self.finish(status, value_change, None, inner);
+        self.finish(status, ValueChange::Notify, None, inner);
     }
 
     /// Set the value directly without animating; recomputes status and notifies.
@@ -2918,9 +2901,9 @@ mod tests {
     /// directly contradicted the model, its own comment, AND Flutter: it
     /// read `1.0` at the call, then `tick_at(0.0)` — the very first tick,
     /// no time elapsed — recomputed via the sampler and got `0.0`, a
-    /// one-frame discontinuity the whole change exists to remove. This
-    /// tick must fire NO value notification: nothing actually changed
-    /// between the call and this tick once both agree.
+    /// one-frame discontinuity the whole change exists to remove. The tick
+    /// still notifies value listeners (every tick does, as in Flutter's
+    /// `_tick`); what it must not do is move the value.
     #[test]
     fn repeat_restart_at_call_value_from_max_has_no_discontinuity_at_the_first_tick() {
         let _serial = serial();
@@ -2946,8 +2929,8 @@ mod tests {
         );
         assert_eq!(
             value_fires.load(Ordering::SeqCst),
-            0,
-            "nothing changed between the call and this tick, so no value notification fires"
+            1,
+            "a tick is a frame: value listeners fire once per tick even when the sample repeats"
         );
         c.dispose();
     }
