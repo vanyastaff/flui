@@ -44,7 +44,13 @@ the old ~5e-3 residual). All curves are comfortably within a 60fps frame budget.
 registration id instead of a linear `Vec` scan; see `vsync.rs`'s `tick_all`
 doc for the cursor-walk design. Measured with the committed Criterion bench
 (`benches/vsync_registry.rs`); run `cargo bench -p flui-animation --bench
-vsync_registry` to reproduce.
+vsync_registry` to reproduce. The `unregister_all` rows below are from the
+bench's current shape, which keeps one extra clone of every controller alive
+per batch so a removal's `Arc` drop only decrements a refcount instead of
+deallocating a whole `AnimationController` — both the "before" and "after"
+`unregister_all` rows were re-measured under that shape so they compare like
+for like (see the bench file's doc comment for why an earlier shape without
+that clone conflated map-removal cost with deallocation cost).
 
 Host: 13th Gen Intel Core i9-13900K, rustc 1.98.1 (48a229cea 2026-09-01),
 Linux x86_64 — not CPU-isolated, so treat these as a distribution and a
@@ -64,8 +70,8 @@ table's wall time.
 | `running_vsync_registry` | 100 | 6.4585 / 6.6842 / 6.8430 µs |
 | `running_vsync_registry` | 1,000 | 171.39 / 204.23 / 261.10 µs |
 | `mixed_vsync_registry` | 1,000 (10% running) | 123.48 / 125.84 / 129.69 µs |
-| `unregister_all` | 1,000 | 443.93 / 488.79 / 547.90 µs |
-| `unregister_all` | 10,000 | 32.559 / 34.293 / 36.710 ms |
+| `unregister_all` | 1,000 | 298.07 / 298.27 / 298.47 µs |
+| `unregister_all` | 10,000 | 31.867 / 32.497 / 33.196 ms |
 
 ### After: `BTreeMap`, cursor walk over `range_mut(cursor..fence)`
 
@@ -78,22 +84,22 @@ table's wall time.
 | `running_vsync_registry` | 100 | 6.3262 / 6.3521 / 6.4244 µs |
 | `running_vsync_registry` | 1,000 | 69.581 / 69.773 / 69.948 µs |
 | `mixed_vsync_registry` | 1,000 (10% running) | 37.981 / 38.077 / 38.230 µs |
-| `unregister_all` | 1,000 | 152.51 / 158.30 / 160.97 µs |
-| `unregister_all` | 10,000 | 1.5686 / 1.6182 / 1.6409 ms |
+| `unregister_all` | 1,000 | 30.429 / 30.793 / 31.541 µs |
+| `unregister_all` | 10,000 | 332.38 / 333.95 / 335.77 µs |
 
 ### Scaling ratio, 10,000 / 1,000 (the acceptance criterion)
 
 | Bench | Before (≈N²) | After (≈N log N) |
 |-------|---:|---:|
 | `stopped_vsync_registry` | ×86.6 | ×15.6 |
-| `unregister_all` | ×70.2 | ×10.2 |
+| `unregister_all` | ×109.0 | ×10.8 |
 
 An N² scan scales ×100 over a 10× population growth; N log N scales
-×(10,000·log₂10,000)/(1,000·log₂1,000) ≈ ×13.3. Both ratios above land an
-order of magnitude below the N² baseline and close to the N log N estimate,
-consistent with the indexed registry rather than the quadratic scan it
-replaced. `has_running` is unaffected by this change and stays O(N); it is
-not part of either table.
+×(10,000·log₂10,000)/(1,000·log₂1,000) ≈ ×13.3. The two after-ratios above
+(×15.6, ×10.8) sit roughly ×6–9 below the ×100 quadratic scale and within
+~20% of the ×13.3 N log N estimate, consistent with the indexed registry
+rather than the quadratic scan it replaced. `has_running` is unaffected by
+this change and stays O(N); it is not part of either table.
 
 ## Memory Layout
 

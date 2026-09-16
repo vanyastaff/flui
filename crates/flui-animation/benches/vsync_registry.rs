@@ -99,6 +99,21 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
 /// iteration (untimed setup) so the timed closure is only the removals —
 /// this is the second quadratic the indexed registry removes (`retain` over
 /// a linear store, once per removal, made the whole teardown O(N^2)).
+///
+/// `register` takes its controller by value, so if setup handed it the ONLY
+/// handle, each `unregister` in the timed routine would drop the last strong
+/// reference and deallocate a whole `AnimationController` (its `Mutex`,
+/// listener vectors, ticker) — pricing teardown-plus-deallocation, not the
+/// map removal under test. `retained` below keeps one extra clone of every
+/// controller alive per-batch, so `unregister`'s drop only decrements a
+/// refcount; `retained` is threaded back out through the routine's return
+/// value (`O`, not a local the routine drops before returning) so its own
+/// drop — and the real deallocation — lands in `iter_batched`'s
+/// `drop(black_box(output))`, which runs AFTER the timer stops, not before.
+/// `LargeInput` bounds how many of these (registry + retained clones) batch
+/// construction holds in memory at once: `SmallInput` batches ~iters/10
+/// setups up front, which at this N and iteration count would materialize
+/// millions of controllers simultaneously before the first `unregister` runs.
 fn unregister_all(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("unregister_all");
     group.sample_size(10);
@@ -109,21 +124,25 @@ fn unregister_all(criterion: &mut Criterion) {
             bench.iter_batched(
                 || {
                     let vsync = Vsync::new();
+                    let mut retained = Vec::with_capacity(count);
                     let registrations: Vec<_> = (0..count)
                         .map(|_| {
-                            vsync.register(AnimationController::with_detached_ticker(
-                                Duration::from_secs(1),
-                            ))
+                            let controller =
+                                AnimationController::with_detached_ticker(Duration::from_secs(1));
+                            retained.push(controller.clone());
+                            vsync.register(controller)
                         })
                         .collect();
-                    (vsync, registrations)
+                    (vsync, registrations, retained)
                 },
-                |(vsync, registrations)| {
+                |(vsync, registrations, retained)| {
                     for registration in registrations {
                         vsync.unregister(black_box(registration));
                     }
+                    // Moved out, not dropped here: see the doc comment above.
+                    (vsync, retained)
                 },
-                BatchSize::SmallInput,
+                BatchSize::LargeInput,
             );
         });
     }
