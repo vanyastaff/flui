@@ -26,6 +26,9 @@ Frame scheduling, task prioritization, and animation coordination.
   the same shard deadlocks)
 - Uses `event-listener` for async completion callbacks
 - `serde` feature for serialization support
+- `testing` feature for test-only lock-discipline probes (e.g.
+  `AsyncDriver::is_unlocked`); never enabled in production, opted into by a
+  consumer crate's own `dev-dependencies` edge
 - Shared and local post-frame registration is linearized by one gate and one ID
   sequence. Never move local callbacks into `Arc`/`Mutex`; the lane is `Rc`-owned
   and only active inside its binding/realm owner scope.

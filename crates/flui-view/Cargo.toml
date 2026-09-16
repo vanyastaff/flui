@@ -64,6 +64,10 @@ criterion = { workspace = true }
 # layout-builder tests can read committed geometry back off the pipeline
 # (`testing::box_geometry`). Dev-only; stays out of release builds.
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+# Enable flui-scheduler's `testing` feature so `future_builder.rs`'s
+# `nested_token_disposal_cancels_child_and_parent` unit test can reach
+# `AsyncDriver::is_unlocked`. Dev-only; stays out of release builds.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0", features = ["testing"] }
 # Same crate; dev-deps must redeclare so unit tests + integration
 # tests under `#[cfg(test)]` (without the `test-utils` feature flag
 # enabled at the integration boundary) still see it. Cargo merges

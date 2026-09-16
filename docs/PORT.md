@@ -474,6 +474,76 @@ The check scans filenames rather than contents: `docs/adr/ADR-NNNN-*.md`, number
 
 **Allowlist:** none. A number is used once.
 
+### LockDiscipline/StatementDrop. A significant value must not drop while its own lock guard is still held
+
+**Scope:** `crates/flui-scheduler`, `crates/flui-foundation` (whole crate trees, minus `examples/`), the two crates issue #1150's lock-drop sweep actually audited, site by site. This is deliberately narrower than most numbered triggers: a sibling crate carrying the same shape is real but unaudited residue for a future sweep to widen this glob into (tracked in #1176), not a claim that the rest of the workspace is clean.
+
+**The hazard.** A `MutexGuard`/`RwLockWriteGuard`/`RefMut` is a temporary. If the value it displaces, removes, or returns has a significant `Drop` (one that can run arbitrary user code, most commonly another `Arc`'s refcount reaching zero and destroying a captured closure or handle, or a `Waker`'s executor vtable), and that value drops while the guard's own temporary is still alive, a destructor that re-enters the same lock deadlocks. This is the exact shape `ARCHITECTURE.md`'s retired `schedule_frame`/`current_frame()` entry documents for `flui-scheduler`, the shape the `Vec::retain`-during-lock hazard three sibling call sites shared in the same crate, and the shape found in `ListenerRegistry`'s owner-hook dispatch and `ClaimSlot`'s `register_waker`, both of which none of the patterns below can see at all; a targeted review found them, not the trigger. Every one of these is fixed the same way: locate the removal/displacement under the lock, and drop the extracted value only after the guard falls, never by a full copy and never by holding the guard across arbitrary user code.
+
+**Three shapes, four `rg` passes:**
+
+1. **Statement drop** — a displacing/removing method call on a lock guard, used as a bare statement (`;` on the same line, no NAMED `let` binding):
+   ```
+   \.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\.(remove|take|clear|drain|pop|pop_front|pop_back|insert|swap|replace|retain|truncate|extract_if)\([^;]*\);
+   ```
+   The call's return value, the removed/displaced/popped item, has no binding to escape into. It drops at the statement's `;`, while the guard temporary from earlier in the same expression is still live. Post-filters, applied in order: drop doc-comment lines, then drop lines carrying a NAMED `let` binding (see the escape below for what counts as one). A bare `let _ = m.lock().remove(&k);` binds no name and is deliberately NOT filtered out here, since the produced value is still a bare statement temporary for drop-ordering purposes:
+   ```
+   grep -Ev '^[^:]*:[0-9]+:\s*(//!|///|//)'
+   grep -Ev 'let\s+(mut\s+)?([A-Za-z][A-Za-z0-9_]*|_[A-Za-z0-9_]+)\s*[:=]'
+   grep -Ev 'let\s*\('
+   ```
+2. **Assignment through a dereferenced guard** — `*x.lock() = new;` displaces whatever the slot held before, same hazard:
+   ```
+   \*[A-Za-z_][A-Za-z0-9_.]*\.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\s*=[^=][^;]*;
+   ```
+   (`=[^=]`, not `=\s*`, so a comparison such as `assert!(*count.lock() == 3);` cannot match: `==`'s second `=` fails the `[^=]` check.) Post-filters:
+   ```
+   grep -Ev '^[^:]*:[0-9]+:\s*(//!|///|//)'
+   grep -Ev '=\s*(true|false|-?[0-9]+(\.[0-9]+)?|"[^"]*")\s*;'
+   ```
+   A slot assigned a bare `true`/`false`/number/string literal holds plain data, so the OLD value it displaces cannot carry a significant drop. `None` is deliberately NOT in that alternation: `*slot.lock() = None;` on a `Mutex<Option<T>>` still drops whatever `T` the slot previously held, which can be arbitrary — only the literal on the right tells you anything, and `None` tells you nothing about what it is displacing. This is a precision refinement on the regex, not a behavioral exception: `Some(x)`, a struct literal, or a function call on the right-hand side all still count as hits, even when `x` itself turns out to be `Copy` (see the marker escape below for that case).
+3. **`if`/`while let` scrutinee** — the scrutinee's own guard temporary lives through the WHOLE arm body, the exact shape this sweep fixed in `ClaimSlot::Inner::wake_task` (`ARCHITECTURE.md` calls it recurring). Edition-2024 let-chains are covered too (`if ready && let Some(w) = m.lock().take() {` and `if let Some(w) = m.lock().take() && ready {` both match: the pattern allows clauses on either side of the `let`):
+   ```
+   (if|while)\b[^;{]*\blet\b[^=]*=\s*[^;{]*\.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\.(remove|take|pop|pop_front|pop_back|swap|replace|insert)\([^;{]*\{
+   ```
+4. **`match` scrutinee**, the same shape's `match` twin:
+   ```
+   match\s+[^;{]*\.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\.(remove|take|pop|pop_front|pop_back|swap|replace|insert)\([^{]*\)\s*\{
+   ```
+   Neither scrutinee pass takes the `let`/literal-RHS post-filters above — an `if let`/`match` inherently introduces a pattern, and even a `Some(_)` arm still drops the extracted value inside the arm body, under the guard, regardless of what the pattern names. Both take only the doc-comment filter.
+
+**The escape: extract, then drop after the guard falls.** Move the value out from under the guard before the guard's own temporary scope ends. Two shapes work: a block whose `}` closes ahead of the enclosing statement's `;` (`let removed = { guard.method() };`), or a plain `let` binding to a NAMED pattern whose type does not itself borrow the guard. That second qualifier matters. `let it = m.lock().drain();` on a std `Vec`/`HashMap` extends the guard through `it`'s own scope when `drain()` returns a borrowing `Drain`/`IterMut` iterator, since its `Item`s reference the collection through the still-held guard; only an OWNED-collection drain (this crate's two in-scope `.drain()` calls both return an owned `Vec`, not a borrowing iterator) actually lets the guard fall at the `let` statement's `;`. Verified empirically under rustc 1.98.1, both editions 2021 and 2024, for the owned-collection case: the guard, not being part of the bound pattern itself, is dropped when its own enclosing statement or block ends, which for a `let` statement is after the initializer's value has already been moved into the binding. Worked example below is `cancel_frame_callback`'s real body (`crates/flui-scheduler/src/scheduler.rs`), not a sketch:
+```rust
+// Locate-then-remove instead of `Vec::retain`'s drop-in-place: `retain`
+// would run the cancelled callback's `Drop` while `transient` is
+// still held, and a capture that re-enters the scheduler (e.g.
+// registering another callback) would deadlock on this same mutex.
+// The removed value is dropped only after the guard falls.
+let removed = {
+    let mut callbacks = self.inner.callbacks.transient.lock();
+    callbacks
+        .iter()
+        .position(|callback| callback.id == id)
+        .and_then(|index| callbacks.remove(index))
+};
+
+if let Some(callback) = removed {
+    drop(callback);
+    return true;
+}
+```
+A generic helper following the same shape, `Notifier::extract_locked` (`crates/flui-foundation/src/notifier_generic.rs`), backs four call sites (`remove`, `remove_even_if_disposed`, `remove_all_unchecked`, `dispose`) with one function: the guard, created inside `extract_locked`'s own body, is a temporary scoped to that function, and since the closure's return value is `extract_locked`'s tail expression, the guard falls before the caller ever receives the extracted value to drop. `ListenerRegistry::RegistryInner::after_add`/`after_remove` (`crates/flui-foundation/src/listener_registry.rs`) use the same tail-expression trick one level removed: the owner hook itself is an `Arc<Mutex<EdgeHook>>`, cloned out from under the SLOT lock (`on_first`/`on_last`) before the slot lock is released and the hook is called — a hook that re-arms itself (calls `set_on_first_listener` from inside its own body) touches only the slot lock, never the `Arc`'s own inner mutex the still-running call holds, so it neither deadlocks nor loses the re-arm.
+
+**Allowlist marker:** `// PORT-CHECK-OK-LOCK: <reason>`, on its own line, joining the `PORT-CHECK-OK-SP3`/`SP4`/`SP6`/`SP8`/`UNIT`/`STUB`/`DOWNCAST`/`DYN` family so `rg PORT-CHECK-OK` stays a single census of every allowlisted shape in the workspace. Reserved for a displaced/returned value that is provably `Copy` with no `impl Drop` (an `Option<Instant>`, a `Duration`, a `#[derive(Copy)]` enum like `PerformanceMode`, a `FrameTiming`, an `Option<std::thread::ThreadId>` — all plain-data fields, no significant drop possible regardless of lock discipline), never for a value whose `Drop` significance merely hasn't been checked.
+
+**Marker window:** matched with the same windowed scan trigger 10 uses for its own `PORT-CHECK-OK-SP3` marker, not the `check` helper's same-line-only `grep -Ev` (which cannot see this shape at all). Stated violation-relative: for a violation on line V, the marker may sit on V-1 (the line above), V (the same line), V+1, or V+2 (up to two lines below, where rustfmt moves a trailing marker on a block-opening line); a marker two lines ABOVE a violation (V-2) is NOT honoured. Same formula as trigger 10's own SP3 scan: a marker at line M covers violation lines `[M-2, M+1]` (`for (d=-2; d<=1; d++) covered[fp, ln+d]`). This is not cosmetic: rustfmt moves a trailing same-line comment on certain multi-line statements onto its own line, and a same-line-only match would silently stop matching after the next reformat. Implemented as its own `rg`+`awk` pass, mirroring trigger 10's structure exactly, marker-window formula included, because inline `#[cfg(test)] mod tests` hits are answered by `#[cfg(test)]` **within the same file**, which no path-glob (`--glob '!**/tests/**'`) can see. The file-glob exclusions every other trigger in this script relies on answer "is this file named `tests/*.rs`?", not "is this line inside a test module?".
+
+**What this trigger still cannot see:** a violation sharing a physical line with a named `let` (`let x = 1; m.lock().take();` — the named-`let` filter is line-wide, so the second statement is suppressed; rustfmt puts statements on their own lines, which is why this is tolerable); a scrutinee that merely HOLDS the guard across the arm without displacing anything (`if … && let Some(hook) = self.on_first.lock().as_mut() { hook(); }` — `ListenerRegistry::after_add`'s pre-fix shape; that is a "user code under a guard" hazard the lock-discipline tests cover, not a drop-under-guard one, and `as_mut`/`get`/`iter` are deliberately not in the method list so that a plain read under a guard is not flagged); a bound-guard assignment (`let mut slot = x.lock(); *slot = Some(y);`, the guard already a named local, not re-derived from `x.lock()` on the assignment's own line, so pattern 2 never matches it; `ClaimSlot::register_waker` had exactly this shape and was found and fixed by review, not by the trigger); a `.lock()` call rustfmt has split across lines from its own `.remove(`/`.take()` continuation, since every pattern here is single-line; and a `://` inside a string literal on an otherwise-real violation line, which would defeat a naive `:\s*//` comment filter by matching mid-line. The doc-comment filter instead anchors past the `path:line:` prefix first (`^[^:]*:[0-9]+:\s*(//!|///|//)`), so it only ever asks whether the CODE part starts with a comment marker, never whether `//` appears anywhere in the line.
+
+**Test hits are real hits, not exempt.** A test file is exactly where the next contributor copies the shape from. #1150's sweep fixed every inline `mod tests` hit found in scope rather than leaving a "trivial in tests" carve-out. Most of those fixes (18 of the 20 `Option<T>`-slot sites) use `guard.replace(x)` (`Option::replace`) rather than `mem::replace(&mut *guard, Some(x))`: the two are drop-ordering-equivalent (both release the guard, a statement temporary, at the `let` binding's own `;`, after the extracted value is already bound), but `mem::replace(&mut *guard, Some(x))` trips `clippy::mem_replace_option_with_some` under this workspace's `-D warnings` gate, so `guard.replace(x)` is the one that actually ships. The remaining sites use a plain `mem::replace` (a non-`Option` slot) or the same block-scoped extraction as the production sites. The fix is mechanical either way, and the shape it teaches is the one worth keeping constant.
+
+**Back-references:** issue #1150 (sweep), issue #1176 (workspace-wide widening, not yet done); `crates/flui-scheduler/ARCHITECTURE.md`'s `TaskQueue::clear` and "No legacy, lock-tied frame-callback registration API" mapping entries; `crates/flui-scheduler/src/panic_payload.rs`'s `discard_panic_payload` (hoisted crate-private, used by `scheduler.rs`, `async_driver.rs`'s `TaskToken::drop`, and `ticker.rs`'s `TickerDelivery::deliver_now` — a caught panic PAYLOAD can itself own a type whose own `Drop` panics, and dropping it bare during an already-unwinding recovery path is the identical double-panic hazard one level removed from a lock guard); `crates/flui-foundation/src/notifier_generic.rs`'s `extract_locked`; `crates/flui-foundation/src/listener_registry.rs`'s `set_on_first_listener`/`set_on_last_listener` and `RegistryInner::after_add`/`after_remove`; `crates/flui-foundation/src/claim_slot.rs`'s `Inner::wake_task` and `register_waker`.
+
 ### Reactive lint promotion
 
 Triggers grow reactively. A new trigger is added to this list when an anti-pattern is caught in review; it does not pre-exist its first observation.
@@ -1146,7 +1216,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs 23 refusal triggers — one `rg` (ripgrep) pass each, except trigger 22, which delegates to a brace-depth scanner, and trigger 23, which scans filenames rather than file contents — plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, and `ADR-0037/focus-owner` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs 23 refusal triggers — one `rg` (ripgrep) pass each, except trigger 22, which delegates to a brace-depth scanner, and trigger 23, which scans filenames rather than file contents — plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, `ADR-0037/focus-owner`, and `LockDiscipline/StatementDrop` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

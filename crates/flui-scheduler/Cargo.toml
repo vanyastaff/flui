@@ -57,6 +57,13 @@ path = "src/lib.rs"
 default = []
 serde = ["dep:serde"]
 
+# testing: test-only probes for consumer crates' lock-discipline tests
+# (e.g. `AsyncDriver::is_unlocked`); never enabled in production. Off by
+# default; auto-enabled in this crate's own test builds via
+# `cfg(any(test, feature = "testing"))`, and opted into by a downstream
+# crate's dev-dependency edge (see `crates/flui-view/Cargo.toml`).
+testing = []
+
 [[bench]]
 name = "frame_clock_gate"
 harness = false

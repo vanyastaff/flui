@@ -104,6 +104,11 @@
 //!
 //! - **`serde`** - Enable serialization support for duration types, priorities,
 //!   and statistics. Adds `Serialize` and `Deserialize` derives to data types.
+//! - **`testing`** - Test-only lock-discipline probes (e.g.
+//!   `AsyncDriver::is_unlocked`) for a consumer crate's own reentrancy
+//!   tests. Never enabled in production; auto-enabled for this crate's own
+//!   test builds via `cfg(test)`, opted into by a downstream crate through a
+//!   `dev-dependencies` edge (see `crates/flui-view/Cargo.toml`).
 //!
 //! ```toml
 //! [dependencies]
@@ -182,6 +187,10 @@ pub use post_frame::{
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
 /// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
 mod post_frame;
+
+// Shared panic-payload containment for scheduler/async_driver/ticker's
+// already-unwinding recovery paths -- see the module doc.
+mod panic_payload;
 
 pub use web_time::Instant;
 // Re-exports - Duration types

@@ -1317,3 +1317,37 @@ does is link or run it (`bench-compile` only `cargo bench -p flui-rendering
 `ready_heavy` (R=N, every resident task genuinely polled) is essentially
 unchanged, as expected: it was never the O(N)-scan problem this issue fixes,
 so there is no O(N)-vs-O(R) gap for it to close.
+
+### `TaskQueue::clear` — deleted, not fixed
+
+**Rule:** an API with zero production callers and no distinct semantics from
+an existing one is deleted outright, not patched in place, per this crate's
+active-development posture (no shims, no dead surface kept "just in case").
+
+**Conflict:** a lock-drop discipline sweep found `TaskQueue::clear` dropping
+its cleared tasks while `queue`'s lock was still held — the same
+statement-under-guard shape `LockDiscipline/StatementDrop` (`docs/PORT.md`)
+now catches. Re-tracing its callers first: the only ones were its own
+definition and one test (`tests/integration_tests.rs`'s
+`test_task_queue_clear`) that existed solely to exercise the method itself,
+not any behavior a caller depended on.
+
+**Choice:** delete `TaskQueue::clear` and its test rather than move the drop
+outside the lock. This is the identical shape and identical choice as the
+retired `schedule_frame`/`current_frame()` family documented above ("No
+legacy, lock-tied frame-callback registration API"): an unused API surface
+carrying a lock-discipline hazard is not worth preserving just to fix its
+hazard — deleting it removes the hazard AND the dead surface in one motion.
+`count_by_priority`, which shares this queue, keeps its lock but now scopes
+it to the counting loop only (no hazard there — `PriorityCount` is a plain
+`Copy` struct with no significant `Drop` — but a lock held longer than the
+work it protects is still worth narrowing on its own merits). It stays,
+unlike `clear`, though it has no production caller EITHER today (its only
+caller is `task.rs`'s own `test_priority_count`): it is a read-only
+diagnostics accessor, and an unused QUERY costs nothing and commits an
+owner to no distinct behavior, where `clear` was an unused MUTATION whose
+only two observers — its own definition and a test built solely to
+exercise it — is precisely the shape this crate deletes on sight.
+
+**Trade-off accepted:** none. Nothing outside this crate observed `clear`'s
+existence.
