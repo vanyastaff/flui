@@ -328,15 +328,15 @@ oracle parity, the release fade toward `0.0`). The scroll controller's
 status listener matches `Completed | Dismissed` identically (it only ends
 the scroll activity), so its `animate_to` toward a SMALLER pixel value
 reporting `Forward`/`Completed` instead of `Reverse`/`Dismissed` changes
-nothing observable. The button's release fade is the consumer this DID
-break: chaining its start off a status listener watching `Completed`
-(mirroring Flutter's `ticker.then(...)`) stopped distinguishing "the press
-just landed" from "the release just landed" once both report `Completed`,
-so the listener re-triggered itself once the release it started reached
-its own end. Fixed by chaining the release on the press fade's own
-`TickerFuture` instead (`chain_release_fade`,
-`crates/flui-cupertino/src/button.rs`), `Ok`-only and one-shot, never a
-persistent listener that cannot tell the two ends apart.
+nothing observable. The button's release fade is the consumer the rule
+reached: its start was chained off a status listener watching `Completed`,
+which stops distinguishing "the press just landed" from "the release just
+landed" once both report `Completed`, so the listener re-triggered a
+redundant zero-distance settle when the release it started reached its own
+end (no observable trace — same-status writes are deduplicated — but the
+wrong shape). It now chains the release on the press fade's own
+`TickerFuture` (`chain_release_fade`, `crates/flui-cupertino/src/button.rs`),
+`Ok`-only and one-shot: Flutter's own `ticker.then(...)` shape.
 
 **`stop()`/`set_value` keep the bounds-first rule.**
 `AnimationControllerInner::settled_status_directed`/`settled_status_keep_direction`

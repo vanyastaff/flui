@@ -606,10 +606,11 @@ impl ViewState<ZeroDurationContainerProbe> for ZeroDurationContainerProbeState {
 /// settle still fires a value notification (the value DID move), and
 /// `AnimatedBuilder`'s listener schedules its own rebuild the same way any
 /// out-of-frame `Listenable` change would — through the owner's external
-/// inbox, drained only at the NEXT `build_scope`, never re-checked within
-/// the frame that queued it (Flutter's own contract: `buildScope` builds
-/// the *current* pass's dirty elements; a listener firing mid-build queues
-/// for the next one). So after the retargeting pump: layout already shows
+/// inbox, which FLUI's `drain_build_scope` drains once at the start of a
+/// drain, so a schedule landing mid-drain waits for the next frame. Flutter
+/// builds it in the same `buildScope` (`markNeedsBuild`'s in-scope rule:
+/// a dirty descendant is always built in the current pass); closing that
+/// gap is a tracked follow-up. So after the retargeting pump: layout already shows
 /// the new target, `has_dirty_elements()` is true, and exactly one rebuild
 /// is queued — a real cost, but not a stuck animation, and it clears on the
 /// very next pump with the layout unchanged and nothing left running.

@@ -811,30 +811,20 @@ mod tests {
     /// The release fade starts exactly once per tap, and nothing is chained
     /// on the release's own completion.
     ///
-    /// A prior shape chained the release off a permanently registered
-    /// status listener watching `AnimationStatus::Completed` —
-    /// harmless-looking under travel-derived direction, but under the
-    /// method-chosen direction rule `animate_to_curved` (the release's own
-    /// call, kept for oracle parity) reports `Completed` at BOTH ends, so
-    /// the listener re-triggered itself once the release it started landed:
-    /// a second, spurious `animate_to_curved(0.0, …)` call from value `0.0`
-    /// to `0.0`. Chaining on the press fade's own `TickerFuture` instead
-    /// removes the possibility structurally: nothing is chained on the
-    /// RELEASE's own future, so its completion has nothing left to trigger.
+    /// The chain lives on the press fade's own `TickerFuture` (see
+    /// `chain_release_fade`), so nothing is registered on the release's own
+    /// future and its completion has nothing left to trigger. A persistent
+    /// status listener watching `Completed` cannot express that: under
+    /// method-chosen direction the release (`animate_to_curved(0.0, …)`,
+    /// kept for oracle parity) reports `Completed` at both ends too.
     ///
-    /// **Measured, not assumed:** that spurious call is a zero-distance
-    /// settle, and `AnimationControllerInner::take_status_change`'s
-    /// same-status dedup (status is already `Completed` going in and
-    /// `Completed` coming out) suppresses it from firing ANY status
-    /// listener — confirmed by reverting this fix in place of the old
-    /// listener shape and rerunning this exact test: `forward_count` still
-    /// reads 1, not 2. The spurious call is real (traced through the lock/
-    /// `restart_ticker`/`finish` path by hand) but leaves no status, value,
-    /// or `run_generation` trace for a single press+release cycle — the
-    /// fix is a structural correctness/oracle-parity fix (no persistent
-    /// listener misreading a now-ambiguous status), not one this test can
-    /// red-check numerically. This test instead pins the CORRECT observable
-    /// shape as a regression guard.
+    /// No public-API red-check exists for the wrong shape: its extra
+    /// `animate_to_curved(0.0, …)` from `0.0` is a zero-distance settle
+    /// whose same-status write is suppressed by
+    /// `AnimationControllerInner::take_status_change`, so status, value and
+    /// `run_generation` read the same either way (verified by rerunning this
+    /// test against the listener shape: `forward_count` is 1 in both). This
+    /// test pins the correct observable shape as a regression guard.
     #[test]
     fn release_fade_starts_exactly_once_per_tap() {
         let controller = fresh_controller();
