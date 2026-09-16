@@ -34,7 +34,7 @@ use std::rc::Rc;
 
 use common::{lay_out, size, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
-use flui_testing::a11y::Toggled;
+use flui_testing::a11y::{Role, Toggled};
 
 /// The checkbox's full tap target — Flutter parity: `kMinInteractiveDimension`
 /// (`constants.dart`, `48.0`, oracle tag `3.44.0`), the branch
@@ -168,6 +168,50 @@ fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
         .find_by_label(label)
         .unwrap_or_else(|error| panic!("expected one node labeled {label:?}: {error}"))
         .toggled()
+}
+
+/// Every AccessKit role the tree exports for a mounted `Checkbox`.
+fn announced_roles(checkbox: Checkbox, label: &str) -> Vec<Role> {
+    let mut laid = lay_out(
+        themed(checkbox.semantic_label(label).on_changed(|_| {})),
+        constraints(),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    laid.a11y_tree()
+        .expect("semantics enabled before the frame")
+        .nodes()
+        .map(|node| node.role())
+        .collect()
+}
+
+#[test]
+fn a_checkbox_still_announces_as_a_checkbox() {
+    // Guards the checkable roles against the group flag leaking: publishing
+    // `in_mutually_exclusive_group` for radios must not reclassify the other
+    // checkables. A checkbox carries neither `IsButton` nor the group flag, so
+    // it resolves to `CheckBox` under either arm order of the role cascade —
+    // this passes before and after that reorder and is therefore a leak guard,
+    // not evidence for the reorder itself (see `crates/flui-material/ARCHITECTURE.md`).
+    let roles = announced_roles(Checkbox::new(false), "unchecked");
+    assert!(
+        roles.contains(&Role::CheckBox),
+        "a Checkbox must still announce as a checkbox, got {roles:?}",
+    );
+}
+
+#[test]
+fn a_checkbox_never_announces_as_a_radio_button() {
+    // The discriminating half of the leak guard above: a resolution that
+    // answered `RadioButton` for every checkable would satisfy that test and
+    // fail this one. Same caveat applies — a checkbox carries neither of the
+    // flags the cascade reorder turned on, so this bounds the group flag's
+    // reach rather than proving the reorder.
+    let roles = announced_roles(Checkbox::new(false), "unchecked");
+    assert!(
+        !roles.contains(&Role::RadioButton),
+        "a Checkbox must never announce as a radio button, got {roles:?}",
+    );
 }
 
 #[test]

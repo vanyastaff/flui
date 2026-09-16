@@ -10,10 +10,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, loose, tight};
-use flui_material::{ListTile, ListTileThemeData, Theme, ThemeData, ThemeDataOverrides};
+use flui_material::{ListTile, ListTileThemeData, Radio, Theme, ThemeData, ThemeDataOverrides};
+use flui_testing::a11y::Role;
 use flui_types::Color;
 use flui_view::IntoView;
-use flui_widgets::{Icon, IconData, IconTheme, IconThemeData, MediaQuery, MediaQueryData, Text};
+use flui_widgets::{
+    Icon, IconData, IconTheme, IconThemeData, MediaQuery, MediaQueryData, MergeSemantics, Text,
+};
 
 /// `ListTile::build` reads `SafeArea`, which panics without an ambient
 /// `MediaQuery` (`tests/app_bar.rs`'s own tests wrap the same way) — every
@@ -233,5 +236,119 @@ fn list_tile_theme_slot_reaches_the_mounted_materials_color() {
         color,
         format!("{themed_color:?}"),
         "a configured list_tile_theme.tile_color must reach the mounted Material"
+    );
+}
+
+/// A `Radio` in a real `ListTile` still announces as a radio button.
+///
+/// This is the composition a user actually writes, and the one nothing else in
+/// this crate mounts: `ListTile` publishes `.enabled(..)` and `Radio` publishes
+/// `.enabled(..)` too, so `is_compatible_with` reads the overlap as a conflict
+/// and the two form **separate** nodes instead of merging. The radio therefore
+/// keeps a node of its own — and that node announces as a radio, because
+/// `Radio` publishes `.in_mutually_exclusive_group(true)`.
+///
+/// It mounts through this file's [`themed`] helper deliberately. `ListTile::build`
+/// composes `SafeArea`, which reads `MediaQuery::of` and panics with no ambient
+/// `MediaQuery`; the widget-layer harness installs none, so a `ListTile` mounted
+/// bare degrades mid-build, the radio below `SafeArea` never mounts, and the
+/// resulting `[GenericContainer, Button]` is an artifact of that dead subtree —
+/// not a measurement of what a user's tile announces.
+///
+/// The reference splits a bare tile the same way — by its predicate, traced in
+/// `crates/flui-semantics/ARCHITECTURE.md`; no reference test mounts that bare
+/// composition, so that half is inference at the tag. Its one-node oracle
+/// (`test/material/radio_list_tile_test.dart`, `testWidgets('RadioListTile
+/// semantics')`, oracle tag `3.44.0`) is `RadioListTile`'s doing, which wraps its
+/// `ListTile` in `MergeSemantics` (`material/radio_list_tile.dart`); the
+/// reference's own compatibility predicate still gives the radio a node of its
+/// own under the tile, and the merge folds it afterwards. The like-for-like
+/// composition is pinned by the next test; this one pins the bare tile.
+#[test]
+fn a_radio_inside_a_list_tile_announces_as_a_radio_button() {
+    let mut laid = lay_out(
+        themed(
+            ThemeData::light(),
+            ListTile::new()
+                .leading(Radio::new("spring", Some("spring")).on_changed(|_| {}))
+                .title(Text::new("Spring"))
+                .on_tap(|| {}),
+        ),
+        tight(400.0, 56.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let roles: Vec<Role> = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame")
+        .nodes()
+        .map(|node| node.role())
+        .collect();
+
+    assert!(
+        roles.contains(&Role::Button),
+        "the tile's own tap target announces as a button; losing it would mean the \
+         tile stopped publishing `.button(..)`. Roles: {roles:?}"
+    );
+    assert!(
+        roles.contains(&Role::RadioButton),
+        "the radio keeps a node of its own (the tile's `.enabled(..)` conflicts with \
+         the radio's), and that node is a radio button because `Radio` publishes the \
+         mutually-exclusive-group flag. Roles: {roles:?}"
+    );
+}
+
+/// `MergeSemantics` over the same tile is the reference's own composition —
+/// `RadioListTile` wraps its `ListTile` in `MergeSemantics` (`material/
+/// radio_list_tile.dart`, oracle tag `3.44.0`) so the whole tile is one
+/// interactive entity — and here the tile and the radio share **one** node,
+/// as `test/material/radio_list_tile_test.dart`'s `testWidgets('RadioListTile
+/// semantics')` asserts of the reference. That merged node carries the tile's
+/// `IsButton` beside the radio's checkable flags, so `resolve_role`'s
+/// precedence is load-bearing for it: measured, the node resolves `Button`
+/// with the checkable arms moved back below `IsButton`, and `RadioButton` with
+/// them above it.
+///
+/// The roles beyond the root are asserted exactly rather than with `contains`,
+/// because the claim is the node *count*: a second node would mean the merge
+/// did not happen, and a `Button` in its place would mean the precedence
+/// regressed. The root's own role is the cascade's fallback for a flag-free
+/// node and is not this test's claim, so it is split off rather than pinned. What the merged
+/// node still lacks against the oracle — its `'Title'` label, its `tap` action
+/// — is recorded in `crates/flui-semantics/ARCHITECTURE.md`, not asserted here.
+#[test]
+fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
+    let mut laid = lay_out(
+        themed(
+            ThemeData::light(),
+            MergeSemantics::new().child(
+                ListTile::new()
+                    .leading(Radio::new("spring", Some("spring")).on_changed(|_| {}))
+                    .title(Text::new("Spring"))
+                    .on_tap(|| {}),
+            ),
+        ),
+        tight(400.0, 56.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let roles: Vec<Role> = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame")
+        .nodes()
+        .map(|node| node.role())
+        .collect();
+
+    let (_root, rest) = roles
+        .split_first()
+        .expect("the a11y tree always carries its root");
+    assert_eq!(
+        rest,
+        [Role::RadioButton],
+        "beyond the root, exactly one merged node for the tile and its radio, resolving \
+         RadioButton: a Button here means the checkable arms fell below IsButton again, \
+         and a second node means the tile and the radio stopped merging. Roles: {roles:?}"
     );
 }

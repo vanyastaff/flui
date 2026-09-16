@@ -127,6 +127,125 @@ is stricter than Flutter's post-frame debug tab-count check.
 - Integration: `a_children_count_mismatched_with_the_controllers_length_builds_an_error`,
   `a_tab_count_mismatched_with_the_controllers_length_builds_an_error`
 
+### `Radio` publishes its group membership, and the role cascade has to prefer it
+
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — a behavior the
+reference handles is dropped only by decision, recorded where a reader will find
+it.
+
+**Oracle:** `material/radio.dart` builds its UI through
+`RawRadio<T>` (`radio.dart:553`), and `RawRadio` is where the accessibility
+contract lives: `widgets/raw_radio.dart` wraps its child in
+`Semantics(inMutuallyExclusiveGroup: true, checked: value, selected:
+accessibilitySelected, hint: semanticsHint, child: buildToggleableWithChild(…))`,
+and `widgets/toggleable.dart` adds the inner `Semantics(enabled: isInteractive)`
+around the child. The `inMutuallyExclusiveGroup` flag is what separates a radio
+from a checkbox to a screen reader: the two publish identical checked state, and
+only the group flag says the checked state is one-of-a-set rather than
+independent. `selected` and `hint` are `TargetPlatform`-conditional in the
+oracle, computed two lines above the `Semantics` call — Android/Fuchsia/Linux/
+Windows null both, iOS/macOS set `selected` to the value and supply a hint only
+for an *unselected* radio (the selected state is announced by the platform
+already, so a hint would duplicate it).
+
+**Choice:** `Radio::build` publishes the same flag —
+`.checked(selected).in_mutually_exclusive_group(true).enabled(interactive)` —
+and `Semantics` grew the `in_mutually_exclusive_group(true)` builder this needed
+(it previously had no such method, which is why the flag was unwired).
+
+**Why the flag alone was not enough, and what else had to change.** Publishing
+it exposed a defect one layer up, in the role cascade rather than in this
+widget. `resolve_role` tests one flag before another to pick a single role out of
+the union a node carries, and it tested `IsButton` before the checkable flags —
+so a node that carried both resolved to `Button` and the radio-ness was
+discarded. Checkable state is the more specific of the two and now wins.
+
+The composition that reaches it is `Semantics::new().button(true).child(Radio…)`,
+which merges onto one node: measured, that node resolves `Button` under the old
+order and `RadioButton` under the new one, same node id. **It is not the
+`ListTile` composition.** A real `ListTile` publishes `.enabled(..)` and a
+`Radio` publishes `.enabled(..)` too, `is_compatible_with` treats that overlap as
+a conflict, and the two therefore never merge — they form **separate** nodes.
+Because they do not merge, the radio keeps a node of its own, and that node is
+what this change fixes: measured through this crate's own `MediaQuery`-wrapped
+fixture (`tests/list_tile.rs`'s `themed`), a `Radio` inside a real `ListTile`
+exports `[GenericContainer, Button, RadioButton]` — **it does announce as a
+radio**, and the group flag published here is what makes it. The cascade reorder
+is not load-bearing there: the radio's own node carries no `IsButton`, so it
+resolves `RadioButton` under either arm order. So the precedence neither fixes
+nor is exercised by the tile composition, while publishing the flag *does* fix
+it. The reference splits a bare tile the same way — by its predicate, traced
+below; no reference test mounts that bare composition — and its one-node oracle
+is a *merge*: `RadioListTile` wraps its `ListTile` in `MergeSemantics`
+(`material/radio_list_tile.dart`, tag `3.44.0`), and that is what
+`test/material/radio_list_tile_test.dart`'s `testWidgets('RadioListTile
+semantics')` asserts as one node carrying `isButton` and the radio's own flags
+together (the `isButton` there depends on the test passing
+`internalAddSemanticForOnTap: true`). Its compatibility predicate is not the reason — `isCompatibleWith`
+rejects actions on the same raw bit intersection FLUI uses and rejects flags
+through `_flags.hasConflictingFlags(..)`, whose tristate `hasConflict` is
+`both != none`, i.e. the same "both carry the trait" test as FLUI's bit
+intersection for `hasEnabledState`, `isFocusable` and `hasCheckedState` — so the
+reference's own pipeline gives the radio a `SemanticsNode` of its own under the
+tile, and `MergeSemantics` folds it into the parent's data afterwards. The
+like-for-like FLUI composition is therefore `MergeSemantics` over the tile, and
+measured it exports **one** node resolving `RadioButton` — the reorder above is
+what makes that merged node a radio (it resolves `Button` with the cascade
+reverted). That composition is pinned in `tests/list_tile.rs` beside the bare
+one. A comparison of a bare FLUI tile against a merged reference one is not a
+divergence in `is_compatible_with`, and is not recorded as one. (`hasConflictingFlags` lives in the
+engine's `lib/ui`, outside `.flutter`; its body was read from a local SDK at
+framework `3.44.8` / engine `0cd6107`, not the pinned tag — provenance stated
+because it is the one link that cannot be checked at `3.44.0`.) The precedence
+itself is flui-semantics' decision and is recorded in full in
+[`crates/flui-semantics/ARCHITECTURE.md`](../flui-semantics/ARCHITECTURE.md).
+
+**What is still not wired, named rather than implied.** The oracle's
+`selected` and `hint` fields are `TargetPlatform`-conditional
+(`widgets/raw_radio.dart`) and FLUI's semantics surface has no platform
+dimension, so neither is published — a deliberate drop of a
+platform-dependent behavior, not an oversight.
+`focus_node` / `autofocus` keep the whole-substrate `InkWell` gap `Checkbox` and
+`Switch` already name. And **no `Radio` gains a semantics *action*** — publishing
+the group flag changes what the control *is* to a screen reader, not what a
+platform request can *do* to it. This is where FLUI is narrower than the
+reference rather than equal to it: Flutter's `InkResponse` publishes
+`Semantics(onTap: …)` itself, so the oracle's node carries
+`actions: [tap, focus]` alongside those flags (`radio_list_tile_test.dart`, tag
+`3.44.0`), and a screen reader can activate the control through the semantics
+tree. In FLUI the widget-layer gesture callback is `Rc<dyn Fn(..)>` while
+`SemanticsActionHandler` is `Arc<dyn Fn(..) + Send + Sync>`, so bridging the two
+is a storage-and-lifetime decision that owes its own design record; until then
+activation reaches the tree only through the pointer path. Naming this as a
+present gap rather than reading "the `InkResponse` owns activation" as parity.
+
+**Replacement coverage** (`tests/radio.rs`):
+
+- `a_mounted_radio_announces_as_a_radio_button` /
+  `a_mounted_radio_does_not_announce_as_a_checkbox` — the direct case, with the
+  negative half asserted separately so a resolution that answered
+  `RadioButton` for everything would not pass.
+- `a_radio_nested_under_an_annotated_ancestor_still_announces_as_a_radio_button`
+  — the absorbed case, and the only leg that can fail on the precedence:
+  mounting the radio as the render *root* makes it form its own node, so nothing
+  merges and the composition never arises.
+- `a_radio_without_a_tap_handler_still_announces_as_a_radio_button` — kind and
+  interactivity are independent; a missing `on_changed` does not make it
+  something else.
+- `a_checkbox_still_announces_as_a_checkbox` /
+  `a_checkbox_never_announces_as_a_radio_button` (`tests/checkbox.rs`) — the
+  other arm of the cascade. Publishing the group flag for radios must not leak
+  onto the other checkables, which would announce every checkbox as a radio.
+  Both pass before *and* after the reorder, since a checkbox carries neither
+  `IsButton` nor the group flag: they guard the flag against leaking, not the
+  cascade order.
+- `a_radio_inside_a_list_tile_announces_as_a_radio_button` (`tests/list_tile.rs`)
+  — the composition a user actually writes, and the only test here that mounts it
+  through a `MediaQuery` ancestor. It asserts both roles the composition exports
+  (`Button` from the tile's tap target, `RadioButton` from the radio's separate
+  node) and reddens to `[GenericContainer, Button, CheckBox]` when the group flag
+  is removed from `Radio::build`.
+
 ---
 
 ## Thread safety

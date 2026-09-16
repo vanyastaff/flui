@@ -16,12 +16,27 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 
 use accesskit::{Node, TreeUpdate};
+use flui_rendering::PipelineCell;
+use flui_semantics::{
+    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
+    semantics_action_for,
+};
 
 // AccessKit's vocabulary is this module's vocabulary, so a consumer writes
 // `use flui_testing::a11y::Role` and never has to add accesskit itself at a
 // version that must match ours. Named items only — a glob would enrol every
 // future accesskit item into this crate's contract without anyone deciding to.
-pub use accesskit::{Action, NodeId, Rect as A11yRect, Role, Toggled};
+// `ActionRequest` and its payload type are here because they are the
+// *parameter* of [`invoke_semantics_action`]: a caller cannot construct a
+// request, or a replacement for its target tree, without naming them. The two
+// geometry payloads are aliased because `Rect` and `Point` are otherwise
+// indistinguishable from this crate's own vocabulary at a call site, and a
+// caller constructing a scroll-offset request needs `Point` to name the offset
+// the platform sends.
+pub use accesskit::{
+    Action, ActionData, ActionRequest, NodeId, Point as A11yPoint, Rect as A11yRect, Role, Toggled,
+    TreeId,
+};
 
 /// The binding drives no tree, so there is no pipeline to assemble semantics
 /// from.
@@ -373,10 +388,126 @@ pub enum A11yQueryError {
     },
 }
 
+/// Why a platform accessibility action could not be delivered.
+///
+/// Split from [`SemanticsActionError`] because the two answer different
+/// questions: that one says the *node* refused, this one adds the case where the
+/// framework had nothing to deliver the request to at all. Keeping them distinct
+/// is what lets a test assert the second — a platform action with no FLUI
+/// counterpart is a dropped request, and a dropped request that no test can name
+/// is the failure mode this module exists to catch.
+#[derive(Debug, thiserror::Error)]
+pub enum InvokeActionError {
+    /// The platform's action has no FLUI counterpart, so nothing routes it.
+    ///
+    /// The translation table's inbound half drops these deliberately; see
+    /// `flui_semantics::semantics_action_for` for which and why. A test that
+    /// reaches this is asserting the drop, not failing to arrange one.
+    #[error("accesskit action {0:?} has no FLUI counterpart and cannot be delivered")]
+    UnroutablePlatformAction(accesskit::Action),
+
+    /// Resolution against the presentation's current semantics tree failed.
+    #[error(transparent)]
+    Resolution(#[from] SemanticsActionError),
+
+    /// The platform addressed a node identity FLUI never exports.
+    ///
+    /// [`AccessibilityNodeId`] is non-zero, so a request carrying zero is out of
+    /// contract: no exported identity is ever zero, which makes it a value the
+    /// framework cannot have published. Dropped rather than resolved, and
+    /// dropped *here* rather than fabricated into a node id the tree is then
+    /// searched for — that search would fail with "node not found", which reads
+    /// as "the tree changed" instead of "the request was malformed".
+    #[error("platform addressed node 0, which is outside the exported identity space")]
+    MalformedNodeIdentity,
+}
+
+/// Deliver an accessibility action to the node it addresses, as a platform
+/// adapter would.
+///
+/// The write half of this module: [`A11yTree::nodes`] and
+/// [`A11yNode::supports_action`] say what the tree *advertises*, and this says
+/// whether pressing it *does* anything. A node can do both and still be dead —
+/// an action advertised outbound that the inbound adapter cannot route back is
+/// a control a screen reader can see and press to no effect — so a round trip
+/// has to start from the platform's own request type rather than from FLUI's
+/// action enum. Taking [`accesskit::ActionRequest`] whole is what makes the
+/// test cross both adapter hops (`semantics_action_for` and
+/// `semantics_action_args_for`) instead of starting one step past them, where a
+/// routing gap is invisible.
+///
+/// Resolve-then-invoke is spelled out here rather than left to each caller
+/// because the order is load-bearing: the invocation clones the handler so that
+/// **no semantics-tree borrow is held while user code runs**
+/// (`PipelineOwner::resolve_semantics_action`). A caller that invoked from
+/// inside `PipelineCell::with` would run a widget's callback underneath the
+/// pipeline owner's own borrow.
+///
+/// **`ActionRequest::target_tree` is not consulted.** A presentation hosts one
+/// semantics tree today, so `cell` is the only tree a request can be addressed
+/// to and there is nothing to route on. `target_node` is still validated: a
+/// value that is not a valid node id is rejected rather than looked up in
+/// whichever tree happens to be mounted. The field becomes load-bearing the
+/// moment one presentation can host more than one tree, which is why it is
+/// named here rather than silently ignored.
+///
+/// **Silent where the production adapter traces.** When
+/// [`semantics_action_args_for`] answers `None` this helper routes the action
+/// argument-free and says nothing; the real adapter's `set_action_listener`
+/// closure in `flui-app`'s `app/presentation.rs` wraps the identical `and_then`
+/// in a `tracing::trace!`, because an argument-free `SetValue` reaches a
+/// handler as a no-op edit that is otherwise invisible in the field. The
+/// divergence is diagnostic and not behavioral — the request that reaches the
+/// owner is argument-free in both cases — and a test process installs no
+/// subscriber that would render such a trace anyway; a test observes the drop
+/// through an assertion on the handler, as
+/// `a_set_text_request_without_a_payload_is_dropped_rather_than_emptied` does.
+/// Named so a reader does not infer from this silence that production is silent
+/// too.
+///
+/// # Errors
+///
+/// [`InvokeActionError::MalformedNodeIdentity`] when `request.target_node` is
+/// zero, which is outside the exported identity space and is checked before the
+/// request is allowed to touch the tree at all.
+/// [`InvokeActionError::UnroutablePlatformAction`] when the platform's action
+/// has no FLUI counterpart. [`InvokeActionError::Resolution`] when the
+/// presentation has no semantics owner, when the node id is unknown, or when the
+/// node does not effectively support the action — the last of which is how
+/// `block_user_actions` becomes observable.
+pub fn invoke_semantics_action(
+    cell: &PipelineCell,
+    request: accesskit::ActionRequest,
+) -> Result<(), InvokeActionError> {
+    let node_id = AccessibilityNodeId::from_u64(request.target_node.0)
+        .ok_or(InvokeActionError::MalformedNodeIdentity)?;
+    let action = semantics_action_for(request.action)
+        .ok_or(InvokeActionError::UnroutablePlatformAction(request.action))?;
+    let arguments = request
+        .data
+        .as_ref()
+        .and_then(|data| semantics_action_args_for(data, request.target_node));
+
+    let invocation = cell.with(|owner| {
+        owner.resolve_semantics_action(SemanticsActionRequest {
+            node_id,
+            action,
+            arguments,
+        })
+    })?;
+
+    invocation.invoke();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::assert_matches;
+
     use accesskit::{TreeId, TreeInfo};
+    use flui_rendering::PipelineOwner;
+
+    use super::*;
 
     fn node(role: Role, label: &str, children: &[NodeId]) -> Node {
         let mut n = Node::new(role);
@@ -509,5 +640,61 @@ mod tests {
     fn focus_resolves_through_the_reachable_set() {
         let tree = A11yTree::new(scrambled_update());
         assert_eq!(tree.focus().expect("focus is reachable").label(), Some("a"));
+    }
+
+    /// A request addressed to node 0 is named as malformed, not as a missing
+    /// node.
+    ///
+    /// Exported identities are non-zero, so node 0 is a value the tree cannot
+    /// hold. Resolving it would fail with "node not found", which a reader would
+    /// take for a tree that changed under the request — the two are different
+    /// diagnoses and this is the one that keeps them apart.
+    #[test]
+    fn a_request_addressed_to_node_zero_is_malformed_rather_than_unknown() {
+        let cell = PipelineCell::new(PipelineOwner::new());
+
+        let outcome = invoke_semantics_action(
+            &cell,
+            ActionRequest {
+                action: Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: NodeId(0),
+                data: None,
+            },
+        );
+
+        assert_matches!(
+            outcome,
+            Err(InvokeActionError::MalformedNodeIdentity),
+            "node 0 is outside the exported identity space, so the request never \
+             reaches the tree — a Resolution error here would mean it did",
+        );
+    }
+
+    /// An action the translation table does not route is named as unroutable.
+    ///
+    /// A binding with no mounted tree is deliberate: this error is raised before
+    /// the tree is consulted, and a test that needed a mounted tree to observe
+    /// it could not tell the drop apart from "the tree had no such node".
+    #[test]
+    fn an_action_with_no_flui_counterpart_is_unroutable() {
+        let cell = PipelineCell::new(PipelineOwner::new());
+
+        let outcome = invoke_semantics_action(
+            &cell,
+            ActionRequest {
+                action: Action::Collapse,
+                target_tree: TreeId::ROOT,
+                target_node: NodeId(1),
+                data: None,
+            },
+        );
+
+        assert_matches!(
+            outcome,
+            Err(InvokeActionError::UnroutablePlatformAction(action)) if action == Action::Collapse,
+            "the drop must be reported against the action that caused it, so the \
+             reader knows which platform request went nowhere",
+        );
     }
 }

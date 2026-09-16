@@ -1216,3 +1216,165 @@ and only a later mount fills it. Cancellation settles the entry exactly like
 completion — there is no separate "the push was canceled" state at this
 layer, only whichever lifecycle state the entry has moved to by the time the
 queued command is drained.
+
+### 17. `Semantics` action builders take `Send + Sync` handlers, so the caller hoists the `Arc` where the reference's closure captures a `State` field
+
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — the reference's
+observable behavior is the floor; where a contract is better, improve it and
+record what is. This file's own scope note puts a callback bound here rather
+than in an ADR: it is local to this crate.
+
+**Oracle:** `Semantics(onTap: …, onSetText: …)` (`src/semantics/semantics.dart`,
+tag `3.44.0`) relays Dart closures into the `SemanticsConfiguration` setters,
+which store them and hand them to the engine. Dart's type system has no thread
+affinity, so the reference states no bound anywhere. The nearest FLUI analogue
+of that configuration object is `SemanticsConfiguration`, and the widget-level
+builders are new ergonomics over it rather than a transcription of it — the
+reference's own widget does not surface `onShowOnScreen` or `onScrollToOffset`
+at all, though its configuration does.
+
+**Choice:** eleven payload-free builders — `on_tap`, `on_long_press`,
+`on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`,
+`on_show_on_screen`, `on_focus`, `on_blur` — take
+`impl Fn() + Send + Sync + 'static`; `on_set_text` takes `impl Fn(&str) + …`
+and `on_scroll_to_offset` takes `impl Fn(f64, f64) + …`. `on_action` registers
+any `SemanticsAction` verbatim for the two things the typed set deliberately
+does not cover. All of them go through one private `add_action_handler`.
+
+**Why the oracle's shape does not transcribe.** The bound is already at the
+storage, so it has to be met somewhere, and this is where it is met:
+
+- `SemanticsActionHandler` is
+  `Arc<dyn Fn(SemanticsAction, Option<ActionArgs>) + Send + Sync>`
+  (`crates/flui-semantics/src/action.rs`). **The bounds come from storage, not
+  from a calling convention:** the handler is stored in a
+  `SemanticsConfiguration`, which rides in the annotation render object, whose
+  `RenderView::RenderObject` associated type is pinned `Send + Sync + 'static`.
+  The handler is *not* invoked across a thread — resolution is owner-local and
+  commits only at the pipeline's `Idle` point
+  (`PipelineOwner::resolve_semantics_action`, whose module doc says exactly
+  this), which is why the invocation it returns holds a cloned handler rather
+  than a borrow. The genuinely cross-thread seam in this story is one layer out,
+  in the platform's action *listener*. An earlier draft of this entry gave the
+  thread-crossing reason; it sounded right and was wrong.
+- `RenderView::RenderObject` is bounded
+  `RenderObject<_> + Send + Sync + 'static`
+  (`crates/flui-view/src/view/render.rs`), so the annotation render object the
+  widget wraps cannot hold a `!Send` closure either.
+- The catalog's **dominant** callback convention is `Rc<dyn Fn(..)>`, owner-thread-local: 56 such
+  type aliases across `flui-widgets/src` (44) and `flui-material/src` (12), counted as
+  `type <name> = Rc<dyn Fn…>` declarations *including* those whose `Rc<dyn Fn` sits on a
+  continuation line (`pub trait`-style wrapping is common on these signatures, so a same-line read
+  under-counts them: 34/11). This bound is stricter than that convention, and a
+  caller meets it on the first handler they write.
+- It is **not unprecedented**, and the precedent is worth reading rather than rediscovering. Ten
+  public builders already take `impl Fn(..) + Send + Sync + 'static`: `interaction/draggable.rs`
+  (5), `interaction/drag_target.rs` (4), `scroll/page_view.rs` (1). `draggable.rs` names the
+  rationale outright, calling those `Arc` bounds a "legacy storage shape, not a cross-thread callback
+  contract" — which is precisely an action handler's situation. Each of those ten stores the
+  callback as `Arc::new(<the caller's closure>)`; none of them shows the hoist pattern a caller
+  needs when the closure must be shared with something else, so `on_action`'s own docs carry that
+  example instead of pointing at them.
+
+**Consequences, named rather than left to be discovered:**
+
+- **The ordinary "activation toggles this control's own state" closure does not
+  compile.** A widget's state is `Rc<RefCell<_>>`, which is neither `Send` nor
+  `Sync`. `Arc<Mutex<_>>`, or a shared store, is the way through — the same
+  trade `CustomPainter` already makes, which is `Send + Sync` and
+  widget-facing. `on_action`'s own docs show the hoist.
+- **This publishes actions; it does not make any shipped control
+  activatable.** No Material or Cupertino widget gains a semantics action here,
+  so nothing in the catalog can be activated through the semantics tree yet.
+  Flutter's `InkResponse` publishes `Semantics(onTap: …)` itself
+  (`material/ink_well.dart`), which is why the reference's nodes carry
+  `SemanticsAction.tap` while FLUI's do not — the gap is on FLUI's side, not a
+  shape the two share. `Button`, `Checkbox` and `ListTile` publish no tap
+  semantics of their own in either framework, so the wiring belongs at
+  `InkResponse`'s layer when it lands. Bridging a widget's *existing* gesture
+  callback into an action is a separate change, and what blocks it is storage and
+  threading — not this surface.
+- **The likelier long-term shape is the opposite one, and it is rejected here
+  only for want of a design.** No surveyed framework puts the bound on the
+  handler: GPUI's listener carries none at all, and Bevy, Iced, Slint, and
+  Dioxus/Blitz each put `Send` on a sender the widget owns rather than on the
+  callback. What FLUI would need to reach that shape is the `!Send` closure
+  carried beside an owner-local handle — a handle type and its own design
+  record, so it is not this widget's change; until then the bound is the
+  documented contract rather than an accident a later reader has to guess at.
+
+**A handler allocated on every build costs a `SEMANTICS` impact on every
+rebuild — the price of comparing handlers by identity, pinned rather than
+assumed.** The configuration stores the handler it is handed and compares two
+configurations' handlers with `Arc::ptr_eq`
+(`crates/flui-semantics/src/configuration.rs`), so a handler built on the spot
+inside `build` is a fresh `Arc` each time, the mounted configuration compares
+unequal, and `RenderSemanticsAnnotations::set_configuration` answers
+`RenderUpdateImpact::SEMANTICS` even when nothing semantic changed — every typed
+builder allocates one through `add_action_handler` (`src/semantics/mod.rs`). The
+escape is the hoist `on_action`'s own rustdoc demonstrates: build the handler
+once where the widget's state lives and let each build take an `Arc::clone`.
+What holds that consequence in place is
+`a_handler_allocated_per_build_costs_a_semantics_impact_per_rebuild`, a unit
+test in `src/semantics/mod.rs` beside the identity pin: a later change that
+dedupes the builders, caches the handler, or relaxes the comparison has to flip
+that test deliberately rather than move the re-publish rate of every
+action-bearing node in silence.
+
+**Builder inventory, and what has no builder.** FLUI's action vocabulary
+(`crates/flui-semantics/src/action.rs`) has 24 `SemanticsAction` variants, of
+which **9 have no inbound route at all** — the eight the translation table drops
+deliberately (the four cursor moves, copy, cut, paste, and dismiss) plus
+`DidGainAccessibilityFocus`, which is advertised outbound and unreachable
+inbound. Of the 15 routable ones, 13 have a typed builder and `SetSelection` /
+`CustomAction` are reachable through `on_action` only. `expand` / `collapse`
+have no `SemanticsAction` variant to map to, so the reference's `onExpand` /
+`onCollapse` are not merely unwired here. `on_blur` is deliberately *not* the
+mirror of `on_focus`: the platform reports losing accessibility focus as a
+notification about something that already happened, whereas a focus request is a
+command the node may refuse.
+
+**A payload that did not cross the seam is dropped, not defaulted.**
+`on_set_text` and `on_scroll_to_offset` trace a `warn!` and do nothing when
+`ActionArgs` arrives without the matching payload. `""` and `(0.0, 0.0)` are
+both legitimate values a platform can mean, so substituting either turns a lost
+payload into a silent edit or a scroll to the origin — a wrong result that reads
+as a right one.
+
+**Replacement tests** (`tests/semantics.rs`), each with what it can fail on:
+
+- `a_tap_handler_round_trips_from_a_platform_click_to_the_callback` — the
+  acceptance test, and it asserts both halves: the node *tells* the platform the
+  action exists (`supports_action(Action::Click)`) and pressing it *runs* the
+  callback exactly once. A node passing only the first half is the dead control
+  this surface exists to rule out.
+- `a_semantics_node_with_no_tap_handler_advertises_no_click` — the negative
+  control, so the advertise half is not satisfied by a node that advertises
+  everything.
+- `a_set_text_request_carries_its_payload_into_the_handler` — the payload path,
+  which no payload-free test reaches.
+- `the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set` —
+  derives the unreachable set from the live translation table and asserts it
+  equals the documented nine, so a table change that closes one is loud rather
+  than a silent improvement nobody notices.
+- `the_exhaustive_routing_list_agrees_with_the_translation_table` — the routing
+  predicate is written out exhaustively and then checked against the production
+  table, so it cannot drift into a second copy of the answer. Because
+  `accesskit::Action` is not `#[non_exhaustive]`, an upstream release that adds
+  a variant stops this file compiling rather than silently dropping it.
+- `block_user_actions_refuses_a_click_the_node_still_holds_a_handler_for` — both
+  halves, now measured rather than implied. The refusal half: the request errors
+  *and* the handler did not run. The advertise half: the blocked node does **not**
+  advertise the click, which is asserted as the measured value rather than
+  assumed — `blocks_user_actions` narrows the effective action set that snapshot
+  export and input dispatch both consult, so the node is invisible to assistive
+  technology instead of a control it can see and press to no effect.
+
+**Red→green, measured rather than asserted.** Both halves of the acceptance test
+were shown to fail against a mutated builder and then pass against the restored
+one: replacing the handler invocation with a discarded binding turns
+`a_tap_handler_round_trips_…` red on *its own* delivery assertion
+(`left: 0, right: 1` — the advertise assertion above it stays green, so the two
+halves are independently pinned), and the same mutation of `on_set_text` turns
+`a_set_text_request_carries_its_payload_into_the_handler` red with
+`left: [], right: ["hello"]`.

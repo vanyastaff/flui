@@ -310,6 +310,8 @@ impl SemanticsActionRequest {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use flui_foundation::RenderId;
 
     use super::*;
@@ -327,12 +329,161 @@ mod tests {
         assert_eq!(SemanticsAction::LongPress.name(), "longPress");
     }
 
+    /// Every [`SemanticsAction`], listed once.
+    ///
+    /// A list is only exhaustive if something checks it. The array's length is
+    /// not that check: it is a literal nothing compares against the enum, so on
+    /// its own a variant could be added to the enum and to `values()` without
+    /// ever appearing here, or appear here twice while another went missing.
+    ///
+    /// What is checked, in two links that are not one chain.
+    /// [`declared_variant`] is a `match` with no wildcard arm, so a variant
+    /// added to the enum stops compiling there and must be *named* in its
+    /// alternation. Naming it is all that link obliges: the assertion the arm
+    /// calls, [`declared`], runs only for an action the loop in
+    /// [`test_all_actions`] visits, and that loop iterates
+    /// [`SemanticsAction::values`]. The second link is that test's set
+    /// comparison over the same `values()`. Together they catch the drift that
+    /// happens in practice — a variant added to the enum and to `values()`
+    /// without being listed here, or listed here without being added to
+    /// `values()`, fails that comparison.
+    ///
+    /// **The residual hole, named rather than left to be inferred:** a variant
+    /// added to the enum and named in the `match` but never added to
+    /// `values()` compiles, is never visited by that loop and so never reaches
+    /// [`declared`], and leaves the two sides equal because both lack it. No
+    /// part of this gate sees that variant, and a consumer that enumerates the
+    /// vocabulary has [`SemanticsAction::values`] to walk — which does not
+    /// carry it.
+    const EVERY_ACTION: [SemanticsAction; 24] = [
+        SemanticsAction::Tap,
+        SemanticsAction::LongPress,
+        SemanticsAction::ScrollLeft,
+        SemanticsAction::ScrollRight,
+        SemanticsAction::ScrollUp,
+        SemanticsAction::ScrollDown,
+        SemanticsAction::Increase,
+        SemanticsAction::Decrease,
+        SemanticsAction::ShowOnScreen,
+        SemanticsAction::MoveCursorForwardByCharacter,
+        SemanticsAction::MoveCursorBackwardByCharacter,
+        SemanticsAction::SetSelection,
+        SemanticsAction::Copy,
+        SemanticsAction::Cut,
+        SemanticsAction::Paste,
+        SemanticsAction::DidGainAccessibilityFocus,
+        SemanticsAction::DidLoseAccessibilityFocus,
+        SemanticsAction::CustomAction,
+        SemanticsAction::Dismiss,
+        SemanticsAction::MoveCursorForwardByWord,
+        SemanticsAction::MoveCursorBackwardByWord,
+        SemanticsAction::SetText,
+        SemanticsAction::Focus,
+        SemanticsAction::ScrollToOffset,
+    ];
+
+    /// Returns `action` if [`EVERY_ACTION`] lists it.
+    ///
+    /// Panics naming the variant, because the reader of a failure needs to know
+    /// which action is missing rather than only that the counts disagree.
+    fn declared(action: SemanticsAction) -> SemanticsAction {
+        assert!(
+            EVERY_ACTION.contains(&action),
+            "`{}` is not in EVERY_ACTION: a new variant belongs in that list, \
+             not only in the enum, or the list stops describing the enum",
+            action.name(),
+        );
+        action
+    }
+
+    /// Names every variant, with no wildcard arm.
+    ///
+    /// The compile-time link. Adding a variant to the enum makes this `match`
+    /// non-exhaustive, so the variant has to be named in the alternation below
+    /// before the crate compiles again — and naming it is the whole
+    /// obligation. This function runs only for the actions [`test_all_actions`]
+    /// iterates, and that loop is driven by [`SemanticsAction::values`], so
+    /// agreeing to compile does not by itself put the variant in
+    /// [`EVERY_ACTION`]; the run-time link is that test's set comparison, and
+    /// the list's own doc states what the pair does and does not catch. The
+    /// arms are written as one alternation because every one of them does the
+    /// same thing; the list that gives them meaning is [`EVERY_ACTION`].
+    fn declared_variant(action: SemanticsAction) -> SemanticsAction {
+        match action {
+            SemanticsAction::Tap
+            | SemanticsAction::LongPress
+            | SemanticsAction::ScrollLeft
+            | SemanticsAction::ScrollRight
+            | SemanticsAction::ScrollUp
+            | SemanticsAction::ScrollDown
+            | SemanticsAction::Increase
+            | SemanticsAction::Decrease
+            | SemanticsAction::ShowOnScreen
+            | SemanticsAction::MoveCursorForwardByCharacter
+            | SemanticsAction::MoveCursorBackwardByCharacter
+            | SemanticsAction::SetSelection
+            | SemanticsAction::Copy
+            | SemanticsAction::Cut
+            | SemanticsAction::Paste
+            | SemanticsAction::DidGainAccessibilityFocus
+            | SemanticsAction::DidLoseAccessibilityFocus
+            | SemanticsAction::CustomAction
+            | SemanticsAction::Dismiss
+            | SemanticsAction::MoveCursorForwardByWord
+            | SemanticsAction::MoveCursorBackwardByWord
+            | SemanticsAction::SetText
+            | SemanticsAction::Focus
+            | SemanticsAction::ScrollToOffset => declared(action),
+        }
+    }
+
     #[test]
     fn test_all_actions() {
-        let actions = SemanticsAction::values();
-        assert!(actions.len() >= 20);
-        assert!(actions.contains(&SemanticsAction::Tap));
-        assert!(actions.contains(&SemanticsAction::Dismiss));
+        for action in SemanticsAction::values() {
+            declared_variant(*action);
+        }
+
+        // Compared as bitmasks rather than as slices: the order an action is
+        // published in is not part of the contract, the set of actions is.
+        let published: BTreeSet<u64> = SemanticsAction::values()
+            .iter()
+            .map(|action| action.value())
+            .collect();
+        let listed: BTreeSet<u64> = EVERY_ACTION.iter().map(|action| action.value()).collect();
+
+        let missing: Vec<_> = EVERY_ACTION
+            .iter()
+            .filter(|action| !published.contains(&action.value()))
+            .map(|action| action.name())
+            .collect();
+        let unexpected: Vec<_> = SemanticsAction::values()
+            .iter()
+            .filter(|action| !listed.contains(&action.value()))
+            .map(|action| action.name())
+            .collect();
+
+        // A duplicate is invisible to a set comparison — both entries carry the
+        // same mask — so each side is checked for one-entry-per-action as well.
+        // Distinct count equal to total count is exactly that, and these two
+        // assertions plus the set equality below are multiset equality.
+        assert_eq!(
+            published.len(),
+            SemanticsAction::values().len(),
+            "values() lists an action twice: the duplicate hides whichever entry \
+             it displaced, because both publish the same mask",
+        );
+        assert_eq!(
+            listed.len(),
+            EVERY_ACTION.len(),
+            "EVERY_ACTION lists an action twice; the pinned array length hides \
+             it, which is why that length is not the gate",
+        );
+        assert_eq!(
+            published, listed,
+            "values() and EVERY_ACTION must be the same set of actions; listed \
+             but not published: {missing:?}, published but not listed: \
+             {unexpected:?}",
+        );
     }
 
     #[test]

@@ -99,10 +99,9 @@
 //!   state-resolved.
 //! - **`focus_node`/`autofocus`** — same whole-substrate `InkWell` gap
 //!   [`crate::Checkbox`]/[`crate::Switch`] already name.
-//! - **`in_mutually_exclusive_group`/platform-conditional `selected`/`hint`
-//!   accessibility fields** — `flui_widgets::Semantics` has no
-//!   `in_mutually_exclusive_group` builder method yet (a substrate gap, not
-//!   specific to this type); only `.checked()`/`.enabled()` are wired.
+//! - **Platform-conditional `selected`/`hint` accessibility fields** — the
+//!   oracle emits these on some platforms only, and FLUI's semantics surface
+//!   is platform-independent, so neither is wired.
 
 use std::rc::Rc;
 
@@ -345,6 +344,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
 
         Semantics::new()
             .checked(selected)
+            .in_mutually_exclusive_group(true)
             .enabled(interactive)
             .child(ink_well)
     }
