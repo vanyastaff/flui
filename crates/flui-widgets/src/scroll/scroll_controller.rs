@@ -497,8 +497,27 @@ impl ScrollController {
                 // fling controller's status listener (installed by
                 // `ScrollableState`) ends the activity when the run settles,
                 // exactly as it does for a ballistic fling.
-                self.position().set_is_scrolling(true);
-                let _ = fling.animate_to_curved(target_pixels, Some(duration), curve);
+                //
+                // #1183: raise the activity only after the run start
+                // returned `Ok`, and only if it's still actually running.
+                // `target_pixels` reaching here NaN (`f32::clamp` passes NaN
+                // through unchanged, since every NaN comparison is `false`
+                // -- `ScrollController::animate_to`'s own pre-clamp does not
+                // filter it) must not park the scrollable in "scrolling"
+                // forever; and a start that settles SYNCHRONOUSLY (target ==
+                // the just-synced current value) already reported its own
+                // end through the status listener above -- checking
+                // `is_running()` after the call, rather than unconditionally
+                // on `Ok`, keeps that already-correct settle from being
+                // clobbered back to `true`.
+                use flui_animation::Animation;
+                if fling
+                    .animate_to_curved(target_pixels, Some(duration), curve)
+                    .is_ok()
+                    && fling.status().is_running()
+                {
+                    self.position().set_is_scrolling(true);
+                }
             }
             PendingScrollCommand::Cancel => {
                 let _ = fling.stop();
@@ -805,15 +824,10 @@ mod tests {
 
     /// Builds an unbounded fling-style `AnimationController` — the same
     /// shape `ScrollableState::create_state` constructs (`scrollable.rs`):
-    /// wide-open bounds so a driven value is never clamped by the controller
-    /// itself, only by `animate_to`'s own pre-clamp of the target.
+    /// a driven value is never clamped by the controller itself, only by
+    /// `animate_to`'s own pre-clamp of the target.
     fn fling_stub() -> AnimationController {
-        AnimationController::without_ticker_bounds(
-            Duration::from_millis(1),
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-        )
-        .expect("NEG_INFINITY < INFINITY satisfies the bounds invariant")
+        AnimationController::unbounded_without_ticker(Duration::from_millis(1))
     }
 
     #[test]
@@ -898,12 +912,16 @@ mod tests {
         let controller = ScrollController::new();
         controller.update_dimensions(300.0, 0.0, 500.0);
         let fling = fling_stub();
+        // `fling_stub` is unbounded (#1183): `forward()`/`reverse()`/`fling()`
+        // all target an infinite bound and are refused. `animate_to` with a
+        // large finite target is the unbounded-safe way to establish a
+        // genuinely running state for this test's setup.
         fling
-            .forward()
-            .expect("fling_stub is not disposed, forward() must succeed");
+            .animate_to(1_000_000.0, None)
+            .expect("fling_stub is not disposed, animate_to() must succeed");
         assert!(
             fling.status().is_running(),
-            "sanity: forward() leaves the fling controller running"
+            "sanity: animate_to() leaves the fling controller running"
         );
 
         controller.animate_to(
@@ -920,6 +938,31 @@ mod tests {
             !fling.status().is_running(),
             "jump_to must cancel a not-yet-serviced animate_to instead of letting \
              it start on the next service_pending_command call"
+        );
+    }
+
+    /// #1183: `service_pending_command`'s `is_scrolling` flag must follow
+    /// whether the run start actually succeeded and is still running, not
+    /// fire unconditionally before the call -- a refused start (a NaN
+    /// target, which `f32::clamp` passes through unchanged since every NaN
+    /// comparison is `false`) must not park the scrollable in "scrolling"
+    /// forever.
+    #[test]
+    fn animate_to_with_a_non_finite_target_leaves_is_scrolling_false() {
+        let controller = ScrollController::new();
+        controller.update_dimensions(300.0, 0.0, 500.0);
+        let fling = fling_stub();
+
+        controller.animate_to(
+            f32::NAN,
+            Duration::from_millis(100),
+            Arc::new(flui_animation::Curves::Linear),
+        );
+        controller.service_pending_command(&fling);
+
+        assert!(
+            !controller.position().is_scrolling(),
+            "a refused run start (NonFiniteTarget) must leave is_scrolling false"
         );
     }
 
@@ -974,15 +1017,18 @@ mod tests {
         let fling = fling_stub();
 
         // Establish a genuine RUNNING state FIRST, before any listener/hook
-        // is wired up — otherwise `forward()` itself would trigger the
+        // is wired up — otherwise starting the run itself would trigger the
         // reentrant cascade below synchronously, on this (main) thread,
-        // before the sanity check even runs.
+        // before the sanity check even runs. `fling_stub` is unbounded
+        // (#1183): `forward()` targets an infinite bound and is refused, so
+        // `animate_to` with a large finite target is the unbounded-safe
+        // substitute.
         fling
-            .forward()
-            .expect("fling_stub is not disposed, forward() must succeed");
+            .animate_to(1_000_000.0, None)
+            .expect("fling_stub is not disposed, animate_to() must succeed");
         assert!(
             fling.status().is_running(),
-            "sanity: forward() leaves the fling controller running, so the \
+            "sanity: animate_to() leaves the fling controller running, so the \
              stop() fired from jump_to's hook below is a genuine status \
              transition (not a no-op the listener would never see)"
         );
@@ -1058,9 +1104,12 @@ mod tests {
         controller.service_pending_command(&fling);
         assert_eq!(
             fling.status(),
-            flui_animation::AnimationStatus::Dismissed,
-            "clear_pending_command must drop the queued animate_to — \
-             servicing afterward must not start it"
+            flui_animation::AnimationStatus::Completed,
+            "clear_pending_command must drop the queued animate_to; the preceding jump_to \
+             re-queued Cancel instead (see jump_to's own doc), which services as \
+             fling.stop() -- on a fresh, never-run UNBOUNDED controller that reports \
+             Completed (direction defaults Forward, and neither infinite bound is ever \
+             \"at\": #1183's v3 delta 6). Either way, the queued animate_to must not start"
         );
     }
 }

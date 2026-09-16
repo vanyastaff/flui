@@ -55,6 +55,28 @@ pub enum AnimationError {
     /// for oscillating springs.
     #[error("Invalid spring configuration: {0}")]
     InvalidSpring(String),
+
+    /// A caller-supplied value-space input (a `target`, a `from`, a fling
+    /// `velocity`, or a simulation's initial sample) was not finite, or
+    /// clamps to a bound this controller does not have.
+    ///
+    /// `NaN` is always refused — there is no finite value to repair toward.
+    /// A `+-inf` input is refused only when the bound it would clamp to is
+    /// itself non-finite (an [`unbounded`](crate::AnimationController::unbounded)-family
+    /// controller); on a bounded controller it clamps to that bound instead
+    /// (unchanged Flutter-parity "go to the end" idiom).
+    ///
+    /// Returned by [`forward`](crate::AnimationController::forward)/[`forward_from`](crate::AnimationController::forward_from),
+    /// [`reverse`](crate::AnimationController::reverse)/[`reverse_from`](crate::AnimationController::reverse_from),
+    /// [`animate_to`](crate::AnimationController::animate_to)/[`animate_back`](crate::AnimationController::animate_back)
+    /// (and their `_curved` variants), [`fling`](crate::AnimationController::fling)/[`fling_with`](crate::AnimationController::fling_with),
+    /// [`animate_with`](crate::AnimationController::animate_with)/[`animate_back_with`](crate::AnimationController::animate_back_with),
+    /// and [`repeat`](crate::AnimationController::repeat)/[`repeat_with`](crate::AnimationController::repeat_with)
+    /// when its *effective* range (after defaulting) is not finite. Because
+    /// every production caller of these methods discards the `Result`
+    /// today, a refusal also reaches `tracing::warn!` on its own.
+    #[error("Non-finite target: {0}")]
+    NonFiniteTarget(String),
 }
 
 #[cfg(test)]

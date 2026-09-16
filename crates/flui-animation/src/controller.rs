@@ -281,6 +281,15 @@ struct AnimationControllerInner {
     /// replace-or-take call on it, or any `TickerCompleter`/`TickerDelivery`
     /// call — bare, `let _ =`-discarded, or `drop(..)`-wrapped.
     active_run: Option<TickerCompleter>,
+
+    /// Latches the "received a non-finite value" warning so a poisoned
+    /// gesture drag calling [`set_value`](AnimationController::set_value)
+    /// every frame — or a simulation whose sample goes non-finite mid-run —
+    /// warns once per controller, not once per frame. Never reset: once a
+    /// caller has proven it can produce a non-finite value, repeating the
+    /// warning on every subsequent occurrence adds noise without adding
+    /// information.
+    non_finite_warned: bool,
 }
 
 impl AnimationController {
@@ -425,22 +434,81 @@ impl AnimationController {
     /// [`Self::without_ticker`] — `ticker: None` is exactly the shape a
     /// controller ends up in today anyway (a private scheduler's ticker that
     /// nothing ever pumps), just without allocating the unused parts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
+    /// finite and `lower_bound < upper_bound`. Bounded means finite;
+    /// unbounded is [`Self::unbounded_inner`], not a bound value — a
+    /// half-open pair (one finite, one infinite) is rejected the same way,
+    /// since nothing in this workspace needs it and the rule would
+    /// otherwise be incidental complexity.
     fn with_bounds_inner(
         duration: Duration,
         ticker: Option<Ticker>,
         lower_bound: f32,
         upper_bound: f32,
     ) -> Result<Self, AnimationError> {
-        if lower_bound >= upper_bound {
+        // `lower_bound >= upper_bound` (not the negated `!(lower < upper)`,
+        // which clippy's `neg_cmp_op_on_partial_ord` flags on a
+        // `PartialOrd`-only type): NaN makes the two diverge, but NaN is
+        // caught by the `is_finite` clauses below regardless of which form
+        // this takes.
+        if lower_bound >= upper_bound || !lower_bound.is_finite() || !upper_bound.is_finite() {
             return Err(AnimationError::InvalidBounds(format!(
-                "lower_bound ({lower_bound}) must be less than upper_bound ({upper_bound})"
+                "lower_bound ({lower_bound}) and upper_bound ({upper_bound}) must both be \
+                 finite, with lower_bound < upper_bound"
             )));
         }
 
+        Ok(Self::new_inner(
+            duration,
+            ticker,
+            lower_bound,
+            upper_bound,
+            lower_bound,
+        ))
+    }
+
+    /// Shared construction body for [`Self::unbounded`],
+    /// [`Self::unbounded_without_ticker`], and
+    /// [`Self::unbounded_with_detached_ticker`] — fixed `(-inf, inf)`
+    /// bounds, infallible (there is no bound input to reject).
+    ///
+    /// Initial `value = 0.0` (not `lower_bound`, which would be `-inf` and
+    /// leak into [`AnimationController::velocity`]) — Flutter parity:
+    /// `AnimationController.unbounded`'s own doc (`animation_controller.dart`
+    /// @ 3.44.0) fixes the initial value at `0.0`.
+    fn unbounded_inner(duration: Duration, ticker: Option<Ticker>) -> Self {
+        Self::new_inner(duration, ticker, f32::NEG_INFINITY, f32::INFINITY, 0.0)
+    }
+
+    /// The one place every constructor builds the inner state: `value`,
+    /// `start_value`, and `target_value` all start at `initial_value`
+    /// (`lower_bound` for a bounded controller, `0.0` for an unbounded one),
+    /// and `status`/`last_reported_status` are BOTH set from
+    /// [`AnimationControllerInner::settled_status_keep_direction`] at that
+    /// value — Flutter parity: `_internalSetValue`'s status rule applies at
+    /// construction too, not only to a later `set_value` (a bounded
+    /// controller at `lower_bound` stays `Dismissed`; an unbounded one at
+    /// `0.0`, direction defaulted `Forward`, reports `Forward` — see
+    /// `docs/ARCHITECTURE.md`'s mapping entry for the recorded cost). Both
+    /// fields must agree at construction: if `last_reported_status` stayed
+    /// hard-coded `Dismissed` while `status` starts `Forward`, the first
+    /// [`AnimationController::finish`] call — even one that changes
+    /// nothing — would read them as different and fire a spurious status
+    /// notification for a change that never happened.
+    fn new_inner(
+        duration: Duration,
+        ticker: Option<Ticker>,
+        lower_bound: f32,
+        upper_bound: f32,
+        initial_value: f32,
+    ) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
 
-        let inner = AnimationControllerInner {
-            value: lower_bound,
+        let mut inner = AnimationControllerInner {
+            value: initial_value,
             status: AnimationStatus::Dismissed,
             duration,
             reverse_duration: None,
@@ -449,8 +517,8 @@ impl AnimationController {
             ticker,
             status_listeners: Vec::new(),
             direction: AnimationDirection::Forward,
-            start_value: lower_bound,
-            target_value: upper_bound,
+            start_value: initial_value,
+            target_value: initial_value,
             last_raw_elapsed_secs: 0.0,
             run_generation: 0,
             run_duration: None,
@@ -461,12 +529,72 @@ impl AnimationController {
             run_curve: None,
             last_reported_status: AnimationStatus::Dismissed,
             active_run: None,
+            non_finite_warned: false,
         };
+        let initial_status = inner.settled_status_keep_direction();
+        inner.status = initial_status;
+        inner.last_reported_status = initial_status;
 
-        Ok(Self {
+        Self {
             inner: Arc::new(Mutex::new(inner)),
             notifier,
-        })
+        }
+    }
+
+    /// Create an unbounded animation controller, auto-scheduled off
+    /// `scheduler`: fixed `(-inf, inf)` bounds, initial `value = 0.0`,
+    /// initial [`status`](Animation::status) [`Forward`](AnimationStatus::Forward)
+    /// (see [`unbounded_without_ticker`](Self::unbounded_without_ticker)'s
+    /// own doc for the full contract — this is the same shape with a real,
+    /// scheduled ticker).
+    #[must_use]
+    pub fn unbounded(duration: Duration, scheduler: &UpdateScheduler) -> Self {
+        let ticker = Ticker::new_with_scheduler(scheduler);
+        Self::unbounded_inner(duration, Some(ticker))
+    }
+
+    /// Create an unbounded animation controller with no ticker at all — the
+    /// shape a pixel-space fling/ballistic-simulation controller needs (see
+    /// [`Self::without_ticker`] for why "no ticker, driven by `tick_at`" is
+    /// the production widget-layer shape).
+    ///
+    /// Bounds are fixed at `f32::NEG_INFINITY..f32::INFINITY`: unboundedness
+    /// is this constructor, not a bound value — [`Self::with_bounds`] and
+    /// its siblings reject a non-finite bound. Initial `value = 0.0`
+    /// (Flutter parity: `AnimationController.unbounded`'s own doc), and
+    /// initial [`status`](Animation::status) is
+    /// [`AnimationStatus::Forward`] — [`AnimationDirection`] defaults
+    /// `Forward` and `0.0` is not "at a bound" on an infinite range, so the
+    /// keep-direction status rule (the same one
+    /// [`set_value`](Self::set_value) applies) reports the running
+    /// direction rather than `Dismissed`. This means a never-run unbounded
+    /// controller reports `status().is_running() == true`; the real "is a
+    /// run installed" fact is [`is_animating`](Animation::is_animating), not
+    /// `status`.
+    ///
+    /// Driving this controller with a run that targets a bound —
+    /// [`forward`](Self::forward)/[`reverse`](Self::reverse)/
+    /// [`fling`](Self::fling) — is refused with
+    /// [`AnimationError::NonFiniteTarget`], since there is no finite bound
+    /// to run to; drive it with
+    /// [`animate_to`](Self::animate_to)/[`animate_back`](Self::animate_back)
+    /// (finite `target`), [`animate_with`](Self::animate_with) (a
+    /// [`Simulation`]), [`set_value`](Self::set_value), or
+    /// [`repeat_with`](Self::repeat_with) with an explicit finite range
+    /// instead. [`reset`](Self::reset) resets to `0.0` (the defined
+    /// beginning — flutter/flutter#76014), not `-inf`.
+    #[must_use]
+    pub fn unbounded_without_ticker(duration: Duration) -> Self {
+        Self::unbounded_inner(duration, None)
+    }
+
+    /// [`Self::unbounded_without_ticker`] with a real, but permanently
+    /// detached, [`Ticker`] — the unbounded twin of
+    /// [`Self::with_detached_ticker`]: `is_animating()` reports correctly
+    /// mid-run without a live scheduler ever pumping it.
+    #[must_use]
+    pub fn unbounded_with_detached_ticker(duration: Duration) -> Self {
+        Self::unbounded_inner(duration, Some(Ticker::new()))
     }
 
     /// Set the duration for reverse animation.
@@ -553,13 +681,38 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
+    /// `from` is infinite toward a bound this controller does not have, or
+    /// if this controller is [`unbounded`](Self::unbounded) (`forward`
+    /// always targets `upper_bound`, which has no finite value to run to).
     pub fn forward_from(&self, from: Option<f32>) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
+
+        // `forward` always targets `upper_bound` — refuse before touching
+        // `from`, so `forward()` (no `from` at all) is refused on an
+        // unbounded controller too, not only an explicit non-finite `from`.
+        if !inner.upper_bound.is_finite() {
+            let err = AnimationError::NonFiniteTarget(
+                "forward/forward_from targets the upper bound, which is not finite on an \
+                 unbounded controller"
+                    .to_string(),
+            );
+            return Err(Self::warn_non_finite_target(inner, err));
+        }
         let entry_value = inner.value;
 
+        let from = match from {
+            Some(raw) => {
+                match Self::canonicalize_value_target(raw, inner.lower_bound, inner.upper_bound) {
+                    Ok(canonical) => Some(canonical),
+                    Err(err) => return Err(Self::warn_non_finite_target(inner, err)),
+                }
+            }
+            None => None,
+        };
         if let Some(start) = from {
-            inner.value = start.clamp(inner.lower_bound, inner.upper_bound);
+            inner.value = start;
         }
 
         inner.clear_run_modes();
@@ -633,13 +786,37 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
+    /// `from` is infinite toward a bound this controller does not have, or
+    /// if this controller is [`unbounded`](Self::unbounded) (`reverse`
+    /// always targets `lower_bound`, which has no finite value to run to).
     pub fn reverse_from(&self, from: Option<f32>) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
+
+        // See `forward_from`'s own comment: refuse before touching `from`,
+        // so `reverse()` (no `from` at all) is refused too.
+        if !inner.lower_bound.is_finite() {
+            let err = AnimationError::NonFiniteTarget(
+                "reverse/reverse_from targets the lower bound, which is not finite on an \
+                 unbounded controller"
+                    .to_string(),
+            );
+            return Err(Self::warn_non_finite_target(inner, err));
+        }
         let entry_value = inner.value;
 
+        let from = match from {
+            Some(raw) => {
+                match Self::canonicalize_value_target(raw, inner.lower_bound, inner.upper_bound) {
+                    Ok(canonical) => Some(canonical),
+                    Err(err) => return Err(Self::warn_non_finite_target(inner, err)),
+                }
+            }
+            None => None,
+        };
         if let Some(start) = from {
-            inner.value = start.clamp(inner.lower_bound, inner.upper_bound);
+            inner.value = start;
         }
 
         inner.clear_run_modes();
@@ -715,8 +892,12 @@ impl AnimationController {
 
     /// Reset to the beginning (lower bound).
     ///
-    /// Sets the value to `lower_bound` and the status to
-    /// [`AnimationStatus::Dismissed`]. Cancels the active run's
+    /// Sets the value to the beginning — `lower_bound` on a bounded
+    /// controller, `0.0` on an [`unbounded`](Self::unbounded) one (there is
+    /// no `lower_bound` to return to: flutter/flutter#76014 asks for
+    /// exactly this defined beginning) — and the status to
+    /// [`AnimationStatus::Dismissed`]. Never fails for non-finiteness: a
+    /// reset always has a value to land on. Cancels the active run's
     /// [`TickerFuture`] with
     /// [`TickerCanceled`](flui_scheduler::ticker::TickerCanceled), delivered
     /// with no controller lock held.
@@ -729,7 +910,11 @@ impl AnimationController {
         Self::check_disposed(&inner)?;
 
         let delivery = inner.stop_running();
-        inner.value = inner.lower_bound;
+        inner.value = if inner.is_unbounded() {
+            0.0
+        } else {
+            inner.lower_bound
+        };
         inner.status = AnimationStatus::Dismissed;
         self.finish(
             AnimationStatus::Dismissed,
@@ -767,6 +952,9 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] if `target` is `NaN`, if
+    /// `target` is infinite toward a bound this controller does not have,
+    /// or if `target - value` overflows `f32`.
     ///
     /// # Examples
     ///
@@ -804,6 +992,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// as [`animate_to`](Self::animate_to).
     pub fn animate_back(
         &self,
         target: f32,
@@ -820,6 +1010,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// as [`animate_to`](Self::animate_to).
     pub fn animate_to_curved(
         &self,
         target: f32,
@@ -836,6 +1028,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// as [`animate_to`](Self::animate_to).
     pub fn animate_back_curved(
         &self,
         target: f32,
@@ -872,7 +1066,24 @@ impl AnimationController {
         Self::check_disposed(&inner)?;
         let entry_value = inner.value;
 
-        let target = target.clamp(inner.lower_bound, inner.upper_bound);
+        let target =
+            match Self::canonicalize_value_target(target, inner.lower_bound, inner.upper_bound) {
+                Ok(target) => target,
+                Err(err) => return Err(Self::warn_non_finite_target(inner, err)),
+            };
+        // `target - value` overflowing f32 (e.g. `set_value(-f32::MAX)` then
+        // `animate_to(f32::MAX)`) would make `tick_time_based`'s
+        // `start_value + range * eased_t` interior lerp compute `inf * t`,
+        // finite but wrong, or — at an already-non-finite `start_value` —
+        // `inf * 0.0 = NaN`. Refuse before any mutation rather than let a
+        // run install with a span nothing downstream can interpolate.
+        let span = target - entry_value;
+        if !span.is_finite() {
+            let err = AnimationError::NonFiniteTarget(format!(
+                "animate_to/animate_back span ({target} - {entry_value}) overflows f32"
+            ));
+            return Err(Self::warn_non_finite_target(inner, err));
+        }
         inner.clear_run_modes();
         inner.run_curve = curve;
         inner.start_value = inner.value;
@@ -976,6 +1187,11 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] on an
+    /// [`unbounded`](Self::unbounded) controller — a default repeat targets
+    /// this controller's own (infinite) bounds; use
+    /// [`repeat_with`](Self::repeat_with) with an explicit finite range
+    /// instead.
     pub fn repeat(&self, reverse: bool) -> Result<TickerFuture, AnimationError> {
         self.repeat_with(None, None, reverse, None, None)
     }
@@ -1020,6 +1236,14 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::InvalidBounds`] if `min`/`max` are `NaN` or
+    /// describe an inverted or empty range (a range-shape error, on any
+    /// controller). Returns [`AnimationError::NonFiniteTarget`] if the
+    /// EFFECTIVE range (after defaulting unset endpoints to this
+    /// controller's own bounds) is not finite — only reachable on an
+    /// [`unbounded`](Self::unbounded) controller with `min`/`max` left
+    /// unset (or set on only one side); pass an explicit finite range to
+    /// repeat on an unbounded controller.
     pub fn repeat_with(
         &self,
         min: Option<f32>,
@@ -1031,6 +1255,17 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
         let entry_value = inner.value;
+
+        // A caller-supplied NaN endpoint is a range-shape error on ANY
+        // controller (today `repeat_with(Some(f32::NAN), ..)` installs a NaN
+        // run) — checked before defaulting/clamping so it can never be
+        // confused with the *effective*-range non-finiteness an unbounded
+        // controller's own defaulted bound produces below.
+        if min.is_some_and(f32::is_nan) || max.is_some_and(f32::is_nan) {
+            return Err(AnimationError::InvalidBounds(format!(
+                "repeat range endpoints must not be NaN (min={min:?}, max={max:?})"
+            )));
+        }
 
         // Clamp the repeat range into the controller's bounds and reject an
         // empty/inverted range, so a repeat run can never start `value` (or its
@@ -1051,6 +1286,19 @@ impl AnimationController {
                 "repeat min ({lo}) must be less than max ({hi}) within bounds [{}, {}]",
                 inner.lower_bound, inner.upper_bound
             )));
+        }
+        // The range wasn't inverted, but a side that defaulted from an
+        // unbounded controller's own +-inf bound leaked through: there is no
+        // finite range to repeat inside (Decision 2 — `repeat()`/
+        // `repeat_with(None, None, ..)` on an unbounded controller is
+        // refused this way; an explicit finite range on both sides never
+        // reaches here).
+        if !lo.is_finite() || !hi.is_finite() {
+            let err = AnimationError::NonFiniteTarget(format!(
+                "repeat range [{lo}, {hi}] is not finite; this controller is unbounded in \
+                 that direction -- pass an explicit finite range"
+            ));
+            return Err(Self::warn_non_finite_target(inner, err));
         }
 
         // A leftover per-run mode (an `animate_to_curved` curve, a fling
@@ -1158,6 +1406,10 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] if `velocity` is not
+    /// finite, or if this controller is [`unbounded`](Self::unbounded) in
+    /// the direction `velocity` drives toward (a fling has no finite end to
+    /// spring at).
     /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped
     /// (would oscillate).
     ///
@@ -1180,6 +1432,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// as [`fling`](Self::fling).
     /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped.
     pub fn fling_with(
         &self,
@@ -1189,8 +1443,19 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
-        let spring = spring.unwrap_or_else(default_fling_spring);
-        inner.direction = if velocity < 0.0 {
+        if !velocity.is_finite() {
+            let err = AnimationError::NonFiniteTarget(format!(
+                "fling velocity {velocity} must be finite"
+            ));
+            return Err(Self::warn_non_finite_target(inner, err));
+        }
+
+        // Compute into locals; every refusal below must leave `inner`
+        // untouched, so `direction` is assigned to the controller only
+        // after the InvalidSpring check too (fixing the pre-existing bug
+        // where a refused fling still corrupted `direction`, observable
+        // via a later `stop()`).
+        let direction = if velocity < 0.0 {
             AnimationDirection::Reverse
         } else {
             AnimationDirection::Forward
@@ -1200,7 +1465,15 @@ impl AnimationController {
         } else {
             inner.upper_bound + FLING_TOLERANCE.distance
         };
+        if !target.is_finite() {
+            let err = AnimationError::NonFiniteTarget(format!(
+                "fling target {target} is not finite; this controller is unbounded in the \
+                 direction velocity {velocity} drives toward"
+            ));
+            return Err(Self::warn_non_finite_target(inner, err));
+        }
 
+        let spring = spring.unwrap_or_else(default_fling_spring);
         let sim =
             SpringSimulation::new(spring, inner.value, target, velocity).with_snap_to_end(true);
         if sim.spring_type() == SpringType::Underdamped {
@@ -1211,6 +1484,7 @@ impl AnimationController {
             ));
         }
 
+        inner.direction = direction;
         inner.clear_run_modes();
         inner.simulation = Some(Box::new(sim));
         inner.status = inner.direction.running_status();
@@ -1229,11 +1503,17 @@ impl AnimationController {
         Ok(future)
     }
 
-    /// Drive the animation according to a custom simulation.
+    /// Drive the animation according to a custom simulation. Works
+    /// unmodified on an [`unbounded`](Self::unbounded) controller — a
+    /// simulation is not refused the way a bound-targeting run is, since it
+    /// carries its own `is_done` termination rather than running toward
+    /// `lower_bound`/`upper_bound`.
     ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] if `simulation.x(0.0)` is
+    /// not finite.
     ///
     /// # Example
     ///
@@ -1260,6 +1540,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::NonFiniteTarget`] under the same condition
+    /// as [`animate_with`](Self::animate_with).
     pub fn animate_back_with<S: Simulation + 'static>(
         &self,
         simulation: S,
@@ -1275,12 +1557,22 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
+        // A simulation that starts non-finite would otherwise install a run
+        // whose `is_done` may never fire (Decision 4/v3 delta 1) — refuse
+        // before any mutation, exactly like every other non-finite entry
+        // point.
+        let initial = simulation.x(0.0);
+        if !initial.is_finite() {
+            let err = AnimationError::NonFiniteTarget(format!(
+                "simulation.x(0.0) = {initial} is not finite"
+            ));
+            return Err(Self::warn_non_finite_target(inner, err));
+        }
+
         inner.clear_run_modes();
         inner.direction = direction;
         inner.status = direction.running_status();
-        inner.value = simulation
-            .x(0.0)
-            .clamp(inner.lower_bound, inner.upper_bound);
+        inner.value = initial.clamp(inner.lower_bound, inner.upper_bound);
         inner.simulation = Some(simulation);
         // `restart_ticker` runs BEFORE the completer replaces `active_run` —
         // see its own doc for why the order is load-bearing.
@@ -1436,7 +1728,35 @@ impl AnimationController {
             .simulation
             .as_ref()
             .expect("tick_simulation requires an active simulation");
-        let new_value = sim.x(cycle).clamp(inner.lower_bound, inner.upper_bound);
+        let sampled = sim.x(cycle);
+
+        // A user simulation emitting a non-finite sample mid-run must not
+        // poison the controller — end the run AT THE LAST FINITE VALUE
+        // instead of writing the sample through (v3 delta 1): a
+        // "value unchanged, run continues" no-op would leave `active_run`
+        // installed and `Vsync` ticking forever, and a scrollable's
+        // `is_scrolling` stuck. The latch is shared with
+        // `set_value`'s non-finite canonicalization.
+        if !sampled.is_finite() {
+            inner.simulation = None;
+            if let Some(ticker) = &mut inner.ticker {
+                ticker.stop();
+            }
+            let status = inner.direction.settled_status();
+            inner.status = status;
+            // Publish before unlocking — see below for why the order
+            // matters to a panicking listener. `complete`, not `cancel`:
+            // this is the run ending on its own terms, same as a normal
+            // `is_done`.
+            let delivery = inner.active_run.take().map(TickerCompleter::complete);
+            let should_warn = !inner.non_finite_warned;
+            inner.non_finite_warned = true;
+            self.finish(status, ValueChange::Unchanged, delivery, inner);
+            Self::warn_non_finite_value(should_warn, sampled);
+            return;
+        }
+
+        let new_value = sampled.clamp(inner.lower_bound, inner.upper_bound);
         let is_done = sim.is_done(cycle);
         inner.value = new_value;
 
@@ -1474,25 +1794,38 @@ impl AnimationController {
         } else {
             narrow_f32((cycle / duration.as_secs_f64()).clamp(0.0, 1.0))
         };
-        let range = inner.target_value - inner.start_value;
         // Flutter parity: `_InterpolationSimulation.x` special-cases the
         // endpoints to the exact begin/end value and only runs the curve
         // through the interior, so a curve that overshoots slightly at its
-        // bounds (e.g. an elastic curve) never reports outside [start, target].
-        let eased_t = match (&inner.run_curve, t) {
-            (_, 0.0) => 0.0,
-            (_, t) if t >= 1.0 => 1.0,
-            (Some(curve), t) => curve.transform(t),
-            (None, t) => t,
+        // bounds (e.g. an elastic curve) never reports outside
+        // `[start, target]`. Reading `start_value`/`target_value` directly
+        // at the endpoints (rather than `start + range * eased_t` with
+        // `eased_t` merely clamped to 0.0/1.0) is structural, not cosmetic:
+        // `range` can be `+-inf` in principle (an extreme-bounds
+        // configuration; `animate_to`/`animate_back` themselves already
+        // refuse an overflowing span before a run ever starts), and
+        // `inf * 0.0 = NaN` — no path through this function may ever
+        // compute that product.
+        let value = if t <= 0.0 {
+            inner.start_value
+        } else if t >= 1.0 {
+            inner.target_value
+        } else {
+            let eased_t = match &inner.run_curve {
+                Some(curve) => curve.transform(t),
+                None => t,
+            };
+            inner.start_value + (inner.target_value - inner.start_value) * eased_t
         };
-        inner.value = inner.start_value + range * eased_t;
+        inner.value = value;
 
         if t < 1.0 {
             drop(inner);
             self.notifier.notify_listeners();
             return;
         }
-        inner.value = inner.target_value;
+        // `inner.value` is already `target_value` — set above by the
+        // `t >= 1.0` arm.
 
         // Non-repeating completion. Flutter parity: `AnimationController._tick`
         // (`animation_controller.dart` @ 3.44.0) reports the settled status
@@ -1609,23 +1942,50 @@ impl AnimationController {
     /// next frame recomputes the value from the stale run's `start_value`/
     /// `target_value`, silently overwriting what was just set.
     ///
-    /// A `NaN` input is canonicalized to the lower bound: Rust's `clamp`
-    /// propagates `NaN`, which would otherwise poison every downstream
-    /// curve/tween evaluation for the rest of the controller's life.
+    /// A non-finite input is canonicalized on a BOUNDED controller — `NaN`
+    /// to the lower bound, `+-inf` to whichever bound it points at — the
+    /// same rule `clamp` already applies to a finite input, made total over
+    /// `NaN` (which `clamp` alone propagates unchanged and would otherwise
+    /// poison every downstream curve/tween evaluation). On an
+    /// [`unbounded`](Self::unbounded) controller a non-finite input is
+    /// instead a FULL no-op: no active run is stopped, no notification
+    /// fires, the value stays exactly what it was — a poisoned gesture drag
+    /// or a bad computation must not clobber a live fling or snap a
+    /// scrollable to a bound it doesn't have. Either way the warning below
+    /// is latched (`non_finite_warned`): it fires once per controller, not
+    /// once per frame of a misbehaving caller.
     pub fn set_value(&self, value: f32) {
-        let was_nan = value.is_nan();
         let mut inner = self.inner.lock();
+
+        if !value.is_finite() {
+            let should_warn = !inner.non_finite_warned;
+            inner.non_finite_warned = true;
+
+            if inner.is_unbounded() {
+                drop(inner);
+                Self::warn_non_finite_value(should_warn, value);
+                return;
+            }
+
+            let delivery = inner.stop_running();
+            let canonical = if value.is_nan() {
+                inner.lower_bound
+            } else {
+                value
+            };
+            inner.value = canonical.clamp(inner.lower_bound, inner.upper_bound);
+            let status = inner.settled_status_keep_direction();
+            inner.status = status;
+            self.finish(status, ValueChange::Notify, delivery, inner);
+            Self::warn_non_finite_value(should_warn, value);
+            return;
+        }
+
         let delivery = inner.stop_running();
-        // Canonicalize silently under the lock; `tracing::warn!`'s
-        // subscriber is arbitrary user code and `delivery` is live here —
-        // the warning itself waits for `Self::warn_if_nan` below, after
-        // `finish` has unlocked and delivered.
-        let value = if was_nan { inner.lower_bound } else { value };
         inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
         let status = inner.settled_status_keep_direction();
         inner.status = status;
         self.finish(status, ValueChange::Notify, delivery, inner);
-        Self::warn_if_nan(was_nan);
     }
 
     /// **CRITICAL:** Dispose when done to prevent leaks.
@@ -1657,6 +2017,56 @@ impl AnimationController {
         } else {
             Ok(())
         }
+    }
+
+    /// Canonicalize a caller-supplied value-space input — `animate_to`/
+    /// `animate_back`'s `target`, `forward_from`/`reverse_from`'s `from` —
+    /// against this controller's bounds.
+    ///
+    /// `NaN` is always refused: there is no finite value to repair toward,
+    /// and letting it through would poison every downstream curve/tween
+    /// evaluation for the rest of the run (`clamp` propagates `NaN`
+    /// unchanged rather than rejecting it). `+-inf` clamps to whichever
+    /// bound it points at when that bound is finite — Flutter's own "go to
+    /// the end" idiom, e.g. `animate_to(f32::INFINITY)` on a bounded
+    /// controller — and is refused when that bound is itself non-finite: an
+    /// unbounded controller has no end in that direction to go to.
+    fn canonicalize_value_target(
+        raw: f32,
+        lower_bound: f32,
+        upper_bound: f32,
+    ) -> Result<f32, AnimationError> {
+        if raw.is_nan() {
+            return Err(AnimationError::NonFiniteTarget(
+                "value must be finite, got NaN".to_string(),
+            ));
+        }
+        let clamped = raw.clamp(lower_bound, upper_bound);
+        if !clamped.is_finite() {
+            return Err(AnimationError::NonFiniteTarget(format!(
+                "value {raw} has no finite bound to run to in that direction \
+                 (bounds are [{lower_bound}, {upper_bound}])"
+            )));
+        }
+        Ok(clamped)
+    }
+
+    /// Emit the "refused for a non-finite input" warning every
+    /// [`AnimationError::NonFiniteTarget`]-returning call site needs:
+    /// production callers of these methods discard the `Result` (the three
+    /// workspace fling controllers spell `let _ = fling.animate_to_curved(..)`
+    /// and friends), so this is the only place the refusal becomes
+    /// observable. Call only once the refusal is fully decided and no
+    /// mutation has been applied — it drops the controller's lock before
+    /// warning, mirroring [`warn_if_no_ticker`](Self::warn_if_no_ticker), so
+    /// the warning's arbitrary subscriber never runs under it.
+    fn warn_non_finite_target(
+        inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        err: AnimationError,
+    ) -> AnimationError {
+        drop(inner);
+        tracing::warn!("{err}");
+        err
     }
 
     /// Number of registered value listeners. Test-only: lets combinator tests
@@ -1731,13 +2141,21 @@ impl AnimationController {
         }
     }
 
-    /// Emits the `set_value(NaN)` warning — call only after `finish` has
-    /// unlocked and delivered, for the same reason as
-    /// [`warn_if_no_ticker`](Self::warn_if_no_ticker).
-    fn warn_if_nan(was_nan: bool) {
-        if was_nan {
+    /// Emits the "received a non-finite value" warning shared by
+    /// [`set_value`](Self::set_value)'s canonicalization and
+    /// [`tick_simulation`](Self::tick_simulation)'s mid-run non-finite
+    /// sample — call only after `finish` has unlocked and delivered, for
+    /// the same reason as [`warn_if_no_ticker`](Self::warn_if_no_ticker).
+    /// `should_warn` is the caller's snapshot of the latch
+    /// (`!non_finite_warned`, taken before setting it) — this fires at most
+    /// once per controller, not once per frame of a poisoned gesture drag
+    /// or a misbehaving simulation.
+    fn warn_non_finite_value(should_warn: bool, raw: f32) {
+        if should_warn {
             tracing::warn!(
-                "set_value(NaN) canonicalized to lower bound; drive the controller with finite values"
+                value = raw,
+                "received a non-finite value; canonicalized or ignored -- drive the \
+                 controller with finite values"
             );
         }
     }
@@ -1887,6 +2305,15 @@ impl AnimationControllerInner {
     /// zero, so there is no per-run epoch left to subtract).
     fn cycle_elapsed_secs(&self) -> f64 {
         (self.last_raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE)).max(0.0)
+    }
+
+    /// Whether this controller was built by one of the `unbounded*`
+    /// constructors. Both bounds are fixed `+-inf` TOGETHER there — FLUI
+    /// never constructs a half-open pair (one finite, one infinite); see
+    /// [`AnimationController::with_bounds_inner`]'s own doc — so checking
+    /// `lower_bound` alone detects it.
+    fn is_unbounded(&self) -> bool {
+        !self.lower_bound.is_finite()
     }
 
     /// Whether the current value is at (or indistinguishable from) the upper bound.
@@ -2377,8 +2804,14 @@ mod tests {
         c.dispose();
     }
 
-    /// `without_ticker_bounds` is the fling/ballistic-simulation shape:
-    /// wide-open bounds, no ticker.
+    /// `without_ticker_bounds` is a BOUNDED constructor: bounded means
+    /// finite (#1183). This test used to assert the OPPOSITE — that a
+    /// wide-open `(NEG_INFINITY, INFINITY)` pair was ACCEPTED, landing
+    /// `value() == NEG_INFINITY` — that assertion is deliberately inverted
+    /// here, not preserved: unboundedness is now a constructor fact
+    /// ([`AnimationController::unbounded_without_ticker`]), not a bound
+    /// value, so the same wide-open pair this test used to accept must now
+    /// be rejected, and the unbounded shape starts at `0.0`, never `-inf`.
     #[test]
     fn without_ticker_bounds_rejects_invalid_bounds_and_accepts_wide_open_ones() {
         let _serial = serial();
@@ -2386,13 +2819,23 @@ mod tests {
             AnimationController::without_ticker_bounds(Duration::from_millis(1), 20.0, 10.0);
         assert!(matches!(rejected, Err(AnimationError::InvalidBounds(_))));
 
-        let c = AnimationController::without_ticker_bounds(
+        let wide_open = AnimationController::without_ticker_bounds(
             Duration::from_millis(1),
             f32::NEG_INFINITY,
             f32::INFINITY,
-        )
-        .expect("NEG_INFINITY < INFINITY satisfies the bounds invariant");
-        assert_eq!(c.value(), f32::NEG_INFINITY);
+        );
+        assert!(
+            matches!(wide_open, Err(AnimationError::InvalidBounds(_))),
+            "a wide-open pair is unboundedness spelled as bounds -- reject it; \
+             use unbounded_without_ticker instead"
+        );
+
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        assert_eq!(
+            c.value(),
+            0.0,
+            "unbounded_without_ticker starts at 0.0, never -inf"
+        );
         c.dispose();
     }
 
@@ -2430,8 +2873,10 @@ mod tests {
     }
 
     /// `with_detached_ticker_bounds` is the same shape with custom bounds --
-    /// mirrors `without_ticker_bounds`'s coverage of bounds validation and
-    /// the wide-open fling/ballistic-simulation range.
+    /// mirrors `without_ticker_bounds`'s coverage of bounds validation. See
+    /// that test's own doc for why the wide-open-pair assertion below is a
+    /// deliberate inversion of what this test used to check, not a
+    /// preserved pin.
     #[test]
     fn with_detached_ticker_bounds_rejects_invalid_bounds_and_accepts_wide_open_ones() {
         let _serial = serial();
@@ -2439,13 +2884,23 @@ mod tests {
             AnimationController::with_detached_ticker_bounds(Duration::from_millis(1), 20.0, 10.0);
         assert!(matches!(rejected, Err(AnimationError::InvalidBounds(_))));
 
-        let c = AnimationController::with_detached_ticker_bounds(
+        let wide_open = AnimationController::with_detached_ticker_bounds(
             Duration::from_millis(1),
             f32::NEG_INFINITY,
             f32::INFINITY,
-        )
-        .expect("NEG_INFINITY < INFINITY satisfies the bounds invariant");
-        assert_eq!(c.value(), f32::NEG_INFINITY);
+        );
+        assert!(
+            matches!(wide_open, Err(AnimationError::InvalidBounds(_))),
+            "a wide-open pair is unboundedness spelled as bounds -- reject it; \
+             use unbounded_with_detached_ticker instead"
+        );
+
+        let c = AnimationController::unbounded_with_detached_ticker(Duration::from_millis(1));
+        assert_eq!(
+            c.value(),
+            0.0,
+            "unbounded_with_detached_ticker starts at 0.0, never -inf"
+        );
         c.dispose();
     }
 
@@ -2455,6 +2910,650 @@ mod tests {
         let c = controller(100);
         c.dispose();
         assert!(matches!(c.forward(), Err(AnimationError::Disposed)));
+    }
+
+    // ---- #1183: unboundedness is a constructor fact ----------------------
+
+    /// Bounded means finite: every bounded constructor (and `builder.rs`'s
+    /// `.bounds()`, tested separately in that module) must reject any bound
+    /// that is `NaN`, infinite, or a half-open pair (one finite, one
+    /// infinite) -- unboundedness is `unbounded*`, not a bound value.
+    #[test]
+    fn bounds_constructors_reject_non_finite_bounds() {
+        let _serial = serial();
+        let scheduler = UpdateScheduler::new();
+        let cases: &[(f32, f32)] = &[
+            (f32::NAN, 1.0),
+            (0.0, f32::NAN),
+            (f32::NEG_INFINITY, f32::INFINITY),
+            (f32::NEG_INFINITY, 5.0),
+            (5.0, f32::INFINITY),
+            (f32::NEG_INFINITY, f32::NEG_INFINITY),
+        ];
+        for &(lower, upper) in cases {
+            assert!(
+                matches!(
+                    AnimationController::with_bounds(
+                        Duration::from_millis(1),
+                        &scheduler,
+                        lower,
+                        upper
+                    ),
+                    Err(AnimationError::InvalidBounds(_))
+                ),
+                "with_bounds({lower}, {upper}) must be rejected"
+            );
+            assert!(
+                matches!(
+                    AnimationController::without_ticker_bounds(
+                        Duration::from_millis(1),
+                        lower,
+                        upper
+                    ),
+                    Err(AnimationError::InvalidBounds(_))
+                ),
+                "without_ticker_bounds({lower}, {upper}) must be rejected"
+            );
+            assert!(
+                matches!(
+                    AnimationController::with_detached_ticker_bounds(
+                        Duration::from_millis(1),
+                        lower,
+                        upper
+                    ),
+                    Err(AnimationError::InvalidBounds(_))
+                ),
+                "with_detached_ticker_bounds({lower}, {upper}) must be rejected"
+            );
+        }
+    }
+
+    /// Pin: a finite, merely non-default range must still be accepted and
+    /// start at its own `lower_bound` -- the tightened validation rejects
+    /// non-finite bounds, not merely-unusual finite ones.
+    #[test]
+    fn bounds_constructors_still_accept_a_finite_non_default_range() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker_bounds(Duration::from_millis(1), -1.0, 3.0)
+            .expect("finite (-1, 3) satisfies lower < upper");
+        assert_eq!(c.value(), -1.0);
+        c.dispose();
+    }
+
+    /// `unbounded_without_ticker`'s documented contract: `value() == 0.0`,
+    /// initial status `Forward` (Flutter's `_internalSetValue` rule at
+    /// `0.0`, direction defaulted `Forward` -- see the mapping entry for the
+    /// recorded cost), zero velocity, and not animating until driven.
+    #[test]
+    fn unbounded_without_ticker_starts_at_zero_forward_and_idle() {
+        let _serial = serial();
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        assert_eq!(c.value(), 0.0);
+        assert_eq!(c.status(), AnimationStatus::Forward);
+        assert_eq!(c.velocity(), 0.0);
+        assert!(!c.is_animating());
+        c.dispose();
+    }
+
+    /// `set_value` at a non-bound value on an unbounded controller keeps the
+    /// keep-direction status (`Forward`, unchanged from construction) and
+    /// must fire no status listener -- status equality alone is vacuous
+    /// under `take_status_change`'s dedup, so this counts callbacks (v3
+    /// delta 5).
+    #[test]
+    fn unbounded_set_value_at_a_non_bound_value_fires_no_status_change() {
+        let _serial = serial();
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        let status_changes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&status_changes);
+        let _id = c.add_status_listener(Arc::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        c.set_value(123.0);
+        assert_eq!(c.status(), AnimationStatus::Forward);
+        assert_eq!(
+            status_changes.load(Ordering::SeqCst),
+            0,
+            "status was already Forward at construction (v3 delta 5's last_reported_status fix); \
+             set_value at a non-bound value must not re-fire it"
+        );
+        c.dispose();
+    }
+
+    /// v3 delta 7: `set_value` with a non-finite input on an UNBOUNDED
+    /// controller is a FULL no-op -- not merely "unchanged value" but no
+    /// `stop_running` and no notification either: a poisoned drag's
+    /// `set_value(NaN)` must not cancel a live fling out from under it.
+    /// Pinned alongside the BOUNDED canonicalization (`NaN` -> lower bound,
+    /// `+inf` -> upper bound) it does not disturb, and the shared latch
+    /// (`non_finite_warned`) firing once across three non-finite calls.
+    #[test]
+    fn set_value_non_finite_is_a_full_no_op_on_unbounded_but_canonicalizes_on_bounded() {
+        let _serial = serial();
+
+        // Bounded: pin -- `+inf` clamps to the upper bound (mirrors the
+        // existing `set_value_nan_is_canonicalized` pin for `NaN`).
+        let c = controller(100);
+        c.set_value(f32::INFINITY);
+        assert_eq!(
+            c.value(),
+            1.0,
+            "set_value(+inf) on a bounded controller clamps to upper"
+        );
+        c.dispose();
+
+        // Unbounded: a live run must survive set_value(NaN) untouched --
+        // the run is still installed and still ticking afterward.
+        let c = AnimationController::unbounded_with_detached_ticker(Duration::from_millis(1000));
+        c.animate_to(500.0, None).unwrap();
+        assert!(c.is_animating(), "precondition: a live run is installed");
+        let generation_before = c.run_generation();
+
+        c.set_value(f32::NAN);
+        assert_eq!(
+            c.value(),
+            0.0,
+            "set_value(NaN) on an unbounded controller must not move value"
+        );
+        assert!(
+            c.is_animating(),
+            "set_value(NaN) on an unbounded controller must not stop the live run"
+        );
+        assert_eq!(c.run_generation(), generation_before);
+
+        c.set_value(f32::INFINITY);
+        assert_eq!(
+            c.value(),
+            0.0,
+            "set_value(+inf) on an unbounded controller must not move value"
+        );
+        c.set_value(f32::NEG_INFINITY);
+        assert_eq!(
+            c.value(),
+            0.0,
+            "set_value(-inf) on an unbounded controller must not move value"
+        );
+        assert!(
+            c.is_animating(),
+            "none of the three non-finite calls may have stopped the run"
+        );
+        c.dispose();
+    }
+
+    /// Decision 2: every bound-targeting run start is refused on an
+    /// unbounded controller (there is no finite bound to run to), and the
+    /// refusal is a NO-OP in every observable respect -- value, status,
+    /// direction (probed via `stop()`'s reported status against a fresh
+    /// twin that never received the refused call), `run_generation`,
+    /// `is_animating`, and both listener kinds, plus a concurrently live
+    /// `animate_to` run's own future staying pending throughout.
+    #[test]
+    fn unbounded_refusals_leave_the_controller_completely_untouched() {
+        let _serial = serial();
+
+        type Attempt = Box<dyn Fn(&AnimationController) -> Result<TickerFuture, AnimationError>>;
+        let attempts: Vec<(&str, Attempt)> = vec![
+            ("forward()", Box::new(AnimationController::forward)),
+            (
+                "forward_from(Some(0.5))",
+                Box::new(|c: &AnimationController| c.forward_from(Some(0.5))),
+            ),
+            ("reverse()", Box::new(AnimationController::reverse)),
+            (
+                "fling(1.0)",
+                Box::new(|c: &AnimationController| c.fling(1.0)),
+            ),
+            (
+                "fling(-1.0)",
+                Box::new(|c: &AnimationController| c.fling(-1.0)),
+            ),
+            (
+                "repeat(false)",
+                Box::new(|c: &AnimationController| c.repeat(false)),
+            ),
+            (
+                "repeat_with(None, Some(1.0), ..)",
+                Box::new(|c: &AnimationController| {
+                    c.repeat_with(None, Some(1.0), false, None, None)
+                }),
+            ),
+        ];
+
+        for (name, attempt) in attempts {
+            let c =
+                AnimationController::unbounded_with_detached_ticker(Duration::from_millis(1000));
+            let twin =
+                AnimationController::unbounded_with_detached_ticker(Duration::from_millis(1000));
+
+            // An identical live run on both: a corrupted `direction` on `c`
+            // (the `fling_with` ordering bug this plan also fixes) shows up
+            // as a divergent `stop()` status against `twin`, which never
+            // sees the refused call.
+            let live = c.animate_to(200.0, None).unwrap();
+            twin.animate_to(200.0, None).unwrap();
+            assert!(c.is_animating(), "precondition: a live run is installed");
+
+            let value_hits = Arc::new(AtomicUsize::new(0));
+            let vh = Arc::clone(&value_hits);
+            let _vid = c.add_listener(Arc::new(move || {
+                vh.fetch_add(1, Ordering::SeqCst);
+            }));
+            let status_hits = Arc::new(AtomicUsize::new(0));
+            let sh = Arc::clone(&status_hits);
+            let _sid = c.add_status_listener(Arc::new(move |_| {
+                sh.fetch_add(1, Ordering::SeqCst);
+            }));
+
+            let value_before = c.value();
+            let status_before = c.status();
+            let generation_before = c.run_generation();
+
+            let result = attempt(&c);
+            assert!(
+                matches!(result, Err(AnimationError::NonFiniteTarget(_))),
+                "{name} must be refused with NonFiniteTarget on an unbounded controller, got {result:?}"
+            );
+
+            assert_eq!(c.value(), value_before, "{name}: value must be untouched");
+            assert_eq!(
+                c.status(),
+                status_before,
+                "{name}: status must be untouched"
+            );
+            assert_eq!(
+                c.run_generation(),
+                generation_before,
+                "{name}: run_generation must be untouched"
+            );
+            assert!(
+                c.is_animating(),
+                "{name}: the live run must still be installed and ticking"
+            );
+            assert_eq!(
+                value_hits.load(Ordering::SeqCst),
+                0,
+                "{name}: a refused call must fire no value listener"
+            );
+            assert_eq!(
+                status_hits.load(Ordering::SeqCst),
+                0,
+                "{name}: a refused call must fire no status listener"
+            );
+            assert!(
+                live.is_pending(),
+                "{name}: the live animate_to(200.0) run's future must still be pending"
+            );
+
+            c.stop().unwrap();
+            twin.stop().unwrap();
+            assert_eq!(
+                c.status(),
+                twin.status(),
+                "{name}: a refused call must not corrupt direction -- stop() on the refused \
+                 controller must report the same status a twin that never saw it reports"
+            );
+        }
+    }
+
+    /// On a BOUNDED controller, a non-finite `target`/`from` is refused too
+    /// (Decision 2's declared change: today `clamp` passes `NaN` straight
+    /// through) -- nothing is mutated by the refusal.
+    #[test]
+    fn bounded_controller_refuses_non_finite_target_and_from() {
+        let _serial = serial();
+
+        let c = controller(100);
+        assert!(matches!(
+            c.animate_to(f32::NAN, None),
+            Err(AnimationError::NonFiniteTarget(_))
+        ));
+        assert_eq!(
+            c.value(),
+            0.0,
+            "a refused animate_to(NaN) must not move value"
+        );
+
+        let c = controller(100);
+        assert!(matches!(
+            c.forward_from(Some(f32::NAN)),
+            Err(AnimationError::NonFiniteTarget(_))
+        ));
+        assert_eq!(c.value(), 0.0);
+
+        let c = controller(100);
+        c.set_value(0.5);
+        assert!(matches!(
+            c.reverse_from(Some(f32::NAN)),
+            Err(AnimationError::NonFiniteTarget(_))
+        ));
+        assert_eq!(
+            c.value(),
+            0.5,
+            "a refused reverse_from(NaN) must not move value"
+        );
+    }
+
+    /// v3 delta 2: `+-inf` still CLAMPS on a bounded controller (today's
+    /// "go to the end" idiom) -- only a bound-less direction refuses.
+    #[test]
+    fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() {
+        let _serial = serial();
+
+        // `target` clamps to the finite upper bound and the run proceeds
+        // normally from there (clamping the target does not mean an
+        // instant settle: `value` still starts at the entry value and
+        // reaches `1.0` only once the run completes).
+        let c = controller(100);
+        c.animate_to(f32::INFINITY, None).unwrap();
+        c.tick_at(0.1);
+        assert_eq!(
+            c.value(),
+            1.0,
+            "animate_to(+inf) clamps to the finite upper bound"
+        );
+        c.dispose();
+
+        // `from` clamping to the upper bound makes `forward_from`'s own
+        // target (also `upper_bound`) already reached -- this settles
+        // SYNCHRONOUSLY (zero distance), unlike the `animate_to` case above.
+        let c = controller(100);
+        c.forward_from(Some(f32::INFINITY)).unwrap();
+        assert_eq!(
+            c.value(),
+            1.0,
+            "forward_from(Some(+inf)) clamps to the finite upper bound"
+        );
+        c.dispose();
+    }
+
+    /// On unbounded: `animate_to`/`animate_with`/`repeat_with` with an
+    /// explicit finite range all still run (pin) -- the refusal is about
+    /// bound-*targeting*, not about the controller being unbounded per se.
+    #[test]
+    fn unbounded_controller_runs_finite_targeted_operations() {
+        let _serial = serial();
+
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
+        c.animate_to(200.0, None).unwrap();
+        c.tick_at(0.1);
+        assert_eq!(
+            c.value(),
+            200.0,
+            "animate_to still runs on an unbounded controller"
+        );
+        c.dispose();
+
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
+        let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 1.0);
+        let sim = SpringSimulation::new(spring, 0.0, 50.0, 10.0);
+        c.animate_with(sim).unwrap();
+        assert!(
+            c.value().is_finite(),
+            "animate_with still runs on an unbounded controller"
+        );
+        c.dispose();
+
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
+        c.repeat_with(Some(0.0), Some(1.0), false, None, None)
+            .expect("an explicit finite range must run on an unbounded controller");
+        c.dispose();
+    }
+
+    /// v3 delta 2's own wording: "on an unbounded one all three are
+    /// refused" -- `animate_to` with an INFINITE `target` on an unbounded
+    /// controller must be refused exactly like a `NaN` one (both clamp to a
+    /// non-finite result, since neither bound is finite). Unlike
+    /// `forward`/`reverse` (blanket-refused on unbounded regardless of
+    /// their argument -- see the battery test above), `animate_to` is only
+    /// refused when `target` ITSELF is non-finite, so this is the
+    /// distinguishing case for that half of the rule.
+    #[test]
+    fn unbounded_controller_refuses_an_infinite_animate_to_target_too() {
+        let _serial = serial();
+
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
+        assert!(matches!(
+            c.animate_to(f32::INFINITY, None),
+            Err(AnimationError::NonFiniteTarget(_))
+        ));
+        assert_eq!(c.value(), 0.0, "a refused animate_to must not move value");
+    }
+
+    /// Decision 1/flutter#76014: `reset()` on an unbounded controller lands
+    /// on `0.0` (the defined beginning), never `-inf` -- and never fails for
+    /// non-finiteness.
+    #[test]
+    fn unbounded_reset_lands_on_zero_not_negative_infinity() {
+        let _serial = serial();
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        c.set_value(500.0);
+        c.reset().unwrap();
+        assert_eq!(c.value(), 0.0);
+        assert_eq!(c.status(), AnimationStatus::Dismissed);
+        c.dispose();
+    }
+
+    /// v3 delta 6: the FIRST `stop()` on a fresh, never-run unbounded
+    /// controller reports `Completed` -- direction defaults `Forward`, and
+    /// `settled_status_directed` falls to the direction-only branch because
+    /// neither infinite bound is ever "at". Every `jump_to` on a fresh
+    /// `Scrollable` triggers exactly this event through the stop hook.
+    #[test]
+    fn unbounded_first_stop_on_a_fresh_controller_reports_completed() {
+        let _serial = serial();
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        c.stop().unwrap();
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        c.dispose();
+    }
+
+    // ---- #1183: repeat_with's effective-range check ------------------------
+
+    /// v3 delta 3: a caller-supplied NaN endpoint is an any-controller
+    /// range-shape error -- red today: the OLD `lo >= hi` check does not
+    /// catch NaN (`NaN >= hi` is `false`), so `repeat_with(Some(NaN), ..)`
+    /// installed a NaN-poisoned run.
+    #[test]
+    fn repeat_with_rejects_a_nan_endpoint_on_a_bounded_controller() {
+        let _serial = serial();
+        let c = controller(100);
+        let r = c.repeat_with(Some(f32::NAN), Some(1.0), false, None, None);
+        assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
+        assert_eq!(c.value(), 0.0, "a refused repeat_with must not move value");
+    }
+
+    /// Decision 2: `repeat`/`repeat_with` whose EFFECTIVE range defaults
+    /// through an unbounded controller's own infinite bound is refused with
+    /// `NonFiniteTarget`, distinct from `InvalidBounds`'s range-SHAPE errors
+    /// above -- a partially-specified range (`Some(0.0), None`) hits the
+    /// same refusal on the still-infinite side.
+    #[test]
+    fn repeat_with_refuses_a_non_finite_effective_range_on_unbounded() {
+        let _serial = serial();
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        let r = c.repeat_with(Some(0.0), None, false, None, None);
+        assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
+        assert_eq!(c.value(), 0.0);
+    }
+
+    // ---- #1183: span overflow -----------------------------------------------
+
+    /// v3 delta 4: a `target - value` span overflowing `f32` is refused at
+    /// the call rather than let `tick_time_based` interpolate an infinite
+    /// range -- red today: `set_value(-f32::MAX)` then `animate_to(f32::MAX)`
+    /// installs a run whose `range` is `+inf`.
+    #[test]
+    fn animate_to_refuses_a_span_that_overflows_f32() {
+        let _serial = serial();
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
+        c.set_value(-f32::MAX);
+        let r = c.animate_to(f32::MAX, None);
+        assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
+        assert_eq!(
+            c.value(),
+            -f32::MAX,
+            "a refused animate_to must not move value"
+        );
+        c.dispose();
+    }
+
+    // ---- #1183: fling_with's ordering and non-finite refusals ---------------
+
+    /// v3 delta 1: `fling_with` refuses a non-finite `velocity` before ANY
+    /// mutation -- red today: `NaN < 0.0` is `false`, so a NaN velocity took
+    /// the Forward branch and built a spring whose `SpringSimulation` never
+    /// reaches `is_done` for a NaN target.
+    #[test]
+    fn fling_refuses_a_non_finite_velocity() {
+        let _serial = serial();
+        let c = controller(100);
+        let r = c.fling(f32::NAN);
+        assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
+        assert!(!c.is_animating());
+    }
+
+    /// Red today (the plan's own repro): `fling_with` wrote `inner.direction`
+    /// BEFORE its `InvalidSpring` check, so a refused fling still corrupted
+    /// direction, observable only via a LATER `stop()` (an interior value
+    /// keeps the running status via direction, not a bound). Fixed by
+    /// computing `direction` into a local and assigning it only after every
+    /// check passes.
+    #[test]
+    fn fling_with_refused_for_invalid_spring_leaves_direction_untouched() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(0.5); // interior value: settled_status_directed falls to direction
+        let underdamped = SpringDescription::with_damping_ratio(1.0, 500.0, 0.5);
+
+        let r = c.fling_with(-1.0, Some(underdamped));
+        assert!(matches!(r, Err(AnimationError::InvalidSpring(_))));
+
+        c.stop().unwrap();
+        assert_eq!(
+            c.status(),
+            AnimationStatus::Completed,
+            "direction must still be the controller's original Forward -- a corrupted \
+             Reverse would report Dismissed instead"
+        );
+    }
+
+    // ---- #1183: no path reads NaN -- simulation and tick endpoints ---------
+
+    /// A scratch [`Simulation`] whose `x()` is finite at `t = 0` (so
+    /// `drive_simulation` accepts it) but returns NaN once mid-run.
+    struct GoesNanMidRun {
+        nan_at: f32,
+    }
+
+    impl Simulation for GoesNanMidRun {
+        fn x(&self, time: f32) -> f32 {
+            if time >= self.nan_at { f32::NAN } else { time }
+        }
+        fn dx(&self, _time: f32) -> f32 {
+            1.0
+        }
+        fn is_done(&self, _time: f32) -> bool {
+            false
+        }
+        fn tolerance(&self) -> Tolerance {
+            Tolerance::DEFAULT
+        }
+    }
+
+    /// v3 delta 1: a mid-run non-finite sample ENDS the run at the last
+    /// finite value -- settled status by direction, the future resolves
+    /// `Ok`, the ticker stops, and the run no longer holds `Vsync` open
+    /// (checked via a real registration's `has_running()`). NOT
+    /// "value unchanged, run continues": that would leave `active_run`
+    /// installed forever.
+    #[test]
+    fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_value() {
+        let _serial = serial();
+        let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
+        let vsync = crate::vsync::Vsync::new();
+        let _reg = vsync.register(c.clone());
+
+        let mut future = c.animate_with(GoesNanMidRun { nan_at: 1.0 }).unwrap();
+        // `Vsync` anchors a run's `t = 0` on the FIRST `tick_all` it sees
+        // after the run starts (registration alone reads no clock) -- so
+        // the first call establishes the anchor at elapsed 0, exactly like
+        // a real frame loop's first pumped frame after `animate_with`.
+        vsync.tick_all(0.0);
+        vsync.tick_all(0.5);
+        assert_eq!(
+            c.value(),
+            0.5,
+            "precondition: the run is progressing normally"
+        );
+        assert!(vsync.has_running());
+
+        vsync.tick_all(1.0); // sim.x(1.0) is NaN
+        assert_eq!(
+            c.value(),
+            0.5,
+            "the run must end AT THE LAST FINITE VALUE, not read the NaN sample through"
+        );
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        assert!(
+            !vsync.has_running(),
+            "the run must not hold the frame loop open forever"
+        );
+
+        use std::future::Future;
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        assert_eq!(
+            std::pin::Pin::new(&mut future).poll(&mut cx),
+            std::task::Poll::Ready(Ok(())),
+            "the future must resolve Ok -- the run ended on its own terms, not by cancellation"
+        );
+        c.dispose();
+    }
+
+    /// v3 delta 1: `drive_simulation` refuses a simulation whose FIRST
+    /// sample (`x(0.0)`) is already non-finite, before any mutation.
+    #[test]
+    fn drive_simulation_refuses_a_non_finite_initial_sample() {
+        let _serial = serial();
+        let c = controller(100);
+        let r = c.animate_with(GoesNanMidRun { nan_at: 0.0 });
+        assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
+        assert_eq!(c.value(), 0.0);
+    }
+
+    /// Decision 4: `tick_time_based` reads `start_value`/`target_value`
+    /// directly at the exact endpoints rather than computing
+    /// `start + range * eased_t` there -- a curve that is not the identity
+    /// at its own endpoints (this uses a curve whose `transform` shifts
+    /// every input) must still land EXACTLY on `start_value` at `t == 0`,
+    /// matching Flutter's `_InterpolationSimulation.x` parity.
+    #[test]
+    fn tick_time_based_reads_start_value_exactly_at_t_zero() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker_bounds(Duration::from_millis(100), -1.0, 3.0)
+            .unwrap();
+        c.set_value(-1.0);
+        c.animate_to_curved(3.0, None, Arc::new(NotIdentityAtEndpoints))
+            .unwrap();
+        c.tick_at(0.0);
+        assert_eq!(
+            c.value(),
+            -1.0,
+            "t == 0 must read start_value exactly, regardless of the curve"
+        );
+    }
+
+    /// A curve whose `transform` is NOT the identity at `0.0`/`1.0` --
+    /// `tick_time_based`'s endpoint special-case must still land exactly on
+    /// `start_value`/`target_value` there despite this.
+    #[derive(Debug)]
+    struct NotIdentityAtEndpoints;
+
+    impl Curve for NotIdentityAtEndpoints {
+        fn transform(&self, t: f32) -> f32 {
+            0.1 + t * 0.8
+        }
     }
 
     // ---- run-generation: bumps per run-start, stable across ticks ----

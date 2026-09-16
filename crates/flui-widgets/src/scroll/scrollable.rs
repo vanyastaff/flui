@@ -340,18 +340,13 @@ impl StatefulView for Scrollable {
     type State = ScrollableState;
 
     fn create_state(&self) -> Self::State {
-        // Wide-open bounds: pixel values from the ballistic simulation are
-        // never clamped — the simulation's own `is_done` terminates the run.
-        // `NEG_INFINITY < INFINITY` satisfies `without_ticker_bounds`'s
-        // lower < upper check; `value.clamp(NEG_INF, INF)` is the identity on
-        // finite f32. No ticker: `Vsync` drives this controller once
-        // registered below.
-        let fling_controller = AnimationController::without_ticker_bounds(
-            Duration::from_millis(1),
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-        )
-        .expect("NEG_INFINITY < INFINITY satisfies the bounds invariant");
+        // Unbounded: pixel values from the ballistic simulation are never
+        // clamped — the simulation's own `is_done` terminates the run.
+        // Unboundedness is a constructor fact (#1183), not a bound value —
+        // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
+        // `Vsync` drives this controller once registered below.
+        let fling_controller =
+            AnimationController::unbounded_without_ticker(Duration::from_millis(1));
 
         ScrollableState {
             scroll_controller: self.controller.clone(),

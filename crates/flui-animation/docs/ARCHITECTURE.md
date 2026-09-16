@@ -528,6 +528,157 @@ leg, so it comes out negative — matching FLUI's non-repeat velocity
 contract rather than introducing a repeat-specific special case. Pinned by
 `repeat_reverse_leg_velocity_is_negative`.
 
+### Unbounded is a constructor fact; bound-targeting runs on it are refused; no path reads NaN
+
+**Issue #1183; flutter/flutter#76014** (open — Flutter itself calls
+`unbounded`'s behavior under `forward`/`reverse`/`repeat` "simply not
+defined"). `AnimationController::unbounded`/`unbounded_without_ticker`/
+`unbounded_with_detached_ticker` fix bounds at `(f32::NEG_INFINITY,
+f32::INFINITY)` and are infallible — unboundedness is a constructor fact,
+never a bound VALUE. `with_bounds`/`without_ticker_bounds`/
+`with_detached_ticker_bounds` (and `AnimationControllerBuilder::bounds`,
+which duplicates the same check) now REJECT any bound that is not finite,
+including a wide-open `(NEG_INFINITY, INFINITY)` pair: **FLUI's own rule**
+— Flutter's `AnimationController` constructor accepts any `lowerBound`/
+`upperBound` pair, including non-finite or inverted ones, and only the
+dedicated `unbounded` factory fixes `+-inf`. A half-open pair (one bound
+finite, one infinite) is rejected the same way as a wide-open one: nothing
+in this workspace needs it, and allowing it would make the "bounded means
+finite" rule incidental complexity with no consumer.
+
+**Initial value and status: parity, then a recorded cost.** `value = 0.0`
+(never `lower_bound`, which is `-inf`) is Flutter's own `unbounded` doc
+(`animation_controller.dart` @ 3.44.0). The initial `status` is computed by
+the SAME rule `set_value` applies —
+`AnimationControllerInner::settled_status_keep_direction` — applied once at
+construction for every constructor, not hard-coded `Dismissed`: a bounded
+controller at `lower_bound` still reports `Dismissed` (unchanged), but an
+unbounded one at `0.0`, with `AnimationDirection` defaulted `Forward` and
+neither infinite bound ever "at", reports **`Forward`** — this IS Flutter
+parity (`_internalSetValue` sets status `forward` at `value == 0.0`,
+`animation_controller.dart:759-765`). The recorded cost: a never-run
+unbounded controller reports `status().is_running() == true` from the
+moment it is constructed; the real "is a run installed" fact stays
+`is_animating()`/the internal `active_run`, never `status`, exactly as
+[`AnimationController::walk_probe`]'s own doc already documented before
+this change (`set_value`'s interior-value status already had the identical
+property). One direct, load-bearing consequence: **the first `stop()` on a
+fresh unbounded controller emits `Forward → Completed`** —
+`settled_status_directed`'s bound checks are both false on an infinite
+range, so it falls to `match direction { Forward => Completed }`. Every
+`jump_to` on a fresh `Scrollable`/`RefreshIndicator` (both migrated to
+`unbounded_without_ticker` below) triggers exactly this event through the
+fling controller's `stop_hook`.
+
+**Refusals: `NonFiniteTarget`, additive `#[non_exhaustive]` variant.**
+Derived from `!lower_bound.is_finite()` (both bounds are `+-inf` together
+by construction, so either alone detects it): `forward`/`forward_from`,
+`reverse`/`reverse_from`, `fling`/`fling_with`, and `repeat`/`repeat_with`
+whose EFFECTIVE range (`min`/`max` defaulted against this controller's own
+bounds) is still non-finite are refused on an unbounded controller — there
+is no finite bound/range to run to. `repeat_with(Some(0.0), Some(1.0), ..)`
+on an unbounded controller WORKS (an explicit finite range is not
+"unbounded" in the relevant sense). **On ANY controller** (bounded too —
+FLUI's declared behavior CHANGE, since `f32::clamp` today passes `NaN`
+through unchanged and PANICS on a NaN *bound* even in release):
+`animate_to`/`animate_back`(`_curved`) refuse a non-finite `target`, and
+`forward_from`/`reverse_from` refuse a non-finite `from` — `NaN` always;
+`+-inf` clamps to the bound it points at when that bound is finite (the
+"go to the end" idiom, unchanged) and refuses when that bound is itself
+infinite. `fling`/`fling_with` additionally refuse a non-finite `velocity`
+(a NaN velocity took the `Forward` branch and built a spring whose
+`is_done` never fires). `animate_to`/`animate_back` also refuse when
+`target - value` overflows `f32` (an extreme `set_value` followed by an
+extreme `animate_to`), and `drive_simulation`/`animate_with` refuse a
+simulation whose `x(0.0)` is already non-finite. Every refusal runs BEFORE
+any state mutation — `fling_with` in particular used to write
+`inner.direction` before its `InvalidSpring` check, corrupting direction on
+a refused fling (observable only via a LATER `stop()`); fixed by computing
+`direction`/`target` into locals and assigning only once every check
+passes. Because every production caller of these methods discards the
+`Result` (`let _ = fling.animate_to_curved(..)`, `let _ =
+fc_fling.animate_with(sim)`), the controller emits `tracing::warn!` itself
+for every `NonFiniteTarget` refusal, once per call, after the guard drops
+(`warn_non_finite_target`, mirroring `warn_if_no_ticker`'s pattern) — a
+silent no-op here would hide the caller bug exactly the way Flutter's own
+`∞` jump does.
+
+**`repeat_with`'s NaN endpoint is `InvalidBounds`, a range-SHAPE error,
+distinct from the unbounded-range `NonFiniteTarget` above.** A
+caller-supplied `Some(f32::NAN)` `min`/`max` is checked BEFORE defaulting
+against the controller's own bounds, on ANY controller — today it silently
+widens `lo >= hi`'s inversion check to include non-finite endpoints (`!(lo
+< hi) || !lo.is_finite() || !hi.is_finite()`), because before this fix
+`repeat_with(Some(f32::NAN), ..)` reached `inner.value.clamp(lo, hi)` with
+`lo = NaN` as the clamp's own `min` PARAMETER and PANICKED (`f32::clamp`
+asserts `min <= max`) — worse than silently installing a broken run. The
+unbounded-range case (both `min`/`max` unset, or one side unset on an
+unbounded controller) is checked SEPARATELY, after the shape check, and
+maps to `NonFiniteTarget` instead: a range that is not inverted but has a
+side that defaulted through an infinite bound has a shape problem of a
+different kind — there is no finite range to repeat inside, not an invalid
+one.
+
+**`set_value`/simulation NaN canonicalization stays infallible, latched.**
+`set_value` on a BOUNDED controller keeps its existing canonicalization
+(`NaN` → `lower_bound`, `+-inf` → the bound it points at) — a declared PIN.
+On an UNBOUNDED controller a non-finite input is a FULL no-op instead: no
+`stop_running`, no notification, the value stays exactly what it was — a
+poisoned gesture drag or a bad computation must not clobber a live fling or
+snap a scrollable to a bound it doesn't have. A mid-run simulation sample
+going non-finite (`tick_simulation`) ENDS the run at the LAST FINITE value
+— settled status by direction, `active_run` completed (`Ok`), ticker
+stopped — rather than "value unchanged, run continues": the latter would
+leave `active_run` installed, `Vsync` ticking forever, and a scrollable's
+`is_scrolling` stuck. Both paths share ONE latch,
+`AnimationControllerInner::non_finite_warned: bool`, fired at most once per
+controller (`warn_non_finite_value`) — distinct from `NonFiniteTarget`'s
+per-call warn: a NaN-producing drag or a misbehaving simulation must warn
+once, not every frame.
+
+**`tick_time_based` reads `start_value`/`target_value` DIRECTLY at the
+exact endpoints (`t <= 0.0` / `t >= 1.0`), never via `start + range *
+eased_t` there** — Flutter's `_InterpolationSimulation.x` already
+special-cases the endpoints to the exact begin/end value structurally, but
+FLUI's previous shape only special-cased `eased_t` (to exactly `0.0`/`1.0`)
+while still computing the product — `range` can be `+-inf` in principle
+(the span-overflow case above), and `inf * 0.0 = NaN`. Reading the field
+directly at the boundary removes the multiplication from that path
+entirely, so no path through `tick_at` can ever compute or store a NaN
+value: the issue's own stated criterion.
+
+**Consumer migration.** `scrollable.rs`'s ballistic fling controller and
+`refresh_indicator.rs`'s both migrate from
+`without_ticker_bounds(1ms, NEG_INFINITY, INFINITY).expect(..)` to
+`unbounded_without_ticker(1ms)` (the `.expect` — previously provably
+infallible only because the literal pair was hardcoded — is gone with the
+fallible constructor it guarded). `scroll_controller.rs`'s
+`service_pending_command` raises `ScrollPosition::set_is_scrolling(true)`
+only AFTER `fling.animate_to_curved(..)` returns `Ok` AND the resulting
+status is still running — a refused start (a non-finite target reaching
+this call) must not park the scrollable in "scrolling" forever, and a
+start that settles SYNCHRONOUSLY (target already equals the just-synced
+current value) already reported its own end through the fling status
+listener installed above; checking `is_running()` rather than firing
+unconditionally on `Ok` keeps that already-correct settle from being
+clobbered back to `true`.
+
+**`reset()` on an unbounded controller lands on `0.0`, not `-inf`** — the
+one place this plan diverges from a literal reading of Flutter's own
+`unbounded` doc (which implies `-inf`/`+inf` as the "ends"): flutter#76014's
+reporter asks for exactly this defined beginning, and `0.0` is already the
+initial value/the value every other non-finite-input path canonicalizes
+toward. `reset()` never fails for non-finiteness on any controller — a
+reset always has a value to land on.
+
+**Tests inverted, not fixed.** `without_ticker_bounds_rejects_invalid_bounds_and_accepts_wide_open_ones`
+and its `with_detached_ticker_bounds` twin used to assert that a wide-open
+`(NEG_INFINITY, INFINITY)` pair was ACCEPTED, landing `value() ==
+NEG_INFINITY` — under this change that same input is REJECTED, and the
+tests were rewritten (not merely patched) to assert the rejection plus the
+unbounded constructor's own `0.0` start, each documenting why the old
+assertion no longer holds.
+
 ## Composition Model
 
 Animations compose via `Arc<dyn Animation<f32>>`:

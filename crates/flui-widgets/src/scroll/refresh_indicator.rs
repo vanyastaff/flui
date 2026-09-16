@@ -389,16 +389,13 @@ impl StatefulView for RefreshIndicator {
     type State = RefreshIndicatorState;
 
     fn create_state(&self) -> Self::State {
-        // Wide-open bounds: pixel values from the ballistic simulation are
-        // never clamped by the controller — the simulation's own `is_done`
-        // terminates the run. NEG_INFINITY < INFINITY satisfies the bounds
-        // check. No ticker: `Vsync` drives this controller once registered.
-        let fling_controller = AnimationController::without_ticker_bounds(
-            Duration::from_millis(1),
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-        )
-        .expect("BUG: NEG_INFINITY < INFINITY is a hardcoded literal pair, so without_ticker_bounds can never reject it");
+        // Unbounded: pixel values from the ballistic simulation are never
+        // clamped by the controller — the simulation's own `is_done`
+        // terminates the run. Unboundedness is a constructor fact (#1183),
+        // not a bound value. No ticker: `Vsync` drives this controller once
+        // registered.
+        let fling_controller =
+            AnimationController::unbounded_without_ticker(Duration::from_millis(1));
 
         RefreshIndicatorState {
             scroll_controller: self.scroll_controller.clone(),

@@ -101,7 +101,10 @@ impl AnimationControllerBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`AnimationError::InvalidBounds`] if `lower >= upper`.
+    /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
+    /// finite and `lower < upper` — bounded means finite; an
+    /// [`AnimationController::unbounded`] controller is not reachable
+    /// through this builder (it has no bound to configure).
     ///
     /// # Examples
     ///
@@ -121,9 +124,14 @@ impl AnimationControllerBuilder {
     /// # }
     /// ```
     pub fn bounds(mut self, lower: f32, upper: f32) -> Result<Self, AnimationError> {
-        if lower >= upper {
+        // `lower >= upper` (not the negated `!(lower < upper)`, which
+        // clippy's `neg_cmp_op_on_partial_ord` flags on a `PartialOrd`-only
+        // type): NaN makes the two diverge, but NaN is caught by the
+        // `is_finite` clauses below regardless of which form this takes.
+        if lower >= upper || !lower.is_finite() || !upper.is_finite() {
             return Err(AnimationError::InvalidBounds(format!(
-                "lower_bound ({lower}) must be less than upper_bound ({upper})"
+                "lower_bound ({lower}) and upper_bound ({upper}) must both be finite, with \
+                 lower_bound < upper_bound"
             )));
         }
         self.lower_bound = lower;
@@ -315,6 +323,28 @@ mod tests {
             .bounds(20.0, 10.0); // Invalid: lower > upper
 
         assert!(result.is_err());
+    }
+
+    /// #1183: `.bounds()` duplicates `with_bounds_inner`'s validation, so it
+    /// must adopt the same "bounded means finite" rule -- red before the
+    /// fix, since the old `lower >= upper` check accepts `NaN` (`NaN >=
+    /// upper` is always `false`) and any infinite pair with `lower < upper`.
+    #[test]
+    fn bounds_rejects_non_finite_endpoints() {
+        let scheduler = UpdateScheduler::new();
+        let cases: &[(f32, f32)] = &[
+            (f32::NAN, 1.0),
+            (0.0, f32::NAN),
+            (f32::NEG_INFINITY, f32::INFINITY),
+        ];
+        for &(lower, upper) in cases {
+            let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
+                .bounds(lower, upper);
+            assert!(
+                matches!(result, Err(AnimationError::InvalidBounds(_))),
+                "bounds({lower}, {upper}) must be rejected"
+            );
+        }
     }
 
     #[test]

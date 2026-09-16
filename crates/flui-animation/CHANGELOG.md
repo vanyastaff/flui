@@ -8,6 +8,18 @@ Versioning: per `docs/release.md` policy.
 
 ### Added
 
+- `AnimationController::unbounded`/`unbounded_without_ticker`/
+  `unbounded_with_detached_ticker` (issue #1183) — unboundedness is now a
+  constructor fact (fixed `(f32::NEG_INFINITY, f32::INFINITY)` bounds,
+  initial `value = 0.0`, initial status `Forward`), not a bound value passed
+  to `with_bounds`/`without_ticker_bounds`/`with_detached_ticker_bounds`,
+  which now reject a wide-open (or half-open) pair — see `### Changed` below
+  and `crates/flui-animation/docs/ARCHITECTURE.md`'s "Unbounded is a
+  constructor fact" mapping entry.
+- `AnimationError::NonFiniteTarget(String)` — new additive
+  (`#[non_exhaustive]`) variant returned by every run-starting method when a
+  `target`/`from`/`velocity`/simulation sample is non-finite, or when it
+  targets a bound this controller does not have (unbounded).
 - `smoothing` module — frame-rate-independent followers Flutter does not ship:
   `exp_decay` / `exp_decay_half_life` / `Smoothed` (Holmér exponential decay,
   half-life parameterization) and `SmoothDamp` (critically damped spring
@@ -35,6 +47,51 @@ Versioning: per `docs/release.md` policy.
 
 ### Changed
 
+- **Bounded constructors reject non-finite bounds; unbounded runs on it are
+  refused; no path reads NaN** (issue #1183, flutter/flutter#76014).
+  `with_bounds`/`without_ticker_bounds`/`with_detached_ticker_bounds` (and
+  `AnimationControllerBuilder::bounds`) now reject `NaN`, an infinite bound,
+  or a half-open pair with `InvalidBounds` — a declared behavior CHANGE:
+  Flutter's own constructor accepts any pair. A wide-open
+  `(NEG_INFINITY, INFINITY)` pair, which `scrollable.rs`/
+  `scroll_controller.rs`/`refresh_indicator.rs` all used to spell as
+  `without_ticker_bounds(1ms, NEG_INFINITY, INFINITY).expect(..)`, now
+  migrates to `unbounded_without_ticker(1ms)` instead (see `### Added`). On
+  an unbounded controller, `forward`/`forward_from`/`reverse`/`reverse_from`/
+  `fling`/`fling_with`, and `repeat`/`repeat_with` whose effective range is
+  still non-finite, now return `Err(NonFiniteTarget)` instead of installing
+  a run toward an infinite value; `repeat_with(Some(finite), Some(finite),
+  ..)` is unaffected. On ANY controller (bounded too), `animate_to`/
+  `animate_back`(`_curved`)/`forward_from`/`reverse_from` now refuse a `NaN`
+  `target`/`from` instead of letting it through `clamp` unchanged (a
+  `+-inf` `target`/`from` still clamps to a finite bound exactly as before;
+  it is refused only when that bound is itself infinite). `repeat_with`'s
+  range-inversion check now also catches a `NaN` endpoint
+  (`repeat_with(Some(f32::NAN), ..)` used to reach `f32::clamp`'s own
+  `assert!(min <= max)` and PANIC). `fling`/`fling_with` refuse a
+  non-finite `velocity`, and no longer corrupt `direction` on a refused
+  fling (a pre-existing ordering bug: `direction` was written before the
+  `InvalidSpring` check). `animate_to`/`animate_back` refuse when
+  `target - value` overflows `f32`. `set_value` and a running simulation's
+  sample keep their existing NaN canonicalization on a BOUNDED controller
+  (pinned); on an UNBOUNDED one, a non-finite `set_value` input is now a
+  full no-op (was: canonicalized against `-inf`/`+inf`, which is exactly
+  the bug this issue reports), and a simulation that goes non-finite
+  MID-RUN now ends the run at its last finite value instead of continuing
+  with a stale value forever. `reset()` on an unbounded controller now
+  lands on `0.0` (flutter#76014's requested defined beginning), not `-inf`.
+  `tick_time_based` now reads `start_value`/`target_value` directly at the
+  exact endpoints instead of computing `start + range * eased_t` there, so
+  `range` being non-finite can no longer produce `inf * 0.0 = NaN`.
+  `scroll_controller.rs`'s `service_pending_command` now raises
+  `is_scrolling(true)` only after the run start returns `Ok` AND is still
+  running, instead of unconditionally before the call, so a refused (or
+  synchronously-settled) start no longer parks the scrollable in
+  "scrolling" forever. Two tests inverted: `…_bounds_rejects_invalid_bounds_and_accepts_wide_open_ones`
+  (both the `without_ticker` and `with_detached_ticker` variants) used to
+  assert a wide-open pair was ACCEPTED at `value() == NEG_INFINITY`; they
+  now assert it is REJECTED, and that the unbounded constructor starts at
+  `0.0`.
 - **Repeat sampling is a pure function of elapsed time** (#1078):
   `AnimationController::repeat`/`repeat_with`'s `value`/`status`/`direction` at any `tick_at` are
   now computed from the elapsed time since the run started, the range, period, `reverse`, and
