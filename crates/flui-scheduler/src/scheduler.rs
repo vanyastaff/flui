@@ -77,6 +77,7 @@ use crate::{
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
+    panic_payload::discard_panic_payload,
     post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
@@ -730,6 +731,7 @@ struct IdleDeadlineGuard<'a> {
 
 impl Drop for IdleDeadlineGuard<'_> {
     fn drop(&mut self) {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.slot.lock() = None;
     }
 }
@@ -1089,42 +1091,6 @@ fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
     }
 }
 
-/// Discards a panic payload that its call site does not (or no longer can)
-/// propagate, containing the possibility that the payload's own `Drop` impl
-/// itself panics.
-///
-/// A panic payload is `Box<dyn Any + Send>` — it can own, or itself be, any
-/// type, including one whose `Drop` panics. An ordinary `drop(payload)`
-/// would let that second panic escape uncontained: during an unwind that is
-/// a double panic (an abort with no diagnostic); outside one, it replaces
-/// the failure this call site actually meant to report. Every call site
-/// this exists for has already traced the original panic before calling
-/// this; it only adds a SECOND trace, and only if dropping the payload
-/// panics too.
-///
-/// The SECOND-order payload -- what `panic_any` inside the first payload's
-/// own `Drop::drop` raised -- is contained the same way it got here in the
-/// first place: leaked, never dropped. It is itself `Box<dyn Any + Send>`
-/// and so can just as well own a type whose `Drop` ALSO panics; an ordinary
-/// `drop` of it here would only move the uncontained-second-panic problem
-/// this function exists to close down one more level instead of closing it.
-fn discard_panic_payload(payload: Box<dyn std::any::Any + Send>, context: &'static str) {
-    if let Err(drop_payload) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
-    {
-        tracing::error!(
-            context,
-            panic_msg = flui_foundation::panic::payload_text(&*drop_payload)
-                .unwrap_or("(non-string panic payload)"),
-            "a discarded panic payload's own Drop panicked; containing it here rather than \
-             letting a second panic escape"
-        );
-        // A payload whose own Drop panics cannot be dropped safely -- leaking
-        // it is the only containment left; see this function's own doc.
-        std::mem::forget(drop_payload);
-    }
-}
-
 impl UpdateScheduler {
     /// Create a new scheduler with the default configuration
     /// (equivalent to `SchedulerBuilder::new().build()`).
@@ -1308,6 +1274,7 @@ impl UpdateScheduler {
     #[tracing::instrument(skip(self))]
     pub fn handle_begin_frame(&self, vsync_time: Instant) -> FrameId {
         // Store vsync time for all tickers to use
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_vsync_time.lock() = Some(vsync_time);
 
         // Create frame timing with vsync timestamp. `FrameTiming` labels its
@@ -1320,6 +1287,7 @@ impl UpdateScheduler {
         timing.phase = FramePhase::Build;
 
         let frame_id = timing.id;
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_frame.lock() = Some(timing);
         self.inner
             .frame
@@ -1337,6 +1305,7 @@ impl UpdateScheduler {
         // its own (now stale) id still in `frame_thread`, mistake itself
         // for the current driver, and drop a cross-thread wake for the
         // frame actually in flight.
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.frame_thread.lock() = Some(std::thread::current().id());
         self.inner.frame.frame_count.fetch_add(1, Ordering::Relaxed);
 
@@ -1688,6 +1657,7 @@ impl UpdateScheduler {
                     .frame
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
+                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *self.inner.frame.current_vsync_time.lock() = None;
             }
             // The post-frame callback's panic happened first in this frame's
@@ -1717,6 +1687,7 @@ impl UpdateScheduler {
 
         // Return to idle
         self.set_scheduler_phase(SchedulerPhase::Idle);
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_vsync_time.lock() = None;
     }
 
@@ -1783,6 +1754,7 @@ impl UpdateScheduler {
             .frame
             .scheduler_phase
             .store(SchedulerPhase::Idle as u8, Ordering::Release);
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_vsync_time.lock() = None;
         self.inner.callbacks.cancelled.clear();
 
@@ -1942,6 +1914,7 @@ impl UpdateScheduler {
     ) -> (FrameId, R) {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
 
         // ONE recovery boundary over the whole frame lifetime this method
@@ -3257,6 +3230,7 @@ impl UpdateScheduler {
     ///
     /// Called when time dilation changes to avoid large time jumps.
     pub fn reset_epoch(&self) {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.binding.epoch_start.lock() = Duration::ZERO;
     }
 
@@ -3369,6 +3343,7 @@ impl UpdateScheduler {
             callback(&timings);
         }
 
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.binding.last_timings_report.lock() = Instant::now();
         count
     }
@@ -3390,6 +3365,7 @@ impl UpdateScheduler {
     /// This is typically called internally when performance mode requests
     /// change, but can also be called by the platform integration layer.
     pub fn set_performance_mode(&self, mode: PerformanceMode) {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.binding.current_performance_mode.lock() = mode;
     }
 
@@ -3660,7 +3636,7 @@ mod tests {
 
         let _token = scheduler.spawn_local(Box::pin(async move {
             polls_for_task.fetch_add(1, Ordering::Release);
-            *observed_for_task.lock() = Some(probe.phase());
+            let _prev = observed_for_task.lock().replace(probe.phase());
         }));
 
         scheduler.handle_begin_frame(Instant::now());
@@ -3753,7 +3729,7 @@ mod tests {
         let stored: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
         let stored_for_task = Arc::clone(&stored);
         let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            *stored_for_task.lock() = Some(cx.waker().clone());
+            let _prev = stored_for_task.lock().replace(cx.waker().clone());
             std::task::Poll::<()>::Pending
         })));
         // `spawn_local` requested the frame that will first poll the task.
@@ -3800,7 +3776,7 @@ mod tests {
         let stored: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
         let stored_for_task = Arc::clone(&stored);
         let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            *stored_for_task.lock() = Some(cx.waker().clone());
+            let _prev = stored_for_task.lock().replace(cx.waker().clone());
             std::task::Poll::<()>::Pending
         })));
         // `spawn_local` requested the frame that will first poll the task.
@@ -3985,7 +3961,7 @@ mod tests {
 
         let rt = Arc::clone(&received_time);
         scheduler.schedule_frame_callback(Box::new(move |vsync_time| {
-            *rt.lock() = Some(vsync_time);
+            let _prev = rt.lock().replace(vsync_time);
         }));
 
         let vsync = Instant::now();
@@ -4494,7 +4470,7 @@ mod tests {
 
         let rs = Arc::clone(&received_state);
         let id = scheduler.add_lifecycle_state_listener(Arc::new(move |state| {
-            *rs.lock() = Some(state);
+            let _prev = rs.lock().replace(state);
         }));
 
         // Change state - listener should be called

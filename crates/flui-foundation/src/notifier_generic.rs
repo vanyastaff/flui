@@ -119,8 +119,32 @@ impl<Arg> Notifier<Arg> {
     /// call proceed.
     pub(crate) fn add_unchecked(&self, listener: ArgCallback<Arg>) -> ListenerId {
         let id = self.mint_id();
-        self.listeners.lock().insert(id, listener);
+        let evicted = self.listeners.lock().insert(id, listener);
+        debug_assert!(
+            evicted.is_none(),
+            "listener ids are monotonic (see mint_id) — a fresh id can never \
+             collide with a live registration"
+        );
         id
+    }
+
+    /// Runs `mutate` against the locked listener map and returns whatever it
+    /// extracts (a removed listener, or the whole displaced map on a clear),
+    /// only after this notifier's own lock has released.
+    ///
+    /// A removed/displaced [`ArgCallback`]'s `Drop` may run arbitrary user
+    /// code: the last `Arc` clone of a listener closure reaching zero can
+    /// destroy captured state whose own destructor calls back into this same
+    /// notifier (e.g. another `remove`/`dispose`). `mutate` itself only
+    /// touches the map while the guard is held; its *return value* is not
+    /// dropped here — it is this function's tail expression, so the guard
+    /// (a temporary scoped to this function body) releases before the
+    /// caller ever receives, and can drop, the extracted value.
+    fn extract_locked<T>(
+        &self,
+        mutate: impl FnOnce(&mut HashMap<ListenerId, ArgCallback<Arg>>) -> T,
+    ) -> T {
+        mutate(&mut self.listeners.lock())
     }
 
     /// Remove a previously registered listener. No-op if absent.
@@ -135,7 +159,7 @@ impl<Arg> Notifier<Arg> {
         if self.check_disposed() {
             return;
         }
-        self.listeners.lock().remove(&id);
+        drop(self.extract_locked(|listeners| listeners.remove(&id)));
     }
 
     /// [`Self::remove`] without the disposed gate: always a silent no-op on a
@@ -145,7 +169,7 @@ impl<Arg> Notifier<Arg> {
     /// needs — `ChangeNotifier.removeListener` upstream carries no
     /// `debugAssertNotDisposed` so teardown code can always detach.
     pub fn remove_even_if_disposed(&self, id: ListenerId) {
-        self.listeners.lock().remove(&id);
+        drop(self.extract_locked(|listeners| listeners.remove(&id)));
     }
 
     /// Remove all listeners.
@@ -160,7 +184,7 @@ impl<Arg> Notifier<Arg> {
     /// rationale as [`Self::add_unchecked`]; racing a `dispose` here is
     /// harmless (both clear the same map).
     pub(crate) fn remove_all_unchecked(&self) {
-        self.listeners.lock().clear();
+        drop(self.extract_locked(std::mem::take));
     }
 
     /// Number of registered listeners.
@@ -182,7 +206,18 @@ impl<Arg> Notifier<Arg> {
         if self.is_disposed.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.listeners.lock().clear();
+        drop(self.extract_locked(std::mem::take));
+    }
+
+    /// Test-only probe: `true` if `listeners` is currently free to lock.
+    ///
+    /// Backs a regression test for `extract_locked`'s drop-after-release
+    /// ordering: a listener whose own `Drop` re-enters this same notifier
+    /// (another `remove`/`dispose` call) must observe the lock already
+    /// free, not deadlock on it.
+    #[cfg(test)]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        self.listeners.try_lock().is_some()
     }
 }
 
@@ -300,7 +335,7 @@ mod tests {
         let id_b = n.add(Arc::new(move |()| {
             fb.fetch_add(1, Ordering::SeqCst);
         }));
-        *id_b_cell.lock() = Some(id_b);
+        let _prev = id_b_cell.lock().replace(id_b);
         n.notify(());
         assert_eq!(fired_b.load(Ordering::SeqCst), 0);
     }
@@ -326,5 +361,86 @@ mod tests {
         let n: Notifier<()> = Notifier::new();
         n.dispose();
         n.notify(());
+    }
+
+    /// A listener whose own `Drop` re-enters the notifier, probing whether
+    /// the lock is still held.
+    struct ReentrantDropCanary {
+        notifier: Notifier<()>,
+        observed_locked: Arc<AtomicBool>,
+    }
+
+    impl Drop for ReentrantDropCanary {
+        fn drop(&mut self) {
+            // Probe first, THEN decide whether to reenter: attempting the
+            // reentrant call unconditionally would make a real regression
+            // (the lock still held here) actually deadlock on it, turning
+            // this test into a hang instead of a fast assertion failure.
+            if self.notifier.is_unlocked() {
+                // Reentrant call into the same notifier from inside a
+                // removed listener's own destructor. `remove_even_if_disposed`
+                // (not `remove`) because the `dispose` variant of this canary
+                // runs after `is_disposed` is already `true`, and `remove`
+                // would debug-panic on that gate — this canary only needs to
+                // prove the LOCK is free to reacquire, independent of that
+                // gate.
+                self.notifier
+                    .remove_even_if_disposed(ListenerId::new(999_999));
+            } else {
+                self.observed_locked.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// Pins `Notifier::remove`'s extract-then-drop ordering (via
+    /// `extract_locked`, backing both `remove` and
+    /// `remove_even_if_disposed`): reverting to a bare
+    /// `self.listeners.lock().remove(&id);` statement drops the removed
+    /// callback while its own guard is still live, so a listener whose
+    /// `Drop` re-enters this notifier deadlocks on `listeners`.
+    #[test]
+    fn remove_drops_the_removed_listener_after_releasing_the_lock() {
+        let n: Notifier<()> = Notifier::new();
+        let observed_locked = Arc::new(AtomicBool::new(false));
+        let canary = ReentrantDropCanary {
+            notifier: n.clone(),
+            observed_locked: Arc::clone(&observed_locked),
+        };
+        let id = n.add(Arc::new(move |()| {
+            let _keep_alive = &canary;
+        }));
+
+        n.remove(id);
+
+        assert!(
+            !observed_locked.load(Ordering::SeqCst),
+            "the removed listener's Drop observed the notifier's lock still held"
+        );
+    }
+
+    /// Pins `Notifier::dispose`'s extract-then-drop ordering (via
+    /// `extract_locked`, backing both `remove_all_unchecked` and
+    /// `dispose`): reverting to a bare `self.listeners.lock().clear();`
+    /// statement drops every cleared callback while the guard is still
+    /// live, so a listener whose `Drop` re-enters this notifier deadlocks
+    /// on `listeners`.
+    #[test]
+    fn dispose_drops_every_removed_listener_after_releasing_the_lock() {
+        let n: Notifier<()> = Notifier::new();
+        let observed_locked = Arc::new(AtomicBool::new(false));
+        let canary = ReentrantDropCanary {
+            notifier: n.clone(),
+            observed_locked: Arc::clone(&observed_locked),
+        };
+        let _id = n.add(Arc::new(move |()| {
+            let _keep_alive = &canary;
+        }));
+
+        n.dispose();
+
+        assert!(
+            !observed_locked.load(Ordering::SeqCst),
+            "a disposed listener's Drop observed the notifier's lock still held"
+        );
     }
 }

@@ -42,6 +42,10 @@ enum Channel {
 
 type EdgeHook = Box<dyn FnMut() + Send>;
 
+/// An installed edge hook, shared so it can be called with the SLOT lock
+/// (`on_first`/`on_last`) already released. See `after_add`/`after_remove`.
+type SharedHook = Arc<Mutex<EdgeHook>>;
+
 struct RegistryInner<S> {
     /// Zero-arg value channel — reuses the existing hardened `ChangeNotifier`.
     value: ChangeNotifier,
@@ -49,26 +53,55 @@ struct RegistryInner<S> {
     status: Notifier<S>,
     /// Total live listeners across both channels — drives the lazy edges.
     count: AtomicUsize,
-    on_first: Mutex<Option<EdgeHook>>,
-    on_last: Mutex<Option<EdgeHook>>,
+    on_first: Mutex<Option<SharedHook>>,
+    on_last: Mutex<Option<SharedHook>>,
 }
 
 impl<S> RegistryInner<S> {
     /// Bump the shared count; fire `on_first` on the 0 → 1 transition.
+    ///
+    /// The hook runs with the `on_first` SLOT lock already released: it is
+    /// arbitrary owner code (the module doc's "subscribe to parent"), and a
+    /// hook that calls [`ListenerRegistry::set_on_first_listener`] from
+    /// inside itself — re-arming for the next 0 → 1 edge — must neither
+    /// deadlock on that same lock nor lose the re-arm. Cloning the `Arc`
+    /// under the slot lock and releasing before calling achieves both: a
+    /// re-arm mid-call replaces the OUTER `Option` slot (a different lock,
+    /// already free by then) with a new `SharedHook`, leaving the Arc this
+    /// call is still running under untouched until it returns.
+    ///
+    /// What a hook must NOT do is drive this registry's count back across
+    /// its OWN edge from inside its body: the per-hook mutex is held for the
+    /// whole call, so a nested crossing of the same edge clones the same
+    /// `Arc` and re-locks it on the same thread, a deadlock on the
+    /// non-reentrant `parking_lot::Mutex`. An `on_first` hook cannot reach
+    /// its own edge (the count is already 1 while it runs, so an add inside
+    /// it is 1 → 2); an `on_last` hook that adds and then drops a listener
+    /// crosses 1 → 0 again and deadlocks; see [`Self::after_remove`].
     fn after_add(&self) {
-        if self.count.fetch_add(1, Ordering::AcqRel) == 0
-            && let Some(hook) = self.on_first.lock().as_mut()
-        {
-            hook();
+        if self.count.fetch_add(1, Ordering::AcqRel) == 0 {
+            let hook = self.on_first.lock().clone();
+            if let Some(hook) = hook {
+                (*hook.lock())();
+            }
         }
     }
 
-    /// Drop the shared count; fire `on_last` on the 1 → 0 transition.
+    /// Drop the shared count; fire `on_last` on the 1 → 0 transition. Same
+    /// released-before-calling discipline as [`Self::after_add`].
+    ///
+    /// An `on_last` hook must not add and then drop a listener from inside
+    /// its own body: that second 1 → 0 crossing re-enters this method while
+    /// the hook's own per-hook mutex is still held by the outer call, and
+    /// `hook.lock()` self-deadlocks. Re-arming through
+    /// [`ListenerRegistry::set_on_last_listener`] is the supported way to
+    /// change what the next edge does.
     fn after_remove(&self) {
-        if self.count.fetch_sub(1, Ordering::AcqRel) == 1
-            && let Some(hook) = self.on_last.lock().as_mut()
-        {
-            hook();
+        if self.count.fetch_sub(1, Ordering::AcqRel) == 1 {
+            let hook = self.on_last.lock().clone();
+            if let Some(hook) = hook {
+                (*hook.lock())();
+            }
         }
     }
 }
@@ -153,14 +186,48 @@ impl<S> ListenerRegistry<S> {
 
     /// Install the hook fired when the total listener count crosses 0 → 1.
     /// Owners wire "subscribe to parent" here. See the ordering contract.
+    ///
+    /// A hook already installed (the ordering contract says this shouldn't
+    /// happen, but nothing enforces it) is displaced, not merged; the
+    /// displaced `Box<dyn FnMut>`'s `Drop` may run arbitrary captured-state
+    /// teardown, so it is extracted from the guard before being dropped —
+    /// never while `on_first`'s own lock is held. Calling this from INSIDE
+    /// a currently-running `on_first` hook (a self-re-arm) is sound: it
+    /// only ever touches this outer slot, never the running hook's own
+    /// per-hook mutex — see `RegistryInner::after_add`'s own doc.
     pub fn set_on_first_listener(&self, f: impl FnMut() + Send + 'static) {
-        *self.inner.on_first.lock() = Some(Box::new(f));
+        let previous = self
+            .inner
+            .on_first
+            .lock()
+            .replace(Arc::new(Mutex::new(Box::new(f))));
+        drop(previous);
     }
 
     /// Install the hook fired when the total listener count crosses 1 → 0.
-    /// Owners tear down the parent subscription here.
+    /// Owners tear down the parent subscription here. Same displaced-hook
+    /// discipline, and the same self-re-arm soundness, as
+    /// [`Self::set_on_first_listener`]. One constraint the `on_first` side
+    /// does not have: the hook must not add and then drop a listener from
+    /// inside its own body. That crosses 1 → 0 again while the hook's own
+    /// per-hook mutex is held and deadlocks (see `RegistryInner::after_remove`).
     pub fn set_on_last_listener(&self, f: impl FnMut() + Send + 'static) {
-        *self.inner.on_last.lock() = Some(Box::new(f));
+        let previous = self
+            .inner
+            .on_last
+            .lock()
+            .replace(Arc::new(Mutex::new(Box::new(f))));
+        drop(previous);
+    }
+
+    /// Test-only probe: `true` if `on_first`'s SLOT lock is currently free.
+    ///
+    /// Backs a regression test for `set_on_first_listener`'s
+    /// extract-then-drop ordering: a previously-installed hook whose own
+    /// `Drop` re-enters this method must observe the lock already released.
+    #[cfg(test)]
+    pub(crate) fn on_first_is_unlocked(&self) -> bool {
+        self.inner.on_first.try_lock().is_some()
     }
 
     /// Total registered listeners across both channels.
@@ -257,7 +324,7 @@ impl Drop for ListenerSubscription {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
 
@@ -281,6 +348,41 @@ mod tests {
         let s2 = reg.add_value_listener(Arc::new(|| {}));
         assert_eq!(firsts.load(Ordering::SeqCst), 1, "first edge fires once");
         drop(s1);
+        drop(s2);
+    }
+
+    /// A hook that re-arms itself (calls `set_on_first_listener` from
+    /// inside its own body) must neither deadlock on `on_first`'s slot lock
+    /// nor lose the re-arm. Reverting `after_add` to call the hook while
+    /// still holding that lock (the let-chain-scrutinee shape) hangs this
+    /// test forever — a same-thread, non-reentrant `parking_lot::Mutex`
+    /// deadlock, not a panic, so it was verified in scratch under `timeout`
+    /// rather than left in the permanent suite as an unbounded hang.
+    #[test]
+    fn on_first_listener_hook_can_re_arm_itself_without_deadlocking() {
+        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
+        let fires = Arc::new(AtomicUsize::new(0));
+        let fires_for_hook = Arc::clone(&fires);
+        let reg_for_hook = reg.clone();
+
+        reg.set_on_first_listener(move || {
+            fires_for_hook.fetch_add(1, Ordering::SeqCst);
+            let fires_for_next = Arc::clone(&fires_for_hook);
+            reg_for_hook.set_on_first_listener(move || {
+                fires_for_next.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+
+        let s1 = reg.add_value_listener(Arc::new(|| {}));
+        assert_eq!(fires.load(Ordering::SeqCst), 1, "the original hook fired");
+        drop(s1);
+
+        let s2 = reg.add_value_listener(Arc::new(|| {}));
+        assert_eq!(
+            fires.load(Ordering::SeqCst),
+            2,
+            "the re-armed hook must fire on the next 0 -> 1 edge, not be lost"
+        );
         drop(s2);
     }
 
@@ -378,5 +480,44 @@ mod tests {
         drop(v); // value channel disposed — removal must be skipped, not panic.
         drop(s); // status channel disposed — same.
         assert_eq!(reg.listener_count(), 0, "count still reaches zero");
+    }
+
+    /// Pins `set_on_first_listener`'s extract-then-drop ordering: reverting
+    /// to a bare `*self.inner.on_first.lock() = Some(Box::new(f));`
+    /// statement drops the DISPLACED hook (the one this call is overwriting)
+    /// while that assignment's own guard is still live, so a hook whose
+    /// `Drop` re-enters this registry deadlocks on `on_first`.
+    #[test]
+    fn set_on_first_listener_drops_the_displaced_hook_after_releasing_the_lock() {
+        struct DropCanary {
+            reg: ListenerRegistry<u8>,
+            observed_locked: Arc<AtomicBool>,
+        }
+        impl Drop for DropCanary {
+            fn drop(&mut self) {
+                if !self.reg.on_first_is_unlocked() {
+                    self.observed_locked.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+
+        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
+        let observed_locked = Arc::new(AtomicBool::new(false));
+
+        let canary = DropCanary {
+            reg: reg.clone(),
+            observed_locked: Arc::clone(&observed_locked),
+        };
+        reg.set_on_first_listener(move || {
+            let _keep_alive = &canary;
+        });
+
+        // Overwrites the hook above, displacing (and dropping) it.
+        reg.set_on_first_listener(|| {});
+
+        assert!(
+            !observed_locked.load(Ordering::SeqCst),
+            "the displaced hook's Drop observed the lock still held"
+        );
     }
 }

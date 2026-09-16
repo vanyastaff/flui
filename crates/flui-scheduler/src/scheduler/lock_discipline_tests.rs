@@ -216,7 +216,7 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
     let observed_for_callback = Arc::clone(&observed);
     scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
         assert_no_scheduler_lock_held(&probe);
-        *observed_for_callback.lock() = probe.current_frame();
+        let _prev = std::mem::replace(&mut *observed_for_callback.lock(), probe.current_frame());
     }));
 
     let frame_id = scheduler.handle_begin_frame(Instant::now());
@@ -592,7 +592,7 @@ fn transient_callback_cancelling_a_later_sibling_and_registering_a_replacement_d
     let sibling_id = scheduler.schedule_frame_callback(Box::new(move |_| {
         sibling_ran_for_b.fetch_add(1, Ordering::SeqCst);
     }));
-    *sibling_id_slot.lock() = Some(sibling_id);
+    let _prev = sibling_id_slot.lock().replace(sibling_id);
 
     scheduler.execute_frame();
     assert_eq!(

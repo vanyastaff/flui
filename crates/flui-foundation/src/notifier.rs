@@ -819,7 +819,7 @@ mod tests {
         let id_b = notifier.add_listener(Arc::new(move || {
             fired_b_clone.store(true, Ordering::SeqCst);
         }));
-        *id_b_cell.lock() = Some(id_b);
+        let _prev = id_b_cell.lock().replace(id_b);
 
         notifier.notify_listeners();
         assert!(

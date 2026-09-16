@@ -1600,7 +1600,7 @@ fn test_ticker_start_typed() {
 
     let e = Arc::clone(&elapsed_captured);
     ticker.start_typed(move |elapsed: Seconds| {
-        *e.lock() = elapsed;
+        let _prev = std::mem::replace(&mut *e.lock(), elapsed);
     });
 
     // Would need a mock TickerProvider to properly test
@@ -1879,21 +1879,6 @@ fn test_task_queue_len() {
 
     queue.add(Priority::Animation, || {});
     assert_eq!(queue.len(), 2);
-}
-
-#[test]
-fn test_task_queue_clear() {
-    let queue = TaskQueue::new();
-
-    queue.add(Priority::Build, || {});
-    queue.add(Priority::Animation, || {});
-
-    assert_eq!(queue.len(), 2);
-
-    queue.clear();
-
-    assert_eq!(queue.len(), 0);
-    assert!(queue.is_empty());
 }
 
 #[test]

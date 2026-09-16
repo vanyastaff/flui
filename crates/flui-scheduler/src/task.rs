@@ -476,30 +476,20 @@ impl TaskQueue {
         count
     }
 
-    /// Clear all pending tasks
-    pub fn clear(&self) {
-        let mut queue = self.queue.lock();
-        let cleared = queue.len();
-        queue.clear();
-        if cleared > 0 {
-            self.len.fetch_sub(cleared, AtomicOrdering::AcqRel);
-        }
-    }
-
     /// Get count of tasks at each priority level
     pub fn count_by_priority(&self) -> PriorityCount {
-        let queue = self.queue.lock();
         let mut counts = PriorityCount::default();
-
-        for pt in queue.iter() {
-            match pt.0.priority {
-                Priority::UserInput => counts.user_input += 1,
-                Priority::Animation => counts.animation += 1,
-                Priority::Build => counts.build += 1,
-                Priority::Idle => counts.idle += 1,
+        {
+            let queue = self.queue.lock();
+            for pt in queue.iter() {
+                match pt.0.priority {
+                    Priority::UserInput => counts.user_input += 1,
+                    Priority::Animation => counts.animation += 1,
+                    Priority::Build => counts.build += 1,
+                    Priority::Idle => counts.idle += 1,
+                }
             }
         }
-
         counts
     }
 

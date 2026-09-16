@@ -910,6 +910,129 @@ mod tests {
         );
     }
 
+    /// Widget-tier acceptance test: a `FutureBuilder`'s own future can own a
+    /// SECOND [`TaskToken`] from the same driver (e.g. a nested subscription
+    /// it spawned itself). Disposing the element must cancel both — proving
+    /// disposal's wiring reaches `TaskToken::cancel` correctly, not that no
+    /// deadlock is possible there. `AsyncDriver`'s own reentrant-cancel
+    /// guarantee is already proven, BOUNDED, at the driver level by
+    /// `cancelling_a_future_that_owns_another_token_terminates`
+    /// (`async_driver.rs`), which runs the cancellation off-thread with a 5 s
+    /// wait; `ElementTree` is `!Send`, so that bounding technique does not
+    /// apply to a real disposal, and none is attempted here. Instead, the
+    /// nested child's non-blocking `AsyncDriver::is_unlocked` is probed
+    /// from inside the parent future's own destructor — the instant before
+    /// the child `TaskToken`'s field-drop would try to re-lock the same
+    /// driver — converting a regression that reintroduces holding that lock
+    /// across a removed task's destructor (#1038) into a leak-and-panic
+    /// instead of a hang on the child's subsequent `.lock()`.
+    ///
+    /// That panic does NOT fail this test directly: `dispose()` runs inside
+    /// `on_unmount`'s own `catch_unwind` (`element/behavior.rs`'s
+    /// `StatefulBehavior::on_unmount`), which contains it and records it via
+    /// `owner.record_hook_panic` instead of letting it propagate. What
+    /// actually fails a regression here is the `take_recovered_panics()`
+    /// assertion below (the root cause) and, as a consequence, the
+    /// `pending_task_count() == 0` assertion after it (the leaked child was
+    /// never cancelled).
+    #[test]
+    fn nested_token_disposal_cancels_child_and_parent() {
+        /// The "parent" subscription's future: owns a `child` task on the
+        /// same driver, exactly as a real subscription that itself spawns
+        /// nested work would. Never resolves on its own — the element is
+        /// disposed while it is still pending.
+        struct HoldsChild {
+            child: Option<TaskToken>,
+            driver: AsyncDriver,
+        }
+
+        impl Future for HoldsChild {
+            type Output = Result<Payload, Boom>;
+            fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+                Poll::Pending
+            }
+        }
+
+        impl Drop for HoldsChild {
+            fn drop(&mut self) {
+                // `child`'s own `Drop` would re-lock `driver`'s internals
+                // to cancel it. `cancel()`'s extract-then-drop split
+                // (#1038) guarantees THIS destructor — reached via the
+                // parent token's own `cancel()` dropping the removed task
+                // outside its lock — already runs with that lock free, so
+                // dropping `child` here normally never contends on it.
+                //
+                // A regression that reintroduces holding the lock across
+                // the removed task's destructor would make `child`'s own
+                // `.lock()` deadlock instead — taking the whole test
+                // process down with it (nextest's slow-timeout is the only
+                // thing that would ever end it). Probing non-blockingly
+                // FIRST and leaking `child` on a bad read, rather than
+                // dropping it, converts that hang into an immediate,
+                // diagnosable panic: still a failing test, never a hang.
+                let child = self.child.take().expect("HoldsChild always holds a child");
+                if self.driver.is_unlocked() {
+                    drop(child);
+                } else {
+                    std::mem::forget(child);
+                    panic!(
+                        "the driver's task lock was still held while dropping \
+                         the parent future; leaked the nested child token \
+                         instead of deadlocking on its own cancellation"
+                    );
+                }
+            }
+        }
+
+        // Mirrors `Harness::mount`'s own steps, but captures the driver
+        // BEFORE mounting so the factory closure (invoked during `init_state`)
+        // can spawn the child task on the SAME driver the widget itself uses.
+        let scheduler = UpdateScheduler::new();
+        let driver = scheduler.async_driver().clone();
+        let driver_for_factory = driver.clone();
+        let factory: FutureFactory<Payload, Boom> = Rc::new(move || {
+            let child = driver_for_factory.spawn_local(Box::pin(std::future::pending::<()>()));
+            Box::pin(HoldsChild {
+                child: Some(child),
+                driver: driver_for_factory.clone(),
+            })
+        });
+        let view = FutureBuilder::keyed(
+            Some(1_u32),
+            factory,
+            recording_builder(Arc::new(Mutex::new(Vec::new()))),
+        );
+
+        let mut owner = BuildOwner::new();
+        owner.set_async_driver(driver.clone());
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree); // init_state: subscribe() spawns the
+        // parent wrapper task, whose eager inline poll constructs
+        // `HoldsChild`, which spawns and holds the child task.
+
+        assert_eq!(
+            driver.pending_task_count(),
+            2,
+            "the parent wrapper task and the nested child must both be live after mount"
+        );
+
+        tree.remove(root, &mut owner.element_owner_mut());
+
+        assert!(
+            owner.take_recovered_panics().is_empty(),
+            "the nested child's lock probe must never observe the driver's \
+             lock held; a recorded panic here is the root cause of any \
+             leaked (uncancelled) child task below"
+        );
+        assert_eq!(
+            driver.pending_task_count(),
+            0,
+            "disposing the element must cancel both the parent and the nested child"
+        );
+    }
+
     // ── the generation guard, tested directly ───────────────────────────────
 
     fn fresh_slot() -> SharedSlot<Payload, Boom> {

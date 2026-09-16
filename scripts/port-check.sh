@@ -6,7 +6,10 @@
 # sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
 # guard, Cross.H2 canonical-type-home guards, the Cross.H3
 # live-BuildContext guard, the Cross.H7 speculative scheduler surface guard,
-# and the ADR-0027/ADR-0037 ownership-surface guards. Exits non-zero on the first
+# the ADR-0027/ADR-0037 ownership-surface guards, and the
+# LockDiscipline/StatementDrop lock-drop guard (crates/flui-scheduler +
+# crates/flui-foundation only — see that trigger's own comment for why).
+# Exits non-zero on the first
 # violation outside the whitelist; prints
 # the offending file:line and the trigger ID.
 # Triggers
@@ -1657,6 +1660,158 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# LockDiscipline/StatementDrop (#1150 lock-drop sweep) — a value with a
+# significant `Drop` must not itself drop while the lock guard that produced
+# it is still held.
+#
+# Scope: crates/flui-scheduler, crates/flui-foundation (whole crate trees,
+# minus examples/) — the two crates #1150's lock-drop sweep actually
+# audited hit by hit. Not workspace-wide: a sibling crate carrying this same
+# shape is real but out-of-scope residue for a future sweep to widen this
+# glob into, not silently assumed clean (#1176).
+#
+# Three shapes:
+#   1. STATEMENT drop: `.(lock|write|borrow_mut)()(.unwrap()|.expect(..))?
+#      .(remove|take|clear|drain|pop|pop_front|pop_back|insert|swap|
+#      replace|retain|truncate|extract_if)(...)` used as a bare statement,
+#      ending `;` on the same line, with no NAMED `let` binding — whatever
+#      the call displaces or returns has nowhere to go but drop right
+#      there, under the guard. `let _ = ...;` binds nothing and is NOT
+#      excluded: the produced value is still a bare statement temporary
+#      for drop-ordering purposes, dropped before the guard (reverse
+#      creation order) exactly like an unbound statement.
+#   2. ASSIGNMENT through a dereferenced guard: `*x.lock()(.unwrap()|
+#      .expect(..))? = ...;` displaces whatever the slot held before —
+#      same hazard, unless the right-hand side is itself a literal (a slot
+#      assigned a bare `true`/`false`/number/string literal holds plain
+#      data, so the OLD value's drop cannot be significant). `None` is
+#      NOT a plain-data literal here: `*slot.lock() = None;` on a
+#      `Mutex<Option<T>>` still drops whatever `T` value the slot
+#      previously held, which can be arbitrary.
+#   3. SCRUTINEE shape: `if let`/`while let`/`match` whose scrutinee ends
+#      in one of the same displacing calls — the scrutinee's guard
+#      temporary lives through the WHOLE arm body (the exact shape this
+#      sweep fixed in `wake_task`; `ARCHITECTURE.md` calls it recurring),
+#      so anything the arm does with the extracted value, including an
+#      explicit `drop(..)`, still runs under the guard. Regexes 1 and 2
+#      cannot see this shape at all (no bare-statement `;`, filtered out
+#      by the `let` exclusion) even though it produces the identical
+#      hazard.
+#
+# Escape: extract the value out from under the guard FIRST — a block whose
+# `}` closes before the enclosing statement's own `;`, or a plain `let`
+# binding to a NAMED pattern whose type does not itself borrow the guard
+# (a `Vec`/`HashMap` drain into an OWNED collection, not a borrowing
+# `Drain`/`IterMut` iterator) — such a binding's only temporary, the
+# guard, releases at the statement's end, after the binding already holds
+# the value. Then drop the extracted value explicitly, once the guard is
+# gone. Worked example, `cancel_frame_callback` (scheduler.rs): locates
+# the removal under the lock via `position`+`remove` and returns it,
+# rather than copying the whole `Vec` — see that function's own body, not
+# a paraphrase of it, for the exact shape.
+#
+# Allowlist marker: `// PORT-CHECK-OK-LOCK: <reason>`, joining the
+# SP3/SP4/SP6/SP8/UNIT/STUB/DOWNCAST/DYN family so `rg PORT-CHECK-OK` stays
+# a one-census grep. Matched with the SAME windowed scan trigger 10 uses
+# for its SP3 marker (rustfmt moves a trailing same-line comment on a
+# block-opening decl into the body as its first line, so a same-line-only
+# match would silently stop matching after a reformat): for a violation on
+# line V, a marker on V-1 (the line above), V, V+1, or V+2 (up to two
+# lines below) sanctions it; a marker two lines ABOVE a violation (V-2) is
+# NOT honoured.
+#
+# What this trigger still cannot see: a bound-guard assignment
+# (`let mut slot = x.lock(); *slot = Some(y);`, the guard already named,
+# not re-derived from `x.lock()` on the assignment's own line);
+# a `.lock()` call rustfmt has split across lines from its own
+# `.remove(`/`.take()` continuation; and a `://` inside a string literal
+# on an otherwise-real violation line, which the doc-comment filter below
+# anchors past (`^[^:]*:[0-9]+:` — the rg `path:line:` prefix — before
+# checking for `//`, rather than matching `://` anywhere in the line) so
+# it does not also defeat that filter.
+# -----------------------------------------------------------------------------
+lockdrop_scope=(crates/flui-scheduler crates/flui-foundation)
+lockdrop_comment_filter='^[^:]*:[0-9]+:\s*(//!|///|//)'
+# Excludes only a NAMED `let` binding (`let x = ..`, `let mut x = ..`, a
+# typed `let x: T = ..`, or tuple-destructuring `let (..) = ..`) from
+# regex 1's hits -- `let _ = ..` binds no name and is deliberately NOT
+# matched here, so it stays a violation. `_foo` (named, just unused) IS a
+# real binding and IS excluded; a bare `_` is not.
+lockdrop_named_let='let\s+(mut\s+)?([A-Za-z][A-Za-z0-9_]*|_[A-Za-z0-9_]+)\s*[:=]'
+lockdrop_tuple_let='let\s*\('
+
+lockdrop_hits_raw=$(
+  {
+    rg --line-number --no-heading --type rust --glob '!**/examples/**' \
+      '\.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\.(remove|take|clear|drain|pop|pop_front|pop_back|insert|swap|replace|retain|truncate|extract_if)\([^;]*\);' \
+      "${lockdrop_scope[@]}" 2>/dev/null \
+      | grep -Ev "${lockdrop_comment_filter}" \
+      | grep -Ev "${lockdrop_named_let}" \
+      | grep -Ev "${lockdrop_tuple_let}" \
+      || true
+    rg --line-number --no-heading --type rust --glob '!**/examples/**' \
+      '\*[A-Za-z_][A-Za-z0-9_.]*\.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\s*=[^=][^;]*;' \
+      "${lockdrop_scope[@]}" 2>/dev/null \
+      | grep -Ev "${lockdrop_comment_filter}" \
+      | grep -Ev '=\s*(true|false|-?[0-9]+(\.[0-9]+)?|"[^"]*")\s*;' \
+      || true
+    rg --line-number --no-heading --type rust --glob '!**/examples/**' \
+      '(if|while)\b[^;{]*\blet\b[^=]*=\s*[^;{]*\.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\.(remove|take|pop|pop_front|pop_back|swap|replace|insert)\([^;{]*\{' \
+      "${lockdrop_scope[@]}" 2>/dev/null \
+      | grep -Ev "${lockdrop_comment_filter}" \
+      || true
+    rg --line-number --no-heading --type rust --glob '!**/examples/**' \
+      'match\s+[^;{]*\.(lock|write|borrow_mut)\(\)(\.unwrap\(\)|\.expect\([^)]*\))?\.(remove|take|pop|pop_front|pop_back|swap|replace|insert)\([^{]*\)\s*\{' \
+      "${lockdrop_scope[@]}" 2>/dev/null \
+      | grep -Ev "${lockdrop_comment_filter}" \
+      || true
+  }
+)
+
+lockdrop_markers=$(rg --line-number --no-heading 'PORT-CHECK-OK-LOCK:' \
+    --type rust --glob '!**/examples/**' \
+    "${lockdrop_scope[@]}" 2>/dev/null || true)
+
+# Same windowed-marker algorithm as trigger 10's SP3 scan (see that trigger's
+# own comment for the rustfmt rationale): one rg call collects every marker,
+# one awk pass filters hits via a single pipe, window −1..+2 expanded at
+# marker-load time for O(1) lookup per hit.
+lockdrop_hits=$(
+  { printf '%s\n' "${lockdrop_markers}"; printf '%s\n' '---LOCKSPLIT---'; printf '%s\n' "${lockdrop_hits_raw}"; } | \
+  awk -F':' '
+  /^---LOCKSPLIT---$/ { past_split = 1; next }
+  !past_split {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    # Violation-relative: for a violation on line V, a marker on V-1 (the
+    # line above), V, V+1, or V+2 sanctions it -- a marker at M therefore
+    # covers violation lines [M-2, M+1], same formula trigger 10 uses for
+    # its SP3 scan.
+    for (d = -2; d <= 1; d++) covered[fp SUBSEP (ln + d)] = 1
+    next
+  }
+  {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    if (!((fp SUBSEP ln) in covered)) print
+  }'
+)
+
+if [[ -n "${lockdrop_hits}" ]]; then
+  echo "VIOLATION LockDiscipline/StatementDrop: a significant value drops while its own lock guard is still held"
+  echo "see docs/PORT.md (LockDiscipline/StatementDrop)"
+  echo "${lockdrop_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    LockDiscipline/StatementDrop: no lock-guarded drop of a displaced/removed value"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1665,7 +1820,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 23 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner grep clean"
+echo "port-check: all 23 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner + LockDiscipline/StatementDrop grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

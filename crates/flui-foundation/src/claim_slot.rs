@@ -116,9 +116,29 @@ impl<T> Inner<T> {
     /// would observe: delivery, requester abandonment, and owner
     /// disconnection.
     fn wake_task(&self) {
-        if let Some(waker) = self.waker.lock().take() {
+        // `if let Some(w) = self.waker.lock().take() { w.wake() }` holds the
+        // `MutexGuard` — a temporary of the `if let` scrutinee — for the
+        // whole arm body, not just the `.take()` call: this exact shape is
+        // already documented as a recurring bug in this crate (see the
+        // retired `schedule_frame`/`current_frame()` lock-tied API in
+        // `ARCHITECTURE.md`), and `waker.wake()` is arbitrary task-executor
+        // code that may re-enter this slot. Extracting into a named binding
+        // first ends the guard's scope at that statement's `;`, before
+        // `wake()` ever runs.
+        let woken = self.waker.lock().take();
+        if let Some(waker) = woken {
             waker.wake();
         }
+    }
+
+    /// Test-only probe: `true` if `waker` is currently free to lock.
+    ///
+    /// Backs a regression test for `wake_task`'s extract-then-wake ordering:
+    /// a waker whose own `wake()` re-enters this slot and probes this method
+    /// must observe the lock already released.
+    #[cfg(test)]
+    fn is_unlocked(&self) -> bool {
+        self.waker.try_lock().is_some()
     }
 }
 
@@ -316,7 +336,15 @@ impl<T> ClaimHandle<T> {
         let mut slot = self.inner.waker.lock();
         match &*slot {
             Some(existing) if existing.will_wake(waker) => {}
-            _ => *slot = Some(waker.clone()),
+            _ => {
+                // The displaced `Waker`'s own `Drop` is executor vtable
+                // code, not necessarily inert — extract it and release
+                // this guard before dropping it, so a vtable that somehow
+                // re-enters this same slot cannot deadlock on it.
+                let displaced = slot.replace(waker.clone());
+                drop(slot);
+                drop(displaced);
+            }
         }
     }
 
@@ -510,12 +538,12 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::{Context, Poll, Waker};
     use std::thread;
     use std::time::Duration;
 
-    use super::{ClaimOutcome, claim_slot};
+    use super::{ClaimOutcome, Inner, claim_slot};
 
     fn counting_wake() -> (Arc<dyn Fn() + Send + Sync>, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));
@@ -788,6 +816,110 @@ mod tests {
         assert_eq!(
             Pin::new(&mut handle).poll(&mut cx),
             Poll::Ready(ClaimOutcome::Delivered(7))
+        );
+    }
+
+    /// Pins `Inner::wake_task`'s extract-then-wake ordering: reverting it to
+    /// `if let Some(w) = self.waker.lock().take() { w.wake() }` keeps the
+    /// `waker` mutex's guard alive for the whole `wake()` call (an `if let`
+    /// scrutinee temporary lives through its arm body), so a waker that
+    /// re-enters this same slot from its own `wake()` would observe the
+    /// lock still held. This waker's `wake_by_ref` probes exactly that.
+    #[test]
+    fn wake_task_releases_the_waker_lock_before_calling_wake() {
+        struct ProbingWake {
+            inner: Arc<Inner<u32>>,
+            observed_locked: AtomicBool,
+        }
+        impl std::task::Wake for ProbingWake {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                if !self.inner.is_unlocked() {
+                    self.observed_locked.store(true, Ordering::Release);
+                }
+            }
+        }
+
+        let (wake, _wake_count) = counting_wake();
+        let (slot, mut handle) = claim_slot::<u32>(wake);
+
+        let probe = Arc::new(ProbingWake {
+            inner: Arc::clone(&handle.inner),
+            observed_locked: AtomicBool::new(false),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
+
+        slot.deliver(9).expect("slot is still Pending");
+
+        assert!(
+            !probe.observed_locked.load(Ordering::Acquire),
+            "wake_task must release the waker lock before calling Waker::wake"
+        );
+    }
+
+    /// Pins `register_waker`'s extract-then-drop ordering: reverting it to
+    /// `*slot = Some(waker.clone())` (a bound-guard assignment — `slot` is
+    /// already a named `MutexGuard`, not re-derived from `.lock()` on this
+    /// statement's own line, so `LockDiscipline/StatementDrop` cannot see
+    /// this shape) drops the DISPLACED waker — executor vtable code — while
+    /// `slot` is still held. A waker whose own `Drop` re-enters this same
+    /// slot's `is_unlocked()` observes the lock still held under the bug.
+    #[test]
+    fn register_waker_drops_the_displaced_waker_after_releasing_the_lock() {
+        struct ProbingWake {
+            inner: Arc<Inner<u32>>,
+            observed_locked: Arc<AtomicBool>,
+        }
+        // `std::task::Waker::noop()` cannot stand in here: this test's whole
+        // point is the custom `Drop` impl below, which a built-in no-op
+        // waker has no way to attach.
+        #[expect(
+            clippy::manual_noop_waker,
+            reason = "the Drop impl is this test's subject; Waker::noop() cannot carry one"
+        )]
+        impl std::task::Wake for ProbingWake {
+            fn wake(self: Arc<Self>) {}
+            fn wake_by_ref(self: &Arc<Self>) {}
+        }
+        impl Drop for ProbingWake {
+            fn drop(&mut self) {
+                if !self.inner.is_unlocked() {
+                    self.observed_locked.store(true, Ordering::Release);
+                }
+            }
+        }
+
+        let (wake, _wake_count) = counting_wake();
+        let (_slot, mut handle) = claim_slot::<u32>(wake);
+        let observed_locked = Arc::new(AtomicBool::new(false));
+
+        {
+            // Moved directly into the `Waker`, no separate clone kept: the
+            // ONLY strong reference left after this block ends is the one
+            // `register_waker` stored in the slot, so displacing it below
+            // is what actually drops `ProbingWake` — not a leftover local.
+            let first = Arc::new(ProbingWake {
+                inner: Arc::clone(&handle.inner),
+                observed_locked: Arc::clone(&observed_locked),
+            });
+            let first_waker = Waker::from(first);
+            let mut cx = Context::from_waker(&first_waker);
+            assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
+        }
+
+        // A different waker (different underlying allocation, so
+        // `will_wake` is `false`) displaces the first, dropping it.
+        let (second_waker, _second_wake_count) = test_waker();
+        let mut cx2 = Context::from_waker(&second_waker);
+        assert_eq!(Pin::new(&mut handle).poll(&mut cx2), Poll::Pending);
+
+        assert!(
+            !observed_locked.load(Ordering::Acquire),
+            "register_waker must release the waker lock before dropping the displaced waker"
         );
     }
 

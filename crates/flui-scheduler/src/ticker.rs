@@ -1521,7 +1521,9 @@ fn poll_resolution(
 /// caught payload is logged at `error!` immediately (never silently dropped)
 /// and the FIRST one is what gets re-raised — unless this call is itself
 /// running during an unwind (`std::thread::panicking()`), in which case it is
-/// logged instead of replacing the unwind already in flight.
+/// logged and discarded through [`crate::panic_payload::discard_panic_payload`]
+/// instead of replacing the unwind already in flight or dropping the
+/// payload bare (which could itself panic a second time).
 ///
 /// `notify` itself stays uncontained: a waker that re-polls or drops the
 /// future it wakes from inside `wake()` deadlocks inside `event-listener`'s
@@ -1553,6 +1555,14 @@ fn deliver_now(
                 payload = flui_foundation::panic::payload_text(&*payload)
                     .unwrap_or("<non-string panic payload>"),
                 "a TickerFuture continuation panicked while already unwinding; not re-raising"
+            );
+            // Dropping `payload` bare here would let a second-order panic
+            // from its own `Drop` escape uncontained -- during this
+            // already-unwinding path, a double panic (abort, no
+            // diagnostic).
+            crate::panic_payload::discard_panic_payload(
+                payload,
+                "TickerFuture::deliver_now (continuation panic, traced above)",
             );
         } else {
             std::panic::resume_unwind(payload);
@@ -2890,7 +2900,7 @@ mod tests {
             match previous {
                 CallbackSlot::Ready(callback) => {
                     drop(guard);
-                    *stolen_in_hook.lock() = Some(callback);
+                    let _prev = stolen_in_hook.lock().replace(callback);
                 }
                 other => {
                     // Not reachable at this call site today — the lease

@@ -340,7 +340,7 @@ fn a_continuation_on_a_pending_future_runs_once_with_the_outcome() {
     let observed2 = Arc::clone(&observed);
     future.when_complete_or_cancel(move |outcome| {
         calls2.fetch_add(1, Ordering::SeqCst);
-        *observed2.lock() = Some(outcome);
+        let _prev = observed2.lock().replace(outcome);
     });
 
     completer.complete().deliver();
@@ -405,7 +405,7 @@ fn a_continuation_sees_the_state_lock_free() {
     let observed2 = Arc::clone(&observed);
 
     future.when_complete_or_cancel(move |_outcome| {
-        *observed2.lock() = Some(inner.state.try_lock().is_some());
+        let _prev = observed2.lock().replace(inner.state.try_lock().is_some());
     });
 
     completer.complete().deliver();
