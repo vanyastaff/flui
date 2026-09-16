@@ -109,11 +109,23 @@ fn gesture_fixture_with(
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(1.0, 1.0).into_view().boxed()
     }));
-    // No controller yet: both hero pages share the tag `"shared"`, and an
-    // attached `HeroController` would otherwise fly a real *programmatic*
-    // flight between them right here (`did_change_top` does not consult
-    // `transition_on_user_gestures` at all) — contaminating every assertion
-    // below with an unrelated, already-airborne flight.
+    // No EXPLICIT controller yet — but `mount_navigator` already attached the
+    // Navigator's own auto-installed hero observer (`did_change_top` does not
+    // consult `transition_on_user_gestures` at all), so both pushes below are
+    // already live to a `HeroController` by the time they run. Confirmed via
+    // direct instrumentation: pushing `from_route` (both hero pages share the
+    // tag `"shared"`) launches a real programmatic flight on the AUTO
+    // observer's own `FlightManager` — a store this fixture's `controller`
+    // never reads, so it cannot contaminate `controller.flights()`. `install`
+    // below only swaps which observer receives FUTURE notifications; it does
+    // not retroactively cancel a flight the auto observer already started
+    // (confirmed: the flight's overlay entry survives `install`, the
+    // `from_controller.set_value(1.0)` below, ten settle ticks, and a full
+    // gesture start/stop cycle — its retirement is gated on its OWN owning
+    // `HeroController` still being live to service it, not on frame count).
+    // Named rather than silently tolerated: it is real, but it cannot reach
+    // any assertion in this file, since nothing here ever reads the auto
+    // observer's own flights or overlay entries by identity.
     let mut harness = mount_navigator(&navigator);
 
     let to_route = hero_page(to_opt_in, 40.0, 24.0).maintain_state(to_maintain_state);
@@ -129,9 +141,11 @@ fn gesture_fixture_with(
     harness.tick();
     let from = navigator.current().expect("the dragged route is pushed");
 
-    // Attach the controller only now — after both hero pages already sit on
-    // the stack — so the gesture is the first `did_change_top`-adjacent
-    // event it ever reacts to.
+    // Attach the EXPLICIT controller only now — after both hero pages already
+    // sit on the stack — so the gesture below is the first notification
+    // *this* controller ever reacts to (it replaces the auto observer as of
+    // this call; see the fixture's own doc for what that does and does not
+    // clean up).
     let controller = install(&navigator);
 
     let from_controller = transition
@@ -490,69 +504,82 @@ fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
 /// A `maintainState == false` destination that is still covered when the
 /// gesture starts has no mounted subtree to flip onstage in the first
 /// place (`ModalRoute`'s own doc: "a covered modal with `maintain_state ==
-/// false` is unmounted"), so there is nothing to measure — the deferred path
-/// correctly measures nothing, exactly as it would for a programmatic
-/// transition onto the same unmeasurable destination
+/// false` is unmounted"; pinned directly by
+/// `modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state`
+/// in `modal_route_tests.rs`, once the covering transition completes), so
+/// there is nothing to measure — the deferred path correctly measures
+/// nothing, exactly as it would for a programmatic transition onto the same
+/// unmeasurable destination
 /// (`a_measurement_whose_navigator_vanished_before_the_frame_records_nothing`'s
 /// sibling case). The behavior under test is "falls back, does not crash
-/// trying" — not "recovers a flight from an inherently unmeasurable route".
+/// trying, and finds nothing to fly" — not "recovers a flight from an
+/// inherently unmeasurable route".
 ///
 /// Red-check: drop the `destination.maintain_state()` conjunct from the sync
 /// fast-path condition in `HeroController::maybe_start` — the flight starts
 /// synchronously and the first assertion (`flights().get(...).is_none()`
 /// before any tick) fails.
 ///
-/// **Corrected (2026-08-05), not quarantined — the old expectation rested on
-/// a masked bug, not a real invariant.** This test's second assertion used to
-/// claim nothing flies because the destination's subtree is unmounted while
-/// covered with `maintain_state(false)`. That claim was never actually
-/// exercised: the owner-local post-frame lane's old thread-local "active
-/// lane" gate silently failed the deferred measurement's `schedule_local`
-/// call in this exact fixture (`gesture_fixture_with` calls
-/// `BackGestureController::new` outside any `enter_owner_scope`), so the
-/// measurement never ran and the "nothing to fly" assertion passed vacuously
-/// regardless of whether the destination was actually unmounted.
-/// `LocalPostFrameHandle` addresses its lane directly and has no "active
-/// lane" gate to fail here, so the measurement now genuinely runs — and
-/// finds `to`'s subtree still fully mounted and laid out (confirmed by direct
-/// inspection: `route_subtree` returns `Some` and `box_size` reports the full
-/// 800x600 screen). `maintain_state(false)` does not actually dispose the
-/// covered route's subtree anywhere in this port — a real, pre-existing
-/// Navigator/`ModalRoute` gap, independent of the post-frame lane redesign,
-/// filed as a follow-up rather than fixed here (out of scope: this slice
-/// retires the post-frame lane's thread-local machinery, not Navigator
-/// route-disposal semantics). Given that gap, a flight genuinely starting one
-/// tick after the (denied) sync fast path is the CORRECT behavior for this
-/// port today, not a bug this test should keep failing on — it is exactly
-/// what `gesture_pop_with_both_ends_opted_in_starts_synchronously_and_tracks_the_drag`
-/// gets synchronously, just one frame later because the sync fast path's
-/// `maintain_state()` conjunct denies it. The test keeps its real point (this
-/// path never panics) and asserts the flight it produces is a genuine one
-/// (non-degenerate begin/end rects), not just `is_some()`.
+/// **Two episodes of one masked bug, not two different bugs.** "Nothing
+/// measurable" was the right expectation from the start, but each time this
+/// test was checked, something else was silently absorbing the covered
+/// route's own unmount before this test's single `harness.tick()` could
+/// observe it:
+///
+/// 1. (2026-08-05) The owner-local post-frame lane's old thread-local
+///    "active lane" gate silently failed the deferred measurement's own
+///    `schedule_local` call in this exact fixture (`gesture_fixture_with`
+///    calls `BackGestureController::new` outside any `enter_owner_scope`),
+///    so the measurement never ran at all and "nothing flies" passed
+///    vacuously. Once `LocalPostFrameHandle` addressed its lane directly (no
+///    "active lane" gate to fail), the measurement started genuinely
+///    running — and found `to`'s subtree STILL mounted and laid out
+///    (`route_subtree` returned `Some`, `box_size` reported the full
+///    800x600 screen) despite `maintain_state(false)` and full coverage.
+///    The test was flipped to expect that flight instead of asking why the
+///    subtree was still there.
+/// 2. (issue #1180) The covered route's own unmount is driven by a rebuild
+///    that used to travel through `BuildOwner`'s external inbox, which
+///    `drain_build_scope` drained only once, at the START of its heap loop —
+///    so a rebuild a LATER build in that same drain schedules waited a
+///    whole extra frame. This fixture's single settling `harness.tick()`
+///    was one frame short of that wait, so the unmount had simply not
+///    landed yet by the time this test measured — the identical masked-bug
+///    shape as episode 1, moved from the post-frame lane to the inbox
+///    deferral. `drain_build_scope` now absorbs that inbox at the top of
+///    every heap pop, landing the unmount within the SAME tick.
+///    Confirmed directly: `route_subtree(to)` is `Some` on the code before
+///    this change and `None` after it, for the identical fixture state.
+///
+/// So the flight this test used to assert on was never a real one — it was
+/// the same masked bug wearing a different mechanism. This is the original,
+/// Flutter-correct expectation, restored.
 #[test]
 fn a_to_route_that_does_not_maintain_state_falls_back_to_the_deferred_path_without_panicking() {
-    let (navigator, mut harness, controller, _to, from, from_controller) =
+    let (navigator, mut harness, controller, to, from, from_controller) =
         gesture_fixture_with(true, true, false);
 
-    let _gesture = BackGestureController::new(navigator, from, from_controller);
+    let _gesture = BackGestureController::new(navigator.clone(), from, from_controller);
     assert!(
         controller.flights().get(&hero_tag()).is_none(),
         "no maintainState on the destination: the sync fast path must not fire"
     );
 
-    // The deferred (offstage-then-post-frame) path runs next — no panic, and
-    // (per the maintain_state(false) gap documented above) the destination is
-    // still genuinely measurable, so a real flight starts here, one tick
-    // after the sync fast path denied it.
+    // The deferred (offstage-then-post-frame) path runs next — still no
+    // panic, and the covered maintain_state(false) destination now has no
+    // mounted subtree left to measure by the time it runs (issue #1180: the
+    // covering transition's own unmount rebuild lands within this same
+    // tick, not the next one).
     harness.tick();
-    let flight = controller
-        .flights()
-        .get(&hero_tag())
-        .expect("the deferred path measures a genuinely mounted destination and starts a flight");
-    assert_ne!(
-        flight.begin_rect(),
-        flight.target_rect(),
-        "the two hero pages differ in size, so begin and end must differ"
+    assert!(
+        navigator.route_subtree(to).is_none(),
+        "a covered maintain_state(false) destination must have no mounted \
+         subtree by the time the deferred path measures it"
+    );
+    assert!(
+        controller.flights().get(&hero_tag()).is_none(),
+        "the deferred path measures nothing: the covered maintain_state(false) \
+         destination is unmounted"
     );
 }
 
