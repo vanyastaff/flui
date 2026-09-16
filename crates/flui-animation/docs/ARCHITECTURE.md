@@ -160,9 +160,9 @@ struct AnimationControllerInner {
     upper_bound: f32,
     
     // Animation state. Time comes from the ticker's elapsed seconds (scaled by
-    // time_dilation), not wall-clock Instants: `run_epoch_secs` marks where the
-    // current run/repeat-cycle began on the ticker timeline.
-    run_epoch_secs: f64,
+    // time_dilation), not wall-clock Instants: `restart_ticker` always begins a
+    // fresh run's Ticker at elapsed zero, so that elapsed time IS the elapsed
+    // time since the run started — no per-run epoch to subtract.
     run_duration: Option<Duration>, // per-run override (animate_to), never clobbers `duration`
     start_value: f32,
     target_value: f32,
@@ -170,13 +170,17 @@ struct AnimationControllerInner {
     // Physics
     simulation: Option<Box<dyn Simulation>>,
     
-    // Repeat
+    // Repeat. value/status/direction are a pure function of elapsed time
+    // since the run started (`repeat_initial_ns`, the phase the run started
+    // at, plus that elapsed time, reduced modulo `repeat_period` in integer
+    // nanoseconds) — no incremental per-cycle bookkeeping.
     is_repeating: bool,
     repeat_reverse: bool,
     repeat_min: f32,
     repeat_max: f32,
     repeat_period: Option<Duration>,
     repeat_count: Option<u32>,
+    repeat_initial_ns: u128,
     
     // Ticker
     ticker: Option<Ticker>,
@@ -410,6 +414,98 @@ overwriting what `set_value` had just set.
 consistent with "is there a run to advance". Both
 `AnimationController::tick_at`'s own guard and `Vsync::has_running`/
 `tick_all` read it instead of bare `status().is_running()`.
+
+### Repeat sampling is a pure function of elapsed time
+
+**The FLUI defect fixed (#1078):** a repeat's `value`/`status`/`direction`
+used to be advanced incrementally, one retired cycle at a time
+(`repeat_done: u32`, `run_epoch_secs` re-zeroed per cycle). A single frame
+that spanned more than one cycle (a dropped frame, or a caller ticking
+`tick_at` with a coarser partition than the period) advanced the incremental
+state by the same amount regardless of how many `tick_at` calls it took to
+get there for every case EXCEPT exhaustion, which had its own
+separately-maintained parity correction — two hand-copies of the same
+modular arithmetic, and only one of them was right. `AnimationController::tick_repeat`
+replaces both with one computation: `total_ns` (elapsed nanoseconds since
+the run started, plus `repeat_initial_ns`) reduced modulo `repeat_period_ns`
+gives the cycle index and phase directly, so `tick_at(1.25)` gives the
+identical answer whether or not an intervening `tick_at(1.0)` happened.
+`AnimationControllerInner::repeat_leg`/`repeat_landing` are the one place
+the leg/landing parity lives now; every call site (`repeat_with`'s
+value-at-the-call sample, `tick_repeat`'s running leg, both exhaustion
+paths) defers to them instead of re-deriving it.
+
+**Initial phase = Flutter parity.** A repeat starts from the CURRENT value
+clamped into `[min, max]`, not from `min` — matching
+`AnimationController._startSimulation`'s `_value = x(0.0)`
+(`animation_controller.dart:861-871` @ 3.44.0). This is not merely oracle
+fidelity: a `repeat()` issued fresh on every widget build (a common pattern
+for a looping indicator built imperatively rather than held across
+rebuilds) progresses from wherever the animation currently is instead of
+snapping back to the start every time it is called.
+
+**IMPROVEMENT over Flutter: exhaustion lands on the last cycle's endpoint,
+with that leg's own settled status.** Flutter's `_RepeatingSimulation.x`
+wraps with `% 1.0`, so a 1-count restart repeat's exit value is exactly
+`min` at `completed` (`animation_controller_test.dart`'s "calling repeat by
+setting count as valid with reverse as false" expects `0` at 100ms even
+though the run is reported `completed`, not `dismissed`), and a bounce
+exhaustion reports the direction of the NEXT leg it never runs (`count: 1`
+bounce ends `dismissed` at value `1.0`). FLUI lands on the endpoint its own
+final retired leg actually reached, with that leg's own direction settled
+(`Completed` at `max`, `Dismissed` at `min`) — matching the Web Animations
+spec's fill behavior ("holding the endpoint of the final iteration rather
+than the start of the next"), Android's `ValueAnimator`, and Compose's
+`VectorizedRepeatableSpec`, all of which land on the actual endpoint. The
+replaced oracle is `repeat_restart_finite_count_exhausts_from_the_phase_origin`
+and `repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind`'s
+exhaustion assertion (`crates/flui-animation/src/controller.rs`), which pin
+the new landing/status instead of Flutter's wrap.
+
+**`min == max` stays rejected.** Flutter permits the degenerate range
+(`assert(max >= min)`); FLUI does not, the same contract
+[`with_bounds`](AnimationController::with_bounds) already applies to an
+empty range — a repeat that can structurally never change value is a
+caller error that would hold the frame loop open forever doing nothing,
+and failing fast beats a silent no-op animation.
+
+**Zero effective period settles synchronously at the call.** Android's
+`ValueAnimator.animateBasedOnTime` explicitly "ignores the repeat count and
+skips to the end" for a 0-duration animator; Compose's
+`InfiniteRepeatableSpec` throws ("cannot have a 0-duration"); Flutter
+asserts. FLUI repairs rather than rejects (the house rule — see
+`with_bounds`' own `InvalidBounds` contract for the cases that DO reject):
+an infinite zero-period repeat that ticked once per frame would hold the
+frame loop open forever doing nothing, so `repeat_with` settles it
+synchronously through the same `settle_at_target` chokepoint a
+zero-distance/zero-duration `forward`/`reverse`/`animate_to` uses, landing
+on `repeat_landing`'s endpoint for the finite count (or cycle 0's end for
+an infinite one) — a documented exception to "an infinite repeat's future
+resolves only by cancellation".
+
+**One period for both legs of a bounce; `set_duration` does not retime an
+active repeat.** `repeat_period` is resolved ONCE at the call
+(`period.unwrap_or(duration)`), not read live on every tick — Flutter
+parity, `period ??= duration` captured by the simulation
+(`animation_controller.dart:717-745`). The previous behavior fell through
+to `current_duration()`'s live `duration`/`reverse_duration` lookup
+whenever `period` defaulted, so the reverse leg of a bounce with a
+defaulted period could pick up `reverse_duration` instead of the forward
+leg's period (contradicting `repeat_with`'s own "defaults to the forward
+duration" doc), and a live `set_duration` mid-repeat changed the running
+period out from under it. Resolving once fixes both, and keeps the
+modular-nanosecond arithmetic in `tick_repeat` exact (one divisor for
+every leg).
+
+**`velocity()` on a reverse leg is SIGNED** — a deliberate divergence from
+Flutter's `_RepeatingSimulation.dx`, which is always positive
+(`(max-min)/period`, `animation_controller.dart:1053`). FLUI's `velocity()`
+reports `range / duration` off the leg's own `start_value`/`target_value`,
+which are swapped on a reverse leg, so it comes out negative — matching
+FLUI's non-repeat velocity contract rather than introducing a
+repeat-specific special case. This is not a new divergence from this
+change; it predates it and is pinned, not re-derived, by
+`reverse_mid_flight_keeps_full_range_velocity`'s sibling repeat coverage.
 
 ## Composition Model
 

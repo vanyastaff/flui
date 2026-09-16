@@ -26,14 +26,6 @@ fn narrow_f32(x: f64) -> f32 {
     x as f32
 }
 
-/// Floor a non-negative cycle ratio to a whole repeat-cycle count. Used by the
-/// repeat tick to retire every cycle a long frame elapsed; `as u32` saturates a
-/// pathological ratio to `u32::MAX` rather than wrapping.
-#[inline]
-fn whole_cycles(ratio: f64) -> u32 {
-    ratio.floor() as u32
-}
-
 /// Default spring for fling animations.
 fn default_fling_spring() -> SpringDescription {
     SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
@@ -94,8 +86,11 @@ pub(crate) struct WalkProbe {
 /// callback, not on wall-clock reads. Elapsed time is scaled by the global
 /// [`time_dilation`] factor, and muting the ticker (e.g. when the view is
 /// hidden) freezes progress — so lifecycle gating is handled at the ticker
-/// layer rather than re-derived here. A per-run epoch (`run_epoch_secs`) marks
-/// where the current run or repeat cycle began on the ticker timeline.
+/// layer rather than re-derived here. `restart_ticker` always begins a
+/// fresh run's timeline at zero, so every value/status/direction the
+/// controller reports — including a repeat's leg and phase — is a pure
+/// function of the elapsed time since the current run started, never of
+/// incremental per-cycle bookkeeping (see the private `tick_repeat`).
 ///
 /// # Thread safety
 ///
@@ -168,10 +163,6 @@ struct AnimationControllerInner {
     /// Target value for the current run.
     target_value: f32,
 
-    /// Ticker-timeline epoch (dilated seconds) at which the current run or
-    /// repeat cycle began. `cycle_elapsed = dilated_elapsed - run_epoch_secs`.
-    run_epoch_secs: f64,
-
     /// Most recent raw (pre-dilation) elapsed seconds seen by
     /// [`AnimationController::tick_at`], so `velocity()` can report the
     /// in-progress rate without a fresh tick.
@@ -179,7 +170,7 @@ struct AnimationControllerInner {
 
     /// Monotonically increasing counter, bumped once each time a fresh run is
     /// established (every [`restart_ticker`](AnimationController::restart_ticker),
-    /// where `run_epoch_secs` is re-zeroed). An external frame driver reads
+    /// which restarts the [`Ticker`] at elapsed zero). An external frame driver reads
     /// [`AnimationController::run_generation`] to detect "a new run's `t = 0`
     /// was just set" and re-anchor its own per-run epoch — so a controller run
     /// twice (forward → reverse) is ticked from the second run's start instead
@@ -214,8 +205,15 @@ struct AnimationControllerInner {
     /// Number of repeat cycles to run; `None` repeats indefinitely.
     repeat_count: Option<u32>,
 
-    /// Completed repeat cycles so far.
-    repeat_done: u32,
+    /// Phase offset, in nanoseconds into the repeat period, that the value at
+    /// the call to `repeat`/`repeat_with` sits at — the pure-time-sampling
+    /// model's only piece of repeat state:
+    /// [`tick_repeat`](AnimationController::tick_repeat) computes
+    /// `total_ns = elapsed_ns_since_the_run_started + repeat_initial_ns` and
+    /// derives leg, phase, and exhaustion from `total_ns` alone, so a long
+    /// frame that spans several cycles at once needs no incremental
+    /// bookkeeping (the field this replaces, `repeat_done`, required it).
+    repeat_initial_ns: u128,
 
     /// Active physics simulation (if using fling/animate_with).
     simulation: Option<Box<dyn Simulation>>,
@@ -425,7 +423,6 @@ impl AnimationController {
             direction: AnimationDirection::Forward,
             start_value: lower_bound,
             target_value: upper_bound,
-            run_epoch_secs: 0.0,
             last_raw_elapsed_secs: 0.0,
             run_generation: 0,
             run_duration: None,
@@ -437,7 +434,7 @@ impl AnimationController {
             repeat_max: upper_bound,
             repeat_period: None,
             repeat_count: None,
-            repeat_done: 0,
+            repeat_initial_ns: 0,
             simulation: None,
             run_curve: None,
             last_reported_status: AnimationStatus::Dismissed,
@@ -960,12 +957,28 @@ impl AnimationController {
 
     /// Repeat the animation with full control over range, period, and count.
     ///
+    /// The run starts from the CURRENT value, clamped into `[min, max]` —
+    /// not from `min` — so a `repeat()` issued every build (a common pattern
+    /// for a looping indicator) progresses instead of freezing at the start
+    /// each time; to start at `min`, call [`set_value`](Self::set_value)
+    /// first (flutter#67507). `value`/`status`/`direction` at any later
+    /// [`tick_at`](Self::tick_at) are a pure function of the elapsed time
+    /// since this call, the range, `period`, `reverse`, and `count` — the
+    /// frame partition never changes the answer. `count` boundaries are
+    /// measured from that phase origin, not from a fresh cycle 0: a run
+    /// started mid-cycle ends `count` boundaries later, not `count` full
+    /// periods (Flutter: `_exitTimeInSeconds = count*period - _initialT`;
+    /// Compose: `iterations*duration - initialOffset`), and a finite run
+    /// lands on the END of its last cycle.
+    ///
     /// # Arguments
     ///
     /// * `min` - Lower endpoint of the repeat range (defaults to `lower_bound`)
     /// * `max` - Upper endpoint of the repeat range (defaults to `upper_bound`)
     /// * `reverse` - Bounce back and forth instead of restarting each cycle
-    /// * `period` - Per-cycle duration (defaults to the forward duration)
+    /// * `period` - Per-cycle duration (defaults to the forward duration);
+    ///   resolved once at this call — a later [`set_duration`](Self::set_duration)
+    ///   does not retime an active repeat, and both legs of a bounce share it
     /// * `count` - Number of cycles; `None` repeats indefinitely (see
     ///   [`repeat`](Self::repeat) for what that means for the returned future)
     ///
@@ -982,11 +995,16 @@ impl AnimationController {
     ) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
+        let entry_value = inner.value;
 
         // Clamp the repeat range into the controller's bounds and reject an
         // empty/inverted range, so a repeat run can never start `value` (or its
         // ticks) outside `[lower_bound, upper_bound]` — consistent with
-        // [`with_bounds`]'s `InvalidBounds` contract.
+        // [`with_bounds`]'s `InvalidBounds` contract. Flutter permits
+        // `min == max`; FLUI does not: a repeat that can structurally never
+        // change value is a caller error that would hold the frame loop open
+        // doing nothing, the same contract `with_bounds` already applies to
+        // an empty range.
         let lo = min
             .unwrap_or(inner.lower_bound)
             .clamp(inner.lower_bound, inner.upper_bound);
@@ -999,21 +1017,72 @@ impl AnimationController {
                 inner.lower_bound, inner.upper_bound
             )));
         }
-        inner.is_repeating = true;
+
+        // A leftover per-run mode (an `animate_to_curved` curve, a fling
+        // simulation) must not shape a following repeat — Flutter's `repeat`
+        // applies no curve at all, and `tick_repeat` applies none either.
+        inner.clear_run_modes();
         inner.repeat_reverse = reverse;
         inner.repeat_min = lo;
         inner.repeat_max = hi;
-        inner.repeat_period = period;
+        // Resolved ONCE, not read live on every tick: a later `set_duration`
+        // must not retime an active repeat (Flutter parity — `period ??=
+        // duration`, captured by the simulation at the call), and one period
+        // for both legs of a bounce keeps the modular-nanosecond arithmetic
+        // in `tick_repeat` exact.
+        let resolved_period = period.unwrap_or(inner.duration);
+        inner.repeat_period = Some(resolved_period);
         inner.repeat_count = count;
-        inner.repeat_done = 0;
-        inner.run_duration = None;
-        inner.simulation = None;
 
-        inner.value = lo;
-        inner.direction = AnimationDirection::Forward;
-        inner.status = AnimationStatus::Forward;
-        inner.start_value = lo;
-        inner.target_value = hi;
+        // The value at the call is the pure function sampled at elapsed
+        // time zero — NOT a bare `lo`: from `value == max` in restart mode
+        // that is `lo` (the phase wraps), exactly Flutter's
+        // `_startSimulation` setting `_value = x(0.0)`; in bounce mode a
+        // value starting at `max` reports the reverse leg. Widen to f64
+        // before subtracting — near `max` the f32 difference loses bits,
+        // ~60ns of quantization at a 1s period, harmless to the phase this
+        // computes.
+        let v = inner.value.clamp(lo, hi);
+        let period_ns = resolved_period.as_nanos();
+        let initial_ns = if period_ns == 0 {
+            0
+        } else {
+            let ratio = (f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo));
+            (ratio * period_ns as f64).round() as u128
+        };
+        inner.repeat_initial_ns = initial_ns;
+
+        if period_ns == 0 {
+            // ZERO EFFECTIVE PERIOD, any count: settle SYNCHRONOUSLY at the
+            // call instead of installing a run that can never advance —
+            // Android's rule ("0 duration animator, ignore the repeat count
+            // and skip to the end", `ValueAnimator.animateBasedOnTime`);
+            // Compose rejects it, Flutter asserts. An infinite zero-period
+            // repeat ticking once per frame would hold the frame loop open
+            // forever doing nothing, so it settles instead — a documented
+            // exception to "an infinite repeat's future resolves only by
+            // cancellation". `count.saturating_sub(1)` treats an explicit
+            // `Some(0)` the same as `Some(1)`: landing on cycle 0's end
+            // rather than underflowing.
+            let landing_index = u128::from(count.map_or(0, |c| c.saturating_sub(1)));
+            let (value, direction) = inner.repeat_landing(landing_index);
+            inner.direction = direction;
+            inner.target_value = value;
+            return Ok(self.settle_at_target(entry_value, inner));
+        }
+
+        inner.is_repeating = true;
+        let i0 = initial_ns / period_ns;
+        let direction = AnimationControllerInner::repeat_leg(reverse, i0);
+        inner.direction = direction;
+        inner.status = direction.running_status();
+        let (start, target) = match direction {
+            AnimationDirection::Forward => (lo, hi),
+            AnimationDirection::Reverse => (hi, lo),
+        };
+        inner.start_value = start;
+        inner.target_value = target;
+        inner.value = v;
         // `restart_ticker` runs BEFORE the completer replaces `active_run` —
         // see its own doc for why the order is load-bearing.
         let has_ticker = self.restart_ticker(&mut inner);
@@ -1023,12 +1092,12 @@ impl AnimationController {
             .replace(completer)
             .map(TickerCompleter::cancel);
 
-        self.finish(
-            AnimationStatus::Forward,
-            ValueChange::Unchanged,
-            displaced_delivery,
-            inner,
-        );
+        // Flutter parity: `_startSimulation` sets `_value` directly, without
+        // `notifyListeners()` (`animation_controller.dart:865` @ 3.44.0) —
+        // the value-at-the-call jump is real but reported on the run's first
+        // tick, not synchronously here.
+        let status = inner.status;
+        self.finish(status, ValueChange::Unchanged, displaced_delivery, inner);
         Self::warn_if_no_ticker(has_ticker);
         Ok(future)
     }
@@ -1276,9 +1345,10 @@ impl AnimationController {
     /// pre-dilation) since the ticker started.
     ///
     /// This is the single time-driven entry point: time-based runs interpolate
-    /// `start_value -> target_value`, simulations sample `x(t)`, and repeats
-    /// advance their cycle epoch. Value and status listeners are fired only
-    /// after the inner lock is released.
+    /// `start_value -> target_value`, simulations sample `x(t)`, and a repeat
+    /// samples its leg/phase/exhaustion as a pure function of `cycle` (see
+    /// the private `tick_repeat`). Value and status listeners are fired
+    /// only after the inner lock is released.
     pub fn tick_at(&self, raw_elapsed_secs: f64) {
         let mut inner = self.inner.lock();
         // `active_run.is_none()`, not `!status.is_running()`: `active_run`
@@ -1291,13 +1361,17 @@ impl AnimationController {
             return;
         }
         inner.last_raw_elapsed_secs = raw_elapsed_secs;
-        let dilated = raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE);
-        let cycle = (dilated - inner.run_epoch_secs).max(0.0);
+        // `restart_ticker` always begins a fresh run's `Ticker` at elapsed
+        // zero, so the dilated elapsed time IS the elapsed time since this
+        // run started — no per-run epoch to subtract.
+        let cycle = (raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE)).max(0.0);
 
-        if inner.simulation.is_some() {
+        if inner.is_repeating {
+            self.tick_repeat(inner, cycle);
+        } else if inner.simulation.is_some() {
             self.tick_simulation(inner, narrow_f32(cycle));
         } else {
-            self.tick_time_based(inner, dilated, cycle);
+            self.tick_time_based(inner, cycle);
         }
     }
 
@@ -1336,11 +1410,12 @@ impl AnimationController {
         }
     }
 
-    /// Time-based (tween) branch of [`tick_at`](Self::tick_at).
+    /// Time-based (tween) branch of [`tick_at`](Self::tick_at). Never called
+    /// while `is_repeating` — [`tick_at`](Self::tick_at) dispatches a repeat
+    /// to [`tick_repeat`](Self::tick_repeat) instead.
     fn tick_time_based(
         &self,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
-        dilated: f64,
         cycle: f64,
     ) {
         let duration = inner.current_duration();
@@ -1367,101 +1442,7 @@ impl AnimationController {
             self.notifier.notify_listeners();
             return;
         }
-
-        // Cycle complete. Provisional: this is the end of the *first* spanned
-        // cycle; the repeat-exhaustion branch below overwrites it with the
-        // last cycle's endpoint when several cycles retire in one frame.
         inner.value = inner.target_value;
-
-        if inner.is_repeating {
-            let period = duration.as_secs_f64();
-            // Retire every whole cycle this frame spanned, not just one. A long
-            // frame (dt > period, e.g. after a dropped frame) elapses several
-            // cycles at once; advancing count/epoch by a single cycle would leave
-            // a finite repeat active an extra frame and an infinite repeat
-            // permanently out of phase. `cycle >= period` here (t reached 1.0),
-            // so `spanned >= 1`. Cost is O(1): the count is arithmetic and the
-            // cycle transition is applied by parity, never looped.
-            let spanned = if period > 0.0 {
-                whole_cycles(cycle / period).max(1)
-            } else {
-                // Zero-period repeat: a finite count exhausts at once; an
-                // infinite one would be unbounded, so retire one cycle per tick.
-                inner
-                    .repeat_count
-                    .map_or(1, |count| count.saturating_sub(inner.repeat_done))
-                    .max(1)
-            };
-            let cycles = match inner.repeat_count {
-                Some(count) => spanned.min(count - inner.repeat_done),
-                None => spanned,
-            };
-            inner.repeat_done += cycles;
-
-            let exhausted = inner
-                .repeat_count
-                .is_some_and(|count| inner.repeat_done >= count);
-            if exhausted {
-                // Land on the end of the final (count-th) retired cycle. In
-                // restart mode every cycle ends at `repeat_max`; in bounce mode
-                // the end alternates, so for a multi-cycle frame it depends on
-                // the parity of how many cycles were retired (the value set above
-                // is only the first cycle's target). This also drives the settled
-                // status below, so it must be correct before that read.
-                inner.value = if inner.repeat_reverse {
-                    let entry_forward = inner.direction == AnimationDirection::Forward;
-                    let last_forward = entry_forward == (cycles % 2 == 1);
-                    // `settled_status` below reads `inner.direction` with no
-                    // bound check, so — unlike the old bounds-first rule —
-                    // it must already be the FINAL retired leg's direction,
-                    // not whichever leg was active when this tick began.
-                    inner.direction = if last_forward {
-                        AnimationDirection::Forward
-                    } else {
-                        AnimationDirection::Reverse
-                    };
-                    if last_forward {
-                        inner.repeat_max
-                    } else {
-                        inner.repeat_min
-                    }
-                } else {
-                    inner.repeat_max
-                };
-                if let Some(ticker) = &mut inner.ticker {
-                    ticker.stop();
-                }
-                inner.is_repeating = false;
-                // Run-end rule, not the bounds-first stop/set_value one — see
-                // `AnimationDirection::settled_status`'s doc.
-                let status = inner.direction.settled_status();
-                inner.status = status;
-                let delivery = inner.active_run.take().map(TickerCompleter::complete);
-                self.finish(status, ValueChange::Notify, delivery, inner);
-                return;
-            }
-
-            // Advance the epoch past every retired cycle (phase-preserving — the
-            // remainder within the new cycle is interpolated on the next tick).
-            inner.run_epoch_secs += f64::from(cycles) * period;
-            let _ = dilated; // boundary time available if a future modulo path needs it
-            // `begin_next_repeat_cycle` is an idempotent reset in restart mode
-            // and a pure direction flip in bounce mode, so only the parity of the
-            // retired-cycle count matters — collapse N cycles to at most one
-            // transition rather than looping. In bounce mode an even retired
-            // count cancels out (net no flip), so the cycle-begin step is
-            // skipped entirely rather than calling it twice.
-            if inner.repeat_reverse {
-                if cycles % 2 == 1 {
-                    inner.begin_next_repeat_cycle();
-                }
-            } else {
-                inner.begin_next_repeat_cycle();
-            }
-            let status = inner.status;
-            self.finish(status, ValueChange::Notify, None, inner);
-            return;
-        }
 
         // Non-repeating completion. Flutter parity: `AnimationController._tick`
         // (`animation_controller.dart` @ 3.44.0) reports the settled status
@@ -1480,6 +1461,89 @@ impl AnimationController {
         // for why the order matters to a panicking listener.
         let delivery = inner.active_run.take().map(TickerCompleter::complete);
         self.finish(status, ValueChange::Notify, delivery, inner);
+    }
+
+    /// Repeat branch of [`tick_at`](Self::tick_at).
+    ///
+    /// `value`/`status`/`direction` are a pure function of `cycle` (elapsed
+    /// time since the run started), `repeat_period`, `repeat_min`/`repeat_max`,
+    /// `repeat_reverse`, `repeat_initial_ns` (the phase the run started at),
+    /// and `repeat_count` — the frame partition never changes the answer:
+    /// `tick_at(1.25)` gives the same result whether or not an intervening
+    /// `tick_at(1.0)` happened, for any number of cycles a long frame spans.
+    /// All arithmetic is integer nanoseconds — Compose's
+    /// `VectorizedRepeatableSpec` and GPUI both reduce modulo the period in
+    /// nanos before any float conversion, because the f64 predicate `total >=
+    /// count * period` is unsound at an exact boundary (`0.3 >= 3.0 * 0.1` is
+    /// `false`), which would land an exhaustion a frame late.
+    ///
+    /// [`AnimationControllerInner::repeat_leg`]/`repeat_landing` are the only
+    /// place the leg/landing parity math lives; this function calls them
+    /// instead of hand-copying it.
+    fn tick_repeat(
+        &self,
+        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        cycle: f64,
+    ) {
+        let period_ns = inner
+            .repeat_period
+            .expect("BUG: is_repeating implies repeat_with already resolved repeat_period")
+            .as_nanos();
+        if period_ns == 0 {
+            // `repeat_with`'s own zero-period branch settles synchronously
+            // at the call and never sets `is_repeating`, so this cannot be
+            // reached today — guarded, not `expect`ed, since a u128 division
+            // by zero panics and this guards a value read from state rather
+            // than an invariant this function alone maintains.
+            return;
+        }
+
+        let elapsed_ns = Duration::try_from_secs_f64(cycle.max(0.0)).map_or(0, |d| d.as_nanos());
+        let total_ns = elapsed_ns + inner.repeat_initial_ns;
+        let i = total_ns / period_ns;
+
+        let exhausted = inner
+            .repeat_count
+            .is_some_and(|count| total_ns >= u128::from(count) * period_ns);
+        if exhausted {
+            let count = inner
+                .repeat_count
+                .expect("BUG: `exhausted` above requires repeat_count to be Some");
+            // `saturating_sub(1)` treats a degenerate `count == 0` the same
+            // as `count == 1` (lands on cycle 0's end) rather than
+            // underflowing a u128 index.
+            let (value, direction) = inner.repeat_landing(u128::from(count.saturating_sub(1)));
+            inner.value = value;
+            inner.start_value = value;
+            inner.target_value = value;
+            inner.direction = direction;
+            if let Some(ticker) = &mut inner.ticker {
+                ticker.stop();
+            }
+            inner.is_repeating = false;
+            let status = direction.settled_status();
+            inner.status = status;
+            let delivery = inner.active_run.take().map(TickerCompleter::complete);
+            self.finish(status, ValueChange::Notify, delivery, inner);
+            return;
+        }
+
+        let phase = (total_ns % period_ns) as f64 / period_ns as f64;
+        let direction = AnimationControllerInner::repeat_leg(inner.repeat_reverse, i);
+        inner.direction = direction;
+        let (start, target) = match direction {
+            AnimationDirection::Forward => (inner.repeat_min, inner.repeat_max),
+            AnimationDirection::Reverse => (inner.repeat_max, inner.repeat_min),
+        };
+        inner.start_value = start;
+        inner.target_value = target;
+        // `take_status_change` dedups repeated same-status writes, so a leg
+        // flip fires exactly one status change and an even number of
+        // skipped bounce cycles in one long frame fires none.
+        inner.value = start + (target - start) * narrow_f32(phase);
+        let status = direction.running_status();
+        inner.status = status;
+        self.finish(status, ValueChange::Notify, None, inner);
     }
 
     /// Set the value directly without animating; recomputes status and notifies.
@@ -1570,11 +1634,10 @@ impl AnimationController {
     /// delivery drops under the lock if that foreign code panics" — not the
     /// foreign call itself. `replace`/`.map(TickerCompleter::cancel)` at
     /// every call site touch only `active_run`; this function touches only
-    /// `run_epoch_secs`/`last_raw_elapsed_secs`/`run_generation`/`ticker` —
-    /// disjoint fields, so reordering the two calls is free.
+    /// `last_raw_elapsed_secs`/`run_generation`/`ticker` — disjoint fields,
+    /// so reordering the two calls is free.
     #[must_use]
     fn restart_ticker(&self, inner: &mut AnimationControllerInner) -> bool {
-        inner.run_epoch_secs = 0.0;
         inner.last_raw_elapsed_secs = 0.0;
         // A fresh run's `t = 0` is established here — bump the generation so an
         // external frame driver re-anchors its per-run epoch (see
@@ -1765,10 +1828,11 @@ impl AnimationControllerInner {
         base.mul_f64(fraction)
     }
 
-    /// Dilated elapsed within the current cycle, from the last observed tick.
+    /// Dilated elapsed time since the current run started, from the last
+    /// observed tick (`restart_ticker` always begins a fresh run at elapsed
+    /// zero, so there is no per-run epoch left to subtract).
     fn cycle_elapsed_secs(&self) -> f64 {
-        let dilated = self.last_raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE);
-        (dilated - self.run_epoch_secs).max(0.0)
+        (self.last_raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE)).max(0.0)
     }
 
     /// Whether the current value is at (or indistinguishable from) the upper bound.
@@ -1836,32 +1900,32 @@ impl AnimationControllerInner {
         }
     }
 
-    /// Set up the next repeat cycle: flips direction in bounce mode, restarts
-    /// at `repeat_min` otherwise. Status change detection is the caller's
-    /// job, via [`take_status_change`](Self::take_status_change).
-    fn begin_next_repeat_cycle(&mut self) {
-        if self.repeat_reverse {
-            let was_forward = self.direction == AnimationDirection::Forward;
-            self.direction = if was_forward {
-                AnimationDirection::Reverse
-            } else {
-                AnimationDirection::Forward
-            };
-            self.status = self.direction.running_status();
-            if was_forward {
-                self.start_value = self.repeat_max;
-                self.target_value = self.repeat_min;
-            } else {
-                self.start_value = self.repeat_min;
-                self.target_value = self.repeat_max;
-            }
+    /// The direction of repeat cycle `index` (0-based): `Forward` unless the
+    /// repeat bounces and `index` is odd. The single owner of this parity —
+    /// every leg/landing computation in this file (`repeat_with`'s
+    /// value-at-the-call sample, [`repeat_landing`](Self::repeat_landing),
+    /// and [`AnimationController::tick_repeat`]'s running leg) calls this
+    /// instead of hand-copying the arithmetic; two copies is how one path
+    /// ships wrong.
+    fn repeat_leg(reverse: bool, index: u128) -> AnimationDirection {
+        if reverse && index % 2 == 1 {
+            AnimationDirection::Reverse
         } else {
-            self.direction = AnimationDirection::Forward;
-            self.status = AnimationStatus::Forward;
-            self.value = self.repeat_min;
-            self.start_value = self.repeat_min;
-            self.target_value = self.repeat_max;
+            AnimationDirection::Forward
         }
+    }
+
+    /// The value/direction at the END of repeat cycle `index` (0-based): a
+    /// `Reverse` leg lands on `repeat_min`, a `Forward` leg on `repeat_max`.
+    /// The single landing rule every exhaustion (finite count run out) and
+    /// zero-period settle reports.
+    fn repeat_landing(&self, index: u128) -> (f32, AnimationDirection) {
+        let direction = Self::repeat_leg(self.repeat_reverse, index);
+        let value = match direction {
+            AnimationDirection::Reverse => self.repeat_min,
+            AnimationDirection::Forward => self.repeat_max,
+        };
+        (value, direction)
     }
 }
 
@@ -2593,8 +2657,8 @@ mod tests {
     fn repeat_with_clamps_range_into_bounds() {
         let _serial = serial();
         let c = controller(100);
-        // Out-of-bounds min/max are clamped into [0, 1]; the run starts at the
-        // clamped min and never leaves the controller bounds.
+        // Out-of-bounds min/max are clamped into [0, 1]; the run never
+        // leaves the controller bounds.
         c.repeat_with(
             Some(-5.0),
             Some(5.0),
@@ -2603,12 +2667,527 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(c.value(), 0.0, "clamped min = lower_bound");
+        // The run starts at the CURRENT value (0.0, this controller's
+        // default) clamped into the range — not "at the clamped min",
+        // which only coincides here because the current value already is
+        // the lower bound.
+        assert_eq!(
+            c.value(),
+            0.0,
+            "current value 0.0 clamped into [0, 1] is still 0.0"
+        );
         c.tick_at(0.005); // mid-cycle
         assert!(
             c.value() >= 0.0 && c.value() <= 1.0,
             "stays within bounds: {}",
             c.value()
+        );
+        c.dispose();
+    }
+
+    // ---- repeat sampling is a pure function of elapsed time (#1078) ----
+
+    /// The issue's own reproduction: a repeating run's value/status at any
+    /// `tick_at(t)` depends only on the elapsed time since the run started,
+    /// never on how many intervening ticks partitioned the way there —
+    /// `tick_at(1.25)` must equal `tick_at(1.0); tick_at(1.25)`, for both
+    /// restart and bounce.
+    #[test]
+    fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
+        let _serial = serial();
+
+        // Restart mode: skip cycle 0's boundary tick entirely.
+        let direct = AnimationController::without_ticker(Duration::from_secs(1));
+        direct
+            .repeat_with(None, None, false, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        direct.tick_at(1.25);
+        let partitioned = AnimationController::without_ticker(Duration::from_secs(1));
+        partitioned
+            .repeat_with(None, None, false, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        partitioned.tick_at(1.0);
+        partitioned.tick_at(1.25);
+        assert!(
+            (direct.value() - 0.25).abs() < 1e-6,
+            "value={}",
+            direct.value()
+        );
+        assert_eq!(direct.value(), partitioned.value());
+        assert_eq!(direct.status(), partitioned.status());
+        direct.dispose();
+        partitioned.dispose();
+
+        // Bounce mode: same elapsed time, opposite leg (cycle index 1 is
+        // the reverse leg).
+        let direct = AnimationController::without_ticker(Duration::from_secs(1));
+        direct
+            .repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        direct.tick_at(1.25);
+        let partitioned = AnimationController::without_ticker(Duration::from_secs(1));
+        partitioned
+            .repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        partitioned.tick_at(1.0);
+        partitioned.tick_at(1.25);
+        assert!(
+            (direct.value() - 0.75).abs() < 1e-6,
+            "value={}",
+            direct.value()
+        );
+        assert_eq!(direct.value(), partitioned.value());
+        assert_eq!(direct.status(), partitioned.status());
+        direct.dispose();
+        partitioned.dispose();
+    }
+
+    /// Partition invariance holds for any number of skipped cycles (odd and
+    /// even), and over a custom `min`/`max` range, not only the
+    /// controller's own bounds.
+    #[test]
+    fn repeat_value_is_partition_invariant_over_custom_bounds_and_multiple_skipped_cycles() {
+        let _serial = serial();
+        for &t in &[1.25_f64, 2.25, 3.25] {
+            let direct = AnimationController::without_ticker(Duration::from_secs(1));
+            direct
+                .repeat_with(
+                    Some(0.2),
+                    Some(0.8),
+                    true,
+                    Some(Duration::from_secs(1)),
+                    None,
+                )
+                .unwrap();
+            direct.tick_at(t);
+
+            let partitioned = AnimationController::without_ticker(Duration::from_secs(1));
+            partitioned
+                .repeat_with(
+                    Some(0.2),
+                    Some(0.8),
+                    true,
+                    Some(Duration::from_secs(1)),
+                    None,
+                )
+                .unwrap();
+            let mut elapsed = 0.0_f64;
+            while elapsed < t {
+                elapsed = (elapsed + 1.0).min(t);
+                partitioned.tick_at(elapsed);
+            }
+
+            assert!(
+                (direct.value() - partitioned.value()).abs() < 1e-6,
+                "t={t}: direct={} partitioned={}",
+                direct.value(),
+                partitioned.value()
+            );
+            assert_eq!(direct.status(), partitioned.status(), "t={t}");
+            direct.dispose();
+            partitioned.dispose();
+        }
+    }
+
+    /// Sampling the same elapsed time twice is idempotent.
+    #[test]
+    fn repeat_tick_at_the_same_time_twice_is_idempotent() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_secs(1));
+        c.repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        c.tick_at(2.25);
+        let (value, status) = (c.value(), c.status());
+        c.tick_at(2.25);
+        assert_eq!(c.value(), value);
+        assert_eq!(c.status(), status);
+        c.dispose();
+    }
+
+    /// The value/status at the call are the pure function sampled at
+    /// elapsed time zero, computed BEFORE any tick — a bounce starting
+    /// exactly at `max` reports the reverse leg immediately. Flutter
+    /// parity: `_startSimulation` runs `x(0.0)` (which flips direction)
+    /// before `_status` is computed (`animation_controller.dart:861-871`
+    /// @ 3.44.0).
+    #[test]
+    fn repeat_bounce_from_max_reports_reverse_status_at_the_call() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(1.0);
+        c.repeat(true).unwrap();
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        assert_eq!(c.status(), AnimationStatus::Reverse);
+        c.dispose();
+    }
+
+    /// Flutter oracle: `animation_controller_test.dart` "calling repeat
+    /// with reverse set to true makes the animation alternate between
+    /// lowerBound and upperBound values on each repeat" (@ 3.44.0) — the
+    /// two sub-cases that start from a boundary/interior value (the
+    /// `value == 0.0` sub-case is a restart-equivalent already covered by
+    /// `repeat_value_is_partition_invariant_across_a_skipped_cycle`).
+    #[test]
+    fn repeat_bounce_flutter_oracle_reverse_from_max_and_mid() {
+        let _serial = serial();
+
+        // value == max at the call reports the reverse leg immediately.
+        let c = controller(100);
+        c.set_value(1.0);
+        c.repeat(true).unwrap();
+        c.tick_at(0.025);
+        assert!((c.value() - 0.75).abs() < 1e-6, "value={}", c.value());
+        c.tick_at(0.125);
+        assert!((c.value() - 0.25).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+
+        // value == 0.5 (mid-range) at the call.
+        let c = controller(100);
+        c.set_value(0.5);
+        c.repeat(true).unwrap();
+        c.tick_at(0.05);
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        c.tick_at(0.15);
+        assert!((c.value() - 0.0).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+    }
+
+    /// Flutter oracle: `animation_controller_test.dart` "calling repeat
+    /// with specified min and max values between 0 and 1..." (@ 3.44.0) —
+    /// the `min == max` degenerate sub-case is skipped: FLUI rejects it
+    /// (`repeat_with_rejects_inverted_range`), where Flutter permits it.
+    #[test]
+    fn repeat_bounce_flutter_oracle_interior_range() {
+        let _serial = serial();
+
+        // value 0.0 is below `min` at the call — the silent clamp lands on
+        // 0.5 (Flutter's `x(0.0)` parity), not a rejection.
+        let c = controller(100);
+        c.repeat_with(Some(0.5), Some(1.0), true, None, None)
+            .unwrap();
+        assert!(
+            (c.value() - 0.5).abs() < 1e-6,
+            "silent clamp: value={}",
+            c.value()
+        );
+        c.tick_at(0.05);
+        assert!((c.value() - 0.75).abs() < 1e-6, "value={}", c.value());
+        c.tick_at(0.10);
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        c.tick_at(0.20);
+        assert!((c.value() - 0.5).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+
+        // The same 200ms checkpoint, sampled in a SINGLE tick from the call
+        // with no intervening boundary ticks: partition invariance must
+        // give the identical answer the sequential port above established.
+        // A two-cycle skip in one frame is exactly where the old
+        // incremental model (advance-by-one-cycle-endpoint) diverged from
+        // pure sampling.
+        let jumped = controller(100);
+        jumped
+            .repeat_with(Some(0.5), Some(1.0), true, None, None)
+            .unwrap();
+        jumped.tick_at(0.20);
+        assert!(
+            (jumped.value() - 0.5).abs() < 1e-6,
+            "value={}",
+            jumped.value()
+        );
+        jumped.dispose();
+
+        let c = controller(100);
+        c.set_value(0.2);
+        c.repeat_with(Some(0.2), Some(0.6), true, None, None)
+            .unwrap();
+        c.tick_at(0.05);
+        assert!((c.value() - 0.4).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+    }
+
+    /// Flutter oracle: `animation_controller_test.dart` "calling repeat
+    /// with negative min value and positive max value..." (@ 3.44.0) — a
+    /// repeat range that does not start at the controller's own bounds, on
+    /// a controller whose own bounds are not `[0, 1]`.
+    #[test]
+    fn repeat_restart_flutter_oracle_custom_controller_bounds() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker_bounds(Duration::from_millis(100), -1.0, 3.0)
+            .unwrap();
+        c.set_value(1.0);
+        c.repeat_with(Some(1.0), Some(3.0), false, None, None)
+            .unwrap();
+        assert!(
+            (c.value() - 1.0).abs() < 1e-6,
+            "value at call={}",
+            c.value()
+        );
+        c.tick_at(0.05);
+        assert!((c.value() - 2.0).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+
+        let c = AnimationController::without_ticker_bounds(Duration::from_millis(100), -1.0, 3.0)
+            .unwrap();
+        c.set_value(0.0);
+        c.repeat_with(Some(-1.0), Some(3.0), false, None, None)
+            .unwrap();
+        assert!(
+            (c.value() - 0.0).abs() < 1e-6,
+            "value at call={}",
+            c.value()
+        );
+        c.tick_at(0.025);
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+    }
+
+    /// A finite count is measured from the phase origin, not from a fresh
+    /// cycle 0: a run started mid-cycle (value 0.5, half a period's phase)
+    /// exhausts `count` boundaries later — half a period after the call,
+    /// not a full period later (Flutter: `_exitTimeInSeconds = count*period
+    /// - _initialT`). Lands on the leg's own endpoint, `Completed` — the
+    /// improved replacement for Flutter's `% 1.0`-wrapped oracle (see
+    /// `docs/ARCHITECTURE.md`'s "Repeat sampling" mapping entry).
+    #[test]
+    fn repeat_restart_finite_count_exhausts_from_the_phase_origin() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(0.5);
+        c.repeat_with(None, None, false, None, Some(1)).unwrap();
+        c.tick_at(0.05);
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        c.dispose();
+    }
+
+    /// Flutter oracle: `animation_controller_test.dart` "calling repeat by
+    /// setting count as valid with reverse as true..." (@ 3.44.0). Its
+    /// harness ticks are ABSOLUTE frame timestamps
+    /// (`scheduler_tester.dart`'s `tick` calls `handleBeginFrame` with the
+    /// argument directly), so `tick(100ms)` then `tick(60ms)` REWINDS the
+    /// clock to 60ms — the oracle's `0.6` sample is elapsed 60ms, not a
+    /// cumulative 160ms. Pure sampling makes that rewind exact, with no
+    /// `toStringAsFixed` rounding needed. The exhaustion assertion is
+    /// FLUI's own addition — the oracle never ticks that far.
+    #[test]
+    fn repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind() {
+        let _serial = serial();
+        let c = controller(100);
+        c.repeat_with(None, None, true, None, Some(4)).unwrap();
+        c.tick_at(0.025);
+        assert!((c.value() - 0.25).abs() < 1e-6, "value={}", c.value());
+        c.tick_at(0.05);
+        assert!((c.value() - 0.5).abs() < 1e-6, "value={}", c.value());
+        c.tick_at(0.099);
+        assert!((c.value() - 0.99).abs() < 1e-3, "value={}", c.value());
+        c.tick_at(0.10);
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        // The harness's absolute-time rewind: elapsed 60ms, not a
+        // cumulative 160ms.
+        c.tick_at(0.06);
+        assert!((c.value() - 0.6).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+
+        // The non-rewound interpretation, for contrast: elapsed 160ms lands
+        // on the reverse leg's 0.4, not the forward leg's 0.6.
+        let c2 = controller(100);
+        c2.repeat_with(None, None, true, None, Some(4)).unwrap();
+        c2.tick_at(0.16);
+        assert!((c2.value() - 0.4).abs() < 1e-6, "value={}", c2.value());
+        c2.dispose();
+
+        // Exhaustion at exactly 400ms lands on the 4th (odd-indexed)
+        // cycle's reverse-leg endpoint.
+        let c3 = controller(100);
+        c3.repeat_with(None, None, true, None, Some(4)).unwrap();
+        c3.tick_at(0.4);
+        assert!((c3.value() - 0.0).abs() < 1e-6, "value={}", c3.value());
+        assert_eq!(c3.status(), AnimationStatus::Dismissed);
+        c3.dispose();
+    }
+
+    /// The exhaustion boundary is checked in integer nanoseconds, not f64:
+    /// `0.3 >= 3.0 * 0.1` is `false` in f64 arithmetic, which would leave a
+    /// 3-count 100ms repeat `Forward` one frame past the boundary it
+    /// should have exhausted at.
+    #[test]
+    fn repeat_exhaustion_boundary_is_exact_at_a_float_unsafe_ratio() {
+        let _serial = serial();
+        let c = controller(100);
+        c.repeat_with(None, None, false, None, Some(3)).unwrap();
+        c.tick_at(0.3);
+        assert_eq!(
+            c.status(),
+            AnimationStatus::Completed,
+            "3 * 100ms sampled at exactly 300ms must already be exhausted"
+        );
+        c.dispose();
+    }
+
+    /// A zero effective period settles SYNCHRONOUSLY at the call — Android's
+    /// rule ("0 duration animator, ignore the repeat count and skip to the
+    /// end"); Compose rejects it, Flutter asserts. A later `tick_at`
+    /// changes nothing (no run was ever installed), and `run_generation` is
+    /// untouched.
+    #[test]
+    fn repeat_with_zero_period_settles_synchronously_at_the_call() {
+        let _serial = serial();
+
+        // Finite count: lands on the count-th cycle's end (count=3, bounce,
+        // from 0: cycle index 2 is even -> Forward -> max).
+        let c = controller(100);
+        let generation_before = c.run_generation();
+        let future = c
+            .repeat_with(None, None, true, Some(Duration::ZERO), Some(3))
+            .unwrap();
+        assert!(future.is_complete());
+        assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        assert_eq!(c.run_generation(), generation_before);
+        c.tick_at(1.0);
+        assert!(
+            (c.value() - 1.0).abs() < 1e-6,
+            "a later tick must change nothing"
+        );
+        c.dispose();
+
+        // Infinite count: lands on cycle 0's end (Android's skip-to-end) —
+        // a documented exception to "an infinite repeat's future resolves
+        // only by cancellation".
+        let c2 = controller(100);
+        let future2 = c2
+            .repeat_with(None, None, false, Some(Duration::ZERO), None)
+            .unwrap();
+        assert!(future2.is_complete());
+        assert!((c2.value() - 1.0).abs() < 1e-6, "value={}", c2.value());
+        assert_eq!(c2.status(), AnimationStatus::Completed);
+        c2.dispose();
+    }
+
+    /// A leftover per-run easing curve must not shape a following repeat.
+    /// Flutter's `repeat` applies no curve at all, and `tick_repeat` never
+    /// reads `run_curve` — interpolation is always linear.
+    #[test]
+    fn a_leftover_curve_does_not_shape_a_following_repeat() {
+        use crate::curve::Curves;
+        let _serial = serial();
+        let c = controller(100);
+        // A zero-distance curved run settles synchronously but still
+        // installs the curve in `run_curve` — exactly the leftover state a
+        // real `animate_to_curved` interruption would leave behind.
+        c.animate_to_curved(
+            0.0,
+            Some(Duration::from_millis(100)),
+            Arc::new(Curves::EaseInQuint),
+        )
+        .unwrap();
+
+        c.repeat_with(None, None, false, Some(Duration::from_millis(100)), None)
+            .unwrap();
+        c.tick_at(0.05);
+        assert!(
+            (c.value() - 0.5).abs() < 1e-6,
+            "a repeat interpolates linearly, no curve — value={}",
+            c.value()
+        );
+        c.dispose();
+    }
+
+    /// `set_duration` must not retime an ACTIVE repeat: the period is
+    /// resolved ONCE at `repeat_with` (`period.unwrap_or(duration)`), not
+    /// read live on every tick — Flutter parity (`period ??= duration`,
+    /// captured by the simulation at the call).
+    #[test]
+    fn set_duration_during_an_active_repeat_leaves_the_running_period_unchanged() {
+        let _serial = serial();
+        let c = controller(100);
+        // Period defaults from `duration` (no explicit `period` argument) —
+        // the shape that used to be re-read live.
+        c.repeat_with(None, None, false, None, None).unwrap();
+        c.set_duration(Duration::from_millis(200));
+        c.tick_at(0.05); // half of the ORIGINAL 100ms period
+        assert!(
+            (c.value() - 0.5).abs() < 1e-6,
+            "set_duration mid-repeat must not retime the running period: value={}",
+            c.value()
+        );
+        c.dispose();
+    }
+
+    /// A frame that spans several repeat cycles at once fires status
+    /// listeners by PARITY, not once per retired cycle: an even number of
+    /// skipped bounce legs cancels out (no net direction flip), an odd
+    /// number fires exactly one status change, and a restart repeat's
+    /// cycle boundary never changes status at all (`take_status_change`
+    /// dedups the repeated `Forward` write). A tick that advances a live
+    /// run fires the value listener exactly once, regardless of how many
+    /// cycles it retired.
+    #[test]
+    fn repeat_multi_cycle_frame_notification_counts() {
+        let _serial = serial();
+
+        // Restart: a single tick spanning 3.5 cycles never changes status
+        // and fires exactly one value notification.
+        let c = controller(100);
+        c.repeat_with(None, None, false, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        let status_fires = Arc::new(AtomicUsize::new(0));
+        let sf = Arc::clone(&status_fires);
+        c.add_status_listener(Arc::new(move |_| {
+            sf.fetch_add(1, Ordering::SeqCst);
+        }));
+        let value_fires = Arc::new(AtomicUsize::new(0));
+        let vf = Arc::clone(&value_fires);
+        c.add_listener(Arc::new(move || {
+            vf.fetch_add(1, Ordering::SeqCst);
+        }));
+        c.tick_at(3.5);
+        assert!((c.value() - 0.5).abs() < 1e-6, "value={}", c.value());
+        assert_eq!(
+            status_fires.load(Ordering::SeqCst),
+            0,
+            "restart never changes status mid-repeat"
+        );
+        assert_eq!(
+            value_fires.load(Ordering::SeqCst),
+            1,
+            "one tick, one value notification"
+        );
+        c.dispose();
+
+        // Bounce, EVEN number of retired cycles (2): direction is back to
+        // Forward, so no net status change.
+        let c = controller(100);
+        c.repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        let status_fires = Arc::new(AtomicUsize::new(0));
+        let sf = Arc::clone(&status_fires);
+        c.add_status_listener(Arc::new(move |_| {
+            sf.fetch_add(1, Ordering::SeqCst);
+        }));
+        c.tick_at(2.5);
+        assert_eq!(
+            status_fires.load(Ordering::SeqCst),
+            0,
+            "an even number of skipped bounce cycles fires no status change"
+        );
+        c.dispose();
+
+        // Bounce, ODD number of retired cycles (3): exactly one status
+        // change.
+        let c = controller(100);
+        c.repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
+            .unwrap();
+        let status_fires = Arc::new(AtomicUsize::new(0));
+        let sf = Arc::clone(&status_fires);
+        c.add_status_listener(Arc::new(move |_| {
+            sf.fetch_add(1, Ordering::SeqCst);
+        }));
+        c.tick_at(3.5);
+        assert_eq!(
+            status_fires.load(Ordering::SeqCst),
+            1,
+            "an odd number of skipped bounce cycles fires exactly one status change"
         );
         c.dispose();
     }
