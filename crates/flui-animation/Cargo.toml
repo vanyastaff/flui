@@ -43,3 +43,7 @@ serde = ["dep:serde", "flui-types/serde"]
 [[bench]]
 name = "animation_bench"
 harness = false
+
+[[bench]]
+name = "vsync_registry"
+harness = false

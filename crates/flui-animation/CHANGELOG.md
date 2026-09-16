@@ -49,9 +49,22 @@ Versioning: per `docs/release.md` policy.
   itself as animating.
 - `TweenSequence::transform` documents its clamping semantics (saturates
   overshoot, unlike plain `Tween` extrapolation).
+- `Vsync`'s registry is now a `BTreeMap` keyed by registration id, walked by
+  a cursor bounded at the id count captured on entry, instead of a per-frame
+  id snapshot resolved through a linear `Vec` scan: `tick_all` drops from
+  O(N²) to O(N log N) per pump, and `register`/`unregister`/lookup of one
+  controller drop from O(N) to O(log N) — the cost a consumer with a large
+  resident registry (many implicitly-animated widgets sharing one `Vsync`)
+  will actually notice. Measured before/after in
+  [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#vsync-registry-indexing-1060)
+  (Refs #1060).
 
 ### Fixed
 
+- `Vsync::tick_all` re-reads `muted` on every registration it visits instead
+  of only once at entry: a listener that calls `set_muted(true)` mid-walk
+  now stops the rest of that frame's controllers from ticking, instead of
+  letting the in-flight walk finish against stale state (Refs #1060).
 - `TweenAnimation` never subscribed to its parent, so listeners on any tween
   combinator silently never fired (`AnimatedBuilder`-class breakage).
 - `ProxyAnimation` status listeners were orphaned on the old parent after

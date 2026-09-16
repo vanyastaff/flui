@@ -27,6 +27,7 @@
 //! controller run twice (forward to completion, then reverse) is ticked from the
 //! second run's own start instead of snapping to its target on the first frame.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -47,8 +48,11 @@ pub struct VsyncRegistration(u64);
 /// `t = 0`; `last_gen` is the controller's `run_generation` observed when that
 /// anchor was set. `run_start_secs` is `None` until the first tick anchors it,
 /// so registration needs no clock reading.
+///
+/// Keyed by the registration id (the `u64` inside [`VsyncRegistration`]) in
+/// [`VsyncInner::controllers`] rather than carrying its own id — the map key
+/// *is* the identity.
 struct RegisteredController {
-    id: VsyncRegistration,
     controller: AnimationController,
     run_start_secs: Option<f64>,
     last_gen: u64,
@@ -63,7 +67,11 @@ struct RegisteredChild {
 
 #[derive(Default)]
 struct VsyncInner {
-    controllers: Vec<RegisteredController>,
+    /// Keyed by the registration id, which is also the registration
+    /// *order*: ids are `next_id` post-increments and are never reused, so
+    /// ascending key order is ascending registration order. `tick_all`'s
+    /// cursor walk relies on that order to replace a per-frame id snapshot.
+    controllers: BTreeMap<u64, RegisteredController>,
     /// Nested registries — Flutter's `TickerMode` mutes a *subtree*'s tickers
     /// (`ticker_provider.dart:397`); FLUI's widgets take their `Vsync` from the
     /// ambient `VsyncScope`, so a subtree's registry is a child of the one
@@ -105,22 +113,24 @@ impl Vsync {
     /// the new run is observed.
     pub fn register(&self, controller: AnimationController) -> VsyncRegistration {
         let mut inner = self.inner.lock();
-        let id = VsyncRegistration(inner.next_id);
+        let id = inner.next_id;
         inner.next_id += 1;
         let last_gen = controller.run_generation();
-        inner.controllers.push(RegisteredController {
+        inner.controllers.insert(
             id,
-            controller,
-            run_start_secs: None,
-            last_gen,
-        });
-        id
+            RegisteredController {
+                controller,
+                run_start_secs: None,
+                last_gen,
+            },
+        );
+        VsyncRegistration(id)
     }
 
     /// Remove the controller previously registered under `id`. Idempotent: an
     /// unknown or already-removed id is a no-op.
     pub fn unregister(&self, id: VsyncRegistration) {
-        self.inner.lock().controllers.retain(|c| c.id != id);
+        self.inner.lock().controllers.remove(&id.0);
     }
 
     /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
@@ -216,6 +226,12 @@ impl Vsync {
     /// last running controller completes, `has_running()` returns `false` and
     /// the driver does NOT re-request, so the window quiesces cleanly — no
     /// infinite redraw after all animations settle.
+    ///
+    /// **O(N)**: the indexed registry (see [`tick_all`](Self::tick_all)'s doc)
+    /// speeds up *resolving one id*, not "is anything running", which still
+    /// reads every entry's status. No active-set index: that would need
+    /// start/stop notifications from the controller to track membership,
+    /// which nothing here provides.
     #[must_use]
     pub fn has_running(&self) -> bool {
         let (mine, children) = {
@@ -229,7 +245,7 @@ impl Vsync {
             (
                 inner
                     .controllers
-                    .iter()
+                    .values()
                     .any(|c| c.controller.status().is_running()),
                 inner
                     .children
@@ -251,8 +267,14 @@ impl Vsync {
     /// observation (a fresh run was just established) or it has no anchor yet,
     /// re-anchor `t = 0` to `now_secs`; then, if the controller reports running,
     /// tick it with the raw seconds elapsed since that anchor. A non-running
-    /// controller is skipped (its anchor is set on the frame it next starts), so
-    /// a disposed-but-not-unregistered controller is simply not ticked.
+    /// controller is skipped (its anchor is set on the frame it next starts).
+    ///
+    /// `now_secs` is expected to be a **non-decreasing** virtual clock across
+    /// calls. There is no clamp here: [`tick_at`](AnimationController::tick_at)
+    /// already clamps its own run-relative elapsed time at 0, so a backwards
+    /// step re-samples the controller's pure time function — never below that
+    /// run's `t = 0` — rather than "holding" the run; a `.max(0.0)` in this
+    /// method would change no observed value.
     ///
     /// # The registry lock is **not** held while ticking
     ///
@@ -263,27 +285,63 @@ impl Vsync {
     /// that re-entrant — and `parking_lot::Mutex` is not reentrant, so it
     /// deadlocked rather than panicked.
     ///
-    /// So each controller is looked up, its bookkeeping updated, and the lock
-    /// dropped *before* it is ticked. Ticking one controller at a time, rather than
-    /// snapshotting them all up front, preserves the property the old loop had:
-    /// a controller that an **earlier** controller's listener starts during this
-    /// same call (a `Scrollable` handing off to its fling controller) is anchored
-    /// and ticked in this frame, not the next.
+    /// So the registry is walked one entry at a time: each controller is looked
+    /// up, its bookkeeping updated, and the lock dropped *before* it is ticked.
+    /// Walking one entry at a time — rather than snapshotting every due
+    /// controller up front — preserves the property the original loop had: a
+    /// controller that an **earlier** controller's listener starts during this
+    /// same call (a `Scrollable` handing off to its fling controller) is
+    /// anchored and ticked in this frame, not the next.
     ///
-    /// A controller *registered* during this call is not ticked until the next
-    /// frame, and one *unregistered* during it is skipped from that point on.
+    /// # An indexed cursor walk, not a per-frame id snapshot
     ///
-    // ponytail: linear scan per controller. The registry holds a handful of
-    // controllers; if it ever holds hundreds, key it by `VsyncRegistration`.
+    /// `controllers` is a [`BTreeMap`] keyed by registration id, and ids are
+    /// `next_id` post-increments that are never reused — so ascending key
+    /// order *is* registration order. `tick_all` reads `fence = next_id` once
+    /// at entry, then walks `controllers.range_mut(cursor..fence)` one entry
+    /// at a time, advancing `cursor` past each id it visits. That range bound
+    /// — not a captured id list — is what gives the walk the same reentrancy
+    /// guarantees the old snapshot-then-`find` scan had:
+    ///
+    /// - A controller *registered* during this call gets an id ≥ `fence`
+    ///   (`next_id` only grows), so the walk's upper bound excludes it —
+    ///   ticked next frame.
+    /// - A controller *unregistered* during this call (by an earlier
+    ///   listener) is removed from the map outright, so the walk simply never
+    ///   reaches its key — skipped, with no lookup-miss branch to write.
+    /// - Unregistering a later controller and re-registering the same
+    ///   controller from an earlier listener gives the new registration an id
+    ///   that is also ≥ `fence`: not ticked this call, and its anchor starts
+    ///   fresh (`run_start_secs: None`) rather than inheriting the old
+    ///   registration's — no aliasing between the two ids.
+    /// - A listener that restarts an **earlier**, already-visited controller
+    ///   does not get it re-ticked this call: the cursor only moves forward,
+    ///   never back. Same as the old snapshot's behavior.
+    ///
+    /// `muted` is **re-read under the per-iteration lock**, not only at
+    /// entry: a listener that mutes the registry mid-walk stops the remaining
+    /// entries of *this* frame from ticking — Flutter honors a mid-frame
+    /// `Ticker.muted = true` the same way: the `muted` setter's
+    /// `unscheduleTick` call (`scheduler/ticker.dart`) hands the cancellation
+    /// to `SchedulerBinding.cancelFrameCallbackWithId`, and it is
+    /// `handleBeginFrame`'s callback loop (`scheduler/binding.dart`), which
+    /// skips any id already in `_removedIds`, that actually honors it within
+    /// the same frame. Nested `children` registries are still sampled **once
+    /// at entry** and ticked before the cursor walk starts, exactly as
+    /// before: a child attached via [`attach_child`](Self::attach_child) from
+    /// a listener mid-walk is first ticked on the *next* call — a ticker
+    /// started mid-frame schedules for the next frame in Flutter too.
+    ///
+    /// Cost: **O(log N)** per register/unregister/lookup — each
+    /// `range_mut(cursor..fence).next()` is its own fresh seek, since the
+    /// lock (and so the map borrow) is dropped between steps; one such seek
+    /// per resident controller per pump, so **O(N log N)** per pump.
+    /// [`has_running`](Self::has_running) stays O(N) — see its doc for why.
     pub fn tick_all(&self, now_secs: f64) {
-        let (registrations, children, muted) = {
+        let (fence, children, muted) = {
             let inner = self.inner.lock();
             (
-                inner
-                    .controllers
-                    .iter()
-                    .map(|registered| registered.id)
-                    .collect::<Vec<_>>(),
+                inner.next_id,
                 inner
                     .children
                     .iter()
@@ -305,33 +363,59 @@ impl Vsync {
             child.tick_all(now_secs);
         }
 
-        for id in registrations {
-            let due = {
+        let mut cursor = 0u64;
+        loop {
+            let step = {
                 let mut inner = self.inner.lock();
-                let Some(registered) = inner.controllers.iter_mut().find(|c| c.id == id) else {
-                    continue; // A previous tick's listener unregistered it.
-                };
-
-                let generation = registered.controller.run_generation();
-                if generation != registered.last_gen || registered.run_start_secs.is_none() {
-                    registered.last_gen = generation;
-                    registered.run_start_secs = Some(now_secs);
-                }
-                if registered.controller.status().is_running() {
-                    // `run_start_secs` is `Some` here — set in the branch above on
-                    // this same call if it was `None`.
-                    let run_start = registered.run_start_secs.unwrap_or(now_secs);
-                    Some((registered.controller.clone(), now_secs - run_start))
+                // Re-read per iteration, not only captured at entry above: a
+                // listener that mutes the registry mid-walk must stop the
+                // rest of this frame's entries from ticking.
+                if inner.muted {
+                    RegistryWalkStep::Finished
+                } else if let Some((&id, registered)) =
+                    inner.controllers.range_mut(cursor..fence).next()
+                {
+                    cursor = id + 1;
+                    let generation = registered.controller.run_generation();
+                    if generation != registered.last_gen || registered.run_start_secs.is_none() {
+                        registered.last_gen = generation;
+                        registered.run_start_secs = Some(now_secs);
+                    }
+                    if registered.controller.status().is_running() {
+                        // `run_start_secs` is `Some` here — set in the branch
+                        // above on this same call if it was `None`.
+                        let run_start = registered.run_start_secs.unwrap_or(now_secs);
+                        RegistryWalkStep::Running(
+                            registered.controller.clone(),
+                            now_secs - run_start,
+                        )
+                    } else {
+                        RegistryWalkStep::NotRunning
+                    }
                 } else {
-                    None
+                    RegistryWalkStep::Finished
                 }
             };
 
-            if let Some((controller, elapsed)) = due {
-                controller.tick_at(elapsed);
+            match step {
+                RegistryWalkStep::Finished => break,
+                RegistryWalkStep::NotRunning => {}
+                RegistryWalkStep::Running(controller, elapsed) => controller.tick_at(elapsed),
             }
         }
     }
+}
+
+/// One step of [`Vsync::tick_all`]'s cursor walk over `controllers`.
+enum RegistryWalkStep {
+    /// The walk's range is exhausted, or the registry was muted mid-walk:
+    /// either way the walk ends here.
+    Finished,
+    /// The controller at this position is not running; skip it and continue.
+    NotRunning,
+    /// The controller is running; tick it with the given elapsed seconds
+    /// once the registry lock guarding this step is released.
+    Running(AnimationController, f64),
 }
 
 impl std::fmt::Debug for Vsync {
@@ -346,6 +430,7 @@ impl std::fmt::Debug for Vsync {
 mod tests {
     use std::time::Duration;
 
+    use flui_foundation::Listenable;
     use flui_scheduler::UpdateScheduler;
 
     use super::*;
@@ -653,5 +738,382 @@ mod tests {
 
         driver.dispose();
         late.dispose();
+    }
+
+    /// An **earlier** listener starting an **already-registered, later**
+    /// controller must anchor AND TICK it in the SAME `tick_all` call — the
+    /// same-frame scroll→fling handoff the walk's ordering exists to
+    /// preserve. Status/value alone can't tell "B was anchored this call"
+    /// from "B was ticked this call": B starts at its own run's `t = 0`
+    /// either way, so both read `Forward` / value `0.0`. This test also
+    /// counts B's VALUE-listener notifications — `tick_at` fires one
+    /// unconditionally on every non-completing tick; anchoring alone does
+    /// not — which is what actually tells the two apart.
+    ///
+    /// Red-check: a walk that decides "is this controller due" from a
+    /// snapshot of `is_running()` taken at call ENTRY (before any listener
+    /// runs), while still doing the anchor bookkeeping live at each
+    /// controller's own turn, anchors B this call but never calls `tick_at`
+    /// on it — B's status/value assertions below still pass (untouched-
+    /// since-mount reads the same as anchored-to-zero), but the value-
+    /// notification-count assertion does not: B's count stays flat instead
+    /// of growing.
+    #[test]
+    fn an_earlier_listener_can_start_a_later_registered_controller_in_the_same_frame() {
+        let vsync = Vsync::new();
+        let a = controller(100);
+        let b = controller(100);
+        vsync.register(a.clone());
+        vsync.register(b.clone());
+
+        let b_notify_count = Arc::new(Mutex::new(0u32));
+        let b_notify_count_for_listener = Arc::clone(&b_notify_count);
+        b.add_listener(Arc::new(move || {
+            *b_notify_count_for_listener.lock() += 1;
+        }));
+
+        let b_for_listener = b.clone();
+        let count_at_forward: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+        let count_at_forward_for_listener = Arc::clone(&count_at_forward);
+        let count_source_for_listener = Arc::clone(&b_notify_count);
+        a.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                let _ = b_for_listener.forward();
+                // `forward()` itself fires no value notification (the value
+                // hasn't moved yet); snapshot right after it so the
+                // assertion below measures growth from THIS call's tick,
+                // not from `forward()` starting the run.
+                *count_at_forward_for_listener.lock() = Some(*count_source_for_listener.lock());
+            }
+        }));
+
+        a.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0); // anchor A
+        assert_eq!(
+            b.status(),
+            AnimationStatus::Dismissed,
+            "B is idle before this call"
+        );
+
+        vsync.tick_all(0.2); // past A's 100ms duration -> Completed -> starts B
+
+        assert_eq!(a.status(), AnimationStatus::Completed);
+        assert_eq!(
+            b.status(),
+            AnimationStatus::Forward,
+            "B is anchored and ticked in the SAME call A completed it"
+        );
+        assert!(
+            b.value() < 1e-4,
+            "B's first observed tick is its own run's t = 0 (anchored this call), got {}",
+            b.value(),
+        );
+        let snapshot = count_at_forward
+            .lock()
+            .expect("A's listener ran and captured the snapshot");
+        assert!(
+            *b_notify_count.lock() > snapshot,
+            "B's value listener must fire from a REAL `tick_at` call during \
+             THIS SAME `tick_all` — anchoring B without ticking it would \
+             leave the count flat at {snapshot}, got {}",
+            *b_notify_count.lock(),
+        );
+
+        // A following tick advances B from that anchor, proving it is a real
+        // anchor and not a fluke of `now_secs - run_start == 0` on this call.
+        vsync.tick_all(0.25);
+        assert!(
+            (b.value() - 0.5).abs() < 1e-3,
+            "B advances from ITS OWN run start on the next tick, got {}",
+            b.value(),
+        );
+
+        a.dispose();
+        b.dispose();
+    }
+
+    /// A controller registered from a listener during `tick_all` is not
+    /// ticked until the NEXT call — its value is untouched by the call that
+    /// registered it, and only starts advancing afterward.
+    ///
+    /// Red-check: a walk that includes ids registered mid-walk in THIS
+    /// call's range would still anchor `late` fresh right here (elapsed 0,
+    /// same as the correct behavior), so the assertion right after this
+    /// call does not discriminate. What actually reddens is the assertion
+    /// after the NEXT call, `tick_all(0.25)` (`late.value() < 1e-4` below
+    /// it): under that mutation `late` is already anchored from THIS call,
+    /// so `tick_all(0.25)` reads a real elapsed (~0.05, value ~0.5) instead
+    /// of landing on `late`'s own anchor tick.
+    #[test]
+    fn a_controller_registered_during_tick_all_waits_for_the_next_frame() {
+        let vsync = Vsync::new();
+        let driver = controller(100);
+        vsync.register(driver.clone());
+
+        let late = controller(100);
+        let vsync_for_listener = vsync.clone();
+        let late_for_listener = late.clone();
+        driver.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                vsync_for_listener.register(late_for_listener.clone());
+                let _ = late_for_listener.forward();
+            }
+        }));
+
+        driver.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0);
+        vsync.tick_all(0.2); // completes driver -> registers + starts `late`
+
+        assert_eq!(
+            late.status(),
+            AnimationStatus::Forward,
+            "late started running"
+        );
+        assert!(
+            late.value() < 1e-4,
+            "but this call did not tick it — its value is untouched, got {}",
+            late.value(),
+        );
+
+        vsync.tick_all(0.25); // the NEXT call reaches it — but this is ITS OWN
+        // anchor tick (first observation since registering), so it still
+        // holds at its run start, same as any freshly registered controller.
+        assert!(
+            late.value() < 1e-4,
+            "the next call anchors `late` — elapsed 0 relative to that anchor \
+             — so it still holds at its run start, got {}",
+            late.value(),
+        );
+
+        vsync.tick_all(0.35); // a later call advances it from that real anchor
+        assert!(
+            late.value() > 0.0,
+            "a later call advances the late registration from its anchor, got {}",
+            late.value(),
+        );
+
+        driver.dispose();
+        late.dispose();
+    }
+
+    /// An **earlier** listener unregistering a **later**, running controller
+    /// must stop it before its own turn: it does not move in this same
+    /// `tick_all` call.
+    ///
+    /// Red-check: resolving each id through a snapshot taken before any
+    /// listener ran (rather than a live lookup at that id's own turn) would
+    /// tick B once more even though A already unregistered it.
+    #[test]
+    fn an_earlier_listener_unregistering_a_later_controller_skips_it_this_frame() {
+        let vsync = Vsync::new();
+        let a = controller(100);
+        let b = controller(100);
+        vsync.register(a.clone());
+        let b_registration = vsync.register(b.clone());
+
+        let vsync_for_listener = vsync.clone();
+        a.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                vsync_for_listener.unregister(b_registration);
+            }
+        }));
+
+        a.forward().expect("fresh controller forwards");
+        b.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0); // anchors both
+        vsync.tick_all(0.2); // completes A -> unregisters B before B's turn
+
+        assert_eq!(a.status(), AnimationStatus::Completed);
+        assert!(
+            b.value() < 1e-4,
+            "B never advanced past its anchor tick, got {}",
+            b.value(),
+        );
+
+        a.dispose();
+        b.dispose();
+    }
+
+    /// Unregistering a later, running controller and immediately
+    /// re-registering the SAME controller from an earlier listener must not
+    /// retarget this call's walk onto the new registration — new ids are
+    /// always at or past this call's fence — and the re-registration's
+    /// anchor is fresh, not inherited from the old one: the first tick that
+    /// observes it re-anchors `t = 0` there, so the controller's value
+    /// visibly holds at ITS OWN run start rather than continuing from
+    /// wherever the old registration left it.
+    ///
+    /// Red-check: reusing ids, or letting a re-registration inherit the
+    /// removed entry's `run_start_secs`, would either tick it this call or
+    /// skip the re-anchor and keep advancing from the stale elapsed time.
+    #[test]
+    fn unregister_and_reregister_from_a_listener_cannot_retarget_the_walk() {
+        let vsync = Vsync::new();
+        let a = AnimationController::new(Duration::from_millis(300), &UpdateScheduler::new());
+        let b = AnimationController::new(Duration::from_millis(1000), &UpdateScheduler::new());
+        vsync.register(a.clone());
+        let b_registration = vsync.register(b.clone());
+
+        let vsync_for_listener = vsync.clone();
+        let b_for_listener = b.clone();
+        let retargeted = Arc::new(Mutex::new(false));
+        let retargeted_for_listener = Arc::clone(&retargeted);
+        a.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed && !*retargeted_for_listener.lock() {
+                *retargeted_for_listener.lock() = true;
+                vsync_for_listener.unregister(b_registration);
+                vsync_for_listener.register(b_for_listener.clone());
+            }
+        }));
+
+        a.forward().expect("fresh controller forwards");
+        b.forward().expect("fresh controller forwards");
+
+        vsync.tick_all(0.0); // anchors both at t = 0
+        vsync.tick_all(0.2); // B progresses normally; A not yet completed
+        let progressed = b.value();
+        assert!(progressed > 0.1, "B made real progress, got {progressed}");
+
+        vsync.tick_all(0.5); // A completes -> unregisters + re-registers B
+        assert!(
+            (b.value() - progressed).abs() < 1e-6,
+            "B does not move in the same call that re-registered it, held at {}, got {}",
+            progressed,
+            b.value(),
+        );
+
+        vsync.tick_all(0.6); // the re-registration's first observed tick
+        assert!(
+            b.value() < 1e-3,
+            "the re-registration's anchor is fresh, so this tick lands at B's \
+             OWN run start rather than continuing from where the old \
+             registration left it (~{}), got {}",
+            progressed,
+            b.value(),
+        );
+
+        vsync.tick_all(0.7); // a real anchor: the following tick advances from it
+        assert!(
+            b.value() > 0.0,
+            "the fresh anchor is real — a later tick advances from it, got {}",
+            b.value(),
+        );
+
+        a.dispose();
+        b.dispose();
+    }
+
+    /// A listener that mutes the registry **mid-walk** stops the rest of
+    /// THIS frame's entries from ticking — Flutter honors a mid-frame
+    /// `Ticker.muted = true` the same way. The registry is unmuted when this
+    /// call starts, so this is a genuinely mid-walk observation, distinct
+    /// from the entry-only mute [`a_muted_registry_delivers_no_ticks_while_its_clock_runs_on`]
+    /// covers.
+    ///
+    /// Red-check: reading `muted` only once, at entry, lets the walk keep
+    /// ticking every remaining entry after a listener mutes it.
+    #[test]
+    fn a_listener_muting_the_registry_mid_walk_stops_this_frames_remaining_entries() {
+        let vsync = Vsync::new();
+        let a = controller(100);
+        let b = controller(100);
+        vsync.register(a.clone());
+        vsync.register(b.clone());
+
+        let vsync_for_listener = vsync.clone();
+        a.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                vsync_for_listener.set_muted(true);
+            }
+        }));
+
+        a.forward().expect("fresh controller forwards");
+        b.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0); // anchors both, registry unmuted at this point
+
+        vsync.tick_all(0.2); // completes A -> mutes the registry before B's turn
+        assert_eq!(a.status(), AnimationStatus::Completed);
+        assert!(
+            b.value() < 1e-4,
+            "B does not advance in the SAME call that muted the registry, got {}",
+            b.value(),
+        );
+
+        // The registry stays muted going into the next call, so it advances
+        // nothing there either — the existing muted-registry contract,
+        // checked here for completeness.
+        vsync.tick_all(0.5);
+        assert!(
+            b.value() < 1e-4,
+            "still muted on the next call, B still does not advance, got {}",
+            b.value(),
+        );
+
+        vsync.set_muted(false);
+        a.dispose();
+        b.dispose();
+    }
+
+    /// A child registry attached from a listener **mid-walk** is first
+    /// ticked on the NEXT call, not this one — children are sampled once,
+    /// before the cursor walk starts.
+    ///
+    /// Red-check: ticking newly attached children within the SAME call
+    /// would still anchor C fresh right here (elapsed 0, same as the
+    /// correct behavior), so the assertion right after this call does not
+    /// discriminate. What actually reddens is the assertion after the NEXT
+    /// call, `parent.tick_all(0.25)` (`c.value() < 1e-4` below it): under
+    /// that mutation C is already anchored from THIS call, so
+    /// `tick_all(0.25)` reads a real elapsed (~0.05, value ~0.5) instead of
+    /// landing on C's own anchor tick.
+    #[test]
+    fn a_child_attached_from_a_listener_is_first_ticked_on_the_next_call() {
+        let parent = Vsync::new();
+        let a = controller(100);
+        parent.register(a.clone());
+
+        let child = Vsync::new();
+        let c = controller(100);
+        child.register(c.clone());
+        c.forward().expect("fresh controller forwards");
+
+        let parent_for_listener = parent.clone();
+        let child_for_listener = child.clone();
+        a.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                parent_for_listener.attach_child(&child_for_listener);
+            }
+        }));
+
+        a.forward().expect("fresh controller forwards");
+        parent.tick_all(0.0);
+        parent.tick_all(0.2); // completes A -> attaches `child` mid-walk
+
+        assert!(
+            c.value() < 1e-4,
+            "C does not move in the call that attached its registry, got {}",
+            c.value(),
+        );
+
+        parent.tick_all(0.25); // the next call reaches it — but this is the
+        // child registry's OWN first observed tick, so C still holds at its
+        // run start (same anchor-tick contract as any freshly ticked run).
+        assert!(
+            c.value() < 1e-4,
+            "the next call reaches C's registry, but that is C's own anchor \
+             tick — elapsed 0 relative to it — so it still holds at run \
+             start, got {}",
+            c.value(),
+        );
+
+        parent.tick_all(0.35); // a later call advances C from that real anchor
+        assert!(
+            c.value() > 0.0,
+            "a later call advances C from the anchor the previous one set, got {}",
+            c.value(),
+        );
+
+        a.dispose();
+        c.dispose();
     }
 }
