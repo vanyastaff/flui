@@ -559,6 +559,123 @@ fn animated_container_interpolates_size_over_frames() {
     );
 }
 
+#[derive(Clone, StatefulView)]
+struct ZeroDurationContainerProbe {
+    vsync: Vsync,
+    side: Arc<Mutex<f32>>,
+}
+
+struct ZeroDurationContainerProbeState {
+    vsync: Vsync,
+    side: Arc<Mutex<f32>>,
+}
+
+impl StatefulView for ZeroDurationContainerProbe {
+    type State = ZeroDurationContainerProbeState;
+
+    fn create_state(&self) -> Self::State {
+        ZeroDurationContainerProbeState {
+            vsync: self.vsync.clone(),
+            side: Arc::clone(&self.side),
+        }
+    }
+}
+
+impl ViewState<ZeroDurationContainerProbe> for ZeroDurationContainerProbeState {
+    fn build(&self, _view: &ZeroDurationContainerProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        let side = *self.side.lock();
+        VsyncScope::new(
+            self.vsync.clone(),
+            AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+                .width(side)
+                .height(side)
+                .duration(Duration::ZERO),
+        )
+    }
+}
+
+/// A `Duration::ZERO` implicit animation retargeted in a rebuild (issue
+/// #1171's synchronous settle) lays out the new target on the SAME pump
+/// that observes the widget's new configuration — `did_update_view`'s
+/// `restart_from_zero()` snaps `ImplicitController`'s value to the new
+/// target before `build()` runs again for the same element, so the child
+/// widget tree `build()` produces already reflects it, with no extra frame
+/// needed.
+///
+/// **The redundant rebuild, named rather than hidden.** The synchronous
+/// settle still fires a value notification (the value DID move), and
+/// `AnimatedBuilder`'s listener schedules its own rebuild the same way any
+/// out-of-frame `Listenable` change would — through the owner's external
+/// inbox, which FLUI's `drain_build_scope` drains once at the start of a
+/// drain, so a schedule landing mid-drain waits for the next frame. Flutter
+/// builds it in the same `buildScope` (`markNeedsBuild`'s in-scope rule:
+/// a dirty descendant is always built in the current pass); closing that
+/// gap is a tracked follow-up. So after the retargeting pump: layout already shows
+/// the new target, `has_dirty_elements()` is true, and exactly one rebuild
+/// is queued — a real cost, but not a stuck animation, and it clears on the
+/// very next pump with the layout unchanged and nothing left running.
+///
+/// Red-check: gate `forward_from`'s settle on distance alone (drop
+/// `run_duration.is_zero()`) — the FIRST `assert_eq!` below (layout on the
+/// retargeting pump) fails; the width still reads the old target.
+#[test]
+fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
+    let vsync = Vsync::new();
+    let side = Arc::new(Mutex::new(20.0));
+    let probe = ZeroDurationContainerProbe {
+        vsync: vsync.clone(),
+        side: Arc::clone(&side),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync.clone());
+
+    let width =
+        |laid: &crate::common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
+    assert!((width(&laid) - 20.0).abs() < 1e-3, "sanity: initial width");
+    assert!(
+        !vsync.has_running(),
+        "sanity: nothing is animating before the retarget"
+    );
+
+    *side.lock() = 100.0;
+    laid.pump();
+
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-3,
+        "a Duration::ZERO retarget must lay out the new target on the SAME \
+         pump that rebuilds with it, got {}",
+        width(&laid)
+    );
+    assert_eq!(
+        laid.build_owner_mut().pending_external_builds(),
+        1,
+        "the synchronous value notify still schedules the redundant \
+         AnimatedBuilder rebuild through the external inbox, deferred to \
+         the next build_scope"
+    );
+    assert!(
+        laid.build_owner_mut().has_dirty_elements(),
+        "that queued rebuild is real dirty work, not a no-op"
+    );
+
+    laid.tick();
+
+    assert_eq!(
+        laid.build_owner_mut().pending_external_builds(),
+        0,
+        "the next pump drains the redundant rebuild"
+    );
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-3,
+        "layout is unchanged by draining the redundant rebuild, got {}",
+        width(&laid)
+    );
+    assert!(
+        !vsync.has_running(),
+        "a synchronous zero-duration settle must leave nothing running for \
+         the frame loop to keep the window open for"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // Curve-only retarget — a rebuild that changes ONLY `curve` (not the target)
 // must re-ease the run already in flight, not keep coasting on the curve

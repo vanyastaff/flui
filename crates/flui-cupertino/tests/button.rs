@@ -108,14 +108,14 @@ fn explicit_minimum_size_zero_removes_the_floor() {
 ///
 /// Ticks in small (~20ms) increments — matching real per-frame cadence —
 /// rather than a few large jumps: the release fade is started reentrantly
-/// from inside the press fade's own `AnimationStatus::Completed` status
-/// listener (see `src/button.rs`'s `init_state`), and a single large
-/// `pump_for` spanning that restart lands its very next tick at an
-/// oversized elapsed delta relative to the just-started run, which this
-/// harness's virtual clock cannot re-anchor mid-jump — a documented
-/// precision limit of driving a reentrant restart through coarse ticks, not
-/// a claim about real per-frame-driven usage (which never jumps 90ms
-/// between frames).
+/// from the press fade's own `TickerFuture`'s `when_complete_or_cancel`
+/// continuation (see `src/button.rs`'s `on_tap` handler, which `finish`
+/// delivers after the controller lock drops), and a single large `pump_for`
+/// spanning that restart lands its very next tick at an oversized elapsed
+/// delta relative to the just-started run, which this harness's virtual
+/// clock cannot re-anchor mid-jump — a documented precision limit of driving
+/// a reentrant restart through coarse ticks, not a claim about real
+/// per-frame-driven usage (which never jumps 90ms between frames).
 #[test]
 fn press_opacity_fades_out_then_back_in_over_the_oracle_durations() {
     let vsync = Vsync::new();

@@ -269,7 +269,7 @@ fact, not a Flutter divergence).
 | Site | Publishes | Displaces |
 |---|---|---|
 | `forward_from`/`reverse_from`/`drive_to`/`repeat_with`/`fling_with`/`drive_simulation` (non-settling path) | nothing (installs a fresh completer) | previous `active_run`, canceled |
-| `forward_from`/`reverse_from`/`drive_to`'s zero-distance path (`settle_at_target`) | the trivial run, complete | previous `active_run`, canceled |
+| `forward_from`/`reverse_from`/`drive_to`'s zero-distance-or-zero-duration settle (`settle_at_target`, see its own entry below) | the trivial run, complete; value notified only if it actually moved | previous `active_run`, canceled |
 | `tick_time_based` (non-repeating end, repeat-exhausted end) | the finishing run, complete | — |
 | `tick_simulation` (`is_done`) | the finishing run, complete | — |
 | `stop`/`set_value` (`stop_running`) | — | `active_run`, canceled |
@@ -294,22 +294,122 @@ delivering the displaced run's cancellation — the observable order a caller
 sees is "the new run started" then "the old one was canceled", matching
 Flutter's own sync-status/microtask-cancel split.
 
-**Recorded gap: zero-duration runs complete on the first tick, not at
-`forward()`.** `AnimationController::new(Duration::ZERO, &scheduler)` behaves
-like any other run: `forward()` installs a pending `TickerFuture` and the run
-completes on the controller's first `tick_at`/`execute_frame`, because
-`tick_time_based`'s `duration.is_zero() => t = 1.0` branch is itself only
-reached from a tick. Flutter's `AnimationController.forward()` on a
-zero-duration `Ticker` returns an *already-complete* `TickerFuture`
-synchronously, before the first frame — Flutter special-cases this in
-`_animateToInternal` (`animation_controller.dart:674-684`: `stop(); if
-(simulationDuration == Duration.zero) { … return TickerFuture.complete(); }`).
-FLUI's `settle_at_target` covers the *zero-distance* case (`forward()` when
-already at the bound) exactly this way, but not the *zero-duration* case (a
-real distance covered in `Duration::ZERO`). Recorded rather than silently
-accepted, and tracked as issue #1171: a caller relying on Flutter's
-synchronous completion for a zero-duration controller must drive one tick
-first.
+### Direction is chosen by the method; a run ends in its direction's settled status
+
+**Rule:** `animate_to`/`animate_to_curved` always run `Forward`, and
+`animate_back`/`animate_back_curved` always run `Reverse`, regardless of
+whether `target` is above or below the current value. Flutter documents
+this exactly: `animateTo`'s status "is reported as forward regardless of
+whether target > value or not", completed at the end; `animateBack` is the
+reverse/dismissed mirror (`AnimationController.animateTo`/`animateBack`,
+`animation_controller.dart` @ 3.44.0). Every run ends in its direction's
+settled status with no bound check
+(`AnimationDirection::settled_status`: `Forward` → `Completed`, `Reverse` →
+`Dismissed`), at every run end: `tick_time_based`'s non-repeat and
+repeat-exhaustion ends, `tick_simulation`'s `is_done`, and
+`settle_at_target`. Flutter's `_tick` applies the identical rule
+unconditionally, so `animate_to(lower_bound)` from mid-range ends
+`Completed`, not `Dismissed` — and the same holds through
+`tick_simulation`: `animate_with(sim)` landing on a BOUNDED controller's
+lower bound also ends `Completed`. A fling's own end is unaffected:
+`fling`/`fling_with` pick `direction` from the sign of `velocity`, not from
+where the simulation happens to land.
+
+**Divergence removed.** `drive_to` previously derived direction from
+`target >= value` (travel, not the method) — an unrecorded divergence that
+made `animate_to`/`animate_back` differ only in default duration and
+discarded the one bit of information the caller's choice of method carries
+(flutter#158233's complaint). Two real consumers call `animate_to_curved`/
+`animate_back_curved` toward a value that can land on either side of the
+current one: `scroll_controller.rs`'s ballistic fling (`animate_to_curved`
+toward an arbitrary pixel offset) and `flui-cupertino`'s `CupertinoButton`
+(`animate_to_curved` for both the press-in fade toward `1.0` and, kept for
+oracle parity, the release fade toward `0.0`). The scroll controller's
+status listener matches `Completed | Dismissed` identically (it only ends
+the scroll activity), so its `animate_to` toward a SMALLER pixel value
+reporting `Forward`/`Completed` instead of `Reverse`/`Dismissed` changes
+nothing observable. The button's release fade is the consumer the rule
+reached: its start was chained off a status listener watching `Completed`,
+which stops distinguishing "the press just landed" from "the release just
+landed" once both report `Completed`, so the listener re-triggered a
+redundant zero-distance settle when the release it started reached its own
+end (no observable trace — same-status writes are deduplicated — but the
+wrong shape). It now chains the release on the press fade's own
+`TickerFuture` (`chain_release_fade`, `crates/flui-cupertino/src/button.rs`),
+`Ok`-only and one-shot: Flutter's own `ticker.then(...)` shape.
+
+**`stop()`/`set_value` keep the bounds-first rule.**
+`AnimationControllerInner::settled_status_directed`/`settled_status_keep_direction`
+still check `is_at_upper_bound`/`is_at_lower_bound` first, falling back to
+direction only for a non-bound stop. This is FLUI's own frame-driver
+contract, not a Flutter one: a scroll gesture's every-frame `set_value` must
+report the bound it actually reached, not the gesture's nominal direction,
+so a driver polling `status().is_running()` sees a real settle. Flutter's
+own `stop()` changes no status at all.
+
+### `settle_at_target` also covers zero-duration runs, and gates value notification on real movement
+
+**Rule (extends the per-site table above):** `settle_at_target` is the single
+settle chokepoint for BOTH zero-DISTANCE runs (`forward()` already at the
+upper bound) and zero-DURATION runs (`forward(..., Some(Duration::ZERO))`, or
+a zero base `duration`): `forward_from`/`reverse_from`/`drive_to` compute the
+run duration before their settle check and gate on
+`distance < BOUND_EPSILON || run_duration.is_zero()`, Flutter's own
+`simulationDuration == Duration.zero` test
+(`AnimationController._animateToInternal`, `animation_controller.dart` @
+3.44.0, covering both causes identically).
+
+It also notifies value listeners only when the value actually moved,
+measured against the value at METHOD ENTRY, before
+`forward_from(Some(x))`/`reverse_from(Some(x))` apply `from`. A settle-time
+comparison against the post-`from` value would miss a jump:
+`forward_from(Some(1.0))` from `0.3` lands exactly on the target it was told
+to jump to, so comparing the post-`from` value to the target always reads
+"unchanged" there. Flutter: `if (value != target) { …; notifyListeners(); }`
+(`_animateToInternal`, same file).
+
+**The same entry-value rule extends to the NON-settling path.** A real run
+that still applies `from` (`forward_from(Some(x))`/`reverse_from(Some(x))`
+when the resulting distance and duration are both nonzero) notifies iff
+`from` actually moved the value, narrower than Flutter's `forward`/
+`reverse`, whose `if (from != null) { value = from; }` goes through the
+`value=` setter and notifies UNCONDITIONALLY. One case is worth naming
+because it looks surprising at first: `forward_from(Some(0.0))` from `1.0`
+with a Duration::ZERO base ends at `1.0` (a Forward run settles at the
+UPPER bound, never at `from`) and fires NO value notification at all — net
+unchanged, even though Flutter's own path fires the `value=` setter's
+notification twice (once for the jump to `0.0`, once for `_animateToInternal`
+snapping back to `1.0`); both observers read `1.0` at the end either way.
+
+### `dispose` does not settle the status; `Vsync` polls for an installed run, not a running status
+
+**`dispose` does not settle the status.** `dispose()` disposes the ticker,
+cancels the active run, and clears listeners; it never touches `status`,
+Flutter parity — `AnimationController.dispose` disposes the ticker and
+clears listeners only (`animation_controller.dart` @ 3.44.0). A controller
+disposed mid-run therefore keeps whatever status it had (e.g. `Forward`):
+`hero_flight.rs`'s deferred replay reads `proxy.status()` after a flight's
+controller may already be disposed, and a manufactured settled status would
+be visible there.
+
+**`status().is_running()` is not proof a run is installed; `active_run.is_some()`
+is.** Two independent paths leave `status` reporting a RUNNING value
+(`Forward`/`Reverse`) with no run actually installed: a mid-run `dispose()`
+(above), and `set_value` at an interior value. `set_value` calls
+`stop_running()`, clearing `active_run`, but still reports a directional
+running status (Flutter parity, `AnimationControllerInner::settled_status_keep_direction`).
+
+A `Vsync`-driven controller polled on `status().is_running()` after a
+mid-run `set_value` would therefore look like it still has a run to
+advance. The NEXT `tick_all` would then recompute its value from the
+stale, already-stopped run's `start_value`/`target_value`, silently
+overwriting what `set_value` had just set.
+
+`AnimationController::walk_probe`'s `live_running` is
+`!disposed && active_run.is_some()`, the two facts that are always
+consistent with "is there a run to advance". Both
+`AnimationController::tick_at`'s own guard and `Vsync::has_running`/
+`tick_all` read it instead of bare `status().is_running()`.
 
 ## Composition Model
 

@@ -128,6 +128,33 @@ with `sample_size(10)`: three back-to-back runs of an identical binary
 reported −70 % / +3 % / +20 % "changes". Read the N ≥ 1,000 rows for
 signal; the N = 100 row exists to show the small-registry cost is unchanged.
 
+### After the single `walk_probe` (issue #1171)
+
+The "cheaper next step" above is implemented: `AnimationController::walk_probe`
+reads `run_generation` and `live_running` under one controller lock instead
+of two, and both `has_running` and the `tick_all` walk now use it.
+Re-measured with the same bench and host as above:
+
+| Bench | N | Criterion estimate (low / median / high) |
+|-------|---:|---|
+| `stopped_vsync_registry` | 100 | 2.4181 / 2.4184 / 2.4195 µs |
+| `stopped_vsync_registry` | 1,000 | 34.335 / 34.778 / 35.536 µs |
+| `stopped_vsync_registry` | 5,000 | 235.70 / 237.14 / 239.16 µs |
+| `stopped_vsync_registry` | 10,000 | 497.53 / 498.06 / 498.93 µs |
+
+At N = 10,000 that is ~49.8 ns/controller/pump, down from the two-lock
+table's ~54.3 ns (542.65 µs / 10,000) — a ~4.5 ns (~8 %) reduction, smaller
+than the ~11 ns (~20 %) the standalone decomposition prototype estimated for
+the two-controller-lock share alone. Three more back-to-back runs on this
+same (not CPU-isolated) host put the N = 10,000 row anywhere from 497 µs to
+560 µs, i.e. the ~54 ns baseline is sometimes matched or slightly exceeded by
+noise alone — the isolated micro-benchmark that produced the ~11 ns estimate
+did not carry the surrounding walk's own lock/branch overhead, which is most
+of the noise floor here. Read this as "measurably not worse, and typically a
+few percent better," not as a confirmed 20 % win; `has_running` folds the
+same probe in and is otherwise unaffected (still O(N), not part of either
+table).
+
 ## Memory Layout
 
 ### Type Sizes
