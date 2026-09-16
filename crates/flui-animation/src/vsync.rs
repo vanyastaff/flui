@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::{Animation, AnimationController};
+use crate::AnimationController;
 
 /// Opaque handle identifying one controller registered with a [`Vsync`].
 ///
@@ -232,6 +232,13 @@ impl Vsync {
     /// reads every entry's status. No active-set index: that would need
     /// start/stop notifications from the controller to track membership,
     /// which nothing here provides.
+    ///
+    /// Reads the controller's crate-private `walk_probe().live_running`, not
+    /// bare `status().is_running()`: a controller `dispose()`d mid-run keeps
+    /// whatever running status it had (`dispose()` deliberately leaves
+    /// `status` untouched), so `live_running` is what tells this apart from
+    /// a genuinely live run — otherwise a disposed-but-not-yet-unregistered
+    /// controller would hold the frame loop open forever.
     #[must_use]
     pub fn has_running(&self) -> bool {
         let (mine, children) = {
@@ -246,7 +253,7 @@ impl Vsync {
                 inner
                     .controllers
                     .values()
-                    .any(|c| c.controller.status().is_running()),
+                    .any(|c| c.controller.walk_probe().live_running),
                 inner
                     .children
                     .iter()
@@ -267,7 +274,10 @@ impl Vsync {
     /// observation (a fresh run was just established) or it has no anchor yet,
     /// re-anchor `t = 0` to `now_secs`; then, if the controller reports running,
     /// tick it with the raw seconds elapsed since that anchor. A non-running
-    /// controller is skipped (its anchor is set on the frame it next starts).
+    /// controller is skipped (its anchor is set on the frame it next starts) —
+    /// folding in `disposed` (see the controller's crate-private
+    /// `walk_probe`), so a disposed-but-not-unregistered controller is
+    /// skipped too, not just one that settled normally.
     ///
     /// `now_secs` is expected to be a **non-decreasing** virtual clock across
     /// calls. There is no clamp here: [`tick_at`](AnimationController::tick_at)
@@ -376,12 +386,18 @@ impl Vsync {
                     inner.controllers.range_mut(cursor..fence).next()
                 {
                     cursor = id + 1;
-                    let generation = registered.controller.run_generation();
-                    if generation != registered.last_gen || registered.run_start_secs.is_none() {
-                        registered.last_gen = generation;
+                    // One lock instead of two: `walk_probe` reads
+                    // `run_generation` AND `live_running` (which folds in
+                    // `disposed` — see its own doc) under a single
+                    // controller lock.
+                    let probe = registered.controller.walk_probe();
+                    if probe.generation != registered.last_gen
+                        || registered.run_start_secs.is_none()
+                    {
+                        registered.last_gen = probe.generation;
                         registered.run_start_secs = Some(now_secs);
                     }
-                    if registered.controller.status().is_running() {
+                    if probe.live_running {
                         // `run_start_secs` is `Some` here — set in the branch
                         // above on this same call if it was `None`.
                         let run_start = registered.run_start_secs.unwrap_or(now_secs);
@@ -434,7 +450,7 @@ mod tests {
     use flui_scheduler::UpdateScheduler;
 
     use super::*;
-    use crate::AnimationStatus;
+    use crate::{Animation, AnimationStatus};
 
     fn controller(ms: u64) -> AnimationController {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
@@ -670,6 +686,55 @@ mod tests {
         );
 
         controller.dispose();
+    }
+
+    /// A controller `dispose()`d mid-run, WITHOUT being unregistered, must
+    /// neither hold the frame loop open nor keep advancing — the frame-loop
+    /// leak issue #1171 closes. `dispose()` deliberately leaves `status`
+    /// untouched (Flutter parity — a proxy replaying `status()` must see the
+    /// status the run had), so `status().is_running()` alone would still
+    /// read `true` here; `has_running`/`tick_all` must instead read
+    /// [`AnimationController::walk_probe`]'s `live_running`, which folds in
+    /// `disposed`.
+    ///
+    /// Red-check: read `c.controller.status().is_running()` in
+    /// `has_running`/`tick_all` instead of `walk_probe().live_running` — this
+    /// test fails because the disposed controller still reports running.
+    #[test]
+    fn a_registry_skips_a_controller_disposed_mid_run_without_unregistering_it() {
+        let vsync = Vsync::new();
+        let controller = controller(100);
+        vsync.register(controller.clone());
+        controller.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0); // anchor
+        vsync.tick_all(0.05); // +50 ms → ~0.5
+
+        let status_before_dispose = controller.status();
+        assert_eq!(
+            status_before_dispose,
+            AnimationStatus::Forward,
+            "sanity: mid-run"
+        );
+
+        controller.dispose();
+        assert_eq!(
+            controller.status(),
+            status_before_dispose,
+            "parity pin: dispose() must not change status"
+        );
+        assert!(
+            !vsync.has_running(),
+            "a disposed controller must not hold the frame loop open, even \
+             though status() still reads Forward"
+        );
+
+        let held = controller.value();
+        vsync.tick_all(0.10);
+        assert_eq!(
+            controller.value(),
+            held,
+            "tick_all must skip a disposed controller entirely"
+        );
     }
 
     /// A status listener that unregisters its own controller — what a route does

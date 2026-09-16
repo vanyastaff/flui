@@ -38,7 +38,17 @@ const DURATION: Duration = Duration::from_millis(300);
 
 /// A leaf-content transition route, plus a handle to drive its controller.
 fn transition(name: &'static str) -> (TransitionRoute<i32>, TransitionHandle) {
-    let route = TransitionRoute::<i32>::new(DURATION, move |_ctx| {
+    transition_with_duration(name, DURATION)
+}
+
+/// Like [`transition`], with an explicit transition duration — for the
+/// zero-duration synchronous-settle coverage (issue #1171), which needs a
+/// duration `transition`'s fixed [`DURATION`] cannot give it.
+fn transition_with_duration(
+    name: &'static str,
+    duration: Duration,
+) -> (TransitionRoute<i32>, TransitionHandle) {
+    let route = TransitionRoute::<i32>::new(duration, move |_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
     .named(name);
@@ -361,6 +371,75 @@ fn an_already_dismissed_controller_finalizes_synchronously_without_double_finali
     assert_eq!(navigator_handle.route_state(top), None, "disposed at once");
     assert_eq!(navigator_handle.route_ids().len(), 1);
     assert_eq!(navigator_handle.overlay().len(), 1);
+}
+
+/// A `Duration::ZERO` transition (issue #1171's zero-duration synchronous
+/// settle) settles push and pop at the call itself, through a REAL
+/// `TransitionRoute` end to end, asserted with NO driven frame in between.
+///
+/// **Push** settles the CONTROLLER synchronously: `did_push` calls
+/// `AnimationController::forward()`, which now snaps to `Completed` at the
+/// call instead of installing a ticker run. The ROUTE's own bookkeeping
+/// (`RouteLifecycle::Pushing` → `Idle`) still needs one pump regardless —
+/// that transition is driven by a continuation `NavigatorShared::apply`
+/// registers on the returned `TickerFuture` post-flush, and merely running
+/// early (because the future is already resolved) only queues a command;
+/// nothing drains it until the next pump
+/// (`an_already_resolved_push_future_still_needs_one_pump_to_settle`,
+/// `navigator_tests.rs`) — that half of the state machine is unchanged by
+/// this issue.
+///
+/// **Pop** settles the ROUTE too, with no pump at all: `did_pop` calls
+/// `reverse()`, which now snaps to `Dismissed` at the call; `handle_pop`
+/// (`history.rs`) reads `finished_when_popped()` synchronously, in the same
+/// function, right after `did_pop` returns — no continuation, no queued
+/// command — so the entry disposes inside `pop()` itself.
+///
+/// Red-check: read distance alone (drop `run_duration.is_zero()`) from
+/// `forward`/`reverse`'s settle gate — the controller stays `Forward`/never
+/// reaches `Dismissed` before a pump, and the pop assertions below fail.
+#[test]
+fn zero_duration_transition_settles_push_and_pop_synchronously() {
+    let (navigator_handle, mut harness) = navigator();
+    let (route, animation) = transition_with_duration("second", Duration::ZERO);
+
+    navigator_handle.push(route);
+    let controller = animation
+        .controller()
+        .expect("install() runs inside push's own flush");
+    assert_eq!(
+        controller.status(),
+        AnimationStatus::Completed,
+        "a zero-duration entrance settles the CONTROLLER at the push call, \
+         before any pump"
+    );
+    let top = navigator_handle.current().expect("pushed");
+    assert_eq!(
+        navigator_handle.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "the ROUTE's own Pushing -> Idle transition still needs a pump — \
+         only the controller settled synchronously"
+    );
+
+    harness.tick(); // drains the queued PushCompleted command
+    assert_eq!(
+        navigator_handle.route_state(top),
+        Some(RouteLifecycle::Idle)
+    );
+
+    assert!(navigator_handle.pop());
+    assert_eq!(
+        controller.status(),
+        AnimationStatus::Dismissed,
+        "a zero-duration exit settles the controller at the pop call too"
+    );
+    assert_eq!(
+        navigator_handle.route_state(top),
+        None,
+        "finished_when_popped() read true INSIDE handle_pop, synchronously \
+         with the same pop() call — no Popping park, no pump needed"
+    );
+    assert_eq!(navigator_handle.route_ids().len(), 1);
 }
 
 /// The status listener raises `finalize()` **once**, however many times the

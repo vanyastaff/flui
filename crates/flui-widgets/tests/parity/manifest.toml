@@ -85,7 +85,10 @@ cases = [
 rust = "animated_container_test"
 family = "animation"
 oracles = ["widgets/animated_container_test.dart"]
-tests = 2
+# 3rd test is a FLUI-specific regression (issue #1171's zero-duration
+# synchronous settle), not a ported Flutter oracle case — `claims` below is
+# unchanged.
+tests = 3
 
 [[targets.claims]]
 oracle = "widgets/animated_container_test.dart"

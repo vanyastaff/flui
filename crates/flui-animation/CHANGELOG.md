@@ -58,6 +58,37 @@ Versioning: per `docs/release.md` policy.
   will actually notice. Measured before/after in
   [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md#vsync-registry-indexing-1060)
   (Refs #1060).
+- Zero-duration runs now settle SYNCHRONOUSLY, before the call returns,
+  instead of completing on the first driven frame (issue #1171; Flutter
+  parity, `_animateToInternal`'s `simulationDuration == Duration.zero`
+  branch): `forward()`/`reverse()`/`forward_from`/`reverse_from`/`animate_to`/
+  `animate_back` (and their `_curved` variants) whose base duration, per-run
+  override, or distance resolves to zero now snap the value, fire value and
+  status listeners once inline, and return an already-complete `TickerFuture`
+  — the displaced run's own `TickerFuture` still cancels, but only after the
+  new status is observable, and `run_generation` is left untouched (no
+  ticker was ever installed).
+- `animate_to`/`animate_to_curved` now always run direction `Forward`, and
+  `animate_back`/`animate_back_curved` always run `Reverse`, regardless of
+  whether `target` is above or below the current value (previously derived
+  from travel, an unrecorded divergence from Flutter's own documented
+  contract). The one production-visible consequence: the unbounded scroll
+  controller's ballistic `animate_to` toward a SMALLER pixel value now
+  reports `Forward`/`Completed` instead of `Reverse`/`Dismissed` (its only
+  consumer treats `Completed`/`Dismissed` identically, so this changes
+  nothing observable there).
+- A run's end status is now its direction's settled status with no bound
+  check, so `animate_to(lower_bound)` from mid-range ends `Completed`, not
+  `Dismissed` (Flutter's `_tick` rule). `stop()`/`set_value` are unchanged:
+  both still report the bound actually reached, falling back to direction
+  only for a non-bound stop.
+- A settle whose value does not actually move (e.g. `forward_from(Some(x))`
+  landing on the value it already held) no longer fires a spurious value
+  notification.
+- `Vsync::has_running`/`tick_all` now skip a controller `dispose()`d mid-run
+  instead of ticking it forever: `dispose()` still leaves `status` untouched
+  (unchanged, and still Flutter parity), so the two consumers instead read a
+  disposed flag folded into the walk's per-controller probe.
 
 ### Fixed
 
