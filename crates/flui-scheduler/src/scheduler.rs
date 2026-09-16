@@ -294,8 +294,8 @@ struct FrameCompletionState {
 /// so `poll` peeks the stored value by copy rather than `take()`-ing it.
 /// Nothing removes it once written, so a second poll after `Poll::Ready`
 /// returns that same value again instead of hanging forever, mirroring
-/// [`TickerFutureOrCancel`](crate::ticker::TickerFutureOrCancel)'s own
-/// `poll_resolution` shape in this crate. There is still no reason to poll
+/// [`TickerFuture`](crate::ticker::TickerFuture)'s own `poll_resolution`
+/// shape in this crate. There is still no reason to poll
 /// it more than once: nothing changes between polls, and every ordinary
 /// executor stops polling a future the moment it returns `Ready`.
 ///
@@ -5529,7 +5529,7 @@ mod tests {
         let scheduler = UpdateScheduler::new();
         let weak = scheduler.downgrade();
         let mut ticker = crate::ticker::Ticker::new_with_scheduler(&scheduler);
-        let _future = ticker.start(|_| {});
+        ticker.start(|_| {});
 
         // The ticker's auto-schedule registered a transient callback whose
         // closure captures a WEAK scheduler — if it captured a strong one

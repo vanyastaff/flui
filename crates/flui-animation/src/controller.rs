@@ -7,6 +7,7 @@ use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringT
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::config::time_dilation;
+use flui_scheduler::ticker::{TickerCompleter, TickerDelivery, TickerFuture};
 use flui_scheduler::{Ticker, UpdateScheduler};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
@@ -44,6 +45,24 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
     velocity: f32::INFINITY,
     time: 1e-3,
 };
+
+/// Whether `AnimationController::finish` must notify value listeners,
+/// alongside status listeners and any pending [`TickerDelivery`]. Most
+/// run-starting calls change `status` but not `value` at the call itself
+/// (the value only moves once ticks arrive) — but `repeat_with` snaps
+/// `value` to the repeat range's lower endpoint and `drive_simulation`
+/// snaps it to `simulation.x(0.0)`, and both still pass `Unchanged`: Flutter
+/// parity is `_startSimulation` setting `_value` directly, without
+/// `notifyListeners()` (`animation_controller.dart:865` @ 3.44.0) — the jump
+/// is real but reported on the run's first tick, not synchronously at the
+/// call. A settle or a tick always changes both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueChange {
+    /// `value` did not change at this call; only status (and delivery) fire.
+    Unchanged,
+    /// `value` changed; notify value listeners too.
+    Notify,
+}
 
 /// Controls an animation, driving it forward/backward.
 ///
@@ -201,6 +220,26 @@ struct AnimationControllerInner {
     /// every frame of a gesture drag) does not re-notify. Flutter parity:
     /// `AnimationController._lastReportedStatus` / `_checkStatusChanged`.
     last_reported_status: AnimationStatus,
+
+    /// The write half of the current run's [`TickerFuture`], if a run is
+    /// installed. Every run-starting method displaces this (canceling
+    /// whatever it held) and installs its own fresh completer; every
+    /// run-ending path (`tick_time_based`, `tick_simulation`,
+    /// `stop_running`) takes it and completes or cancels it. Never touch
+    /// this field with `=` — a direct assignment drops whatever value was
+    /// here before, inline, under whatever lock is held at that statement;
+    /// always go through `.replace()`/`.take()` and bind the returned
+    /// `Option<TickerCompleter>` so its displaced value reaches
+    /// [`AnimationController::finish`] instead. `Option<T>` does not
+    /// inherit `T`'s `#[must_use]`, so nothing in the compiler catches a
+    /// dropped binding here — the backstop is the source-guard test in this
+    /// file's `tests` module
+    /// (`ticker_completer_resolution_never_bypasses_the_finish_chokepoint`),
+    /// checked per statement (comments stripped, rustfmt-wrapped chains
+    /// rejoined) for a direct assignment to this field, an unbound
+    /// replace-or-take call on it, or any `TickerCompleter`/`TickerDelivery`
+    /// call — bare, `let _ =`-discarded, or `drop(..)`-wrapped.
+    active_run: Option<TickerCompleter>,
 }
 
 impl AnimationController {
@@ -387,6 +426,7 @@ impl AnimationController {
             simulation: None,
             run_curve: None,
             last_reported_status: AnimationStatus::Dismissed,
+            active_run: None,
         };
 
         Ok(Self {
@@ -417,10 +457,45 @@ impl AnimationController {
 
     /// Start animation forward from current value to upper bound.
     ///
+    /// The returned [`TickerFuture`] resolves `Ok(())` when this run finishes
+    /// and `Err(TickerCanceled)` if it is superseded (a later run starts
+    /// before this one ends) or torn down ([`stop`](Self::stop)/
+    /// [`set_value`](Self::set_value)/[`reset`](Self::reset)/
+    /// [`dispose`](Self::dispose)). See
+    /// [`TickerFuture::when_complete_or_cancel`] for the idiom to react to
+    /// either outcome without matching on it, and this method's own
+    /// `# Awaiting a run` section below for the `async`/`await` route.
+    ///
+    /// # Awaiting a run
+    ///
+    /// ```rust
+    /// use flui_animation::AnimationController;
+    /// use std::future::Future;
+    /// use std::pin::Pin;
+    /// use std::task::{Context, Poll, Waker};
+    /// use std::time::Duration;
+    ///
+    /// let controller = AnimationController::without_ticker(Duration::from_millis(100));
+    /// let mut run = controller.forward().unwrap();
+    ///
+    /// // A caller that only cares "how did it end", not "did it end yet",
+    /// // reacts to either outcome the same way:
+    /// run.when_complete_or_cancel(|end| {
+    ///     println!("run ended: {end:?}");
+    /// });
+    ///
+    /// // Or await it directly. `tick_at` is normally driven by a real
+    /// // ticker/Vsync; this drives it to completion by hand for the example.
+    /// controller.tick_at(0.1);
+    /// let waker = Waker::noop();
+    /// let mut cx = Context::from_waker(waker);
+    /// assert_eq!(Pin::new(&mut run).poll(&mut cx), Poll::Ready(Ok(())));
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    pub fn forward(&self) -> Result<(), AnimationError> {
+    pub fn forward(&self) -> Result<TickerFuture, AnimationError> {
         self.forward_from(None)
     }
 
@@ -434,12 +509,14 @@ impl AnimationController {
     /// parity — `AnimationController._animateToInternal` scales the
     /// simulation duration by the remaining fraction). Starting at the
     /// upper bound settles immediately with
-    /// [`AnimationStatus::Completed`].
+    /// [`AnimationStatus::Completed`] and an already-complete
+    /// [`TickerFuture`]. See [`forward`](Self::forward) for the returned
+    /// future's contract.
     ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    pub fn forward_from(&self, from: Option<f32>) -> Result<(), AnimationError> {
+    pub fn forward_from(&self, from: Option<f32>) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -452,24 +529,38 @@ impl AnimationController {
         inner.start_value = inner.value;
         inner.target_value = inner.upper_bound;
         if (inner.target_value - inner.value).abs() < BOUND_EPSILON {
-            self.settle_at_target(inner);
-            return Ok(());
+            return Ok(self.settle_at_target(inner));
         }
 
         inner.status = AnimationStatus::Forward;
         inner.run_duration = Some(inner.scaled_run_duration(inner.duration));
-        self.restart_ticker(&mut inner);
+        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
+        // see its own doc for why the order is load-bearing.
+        let has_ticker = self.restart_ticker(&mut inner);
+        let (completer, future) = TickerFuture::pending();
+        let displaced_delivery = inner
+            .active_run
+            .replace(completer)
+            .map(TickerCompleter::cancel);
 
-        Self::emit_status_after_unlock(inner, AnimationStatus::Forward);
-        Ok(())
+        self.finish(
+            AnimationStatus::Forward,
+            ValueChange::Unchanged,
+            displaced_delivery,
+            inner,
+        );
+        Self::warn_if_no_ticker(has_ticker);
+        Ok(future)
     }
 
     /// Start animation in reverse from current value to lower bound.
     ///
+    /// See [`forward`](Self::forward) for the returned future's contract.
+    ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    pub fn reverse(&self) -> Result<(), AnimationError> {
+    pub fn reverse(&self) -> Result<TickerFuture, AnimationError> {
         self.reverse_from(None)
     }
 
@@ -482,12 +573,13 @@ impl AnimationController {
     /// duration) scaled by `(value - lower_bound) / (upper_bound -
     /// lower_bound)` (Flutter parity — see [`forward_from`](Self::forward_from)).
     /// Starting at the lower bound settles immediately with
-    /// [`AnimationStatus::Dismissed`].
+    /// [`AnimationStatus::Dismissed`]. See [`forward`](Self::forward) for the
+    /// returned future's contract.
     ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    pub fn reverse_from(&self, from: Option<f32>) -> Result<(), AnimationError> {
+    pub fn reverse_from(&self, from: Option<f32>) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -500,17 +592,29 @@ impl AnimationController {
         inner.start_value = inner.value;
         inner.target_value = inner.lower_bound;
         if (inner.target_value - inner.value).abs() < BOUND_EPSILON {
-            self.settle_at_target(inner);
-            return Ok(());
+            return Ok(self.settle_at_target(inner));
         }
 
         inner.status = AnimationStatus::Reverse;
         let base = inner.reverse_duration.unwrap_or(inner.duration);
         inner.run_duration = Some(inner.scaled_run_duration(base));
-        self.restart_ticker(&mut inner);
+        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
+        // see its own doc for why the order is load-bearing.
+        let has_ticker = self.restart_ticker(&mut inner);
+        let (completer, future) = TickerFuture::pending();
+        let displaced_delivery = inner
+            .active_run
+            .replace(completer)
+            .map(TickerCompleter::cancel);
 
-        Self::emit_status_after_unlock(inner, AnimationStatus::Reverse);
-        Ok(())
+        self.finish(
+            AnimationStatus::Reverse,
+            ValueChange::Unchanged,
+            displaced_delivery,
+            inner,
+        );
+        Self::warn_if_no_ticker(has_ticker);
+        Ok(future)
     }
 
     /// Stop the animation at its current value.
@@ -526,6 +630,10 @@ impl AnimationController {
     /// after `stop()` would allow the driver to continue ticking a stale or
     /// cleared simulation and produce non-finite pixel values.
     ///
+    /// Cancels the active run's [`TickerFuture`] with
+    /// [`TickerCanceled`](flui_scheduler::ticker::TickerCanceled),
+    /// delivered with no controller lock held.
+    ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
@@ -533,18 +641,21 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
-        inner.stop_running();
+        let delivery = inner.stop_running();
 
         let status = inner.settled_status_directed();
         inner.status = status;
-        Self::emit_status_after_unlock(inner, status);
+        self.finish(status, ValueChange::Unchanged, delivery, inner);
         Ok(())
     }
 
     /// Reset to the beginning (lower bound).
     ///
     /// Sets the value to `lower_bound` and the status to
-    /// [`AnimationStatus::Dismissed`].
+    /// [`AnimationStatus::Dismissed`]. Cancels the active run's
+    /// [`TickerFuture`] with
+    /// [`TickerCanceled`](flui_scheduler::ticker::TickerCanceled), delivered
+    /// with no controller lock held.
     ///
     /// # Errors
     ///
@@ -553,19 +664,15 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
-        inner.clear_run_modes();
+        let delivery = inner.stop_running();
         inner.value = inner.lower_bound;
         inner.status = AnimationStatus::Dismissed;
-        if let Some(ticker) = &mut inner.ticker {
-            ticker.stop();
-        }
-
-        let callbacks = inner.take_status_change();
-        drop(inner);
-        self.notifier.notify_listeners();
-        if let Some(callbacks) = callbacks {
-            Self::fire_status(&callbacks, AnimationStatus::Dismissed);
-        }
+        self.finish(
+            AnimationStatus::Dismissed,
+            ValueChange::Notify,
+            delivery,
+            inner,
+        );
         Ok(())
     }
 
@@ -575,7 +682,9 @@ impl AnimationController {
     ///
     /// The per-run `duration` override applies to **this run only** and does not
     /// modify the controller's base duration. An explicit `duration` is used
-    /// as-is, without remaining-fraction scaling.
+    /// as-is, without remaining-fraction scaling. See [`forward`](Self::forward)
+    /// for the returned future's contract and the `when_complete_or_cancel`
+    /// idiom.
     ///
     /// # Arguments
     ///
@@ -585,11 +694,25 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_animation::AnimationController;
+    /// use std::time::Duration;
+    ///
+    /// let controller = AnimationController::without_ticker(Duration::from_millis(100));
+    /// let run = controller.animate_to(1.0, None).unwrap();
+    /// run.when_complete_or_cancel(|end| {
+    ///     assert!(end.is_ok(), "a run nothing superseded or stopped must complete");
+    /// });
+    /// controller.tick_at(0.1);
+    /// ```
     pub fn animate_to(
         &self,
         target: f32,
         duration: Option<Duration>,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         self.drive_to(target, duration, false, None)
     }
 
@@ -606,7 +729,7 @@ impl AnimationController {
         &self,
         target: f32,
         duration: Option<Duration>,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         self.drive_to(target, duration, true, None)
     }
 
@@ -623,7 +746,7 @@ impl AnimationController {
         target: f32,
         duration: Option<Duration>,
         curve: Arc<dyn Curve + Send + Sync>,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         self.drive_to(target, duration, false, Some(curve))
     }
 
@@ -639,7 +762,7 @@ impl AnimationController {
         target: f32,
         duration: Option<Duration>,
         curve: Arc<dyn Curve + Send + Sync>,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         self.drive_to(target, duration, true, Some(curve))
     }
 
@@ -655,7 +778,7 @@ impl AnimationController {
         duration: Option<Duration>,
         prefer_reverse_duration: bool,
         curve: Option<Arc<dyn Curve + Send + Sync>>,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -675,8 +798,7 @@ impl AnimationController {
         // the value never changes, so settle immediately with a single
         // notification instead.
         if (target - inner.value).abs() < BOUND_EPSILON {
-            self.settle_at_target(inner);
-            return Ok(());
+            return Ok(self.settle_at_target(inner));
         }
 
         inner.status = inner.direction.running_status();
@@ -694,17 +816,31 @@ impl AnimationController {
             };
             inner.scaled_run_duration(base)
         }));
-        self.restart_ticker(&mut inner);
+        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
+        // see its own doc for why the order is load-bearing.
+        let has_ticker = self.restart_ticker(&mut inner);
+        let (completer, future) = TickerFuture::pending();
+        let displaced_delivery = inner
+            .active_run
+            .replace(completer)
+            .map(TickerCompleter::cancel);
 
         let status = inner.status;
-        Self::emit_status_after_unlock(inner, status);
-        Ok(())
+        self.finish(status, ValueChange::Unchanged, displaced_delivery, inner);
+        Self::warn_if_no_ticker(has_ticker);
+        Ok(future)
     }
 
     /// Settle a run whose start value already sits at its target: snap the
-    /// value, stop the ticker, and report the settled status with a single
-    /// notification — no transient running status, no full-duration no-op run.
-    fn settle_at_target(&self, mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>) {
+    /// value, stop the ticker, cancel whatever run this displaced, and
+    /// report the settled status with a single notification — no transient
+    /// running status, no full-duration no-op run. Returns an
+    /// already-complete [`TickerFuture`] for the (trivial, zero-distance)
+    /// run this call represents.
+    fn settle_at_target(
+        &self,
+        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+    ) -> TickerFuture {
         inner.value = inner.target_value;
         if let Some(ticker) = &mut inner.ticker
             && ticker.state().can_tick()
@@ -713,20 +849,22 @@ impl AnimationController {
         }
         let status = inner.settled_status_directed();
         inner.status = status;
-        let callbacks = inner.take_status_change();
-        drop(inner);
-        self.notifier.notify_listeners();
-        if let Some(callbacks) = callbacks {
-            Self::fire_status(&callbacks, status);
-        }
+        let delivery = inner.active_run.take().map(TickerCompleter::cancel);
+        self.finish(status, ValueChange::Notify, delivery, inner);
+        TickerFuture::complete()
     }
 
     /// Repeat the animation, bouncing if `reverse` is true. Repeats forever.
     ///
+    /// An infinite repeat's [`TickerFuture`] resolves only by cancellation —
+    /// it has no natural end. A finite [`repeat_with`](Self::repeat_with)
+    /// count completes normally once exhausted. See
+    /// [`forward`](Self::forward) for the returned future's general contract.
+    ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    pub fn repeat(&self, reverse: bool) -> Result<(), AnimationError> {
+    pub fn repeat(&self, reverse: bool) -> Result<TickerFuture, AnimationError> {
         self.repeat_with(None, None, reverse, None, None)
     }
 
@@ -738,7 +876,8 @@ impl AnimationController {
     /// * `max` - Upper endpoint of the repeat range (defaults to `upper_bound`)
     /// * `reverse` - Bounce back and forth instead of restarting each cycle
     /// * `period` - Per-cycle duration (defaults to the forward duration)
-    /// * `count` - Number of cycles; `None` repeats indefinitely
+    /// * `count` - Number of cycles; `None` repeats indefinitely (see
+    ///   [`repeat`](Self::repeat) for what that means for the returned future)
     ///
     /// # Errors
     ///
@@ -750,7 +889,7 @@ impl AnimationController {
         reverse: bool,
         period: Option<Duration>,
         count: Option<u32>,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -785,10 +924,23 @@ impl AnimationController {
         inner.status = AnimationStatus::Forward;
         inner.start_value = lo;
         inner.target_value = hi;
-        self.restart_ticker(&mut inner);
+        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
+        // see its own doc for why the order is load-bearing.
+        let has_ticker = self.restart_ticker(&mut inner);
+        let (completer, future) = TickerFuture::pending();
+        let displaced_delivery = inner
+            .active_run
+            .replace(completer)
+            .map(TickerCompleter::cancel);
 
-        Self::emit_status_after_unlock(inner, AnimationStatus::Forward);
-        Ok(())
+        self.finish(
+            AnimationStatus::Forward,
+            ValueChange::Unchanged,
+            displaced_delivery,
+            inner,
+        );
+        Self::warn_if_no_ticker(has_ticker);
+        Ok(future)
     }
 
     /// Drive the animation with a spring (fling) and initial velocity.
@@ -811,7 +963,7 @@ impl AnimationController {
     /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     /// controller.fling(1.0).unwrap(); // Fling forward
     /// ```
-    pub fn fling(&self, velocity: f32) -> Result<(), AnimationError> {
+    pub fn fling(&self, velocity: f32) -> Result<TickerFuture, AnimationError> {
         self.fling_with(velocity, None)
     }
 
@@ -825,7 +977,7 @@ impl AnimationController {
         &self,
         velocity: f32,
         spring: Option<SpringDescription>,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -854,11 +1006,19 @@ impl AnimationController {
         inner.clear_run_modes();
         inner.simulation = Some(Box::new(sim));
         inner.status = inner.direction.running_status();
-        self.restart_ticker(&mut inner);
+        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
+        // see its own doc for why the order is load-bearing.
+        let has_ticker = self.restart_ticker(&mut inner);
+        let (completer, future) = TickerFuture::pending();
+        let displaced_delivery = inner
+            .active_run
+            .replace(completer)
+            .map(TickerCompleter::cancel);
 
         let status = inner.status;
-        Self::emit_status_after_unlock(inner, status);
-        Ok(())
+        self.finish(status, ValueChange::Unchanged, displaced_delivery, inner);
+        Self::warn_if_no_ticker(has_ticker);
+        Ok(future)
     }
 
     /// Drive the animation according to a custom simulation.
@@ -883,7 +1043,7 @@ impl AnimationController {
     pub fn animate_with<S: Simulation + 'static>(
         &self,
         simulation: S,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         self.drive_simulation(Box::new(simulation), AnimationDirection::Forward)
     }
 
@@ -895,7 +1055,7 @@ impl AnimationController {
     pub fn animate_back_with<S: Simulation + 'static>(
         &self,
         simulation: S,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         self.drive_simulation(Box::new(simulation), AnimationDirection::Reverse)
     }
 
@@ -903,7 +1063,7 @@ impl AnimationController {
         &self,
         simulation: Box<dyn Simulation>,
         direction: AnimationDirection,
-    ) -> Result<(), AnimationError> {
+    ) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -914,11 +1074,19 @@ impl AnimationController {
             .x(0.0)
             .clamp(inner.lower_bound, inner.upper_bound);
         inner.simulation = Some(simulation);
-        self.restart_ticker(&mut inner);
+        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
+        // see its own doc for why the order is load-bearing.
+        let has_ticker = self.restart_ticker(&mut inner);
+        let (completer, future) = TickerFuture::pending();
+        let displaced_delivery = inner
+            .active_run
+            .replace(completer)
+            .map(TickerCompleter::cancel);
 
         let status = inner.status;
-        Self::emit_status_after_unlock(inner, status);
-        Ok(())
+        self.finish(status, ValueChange::Unchanged, displaced_delivery, inner);
+        Self::warn_if_no_ticker(has_ticker);
+        Ok(future)
     }
 
     /// Get the current velocity of the animation (0.0 if not running).
@@ -1020,12 +1188,13 @@ impl AnimationController {
             }
             let status = inner.settled_status_directed();
             inner.status = status;
-            let callbacks = inner.take_status_change();
-            drop(inner);
-            self.notifier.notify_listeners();
-            if let Some(callbacks) = callbacks {
-                Self::fire_status(&callbacks, status);
-            }
+            // Publish the completion BEFORE unlocking (Flutter parity: `_tick`
+            // completes the run's `Completer` before `notifyListeners()`), so
+            // a panicking value/status listener leaves the run `Ok` — the
+            // unwind drops the delivery, which delivers the already-published
+            // outcome.
+            let delivery = inner.active_run.take().map(TickerCompleter::complete);
+            self.finish(status, ValueChange::Notify, delivery, inner);
         } else {
             drop(inner);
             self.notifier.notify_listeners();
@@ -1121,12 +1290,8 @@ impl AnimationController {
                 inner.is_repeating = false;
                 let status = inner.settled_status_directed();
                 inner.status = status;
-                let callbacks = inner.take_status_change();
-                drop(inner);
-                self.notifier.notify_listeners();
-                if let Some(callbacks) = callbacks {
-                    Self::fire_status(&callbacks, status);
-                }
+                let delivery = inner.active_run.take().map(TickerCompleter::complete);
+                self.finish(status, ValueChange::Notify, delivery, inner);
                 return;
             }
 
@@ -1148,12 +1313,7 @@ impl AnimationController {
                 inner.begin_next_repeat_cycle();
             }
             let status = inner.status;
-            let callbacks = inner.take_status_change();
-            drop(inner);
-            self.notifier.notify_listeners();
-            if let Some(callbacks) = callbacks {
-                Self::fire_status(&callbacks, status);
-            }
+            self.finish(status, ValueChange::Notify, None, inner);
             return;
         }
 
@@ -1170,12 +1330,10 @@ impl AnimationController {
         }
         let status = inner.settled_status_directed();
         inner.status = status;
-        let callbacks = inner.take_status_change();
-        drop(inner);
-        self.notifier.notify_listeners();
-        if let Some(callbacks) = callbacks {
-            Self::fire_status(&callbacks, status);
-        }
+        // Publish before unlocking — see the simulation branch's own comment
+        // for why the order matters to a panicking listener.
+        let delivery = inner.active_run.take().map(TickerCompleter::complete);
+        self.finish(status, ValueChange::Notify, delivery, inner);
     }
 
     /// Set the value directly without animating; recomputes status and notifies.
@@ -1190,40 +1348,42 @@ impl AnimationController {
     /// propagates `NaN`, which would otherwise poison every downstream
     /// curve/tween evaluation for the rest of the controller's life.
     pub fn set_value(&self, value: f32) {
+        let was_nan = value.is_nan();
         let mut inner = self.inner.lock();
-        inner.stop_running();
-        let value = if value.is_nan() {
-            tracing::warn!(
-                "set_value(NaN) canonicalized to lower bound; drive the controller with finite values"
-            );
-            inner.lower_bound
-        } else {
-            value
-        };
+        let delivery = inner.stop_running();
+        // Canonicalize silently under the lock; `tracing::warn!`'s
+        // subscriber is arbitrary user code and `delivery` is live here —
+        // the warning itself waits for `Self::warn_if_nan` below, after
+        // `finish` has unlocked and delivered.
+        let value = if was_nan { inner.lower_bound } else { value };
         inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
         let status = inner.settled_status_keep_direction();
         inner.status = status;
-        let callbacks = inner.take_status_change();
-        drop(inner);
-        self.notifier.notify_listeners();
-        if let Some(callbacks) = callbacks {
-            Self::fire_status(&callbacks, status);
-        }
+        self.finish(status, ValueChange::Notify, delivery, inner);
+        Self::warn_if_nan(was_nan);
     }
 
     /// **CRITICAL:** Dispose when done to prevent leaks.
     ///
-    /// Stops the animation and clears resources. Idempotent.
+    /// Stops the animation and clears resources. Idempotent. Cancels the
+    /// active run's [`TickerFuture`] with
+    /// [`TickerCanceled`](flui_scheduler::ticker::TickerCanceled) —
+    /// delivered with no controller lock held — even though `dispose` itself never
+    /// changes `status` and so fires no status listener (they are already
+    /// cleared by the time delivery runs).
     pub fn dispose(&self) {
         let mut inner = self.inner.lock();
         if inner.disposed {
             return;
         }
+        let delivery = inner.active_run.take().map(TickerCompleter::cancel);
         if let Some(mut ticker) = inner.ticker.take() {
             ticker.stop();
         }
         inner.status_listeners.clear();
         inner.disposed = true;
+        let status = inner.status;
+        self.finish(status, ValueChange::Unchanged, delivery, inner);
     }
 
     fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
@@ -1249,7 +1409,25 @@ impl AnimationController {
     }
 
     /// Reset run state and (re)start the ticker for a fresh run from epoch 0.
-    fn restart_ticker(&self, inner: &mut AnimationControllerInner) {
+    ///
+    /// Returns `false` iff this controller has no ticker at all — the
+    /// caller must warn (and only after it has dropped the controller
+    /// lock). This function itself never emits, and every run-starting site
+    /// calls it **before** creating this run's [`TickerCompleter`] and
+    /// displacing the previous one — so no `TickerDelivery` is ever live
+    /// while this runs. That ordering is load-bearing, not incidental:
+    /// `Ticker::start` reaches the scheduler's `schedule_tick_if_active` →
+    /// `request_frame` → the embedder's `on_frame_scheduled` hook, which
+    /// *is* foreign code running under this guard (unavoidably — it always
+    /// has been, since `Ticker::start` was first called under the
+    /// controller's lock). What this ordering removes is only "and a live
+    /// delivery drops under the lock if that foreign code panics" — not the
+    /// foreign call itself. `replace`/`.map(TickerCompleter::cancel)` at
+    /// every call site touch only `active_run`; this function touches only
+    /// `run_epoch_secs`/`last_raw_elapsed_secs`/`run_generation`/`ticker` —
+    /// disjoint fields, so reordering the two calls is free.
+    #[must_use]
+    fn restart_ticker(&self, inner: &mut AnimationControllerInner) -> bool {
         inner.run_epoch_secs = 0.0;
         inner.last_raw_elapsed_secs = 0.0;
         // A fresh run's `t = 0` is established here — bump the generation so an
@@ -1257,26 +1435,46 @@ impl AnimationController {
         // [`run_generation`](Self::run_generation)). `restart_ticker` is the
         // single chokepoint every run-start path funnels through.
         inner.run_generation = inner.run_generation.wrapping_add(1);
-        if let Some(ticker) = &mut inner.ticker {
-            // Restart-safe: `Ticker::start` refuses a start while a previous
-            // run's future is still installed and hands that future back
-            // instead, so a live run must be ended here or the restart is
-            // silently dropped. `is_running()`, not `can_tick()`: a Muted
-            // ticker still holds its run — and its future — so the narrower
-            // Active-only test skipped the stop and left the animation stuck.
-            //
-            // The guard stays rather than stopping unconditionally: `stop()` is
-            // NOT a no-op on an Idle or Stopped ticker — it clears the callback
-            // slot — and the start below is the only thing that reinstalls one.
-            // Narrowing the stop to runs that actually exist keeps that
-            // coupling out of the picture.
-            if ticker.state().is_running() {
-                ticker.stop();
-            }
-            let controller = self.clone();
-            ticker.start(move |elapsed| controller.tick_at(elapsed));
-        } else {
+        let Some(ticker) = &mut inner.ticker else {
+            return false;
+        };
+        // Restart-safe: `Ticker::start` refuses a start while a run is
+        // already installed and silently drops the callback instead, so
+        // a live run must be ended here or the restart is silently
+        // dropped. `is_running()`, not `can_tick()`: a Muted ticker still
+        // holds its run, so the narrower Active-only test skipped the
+        // stop and left the animation stuck.
+        //
+        // The guard stays rather than stopping unconditionally: `stop()` is
+        // NOT a no-op on an Idle or Stopped ticker — it clears the callback
+        // slot — and the start below is the only thing that reinstalls one.
+        // Narrowing the stop to runs that actually exist keeps that
+        // coupling out of the picture.
+        if ticker.state().is_running() {
+            ticker.stop();
+        }
+        let controller = self.clone();
+        ticker.start(move |elapsed| controller.tick_at(elapsed));
+        true
+    }
+
+    /// Emits the "no ticker" warning `restart_ticker` cannot emit itself —
+    /// call only after `finish` has unlocked and delivered, never while
+    /// this controller's own lock is still held.
+    fn warn_if_no_ticker(has_ticker: bool) {
+        if !has_ticker {
             tracing::warn!("AnimationController has no ticker; the animation will not advance");
+        }
+    }
+
+    /// Emits the `set_value(NaN)` warning — call only after `finish` has
+    /// unlocked and delivered, for the same reason as
+    /// [`warn_if_no_ticker`](Self::warn_if_no_ticker).
+    fn warn_if_nan(was_nan: bool) {
+        if was_nan {
+            tracing::warn!(
+                "set_value(NaN) canonicalized to lower bound; drive the controller with finite values"
+            );
         }
     }
 
@@ -1287,17 +1485,50 @@ impl AnimationController {
         }
     }
 
-    /// Drop the inner lock, then fire status listeners for `status`.
+    /// The single chokepoint for the unlock-then-fan-out sequence every
+    /// run-ending or run-starting site needs: drop the controller lock,
+    /// notify value listeners iff `value_change` says the value changed too
+    /// (a run-start changes status but not value; a settle/tick changes
+    /// both), fire status listeners for `status`, and — last — deliver a
+    /// resolved or displaced run's [`TickerDelivery`] if one is pending.
     ///
-    /// Used by the run-start methods, which change status but not value.
-    fn emit_status_after_unlock(
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+    /// `TickerDelivery::deliver` is called from nowhere else in this file:
+    /// every site that obtains one from [`TickerCompleter::complete`]/
+    /// [`cancel`](TickerCompleter::cancel) hands it here instead of
+    /// delivering it itself, which is what lets one source-guard test
+    /// (`ticker_completer_resolution_never_bypasses_the_finish_chokepoint`) cover
+    /// every call site in this file at once. Status fires BEFORE delivery:
+    /// a new run's status is observable before the run it displaced reports
+    /// its own cancellation, matching the order a caller sees them settle.
+    ///
+    /// `delivery` is declared before `inner` on purpose: parameters drop in
+    /// reverse declaration order, so if a panic unwinds from between
+    /// `take_status_change()` and the explicit `drop(inner)` below,
+    /// `inner`'s guard is still released before `delivery` — a delivery
+    /// dropped here always runs its fan-out with the controller lock free.
+    /// The six run-start callers run `restart_ticker` (which runs the
+    /// scheduler's `on_frame_scheduled` hook — genuinely foreign code, under
+    /// the guard, same as it always was) *before* creating this run's
+    /// completer, so no delivery is ever live across that call either; see
+    /// `restart_ticker`'s own doc. The run-ending callers (`stop`, `reset`,
+    /// `set_value`, `dispose`, the tick paths) never call it.
+    fn finish(
+        &self,
         status: AnimationStatus,
+        value_change: ValueChange,
+        delivery: Option<TickerDelivery>,
+        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
     ) {
         let callbacks = inner.take_status_change();
         drop(inner);
+        if value_change == ValueChange::Notify {
+            self.notifier.notify_listeners();
+        }
         if let Some(callbacks) = callbacks {
             Self::fire_status(&callbacks, status);
+        }
+        if let Some(delivery) = delivery {
+            delivery.deliver();
         }
     }
 }
@@ -1312,17 +1543,24 @@ impl AnimationControllerInner {
         self.run_curve = None;
     }
 
-    /// Halt any active run at the current value: stop the ticker and clear
-    /// simulation/repeat/curve state, without touching `status` or emitting
-    /// any notification. Flutter parity: the raw `AnimationController.stop()`
-    /// that the `value=` setter calls before `_internalSetValue` — it only
-    /// clears `_simulation`/`_lastElapsedDuration` and stops the ticker, it
-    /// does not recompute status (the caller does that separately).
-    fn stop_running(&mut self) {
+    /// Halt any active run at the current value: stop the ticker, clear
+    /// simulation/repeat/curve state, and cancel the displaced run's
+    /// completer — without touching `status` or emitting any notification.
+    /// Flutter parity: the raw `AnimationController.stop()` that the
+    /// `value=` setter calls before `_internalSetValue` — it only clears
+    /// `_simulation`/`_lastElapsedDuration` and stops the ticker, it does
+    /// not recompute status (the caller does that separately).
+    ///
+    /// The returned [`TickerDelivery`] must be handed to
+    /// [`AnimationController::finish`]; nothing else in this file may call
+    /// `deliver()` on it.
+    #[must_use = "a displaced run's TickerDelivery must reach AnimationController::finish"]
+    fn stop_running(&mut self) -> Option<TickerDelivery> {
         self.clear_run_modes();
         if let Some(ticker) = &mut self.ticker {
             ticker.stop();
         }
+        self.active_run.take().map(TickerCompleter::cancel)
     }
 
     /// Snapshot the callbacks to fire **iff** `self.status` differs from the
@@ -2406,5 +2644,568 @@ mod tests {
         assert_eq!(tick_count.load(Ordering::SeqCst), 2);
 
         c.dispose();
+    }
+
+    // ---- controller-owned run futures (issue #1161 / ADR-0064) ----
+
+    #[test]
+    fn forward_future_resolves_ok_when_the_run_completes_via_tick_at() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let future = c.forward().unwrap();
+        assert!(future.is_pending());
+
+        c.tick_at(0.1);
+
+        assert!(
+            future.is_complete(),
+            "a run that reaches its target normally must resolve Ok, not \
+             stay pending"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn zero_duration_forward_completes_on_the_first_scheduler_driven_frame() {
+        let _serial = serial();
+        let scheduler = UpdateScheduler::new();
+        let c = AnimationController::new(Duration::ZERO, &scheduler);
+        let future = c.forward().unwrap();
+        assert!(future.is_pending());
+
+        scheduler.execute_frame();
+
+        assert!(
+            future.is_complete(),
+            "tick_time_based's is_zero => t = 1.0 branch must complete a \
+             zero-duration run on its very first tick"
+        );
+        c.dispose();
+    }
+
+    /// A trivially-finished [`Simulation`] test double: `is_done` is true
+    /// from the first tick, so `tick_simulation`'s completion branch runs
+    /// immediately without needing a real spring to settle.
+    struct InstantSimulation {
+        value: f32,
+    }
+
+    impl Simulation for InstantSimulation {
+        fn x(&self, _time: f32) -> f32 {
+            self.value
+        }
+        fn dx(&self, _time: f32) -> f32 {
+            0.0
+        }
+        fn is_done(&self, _time: f32) -> bool {
+            true
+        }
+        fn tolerance(&self) -> Tolerance {
+            Tolerance::DEFAULT
+        }
+    }
+
+    #[test]
+    fn simulation_run_future_resolves_ok_when_the_simulation_finishes() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let future = c.animate_with(InstantSimulation { value: 0.5 }).unwrap();
+        assert!(future.is_pending());
+
+        c.tick_at(0.0);
+
+        assert!(
+            future.is_complete(),
+            "tick_simulation's is_done branch must complete the run's future"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn finite_repeat_future_completes_when_the_count_is_exhausted() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(10));
+        let future = c
+            .repeat_with(None, None, false, Some(Duration::from_millis(10)), Some(2))
+            .unwrap();
+        assert!(future.is_pending());
+
+        c.tick_at(0.010); // first cycle retires; one more to go
+        assert!(future.is_pending(), "one of two cycles is not exhaustion");
+        c.tick_at(0.020); // second cycle retires -> exhausted
+        assert!(
+            future.is_complete(),
+            "a finite repeat must complete its future once its count is exhausted"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn infinite_repeat_future_only_resolves_via_stop() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(10));
+        let future = c.repeat(false).unwrap();
+        assert!(future.is_pending());
+
+        // Several cycles retire; an infinite repeat has no natural end.
+        c.tick_at(0.010);
+        c.tick_at(0.020);
+        c.tick_at(0.100);
+        assert!(
+            future.is_pending(),
+            "an infinite repeat's future must stay pending through any \
+             number of retired cycles"
+        );
+
+        c.stop().unwrap();
+        assert!(
+            future.is_canceled(),
+            "stop() is the only thing that resolves an infinite repeat's future"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn stop_cancels_the_active_run() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let future = c.forward().unwrap();
+        c.stop().unwrap();
+        assert!(future.is_canceled(), "stop() must cancel the run in flight");
+        c.dispose();
+    }
+
+    #[test]
+    fn set_value_cancels_the_active_run() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let future = c.forward().unwrap();
+        c.set_value(0.3);
+        assert!(
+            future.is_canceled(),
+            "set_value() must cancel the run in flight"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn reset_cancels_the_active_run() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let future = c.forward().unwrap();
+        c.reset().unwrap();
+        assert!(
+            future.is_canceled(),
+            "reset() must cancel the run in flight"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn dispose_cancels_the_active_run() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let future = c.forward().unwrap();
+        c.dispose();
+        assert!(
+            future.is_canceled(),
+            "dispose() must cancel the run in flight"
+        );
+    }
+
+    #[test]
+    fn a_new_runs_status_listener_fires_before_the_displaced_runs_cancellation() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let first = c.forward().unwrap();
+
+        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let order_for_status = Arc::clone(&order);
+        c.add_status_listener(Arc::new(move |_status| {
+            order_for_status.lock().push("new_run_status");
+        }));
+        let order_for_cancel = Arc::clone(&order);
+        first.when_complete_or_cancel(move |_outcome| {
+            order_for_cancel.lock().push("displaced_run_canceled");
+        });
+
+        c.reverse().unwrap();
+
+        assert_eq!(
+            order.lock().as_slice(),
+            &["new_run_status", "displaced_run_canceled"],
+            "the new run's status must be observed before the displaced \
+             run's cancellation is delivered"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn zero_distance_start_returns_a_complete_future_and_cancels_the_displaced_run() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let first = c.forward().unwrap(); // 0.0 -> 1.0, a real run
+        c.tick_at(0.05); // partway; still pending
+        assert!(first.is_pending());
+
+        // Already at the target -> the zero-distance settle path, no new
+        // ticker run.
+        let settled = c.forward_from(Some(1.0)).unwrap();
+
+        assert!(
+            settled.is_complete(),
+            "a zero-distance start must return an already-complete future"
+        );
+        assert!(
+            first.is_canceled(),
+            "the zero-distance settle must still cancel whatever run it displaced"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn every_delivery_runs_with_the_controller_lock_free() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let inner = Arc::clone(&c.inner);
+        let future = c.forward().unwrap();
+
+        let observed = Arc::new(Mutex::new(None));
+        let observed2 = Arc::clone(&observed);
+        future.when_complete_or_cancel(move |_outcome| {
+            *observed2.lock() = Some(inner.try_lock().is_some());
+        });
+
+        c.tick_at(0.1);
+
+        assert_eq!(
+            observed.lock().as_ref(),
+            Some(&true),
+            "a delivery must run with the controller's own lock free — the \
+             finish chokepoint drops it before calling deliver()"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn a_completed_listener_that_starts_a_new_run_leaves_the_finished_run_ok() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let first = c.forward().unwrap();
+
+        let chained = c.clone();
+        let restarted = Arc::new(AtomicUsize::new(0));
+        let restart_flag = Arc::clone(&restarted);
+        c.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed
+                && restart_flag.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                chained.forward_from(Some(0.0)).unwrap();
+            }
+        }));
+
+        c.tick_at(0.1); // completes `first`; the listener above chains a new run
+
+        assert_eq!(
+            restarted.load(Ordering::SeqCst),
+            1,
+            "sanity: the listener must have chained a restart"
+        );
+        assert!(
+            first.is_complete(),
+            "the finished run's own future must resolve Ok even though a \
+             listener started a new run before delivery ran"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn a_panicking_status_listener_leaves_the_finished_run_ok() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        let future = c.forward().unwrap();
+
+        // Registered on the FUTURE, not the controller: this only runs if
+        // `TickerDelivery` actually delivers. `future.is_complete()` alone
+        // (the durable state `publish` writes) would stay green even with
+        // `Drop for TickerDelivery` emptied out, since `finish` never
+        // reaches its own `delivery.deliver()` line when `fire_status`
+        // panics — only the unwind dropping the `delivery` parameter runs
+        // it. This continuation is the oracle for that drop actually firing.
+        let seen = Arc::new(Mutex::new(None));
+        let seen2 = Arc::clone(&seen);
+        future.when_complete_or_cancel(move |outcome| {
+            *seen2.lock() = Some(outcome);
+        });
+
+        c.add_status_listener(Arc::new(|status| {
+            assert!(
+                status != AnimationStatus::Completed,
+                "a status listener panics on completion"
+            );
+        }));
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.tick_at(0.1);
+        }));
+
+        assert!(
+            result.is_err(),
+            "the listener's panic must propagate out of tick_at"
+        );
+        assert_eq!(
+            *seen.lock(),
+            Some(Ok(())),
+            "TickerDelivery must still deliver on drop through the unwind, \
+             running the continuation with the outcome published before \
+             the panicking listener ran"
+        );
+        assert!(future.is_complete());
+        c.dispose();
+    }
+
+    #[test]
+    fn when_complete_or_cancel_chaining_ticks_once_per_frame_and_stop_fully_stops_it() {
+        let _serial = serial();
+        let scheduler = UpdateScheduler::new();
+        // `Duration::ZERO` completes the reverse leg on the FIRST
+        // `execute_frame()` regardless of real elapsed time
+        // (`tick_time_based`'s `duration.is_zero() => t = 1.0`, proven by
+        // `zero_duration_forward_completes_on_the_first_scheduler_driven_frame`)
+        // — deterministic, unlike waiting on a real millisecond duration,
+        // and needs no `thread::sleep`. The chained leg below still takes
+        // its own explicit 10s duration regardless of this controller's
+        // base duration, so it is still in flight when `stop()` cancels it.
+        let c = AnimationController::new(Duration::ZERO, &scheduler);
+        c.set_value(1.0);
+
+        let tick_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&tick_count);
+        c.add_listener(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let restarted = Arc::new(AtomicUsize::new(0));
+        let restart_flag = Arc::clone(&restarted);
+        let chained = c.clone();
+        let future = c.reverse().unwrap();
+        future.when_complete_or_cancel(move |outcome| {
+            if outcome.is_ok() && restart_flag.fetch_add(1, Ordering::SeqCst) == 0 {
+                // A LONG chained run on purpose — see the sibling
+                // status-listener version of this test for why.
+                chained
+                    .animate_to(1.0, Some(Duration::from_secs(10)))
+                    .unwrap();
+            }
+        });
+
+        scheduler.execute_frame();
+
+        assert_eq!(
+            restarted.load(Ordering::SeqCst),
+            1,
+            "sanity: the first run must complete and the continuation must \
+             have chained a restart"
+        );
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            1,
+            "the chained restart must leave exactly ONE live tick registration"
+        );
+
+        scheduler.execute_frame();
+
+        assert_eq!(
+            tick_count.load(Ordering::SeqCst),
+            2,
+            "exactly one value notification per frame across both runs"
+        );
+        assert_eq!(scheduler.transient_callback_count(), 1);
+
+        c.stop().unwrap();
+        assert_eq!(
+            scheduler.transient_callback_count(),
+            0,
+            "stop() must fully cancel the single live tick chain"
+        );
+        assert!(!c.is_animating());
+
+        scheduler.execute_frame();
+        assert_eq!(tick_count.load(Ordering::SeqCst), 2);
+
+        c.dispose();
+    }
+
+    /// Source guard: `TickerDelivery::deliver` must be called from exactly
+    /// one place — inside `AnimationController::finish` — and no
+    /// `TickerCompleter`/`TickerDelivery`-producing call
+    /// (`.complete()`/`.cancel()`/`stop_running(`/`.map(TickerCompleter::..)`)
+    /// or a direct `active_run = ` assignment may appear anywhere else
+    /// without being bound to a name (a `let _ = ..`, a bare unbound
+    /// statement, or either wrapped in `drop(..)`) — every one of those
+    /// shapes delivers (or drops a completer that would have delivered)
+    /// under whatever lock is live at that statement instead of routing
+    /// through `finish`.
+    ///
+    /// Checked per STATEMENT, not per line: physical lines are stripped of
+    /// `//` comments (never `://`) and doc-comment-only lines are dropped
+    /// entirely, then accumulated until a `;`, `{`, or `}` is seen. Only a
+    /// `;`-terminated accumulation is a real statement — a bare tail
+    /// expression (no trailing `;`, e.g. `stop_running`'s own
+    /// `self.active_run.take().map(TickerCompleter::cancel)` return value)
+    /// is a function's return, not a discard, and is excluded by
+    /// construction: it never accumulates a trailing `;` of its own before
+    /// the enclosing `}` ends the accumulation instead. This is what makes a
+    /// rustfmt-wrapped `let _ = inner\n    .active_run\n    .take()\n    .map(TickerCompleter::cancel);`
+    /// visible as one unit regardless of where the formatter broke the
+    /// lines (whitespace before a `.` is removed after joining, so a wrapped
+    /// `.active_run\n.take()` still reads `active_run.take(`), which a
+    /// per-line check cannot see.
+    ///
+    /// Known limit, by construction: a `{` or `}` ends an accumulation
+    /// without checking it, so a tracked call that sits to the LEFT of a
+    /// brace in the same statement — `if let Some(old) = inner.active_run.take() { .. }`,
+    /// `match inner.active_run.take() { .. }` — is not seen. Those shapes are
+    /// bound (the value has a name inside the block), so they are outside
+    /// what this guard claims; do not cite it against them.
+    #[test]
+    fn ticker_completer_resolution_never_bypasses_the_finish_chokepoint() {
+        let source = include_str!("controller.rs");
+        // Scan production code only: this test's own body spells out the
+        // exact patterns it searches for (in match strings and panic
+        // messages), which would otherwise flag itself.
+        let production_end = source
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("controller.rs must contain its own #[cfg(test)] mod tests block");
+        let production = &source[..production_end];
+
+        // `.deliver()` is called from exactly one place: inside `finish`.
+        let deliver_count = production.matches(".deliver()").count();
+        assert_eq!(
+            deliver_count, 1,
+            "`.deliver()` must be called from exactly one place in this file \
+             (AnimationController::finish); found {deliver_count} call site(s)"
+        );
+        let finish_start = production
+            .find("fn finish(")
+            .expect("AnimationController::finish must exist");
+        let finish_body_start = production[finish_start..]
+            .find('{')
+            .map(|i| finish_start + i)
+            .expect("fn finish must have a body");
+        let mut depth = 0i32;
+        let mut finish_body_end = None;
+        for (i, ch) in production[finish_body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        finish_body_end = Some(finish_body_start + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let finish_body_end = finish_body_end.expect("fn finish's body braces must balance");
+        let deliver_pos = production
+            .find(".deliver()")
+            .expect("just counted at least one occurrence above");
+        assert!(
+            (finish_body_start..=finish_body_end).contains(&deliver_pos),
+            "the one `.deliver()` call must be inside `AnimationController::finish`'s \
+             own body (byte range {finish_body_start}..={finish_body_end}), found at \
+             byte {deliver_pos}"
+        );
+
+        // Tracked call shapes that must never appear unbound.
+        let tracked: [&str; 6] = [
+            ".complete()",
+            ".cancel()",
+            "stop_running(",
+            ".map(TickerCompleter::",
+            "active_run.replace(",
+            "active_run.take(",
+        ];
+
+        let mut buffer = String::new();
+        for line in production.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("///") || trimmed.starts_with("//!") {
+                continue; // prose, not code — never joined in
+            }
+            // Strip a trailing `//` comment, but not a `://` inside a URL.
+            let bytes = line.as_bytes();
+            let mut code_part = line;
+            let mut search_from = 0;
+            while let Some(rel) = line[search_from..].find("//") {
+                let at = search_from + rel;
+                if at > 0 && bytes[at - 1] == b':' {
+                    search_from = at + 2;
+                    continue;
+                }
+                code_part = &line[..at];
+                break;
+            }
+
+            for ch in code_part.chars() {
+                buffer.push(ch);
+                if ch == ';' || ch == '{' || ch == '}' {
+                    let statement: String = if ch == ';' {
+                        // Re-join a wrapped method chain so `.active_run\n.take()`
+                        // reads `active_run.take(` again: the tracked patterns
+                        // are written without whitespace before the `.`.
+                        buffer[..buffer.len() - 1]
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .replace(" .", ".")
+                    } else {
+                        String::new() // `{`/`}` boundary: not a value statement
+                    };
+                    buffer.clear();
+
+                    if statement.is_empty() {
+                        continue;
+                    }
+                    let is_bound = statement.starts_with("let ");
+
+                    let discards_via_let_underscore = statement.starts_with("let _ =")
+                        && tracked.iter().any(|pat| statement.contains(pat));
+                    assert!(
+                        !discards_via_let_underscore,
+                        "discards a TickerCompleter/TickerDelivery result with \
+                         `let _ =`, which delivers under whatever lock is held at \
+                         this statement instead of going through \
+                         `AnimationController::finish`: {statement:?}"
+                    );
+
+                    // Covers a bare `foo().map(TickerCompleter::cancel);`, a
+                    // bare `stop_running();`, and either wrapped in
+                    // `drop(..)` — none of them bind the result anywhere.
+                    let bare_discard =
+                        !is_bound && tracked.iter().any(|pat| statement.contains(pat));
+                    assert!(
+                        !bare_discard,
+                        "calls a TickerCompleter/TickerDelivery-producing operation \
+                         with no binding at all, delivering under whatever lock is \
+                         held at this statement instead of going through \
+                         `AnimationController::finish`: {statement:?}"
+                    );
+
+                    let direct_assignment = statement.contains("active_run = ");
+                    assert!(
+                        !direct_assignment,
+                        "assigns `active_run` directly with `=`, which drops \
+                         whatever completer was there before, inline, under \
+                         whatever lock is held at this statement instead of \
+                         routing it through `.replace()` + \
+                         `AnimationController::finish`: {statement:?}"
+                    );
+                }
+            }
+            buffer.push(' '); // preserve the line break as whitespace
+        }
     }
 }

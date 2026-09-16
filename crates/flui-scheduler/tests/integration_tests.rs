@@ -244,7 +244,7 @@ fn test_ticker_mute_unmute() {
 #[test]
 fn test_ticker_future_states() {
     // Test pending state
-    let future = TickerFuture::new();
+    let (_completer, future) = TickerFuture::pending();
     assert!(future.is_pending());
     assert!(!future.is_complete());
     assert!(!future.is_canceled());
@@ -258,7 +258,14 @@ fn test_ticker_future_states() {
 
 #[test]
 fn test_ticker_canceled_error() {
-    let error = TickerCanceled;
+    let (completer, mut future) = TickerFuture::pending();
+    completer.cancel().deliver();
+    let waker = std::task::Waker::noop();
+    let mut cx = std::task::Context::from_waker(waker);
+    let error = match std::pin::Pin::new(&mut future).poll(&mut cx) {
+        std::task::Poll::Ready(Err(error)) => error,
+        other => panic!("expected Err(TickerCanceled), got {other:?}"),
+    };
     assert_eq!(error.to_string(), "The ticker was canceled");
 
     // Test that it implements Error trait
@@ -489,7 +496,7 @@ fn test_scheduler_thread_safety() {
 
 #[test]
 fn test_ticker_future_thread_safety() {
-    let future = TickerFuture::new();
+    let (_completer, future) = TickerFuture::pending();
     let future_clone = future.clone();
 
     // Test that TickerFuture can be shared across threads
@@ -1736,19 +1743,8 @@ fn test_auto_scheduling_ticker_debug() {
 }
 
 #[test]
-fn test_ticker_future_or_cancel() {
-    let future = TickerFuture::new();
-
-    // Get or_cancel future
-    let cancel_future = future.or_cancel();
-
-    // Just verify it compiles and creates
-    let _ = format!("{cancel_future:?}");
-}
-
-#[test]
 fn test_ticker_future_clone() {
-    let future1 = TickerFuture::new();
+    let (_completer, future1) = TickerFuture::pending();
     let future2 = future1.clone();
 
     // Both should reference the same state
@@ -1758,18 +1754,9 @@ fn test_ticker_future_clone() {
 
 #[test]
 fn test_ticker_future_debug() {
-    let future = TickerFuture::new();
+    let future = TickerFuture::complete();
     let debug = format!("{future:?}");
     assert!(debug.contains("TickerFuture"));
-}
-
-#[test]
-fn test_ticker_or_cancel_debug() {
-    let future = TickerFuture::new();
-    let cancel_future = future.or_cancel();
-
-    let debug = format!("{cancel_future:?}");
-    assert!(debug.contains("TickerFutureOrCancel"));
 }
 
 // ============================================================================
@@ -2592,8 +2579,9 @@ fn test_auto_scheduling_ticker_start_typed_works() {
 // ============================================================================
 
 #[test]
-fn test_ticker_future_new_is_pending() {
-    assert!(TickerFuture::new().is_pending());
+fn test_ticker_future_pending_is_pending() {
+    let (_completer, future) = TickerFuture::pending();
+    assert!(future.is_pending());
 }
 
 #[test]
@@ -2606,22 +2594,16 @@ fn test_ticker_future_complete_state_flags() {
 
 #[test]
 fn test_ticker_future_clone_both_pending() {
-    let future1 = TickerFuture::new();
+    let (_completer, future1) = TickerFuture::pending();
     let future2 = future1.clone();
     assert!(future1.is_pending());
     assert!(future2.is_pending());
 }
 
 #[test]
-fn test_ticker_future_default_pending() {
-    let future = TickerFuture::default();
-    assert!(future.is_pending());
-}
-
-#[test]
-fn test_ticker_future_debug_active_state() {
-    let pending = TickerFuture::new();
-    assert!(format!("{pending:?}").contains("active"));
+fn test_ticker_future_debug_pending_state() {
+    let (_completer, pending) = TickerFuture::pending();
+    assert!(format!("{pending:?}").contains("pending"));
 }
 
 #[test]
@@ -2631,30 +2613,14 @@ fn test_ticker_future_debug_complete_state() {
 }
 
 #[test]
-fn test_ticker_future_poll_new_pending() {
-    use std::{
-        future::Future,
-        pin::Pin,
-        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
-    };
+fn test_ticker_future_poll_pending() {
+    use std::{future::Future, pin::Pin, task::Context};
 
-    let mut future = TickerFuture::new();
+    let (_completer, mut future) = TickerFuture::pending();
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
 
-    fn dummy_raw_waker() -> RawWaker {
-        fn no_op(_: *const ()) {}
-        fn clone(_: *const ()) -> RawWaker {
-            dummy_raw_waker()
-        }
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
-    // SAFETY: the vtable's `clone` returns the same no-data waker and the
-    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
-    // trivially — the null data pointer is never dereferenced.
-    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
-    let mut cx = Context::from_waker(&waker);
-
-    assert!(matches!(Pin::new(&mut future).poll(&mut cx), Poll::Pending));
+    assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 }
 
 #[test]
@@ -2662,125 +2628,79 @@ fn test_ticker_future_poll_complete_ready() {
     use std::{
         future::Future,
         pin::Pin,
-        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+        task::{Context, Poll},
     };
 
     let mut future = TickerFuture::complete();
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
 
-    fn dummy_raw_waker() -> RawWaker {
-        fn no_op(_: *const ()) {}
-        fn clone(_: *const ()) -> RawWaker {
-            dummy_raw_waker()
-        }
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
-    // SAFETY: the vtable's `clone` returns the same no-data waker and the
-    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
-    // trivially — the null data pointer is never dereferenced.
-    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
-    let mut cx = Context::from_waker(&waker);
-
-    assert!(matches!(
-        Pin::new(&mut future).poll(&mut cx),
-        Poll::Ready(())
-    ));
+    assert_eq!(Pin::new(&mut future).poll(&mut cx), Poll::Ready(Ok(())));
 }
 
 #[test]
-fn test_ticker_future_or_cancel_poll_pending() {
-    use std::{
-        future::Future,
-        pin::Pin,
-        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
-    };
+fn test_ticker_future_poll_canceled_ready() {
+    use std::{future::Future, pin::Pin, task::Context};
 
-    let future = TickerFuture::new();
-    let mut or_cancel = future.or_cancel();
+    let (completer, mut future) = TickerFuture::pending();
+    completer.cancel().deliver();
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
 
-    fn dummy_raw_waker() -> RawWaker {
-        fn no_op(_: *const ()) {}
-        fn clone(_: *const ()) -> RawWaker {
-            dummy_raw_waker()
-        }
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
-        RawWaker::new(std::ptr::null(), &VTABLE)
+    match Pin::new(&mut future).poll(&mut cx) {
+        std::task::Poll::Ready(Err(TickerCanceled { .. })) => {}
+        other => panic!("expected Poll::Ready(Err(TickerCanceled)), got {other:?}"),
     }
-    // SAFETY: the vtable's `clone` returns the same no-data waker and the
-    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
-    // trivially — the null data pointer is never dereferenced.
-    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
-    let mut cx = Context::from_waker(&waker);
-
-    assert!(matches!(
-        Pin::new(&mut or_cancel).poll(&mut cx),
-        Poll::Pending
-    ));
-}
-
-#[test]
-fn test_ticker_future_or_cancel_poll_complete() {
-    use std::{
-        future::Future,
-        pin::Pin,
-        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
-    };
-
-    let future = TickerFuture::complete();
-    let mut or_cancel = future.or_cancel();
-
-    fn dummy_raw_waker() -> RawWaker {
-        fn no_op(_: *const ()) {}
-        fn clone(_: *const ()) -> RawWaker {
-            dummy_raw_waker()
-        }
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
-    // SAFETY: the vtable's `clone` returns the same no-data waker and the
-    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
-    // trivially — the null data pointer is never dereferenced.
-    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
-    let mut cx = Context::from_waker(&waker);
-
-    assert!(matches!(
-        Pin::new(&mut or_cancel).poll(&mut cx),
-        Poll::Ready(Ok(()))
-    ));
 }
 
 // ============================================================================
 // TickerCanceled Tests
 // ============================================================================
 
+/// Obtains a `TickerCanceled` value the only way this external crate can:
+/// through the public completer/future round trip, since the type is
+/// `#[non_exhaustive]` and has no public constructor.
+fn canceled_error() -> TickerCanceled {
+    use std::{future::Future, pin::Pin, task::Context};
+
+    let (completer, mut future) = TickerFuture::pending();
+    completer.cancel().deliver();
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    match Pin::new(&mut future).poll(&mut cx) {
+        std::task::Poll::Ready(Err(error)) => error,
+        other => panic!("expected Err(TickerCanceled), got {other:?}"),
+    }
+}
+
 #[test]
 fn test_ticker_canceled_display_msg() {
-    let error = TickerCanceled;
+    let error = canceled_error();
     assert_eq!(error.to_string(), "The ticker was canceled");
 }
 
 #[test]
 fn test_ticker_canceled_debug_output() {
-    let error = TickerCanceled;
+    let error = canceled_error();
     assert_eq!(format!("{error:?}"), "TickerCanceled");
 }
 
 #[test]
 fn test_ticker_canceled_copy_semantics() {
-    let error1 = TickerCanceled;
+    let error1 = canceled_error();
     let error2 = error1;
     assert_eq!(error1, error2);
 }
 
 #[test]
 fn test_ticker_canceled_eq_check() {
-    assert_eq!(TickerCanceled, TickerCanceled);
+    assert_eq!(canceled_error(), canceled_error());
 }
 
 #[test]
 fn test_ticker_canceled_error_trait() {
     use std::error::Error;
-    let error = TickerCanceled;
+    let error = canceled_error();
     let _: &dyn Error = &error;
 }
 

@@ -274,12 +274,6 @@ struct TickerInner {
     start_time: Option<Instant>,
     slot: CallbackSlot,
     muted_elapsed: Seconds,
-    /// Future for the currently active ticker run.
-    ///
-    /// Created by `start` / `start_default`, completed by `stop`, and
-    /// canceled by `dispose` / `reset`. Stored here so lifecycle methods can
-    /// resolve the exact run that produced the handle returned to callers.
-    active_future: Option<TickerFuture>,
     /// Pending transient frame callback ID — set when an auto-scheduling
     /// ticker has registered itself with the scheduler for the next frame,
     /// cleared on `stop`/`mute`/`dispose` or when the callback fires.
@@ -345,8 +339,11 @@ impl TickerInner {
 /// A Ticker provides callbacks on every frame, allowing you to drive animations
 /// in sync with the display refresh rate.
 ///
-/// Lifecycle state is explicit at runtime: `start` returns a
-/// [`TickerFuture`], `stop` completes it, and `dispose` / `Drop` cancel it.
+/// Lifecycle state is explicit at runtime: `start`/`stop`/`dispose`/`reset`
+/// are fire-and-forget and resolve no future of their own. A caller that
+/// owns completion (e.g. `flui-animation`'s `AnimationController`) creates
+/// its own [`TickerFuture::pending`] completer/future pair and resolves it
+/// from inside this ticker's callback.
 ///
 /// # Examples
 ///
@@ -428,7 +425,6 @@ impl Ticker {
                 start_time: None,
                 slot: CallbackSlot::Vacant,
                 muted_elapsed: Seconds::ZERO,
-                active_future: None,
                 scheduled_callback_id: None,
             })),
             scheduler: None,
@@ -458,7 +454,6 @@ impl Ticker {
                 start_time: None,
                 slot: CallbackSlot::Vacant,
                 muted_elapsed: Seconds::ZERO,
-                active_future: None,
                 scheduled_callback_id: None,
             })),
             scheduler: Some(scheduler.downgrade()),
@@ -499,15 +494,19 @@ impl Ticker {
 
     /// Dispose of the ticker — idempotent.
     ///
-    /// Clears the callback, sets state to Stopped, cancels the active
-    /// [`TickerFuture`], cancels the pending transient frame callback it can
-    /// observe (auto-scheduling tickers — the registration tails self-cancel
-    /// when they find this ticker no longer [`Active`](TickerState::Active),
-    /// so no tick is ever delivered to a disposed run; see
-    /// [`stop`](Self::stop) for the window and its residuals), and marks
-    /// disposed. Subsequent calls to
+    /// Clears the callback, sets state to Stopped, cancels the pending
+    /// transient frame callback it can observe (auto-scheduling tickers —
+    /// the registration tails self-cancel when they find this ticker no
+    /// longer [`Active`](TickerState::Active), so no tick is ever delivered
+    /// to a disposed run; see [`stop`](Self::stop) for the window and its
+    /// residuals), and marks disposed. Subsequent calls to
     /// `start`/`stop`/`mute`/`unmute`/`reset`/`tick` panic in debug builds via
     /// [`debug_assert!`] and emit a `tracing::warn!` + no-op in release.
+    ///
+    /// The ticker itself resolves nothing — it never held a run's
+    /// [`TickerFuture`] (see [`start`](Self::start)'s own doc). A caller that
+    /// needs "this run ended, cancelled" resolved to an awaiter owns that
+    /// future's completer and cancels it around this call.
     ///
     /// Mirrors Flutter [`ticker.dart:362-379`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
     /// `@mustCallSuper dispose()` semantics and PR #84's `ChangeNotifier::dispose`
@@ -516,33 +515,22 @@ impl Ticker {
         if self.disposed.swap(true, Ordering::Release) {
             return; // already disposed — idempotent
         }
-        let (pending_id, active_future, discarded) = {
+        let (pending_id, discarded) = {
             let mut inner = self.inner.lock();
             inner.state = TickerState::Stopped;
             let discarded = inner.slot.clear_if_ready();
             inner.start_time = None;
-            (
-                inner.scheduled_callback_id.take(),
-                inner.active_future.take(),
-                discarded,
-            )
+            (inner.scheduled_callback_id.take(), discarded)
         };
         // Dropped only after the lock above has released (issue #1059
         // hardening) — a callback's own `Drop` is user code.
         drop(discarded);
         // Cancel pending transient callback outside the inner lock to avoid
-        // lock-during-callback hazard (scheduler may also take its own locks),
-        // and BEFORE resolving the future: resolution wakes awaiters, and a
-        // waker is user code that may read this ticker back. Flutter's order
-        // in `ticker.dart` is the same — `_future = null`, `unscheduleTick()`,
-        // then `_complete()`.
+        // lock-during-callback hazard (scheduler may also take its own locks).
         if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
             && let Some(scheduler) = scheduler.upgrade()
         {
             scheduler.cancel_frame_callback(id);
-        }
-        if let Some(future) = active_future {
-            future.set_canceled();
         }
     }
 
@@ -561,26 +549,34 @@ impl Ticker {
     /// Start the ticker with a callback.
     ///
     /// The callback receives the elapsed time in seconds since start.
-    /// Returns a [`TickerFuture`] that completes when [`stop`](Self::stop) is
-    /// called and is canceled by [`dispose`](Self::dispose) / [`reset`](Self::reset).
     /// Overrides any callback pre-loaded via [`TickerProvider::create_ticker`].
     ///
-    /// # A start that would orphan a live future is refused
+    /// This ticker resolves nothing — it never owned a run's completion
+    /// future. A future this ticker resolved itself would run its wakers and
+    /// continuations under whatever lock a caller holds at
+    /// [`stop`](Self::stop)/[`dispose`](Self::dispose)/[`reset`](Self::reset),
+    /// which for every real caller today is that caller's own non-reentrant
+    /// mutex — so resolution is not this type's job. A caller that needs
+    /// "this run ended" as an awaitable value creates its own
+    /// [`TickerFuture::pending`] pair, drives the run from this ticker's
+    /// callback, and resolves the completer from `stop`/`dispose`/`reset`
+    /// itself — `flui-animation`'s `AnimationController` is the shape to
+    /// copy (it owns exactly this completer, under its own lock, per run).
     ///
-    /// If a previous run's [`TickerFuture`] is still installed — which is the
-    /// case while the ticker is [`Active`](TickerState::Active) *and* while it
-    /// is [`Muted`](TickerState::Muted), since muting pauses a run rather than
-    /// ending it — this call does not start anything. It logs at `error!`,
-    /// drops the supplied callback, and returns that live future, so an
-    /// existing awaiter stays valid. To genuinely restart, end the current run
-    /// first ([`stop`](Self::stop) or [`reset`](Self::reset)).
+    /// # A start while a run is already installed is refused
+    ///
+    /// If the ticker is already [`Active`](TickerState::Active) *or*
+    /// [`Muted`](TickerState::Muted) — muting pauses a run rather than
+    /// ending it — this call does not start anything: it logs at `error!`
+    /// and drops the supplied callback. To genuinely restart, end the
+    /// current run first ([`stop`](Self::stop) or [`reset`](Self::reset)).
     ///
     /// Neither is a no-op on a ticker that is not running, despite having no
     /// run to end: both clear the callback slot, so a callback pre-loaded by
     /// [`TickerProvider::create_ticker`] and never started is discarded by a
-    /// bare `stop()`, and the next [`start_default`](Self::start_default) then
-    /// warns and returns an already-complete future. Pass the callback
-    /// explicitly to [`start`](Self::start) if a stop may have intervened.
+    /// bare `stop()`, and the next [`start_default`](Self::start_default) is
+    /// then a no-op too. Pass the callback explicitly to [`start`](Self::start)
+    /// if a stop may have intervened.
     ///
     /// # Panics
     ///
@@ -588,63 +584,57 @@ impl Ticker {
     /// not already in [`TickerState::Active`] (matches Flutter
     /// [`ticker.dart:188`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
     /// `throw FlutterError('A ticker was started twice.')`).
-    pub fn start<F>(&mut self, callback: F) -> TickerFuture
+    pub fn start<F>(&mut self, callback: F)
     where
         F: FnMut(f64) + Send + 'static,
     {
-        self.start_inner(Some(Box::new(callback)))
+        self.start_inner(Some(Box::new(callback)));
     }
 
     /// Start the ticker using the callback installed via
     /// [`TickerProvider::create_ticker`].
     ///
-    /// Returns a [`TickerFuture`] for the active run. If no callback is
-    /// pre-loaded, this is a no-op and returns an already-complete future.
-    ///
-    /// Returns immediately as a no-op if no callback is pre-loaded. This
-    /// fixes an earlier bug where `create_ticker` stored the callback but
-    /// `start` required a fresh one to be passed in, leaving the
-    /// pre-loaded callback unreachable.
-    pub fn start_default(&mut self) -> TickerFuture {
-        self.start_inner(None)
+    /// A no-op if no callback is pre-loaded. This fixes an earlier bug where
+    /// `create_ticker` stored the callback but `start` required a fresh one
+    /// to be passed in, leaving the pre-loaded callback unreachable.
+    pub fn start_default(&mut self) {
+        self.start_inner(None);
     }
 
-    fn start_inner(&mut self, callback: Option<TickerCallback>) -> TickerFuture {
+    fn start_inner(&mut self, callback: Option<TickerCallback>) {
         if !self.assert_not_disposed("start") {
-            return TickerFuture::canceled();
+            return;
         }
-        // Refuse a start that would orphan a previous run's future, keyed on
-        // the durable fact — is a future still installed? — and never on a
-        // `TickerState` variant list. Flutter's own predicate is
-        // `isActive => _future != null`; the narrower `state == Active` test
-        // this replaces let `mute(); start()` through, overwriting
-        // `active_future` and leaving the displaced future unresolvable by
-        // anything, forever.
+        // Refuse a start while a run is already installed, keyed on the
+        // durable fact — is a run in progress? — and never on a single
+        // `TickerState` variant. Flutter's own predicate is
+        // `isActive => _future != null`; `is_running()` (Active OR Muted) is
+        // this ticker's equivalent now that there is no future to check:
+        // muting pauses a run without ending it, so `mute(); start()` must
+        // be refused exactly like starting an `Active` ticker.
         //
         // Decided under the lock, acted on after it: both the `tracing` event
         // (whose subscriber is arbitrary user code) and the caller's rejected
         // callback (whose `Drop` is arbitrary user code) must not run while
         // `Mutex<TickerInner>` — which is not reentrant — is held. Same shape
         // as `stop`/`dispose`/`reset`/`set_pending_callback`.
-        let live_future = {
+        let already_running = {
             let inner = self.inner.lock();
             debug_assert!(
                 inner.state != TickerState::Active,
                 "A ticker was started twice (id={:?})",
                 self.id
             );
-            inner.active_future.clone()
+            inner.state.is_running()
         };
-        if let Some(live_future) = live_future {
+        if already_running {
             tracing::error!(
                 ticker_id = ?self.id,
-                "Ticker::start called while a previous run's future is still live; \
-                 returning that future rather than orphaning it"
+                "Ticker::start called while a run is already installed; ignoring"
             );
             drop(callback);
-            return live_future;
+            return;
         }
-        let future = TickerFuture::new();
         // `Some(displaced)` means this start armed a run and carries whatever
         // the callback slot held before it; `None` means there was nothing to
         // dispatch, which is reported AFTER the guard releases for the same
@@ -677,7 +667,6 @@ impl Ticker {
                 inner.state = TickerState::Active;
                 inner.start_time = Some(Instant::now());
                 inner.muted_elapsed = Seconds::ZERO;
-                inner.active_future = Some(future.clone());
             }
             displaced
         };
@@ -686,28 +675,28 @@ impl Ticker {
                 ticker_id = ?self.id,
                 "Ticker::start_default called without a pre-loaded callback (no-op)"
             );
-            return TickerFuture::complete();
+            return;
         };
         drop(displaced);
         // Auto-scheduling tickers register a transient frame callback now.
         // Flutter parity: `ticker.dart:200-202 if (shouldScheduleTick)
         // scheduleTick()`.
         self.schedule_tick_if_active();
-        future
     }
 
     /// Start the ticker with a type-safe callback
-    pub fn start_typed<F>(&mut self, mut callback: F) -> TickerFuture
+    pub fn start_typed<F>(&mut self, mut callback: F)
     where
         F: FnMut(Seconds) + Send + 'static,
     {
-        self.start(move |elapsed| callback(Seconds::new(elapsed)))
+        self.start(move |elapsed| callback(Seconds::new(elapsed)));
     }
 
     /// Stop the ticker.
     ///
-    /// This permanently stops the ticker and completes the active
-    /// [`TickerFuture`] normally. Call [`start`](Self::start) to restart.
+    /// This permanently stops the ticker. It resolves nothing — the ticker
+    /// never owned a run's completion future (see [`start`](Self::start)'s
+    /// own doc). Call [`start`](Self::start) to restart.
     ///
     /// # Cancelling the pending transient frame callback is not unconditional
     ///
@@ -742,15 +731,11 @@ impl Ticker {
         if !self.assert_not_disposed("stop") {
             return;
         }
-        let (pending_id, active_future, discarded) = {
+        let (pending_id, discarded) = {
             let mut inner = self.inner.lock();
             inner.state = TickerState::Stopped;
             let discarded = inner.slot.clear_if_ready();
-            (
-                inner.scheduled_callback_id.take(),
-                inner.active_future.take(),
-                discarded,
-            )
+            (inner.scheduled_callback_id.take(), discarded)
         };
         // Dropped only after the lock above has released (issue #1059
         // hardening) — a callback's own `Drop` is user code. If `stop()` was
@@ -760,15 +745,10 @@ impl Ticker {
         // checked-out callback itself once it observes this now-`Stopped`
         // (not running) state.
         drop(discarded);
-        // Unschedule before resolving — see `dispose` for why the order is
-        // load-bearing now that awaiters are actually woken.
         if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
             && let Some(scheduler) = scheduler.upgrade()
         {
             scheduler.cancel_frame_callback(id);
-        }
-        if let Some(future) = active_future {
-            future.set_complete();
         }
     }
 
@@ -890,14 +870,13 @@ impl Ticker {
     ///
     /// **This is narrower than Flutter's `Ticker.isActive`**, which is
     /// `_future != null` and stays true while the ticker is muted. Here a muted
-    /// ticker reports `false` even though its run — and its [`TickerFuture`] —
-    /// is still live, so the ported idiom
-    /// `if !ticker.is_active() { ticker.start(cb) }` will hit
-    /// [`start`](Self::start)'s refusal on a muted ticker and get the previous
-    /// run's future back instead of a new run. Use
-    /// [`is_running`](Self::is_running) — `Active | Muted` — wherever the
-    /// question is "does a run already exist"; that is the predicate `start`
-    /// itself refuses on.
+    /// ticker reports `false` even though its run is still live, so the ported
+    /// idiom `if !ticker.is_active() { ticker.start(cb) }` will hit
+    /// [`start`](Self::start)'s refusal on a muted ticker: the call drops the
+    /// supplied callback and logs at `error!` rather than starting anything.
+    /// [`is_running`](Self::is_running) — `Active | Muted` — is the predicate
+    /// that predicts that refusal; use it wherever the question is "does a run
+    /// already exist".
     #[inline]
     pub fn is_active(&self) -> bool {
         self.state().can_tick()
@@ -934,40 +913,33 @@ impl Ticker {
 
     /// Reset the ticker to initial state.
     ///
-    /// Cancels the active [`TickerFuture`], cancels the pending transient frame
-    /// callback it can observe (auto-scheduling tickers — same window as
-    /// [`stop`](Self::stop)), and clears all state, the callback slot included.
-    /// The ticker can be re-armed via [`start`](Self::start) afterwards, but
-    /// only with an explicitly supplied callback: a value pre-loaded by
+    /// Cancels the pending transient frame callback it can observe
+    /// (auto-scheduling tickers — same window as [`stop`](Self::stop)), and
+    /// clears all state, the callback slot included. This ticker resolves
+    /// nothing — it never owned a run's completion future (see
+    /// [`start`](Self::start)'s own doc). The ticker can be re-armed via
+    /// [`start`](Self::start) afterwards, but only with an explicitly
+    /// supplied callback: a value pre-loaded by
     /// [`TickerProvider::create_ticker`] does not survive this call.
     pub fn reset(&mut self) {
         if !self.assert_not_disposed("reset") {
             return;
         }
-        let (pending_id, active_future, discarded) = {
+        let (pending_id, discarded) = {
             let mut inner = self.inner.lock();
             inner.state = TickerState::Idle;
             inner.start_time = None;
             let discarded = inner.slot.clear_if_ready();
             inner.muted_elapsed = Seconds::ZERO;
-            (
-                inner.scheduled_callback_id.take(),
-                inner.active_future.take(),
-                discarded,
-            )
+            (inner.scheduled_callback_id.take(), discarded)
         };
         // Dropped only after the lock above has released (issue #1059
         // hardening) — same reentrant-`CheckedOut` handling as `stop`/`dispose`.
         drop(discarded);
-        // Unschedule before resolving — see `dispose` for why the order is
-        // load-bearing now that awaiters are actually woken.
         if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
             && let Some(scheduler) = scheduler.upgrade()
         {
             scheduler.cancel_frame_callback(id);
-        }
-        if let Some(future) = active_future {
-            future.set_canceled();
         }
     }
 
@@ -1374,7 +1346,7 @@ impl Extend<Ticker> for TickerGroup {
 }
 
 // ============================================================================
-// TickerFuture and TickerCanceled - Flutter-compatible async ticker support
+// TickerFuture, TickerCompleter, TickerDelivery, and TickerCanceled
 // ============================================================================
 
 use std::{
@@ -1384,28 +1356,40 @@ use std::{
 };
 
 use event_listener::Event;
-// `Listener::wait` is the blocking half of the API — absent on wasm, where
-// there is no thread to park. Upstream gates it on `target_family = "wasm"`;
-// this import mirrors that predicate rather than a narrower `target_arch` one.
-#[cfg(not(target_family = "wasm"))]
-use event_listener::Listener;
 
-/// Completion state of a ticker future
+/// Completion state of a ticker future.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TickerFutureState {
-    /// Ticker is still running
+    /// Not yet resolved.
     Pending,
-    /// Ticker completed normally
+    /// Resolved successfully.
     Complete,
-    /// Ticker was canceled
+    /// Resolved by cancellation.
     Canceled,
 }
 
-/// Shared state for TickerFuture
+/// A continuation registered via [`TickerFuture::when_complete_or_cancel`]
+/// while the future was still pending.
+type Continuation = Box<dyn FnOnce(Result<(), TickerCanceled>) + Send>;
+
+/// The durable resolution plus whatever fan-out was registered before it was
+/// known. Both live behind ONE lock so [`TickerCompleter::complete`]/
+/// [`cancel`](TickerCompleter::cancel) can publish the resolution and take
+/// every already-registered continuation in a single critical section — a
+/// registration landing between two separate locks would be pushed into a
+/// `Vec` that publish already drained and never run.
+struct FutureState {
+    resolution: TickerFutureState,
+    continuations: Vec<Continuation>,
+}
+
+/// Shared state for a [`TickerFuture`]/[`TickerCompleter`]/[`TickerDelivery`]
+/// triple.
 struct TickerFutureInner {
-    /// Current state
-    state: Mutex<TickerFutureState>,
-    /// Event for notifying waiters when state changes
+    state: Mutex<FutureState>,
+    /// Wakes polling waiters. `notify` runs uncontained — see
+    /// [`deliver_now`]'s own doc for the precondition this carries on the
+    /// executor's waker.
     event: Event,
     /// Test-only ordering probe: one entry per decisive state read performed
     /// by [`Self::read_state`], holding the number of listeners registered on
@@ -1426,9 +1410,12 @@ struct TickerFutureInner {
 }
 
 impl TickerFutureInner {
-    fn new(state: TickerFutureState) -> Self {
+    fn new(resolution: TickerFutureState) -> Self {
         Self {
-            state: Mutex::new(state),
+            state: Mutex::new(FutureState {
+                resolution,
+                continuations: Vec::new(),
+            }),
             event: Event::new(),
             #[cfg(test)]
             read_trace: Mutex::new(Vec::new()),
@@ -1438,11 +1425,15 @@ impl TickerFutureInner {
     /// Read the durable resolution state — the decisive read a waiter parks on.
     ///
     /// The durable state is the source of truth and the notification is only a
-    /// hint to re-read it. All three waiting paths — both `Future` impls
-    /// through `poll_resolution`, and the blocking
-    /// [`TickerFuture::when_complete_or_cancel`] — funnel their decisive reads
-    /// through this one accessor, which is what gives the test-only ordering
-    /// probe a single place to observe all of them.
+    /// hint to re-read it. `poll_resolution` and every state query
+    /// (`is_complete`/`is_canceled`/`is_pending`, and `Debug` for both
+    /// [`TickerFuture`] and [`TickerCompleter`]) funnel their reads through
+    /// this one accessor, which is what gives the test-only ordering probe a
+    /// single place to observe them. [`TickerFuture::when_complete_or_cancel`]'s
+    /// fast path does NOT: it must read-and-conditionally-push a continuation
+    /// as one atomic step, so it locks `state` directly instead — under
+    /// `cfg(test)` it is therefore the one read this file's ordering probe
+    /// cannot see.
     fn read_state(&self) -> TickerFutureState {
         #[cfg(test)]
         {
@@ -1452,7 +1443,7 @@ impl TickerFutureInner {
             let registered = self.event.total_listeners();
             self.read_trace.lock().push(registered);
         }
-        *self.state.lock()
+        self.state.lock().resolution
     }
 }
 
@@ -1465,23 +1456,29 @@ impl TickerFutureInner {
 enum Resolved {
     /// The ticker stopped normally.
     Complete,
-    /// The ticker was canceled (disposed or reset).
+    /// The ticker was canceled.
     Canceled,
+}
+
+impl Resolved {
+    /// This outcome as the value [`TickerFuture`]'s `Future` impl resolves to.
+    const fn as_output(&self) -> Result<(), TickerCanceled> {
+        match self {
+            Resolved::Complete => Ok(()),
+            Resolved::Canceled => Err(TickerCanceled),
+        }
+    }
 }
 
 /// Poll the shared resolution, parking on `inner`'s event while it is pending.
 ///
-/// Both `Future` impls in this module are the same state machine and differ
-/// only in how they map the two terminal outcomes; the waiting itself lives
-/// here once.
-///
 /// The loop is `read → register → read → park`, and the second read is not
-/// redundant. `resolve` publishes the durable state *before* it notifies, and
-/// the transition is once-only, so a resolution landing between the first read
-/// and `listen()` announces itself to zero listeners and is never re-announced.
-/// Re-reading after registering is what makes that lost notification
-/// unobservable: the durable state is the source of truth and the notification
-/// is only a hint to re-read it.
+/// redundant. [`TickerCompleter`] publishes the durable state *before* it
+/// notifies, and the transition is once-only, so a resolution landing between
+/// the first read and `listen()` announces itself to zero listeners and is
+/// never re-announced. Re-reading after registering is what makes that lost
+/// notification unobservable: the durable state is the source of truth and
+/// the notification is only a hint to re-read it.
 ///
 /// `event-listener` unlinks a notified entry as it reports it, and re-polling
 /// that same `EventListener` panics, so the slot is cleared on every path that
@@ -1516,27 +1513,76 @@ fn poll_resolution(
     }
 }
 
-/// A future representing an ongoing ticker sequence.
+/// Run every registered continuation, then wake polling waiters, then
+/// re-raise the first caught panic.
 ///
-/// `TickerFuture` is returned by ticker start methods and completes when the
-/// ticker is stopped. It provides two ways to await completion:
+/// Each continuation runs inside its own `catch_unwind`, so one panicking
+/// continuation does not starve its siblings or the waker notification; the
+/// caught payload is logged at `error!` immediately (never silently dropped)
+/// and the FIRST one is what gets re-raised — unless this call is itself
+/// running during an unwind (`std::thread::panicking()`), in which case it is
+/// logged instead of replacing the unwind already in flight.
 ///
-/// - Awaiting the future directly completes when the ticker stops normally
-/// - Using [`or_cancel`](Self::or_cancel) returns a future that also completes
-///   with an error if the ticker is canceled
+/// `notify` itself stays uncontained: a waker that re-polls or drops the
+/// future it wakes from inside `wake()` deadlocks inside `event-listener`'s
+/// own list lock regardless of whether this function catches panics, so
+/// containing the call would not make that case safe. Standard parker-based
+/// executors are unaffected.
+fn deliver_now(
+    inner: &TickerFutureInner,
+    outcome: Result<(), TickerCanceled>,
+    continuations: Vec<Continuation>,
+) {
+    let mut first_payload = None;
+    for continuation in continuations {
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| continuation(outcome)));
+        if let Err(payload) = result {
+            tracing::error!(
+                payload = flui_foundation::panic::payload_text(&*payload)
+                    .unwrap_or("<non-string panic payload>"),
+                "a TickerFuture continuation panicked"
+            );
+            first_payload.get_or_insert(payload);
+        }
+    }
+    inner.event.notify(usize::MAX);
+    if let Some(payload) = first_payload {
+        if std::thread::panicking() {
+            tracing::error!(
+                payload = flui_foundation::panic::payload_text(&*payload)
+                    .unwrap_or("<non-string panic payload>"),
+                "a TickerFuture continuation panicked while already unwinding; not re-raising"
+            );
+        } else {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+/// A future representing an ongoing ticker run.
+///
+/// Created in a pending state by [`TickerFuture::pending`], which hands back
+/// the [`TickerCompleter`] write half alongside it; also constructible
+/// already resolved via [`complete`](Self::complete)/[`canceled`](Self::canceled)
+/// for a run a caller can settle synchronously (a zero-duration animation,
+/// for example). Resolves `Ok(())` when the run ends normally and
+/// `Err(TickerCanceled)` when it is superseded or torn down.
 ///
 /// # Example
 ///
 /// ```rust
-/// use flui_scheduler::ticker::{TickerCanceled, TickerFuture};
+/// use flui_scheduler::ticker::TickerFuture;
 ///
 /// // Create a pre-completed future
 /// let future = TickerFuture::complete();
 /// assert!(future.is_complete());
 ///
-/// // Create a new pending future
-/// let future = TickerFuture::new();
+/// // Create a fresh pending future and its write half
+/// let (completer, future) = TickerFuture::pending();
 /// assert!(!future.is_complete());
+/// completer.complete().deliver();
+/// assert!(future.is_complete());
 /// ```
 pub struct TickerFuture {
     /// Shared inner state
@@ -1546,12 +1592,19 @@ pub struct TickerFuture {
 }
 
 impl TickerFuture {
-    /// Create a new pending ticker future
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(TickerFutureInner::new(TickerFutureState::Pending)),
-            listener: None,
-        }
+    /// Create a fresh pending future and the [`TickerCompleter`] that resolves it.
+    #[must_use = "dropping the returned TickerCompleter immediately cancels this future"]
+    pub fn pending() -> (TickerCompleter, Self) {
+        let inner = Arc::new(TickerFutureInner::new(TickerFutureState::Pending));
+        (
+            TickerCompleter {
+                inner: Arc::clone(&inner),
+            },
+            Self {
+                inner,
+                listener: None,
+            },
+        )
     }
 
     /// Create an already-completed ticker future.
@@ -1568,10 +1621,7 @@ impl TickerFuture {
 
     /// Create an already-canceled ticker future.
     ///
-    /// Used when a ticker operation is rejected after dispose. Awaiting the
-    /// base future keeps Flutter semantics (it does not resolve on cancel),
-    /// while [`or_cancel`](Self::or_cancel) resolves with
-    /// [`TickerCanceled`].
+    /// Used when a run is rejected or superseded before it could start.
     pub fn canceled() -> Self {
         Self {
             inner: Arc::new(TickerFutureInner::new(TickerFutureState::Canceled)),
@@ -1579,174 +1629,52 @@ impl TickerFuture {
         }
     }
 
-    /// Publish a terminal outcome, once, and then wake every waiter.
-    ///
-    /// Two orderings here are load-bearing and neither is incidental:
-    ///
-    /// - **Publish before notifying.** `poll_resolution` registers a listener
-    ///   and then re-reads the durable state; that re-read only closes the
-    ///   lost-notification window because the state it reads is already
-    ///   written by the time any notification can be observed.
-    /// - **Release the state guard before notifying.** `notify` runs user
-    ///   wakers, and a waker may read this future back.
-    ///
-    /// A second call is silently ignored and the first outcome stands — the
-    /// once-only transition is what lets a re-read stand in for a missed
-    /// notification. Flutter asserts here instead (`assert(_completed ==
-    /// null)`, stripped in release); FLUI's drivers reach this method from
-    /// `Drop` as well as from explicit teardown, where a hard failure on an
-    /// idempotent call would be worse than the no-op.
-    fn resolve(&self, outcome: Resolved) {
-        let mut state = self.inner.state.lock();
-        if *state != TickerFutureState::Pending {
-            return;
-        }
-        *state = match outcome {
-            Resolved::Complete => TickerFutureState::Complete,
-            Resolved::Canceled => TickerFutureState::Canceled,
-        };
-        drop(state);
-        self.inner.event.notify(usize::MAX);
-    }
-
-    /// Mark the future as complete (ticker stopped normally).
-    pub(crate) fn set_complete(&self) {
-        self.resolve(Resolved::Complete);
-    }
-
-    /// Mark the future as canceled.
-    pub(crate) fn set_canceled(&self) {
-        self.resolve(Resolved::Canceled);
-    }
-
     /// Check if the ticker completed normally
     pub fn is_complete(&self) -> bool {
-        *self.inner.state.lock() == TickerFutureState::Complete
+        self.inner.read_state() == TickerFutureState::Complete
     }
 
     /// Check if the ticker was canceled
     pub fn is_canceled(&self) -> bool {
-        *self.inner.state.lock() == TickerFutureState::Canceled
+        self.inner.read_state() == TickerFutureState::Canceled
     }
 
     /// Check if the ticker is still pending
     pub fn is_pending(&self) -> bool {
-        *self.inner.state.lock() == TickerFutureState::Pending
+        self.inner.read_state() == TickerFutureState::Pending
     }
 
-    /// Returns a future that completes when this future resolves OR throws
-    /// when the ticker is canceled.
+    /// Calls `f` when this future resolves, however it resolves.
     ///
-    /// If this property is never accessed, then canceling the ticker does not
-    /// throw any exceptions. Once this property is accessed, if the ticker is
-    /// canceled, the returned future will complete with a [`TickerCanceled`]
-    /// error.
+    /// If the future is already resolved when this method is called —
+    /// including in the window between a [`TickerCompleter`] publishing and
+    /// its [`TickerDelivery`] running registered continuations — `f` runs
+    /// immediately, on the calling thread. That is a deliberate divergence
+    /// from Dart's `whenCompleteOrCancel`, which always schedules a
+    /// microtask: callers here must be safe to re-enter from this call, and
+    /// the relative order between two different registrants racing a
+    /// resolution is not a contract.
     ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_scheduler::ticker::{TickerCanceled, TickerFuture};
-    ///
-    /// async fn example() {
-    ///     let future = TickerFuture::new();
-    ///
-    ///     // This will error if the ticker is canceled
-    ///     match future.or_cancel().await {
-    ///         Ok(()) => println!("Ticker completed normally"),
-    ///         Err(TickerCanceled) => println!("Ticker was canceled"),
-    ///     }
-    /// }
-    /// ```
-    pub fn or_cancel(&self) -> TickerFutureOrCancel {
-        TickerFutureOrCancel {
-            inner: Arc::clone(&self.inner),
-            listener: None,
-        }
-    }
-
-    /// Calls the callback either when this future resolves or when the ticker
-    /// is canceled.
-    ///
-    /// This is useful for cleanup operations that should run regardless of
-    /// how the ticker ends.
-    ///
-    /// If the future is already resolved when this method is called, the
-    /// callback is invoked immediately on the current thread — on every
-    /// target, wasm included.
-    ///
-    /// **This blocks.** On a still-pending future this parks the calling
-    /// thread until the ticker completes or is canceled, unlike Flutter's
-    /// `whenCompleteOrCancel`, which registers a continuation and returns.
-    /// For non-blocking usage — and on wasm, where it is the only usable
-    /// route — use [`or_cancel`](Self::or_cancel) with `async`/`await`.
-    ///
-    /// # Panics
-    ///
-    /// Debug-asserts on a wasm target when the future is still pending: there
-    /// is no thread to park, so this call cannot honour its own contract. In
-    /// release it logs at `error!` and returns **without invoking the
-    /// callback**, because reporting a completion that has not happened is
-    /// worse than reporting nothing. Same shape as
-    /// [`Ticker`]'s own use-after-dispose guard.
-    pub fn when_complete_or_cancel<F>(&self, callback: F)
+    /// This never blocks: on a still-pending future, `f` is stored and run
+    /// later by whichever [`TickerCompleter::complete`]/
+    /// [`cancel`](TickerCompleter::cancel) (or its `Drop`) resolves the
+    /// future.
+    pub fn when_complete_or_cancel<F>(&self, f: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce(Result<(), TickerCanceled>) + Send + 'static,
     {
-        // Fast path: already resolved — call immediately.
-        //
-        // Both reads here go through `read_state` for the same reason the
-        // polling paths do: this is a third copy of the same read → register →
-        // re-read → wait state machine, and routing it through the one accessor
-        // is what puts it under the ordering probe instead of leaving it as the
-        // copy nothing watches. Its failure mode is the worse of the two — a
-        // blocked OS thread rather than a parked task.
-        if self.inner.read_state() != TickerFutureState::Pending {
-            callback();
-            return;
+        let mut state = self.inner.state.lock();
+        match state.resolution {
+            TickerFutureState::Pending => state.continuations.push(Box::new(f)),
+            TickerFutureState::Complete => {
+                drop(state);
+                f(Ok(()));
+            }
+            TickerFutureState::Canceled => {
+                drop(state);
+                f(Err(TickerCanceled));
+            }
         }
-
-        // Register listener BEFORE re-checking state (avoid race)
-        let listener = self.inner.event.listen();
-
-        // Re-check after registering (state may have changed)
-        if self.inner.read_state() != TickerFutureState::Pending {
-            callback();
-            return;
-        }
-
-        // `target_family = "wasm"`, not `target_arch = "wasm32"`: that is the
-        // predicate `event_listener::Listener::wait` is itself gated on
-        // upstream, and the two must not be allowed to skew.
-        #[cfg(not(target_family = "wasm"))]
-        {
-            listener.wait();
-            callback();
-        }
-        #[cfg(target_family = "wasm")]
-        {
-            drop(listener);
-            drop(callback);
-            // Log BEFORE the debug-assert: the assert aborts a debug build, so
-            // emitting after it would mean the diagnostic this method's doc
-            // promises never reaches a subscriber in exactly the build that is
-            // most likely to be watching.
-            tracing::error!(
-                "TickerFuture::when_complete_or_cancel was called on a pending future on a \
-                 wasm target, where there is no thread to park; the callback was NOT invoked \
-                 — use or_cancel().await instead"
-            );
-            debug_assert!(
-                false,
-                "TickerFuture::when_complete_or_cancel cannot block on wasm; \
-                 use or_cancel().await"
-            );
-        }
-    }
-}
-
-impl Default for TickerFuture {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -1759,45 +1687,29 @@ impl Clone for TickerFuture {
     }
 }
 
-/// Completes when the ticker stops normally.
-///
-/// Cancellation does **not** resolve this future — that is Flutter's `_cancel`,
-/// which completes only the secondary future — so a canceled ticker leaves this
-/// one parked forever, with no listener and no waker held. That is a literal
-/// violation of the `Future` contract's "register a waker before returning
-/// `Pending`", and it is the honest encoding: nothing can ever wake this future
-/// again, so holding the executor's waker would pin a resource with no purpose.
-/// Use [`TickerFuture::or_cancel`] to observe cancellation.
+/// Resolves when the ticker run this future was created for ends, either way.
 ///
 /// # Precondition on the executor's waker
 ///
-/// This future's waker is invoked from inside `event-listener`'s own list lock,
-/// which is re-taken by both registering and dropping a listener. A waker that
-/// re-polls **or drops** this future from inside `wake()` therefore deadlocks
-/// inside that dependency. Standard parker-based executors — including
-/// `std::task::Wake` implementors that only signal — are safe; an inline-poll
-/// executor is not.
+/// This future's waker is invoked from inside `event-listener`'s own list
+/// lock, which is re-taken by both registering and dropping a listener. A
+/// waker that re-polls **or drops** this future from inside `wake()`
+/// therefore deadlocks inside that dependency. Standard parker-based
+/// executors — including `std::task::Wake` implementors that only signal —
+/// are safe; an inline-poll executor is not.
 impl Future for TickerFuture {
-    type Output = ();
+    type Output = Result<(), TickerCanceled>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        match poll_resolution(&this.inner, &mut this.listener, cx) {
-            Poll::Ready(Resolved::Complete) => Poll::Ready(()),
-            // Cancellation does not resolve the base future, and
-            // `poll_resolution` has already released the listener, so this
-            // parks holding nothing — see this impl's own doc for why that is
-            // deliberate despite the `Future` contract.
-            Poll::Ready(Resolved::Canceled) | Poll::Pending => Poll::Pending,
-        }
+        poll_resolution(&this.inner, &mut this.listener, cx).map(|resolved| resolved.as_output())
     }
 }
 
 impl std::fmt::Debug for TickerFuture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = *self.inner.state.lock();
-        let state_str = match state {
-            TickerFutureState::Pending => "active",
+        let state_str = match self.inner.read_state() {
+            TickerFutureState::Pending => "pending",
             TickerFutureState::Complete => "complete",
             TickerFutureState::Canceled => "canceled",
         };
@@ -1805,52 +1717,164 @@ impl std::fmt::Debug for TickerFuture {
     }
 }
 
-/// A derivative future from [`TickerFuture::or_cancel`] that completes with
-/// an error if the ticker is canceled.
-#[must_use = "a TickerFutureOrCancel does nothing unless awaited; the \
-              cancellation it reports is lost if it is dropped"]
-pub struct TickerFutureOrCancel {
+/// The write half of a [`TickerFuture`], created by [`TickerFuture::pending`].
+///
+/// [`complete`](Self::complete)/[`cancel`](Self::cancel) publish the durable
+/// outcome — and take every continuation registered so far — in one locked
+/// step, then hand back a [`TickerDelivery`] that runs the user-code side
+/// (continuations, then wakers) once the caller is ready for it, typically
+/// after releasing a lock of its own. Dropped without either call, the
+/// completer publishes `Err(TickerCanceled)` and delivers it itself — a run
+/// nobody explicitly ended still settles rather than hanging its awaiters
+/// forever.
+#[must_use = "a pending TickerCompleter cancels its future if dropped unresolved"]
+pub struct TickerCompleter {
     inner: Arc<TickerFutureInner>,
-    listener: Option<event_listener::EventListener>,
 }
 
-/// Resolves `Ok(())` when the ticker stops normally and `Err(TickerCanceled)`
-/// when it is canceled.
-///
-/// Carries the same waker precondition as [`TickerFuture`]'s `Future` impl.
-impl Future for TickerFutureOrCancel {
-    type Output = Result<(), TickerCanceled>;
+impl TickerCompleter {
+    /// Publish `target`, returning the continuations to run iff this call
+    /// performed the (once-only) transition — `None` means the future was
+    /// already resolved by an earlier call, so there is nothing left to
+    /// deliver.
+    fn publish(&self, target: TickerFutureState) -> Option<Vec<Continuation>> {
+        let mut state = self.inner.state.lock();
+        if state.resolution != TickerFutureState::Pending {
+            return None;
+        }
+        state.resolution = target;
+        Some(std::mem::take(&mut state.continuations))
+    }
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        match poll_resolution(&this.inner, &mut this.listener, cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Resolved::Complete) => Poll::Ready(Ok(())),
-            Poll::Ready(Resolved::Canceled) => Poll::Ready(Err(TickerCanceled)),
+    /// Publish `Ok(())` and hand back the delivery half.
+    #[must_use = "a TickerDelivery delivers on drop; call deliver() where continuations may run"]
+    pub fn complete(self) -> TickerDelivery {
+        let continuations = self
+            .publish(TickerFutureState::Complete)
+            .unwrap_or_default();
+        TickerDelivery::new(Arc::clone(&self.inner), Ok(()), continuations)
+    }
+
+    /// Publish `Err(TickerCanceled)` and hand back the delivery half.
+    #[must_use = "a TickerDelivery delivers on drop; call deliver() where continuations may run"]
+    pub fn cancel(self) -> TickerDelivery {
+        let continuations = self
+            .publish(TickerFutureState::Canceled)
+            .unwrap_or_default();
+        TickerDelivery::new(Arc::clone(&self.inner), Err(TickerCanceled), continuations)
+    }
+}
+
+impl Drop for TickerCompleter {
+    fn drop(&mut self) {
+        if let Some(continuations) = self.publish(TickerFutureState::Canceled) {
+            deliver_now(&self.inner, Err(TickerCanceled), continuations);
         }
     }
 }
 
-impl std::fmt::Debug for TickerFutureOrCancel {
+impl std::fmt::Debug for TickerCompleter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TickerFutureOrCancel")
+        write!(f, "TickerCompleter({:?})", self.inner.read_state())
     }
 }
 
-/// Exception thrown by ticker objects when the ticker is canceled.
+/// The fan-out half of a [`TickerCompleter::complete`]/
+/// [`cancel`](TickerCompleter::cancel) call: running continuations and
+/// waking polling waiters.
 ///
-/// This error is returned by [`TickerFuture::or_cancel`] when the ticker
-/// is stopped with cancellation.
+/// The resolution is already published by the time this value exists, so a
+/// run this settles is never stuck on it — only the fan-out's TIMING (now,
+/// via [`deliver`](Self::deliver), or later, on `Drop`) is this type's
+/// choice. Splitting resolution from delivery lets a caller finish a state
+/// change while still holding its own lock and defer the user-code fan-out
+/// (continuations, wakers) until after that lock is released.
+#[must_use = "a TickerDelivery delivers on drop; call deliver() where continuations may run"]
+pub struct TickerDelivery {
+    inner: Arc<TickerFutureInner>,
+    outcome: Result<(), TickerCanceled>,
+    // Wrapped in a `Mutex` (never actually contended — `run` only ever
+    // touches this through `&mut self`) so `TickerDelivery` stays `Sync`
+    // despite holding `Box<dyn FnOnce(..) + Send>` continuations, which are
+    // not themselves `Sync`.
+    continuations: Mutex<Vec<Continuation>>,
+    delivered: bool,
+}
+
+impl TickerDelivery {
+    fn new(
+        inner: Arc<TickerFutureInner>,
+        outcome: Result<(), TickerCanceled>,
+        continuations: Vec<Continuation>,
+    ) -> Self {
+        Self {
+            inner,
+            outcome,
+            continuations: Mutex::new(continuations),
+            delivered: false,
+        }
+    }
+
+    /// Run every continuation, each inside its own `catch_unwind` (the
+    /// payload logged at `error!` immediately), then wake polling waiters,
+    /// then re-raise the first caught payload — unless this call is itself
+    /// running during an unwind, in which case it is logged instead of
+    /// replacing that unwind. A second call, or a `Drop` after this one, is
+    /// a no-op.
+    pub fn deliver(mut self) {
+        self.run();
+    }
+
+    fn run(&mut self) {
+        if self.delivered {
+            return;
+        }
+        self.delivered = true;
+        let continuations = std::mem::take(&mut *self.continuations.lock());
+        deliver_now(&self.inner, self.outcome, continuations);
+    }
+}
+
+impl Drop for TickerDelivery {
+    fn drop(&mut self) {
+        self.run();
+    }
+}
+
+impl std::fmt::Debug for TickerDelivery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TickerDelivery")
+            .field("outcome", &self.outcome)
+            .field("delivered", &self.delivered)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Cancellation outcome of a [`TickerFuture`].
+///
+/// `#[non_exhaustive]`: a future cancel reason (which run superseded this
+/// one, for instance) is a plausible additive field.
 ///
 /// # Example
 ///
 /// ```rust
-/// use flui_scheduler::ticker::TickerCanceled;
+/// use flui_scheduler::ticker::{TickerCanceled, TickerFuture};
+/// use std::future::Future;
+/// use std::pin::Pin;
+/// use std::task::{Context, Poll, Waker};
 ///
-/// let error = TickerCanceled;
-/// assert_eq!(error.to_string(), "The ticker was canceled");
+/// let (completer, mut future) = TickerFuture::pending();
+/// completer.cancel().deliver();
+///
+/// let waker = Waker::noop();
+/// let mut cx = Context::from_waker(waker);
+/// match Pin::new(&mut future).poll(&mut cx) {
+///     Poll::Ready(Err(TickerCanceled { .. })) => {}
+///     other => panic!("expected Err(TickerCanceled), got {other:?}"),
+/// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TickerCanceled;
 
 impl std::fmt::Display for TickerCanceled {
@@ -1861,11 +1885,12 @@ impl std::fmt::Display for TickerCanceled {
 
 impl std::error::Error for TickerCanceled {}
 
-/// Async-half coverage for [`TickerFuture`] / [`TickerFutureOrCancel`]: the
-/// register-before-the-decisive-read ordering, waker lifetime, lock discipline
-/// around resolution, and the mute→start refusal. Split into its own file
-/// because `ticker.rs` is already dense and this family needs a counting waker
-/// plus a lock-probing subscriber that the state-machine tests below never use.
+/// Async-half coverage for [`TickerFuture`]: the register-before-the-decisive-read
+/// ordering, waker lifetime, lock discipline around resolution, continuation
+/// fan-out and panic containment, and the mute→start refusal. Split into its
+/// own file because `ticker.rs` is already dense and this family needs a
+/// counting waker plus a lock-probing subscriber that the state-machine tests
+/// below never use.
 #[cfg(test)]
 mod future_tests;
 
@@ -1895,43 +1920,13 @@ mod tests {
     }
 
     #[test]
-    fn test_ticker_start_future_completes_on_stop() {
-        let mut ticker = Ticker::new();
-        let future = ticker.start(|_| {});
-        assert!(future.is_pending());
-
-        ticker.stop();
-
-        assert!(future.is_complete());
-        assert!(!future.is_canceled());
-        assert!(!future.is_pending());
-    }
-
-    #[test]
-    fn test_ticker_dispose_cancels_future() {
-        let mut ticker = Ticker::new();
-        let future = ticker.start(|_| {});
-        assert!(future.is_pending());
-
-        ticker.dispose();
-
-        assert!(future.is_canceled());
-        assert!(!future.is_complete());
-        assert!(!future.is_pending());
-    }
-
-    #[test]
     fn test_ticker_drop_disposes() {
         let mut ticker = Ticker::new();
-        let future = ticker.start(|_| {});
+        ticker.start(|_| {});
         // Take Arc clone of disposed flag to observe after drop
         let disposed_flag = ticker.disposed.clone();
         drop(ticker);
         assert!(disposed_flag.load(Ordering::Acquire));
-        assert!(
-            future.is_canceled(),
-            "Drop must dispose the ticker and cancel the active future"
-        );
     }
 
     #[test]
@@ -2069,7 +2064,7 @@ mod tests {
     #[test]
     fn test_ticker_reset() {
         let mut ticker = Ticker::new();
-        let future = ticker.start(|_| {});
+        ticker.start(|_| {});
 
         std::thread::sleep(std::time::Duration::from_millis(5));
 
@@ -2077,7 +2072,6 @@ mod tests {
 
         assert_eq!(ticker.state(), TickerState::Idle);
         assert_eq!(ticker.elapsed(), Seconds::ZERO);
-        assert!(future.is_canceled());
     }
 
     // Auto-scheduling Ticker tests
@@ -2177,24 +2171,22 @@ mod tests {
             c.fetch_add(1, Ordering::Relaxed);
         });
         let mut ticker = scheduler.create_ticker(on_tick);
-        let future = ticker.start_default();
-        assert!(future.is_pending());
+        ticker.start_default();
+        assert!(ticker.is_active());
 
         scheduler.execute_frame();
         scheduler.execute_frame();
         assert_eq!(counter.load(Ordering::Relaxed), 2);
 
         ticker.stop();
-        assert!(future.is_complete());
     }
 
     #[test]
-    fn test_start_default_without_callback_returns_complete_future() {
+    fn test_start_default_without_callback_is_a_no_op() {
         let mut ticker = Ticker::new();
 
-        let future = ticker.start_default();
+        ticker.start_default();
 
-        assert!(future.is_complete());
         assert_eq!(ticker.state(), TickerState::Idle);
     }
 
@@ -2214,20 +2206,18 @@ mod tests {
         assert!(elapsed.value() < 1.0);
     }
 
-    /// Teardown pin: a retained ticker whose backing scheduler has
-    /// already been dropped must still resolve `or_cancel()` with
-    /// `Err(TickerCanceled)` once its owner disposes it. `dispose()` first
-    /// tries (and, with a dead scheduler, silently fails) to cancel the
-    /// pending transient callback, and then cancels the active future
-    /// unconditionally — a failed upgrade is a no-op, not an early return, so
-    /// it cannot skip the resolution. A surviving handle fails closed; it
-    /// never panics and never hangs a waiter.
+    /// Teardown control: a retained ticker whose backing scheduler has
+    /// already been dropped must still `dispose()` cleanly — the failed
+    /// `WeakUpdateScheduler` upgrade is a no-op, not an early return, so
+    /// dispose still runs its own state transition. This ticker owns no
+    /// future to resolve any more (see `Ticker::start`'s own doc) — a
+    /// caller-owned completer's cancel-on-dispose is
+    /// `flui-animation`'s `AnimationController` coverage now.
     #[test]
-    fn retained_tickers_future_resolves_canceled_after_owner_disposes_past_scheduler_drop() {
+    fn dispose_after_the_backing_scheduler_drops_does_not_panic() {
         let scheduler = crate::scheduler::UpdateScheduler::new();
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
-        let future = ticker.start(|_| {});
-        assert!(future.is_pending());
+        ticker.start(|_| {});
 
         // The realm's scheduler is gone; the ticker is still retained by its
         // owner (e.g. an `AnimationController` a widget hasn't disposed yet).
@@ -2235,29 +2225,13 @@ mod tests {
 
         ticker.dispose();
 
-        assert!(
-            future.is_canceled(),
-            "dispose() must cancel the active future even though the \
-             backing scheduler can no longer be upgraded"
+        assert!(ticker.is_disposed());
+        assert_eq!(
+            ticker.state(),
+            TickerState::Stopped,
+            "dispose() must still run its state transition even though the \
+             backing scheduler's WeakUpdateScheduler upgrade fails"
         );
-
-        // A single manual poll suffices: `future` is already `Canceled`, so
-        // `or_cancel()` resolves on its very first poll without ever
-        // registering a waker — no executor needed.
-        let mut or_cancel = std::pin::pin!(future.or_cancel());
-        let waker = std::task::Waker::noop();
-        let mut cx = std::task::Context::from_waker(waker);
-        match or_cancel.as_mut().poll(&mut cx) {
-            std::task::Poll::Ready(result) => assert_eq!(
-                result,
-                Err(TickerCanceled),
-                "or_cancel() must resolve Err(TickerCanceled), not Ok, once the \
-                 scheduler is gone and the owner has disposed"
-            ),
-            std::task::Poll::Pending => {
-                panic!("or_cancel() must resolve immediately: the future is already Canceled")
-            }
-        }
     }
 
     // ---- callback slot / TickerLease reentrancy (issue #1059) ----
@@ -2848,12 +2822,12 @@ mod tests {
             }
             // Simulation, not a real `stop()` call — see this test's doc for
             // why a real one is not reachable from the hook here.
-            let (pending_id, discarded, active_future) = {
+            let (pending_id, discarded) = {
                 let mut guard = inner_arc.lock();
                 guard.state = TickerState::Stopped;
                 let discarded = guard.slot.clear_if_ready();
                 let pending_id = guard.scheduled_callback_id.take();
-                (pending_id, discarded, guard.active_future.take())
+                (pending_id, discarded)
             };
             assert!(
                 pending_id.is_none(),
@@ -2862,9 +2836,6 @@ mod tests {
                  not exercise the race it claims to"
             );
             drop(discarded);
-            if let Some(future) = active_future {
-                future.set_complete();
-            }
         })));
 
         ticker.start(|_| {});

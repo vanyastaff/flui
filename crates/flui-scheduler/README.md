@@ -84,7 +84,7 @@ use flui_scheduler::{UpdateScheduler, Ticker};
 let scheduler = Arc::new(UpdateScheduler::new());
 let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
-let future = ticker.start(|elapsed| {
+ticker.start(|elapsed| {
     let progress = (elapsed % 2.0) / 2.0; // 2-second loop
     println!("Animation progress: {:.2}", progress);
 });
@@ -92,9 +92,10 @@ let future = ticker.start(|elapsed| {
 // In your frame loop, scheduler transient callbacks drive the ticker.
 scheduler.execute_frame();
 
-// Stop completes the future normally. dispose()/drop cancels it.
+// dispose()/drop stops the ticker the same way. The ticker itself resolves
+// no future of its own — see "Ticker Run Completion" below for the
+// completer/future pair a caller owns to make a run awaitable.
 ticker.stop();
-assert!(future.is_complete());
 ```
 
 ### Frame Budget Management
@@ -143,19 +144,24 @@ queue.execute_all();
 
 This crate uses small, explicit Rust types for correctness at API boundaries.
 
-### Ticker Lifecycle Futures
+### Ticker Run Completion
 
-Ticker start methods return a `TickerFuture`. The future completes when the
-ticker is stopped normally and is canceled when the ticker is disposed, dropped,
-or reset.
+`Ticker::start`/`stop`/`dispose`/`reset` are fire-and-forget — the ticker itself resolves no
+future. A caller that needs "this run ended" as an awaitable value creates its own
+`TickerFuture::pending` completer/future pair and resolves the completer from inside the
+ticker's own callback — this is exactly what `flui-animation`'s `AnimationController` does,
+under its own lock, for every run it starts.
 
 ```rust
-use flui_scheduler::Ticker;
+use flui_scheduler::ticker::TickerFuture;
 
-let mut ticker = Ticker::new();
-let future = ticker.start(|_| {});
+let (completer, future) = TickerFuture::pending();
+assert!(future.is_pending());
 
-ticker.stop();
+// Resolve the run — the completer's owner does this when the run it
+// represents ends normally; `cancel()` is the counterpart for a run that is
+// superseded or torn down instead.
+completer.complete().deliver();
 assert!(future.is_complete());
 ```
 

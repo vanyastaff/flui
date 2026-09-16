@@ -857,7 +857,7 @@ forever — a real "polling it again after it resolved is a silent hang" trap,
 named on the future's own doc before this issue. `Result<FrameOutcome,
 SchedulerClosed>` is `Copy` (both arms are), so `poll` now peeks the stored
 value by copy instead, and a second poll simply repeats it. This mirrors
-`TickerFutureOrCancel`'s own `poll_resolution` shape in this crate (`ticker.rs`)
+`TickerFuture`'s own `poll_resolution` shape in this crate (`ticker.rs`)
 rather than introducing a second fusing mechanism.
 
 **Teardown mechanism:** `impl Drop for SchedulerInner` drains the completion
@@ -939,188 +939,199 @@ solved.
 ### A ticker future's poll registers before the read that decides to park
 
 **Rule:** the durable resolution state is the source of truth and the
-notification is only a hint to re-read it. Every polling path through
-`TickerFuture` / `TickerFutureOrCancel` must have a listener linked *before* it
-takes the state read that decides to return `Poll::Pending`.
+notification is only a hint to re-read it. Polling `TickerFuture` must have a
+listener linked *before* it takes the state read that decides to return
+`Poll::Pending`.
 
 **Conflict:** Flutter's `TickerFuture` is built on a `Completer`, so this class
 of bug does not exist there — there is no listener to register and therefore no
 window between observing the state and subscribing to a change. FLUI models a
 once-only, monotone transition (a *level* fact) with `event_listener::Event` (an
 *edge* primitive) whose own documentation says a notification sent with no
-listener registered "simply gets lost". Both `poll` impls read the state, dropped
-the guard, and only then called `listen()`; a `set_complete`/`set_canceled`
-landing in that window notified zero listeners, and because the transition is
-guarded by `if *state == Pending` nothing ever re-announced it. The future then
-parked on an event that could never fire again — a permanent hang, not a delay.
-The correct order was already present one screen away, in the blocking
+listener registered "simply gets lost". The original `poll` read the state,
+dropped the guard, and only then called `listen()`; a resolution landing in
+that window notified zero listeners, and because the transition is guarded by
+`if *state == Pending` nothing ever re-announced it. The future then parked on
+an event that could never fire again — a permanent hang, not a delay. The
+correct order was already present one screen away, in the (then-blocking)
 `when_complete_or_cancel`, with a comment naming the hazard.
 
-**Choice:** one private `poll_resolution` helper, shared by both `Future` impls,
-running `read → register → read → park`. The second read is the fix; the
-listener latch (a notification landing on a registered-but-unpolled entry marks
-it `Notified`, and the next `register` reports that) is a redundant second net
+**Choice:** one private `poll_resolution` helper running
+`read → register → read → park`. The second read is the fix; the listener
+latch (a notification landing on a registered-but-unpolled entry marks it
+`Notified`, and the next `register` reports that) is a redundant second net
 that closes only the `listen()`→poll half and cannot touch the window that is
-the defect. `resolve` publishes the durable state before it notifies, which is
-what makes the re-read sufficient, and
+the defect. `TickerCompleter::publish` writes the durable state before
+anything is ever delivered, which is what makes the re-read sufficient, and
 `the_resolution_is_published_before_the_notification` pins that ordering
-independently. The helper is also what makes the two impls provably one state
-machine rather than two copies that drift; both are exercised by their own
-ordering test for that reason.
+independently. `poll_resolution` is unchanged by every later redesign in this
+family — the controller-owned-future rework below moved WHO resolves a run,
+never HOW a poll discovers that it has.
 
 **Precondition this makes reachable, stated rather than fixed:** `Event::notify`
 calls `task.wake()` while holding `event-listener`'s own internal list mutex,
 which both registering and dropping a listener re-take. A waker that re-polls or
 drops the future from inside `wake()` deadlocks inside the dependency. That was
 always true, but a bug that never woke anyone kept it unreachable; it is now a
-documented precondition on both `Future` impls. Standard parker-based executors
-satisfy it. A panicking waker is likewise left uncontained and propagates out of
-`stop`/`dispose`/`reset`: `Inner::notify` increments its notified counter *after*
-`task.wake()`, so an unwind through the waker skips the increment and the next
-listener removal underflows inside the dependency's own `Drop` — measured, and a
-`catch_unwind`-and-retry around `notify` plants that abort rather than avoiding
-it. The residual is that a task whose only wake source is this ticker hangs if
-its waker panics; a task with any other wake source self-heals, because the poll
-reads the durable state first.
+documented precondition on the `Future` impl. Standard parker-based executors
+satisfy it.
+
+### The ticker resolves nothing; the controller owns the one run future
+
+**Rule:** `Ticker::start`/`stop`/`dispose`/`reset` are fire-and-forget. Nothing
+in this crate creates a `TickerFuture` for a ticker's own run any more —
+`TickerFuture::pending()` hands its caller a `TickerCompleter`/`TickerFuture`
+pair, and that caller (never the ticker) decides when and how to resolve it.
+
+**Conflict:** Flutter's `Ticker.start()` returns the `TickerFuture` it owns,
+and `stop({canceled})`/`dispose()` resolve it directly — `_startSimulation`
+returns `_ticker!.start()` verbatim (`animation_controller.dart:861-871`) and
+`stop` forwards straight to `_ticker!.stop` (`:891-900`). FLUI kept that shape
+through #1167 and it was a defect waiting to happen: every `ticker.stop()`
+`AnimationController` calls runs **under the controller's own `inner` lock**
+(`reset`, `settle_at_target`, `tick_simulation`, both `tick_time_based`
+completion arms, `dispose`, `restart_ticker`, `stop_running`). A future the
+ticker resolved would run its continuations and wake its pollers — arbitrary
+user code — from inside that non-reentrant mutex.
+
+**Choice:** move resolution up to the layer that owns the lock and the
+cancel/complete distinction. The ticker keeps exactly one thing Flutter's does
+not need to separate out: a "run in progress" fact
+(`TickerState::is_running()`), used only to refuse a second `start`. Flutter's
+topology is one fact told once; FLUI's is the same fact, held by the layer
+that can safely act on it. See
+`docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
+for the full accounting, including why this is a moved fact and not a
+different one.
 
 ### A second resolution is ignored where Flutter asserts
 
-**Rule:** `TickerFuture::resolve` is once-only; a second `set_complete` or
-`set_canceled` is a silent no-op and the first outcome stands.
+**Rule:** `TickerCompleter::publish` is once-only; a second `complete`/`cancel`
+call (including the implicit one `Drop` performs) is a silent no-op and the
+first outcome stands.
 
 **Conflict:** Flutter's `_complete()`/`_cancel()` open with
 `assert(_completed == null)` — a debug assertion that the transition happens
 exactly once, stripped in release.
 
-**Choice:** keep the no-op, do not assert. FLUI reaches these drivers from
-`impl Drop for Ticker` as well as from explicit teardown, and a hard failure on
-an idempotent teardown call is worse than the no-op; a panic raised from a `Drop`
-running during an unwind aborts the process. The invariant is load-bearing rather
-than cosmetic — it is what lets a re-read after registering stand in for a
-notification that was never delivered — so it is pinned by
-`a_second_resolution_is_ignored_and_the_first_outcome_stands` in place of the
-assertion the reference relies on.
+**Choice:** keep the no-op, do not assert. `TickerCompleter::complete`/`cancel`
+consume `self`, so only `Drop` can ever attempt a second transition (when the
+completer was explicitly resolved and then falls out of scope) — a hard
+failure there would fire on the ordinary, correct path, not a bug. The
+invariant is load-bearing rather than cosmetic: it is what lets a re-read
+after registering stand in for a notification that was never delivered.
 
-### The base ticker future parks on cancellation with no waker registered
+### Publish then deliver: two phases, so the fan-out never runs under a caller's lock
 
-**Rule:** `TickerFuture` (the base future) resolves only on `Complete`. On
-`Canceled` it returns `Poll::Pending` holding no listener and no waker;
-`or_cancel()` is the route that observes cancellation.
+**Rule:** resolving a run is two calls, not one. `TickerCompleter::complete`/
+`cancel` **publish** — set the durable state and take every continuation
+registered so far, in one locked step — and return a `TickerDelivery`, which
+**delivers**: run each continuation (its own `catch_unwind`), then notify
+pollers. A caller finishes publishing while still holding its own lock and
+defers delivery until after that lock is released.
 
-**Conflict:** returning `Pending` without registering a waker is a literal
-violation of the `Future` contract, which requires a poll that returns `Pending`
-to have arranged for the task to be woken. Flutter has no such contract to
-violate: `_cancel` completes only the secondary completer and the primary future
-simply never completes.
+**Conflict:** Flutter's `Completer.complete()` is one call because Dart has no
+equivalent non-reentrant-mutex hazard — completion always schedules a
+microtask. FLUI's fan-out is synchronous, so a single-phase resolve would
+either run under whatever lock the resolver holds (the exact hazard the
+previous section moves resolution to avoid) or force every resolver to
+manually stage a two-step unlock dance with no shared shape.
 
-**Choice:** match Flutter's semantics and take the contract violation
-deliberately, because the alternative is worse in a way the contract exists to
-prevent. The previous code registered a *fresh* listener on every poll of a
-canceled future — a subscription to an event that provably can never fire again,
-pinning the executor's waker for the lifetime of the future. Holding nothing is
-the honest encoding of "nothing can wake this", and it is what
-`a_canceled_base_future_holds_no_waker_and_no_listener` asserts. The obligation
-this carries is documentation: the `Future` impl says so at the point a caller
-reads it.
+**Choice:** the split is the shared shape.
+`AnimationController::finish` is the chokepoint every run-ending or
+run-starting site funnels through: drop the controller lock, notify value
+listeners if the run's value changed, fire status listeners, THEN deliver.
+Continuations run **before** wakers are notified within `deliver` (a
+continuation observes wake count zero; one more once `deliver` returns) —
+inverted, an uncontained panicking waker could unwind out with the drained
+continuation `Vec` never run. Each continuation runs inside its own
+`catch_unwind`; a caught payload is logged at `error!` immediately (so it is
+never silently dropped even if a later continuation panics too) and the
+FIRST one is re-raised once every continuation and the waker notification
+have run — **unless this call is itself running during an unwind**
+(`std::thread::panicking()`), in which case it is logged instead: a caller can
+invoke a resolving call from their own panicking `Drop`, and re-raising there
+would be a panic during a panic, which the runtime aborts rather than unwinds.
+`notify` itself stays uncontained regardless — the same waker precondition the
+previous section documents holds whether or not this function catches panics,
+so containing it would not make a re-entrant waker safe, only hide a different
+failure. `Drop for TickerDelivery` delivers if `deliver()` was never called,
+and `Drop for TickerCompleter` publishes `Canceled` and delivers — a run
+nobody explicitly ended still settles rather than hanging its awaiters
+forever.
 
-### A start that would orphan a live ticker future is refused, in every build
+**Review checkpoint, not a test-checkable one:** `TickerCompleter::publish`
+taking one lock for both "set the durable state" and "take the continuation
+`Vec`" has no test that can fail if it is ever split into two locks instead —
+the window between them contains no user code, so nothing observable changes
+from outside. A registration racing across that window (a `when_complete_or_cancel`
+call from another thread, landing between the two hypothetical locks) would
+still see a consistent state either way in every case this crate's own tests
+can drive. Guard the one-lock shape at review time: a future edit that splits
+`publish` into "set state" then "take continuations" as two separate
+`self.inner.state.lock()` calls is the regression to catch by reading the
+diff, not by a red test.
 
-**Rule:** `Ticker::start`/`start_default` refuse when a previous run's
-`TickerFuture` is still installed, keyed on `active_future.is_some()` — the
-durable fact — and never on a `TickerState` variant list. A refused start logs at
-`error!`, drops the caller's callback, and returns the live future, so an
-existing awaiter stays valid.
+### A start while a run is already installed is refused, in every build
+
+**Rule:** `Ticker::start`/`start_default` refuse when the ticker is `Active`
+*or* `Muted` — muting pauses a run rather than ending it. A refused start
+logs at `error!` and drops the caller's callback; it does not touch ticker
+state.
 
 **Conflict:** Flutter guards this with `assert(!isActive)`, where
-`isActive => _future != null`; stripped in release, a second `start()` overwrites
-`_future` and the displaced future never completes. FLUI already did better than
-that — it refused in release and returned the live future — but keyed the refusal
-on `state == Active`, which is *narrower* than the fact it was protecting.
-`Ticker::mute()` pauses a run without touching `active_future`, so `mute()` then
-`start()` walked straight past the guard, overwrote the field, and orphaned a
-pending future permanently. The enum collapse is what opened the hole, which is
-why the predicate is now the future itself.
+`isActive => _future != null`; stripped in release, a second `start()`
+overwrites `_future` and the displaced future never completes. Before the
+controller took over resolution, FLUI keyed this same refusal on
+`active_future.is_some()` — the future's own presence was the durable fact
+`mute()` never touched, so the refusal survived muting where a narrower
+`state == Active` test did not (issue #1161). With no future left on the
+ticker, `TickerState::is_running()` (`Active | Muted`) is that same fact
+restated directly against state, since a live run and a live future were
+always the same thing here.
 
-**Choice:** refuse on `active_future.is_some()`; keep the existing
-`debug_assert!` on `state == Active` unchanged. These are two different
-questions, not two guesses at one: the assertion answers "is this Flutter's
-*started twice* programming error?" and the refusal answers "is there a live
-future I must not orphan?". Widening the assertion to the same predicate was
-considered and rejected — it would make the ordinary `mute(); start()` sequence a
-debug panic, which would leave the refusal itself release-only and therefore
-untested by a suite that runs in debug. The divergence from Flutter is that a
-start on a *muted* ticker is a supported, refused operation here rather than a
-thrown error.
+**Choice:** refuse on `is_running()`; keep the existing `debug_assert!` on
+`state == Active` unchanged — two different questions, not two guesses at
+one: the assertion answers "is this Flutter's *started twice* programming
+error?" and the refusal answers "is there a live run I must not silently
+replace?". The divergence from Flutter is that a start on a *muted* ticker is
+a supported, refused operation here rather than a thrown error.
 
 **Lock discipline, because the refusal runs user code:** the decision is taken
-under `Mutex<TickerInner>` and acted on after it. Both the `tracing` event (whose
-subscriber is arbitrary user code) and the rejected callback's `Drop` (likewise)
-would otherwise be able to re-enter a non-reentrant mutex. Rust's drop order
-already saves the callback — a function's body-scope locals, the guard included,
-drop before its parameters — so the subscriber is the half that genuinely needed
-hoisting, and it is the half
-`a_refused_start_logs_and_drops_its_callback_with_the_inner_lock_free` actually
-pins. That test's callback oracle stays green with the explicit `drop(callback)`
-deleted, for the same drop-order reason, so the `drop` documents intent and
-nothing more; it must not be cited as test-defended.
+under `Mutex<TickerInner>` and acted on after it. Both the `tracing` event
+(whose subscriber is arbitrary user code) and the rejected callback's `Drop`
+(likewise) would otherwise be able to re-enter a non-reentrant mutex.
 
-**The same rule, applied to the two sites in this file that were breaking it.**
-`start_inner`'s vacant-slot arm emitted `tracing::warn!` and returned from inside
-the guard scope — thirty lines below the comment declaring the rule — and
-`TickerLease::drop` emitted a `tracing::trace!` whose text says "outside the
-inner lock" from inside it, a claim that was true of the callback drop it
-describes and false of the event carrying it. Both now decide under the lock and
-report after it.
+**Cross-crate consequence:** `AnimationController::restart_ticker` guards its
+pre-start `stop()` on `TickerState::is_running()` for the identical reason —
+`mute()`-then-`restart` must end the muted run before installing a new one, or
+the ticker's own refusal above silently drops the new callback instead of
+starting it.
 
-**Cross-crate consequence, closed in the same change:**
-`AnimationController::restart_ticker` guarded its pre-start `stop()` on
-`TickerState::can_tick()` (Active only), so from `Muted` it skipped the stop —
-and with the refusal in place it would have received the *old* future back and
-silently failed to restart the animation. The guard is now `is_running()`.
+### `when_complete_or_cancel` never blocks; it registers a continuation
 
-It stays a guard rather than becoming an unconditional `stop()`, because **`stop`
-and `reset` are not no-ops on a ticker that is not running**: both call
-`CallbackSlot::clear_if_ready`, so a callback pre-loaded by
-`TickerProvider::create_ticker` and never started is discarded by a bare
-`stop()`, and the next `start_default()` then warns and hands back an
-already-complete future. `restart_ticker` is unaffected either way — it always
-passes an explicit callback — but the claim is on `Ticker::start`'s public doc,
-where a reader who acts on it loses a callback, so it is stated there too.
-
-### `when_complete_or_cancel` blocks, and refuses rather than lying on wasm
-
-**Rule:** `TickerFuture::when_complete_or_cancel` invokes its callback
-immediately when the future is already resolved. On a still-pending future it
-parks the calling thread; on a wasm target, where there is no thread to park, it
-`debug_assert!`s, logs at `error!`, and returns **without** invoking the
-callback.
+**Rule:** `TickerFuture::when_complete_or_cancel` runs its callback
+immediately, on the calling thread, when the future is already resolved —
+including in the window between a `TickerCompleter` publishing and its
+`TickerDelivery` running registered continuations. On a still-pending future
+it stores the callback and returns; whichever `complete`/`cancel` (or its
+`Drop`) resolves the future runs it later, from inside `TickerDelivery::deliver`.
 
 **Conflict:** Flutter's `whenCompleteOrCancel` is
-`orCancel.then(thunk, onError: thunk)` — it registers a continuation and returns
-immediately, never blocking. FLUI's blocks, and its wasm path used to drop the
-registration and invoke the callback right away, reporting a completion that had
-not happened. That third behaviour was recorded in
-`docs/audits/2026-07-25-upgrade-pack-audit.md` and never fixed.
+`orCancel.then(thunk, onError: thunk)` — it registers a continuation and
+returns immediately, never blocking, and Dart always defers the callback to a
+microtask. FLUI's used to block the calling thread on a still-pending future,
+which meant there was no non-blocking route to react to a resolution without
+`async`/`await`, and its wasm path silently reported a completion that had
+not happened (recorded in `docs/audits/2026-07-25-upgrade-pack-audit.md`).
 
-**Choice:** keep the blocking shape (the `async` route, `or_cancel().await`, is
-the non-blocking equivalent and is the supported route on wasm) and remove the
-lie rather than the method. Reporting nothing is strictly better than reporting a
-completion that has not happened, and the debug-assert follows
-`Ticker::assert_not_disposed`'s in-crate precedent for "a call that cannot honour
-its contract". The `cfg` predicate is `target_family = "wasm"`, mirroring the one
-`event_listener::Listener::wait` is gated on upstream, so the two cannot skew.
-**Nothing here executes on wasm32:** `flui-scheduler` declares no wasm32
-`wasm-bindgen-test` dev-dependency, so `just wasm-test` does not discover it and
-this branch is proven by `just wasm-check` compiling and by nothing else.
-
-**Where the uniform panicking-`Drop` question is decided:** a `Drop` impl that
-runs user code during teardown needs
-`if std::thread::panicking() { report } else { resume_unwind }` as its
-discriminator, because a caller can invoke the teardown from their own `Drop`
-during an unwind — something a per-call-site split cannot see.
-`impl Drop for Ticker` → `dispose` → `notify` → a panicking waker is exactly that
-shape. Issue #1162 carries the decision for `SchedulerInner`; whichever way it
-lands applies here for the same reason.
+**Choice:** match Flutter's non-blocking shape exactly, with one recorded
+divergence: an already-resolved (or resolving) future runs the callback
+**synchronously on the caller's thread**, not on a microtask, so a registrant
+must be safe to re-enter from this call, and the relative order between two
+different registrants racing a resolution is not a contract. This removes the
+wasm special case entirely — there is no blocking path left to fail on a
+target with no thread to park.
 
 ### `AsyncDriver` indexes ready tasks instead of scanning every resident one
 

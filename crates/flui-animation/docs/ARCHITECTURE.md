@@ -245,6 +245,72 @@ fn tick(&self, delta: Duration) {
 }
 ```
 
+## Mapping decisions
+
+### `AnimationController` owns the one future each run resolves
+
+**Rule:** every run-starting method (`forward`, `forward_from`, `reverse`,
+`reverse_from`, `animate_to`, `animate_back`, `animate_to_curved`,
+`animate_back_curved`, `repeat`, `repeat_with`, `fling`, `fling_with`,
+`animate_with`, `animate_back_with`) returns
+`Result<TickerFuture, AnimationError>`: `Err` means the run could not start
+(the controller is disposed); the `TickerFuture` is how the run ends,
+`Ok(())` on a normal finish and `Err(TickerCanceled)` when it is superseded
+or torn down. `AnimationControllerInner.active_run: Option<TickerCompleter>`
+is the one completer this controller ever holds; every run-ending or
+run-starting site funnels through `AnimationController::finish`, the single
+chokepoint that owns `drop(inner)` then delivers — see
+`docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
+for why resolution moved here rather than staying on `Ticker` (a lock-order
+fact, not a Flutter divergence).
+
+**Per-site table** (guard held → what happens → delivered after unlock):
+
+| Site | Publishes | Displaces |
+|---|---|---|
+| `forward_from`/`reverse_from`/`drive_to`/`repeat_with`/`fling_with`/`drive_simulation` (non-settling path) | nothing (installs a fresh completer) | previous `active_run`, canceled |
+| `forward_from`/`reverse_from`/`drive_to`'s zero-distance path (`settle_at_target`) | the trivial run, complete | previous `active_run`, canceled |
+| `tick_time_based` (non-repeating end, repeat-exhausted end) | the finishing run, complete | — |
+| `tick_simulation` (`is_done`) | the finishing run, complete | — |
+| `stop`/`set_value` (`stop_running`) | — | `active_run`, canceled |
+| `reset` (`stop_running`) | — | `active_run`, canceled |
+| `dispose` | — | `active_run`, canceled |
+| last `Arc<Mutex<Inner>>` drop (no explicit `dispose()`) | — | `active_run`'s own `Drop`, canceled — reachable only for `without_ticker`(`_bounds`) controllers; `new` **and** `with_detached_ticker` both install a real `Ticker`, and once a run starts `restart_ticker` gives it a callback capturing `self.clone()` regardless of whether that ticker is scheduler-driven or detached, so both hold `inner.ticker → callback → controller clone → inner` — a cycle that never reaches zero strong references without `dispose()` |
+
+**Publish-before-listeners.** A natural end (`tick_time_based`,
+`tick_simulation`) takes `active_run` and calls
+`TickerCompleter::complete()` **before** `drop(inner)` — the same guard scope
+that sets `status`. Flutter's `_tick` completes its `Completer` before
+`notifyListeners()`/`_checkStatusChanged()` too
+(`animation_controller.dart:951`); only *delivery* (continuations, wakers) is
+deferred past the unlock. This is what makes a panicking status listener
+leave the run `Ok`: the unwind drops the `TickerDelivery` `finish` was mid-way
+through handing off, which delivers the already-published outcome instead of
+losing it.
+
+**Status-before-cancel.** A run-starting site displaces `active_run` under
+the lock, but `finish` fires the run's own (new) status listeners **before**
+delivering the displaced run's cancellation — the observable order a caller
+sees is "the new run started" then "the old one was canceled", matching
+Flutter's own sync-status/microtask-cancel split.
+
+**Recorded gap: zero-duration runs complete on the first tick, not at
+`forward()`.** `AnimationController::new(Duration::ZERO, &scheduler)` behaves
+like any other run: `forward()` installs a pending `TickerFuture` and the run
+completes on the controller's first `tick_at`/`execute_frame`, because
+`tick_time_based`'s `duration.is_zero() => t = 1.0` branch is itself only
+reached from a tick. Flutter's `AnimationController.forward()` on a
+zero-duration `Ticker` returns an *already-complete* `TickerFuture`
+synchronously, before the first frame — Flutter special-cases this in
+`_animateToInternal` (`animation_controller.dart:674-684`: `stop(); if
+(simulationDuration == Duration.zero) { … return TickerFuture.complete(); }`).
+FLUI's `settle_at_target` covers the *zero-distance* case (`forward()` when
+already at the bound) exactly this way, but not the *zero-duration* case (a
+real distance covered in `Duration::ZERO`). Recorded rather than silently
+accepted, and tracked as issue #1171: a caller relying on Flutter's
+synchronous completion for a zero-duration controller must drive one tick
+first.
+
 ## Composition Model
 
 Animations compose via `Arc<dyn Animation<f32>>`:
