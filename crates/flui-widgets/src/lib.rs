@@ -210,7 +210,7 @@ pub use navigator::{
     NavigatorRoute, NavigatorState, PageRoute, PopInvokedCallback, PopScope, PopupRoute,
     PushCompletion, Route, RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder,
     RouteId, RouteKey, RoutePageBuilder, RouteRequest, RouteResult, RouteSettings,
-    RouteTransitionsBuilder, SimpleRoute,
+    RouteTransitionsBuilder, SimpleRoute, TickerCanceled, TickerFuture,
 };
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0036) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to

@@ -42,6 +42,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use flui_scheduler::TickerFuture;
+
 use super::result::{Completer, RouteResult};
 
 /// A pop result, erased — and carrying the name of what was erased.
@@ -320,9 +322,11 @@ pub(crate) enum RoutePopDisposition {
 /// What [`Route::did_push`] reports about its entrance transition.
 ///
 /// Flutter's `didPush()` returns a `TickerFuture`, and `handlePush` parks the
-/// entry in `pushing` until it resolves (`navigator.dart:3273-3290`). FLUI has no
-/// animation at this layer, so the route says which of the two it is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// entry in `pushing` until it resolves (`navigator.dart:3273-3290`). FLUI's
+/// `AnimationController` run-starting methods return the same kind of future
+/// now (ADR-0064), so a route hands the navigator exactly what Flutter's does.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum PushCompletion {
     /// The route is fully pushed already. The entry settles to `Idle` inside the
     /// same flush.
@@ -335,10 +339,15 @@ pub enum PushCompletion {
     /// observations are enqueued during the first flush either way. Only the
     /// *dispose* of a route sitting in `Removing` moves one flush earlier.
     Immediate,
-    /// The route is animating in. The entry parks in `Pushing` until
-    /// `RouteHistory::notify_push_completed` fires — the `TransitionRoute` seam,
-    /// and the analogue of Flutter's `whenCompleteOrCancel`.
-    Animating,
+    /// The route is animating in. The entry parks in `Pushing` until `future`
+    /// resolves — awaited from the navigator's own apply step, once the flush
+    /// that installed this entry has released the history lock, never from
+    /// inside that flush itself (ADR-0064's constraint for this consumer:
+    /// registering mid-flush would let an already-resolved future settle in
+    /// the very flush it was returned from). Settles the entry the same way
+    /// whether the run completes or is canceled — there is no separate
+    /// "canceled" outcome at this layer.
+    Animating(TickerFuture),
 }
 
 /// A route: something the navigator can push, show and pop with a result.

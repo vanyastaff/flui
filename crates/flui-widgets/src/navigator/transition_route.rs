@@ -194,12 +194,11 @@ impl TransitionInner {
         match status {
             AnimationStatus::Completed => {
                 // `overlayEntries.first.opaque = opaque` (`routes.dart:296`).
+                // The entrance settling `pushing` → `idle` is driven by
+                // `NavigatorShared::apply` awaiting the `TickerFuture`
+                // `did_push` already handed the navigator (ADR-0064), not by
+                // this listener — which owns only the opaque flag.
                 binding.set_entry_opaque(self.opaque.load(Ordering::Relaxed));
-                // The entrance transition finished: `pushing` → `idle`.
-                // Flutter gets this from `didPush`'s `TickerFuture`; FLUI's
-                // controller returns no future, so the status listener is the
-                // seam (`PushCompletion::Animating` + the command queue).
-                binding.notify_push_completed();
             }
             // `overlayEntries.first.opaque = false` (`routes.dart:303-305`): a
             // route in motion never occludes, because the routes beneath it show
@@ -348,8 +347,10 @@ impl<T> TransitionRoute<T> {
     /// route is moved into `NavigatorHandle::push`.
     ///
     /// The controller is created in `install()`, so a caller cannot hold it up
-    /// front; the handle resolves it lazily. Test-facing: FLUI's controller
-    /// returns no `TickerFuture`, so a test drives the transition by hand.
+    /// front; the handle resolves it lazily. Test-facing: a unit test drives
+    /// the transition by hand through this handle (`set_value`) rather than
+    /// awaiting the `TickerFuture` `did_push` returns, since driving real
+    /// elapsed time through a `Vsync` is what `tests/routes.rs` is for.
     pub(crate) fn handle(&self) -> TransitionHandle {
         TransitionHandle {
             inner: Arc::clone(&self.inner),
@@ -666,17 +667,27 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         *self.inner.controller.lock() = Some(controller);
     }
 
-    /// `didPush()` (`routes.dart:336-350`): drive the controller forward.
+    /// `didPush()` (`routes.dart:336-350`): drive the controller forward and
+    /// hand the navigator the same future Flutter's `handlePush` awaits.
     ///
-    /// Flutter returns the `TickerFuture` and `handlePush` awaits it. FLUI's
-    /// controller returns no future, so the entry parks in `Pushing` and the
-    /// status listener raises `notify_push_completed` when the controller reaches
-    /// `Completed` — through the route-binding command queue, never a direct call.
+    /// `forward()`'s only error is
+    /// [`AnimationError::Disposed`](flui_animation::AnimationError::Disposed),
+    /// which cannot occur here: `dispose()` `take()`s `self.inner.controller` before
+    /// disposing it, and `did_push` cannot run after a route's own `dispose`
+    /// (the flush that pushes a route always precedes the flush that could
+    /// ever dispose it). Both failure shapes — no controller at all, or a
+    /// disposed one — are therefore the same internal invariant, not two
+    /// postures: one `expect`, not an `expect` plus a silently-degrading
+    /// `error!` arm nothing can reach or test.
     fn did_push(&mut self) -> PushCompletion {
-        if let Some(controller) = self.inner.controller.lock().as_ref() {
-            let _ = controller.forward();
-        }
-        PushCompletion::Animating
+        let controller = self.inner.controller.lock();
+        let controller = controller
+            .as_ref()
+            .expect("BUG: install() runs before did_push and nothing disposes the controller before the push");
+        let future = controller
+            .forward()
+            .expect("BUG: install() runs before did_push and nothing disposes the controller before the push");
+        PushCompletion::Animating(future)
     }
 
     /// `didAdd()` (`routes.dart:352-361`): jump to the end, no animation.

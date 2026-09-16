@@ -14,7 +14,9 @@
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
+use flui_animation::Vsync;
 use flui_foundation::ElementId;
 use flui_view::BuildContext;
 use flui_view::element::ElementKind;
@@ -22,14 +24,17 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use super::binding::RouteBindingSlot;
+use super::lifecycle::RouteLifecycle;
 use super::named_route::{GeneratedRoute, NamedRouteError, RouteRequest};
 use super::navigator::{
     Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
     NavigatorCommandTarget, NavigatorHandle,
 };
 use super::overlay_route::{NavigatorRoute, RouteContentBuilder, SimpleRoute};
+use super::page_route::PageRoute;
 use super::route::{PushCompletion, Route, RouteSettings};
 use crate::SizedBox;
+use crate::animated::VsyncScope;
 use crate::test_harness::{Harness, mount};
 
 // ============================================================================
@@ -760,10 +765,12 @@ impl Route for ZeroDurationRoute {
     }
 
     fn did_push(&mut self) -> PushCompletion {
-        if let Some(binding) = self.binding.get() {
-            binding.notify_push_completed();
-        }
-        PushCompletion::Animating
+        // The future is already resolved by the time it is handed out — the
+        // zero-duration shape. `NavigatorShared::apply` registers a
+        // continuation on the future once the push's own flush releases the
+        // history lock, and that continuation raises `PushCompleted`
+        // (ADR-0064) — a route has no seam to raise it directly.
+        PushCompletion::Animating(flui_scheduler::TickerFuture::complete())
     }
 
     fn did_pop(&mut self) -> bool {
@@ -786,10 +793,16 @@ impl NavigatorRoute for ZeroDurationRoute {
 
 /// The seam, end to end, through a real `Navigator` and `Overlay`.
 ///
-/// Both commands are raised from **inside** a flush, while `NavigatorShared`
-/// holds the history mutex. The binding enqueues rather than calling back, and
-/// `wake`'s `try_lock` correctly declines. If it locked instead, this test would
-/// hang rather than fail — which is why `pump_route_commands` uses `try_lock`.
+/// `Finalize` (from `did_pop`) is still raised from **inside** a flush, while
+/// `NavigatorShared` holds the history mutex — the binding enqueues rather
+/// than calling back, and `wake`'s `try_lock` correctly declines. `PushCompleted`
+/// is different since ADR-0064: nothing raises it from inside a flush any
+/// more, since the continuation that raises it is registered by
+/// `NavigatorShared::apply`, after the flush that pushed this route releases
+/// the lock. On an already-resolved future that registration fires
+/// immediately, so the command is already queued by the time `push` returns —
+/// but draining it still needs the pump below, exactly like a real transition
+/// would.
 ///
 /// Red-check: change `pump_route_commands` to `self.history.lock()`; this test
 /// deadlocks (nextest's per-test timeout catches it).
@@ -831,6 +844,10 @@ fn a_route_that_raises_nothing_stays_pushing() {
     struct Animating {
         settings: RouteSettings,
         builder: RouteContentBuilder,
+        /// Held for the route's lifetime: dropping it would cancel the
+        /// future and — via `NavigatorShared::apply`'s continuation — raise
+        /// exactly the command this fixture exists to withhold.
+        completer: Option<flui_scheduler::TickerCompleter>,
     }
     impl Route for Animating {
         type Output = i32;
@@ -838,7 +855,9 @@ fn a_route_that_raises_nothing_stays_pushing() {
             &self.settings
         }
         fn did_push(&mut self) -> PushCompletion {
-            PushCompletion::Animating
+            let (completer, future) = flui_scheduler::TickerFuture::pending();
+            self.completer = Some(completer);
+            PushCompletion::Animating(future)
         }
     }
     impl NavigatorRoute for Animating {
@@ -853,11 +872,214 @@ fn a_route_that_raises_nothing_stays_pushing() {
     handle.push(Animating {
         settings: RouteSettings::named("stuck"),
         builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+        completer: None,
     });
     harness.tick();
 
     assert_eq!(handle.route_ids().len(), 2);
     assert_eq!(layers(&mut harness).len(), 2, "both routes are still shown");
+}
+
+// ============================================================================
+// #1161 — the navigator awaits the controller-owned `TickerFuture`
+// ============================================================================
+
+/// Outer acceptance: a pushed `PageRoute`'s entrance settles from `Pushing` to
+/// `Idle` in the very pump whose `Vsync` tick crosses the transition's
+/// duration — never a pump earlier, and never inside the flush that installed
+/// the push.
+///
+/// `pump_frame` ticks `Vsync` (resolving the run's `TickerFuture` and firing
+/// the continuation `NavigatorShared::apply` registered) **before**
+/// `build_scope` drains the external inbox that continuation just queued a
+/// rebuild into — so a real-clock pump settles the push in the very call that
+/// crosses the duration. A hand-driven completion (no `pump_frame` involved)
+/// needs a *following* pump instead — see
+/// `push_completion_settles_at_the_next_pump` in `transition_route_tests.rs`.
+///
+/// This is an end-to-end timing pin, not a placement pin: `did_push` here
+/// hands out a genuinely *pending* future (a real 300 ms run), and
+/// `when_complete_or_cancel` on a pending future only stores the closure —
+/// registering it inside `RouteEntry::handle_push` instead of
+/// `NavigatorShared::apply` would be observably identical here, since nothing
+/// reads the stored closure until the future actually resolves. The
+/// placement rule itself — registered post-flush, never inside it — has an
+/// observable consequence only on an *already-resolved* future, which is
+/// what `an_already_resolved_push_future_still_needs_one_pump_to_settle`
+/// (below) and `a_zero_duration_push_still_needs_an_explicit_command_to_settle`
+/// (`tests.rs`) hand out; those two are the placement pins.
+///
+/// Outer acceptance rather than a single-line pin: this fails against any of
+/// several production pieces (the future actually returned by `did_push`,
+/// `NavigatorShared::apply`'s registration, `NavigatorState::build`'s
+/// `pump_route_commands()` call). Delete `self.shared.pump_route_commands();`
+/// from `build` for one concrete redden — the entry never leaves `Pushing`,
+/// since nothing else drains the queued command this future's continuation
+/// raises.
+#[test]
+fn pushed_page_route_settles_pushing_to_idle_on_the_pump_that_crosses_its_duration() {
+    let vsync = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+
+    let mut laid = crate::testing::lay_out_animated(
+        VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+        crate::testing::tight(200.0, 200.0),
+        vsync,
+    );
+
+    navigator.push(
+        PageRoute::<i32>::new(|_ctx, _animation, _secondary| {
+            SizedBox::new(10.0, 10.0).into_view().boxed()
+        })
+        .transition_duration(Duration::from_millis(300)),
+    );
+    let top = navigator.current().expect("pushed");
+
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(
+        navigator.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "the entrance transition just started"
+    );
+
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        navigator.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "halfway through the 300ms entrance"
+    );
+
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        navigator.route_state(top),
+        Some(RouteLifecycle::Idle),
+        "settled in the pump whose tick reached 300ms — no further pump needed"
+    );
+}
+
+/// Even an already-resolved push future does not settle synchronously with
+/// the push that produced it: `Animating(TickerFuture::complete())` still
+/// parks in `Pushing` right after `push` returns, because the continuation
+/// that raises `RouteCommand::PushCompleted` is registered by
+/// `NavigatorShared::apply` — post-flush — and merely *runs immediately* on
+/// an already-resolved future; running the continuation only queues the
+/// command; nothing has drained the queue yet.
+///
+/// Red-check: register the continuation inside `RouteEntry::handle_push`
+/// instead of `NavigatorShared::apply`; the entry would then already read
+/// `Idle` before the first `harness.tick()` below.
+#[test]
+fn an_already_resolved_push_future_still_needs_one_pump_to_settle() {
+    struct ImmediatelyAnimating {
+        settings: RouteSettings,
+        builder: RouteContentBuilder,
+    }
+    impl Route for ImmediatelyAnimating {
+        type Output = i32;
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+        fn did_push(&mut self) -> PushCompletion {
+            PushCompletion::Animating(flui_scheduler::TickerFuture::complete())
+        }
+    }
+    impl NavigatorRoute for ImmediatelyAnimating {
+        fn content_builder(&self) -> RouteContentBuilder {
+            Rc::clone(&self.builder)
+        }
+    }
+
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
+
+    handle.push(ImmediatelyAnimating {
+        settings: RouteSettings::named("resolved"),
+        builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+    });
+    let top = handle.current().expect("pushed");
+
+    assert_eq!(
+        handle.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "resolved, but nothing has pumped the queued command yet"
+    );
+
+    harness.tick();
+    assert_eq!(
+        handle.route_state(top),
+        Some(RouteLifecycle::Idle),
+        "one pump after the push settles it"
+    );
+}
+
+/// A push registered before the navigator is even mounted reads
+/// `NavigatorShared::settle_wake` **at fire time**, not at registration:
+/// `NavigatorHandle::push` flushes immediately (`push_with_id`, `history.rs`),
+/// so `apply` registers the continuation on this future while the slot is
+/// still `None` — only the later `mount` below fills it.
+///
+/// Red-check: capture the `RebuildHandle` (or its absence) once, at
+/// registration time, instead of reading the `Arc<Mutex<..>>` slot when the
+/// continuation actually fires; the settle after mount would then be silently
+/// dropped and the entry would never leave `Pushing`.
+#[test]
+fn a_push_registered_before_mount_reads_settle_wake_at_fire_time() {
+    struct HandedFuture {
+        settings: RouteSettings,
+        builder: RouteContentBuilder,
+        future: Option<flui_scheduler::TickerFuture>,
+    }
+    impl Route for HandedFuture {
+        type Output = i32;
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+        fn did_push(&mut self) -> PushCompletion {
+            PushCompletion::Animating(self.future.take().expect("did_push runs once"))
+        }
+    }
+    impl NavigatorRoute for HandedFuture {
+        fn content_builder(&self) -> RouteContentBuilder {
+            Rc::clone(&self.builder)
+        }
+    }
+
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+
+    let (completer, future) = flui_scheduler::TickerFuture::pending();
+    handle.push(HandedFuture {
+        settings: RouteSettings::named("pre-mount"),
+        builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+        future: Some(future),
+    });
+    let top = handle.current().expect("pushed before mount");
+    assert_eq!(
+        handle.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "pushed before the Navigator ever mounted"
+    );
+
+    let mut harness = mount(Navigator::new(handle.clone()));
+
+    completer.complete().deliver();
+    assert_eq!(
+        handle.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "resolved after mount, but no pump has run yet"
+    );
+
+    harness.tick();
+    assert_eq!(
+        handle.route_state(top),
+        Some(RouteLifecycle::Idle),
+        "one pump after mount settles a push that registered before it"
+    );
 }
 
 // ============================================================================

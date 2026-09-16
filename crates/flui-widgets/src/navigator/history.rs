@@ -40,6 +40,8 @@ use std::sync::Arc;
 use std::cell::Cell;
 use std::rc::Rc;
 
+use flui_scheduler::TickerFuture;
+
 use super::binding::{RouteCommand, RouteCommandQueue};
 use super::lifecycle::RouteLifecycle;
 use super::observer::{Notification, Observation, ObservationQueues};
@@ -257,13 +259,17 @@ impl RouteEntry {
     ///
     /// The `pushing` state is entered only when the route reports
     /// [`PushCompletion::Animating`]; see that variant's docs for the divergence
-    /// on immediate pushes.
+    /// on immediate pushes. When it does, the future travels back to the caller
+    /// so the flush can record it as a [`DeferredEffect::AwaitPush`] —
+    /// registering a continuation on it is **not** this method's job (or even
+    /// the flush's): see that variant's own doc for why it must wait until the
+    /// history lock is released.
     fn handle_push(
         &mut self,
         previous: Option<RouteId>,
         previous_present: Option<RouteId>,
         is_new_first: bool,
-    ) -> Observation {
+    ) -> (Observation, Option<TickerFuture>) {
         let previous_state = self.state;
         debug_assert!(matches!(
             previous_state,
@@ -272,13 +278,17 @@ impl RouteEntry {
 
         self.route.install();
 
+        let mut await_push = None;
         if matches!(
             previous_state,
             RouteLifecycle::Push | RouteLifecycle::PushReplace
         ) {
             self.state = match self.route.did_push() {
                 PushCompletion::Immediate => RouteLifecycle::Idle,
-                PushCompletion::Animating => RouteLifecycle::Pushing,
+                PushCompletion::Animating(future) => {
+                    await_push = Some(future);
+                    RouteLifecycle::Pushing
+                }
             };
         } else {
             self.route.did_replace(previous);
@@ -289,7 +299,7 @@ impl RouteEntry {
             self.route.did_change_next(None);
         }
 
-        if matches!(
+        let observation = if matches!(
             previous_state,
             RouteLifecycle::Replace | RouteLifecycle::PushReplace
         ) {
@@ -302,7 +312,8 @@ impl RouteEntry {
                 route: self.id(),
                 previous: previous_present,
             }
-        }
+        };
+        (observation, await_push)
     }
 
     /// Flutter's `_RouteEntry.handlePop` (`:3357-3379`).
@@ -449,7 +460,10 @@ pub(crate) struct FlushOutcome {
 
 /// A user-visible effect the flush owes, delivered after the history lock is
 /// released, in the order it was produced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`/`PartialEq`/`Eq`: [`AwaitPush`](Self::AwaitPush) carries a
+/// [`TickerFuture`], which is neither.
+#[derive(Debug, Clone)]
 pub(crate) enum DeferredEffect {
     /// `onPopInvokedWithResult(did_pop, …)` for this route's `PopScope`s —
     /// `_RouteEntry.handlePop` for the `true` case, `NavigatorState.maybePop`'s
@@ -460,6 +474,14 @@ pub(crate) enum DeferredEffect {
     /// (`routes.dart:950-965`), whose `on_remove` is owed on the route's
     /// registry. A plain refusal drains to nothing.
     LocalHistoryPopped(RouteId),
+    /// This route's [`PushCompletion::Animating`] future, handed back by
+    /// [`RouteEntry::handle_push`] so a continuation can be registered on it
+    /// once the history lock is released — never inside the flush that
+    /// produced it. Registering mid-flush would let an already-resolved
+    /// future (a zero-duration push) settle within that same flush instead of
+    /// on the next one, which is exactly the timing ADR-0064's
+    /// navigator-consumer constraint rules out.
+    AwaitPush(RouteId, TickerFuture),
 }
 
 impl FlushOutcome {
@@ -1130,11 +1152,13 @@ impl RouteHistory {
         let mut outcome = self.flush_once(rearrange_overlay);
         let mut passes = 1;
 
-        // A command raised *during* the walk — a zero-duration transition
-        // completing inside its own `did_push`, or `finalize` from `did_pop` —
-        // is applied here and settled by another pass. This is what Flutter gets
-        // from `finalizeRoute`'s `if (!_flushingHistory)` plus the microtask that
-        // carries `whenCompleteOrCancel`.
+        // A command raised *during* the walk — `did_pop`'s `reverse()`
+        // canceling a still-pending `forward()` run (its `TickerFuture`
+        // continuation fires synchronously and queues `PushCompleted`), or
+        // `finalize` from `did_pop` — is applied here and settled by another
+        // pass. This is what Flutter gets from `finalizeRoute`'s
+        // `if (!_flushingHistory)` plus the microtask that carries
+        // `whenCompleteOrCancel`.
         while self.apply_pending_commands() {
             passes += 1;
             assert!(
@@ -1246,9 +1270,15 @@ impl RouteHistory {
                         RouteLifecycle::PushReplace => self.entries[position].replacing,
                         _ => previous_present,
                     };
-                    let observation =
+                    let (observation, await_push) =
                         self.entries[position].handle_push(previous, replaced, next.is_none());
                     self.queues.enqueue(observation);
+                    if let Some(future) = await_push {
+                        deferred.push(DeferredEffect::AwaitPush(
+                            self.entries[position].id(),
+                            future,
+                        ));
+                    }
                     if self.entries[position].state == RouteLifecycle::Idle {
                         advance = false;
                     }
@@ -1456,10 +1486,11 @@ impl RouteHistory {
     ///
     /// Through this module's public surface re-entrancy is *structurally*
     /// unreachable: a `Route` hook receives only `&mut self` and cannot reach
-    /// the history. The guard exists for the case where a zero-duration
-    /// transition's completion callback re-enters via `notify_push_completed`
-    /// mid-flush. Testing it directly rather than shipping it untested
-    /// follows established precedent.
+    /// the history, and push completion now reaches it only as a queued
+    /// `RouteCommand` (ADR-0064) — never a direct call a route's own
+    /// lifecycle callback could make mid-flush. The guard is kept as defence
+    /// in depth regardless. Testing it directly rather than shipping it
+    /// untested follows established precedent.
     pub(crate) fn force_flushing_for_test(&mut self) {
         self.flushing.set(true);
     }

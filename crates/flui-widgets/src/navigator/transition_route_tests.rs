@@ -9,9 +9,12 @@
 //! `'secondary animation is kDismissed when train hopping is interrupted'`.
 //! Expected values are read from `routes.dart`, not from running this code.
 //!
-//! FLUI's `AnimationController` exposes no `TickerFuture`, so these drive the
-//! transition by hand with `set_value` — which is deterministic, and is what makes
-//! `_handleStatusChanged`'s four arms individually testable.
+//! Most of these drive the transition by hand with `set_value` — which is
+//! deterministic, and is what makes `_handleStatusChanged`'s four arms
+//! individually testable — rather than by awaiting the `TickerFuture`
+//! `did_push` returns (ADR-0064). A handful that need the run to have real,
+//! not-yet-covered distance left (so a `reverse()` cannot collapse
+//! synchronously to `Dismissed`) pump a real `Vsync` instead; those say so.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +57,12 @@ fn navigator() -> (NavigatorHandle, Harness) {
 }
 
 /// Drive a controller to `Completed` (entrance finished).
+///
+/// `set_value` **cancels** the active run rather than completing its
+/// `TickerFuture` (`set_value_cancels_the_active_run`, flui-animation) — this
+/// helper drives `status`, not the future. A test that needs the future to
+/// resolve `Ok(())` through natural completion drives a real `Vsync` instead
+/// (see `tests/routes.rs`'s `PUMPS`-based coverage).
 fn complete(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(1.0);
@@ -105,13 +114,37 @@ fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
     );
 }
 
-/// The `Completed` status reaches the navigator through the route-binding command queue,
-/// never a direct call — a direct call would deadlock on the history mutex.
+/// The controller's `TickerFuture` reaches the navigator through
+/// `NavigatorShared::await_push`'s continuation, never a direct call from the
+/// status listener — a direct call would deadlock on the history mutex.
 ///
-/// Red-check: make `TransitionInner::handle_status_changed` skip
-/// `binding.notify_push_completed()`; the entry is stranded in `Pushing`.
+/// `complete()` below drives this through `set_value`, which **cancels** the
+/// run rather than completing it (`set_value_cancels_the_active_run`,
+/// flui-animation) — so this exercises the `Err(TickerCanceled)` arm of the
+/// continuation, not natural completion; `pushed_page_route_settles_…`
+/// (`navigator_tests.rs`), which pumps a real `Vsync` to the end of a real
+/// transition, is the `Ok(())` pin. Complete-or-cancel settles the entry the
+/// same way either arm, so that difference is not what this test is about.
+///
+/// What this pins: the continuation settles synchronously
+/// (`AnimationController::finish` delivers before it returns), but settling
+/// only queues `RouteCommand::PushCompleted` — nothing drains it until the
+/// next pump. This is an end-to-end timing pin, not a placement pin:
+/// `set_value` cancels an already-*pending* run, and
+/// `when_complete_or_cancel` on a pending future only stores the closure, so
+/// registering it inside `RouteEntry::handle_push` instead of
+/// `NavigatorShared::apply` would be observably identical here — the
+/// placement rule is pinned instead by
+/// `an_already_resolved_push_future_still_needs_one_pump_to_settle`
+/// (`navigator_tests.rs`) and
+/// `a_zero_duration_push_still_needs_an_explicit_command_to_settle`
+/// (`tests.rs`), both of which hand out an *already-resolved* future.
+///
+/// Red-check: delete `self.shared.pump_route_commands();` from
+/// `NavigatorState::build` — the entry never leaves `Pushing`, since nothing
+/// else drains the queued command.
 #[test]
-fn push_completion_travels_through_the_route_binding_command_queue() {
+fn push_completion_settles_at_the_next_pump() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
     navigator_handle.push(route);
@@ -122,13 +155,118 @@ fn push_completion_travels_through_the_route_binding_command_queue() {
         Some(RouteLifecycle::Pushing)
     );
 
-    // Completing OUTSIDE a flush: `wake`'s `try_lock` succeeds and settles now.
+    // Completing OUTSIDE a flush: `RouteCommand::PushCompleted` is already
+    // queued by the time this call returns, but nothing has drained it yet.
     complete(&animation);
+    assert_eq!(
+        navigator_handle.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "queued, but no pump has run yet"
+    );
+
+    harness.tick();
+    assert_eq!(
+        navigator_handle.route_state(top),
+        Some(RouteLifecycle::Idle),
+        "the next pump drains the queued command"
+    );
+}
+
+/// Popping a route while its own entrance is still animating cancels that
+/// push's `TickerFuture` **inside the flush that runs `did_pop`**: `did_pop`
+/// calls `reverse()`, which — as a run-starting method — displaces and
+/// cancels the still-pending `forward()` run before starting the new one, and
+/// `AnimationController::finish` delivers synchronously, so the continuation
+/// `NavigatorShared::apply` registered on that run fires right there, mid-flush.
+/// No deadlock (the continuation only touches the command queue and
+/// `settle_wake`, never the history), and the entry ends `Popping`, not
+/// resurrected to `Idle`: by the time the queued `RouteCommand::PushCompleted`
+/// is drained, the entry has already moved on.
+///
+/// Needs a real, ticking `Vsync`: popping at `value == 0` (this file's usual
+/// hand-driven setup, which never advances the controller) would let
+/// `reverse()` collapse straight to `Dismissed` — the
+/// `an_already_dismissed_controller_finalizes_synchronously_…` shape, not this
+/// one — so this pumps the entrance to its midpoint first, leaving `reverse()`
+/// real distance to cover.
+///
+/// Red-check: drop the `entry.state == RouteLifecycle::Pushing` guard in
+/// `RouteHistory::apply_pending_commands`'s `PushCompleted` arm — the stale
+/// command resurrects the entry to `Idle` instead of leaving it `Popping`.
+#[test]
+fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping() {
+    let vsync = Vsync::new();
+    let navigator_handle = NavigatorHandle::new();
+    navigator_handle.seed_initial(super::overlay_route::SimpleRoute::<i32>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    let mut laid = crate::testing::lay_out_animated(
+        VsyncScope::new(vsync.clone(), Navigator::new(navigator_handle.clone())),
+        crate::testing::tight(200.0, 200.0),
+        vsync,
+    );
+
+    let (route, _animation) = transition("second");
+    navigator_handle.push(route);
+    let top = navigator_handle.current().expect("a top route");
+
+    // The first pump after a run starts only anchors `t = 0` for the
+    // registry's per-run clock (`Vsync`'s own doc); a second pump is what
+    // actually advances it — `tests/routes.rs` documents the same thing.
+    laid.pump_for(Duration::ZERO);
+    // Halfway through the 300ms entrance: `Forward`, not yet `Completed` —
+    // `reverse()` below has real distance to cover.
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        navigator_handle.route_state(top),
+        Some(RouteLifecycle::Pushing),
+        "the entrance transition is still running"
+    );
+
+    // The pop's own flush runs `did_pop` -> `reverse()`, which cancels the
+    // still-pending push run synchronously, mid-flush. No hang: nextest's
+    // per-test timeout would catch one.
+    assert!(navigator_handle.pop());
+
+    assert_eq!(
+        navigator_handle.route_state(top),
+        Some(RouteLifecycle::Popping),
+        "canceled by the pop, but popping — not resurrected to idle"
+    );
+}
+
+/// A canceled push future settles the entry to `Idle` exactly like a
+/// completed one — there is no separate "the push was canceled" outcome at
+/// this layer. Canceling the controller's run directly (not popping the
+/// route) isolates this from `did_pop`'s own cancellation path above.
+///
+/// Red-check: gate the continuation's `RouteCommand::PushCompleted` push on
+/// `result.is_ok()` in `NavigatorShared::await_push`; the entry never leaves
+/// `Pushing`.
+#[test]
+fn a_canceled_push_future_still_settles_the_entry_to_idle() {
+    let (navigator_handle, mut harness) = navigator();
+    let (route, animation) = transition("second");
+    navigator_handle.push(route);
+    let top = navigator_handle.current().expect("a top route");
+    harness.tick();
+    assert_eq!(
+        navigator_handle.route_state(top),
+        Some(RouteLifecycle::Pushing)
+    );
+
+    // Cancels the push's run without touching the route's own lifecycle.
+    animation
+        .controller()
+        .expect("install created it")
+        .stop()
+        .expect("a live controller can always stop");
+    harness.tick();
 
     assert_eq!(
         navigator_handle.route_state(top),
         Some(RouteLifecycle::Idle),
-        "the command applied without a further frame"
+        "a canceled run settles the push exactly like a completed one"
     );
 }
 

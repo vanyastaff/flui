@@ -305,14 +305,13 @@ is not part of this change.
   `_controller.forward()`'s returned `TickerFuture` is superseded —
   `forward()` (and every other run-starting method) now returns one.
 - **§2's "What already exists, and is enough" table**, the "The push-deferral
-  seam" row: the navigator wiring for #1161, not yet landed, will have
-  `PushCompletion::Animating` carry the `TickerFuture`
-  `AnimationController::forward` returns and await it from
-  `NavigatorShared::apply`, replacing today's sole backing —
-  `RouteHistory::notify_push_completed`'s status-listener seam.
+  seam" row: the navigator wiring for #1161 has `PushCompletion::Animating`
+  carry the `TickerFuture` `AnimationController::forward` returns and await
+  it from `NavigatorShared::apply`, replacing what used to back it —
+  `RouteBinding::notify_push_completed`'s status-listener seam, now deleted.
 - **The paragraph at §2's close** ("`AnimationController` does not return a
   `TickerFuture` from `forward()`… `PushCompletion::Animating` is the right
   shape rather than a workaround") is superseded: the controller does return
-  one now, for the lock-order reason this ADR records. Once the navigator
-  wiring for #1161 lands, `PushCompletion::Animating(TickerFuture)` will
-  carry that future, not stand in for its absence.
+  one now, for the lock-order reason this ADR records. The navigator wiring
+  for #1161 has landed: `PushCompletion::Animating(TickerFuture)` carries
+  that future, and no longer stands in for its absence.
