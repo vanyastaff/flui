@@ -123,9 +123,11 @@ fn gesture_fixture_with(
     // `from_controller.set_value(1.0)` below, ten settle ticks, and a full
     // gesture start/stop cycle — its retirement is gated on its OWN owning
     // `HeroController` still being live to service it, not on frame count).
-    // Named rather than silently tolerated: it is real, but it cannot reach
-    // any assertion in this file, since nothing here ever reads the auto
-    // observer's own flights or overlay entries by identity.
+    // Named rather than silently tolerated (tracked as issue #1195 — the
+    // auto observer's own flight/overlay entry is never retired by this
+    // fixture): it is real, but it cannot reach any assertion in this file,
+    // since nothing here ever reads the auto observer's own flights or
+    // overlay entries by identity.
     let mut harness = mount_navigator(&navigator);
 
     let to_route = hero_page(to_opt_in, 40.0, 24.0).maintain_state(to_maintain_state);

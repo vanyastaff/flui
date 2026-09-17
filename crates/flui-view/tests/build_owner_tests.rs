@@ -642,6 +642,14 @@ fn test_build_owner_memory_size() {
     // bool` costs nothing extra because existing padding absorbs it.
     // `built_this_frame` is empty on every frame that never lands a
     // mid-drain re-entry, so this is inline scratch state, not a
-    // per-element cost.
+    // per-element cost. `build_scope` calls `built_this_frame.clear()`, not
+    // a fresh `HashSet::new()`, so its backing table retains PEAK capacity
+    // across frames rather than reallocating from empty each time — one
+    // SipHash insert per completed build, bounded at O(peak builds in one
+    // `build_scope` call per owner), ~9 B/slot. Not counted in this struct's
+    // own size (the table's header is inline, but its buckets are
+    // heap-allocated), and not a leak: capacity plateaus at whatever the
+    // busiest single `build_scope` call this owner has ever run needed, then
+    // stays there.
     assert!(size < 688, "BuildOwner is too large: {size} bytes");
 }

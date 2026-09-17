@@ -678,13 +678,15 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
     assert_eq!(
         animated_builder_rebuilds.count(),
         1,
-        "the mid-drain notification must build AnimatedBuilder exactly once, \
-         in the SAME pump — issue #1180's fix"
+        "sanity: exactly one rebuild — `AnimatedBuilder` already built exactly once on the \
+         PRE-#1180 behavior too, just a whole pump later; the two assertions below, not this \
+         count, are the actual #1180 discriminators (WHEN it built, not how many times)"
     );
     assert_eq!(
         laid.build_owner_mut().pending_external_builds(),
         0,
-        "same-drain absorption must leave nothing queued for the next pump"
+        "same-drain absorption must leave nothing queued for the next pump — red before \
+         #1180's fix: the notification is still sitting in the inbox here"
     );
     assert!(
         !laid.build_owner_mut().has_dirty_elements(),
@@ -697,12 +699,16 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
     );
 
     // A further tick is a genuine no-op: nothing queued, nothing running,
-    // layout unchanged.
+    // layout unchanged. This is the OTHER #1180 discriminator alongside
+    // `pending_external_builds() == 0` above: on the pre-#1180 behavior, the
+    // deferred rebuild would have landed on THIS tick, so the count staying
+    // at 1 here — not the count after the retargeting pump — is what proves
+    // the rebuild already happened during the retargeting pump itself.
     laid.tick();
     assert_eq!(
         animated_builder_rebuilds.count(),
         1,
-        "no extra rebuild from an idle tick"
+        "no extra rebuild from an idle tick — red before #1180's fix, which would show 2 here"
     );
     assert!(
         (width(&laid) - 100.0).abs() < 1e-3,

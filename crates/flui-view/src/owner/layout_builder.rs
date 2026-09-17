@@ -199,7 +199,17 @@ impl BuildOwner {
         // profiler would under-report exactly the frames that did the most
         // build work. `during_layout` distinguishes the two; the ranges are
         // disjoint (this runs between layout passes), so summing is correct.
-        let _span = tracing::debug_span!("build", during_layout = true).entered();
+        // `absorbed_mid_drain` must be declared here too, matching
+        // `build_scope_impl`'s own "build" span: `drain_build_scope` records
+        // onto whichever span is current, and a field a span never declared
+        // silently drops the `record` call — without this, every fixpoint
+        // pass's own mid-drain re-entries would vanish from the trace.
+        let _span = tracing::debug_span!(
+            "build",
+            during_layout = true,
+            absorbed_mid_drain = tracing::field::Empty,
+        )
+        .entered();
 
         debug_assert!(
             pipeline.is_free(),

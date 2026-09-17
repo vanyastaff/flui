@@ -41,17 +41,18 @@ thread_local! {
 
 /// Upper bound on RE-ENTRY mid-drain absorbs per frame (issue #1180).
 ///
-/// A "re-entry" is an id landing in the external inbox for at least the
-/// second time in one frame — the self-rescheduling-element case (an element
-/// that calls `schedule` on its own `RebuildHandle` from inside its own
-/// `build`). The FIRST time any id lands in a frame is always free, however
-/// many independent elements do it (a page whose N unrelated parents each
+/// A "re-entry" is a `Vacant` landing for an id that already completed a
+/// build in this `build_scope` call — most often that same element
+/// rescheduling itself from inside its own `build`, but identically a child
+/// notifying its already-built parent, or one half of an A↔B ping-pong. The
+/// FIRST time any id lands in a frame is always free, however many
+/// independent elements do it (a page whose N unrelated parents each
 /// retarget an implicit animation in one frame performs N first-time
-/// absorbs, all legitimate) — see [`BuildOwner::built_this_frame`]. Only a
-/// listener chain that keeps re-scheduling itself after each of its own
-/// builds spends this budget, so 16 is already a pathological tree, not a
-/// realistic one: a downward notification (parent notifies a descendant
-/// below it) costs nothing beyond its own first-time absorb.
+/// absorbs, all legitimate) — see [`BuildOwner::built_this_frame`]. Only an
+/// id that keeps getting notified again after each of its own builds spends
+/// this budget, so 16 is already a pathological tree, not a realistic one:
+/// a downward notification (parent notifies a descendant below it) costs
+/// nothing beyond its own first-time absorb.
 const MAX_MID_DRAIN_ABSORBS: usize = 16;
 
 /// A cloneable, owned handle that lets a listener callback — an animation tick
@@ -397,9 +398,11 @@ pub struct BuildOwner {
     /// up this frame and is also free — a page whose N unrelated elements
     /// each get notified once in one frame performs N such absorbs, all
     /// legitimate. A Vacant absorb for an id ALREADY in this set is a
-    /// self-rescheduler (it built, its `dirty_reasons` entry was removed,
-    /// and it landed in the inbox again before the next pop) and spends one
-    /// unit of [`Self::mid_drain_absorbs_left`].
+    /// RE-ENTRY — it built, its `dirty_reasons` entry was removed, and it
+    /// landed in the inbox again before the next pop, whether from itself
+    /// (a self-reschedule), from a child it just built notifying it back,
+    /// or from the other half of an A↔B ping-pong — and spends one unit of
+    /// [`Self::mid_drain_absorbs_left`].
     pub(crate) built_this_frame: HashSet<ElementId>,
 
     /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
@@ -1195,19 +1198,39 @@ impl BuildOwner {
     ///
     /// * `tree` - The element tree to rebuild
     pub fn build_scope(&mut self, tree: &mut ElementTree) {
-        // Per-frame mid-drain absorb accounting (issue #1180 v3 §3): re-arm
-        // the exhaustion streak against how the PREVIOUS frame ended —
-        // BEFORE this frame's own reset overwrites `mid_drain_absorbs_left`
-        // — then reset the budget and the re-entry set for this frame. There
-        // is no frame-complete hook on `BuildOwner`, so this retroactive
-        // check at the NEXT entry is the only place "did the last frame end
-        // clean" can be answered.
+        // Per-frame mid-drain absorb accounting: re-arm the exhaustion streak
+        // against how the PREVIOUS frame ended — BEFORE this frame's own
+        // reset overwrites `mid_drain_absorbs_left` — then reset the budget
+        // and the re-entry set for this frame. There is no frame-complete
+        // hook on `BuildOwner`, so this retroactive check at the NEXT entry
+        // is the only place "did the last frame end clean" can be answered.
+        //
+        // This reset must run exactly once per real frame, which is why it
+        // lives here rather than in `build_scope_impl`: `build_scope` is the
+        // frame-boundary entry point every production/headless binding calls
+        // once per pump, but `service_child_requests_impl`'s lazy-sliver
+        // service pass also needs to drain newly-built children's subtrees
+        // — possibly several times in the SAME frame, once per fixpoint pass
+        // — and calls `build_scope_impl` directly for that, so the budget it
+        // shares stays a genuine per-frame bound instead of resetting on
+        // every service pass.
         if self.mid_drain_absorbs_left > 0 {
             self.mid_drain_cap_streak = false;
         }
         self.mid_drain_absorbs_left = MAX_MID_DRAIN_ABSORBS;
         self.built_this_frame.clear();
 
+        self.build_scope_impl(tree);
+    }
+
+    /// The reusable core of [`Self::build_scope`]: the build span, the
+    /// early-return when a mounted-but-clean layout builder has no work,
+    /// drain-target selection, the drain itself, and collapsing the scoped
+    /// queues when they empty out. Deliberately excludes the per-frame
+    /// mid-drain accounting reset that only [`Self::build_scope`] performs —
+    /// see that method's doc for why a mid-frame re-entrant caller (the
+    /// lazy-sliver service pass) must reach this directly instead.
+    fn build_scope_impl(&mut self, tree: &mut ElementTree) {
         // The build phase's span, matching the `layout`/`paint`/`compositing`
         // spans the pipeline already emits. Together the four are what a
         // profiler subscribes to: `flui-devtools` is layer 9 and nothing in
@@ -1346,6 +1369,10 @@ impl BuildOwner {
     ) -> BuildDrainResult {
         let mut result = BuildDrainResult::default();
         let mut absorbed_mid_drain = 0usize;
+        // Ids capped for the rest of THIS drain accumulate here instead of
+        // being put straight back into `self.external_inbox` — see the flush
+        // after the loop below and `Self::absorb_mid_drain_inbox`'s doc.
+        let mut capped_leftover: HashMap<ElementId, RebuildReasons> = HashMap::new();
 
         // Re-key every element already on the heap to its AUTHORITATIVE tree
         // depth before draining. `schedule_build_for` trusts the depth its
@@ -1390,8 +1417,22 @@ impl BuildOwner {
         // Each iteration pops one entry first so `pop()`'s mutation of
         // `self.dirty_elements` (a field the split-borrow handle aliases)
         // is released before the handle is reborrowed.
+        //
+        // `absorbed_mid_drain` only counts from the SECOND iteration onward:
+        // the very first absorb of this call is ordinary intake — whatever
+        // landed between the previous drain (or frame) and this one, before
+        // a single element here has built — not something that arrived
+        // "mid-drain" in the sense a profiler cares about. Only an absorb
+        // that runs after this call has already popped and built at least
+        // one entry observed something land while THIS drain was actively
+        // in progress, which is what the field name promises.
+        let mut first_pop = true;
         loop {
-            absorbed_mid_drain += self.absorb_mid_drain_inbox(tree, target, live_scopes);
+            let absorbed_this_pop = self.absorb_mid_drain_inbox(tree, &mut capped_leftover);
+            if !first_pop {
+                absorbed_mid_drain += absorbed_this_pop;
+            }
+            first_pop = false;
             let Some(Reverse(dirty)) = self.dirty_elements.pop() else {
                 break;
             };
@@ -1615,10 +1656,10 @@ impl BuildOwner {
             result.target_rebuilt |=
                 matches!(target, BuildScopeTarget::LayoutBuilder(scope) if scope == id);
             self.pending_dependency_changes.remove(&id);
-            // A LATER mid-drain absorb of this same id (a self-rescheduler
-            // that called `schedule` on its own handle from inside this very
-            // build) is a re-entry, not a first-time absorb — see
-            // `Self::absorb_mid_drain_inbox`.
+            // A LATER mid-drain absorb of this same id is a re-entry, not a
+            // first-time absorb, whether it comes from this element
+            // rescheduling itself, a child notifying it back, or one half of
+            // an A↔B ping-pong — see `Self::absorb_mid_drain_inbox`.
             self.built_this_frame.insert(id);
 
             // ADR-0040: the build ran to completion (the resume_unwind branch
@@ -1710,16 +1751,38 @@ impl BuildOwner {
             }
         }
 
+        // Flush whatever this drain capped back into the real inbox, ONCE,
+        // now that the loop is done with it — not on every pop that found it
+        // still capped (see `Self::absorb_mid_drain_inbox`'s doc). Merge
+        // rather than overwrite: a concurrent `schedule` may have landed
+        // fresh reasons for the same id in `self.external_inbox` while it
+        // sat in `capped_leftover`.
+        if !capped_leftover.is_empty() {
+            let mut inbox = self.external_inbox.lock();
+            for (id, reasons) in capped_leftover {
+                match inbox.entry(id) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(reasons);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        entry.get_mut().merge(reasons);
+                    }
+                }
+            }
+        }
+
         // The build drained: every render child has attached. Settle each
         // render parent's children into element-slot order (no-op unless an
         // insert flagged a possible drift), so a render sibling that attached
         // before a component-deferred sibling does not invert their layout.
         tree.reorder_render_children_after_build();
 
-        // Record onto whichever span is current — `build_scope`'s own span
-        // declares this field; `service_layout_builders`'s `during_layout`
-        // span does not, so `record` on it is a documented tracing no-op
-        // (recording a field a span never declared is silently ignored).
+        // Record onto whichever span is current — `build_scope`'s own "build"
+        // span and `service_layout_builders`'s `during_layout` "build" span
+        // both declare this field now, so a fixpoint pass's re-entries are
+        // captured exactly like a top-level drain's (a span that never
+        // declares a field silently drops a `record` for it, which is why
+        // both call sites must).
         tracing::Span::current().record("absorbed_mid_drain", absorbed_mid_drain);
 
         result
@@ -1729,10 +1792,11 @@ impl BuildOwner {
     /// drain's dirty work, routed to whichever bucket `target` accepts.
     /// Returns how many ids were absorbed (merged into existing work or
     /// freshly scheduled) — never how many merely landed, since a capped
-    /// re-entry is left in the inbox, not absorbed.
+    /// re-entry is held in `capped_leftover` (the caller's drain-scoped
+    /// accumulator), not absorbed.
     ///
     /// Called at the top of every [`Self::drain_build_scope`] pop, not once
-    /// at drain start (issue #1180, Decision 1): `BuildOwner`'s own
+    /// at drain start (issue #1180): `BuildOwner`'s own
     /// synchronous `schedule` — a build calling another element's
     /// [`RebuildHandle`](super::RebuildHandle) on the owner thread — joins
     /// THIS SAME drain instead of waiting for the next `build_scope` call,
@@ -1755,43 +1819,60 @@ impl BuildOwner {
     /// deferred id stays in its bucket). Vacant means a fresh entry is
     /// needed, keyed by the AUTHORITATIVE tree depth (never the depth
     /// captured at `schedule` time — `ElementCore` does not know its own
-    /// tree depth), and routed exactly the way any other dirty id is routed
-    /// for `target`: accepted, it joins `self.dirty_elements`; otherwise
-    /// `Self::defer_dirty_element` sends it to the root or isolated bucket
-    /// `Self::nearest_layout_builder_scope` names — a Global id landing
-    /// during a `LayoutBuilder(scope)` drain defers to the root bucket for
-    /// the next Global drain, and the mirror lands a scope-local id in
-    /// `isolated[scope]` during a Global drain.
+    /// tree depth), and pushed straight onto `self.dirty_elements` —
+    /// `Self::drain_build_scope`'s own pop already re-derives this id's
+    /// nearest layout-builder scope and runs `Self::defer_dirty_element` on
+    /// it if `target` doesn't accept it, so classifying scope again here
+    /// would only duplicate that pop-time routing, never change its
+    /// outcome (a Global id landing during a `LayoutBuilder(scope)` drain
+    /// still ends up deferred to the root bucket for the next Global drain,
+    /// and the mirror still lands a scope-local id in `isolated[scope]`
+    /// during a Global drain).
     ///
     /// # The re-entry budget
     ///
-    /// A Vacant id already in [`Self::built_this_frame`] already built once
-    /// this frame — the only way that combination happens is
-    /// `drain_build_scope`'s `dirty_reasons.remove` running after its build
-    /// and the SAME id landing again before the next pop: a self-rescheduler
-    /// that calls `schedule` on its own handle from inside its own build.
-    /// Every other Vacant id is a first-time absorb this frame and is free,
-    /// however many independent listeners fire (each id can only be a
-    /// first-time absorb once, so the free case is finite). A re-entry
-    /// spends one [`Self::mid_drain_absorbs_left`]; at zero the id is left in
-    /// the inbox for the next `build_scope` (the existing
-    /// `has_dirty_elements` gate already schedules that frame) and a
+    /// A RE-ENTRY is a Vacant landing for an id that already completed a
+    /// build in this `build_scope` call — [`Self::built_this_frame`] is how
+    /// that is recognized. The common shape is an element rescheduling
+    /// itself from inside its own build, but a child notifying its
+    /// already-built parent, or one half of an A↔B ping-pong, land here
+    /// identically. Every other Vacant id is a first-time absorb this frame
+    /// and is free, however many independent listeners fire (each id can
+    /// only be a first-time absorb once, so the free case is finite). A
+    /// re-entry spends one [`Self::mid_drain_absorbs_left`]; at zero the id
+    /// is held in `capped_leftover` for the rest of this drain (the existing
+    /// `has_dirty_elements` gate already schedules the next `build_scope`
+    /// once it is flushed back — see `Self::drain_build_scope`) and a
     /// `tracing::warn!` fires once per streak
     /// ([`Self::mid_drain_cap_streak`]), naming every id this call turned
     /// away.
     ///
+    /// # Why `capped_leftover` is the caller's, not the inbox's
+    ///
+    /// Once the budget hits zero, every further re-entry for the rest of the
+    /// drain is capped too — a self-rescheduler that keeps re-entering re-hits
+    /// this every pop. Putting each one straight back into `self.external_inbox`
+    /// would mean every LATER pop's `drain()` pulls the same already-capped
+    /// ids back out, re-locks, and re-inserts them again, for no new
+    /// information. Accumulating them in `capped_leftover` — owned by
+    /// [`Self::drain_build_scope`] and passed in by `&mut` — means a capped id
+    /// is looked at once, and `self.external_inbox` can go and stay empty
+    /// for the remainder of the drain (the common case once budget is
+    /// exhausted), so later pops hit this function's early return instead of
+    /// a full lock-drain-collect cycle.
+    ///
     /// # Locking
     ///
     /// The inbox lock is held only for the `drain()` that empties it into an
-    /// owned `Vec`, released before anything else runs, and (if any id was
-    /// capped) re-acquired once, briefly, to put those ids back. It is never
-    /// held across a build — `parking_lot::Mutex` is non-reentrant, and a
-    /// build may call `schedule` synchronously.
+    /// owned `Vec`, released before anything else runs. It is never held
+    /// across a build — `parking_lot::Mutex` is non-reentrant, and a build
+    /// may call `schedule` synchronously. `capped_leftover` is a plain local,
+    /// not behind the lock; `Self::drain_build_scope` re-locks the inbox
+    /// exactly once, after the whole drain, to flush it back.
     fn absorb_mid_drain_inbox(
         &mut self,
         tree: &mut ElementTree,
-        target: BuildScopeTarget,
-        live_scopes: Option<&HashSet<ElementId>>,
+        capped_leftover: &mut HashMap<ElementId, RebuildReasons>,
     ) -> usize {
         let landed: Vec<(ElementId, RebuildReasons)> = {
             let mut inbox = self.external_inbox.lock();
@@ -1802,7 +1883,7 @@ impl BuildOwner {
         };
 
         let mut absorbed = 0usize;
-        let mut capped: Vec<(ElementId, RebuildReasons)> = Vec::new();
+        let mut newly_capped_ids: Vec<ElementId> = Vec::new();
         for (id, reasons) in landed {
             // Mark dirty unconditionally, Occupied or Vacant — matching the
             // pre-#1180 drain's own unconditional call. A `RebuildHandle`
@@ -1818,79 +1899,40 @@ impl BuildOwner {
             }
             if self.built_this_frame.contains(&id) {
                 let Some(remaining) = self.mid_drain_absorbs_left.checked_sub(1) else {
-                    capped.push((id, reasons));
+                    newly_capped_ids.push(id);
+                    match capped_leftover.entry(id) {
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(reasons);
+                        }
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            entry.get_mut().merge(reasons);
+                        }
+                    }
                     continue;
                 };
                 self.mid_drain_absorbs_left = remaining;
             }
             self.dirty_reasons.insert(id, reasons);
             let depth = tree.get(id).map_or(0, |node| node.depth);
-            self.route_dirty_element(tree, target, live_scopes, DirtyElement::new(id, depth));
+            // Push straight onto the heap: `drain_build_scope`'s pop already
+            // re-derives this id's scope and defers non-accepted ids, so
+            // classifying scope here too would only duplicate that work.
+            self.dirty_elements
+                .push(Reverse(DirtyElement::new(id, depth)));
             absorbed += 1;
         }
 
-        if !capped.is_empty() {
-            if !self.mid_drain_cap_streak {
-                tracing::warn!(
-                    ids = ?capped.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-                    budget = MAX_MID_DRAIN_ABSORBS,
-                    "mid-drain absorb budget exhausted this frame; deferring the \
-                     remaining self-rescheduled id(s) to the next build_scope"
-                );
-                self.mid_drain_cap_streak = true;
-            }
-            // Concurrent `schedule` calls from other threads may have landed
-            // more work in the inbox while `capped`'s ids sat in this local
-            // `Vec` unlocked — merge rather than overwrite.
-            let mut inbox = self.external_inbox.lock();
-            for (id, reasons) in capped {
-                match inbox.entry(id) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(reasons);
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().merge(reasons);
-                    }
-                }
-            }
+        if !newly_capped_ids.is_empty() && !self.mid_drain_cap_streak {
+            tracing::warn!(
+                ids = ?newly_capped_ids,
+                budget = MAX_MID_DRAIN_ABSORBS,
+                "mid-drain absorb budget exhausted this frame; deferring the \
+                 remaining re-entered id(s) to the next build_scope"
+            );
+            self.mid_drain_cap_streak = true;
         }
 
         absorbed
-    }
-
-    /// Route a single freshly-dirtied element to `self.dirty_elements` if
-    /// `target` accepts it at its nearest live layout-builder scope, else
-    /// defer it to the bucket `Self::nearest_layout_builder_scope` names.
-    ///
-    /// Shared by [`Self::absorb_mid_drain_inbox`] — the only other caller of
-    /// this routing decision is the drain loop's own pop-time reclassification,
-    /// which additionally needs to keep building on acceptance (inlined
-    /// there rather than shared, since this helper only pushes-or-defers).
-    fn route_dirty_element(
-        &mut self,
-        tree: &ElementTree,
-        target: BuildScopeTarget,
-        live_scopes: Option<&HashSet<ElementId>>,
-        dirty: DirtyElement,
-    ) {
-        match target {
-            BuildScopeTarget::All => self.dirty_elements.push(Reverse(dirty)),
-            BuildScopeTarget::Global | BuildScopeTarget::LayoutBuilder(_) => {
-                let live_scopes =
-                    live_scopes.expect("BUG: scoped drain owns a live-scope snapshot");
-                let scope = Self::nearest_layout_builder_scope(tree, dirty.id(), live_scopes);
-                let accepts = match target {
-                    BuildScopeTarget::Global => scope.is_none(),
-                    BuildScopeTarget::LayoutBuilder(target_scope) => scope == Some(target_scope),
-                    BuildScopeTarget::All => unreachable!("matched above"),
-                };
-                if accepts {
-                    self.dirty_elements.push(Reverse(dirty));
-                } else {
-                    self.defer_dirty_element(scope, dirty);
-                }
-            }
-        }
     }
 
     // ========================================================================
@@ -2147,7 +2189,11 @@ impl BuildOwner {
         //    `SparseChildren::ensure` mounts the top-level lazy-child node and
         //    pushes it onto the dirty heap (F1), but the child's own sub-views
         //    (e.g. a Padding wrapping a Text) need a dedicated build pass.
-        self.build_scope(tree);
+        //    `build_scope_impl`, not `build_scope`: this can run more than
+        //    once per frame (once per fixpoint pass), and must NOT reset the
+        //    mid-drain absorb budget each time — that reset is exactly once
+        //    per frame, in `build_scope` itself.
+        self.build_scope_impl(tree);
 
         // 6. Mark each serviced sliver as needing re-layout ONLY if service
         //    did real work (built or evicted children). When all service calls
@@ -2646,20 +2692,6 @@ mod tests {
     impl View for TestView {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
-        }
-
-        // `TestView` is a zero-field marker: any two instances are always
-        // equivalent, so a parent that keeps returning one never needs to
-        // re-mark or reschedule it. Without this, every fixture in this
-        // module whose `build()` returns `TestView` as its own leaf child
-        // would reschedule that hidden child (and re-fire
-        // `on_build_scheduled`) on every one of ITS OWN rebuilds — noise
-        // unrelated to whatever the test is actually driving.
-        fn should_skip_rebuild(&self, _prev: &Self) -> bool
-        where
-            Self: Sized,
-        {
-            true
         }
     }
 
@@ -3945,6 +3977,59 @@ mod tests {
         id
     }
 
+    /// A render-family leaf, identical to `TestView` in every other respect,
+    /// that opts into [`View::should_skip_rebuild`]. Every fixture below that
+    /// returns a leaf from its own `build()` uses THIS type, not the shared
+    /// `TestView` every other test in this module also mounts: without the
+    /// skip, a parent rebuilding and re-declaring the same leaf every time
+    /// would reschedule that hidden leaf too (and re-fire `on_build_scheduled`)
+    /// on every one of the PARENT's own rebuilds — noise unrelated to
+    /// whatever a #1180 test is actually driving. Scoped to this dedicated
+    /// type, rather than added to `TestView` itself, because `TestView` is
+    /// also the leaf ~50 pre-existing tests elsewhere in this module mount:
+    /// putting the override there would silently change what code path those
+    /// tests exercise (a config-changed child skipping its own reconcile
+    /// instead of going through it) even though none of their assertions
+    /// would break — a coverage change nothing would catch. Only
+    /// `mid_drain_schedule_still_requests_a_frame_like_an_out_of_frame_schedule`
+    /// (the wake-count pin) actually depends on the skip; the others merely
+    /// tolerate the extra noise without asserting on it.
+    #[derive(Clone)]
+    struct MidDrainStableLeaf;
+
+    impl crate::RenderView for MidDrainStableLeaf {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for MidDrainStableLeaf {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+
+        fn should_skip_rebuild(&self, _prev: &Self) -> bool
+        where
+            Self: Sized,
+        {
+            true
+        }
+    }
+
     /// A leaf that captures its own [`RebuildHandle`] in `init_state` (when
     /// `handle_slot` is given) and records its `tag` plus a build count on
     /// every build.
@@ -3990,7 +4075,7 @@ mod tests {
         ) -> impl crate::IntoView {
             self.build_calls.fetch_add(1, Ordering::Relaxed);
             self.order.lock().push(self.tag);
-            TestView
+            MidDrainStableLeaf
         }
     }
 
@@ -4048,11 +4133,66 @@ mod tests {
             {
                 handle.schedule(self.reason);
             }
-            TestView
+            MidDrainStableLeaf
         }
     }
 
     impl View for MidDrainNotifier {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+    }
+
+    /// Like [`MidDrainNotifier`], but declares `child` as its own REAL child
+    /// on every build (same view repeated, so the reconcile preserves the
+    /// child element's identity) instead of an unrelated `TestView` — a
+    /// dedicated fixture, not a change to the shared `MidDrainNotifier`, so
+    /// only the test that needs a genuine parent-child relationship pays for
+    /// it.
+    #[derive(Clone)]
+    struct MidDrainNotifierWithChild {
+        should_notify: Arc<std::sync::atomic::AtomicBool>,
+        notify_target: Arc<Mutex<Option<crate::RebuildHandle>>>,
+        reason: RebuildReason,
+        child: MidDrainLeaf,
+    }
+
+    struct MidDrainNotifierWithChildState {
+        should_notify: Arc<std::sync::atomic::AtomicBool>,
+        notify_target: Arc<Mutex<Option<crate::RebuildHandle>>>,
+        reason: RebuildReason,
+        child: MidDrainLeaf,
+    }
+
+    impl crate::StatefulView for MidDrainNotifierWithChild {
+        type State = MidDrainNotifierWithChildState;
+
+        fn create_state(&self) -> Self::State {
+            MidDrainNotifierWithChildState {
+                should_notify: Arc::clone(&self.should_notify),
+                notify_target: Arc::clone(&self.notify_target),
+                reason: self.reason,
+                child: self.child.clone(),
+            }
+        }
+    }
+
+    impl crate::ViewState<MidDrainNotifierWithChild> for MidDrainNotifierWithChildState {
+        fn build(
+            &self,
+            _view: &MidDrainNotifierWithChild,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            if self.should_notify.load(Ordering::Relaxed)
+                && let Some(handle) = self.notify_target.lock().clone()
+            {
+                handle.schedule(self.reason);
+            }
+            self.child.clone()
+        }
+    }
+
+    impl View for MidDrainNotifierWithChild {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
@@ -4102,7 +4242,7 @@ mod tests {
             {
                 handle.schedule(RebuildReason::StateChange);
             }
-            TestView
+            MidDrainStableLeaf
         }
     }
 
@@ -4167,7 +4307,7 @@ mod tests {
                     handle.schedule(RebuildReason::StateChange);
                 }
             }
-            TestView
+            MidDrainStableLeaf
         }
     }
 
@@ -4221,7 +4361,7 @@ mod tests {
             {
                 handle.schedule(RebuildReason::StateChange);
             }
-            TestView
+            MidDrainStableLeaf
         }
     }
 
@@ -4231,8 +4371,86 @@ mod tests {
         }
     }
 
+    /// The notifier's target is its own REAL child (declared every build, so
+    /// the reconcile preserves the child element across the parent's
+    /// rebuild) — pins per-pop absorption of a genuine descendant, not just
+    /// "any dirty id landing during the same drain" (see the sibling variant
+    /// below for that weaker shape).
     #[test]
     fn mid_drain_schedule_for_a_descendant_builds_in_the_same_drain() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let handle_slot = Arc::new(Mutex::new(None));
+        let should_notify = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let descendant_leaf = MidDrainLeaf {
+            tag: "descendant",
+            order: Arc::clone(&order),
+            build_calls: Arc::clone(&build_calls),
+            handle_slot: Some(Arc::clone(&handle_slot)),
+        };
+        let parent = insert_and_settle(
+            &mut tree,
+            &mut owner,
+            root,
+            0,
+            &MidDrainNotifierWithChild {
+                should_notify: Arc::clone(&should_notify),
+                notify_target: Arc::clone(&handle_slot),
+                reason: RebuildReason::StateChange,
+                child: descendant_leaf,
+            },
+        );
+        let descendant = tree
+            .get(parent)
+            .and_then(|node| node.child_ids().first().copied())
+            .expect("descendant mounted as parent's own real child");
+        assert_eq!(
+            build_calls.load(Ordering::Relaxed),
+            1,
+            "sanity: mounted once, from parent's own declared child"
+        );
+
+        let observer = Arc::new(MidDrainRebuildLog::default());
+        owner.set_tree_observer(observer.clone());
+
+        should_notify.store(true, Ordering::Relaxed);
+        let parent_depth = tree.get(parent).expect("parent").depth;
+        tree.mark_needs_build(parent);
+        owner.schedule_build_for(parent, parent_depth, RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        should_notify.store(false, Ordering::Relaxed);
+
+        assert_eq!(
+            observer.count_for(descendant),
+            1,
+            "the descendant — a REAL child of `parent`, scheduled from inside parent's \
+             own build — must build exactly once in this same build_scope call: red \
+             before #1180's fix, which needed a second build_scope"
+        );
+        assert_eq!(build_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            owner.pending_external_builds(),
+            0,
+            "the mid-drain schedule must not survive the drain"
+        );
+        assert!(
+            !owner.has_dirty_elements(),
+            "nothing should be left dirty after absorbing the mid-drain schedule"
+        );
+    }
+
+    /// Sibling variant of the descendant test above: `parent` and `sibling`
+    /// share `root` with no structural relationship to each other, so this
+    /// pins the weaker claim that ANY dirty id landing mid-drain joins the
+    /// same `build_scope` call — not specifically a descendant relationship.
+    #[test]
+    fn mid_drain_schedule_for_a_sibling_builds_in_the_same_drain() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
         let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
@@ -4256,13 +4474,13 @@ mod tests {
                 reason: RebuildReason::StateChange,
             },
         );
-        let descendant = insert_and_settle(
+        let sibling = insert_and_settle(
             &mut tree,
             &mut owner,
             root,
             1,
             &MidDrainLeaf {
-                tag: "descendant",
+                tag: "sibling",
                 order: Arc::clone(&order),
                 build_calls: Arc::clone(&build_calls),
                 handle_slot: Some(Arc::clone(&handle_slot)),
@@ -4285,9 +4503,9 @@ mod tests {
         should_notify.store(false, Ordering::Relaxed);
 
         assert_eq!(
-            observer.count_for(descendant),
+            observer.count_for(sibling),
             1,
-            "the descendant scheduled mid-drain must build exactly once in this same \
+            "the sibling scheduled mid-drain must build exactly once in this same \
              build_scope call — red before #1180's fix: it takes a second build_scope"
         );
         assert_eq!(build_calls.load(Ordering::Relaxed), 2);
@@ -4628,6 +4846,147 @@ mod tests {
         owner.build_scope(&mut tree);
     }
 
+    /// Companion to the rearm test above, for the case it does NOT cover:
+    /// two capped frames in a row, with no clean frame between them. Frame 1
+    /// ends AT the cap (`mid_drain_absorbs_left == 0`), so the re-arm check
+    /// at frame 2's entry (`if mid_drain_absorbs_left > 0`) sees zero and
+    /// leaves the streak flag set — frame 2's own cap event must find the
+    /// streak already latched and log nothing. A warn gated on "capped now"
+    /// alone, ignoring the streak flag, would log once per capped frame
+    /// instead of once per streak: that shape passes the rearm test above
+    /// (which only checks EACH frame in isolation) while failing this one.
+    #[test]
+    fn mid_drain_absorb_streak_warns_once_across_two_consecutive_capped_frames() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let should_reschedule = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handle_slot = Arc::new(Mutex::new(None));
+
+        let root = tree.mount_root(
+            &MidDrainSelfRescheduler {
+                build_calls: Arc::clone(&build_calls),
+                should_reschedule: Arc::clone(&should_reschedule),
+                handle_slot: Arc::clone(&handle_slot),
+            },
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+        owner.build_scope(&mut tree); // build #0 (mount) — captures the handle
+
+        // Frame 1: reschedule itself until the budget caps it, and NEVER
+        // turn `should_reschedule` off — the leftover keeps rescheduling
+        // itself in frame 2 too.
+        should_reschedule.store(true, Ordering::Relaxed);
+        tree.mark_needs_build(root);
+        owner.schedule_build_for(root, 0, RebuildReason::StateChange);
+        let ((), log1) = flui_testing::log_capture::capture(|| owner.build_scope(&mut tree));
+        assert_eq!(
+            log1.count_containing("mid-drain absorb budget exhausted"),
+            1,
+            "frame 1's own cap must still log; log:\n{log1}"
+        );
+        assert!(
+            owner.has_dirty_elements(),
+            "frame 1 ends capped: the leftover is real work for the next frame"
+        );
+
+        // Frame 2: still rescheduling from every build, so this frame caps
+        // again too — but the streak must NOT have re-armed, since frame 1
+        // ended AT the cap rather than with budget left.
+        let ((), log2) = flui_testing::log_capture::capture(|| owner.build_scope(&mut tree));
+        assert_eq!(
+            log2.count_containing("mid-drain absorb budget exhausted"),
+            0,
+            "two capped frames back to back must log ONE warn total (frame 1's), not one \
+             per frame; log:\n{log2}"
+        );
+        assert!(
+            owner.has_dirty_elements(),
+            "frame 2 also ends capped, with its own leftover"
+        );
+
+        // Cleanup: leave the owner in a clean state.
+        should_reschedule.store(false, Ordering::Relaxed);
+        owner.build_scope(&mut tree);
+    }
+
+    /// A capped id is not the only thing this drain still has to build: two
+    /// independent self-reschedulers share the one frame budget, so the
+    /// SECOND one to exhaust it is capped only after the drain has already
+    /// popped and built past the first cap event. A warn gated on "capped
+    /// now" alone (ignoring the streak flag) logs once per capped absorb
+    /// rather than once per streak, and would log twice here.
+    #[test]
+    fn mid_drain_absorb_streak_warns_once_with_further_pops_capped_in_the_same_drain() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+
+        let build_calls_a = Arc::new(AtomicUsize::new(0));
+        let should_reschedule_a = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handle_slot_a = Arc::new(Mutex::new(None));
+        let a = insert_and_settle(
+            &mut tree,
+            &mut owner,
+            root,
+            0,
+            &MidDrainSelfRescheduler {
+                build_calls: Arc::clone(&build_calls_a),
+                should_reschedule: Arc::clone(&should_reschedule_a),
+                handle_slot: Arc::clone(&handle_slot_a),
+            },
+        );
+
+        let build_calls_b = Arc::new(AtomicUsize::new(0));
+        let should_reschedule_b = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handle_slot_b = Arc::new(Mutex::new(None));
+        let b = insert_and_settle(
+            &mut tree,
+            &mut owner,
+            root,
+            1,
+            &MidDrainSelfRescheduler {
+                build_calls: Arc::clone(&build_calls_b),
+                should_reschedule: Arc::clone(&should_reschedule_b),
+                handle_slot: Arc::clone(&handle_slot_b),
+            },
+        );
+
+        // Both siblings reschedule themselves from every build, sharing one
+        // frame budget: whichever exhausts the last unit gets capped first,
+        // but the other is still mid-cycle (already re-pushed onto the heap
+        // from its own most recent re-entry) and builds — then reschedules
+        // and gets capped too, ALL within this one `build_scope` call.
+        should_reschedule_a.store(true, Ordering::Relaxed);
+        should_reschedule_b.store(true, Ordering::Relaxed);
+        let a_depth = tree.get(a).expect("a").depth;
+        let b_depth = tree.get(b).expect("b").depth;
+        tree.mark_needs_build(a);
+        tree.mark_needs_build(b);
+        owner.schedule_build_for(a, a_depth, RebuildReason::StateChange);
+        owner.schedule_build_for(b, b_depth, RebuildReason::StateChange);
+        let ((), log) = flui_testing::log_capture::capture(|| owner.build_scope(&mut tree));
+        should_reschedule_a.store(false, Ordering::Relaxed);
+        should_reschedule_b.store(false, Ordering::Relaxed);
+
+        assert_eq!(
+            log.count_containing("mid-drain absorb budget exhausted"),
+            1,
+            "one shared streak covers both siblings capping in the same drain; log:\n{log}"
+        );
+        assert_eq!(
+            owner.pending_external_builds(),
+            2,
+            "both siblings' capped reschedule stay queued, not lost"
+        );
+        assert!(owner.has_dirty_elements());
+
+        // Cleanup.
+        owner.build_scope(&mut tree);
+    }
+
     #[test]
     fn mid_drain_absorb_budget_is_shared_across_the_frames_separate_drains() {
         let mut owner = BuildOwner::new();
@@ -4791,6 +5150,12 @@ mod tests {
         assert!(!owner.has_dirty_elements());
     }
 
+    /// Pins the end state, not the mechanism: `Self::absorb_mid_drain_inbox`
+    /// pushes an absorbed id straight onto `self.dirty_elements` regardless
+    /// of scope, so it is `Self::drain_build_scope`'s OWN pop-time
+    /// classification (`nearest_layout_builder_scope` + accept +
+    /// `Self::defer_dirty_element`) that routes the Global id here to the
+    /// root bucket, not a scope check made when it was absorbed.
     #[test]
     fn mid_drain_absorb_of_a_global_id_during_a_scoped_drain_defers_to_the_root_bucket() {
         let mut owner = BuildOwner::new();
@@ -4859,6 +5224,11 @@ mod tests {
         assert!(owner.pending_rebuild_reasons(global_id).is_none());
     }
 
+    /// Mirror of the Global case above: the scoped id is pushed onto the
+    /// same heap the absorb always uses, and it is the pop-time
+    /// classification in `Self::drain_build_scope` that defers it into
+    /// `isolated[scope]` because the Global drain running here does not
+    /// accept it — absorb time never inspects scope at all.
     #[test]
     fn mid_drain_absorb_of_a_scoped_id_during_the_global_drain_defers_to_its_scope_bucket() {
         let mut owner = BuildOwner::new();
@@ -5064,17 +5434,21 @@ mod tests {
         }
     }
 
-    /// Documented hazard (issue #1180, Decision 4) — not a policy this test
-    /// asserts as correct. `ElementId` slots are reused immediately, and
-    /// same-drain absorption looks the id up in the tree AFTER the swap, not
-    /// at `schedule` time: if the freed slot is reused, a handle captured for
-    /// the OLD occupant silently lands on whatever now occupies that id. A
-    /// generation-carrying `ElementId` that would let the drain detect the
-    /// handle is stale is out of scope for this change — this pins what
-    /// actually happens today so a future change to that behavior is a
-    /// deliberate decision, not a silent regression either way.
+    /// A same-slot child swap frees the old child's slab index and mints the
+    /// new child at that same index — but `ElementId` is generation-carrying
+    /// (`crates/flui-foundation/src/id.rs`; `ElementTree::resolve_index` is
+    /// the single chokepoint that compares generations), so the new id is
+    /// NEVER equal to the old one even though `index()` matches: freeing a
+    /// slot bumps its generation. A `RebuildHandle` captured for the old
+    /// child therefore cannot land on the new occupant by any mechanism —
+    /// `dirty_reasons`/`external_inbox` are keyed by the full `ElementId`
+    /// (index and generation together), so the stale key never collides with
+    /// the new occupant's own entry, and `ElementTree::get`/`mark_needs_build`
+    /// on the stale id resolve to nothing. This test pins that: a stale
+    /// `RebuildHandle::schedule` after a same-slot swap is an unconditional
+    /// inert miss, never a misattributed rebuild.
     #[test]
-    fn stale_rebuild_handle_after_a_same_slot_child_swap_lands_on_the_new_occupant() {
+    fn stale_rebuild_handle_after_a_same_slot_child_swap_is_an_inert_miss() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
 
@@ -5109,19 +5483,27 @@ mod tests {
             .and_then(|node| node.child_ids().first().copied())
             .expect("new child mounted");
 
-        if new_child_id == old_child_id {
-            assert_eq!(
-                new_build_calls.load(Ordering::Relaxed),
-                1,
-                "the reused slot means the stale notification landed on the new occupant \
-                 (one build, with the stale reason merged in), not a lookup miss"
-            );
-        }
+        assert_eq!(
+            new_child_id.index(),
+            old_child_id.index(),
+            "sanity: the swap must reuse the freed slab slot for this test to mean anything"
+        );
+        assert_ne!(
+            new_child_id, old_child_id,
+            "the reused slot's generation was bumped: the new occupant's id is never equal \
+             to the old occupant's, so a handle captured for the old one cannot name it"
+        );
+        assert_eq!(
+            new_build_calls.load(Ordering::Relaxed),
+            1,
+            "the new occupant builds exactly once, from its own mount — undisturbed by the \
+             stale handle's schedule"
+        );
         assert_eq!(
             owner.pending_external_builds(),
             0,
-            "either absorbed (reused slot) or an inert lookup miss (fresh slot) — never left \
-             stuck in the inbox"
+            "a schedule naming a stale id is an inert miss, not a leak: it never resolves to \
+             anything, stale or new"
         );
     }
 }

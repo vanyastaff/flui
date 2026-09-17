@@ -40,29 +40,37 @@ retarget snaps the controller's value synchronously in `did_update_view`,
 and the dependent `AnimatedBuilder`'s listener fires in that same instant —
 but used to need a second pump to actually rebuild, because its schedule
 missed the retargeting build's own drain by one absorb call. This is also
-Flutter's contract: `BuildOwner.buildScope` re-sorts `_dirtyElements` on
-every iteration, and a `markNeedsBuild` mid-build is absorbed by
-`Element`'s own `if (dirty) return` guard — FLUI's inbox-based external
-scheduling had no equivalent per-iteration re-entry point.
+Flutter's contract, precisely at 3.44.0: `BuildScope._dirtyElementIndexAfter`
+re-sorts `_dirtyElements` only when a mid-flush `_scheduleBuildFor` set
+`_dirtyElementsNeedsResorting` (not on every iteration unconditionally),
+and a `markNeedsBuild` mid-build is absorbed by `Element`'s own
+`if (dirty) return` guard — FLUI's inbox-based external scheduling had no
+equivalent per-iteration re-entry point.
 
 **Choice:** absorb per pop, bounded by a per-*frame* budget
 (`BuildOwner::mid_drain_absorbs_left`, reset to `MAX_MID_DRAIN_ABSORBS = 16`
-at every `build_scope` entry and shared by every drain the frame runs —
-including the layout-builder fixpoint's own `drain_prepared_build_target`
-calls, since none of those re-enters `build_scope` itself). The budget
-charges only a RE-ENTRY — a `Vacant` absorb for an id already recorded in
-`BuildOwner::built_this_frame` (it already built once this frame, so this
-landing is the SAME element rescheduling itself after its own build, not an
-independent first-time notification) — never a first-time absorb, however
-many independent elements get notified in one frame: each id can be a
-first-time absorb at most once, so that case is inherently finite (a page
-whose N unrelated parents each retarget an implicit animation in one frame
-performs N legitimate first-time absorbs, none of them charged). On
-exhaustion, the id is left in the inbox for the next `build_scope` (the
-existing `has_dirty_elements` gate already schedules that frame) and a
-`tracing::warn!` fires once per streak, re-arming only after a frame that
-ends with budget left — there is no frame-complete hook on `BuildOwner`, so
-the re-arm check runs retroactively at the *next* `build_scope` entry.
+at every `build_scope` entry). The budget is genuinely per FRAME, not per
+`build_scope` CALL: `build_scope` factors into the reset plus
+`build_scope_impl`, and every mid-frame re-entrant caller — the
+layout-builder fixpoint's own `drain_prepared_build_target` calls, and
+`service_child_requests_impl`'s lazy-sliver "second build_scope" pass —
+reaches `build_scope_impl` directly instead of `build_scope`, so none of
+them re-runs the reset. The budget charges only a RE-ENTRY — a `Vacant`
+absorb for an id already recorded in `BuildOwner::built_this_frame` (it
+already completed a build in this `build_scope` call, so this landing is
+some element being notified again after that build — the common case is
+the SAME element rescheduling itself, but a child notifying its
+already-built parent, or an A↔B ping-pong, charges identically) — never a
+first-time absorb, however many independent elements get notified in one
+frame: each id can be a first-time absorb at most once, so that case is
+inherently finite (a page whose N unrelated parents each retarget an
+implicit animation in one frame performs N legitimate first-time absorbs,
+none of them charged). On exhaustion, the id is left in the inbox for the
+next `build_scope` (the existing `has_dirty_elements` gate already
+schedules that frame) and a `tracing::warn!` fires once per streak,
+re-arming only after a frame that ends with budget left — there is no
+frame-complete hook on `BuildOwner`, so the re-arm check runs retroactively
+at the *next* `build_scope` entry.
 
 **Divergence 1 (no descendant-only debug assert):** Flutter's
 `Element.markNeedsBuild` debug-asserts, from inside `buildScope`, that a
@@ -79,7 +87,7 @@ there is no cheap invariant to assert here; recording the gap is the honest
 choice over a debug assert that would either never fire (too weak to catch
 anything) or reject a legitimate cross-subtree listener (too strong).
 
-**Divergence 2 (a self-rescheduler keeps rebuilding; Flutter drops it):**
+**Divergence 2 (a re-entered element keeps rebuilding; Flutter drops it):**
 Flutter's `if (dirty) return` in `markNeedsBuild` silently drops a
 self-`setState` issued *during* the element's own build — the dirty flag is
 already set, so the second call is a no-op, and the element builds once for
@@ -88,19 +96,28 @@ before the next pop" apart from a synchronous `schedule` call alone: by the
 time the drain gets back around to absorbing the inbox, the building
 element's build has already returned and its `dirty_reasons` entry has
 already been removed (ordinary post-build cleanup, not something this
-change added), so a same-id re-entry looks identical to a legitimately new
-schedule from any other element. FLUI therefore rebuilds a
-self-rescheduler once per re-entry, up to `MAX_MID_DRAIN_ABSORBS` — Flutter's
-tighter contract would need `RebuildHandle`'s inbox entry to also record
-"was this scheduled during a build the current drain has not yet
-reconciled," which is out of scope for this change.
+change added), so a re-entry — a `Vacant` landing for an id that already
+completed a build in this `build_scope` call — looks identical whether it
+is that same element rescheduling itself, a child notifying its
+already-built parent, or one half of an A↔B ping-pong. FLUI therefore
+rebuilds a re-entered element once per re-entry, up to
+`MAX_MID_DRAIN_ABSORBS` — Flutter's tighter contract would need
+`RebuildHandle`'s inbox entry to also record "was this scheduled during a
+build the current drain has not yet reconciled," which is out of scope for
+this change.
 
-**Stale-id hazard (documented, not solved):** `ElementId` slots are reused
-immediately (a remove-then-insert in one reconcile pass yields the same
-id). A `RebuildHandle` captured for an element unmounted during the SAME
-parent's phase-2 reconcile that also mounts its replacement can therefore
-name the replacement's id by coincidence. Same-drain absorption makes this
-land in the same frame that produced it, where it previously would have
-surfaced (if at all) a frame later — same-drain absorption makes the hazard
-likelier to be observed, not new. A generation-carrying `ElementId` that
-would let the drain detect a stale handle is out of scope for this change.
+**Divergence 3 (`on_build_scheduled` fires mid-drain; Flutter latches its
+frame request across both the dirty-heap and the equivalent of the inbox
+path):** Flutter drives `scheduleBuildFor` and a `Listenable`-triggered
+rebuild through a single `_scheduledFlushDirtyElements`-style latch, so a
+schedule landing while a flush is already underway does not ask for a
+second frame. FLUI's `ExternalBuildScheduler::schedule` has no equivalent
+latch: it fires `on_build_scheduled` on every newly-queued id regardless of
+whether a drain is already running (pinned by
+`mid_drain_schedule_still_requests_a_frame_like_an_out_of_frame_schedule`).
+Recorded as the deliberate alternative rather than built: the redundant
+frame request this can cause is discarded downstream by the ordinary
+dirty-state gate a wake-with-nothing-new-to-do already hits, so adding the
+latch would trade a real per-callsite invariant (every fresh inbox entry
+asks for a frame) for a saving with no measured cost — take it up only if
+a wake-count oracle ever shows the cost is real.
