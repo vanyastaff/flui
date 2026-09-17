@@ -404,11 +404,11 @@ impl DragTargetSlot {
 
     fn set_callbacks(&self, callbacks: SharedTargetCallbacks) {
         // PORT-CHECK-OK-DYN: per-build refresh of the field above.
-        *self.callbacks.lock() = callbacks;
+        let _prev = std::mem::replace(&mut *self.callbacks.lock(), callbacks);
     }
 
     fn publish_rebuild(&self, handle: RebuildHandle) {
-        *self.rebuild.lock() = Some(handle);
+        let _prev = self.rebuild.lock().replace(handle);
     }
 
     /// The target's element has gone. Every later transition is a no-op.

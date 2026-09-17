@@ -174,6 +174,7 @@ fn layout_builder_child_state_change_resizes_without_rebuilding_the_builder() {
 
     // The equivalent of Dart's `setState(() { childWidth = 100; childHeight = 200; })`:
     // mutate the shared cell and notify, without touching the harness root.
+    // PORT-CHECK-OK-LOCK: plain data: (f64, f64), no Drop
     *cell.lock() = (100.0, 200.0);
     notifier.notify();
     laid.tick();
@@ -234,6 +235,7 @@ fn layout_builder_parent_state_change_drives_a_constraint_change() {
 
     // The equivalent of Dart's `setState(() { childWidth = 100; childHeight = 200; })`
     // on the PARENT of the LayoutBuilder (not a descendant, as in case 1 above).
+    // PORT-CHECK-OK-LOCK: plain data: (f64, f64), no Drop
     *cell.lock() = (100.0, 200.0);
     notifier.notify();
     laid.tick();

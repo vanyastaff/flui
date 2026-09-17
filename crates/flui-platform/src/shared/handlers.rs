@@ -1023,7 +1023,7 @@ mod tests {
     #[test]
     fn a_lease_taken_before_any_clear_restores_normally() {
         let callbacks = WindowCallbacks::new();
-        callbacks.on_should_close.lock().replace(Box::new(|| true));
+        let _prev = callbacks.on_should_close.lock().replace(Box::new(|| true));
 
         assert!(callbacks.dispatch_should_close());
         assert!(

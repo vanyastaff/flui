@@ -58,6 +58,7 @@ struct ThemeCapture {
 
 impl StatelessView for ThemeCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // PORT-CHECK-OK-LOCK: plain data: Option<ThemeData>, no Drop
         *self.captured.lock().unwrap() = Some(Theme::maybe_of(ctx));
         SizedBox::shrink()
     }

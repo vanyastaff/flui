@@ -111,11 +111,13 @@ impl WinitWindow {
 
     /// Update focus state
     pub fn set_focused(&self, focused: bool) {
+        // PORT-CHECK-OK-LOCK: plain data: bool
         *self.is_focused.lock() = focused;
     }
 
     /// Update visibility state
     pub fn set_visible(&self, visible: bool) {
+        // PORT-CHECK-OK-LOCK: plain data: bool
         *self.is_visible.lock() = visible;
     }
 }

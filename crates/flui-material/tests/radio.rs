@@ -177,6 +177,7 @@ fn tap_on_an_unselected_radio_fires_on_changed_with_its_own_value() {
     let laid = lay_out(
         themed(
             Radio::new("summer", Some("spring")).on_changed(move |next| {
+                // PORT-CHECK-OK-LOCK: plain data: Option<&'static str>, no Drop
                 *recorder.borrow_mut() = Some(next);
             }),
         ),
@@ -200,6 +201,7 @@ fn tap_on_an_already_selected_radio_is_a_no_op() {
     let laid = lay_out(
         themed(
             Radio::new("spring", Some("spring")).on_changed(move |next| {
+                // PORT-CHECK-OK-LOCK: plain data: Option<&'static str>, no Drop
                 *recorder.borrow_mut() = Some(next);
             }),
         ),

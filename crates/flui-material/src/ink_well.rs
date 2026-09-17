@@ -259,7 +259,8 @@ impl InkWellState {
     /// Cancels and disposes any in-flight press-deactivation timer.
     /// Idempotent (a no-op when nothing is pending).
     fn cancel_pending_deactivation(pending: &Rc<RefCell<Option<PendingDeactivation>>>) {
-        if let Some(previous) = pending.borrow_mut().take() {
+        let taken = pending.borrow_mut().take();
+        if let Some(previous) = taken {
             previous.vsync.unregister(previous.registration);
             previous.controller.dispose();
         }

@@ -424,6 +424,7 @@ fn animated_size_can_set_and_update_clip_behavior() {
         Clip::AntiAlias,
         Clip::AntiAliasWithSaveLayer,
     ] {
+        // PORT-CHECK-OK-LOCK: plain data: Clip is Copy
         *clip_behavior.lock() = clip;
         laid.pump();
         assert_eq!(clip_of(&laid, id), clip);

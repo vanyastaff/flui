@@ -240,7 +240,7 @@ impl BackGestureRuntime {
         }
         let gesture =
             BackGestureController::new(self.navigator.clone(), self.route, self.controller.clone());
-        *self.gesture.borrow_mut() = Some(gesture);
+        let _prev = self.gesture.borrow_mut().replace(gesture);
     }
 
     fn on_drag_update(&self, details: DragUpdateDetails) {

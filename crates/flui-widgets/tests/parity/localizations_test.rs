@@ -144,6 +144,7 @@ impl StatefulView for MaybeLocaleOfProbe {
 impl ViewState<MaybeLocaleOfProbe> for MaybeLocaleOfProbeState {
     fn build(&self, _view: &MaybeLocaleOfProbe, ctx: &dyn BuildContext) -> impl IntoView {
         self.built.store(true, Ordering::Relaxed);
+        // PORT-CHECK-OK-LOCK: plain data: Option<Locale>, no Drop
         *self.captured.lock().expect("test mutex poisoned") = Localizations::maybe_locale_of(ctx);
         SizedBox::shrink()
     }
@@ -287,6 +288,7 @@ impl StatefulView for LocaleOfProbe {
 impl ViewState<LocaleOfProbe> for LocaleOfProbeState {
     fn build(&self, _view: &LocaleOfProbe, ctx: &dyn BuildContext) -> impl IntoView {
         self.build_count.fetch_add(1, Ordering::Relaxed);
+        // PORT-CHECK-OK-LOCK: plain data: Locale, no Drop
         *self.captured.lock().expect("test mutex poisoned") = Some(Localizations::locale_of(ctx));
         SizedBox::shrink()
     }

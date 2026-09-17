@@ -144,7 +144,12 @@ impl fmt::Debug for ParentSubscription {
 
 impl Drop for ParentSubscription {
     fn drop(&mut self) {
-        if let Some(mut teardown) = self.teardown.lock().take() {
+        // Extract the teardown closure out from under the lock guard before
+        // running it: the closure removes a listener from the parent, which
+        // takes the parent's own lock, so running it while the `teardown`
+        // guard is still held would invert the lock order.
+        let teardown = self.teardown.lock().take();
+        if let Some(mut teardown) = teardown {
             teardown();
         }
     }

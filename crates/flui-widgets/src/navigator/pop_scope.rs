@@ -68,7 +68,9 @@ impl PopEntryRegistry {
     }
 
     fn deregister(&self, entry: &Arc<PopEntry>) {
-        self.entries.lock().retain(|held| !Arc::ptr_eq(held, entry));
+        let mut entries = std::mem::take(&mut *self.entries.lock());
+        entries.retain(|held| !Arc::ptr_eq(held, entry));
+        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
 
     /// `ModalRoute.popDisposition`'s veto half (`routes.dart:2034-2038`): any

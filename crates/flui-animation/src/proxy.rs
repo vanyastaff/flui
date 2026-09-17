@@ -155,9 +155,16 @@ where
         let new_sub = link_parent(&new_parent, &self.notifier);
         let new_status_sub = link_parent_status(&new_parent, &self.status_listeners);
         let new_status = new_parent.status();
-        *self.parent.write() = new_parent;
-        *self.parent_sub.write() = new_sub;
-        *self.status_sub.write() = new_status_sub;
+        let old_parent = std::mem::replace(&mut *self.parent.write(), new_parent);
+        let old_parent_sub = std::mem::replace(&mut *self.parent_sub.write(), new_sub);
+        let old_status_sub = std::mem::replace(&mut *self.status_sub.write(), new_status_sub);
+        // Drop the displaced subscriptions after the write guards release: a
+        // `ParentSubscription` drop removes a listener from the (old) parent,
+        // which takes the parent's own lock, so dropping it under a guard here
+        // would invert the lock order.
+        drop(old_parent);
+        drop(old_parent_sub);
+        drop(old_status_sub);
         self.notifier.notify_listeners();
         if new_status != old_status {
             fan_out_status(&self.status_listeners, new_status);

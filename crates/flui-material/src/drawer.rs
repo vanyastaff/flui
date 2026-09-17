@@ -718,7 +718,7 @@ impl StatefulView for DrawerController {
 impl ViewState<DrawerController> for DrawerControllerState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         let rebuild = ctx.rebuild_handle();
-        *self.core.rebuild.borrow_mut() = Some(rebuild.clone());
+        let _prev = self.core.rebuild.borrow_mut().replace(rebuild.clone());
 
         // No dependency: the vsync handle never changes for this
         // controller's life (same reasoning `GestureDetectorState::init_state`
@@ -726,9 +726,10 @@ impl ViewState<DrawerController> for DrawerControllerState {
         let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         if let Some(vsync) = &vsync {
             let registration = vsync.register(self.core.controller.clone());
+            // PORT-CHECK-OK-LOCK: plain data: VsyncRegistration(u64), no Drop
             *self.core.vsync_registration.borrow_mut() = Some(registration);
         }
-        *self.core.vsync.borrow_mut() = vsync;
+        let _prev = std::mem::replace(&mut *self.core.vsync.borrow_mut(), vsync);
 
         // One listener pair covers every path that must rebuild: a value
         // tick (drag `set_value`, or a fling/forward settling frame-by-frame)

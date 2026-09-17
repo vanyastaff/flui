@@ -271,12 +271,12 @@ impl RawInputHandler {
 
     /// Set the callback for raw input events.
     pub fn set_callback(&self, callback: impl Fn(RawPointerEvent) + 'static) {
-        *self.callback.borrow_mut() = Some(Rc::new(callback));
+        let _prev = self.callback.borrow_mut().replace(Rc::new(callback));
     }
 
     /// Clear the callback.
     pub fn clear_callback(&self) {
-        *self.callback.borrow_mut() = None;
+        let _prev = self.callback.borrow_mut().take();
     }
 
     /// Enable or disable raw input handling.
@@ -457,6 +457,7 @@ impl RawInputHandler {
 
     /// Clear all tracking state.
     pub fn reset(&self) {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         self.tracking.borrow_mut().clear();
     }
 }

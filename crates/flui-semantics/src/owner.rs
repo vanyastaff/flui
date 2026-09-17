@@ -1178,6 +1178,7 @@ mod tests {
         let seen: Arc<parking_lot::Mutex<Vec<u64>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let seen_clone = Arc::clone(&seen);
         let callback: SemanticsUpdateCallback = Arc::new(move |update| {
+            // PORT-CHECK-OK-LOCK: plain data: Vec<u64>, no Drop
             *seen_clone.lock() = update.nodes.iter().map(|(id, _)| id.0).collect();
         });
 

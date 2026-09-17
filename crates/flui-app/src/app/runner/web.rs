@@ -105,7 +105,7 @@ where
             };
             r.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
             tracing::info!("WebGPU renderer initialized");
-            *renderer_init.lock() = Some(r);
+            let _prev = renderer_init.lock().replace(r);
         });
 
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
@@ -256,7 +256,7 @@ where
                                     return;
                                 };
                                 let result = renderer.recover().await;
-                                *renderer_recover.lock() = Some(renderer);
+                                let _prev = renderer_recover.lock().replace(renderer);
                                 match result {
                                     Ok(()) => {
                                         tracing::warn!("GPU device lost — recovered successfully");

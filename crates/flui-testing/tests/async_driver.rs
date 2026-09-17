@@ -28,7 +28,7 @@ impl std::future::Future for Signal {
         if self.done.load(Ordering::Acquire) {
             Poll::Ready(())
         } else {
-            *self.waker.lock() = Some(cx.waker().clone());
+            let _prev = self.waker.lock().replace(cx.waker().clone());
             Poll::Pending
         }
     }

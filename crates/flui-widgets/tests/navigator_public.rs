@@ -367,8 +367,8 @@ fn public_nested_navigator_lookup_nearest_and_root() {
     {
         let (nearest, root) = (Arc::clone(&nearest), Arc::clone(&root));
         inner.seed_initial(SimpleRoute::<i32>::new(move |ctx| {
-            *nearest.lock() = NavigatorHandle::maybe_of(ctx);
-            *root.lock() = NavigatorHandle::maybe_of_root(ctx);
+            let _prev = std::mem::replace(&mut *nearest.lock(), NavigatorHandle::maybe_of(ctx));
+            let _prev = std::mem::replace(&mut *root.lock(), NavigatorHandle::maybe_of_root(ctx));
             SizedBox::new(5.0, 5.0).into_view().boxed()
         }));
     }
@@ -408,7 +408,7 @@ fn public_maybe_of_returns_none_when_absent() {
         let (ran, found) = (Arc::clone(&ran), Arc::clone(&found));
         SimpleRoute::<i32>::new(move |ctx| {
             ran.fetch_add(1, Ordering::Relaxed);
-            *found.lock() = NavigatorHandle::maybe_of(ctx);
+            let _prev = std::mem::replace(&mut *found.lock(), NavigatorHandle::maybe_of(ctx));
             SizedBox::new(1.0, 1.0).into_view().boxed()
         })
     };
@@ -427,7 +427,7 @@ fn public_maybe_of_returns_none_when_absent() {
         let outside = Arc::clone(&outside);
         let _laid = lay_out(
             LayoutBuilder::new(move |ctx, _constraints| {
-                *outside.lock() = NavigatorHandle::maybe_of(ctx);
+                let _prev = std::mem::replace(&mut *outside.lock(), NavigatorHandle::maybe_of(ctx));
                 SizedBox::new(1.0, 1.0).into_view().boxed()
             }),
             loose(400.0),
@@ -1250,7 +1250,10 @@ fn on_unknown_route_runs_only_after_the_generator_declined_and_sees_the_callers_
         let offered = Arc::clone(&offered);
         move |request: &RouteRequest<'_>| {
             stages.lock().push("unknown");
-            *offered.lock() = request.settings().arguments().cloned();
+            let _prev = std::mem::replace(
+                &mut *offered.lock(),
+                request.settings().arguments().cloned(),
+            );
             assert_eq!(request.name(), Some("/missing"));
             Some(GeneratedRoute::new(SimpleRoute::<i32>::new(leaf)))
         }
@@ -1407,7 +1410,7 @@ fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
             Some(page(&built, "outer"))
         }
     });
-    *cell.borrow_mut() = Some(handle.clone());
+    let _prev = cell.borrow_mut().replace(handle.clone());
     handle.seed_initial(page(&built, "/"));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
 
@@ -1426,7 +1429,7 @@ fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
     );
     assert!(built.contains("inner") && built.contains("outer"));
 
-    *cell.borrow_mut() = None;
+    let _prev = cell.borrow_mut().take();
 }
 
 /// A factory is handed the caller's own name and arguments.
@@ -1983,7 +1986,7 @@ fn navigator_with_a_re_entrant_factory() -> (NavigatorHandle, Built, LaidOut, Ne
             Some(page(&built, "next"))
         }
     });
-    *cell.borrow_mut() = Some(handle.clone());
+    let _prev = cell.borrow_mut().replace(handle.clone());
     handle.seed_initial(page(&built, "/"));
     let laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
     (handle, built, laid, nested)
@@ -2121,7 +2124,7 @@ fn a_factory_that_pops_during_resolution_leaves_the_removal_a_no_op() {
             Some(page(&built, "next"))
         }
     });
-    *cell.borrow_mut() = Some(handle.clone());
+    let _prev = cell.borrow_mut().replace(handle.clone());
     handle.seed_initial(page(&built, "/"));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
     let root = handle.current().expect("seeded");
@@ -2565,7 +2568,7 @@ fn deferred_exit_a_factory_that_pops_the_captured_route_before_it_is_replaced() 
             Some(DeferredExitRoute::new("/next", 1))
         }
     });
-    *cell.borrow_mut() = Some(handle.clone());
+    let _prev = cell.borrow_mut().replace(handle.clone());
     handle.seed_initial(DeferredExitRoute::new("/", 0));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
     let root = handle.current().expect("seeded");
@@ -2584,7 +2587,7 @@ fn deferred_exit_a_factory_that_pops_the_captured_route_before_it_is_replaced() 
     assert_eq!(handle.current(), Some(arrived));
     assert!(handle.route_ids().contains(&root));
 
-    *cell.borrow_mut() = None;
+    let _prev = cell.borrow_mut().take();
 }
 
 /// A named replacement whose capture came back empty must complete **nothing** —
@@ -2625,7 +2628,7 @@ fn a_named_replacement_with_no_captured_target_completes_nothing() {
             Some(DeferredExitRoute::new("/next", 1))
         }
     });
-    *cell.borrow_mut() = Some(handle.clone());
+    let _prev = cell.borrow_mut().replace(handle.clone());
     handle.seed_initial(DeferredExitRoute::new("/", 0));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
 
@@ -2711,7 +2714,7 @@ fn a_target_mid_exit_transition_is_not_replaced_and_its_result_is_reported() {
                 Some(DeferredExitRoute::new("/next", 1))
             }
         });
-        *cell.borrow_mut() = Some(handle.clone());
+        let _prev = cell.borrow_mut().replace(handle.clone());
         handle.seed_initial(DeferredExitRoute::new("/", 0));
         let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
         let victim = handle.push(DeferredExitRoute::new("victim", 7));
@@ -2743,7 +2746,7 @@ fn a_target_mid_exit_transition_is_not_replaced_and_its_result_is_reported() {
             !handle.route_ids().contains(&victim_id) || handle.current() == Some(arrived),
             "and the new route is on top regardless"
         );
-        *cell.borrow_mut() = None;
+        let _prev = cell.borrow_mut().take();
     });
 
     assert_eq!(
@@ -2951,7 +2954,7 @@ fn an_unresolvable_name_after_a_navigating_factory_adds_nothing_of_its_own() {
             None
         }
     });
-    *cell.borrow_mut() = Some(handle.clone());
+    let _prev = cell.borrow_mut().replace(handle.clone());
     handle.seed_initial(page(&built, "/"));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
     let root = handle.current().expect("seeded");
@@ -2989,7 +2992,7 @@ fn an_unresolvable_name_after_a_navigating_factory_adds_nothing_of_its_own() {
         "and the operation left no route of its own on top"
     );
 
-    *cell.borrow_mut() = None;
+    let _prev = cell.borrow_mut().take();
 }
 
 /// Every named and unnamed operation that cannot deliver a caller's result

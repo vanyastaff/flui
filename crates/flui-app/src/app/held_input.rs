@@ -1867,6 +1867,7 @@ mod tests {
             let mut replay =
                 HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
             assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+            // PORT-CHECK-OK-LOCK: plain data: held pointer events (pointer data), no Drop
             queue.borrow_mut().clear();
         }
 

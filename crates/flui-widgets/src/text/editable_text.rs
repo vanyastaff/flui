@@ -743,7 +743,9 @@ impl ViewState<EditableText> for EditableTextState {
                 // never resurrect this session or run alongside it.
                 let last_sent: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
                 let alive = Rc::new(Cell::new(true));
-                *cursor_area_alive_for_focus.borrow_mut() = Some(Rc::clone(&alive));
+                let _prev = cursor_area_alive_for_focus
+                    .borrow_mut()
+                    .replace(Rc::clone(&alive));
 
                 let controller_for_callback = Rc::clone(&controller_for_ime);
                 let last_sent_for_ime_event = Rc::clone(&last_sent);
@@ -761,11 +763,12 @@ impl ViewState<EditableText> for EditableTextState {
                     Ok(token) => token,
                     Err(error) => {
                         alive.set(false);
-                        *cursor_area_alive_for_focus.borrow_mut() = None;
+                        let _prev = cursor_area_alive_for_focus.borrow_mut().take();
                         tracing::warn!(?error, "IME client could not attach to its presentation");
                         return;
                     }
                 };
+                // PORT-CHECK-OK-LOCK: plain data: ClientToken(NonZeroU64), no Drop
                 *ime_token_for_focus.borrow_mut() = Some(token);
 
                 if let Some(post_frame) = post_frame_handle_for_focus.clone() {
@@ -794,7 +797,8 @@ impl ViewState<EditableText> for EditableTextState {
                         "IME detach reached a presentation that was already closing"
                     );
                 }
-                if let Some(alive) = cursor_area_alive_for_focus.borrow_mut().take() {
+                let alive = cursor_area_alive_for_focus.borrow_mut().take();
+                if let Some(alive) = alive {
                     alive.set(false);
                 }
             }
@@ -848,7 +852,10 @@ impl ViewState<EditableText> for EditableTextState {
             if let Some(id) = self.controller_listener_id.take() {
                 self.controller.borrow().remove_listener(id);
             }
-            *self.controller.borrow_mut() = new_view.controller.clone();
+            let _prev = std::mem::replace(
+                &mut *self.controller.borrow_mut(),
+                new_view.controller.clone(),
+            );
             let rebuild_notifier_for_text = self.rebuild_notifier.clone();
             self.controller_listener_id =
                 Some(self.controller.borrow().add_listener(Arc::new(move || {
@@ -889,7 +896,10 @@ impl ViewState<EditableText> for EditableTextState {
             self.focus_node = replacement;
             self.key_handler_registration = Some(replacement_key_handler_registration);
             self.rect_provider_registration = replacement_rect_provider_registration;
-            *self.observed_focus_node.borrow_mut() = Rc::clone(&self.focus_node);
+            let _prev = std::mem::replace(
+                &mut *self.observed_focus_node.borrow_mut(),
+                Rc::clone(&self.focus_node),
+            );
             self.focus_attachment = Some(replacement_attachment);
 
             if self.focus_node.has_primary_focus() {
@@ -1009,7 +1019,8 @@ impl ViewState<EditableText> for EditableTextState {
         // focused is not guaranteed a blur notification, so this is the one
         // path that always flips the current attach's alive flag false,
         // whether or not the field ever blurred first.
-        if let Some(alive) = self.cursor_area_alive.borrow_mut().take() {
+        let alive = self.cursor_area_alive.borrow_mut().take();
+        if let Some(alive) = alive {
             alive.set(false);
         }
 

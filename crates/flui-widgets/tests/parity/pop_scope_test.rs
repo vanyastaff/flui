@@ -82,7 +82,7 @@ struct RebuildSink(Rc<RefCell<Option<RebuildHandle>>>);
 
 impl RebuildSink {
     fn capture(&self, ctx: &dyn BuildContext) {
-        *self.0.borrow_mut() = Some(ctx.rebuild_handle());
+        let _prev = self.0.borrow_mut().replace(ctx.rebuild_handle());
     }
 
     /// Schedule the captured element for rebuild — call, then

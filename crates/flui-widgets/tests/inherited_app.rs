@@ -55,6 +55,7 @@ struct MediaQueryCapture {
 
 impl StatelessView for MediaQueryCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // PORT-CHECK-OK-LOCK: plain data: MediaQueryData, no Drop
         *self.captured.lock().unwrap() = Some(MediaQuery::maybe_of(ctx));
         SizedBox::shrink()
     }

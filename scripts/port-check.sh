@@ -7,8 +7,8 @@
 # guard, Cross.H2 canonical-type-home guards, the Cross.H3
 # live-BuildContext guard, the Cross.H7 speculative scheduler surface guard,
 # the ADR-0027/ADR-0037 ownership-surface guards, and the
-# LockDiscipline/StatementDrop lock-drop guard (crates/flui-scheduler +
-# crates/flui-foundation only — see that trigger's own comment for why).
+# LockDiscipline/StatementDrop lock-drop guard (whole crates/ tree, minus
+# examples/ — see that trigger's own comment for why).
 # Exits non-zero on the first
 # violation outside the whitelist; prints
 # the offending file:line and the trigger ID.
@@ -1664,11 +1664,11 @@ fi
 # significant `Drop` must not itself drop while the lock guard that produced
 # it is still held.
 #
-# Scope: crates/flui-scheduler, crates/flui-foundation (whole crate trees,
-# minus examples/) — the two crates #1150's lock-drop sweep actually
-# audited hit by hit. Not workspace-wide: a sibling crate carrying this same
-# shape is real but out-of-scope residue for a future sweep to widen this
-# glob into, not silently assumed clean (#1176).
+# Scope: crates/ (whole crate trees, minus examples/) — widened (#1176) from
+# the two crates #1150's lock-drop sweep first audited hit by hit
+# (flui-scheduler, flui-foundation). Every remaining hit is either sanctioned
+# by a `PORT-CHECK-OK-LOCK` marker (plain data, no significant drop) or fixed
+# by extract-then-drop, so the whole-workspace scan stays green.
 #
 # Three shapes:
 #   1. STATEMENT drop: `.(lock|write|borrow_mut)()(.unwrap()|.expect(..))?
@@ -1730,7 +1730,7 @@ fi
 # checking for `//`, rather than matching `://` anywhere in the line) so
 # it does not also defeat that filter.
 # -----------------------------------------------------------------------------
-lockdrop_scope=(crates/flui-scheduler crates/flui-foundation)
+lockdrop_scope=(crates)
 lockdrop_comment_filter='^[^:]*:[0-9]+:\s*(//!|///|//)'
 # Excludes only a NAMED `let` binding (`let x = ..`, `let mut x = ..`, a
 # typed `let x: T = ..`, or tuple-destructuring `let (..) = ..`) from

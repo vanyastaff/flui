@@ -206,8 +206,9 @@ mod tests {
 
     async fn isolated_cache() -> tokio::sync::MutexGuard<'static, ()> {
         let guard = TEST_CACHE_LOCK.lock().await;
+        // PORT-CHECK-OK-LOCK: plain data: pixel buffers (Arc<Vec<u8>>), no lock-taking Drop
         CACHE.entries.lock().clear();
-        CACHE.pending.lock().clear();
+        let _prev = std::mem::take(&mut *CACHE.pending.lock());
         guard
     }
 

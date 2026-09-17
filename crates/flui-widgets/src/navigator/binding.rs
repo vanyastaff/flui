@@ -376,13 +376,13 @@ impl RouteBinding {
     /// Publish this route's primary animation so the route below can drive its
     /// `secondary_animation` from it.
     pub(crate) fn publish_peer(&self, peer: TransitionPeer) {
-        self.registries.peers.lock().insert(self.route, peer);
+        let _prev = self.registries.peers.lock().insert(self.route, peer);
     }
 
     /// Withdraw it. Called from `dispose`; a peer that outlives its controller
     /// would hand out a disposed animation.
     pub(crate) fn withdraw_peer(&self) {
-        self.registries.peers.lock().remove(&self.route);
+        let _prev = self.registries.peers.lock().remove(&self.route);
     }
 
     /// Publish where this route's page subtree *will* live — Flutter's
@@ -391,24 +391,24 @@ impl RouteBinding {
     /// The cell is registered at `install()`, before the page has ever been built,
     /// and resolves to `None` until it mounts. See `subtree.rs`.
     pub(crate) fn publish_subtree(&self, subtree: RouteSubtreeCell) {
-        self.registries.subtrees.lock().insert(self.route, subtree);
+        let _prev = self.registries.subtrees.lock().insert(self.route, subtree);
     }
 
     /// Withdraw it. Called from `dispose`; a registry entry that outlives its route
     /// would let `HeroController` resolve a disposed route's subtree.
     pub(crate) fn withdraw_subtree(&self) {
-        self.registries.subtrees.lock().remove(&self.route);
+        let _prev = self.registries.subtrees.lock().remove(&self.route);
     }
 
     /// Publish this route's `offstage` control — Flutter's `route.offstage` setter,
     /// reachable off the `Route` object it hands `HeroController` (`heroes.dart:967`).
     pub(crate) fn publish_modal(&self, modal: ModalHandle) {
-        self.registries.modals.lock().insert(self.route, modal);
+        let _prev = self.registries.modals.lock().insert(self.route, modal);
     }
 
     /// Withdraw it. A disposed route must not be forced offstage.
     pub(crate) fn withdraw_modal(&self) {
-        self.registries.modals.lock().remove(&self.route);
+        let _prev = self.registries.modals.lock().remove(&self.route);
     }
 
     /// Consume this route's one-shot [`PopPacing`] override, if the navigator
@@ -484,7 +484,7 @@ impl RouteBindingSlot {
 
     /// Filled by `NavigatorHandle::push` / `seed_initial`, before `install()`.
     pub(crate) fn fill(&self, binding: RouteBinding) {
-        *self.inner.lock() = Some(binding);
+        let _prev = self.inner.lock().replace(binding);
     }
 
     /// The binding, cloned out. `None` for a route that was never pushed, which

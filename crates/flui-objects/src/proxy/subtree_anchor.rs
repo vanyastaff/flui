@@ -95,10 +95,12 @@ impl SubtreeAnchor {
     }
 
     fn publish(&self, id: RenderId) {
+        // PORT-CHECK-OK-LOCK: plain data: RenderId (Copy NonZeroUsize)
         *self.published.lock() = Some(id);
     }
 
     fn clear(&self) {
+        // PORT-CHECK-OK-LOCK: plain data: RenderId (Copy NonZeroUsize)
         *self.published.lock() = None;
     }
 }

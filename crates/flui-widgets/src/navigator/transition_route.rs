@@ -358,7 +358,7 @@ impl<T> TransitionRoute<T> {
     }
 
     pub(crate) fn set_status_wake(&self, wake: Arc<ChangeNotifier>) {
-        *self.inner.status_wake.lock() = Some(wake);
+        let _prev = self.inner.status_wake.lock().replace(wake);
     }
 
     /// Flutter's `_updateSecondaryAnimation(nextRoute)` (`routes.dart:422-496`).
@@ -643,7 +643,11 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             && let Some(vsync) = binding.vsync()
         {
             let registration = vsync.register(controller.clone());
-            *self.inner.vsync_registration.lock() = Some((vsync, registration));
+            let _prev = self
+                .inner
+                .vsync_registration
+                .lock()
+                .replace((vsync, registration));
         }
 
         // Publish the primary animation so the route below can coordinate.
@@ -664,7 +668,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             }
         }
 
-        *self.inner.controller.lock() = Some(controller);
+        let _prev = self.inner.controller.lock().replace(controller);
     }
 
     /// `didPush()` (`routes.dart:336-350`): drive the controller forward and
@@ -753,7 +757,8 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         self.inner.completed.complete();
         self.set_secondary(SecondaryParent::Dismissed, always_dismissed());
 
-        if let Some((vsync, registration)) = self.inner.vsync_registration.lock().take() {
+        let vsync_registration = self.inner.vsync_registration.lock().take();
+        if let Some((vsync, registration)) = vsync_registration {
             // `VsyncRegistration` has no `Drop`; a missed unregister keeps a
             // disposed route's controller ticking forever.
             vsync.unregister(registration);

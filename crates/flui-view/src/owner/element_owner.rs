@@ -793,7 +793,7 @@ impl ElementOwner<'_> {
     /// registry entry for the dismounted sliver cannot be serviced post-frame.
     /// No-op if the id is not present.
     pub(crate) fn unregister_child_manager(&mut self, render_id: RenderId) {
-        self.child_manager_registry.lock().remove(&render_id);
+        let _prev = self.child_manager_registry.lock().remove(&render_id);
     }
 
     /// Register a build-during-layout node.

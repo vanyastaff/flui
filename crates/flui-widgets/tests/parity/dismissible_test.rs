@@ -351,6 +351,7 @@ fn drag_past_threshold_dismisses_and_resize_collapse_fires_on_dismissed() {
         .direction(DismissDirection::EndToStart)
         .on_dismissed(move |direction| {
             on_dismissed_count.fetch_add(1, Ordering::SeqCst);
+            // PORT-CHECK-OK-LOCK: plain data: DismissDirection (Copy enum), no Drop
             *on_dismissed_direction.lock().expect("test-only mutex") = Some(direction);
         })
         .on_resize(move || {
@@ -408,6 +409,7 @@ fn drag_past_threshold_dismisses_for_start_to_end_too() {
         .direction(DismissDirection::StartToEnd)
         .on_dismissed(move |direction| {
             on_dismissed_count.fetch_add(1, Ordering::SeqCst);
+            // PORT-CHECK-OK-LOCK: plain data: DismissDirection (Copy enum), no Drop
             *on_dismissed_direction.lock().expect("test-only mutex") = Some(direction);
         });
 
@@ -447,6 +449,7 @@ fn drag_past_threshold_dismisses_for_up_too() {
         .direction(DismissDirection::Up)
         .on_dismissed(move |direction| {
             on_dismissed_count.fetch_add(1, Ordering::SeqCst);
+            // PORT-CHECK-OK-LOCK: plain data: DismissDirection (Copy enum), no Drop
             *on_dismissed_direction.lock().expect("test-only mutex") = Some(direction);
         });
 
@@ -488,6 +491,7 @@ fn drag_below_threshold_springs_back_without_dismissing() {
             on_dismissed.fetch_add(1, Ordering::SeqCst);
         })
         .on_update(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: f64, no Drop
             *last_progress_cb.lock().expect("test-only mutex") = details.progress;
         });
 
@@ -532,6 +536,7 @@ fn direction_up_rejects_downward_extent_but_admits_upward() {
     let widget = Dismissible::new(child())
         .direction(DismissDirection::Up)
         .on_update(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: f64, no Drop
             *last_progress_cb.lock().expect("test-only mutex") = details.progress;
         });
 
@@ -610,6 +615,7 @@ fn direction_end_to_start_rtl_flips_which_physical_drag_dismisses() {
         Dismissible::new(child())
             .direction(DismissDirection::EndToStart)
             .on_update(move |details| {
+                // PORT-CHECK-OK-LOCK: plain data: f64, no Drop
                 *last_progress_cb.lock().expect("test-only mutex") = details.progress;
             }),
     );
@@ -663,6 +669,7 @@ fn a_tappable_child_still_taps_and_a_real_drag_still_wins_the_arena() {
     let widget = Dismissible::new(tappable_child)
         .direction(DismissDirection::EndToStart)
         .on_update(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: f64, no Drop
             *last_progress_cb.lock().expect("test-only mutex") = details.progress;
         });
 
@@ -732,6 +739,7 @@ fn dismiss_threshold_locked_at_one_never_dismisses_even_at_a_large_drag() {
             on_dismissed.fetch_add(1, Ordering::SeqCst);
         })
         .on_update(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: f64, no Drop
             *last_progress_cb.lock().expect("test-only mutex") = details.progress;
         });
 
@@ -875,6 +883,7 @@ fn secondary_background_direction_matches_the_drag() {
         .background(background())
         .secondary_background(secondary_background())
         .on_update(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: DismissDirection (Copy enum), no Drop
             *last_direction_cb.lock().expect("test-only mutex") = details.direction;
         });
 

@@ -563,7 +563,7 @@ impl Platform for AndroidPlatform {
         _options: WindowOptions,
     ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         let window = Arc::new(AndroidWindow::new(self.app.clone()));
-        *self.window.lock() = Some(Arc::clone(&window));
+        let _prev = self.window.lock().replace(Arc::clone(&window));
         tracing::info!("Android window created (wrapping ANativeWindow)");
         Ok(window)
     }
@@ -667,6 +667,7 @@ impl Clipboard for MockClipboard {
     }
 
     fn write_text(&self, text: String) {
+        // PORT-CHECK-OK-LOCK: plain data: String
         *self.content.lock() = Some(text);
     }
 }

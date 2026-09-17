@@ -1346,6 +1346,7 @@ fn lazy_list_view_builder_keyed_insert_at_head_preserves_resident_state() {
     assert_eq!(born_ids(&laid, &[10, 11, 12, 13]), vec![10, 11, 12, 13]);
     let nodes_before = laid.render_node_count();
 
+    // PORT-CHECK-OK-LOCK: plain data: Vec<i32>, no Drop
     data.lock().insert(0, 99);
     laid.pump_widget(keyed_list(&data, &inits, true));
     assert_eq!(
@@ -1420,6 +1421,7 @@ fn lazy_list_view_builder_keyed_swap_within_the_band_preserves_state_without_a_c
     };
     let (y11, y13) = (top_of(&laid, 11), top_of(&laid, 13));
 
+    // PORT-CHECK-OK-LOCK: plain data: Vec<i32>, no Drop
     data.lock().swap(1, 3);
     laid.pump_widget(keyed_list(&data, &inits, false));
     assert_eq!(born_ids(&laid, &[10, 13, 12, 11]), vec![10, 13, 12, 11]);

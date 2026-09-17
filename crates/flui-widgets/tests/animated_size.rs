@@ -178,6 +178,7 @@ fn animated_size_unrelated_rebuild_does_not_reset_in_flight_animation() {
     // reset `size_tween`/`state`/the controller subscription and the
     // reported size would snap straight to the child's raw current size
     // (100) instead of continuing from `before_unrelated_rebuild`.
+    // PORT-CHECK-OK-LOCK: plain data: Alignment is Copy
     *alignment.lock() = Alignment::BOTTOM_RIGHT;
     laid.pump();
     let after_unrelated_rebuild = width(&laid);

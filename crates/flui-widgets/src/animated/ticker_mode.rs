@@ -258,6 +258,7 @@ mod tests {
     impl ViewState<Probe> for ProbeState {
         fn init_state(&mut self, ctx: &dyn BuildContext) {
             let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *self.found_ambient.lock() = Some(ambient.is_some());
             if let Some(vsync) = ambient {
                 let _registration = vsync.register(self.controller.clone());

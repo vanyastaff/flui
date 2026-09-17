@@ -142,7 +142,9 @@ impl OverlayShared {
 
     /// Retain the entries matching `keep`. Used by [`OverlayEntry::remove`].
     pub(crate) fn retain_entries(&self, keep: impl FnMut(&OverlayEntry) -> bool) {
-        self.entries.lock().retain(keep);
+        let mut entries = std::mem::take(&mut *self.entries.lock());
+        entries.retain(keep);
+        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
 }
 
@@ -494,7 +496,7 @@ impl ViewState<Overlay> for OverlayState {
     /// `init_state` is the correct hook and the only permitted one: port-check
     /// trigger #22 rejects acquiring a `RebuildHandle` from `build`/layout/paint.
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        *self.shared.rebuild.lock() = Some(ctx.rebuild_handle());
+        let _prev = self.shared.rebuild.lock().replace(ctx.rebuild_handle());
     }
 
     /// Bottom → top: `entries[i]` paints below `entries[i + 1]`, because
@@ -525,7 +527,7 @@ impl ViewState<Overlay> for OverlayState {
     /// inert. Flutter gets this from `_markDirty`'s `if (mounted)` guard
     /// (`overlay.dart:849`).
     fn dispose(&mut self) {
-        *self.shared.rebuild.lock() = None;
+        let _prev = self.shared.rebuild.lock().take();
     }
 }
 

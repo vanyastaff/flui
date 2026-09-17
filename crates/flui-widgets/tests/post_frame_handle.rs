@@ -107,7 +107,7 @@ struct LocalPostFrameProbeState {
 
 impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        *self.rebuild.lock() = Some(ctx.rebuild_handle());
+        let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
         let handle = ctx
             .local_post_frame_handle()
             .expect("the binding must install a LocalPostFrameHandle");
@@ -156,7 +156,7 @@ impl ViewState<PostFrameProbe> for PostFrameProbeState {
 
         *self.observations.targets_unrelated_scheduler.lock() =
             Some(handle.targets_same_scheduler(&self.unrelated_scheduler));
-        *self.observations.handle.lock() = Some(handle.clone());
+        let _prev = self.observations.handle.lock().replace(handle.clone());
 
         let fired = Arc::clone(&self.observations.fired);
         handle.schedule(move |_timing| {

@@ -158,6 +158,7 @@ impl SharedEngineServices {
         )
     )]
     pub(super) fn set_accessibility_features(&self, features: AccessibilityFeatures) {
+        // PORT-CHECK-OK-LOCK: plain data: AccessibilityFeatures (bool flags), no Drop
         *self.accessibility_features.write() = features;
     }
 
@@ -1474,7 +1475,7 @@ impl AppRuntime {
     /// observe it (the initial redraw request, `Lifecycle::Started`) runs —
     /// otherwise the first such observer would silently see no window.
     pub(super) fn set_redraw_window(&self, window: Arc<dyn PlatformWindow>) {
-        *self.redraw_window.lock() = Some(window);
+        let _prev = self.redraw_window.lock().replace(window);
     }
 
     /// Test-only: read-only access to the installed redraw-poke window,
@@ -1551,7 +1552,7 @@ impl AppRuntime {
     /// former doc (now this field's) for why this is a plain slot rather
     /// than a new `Platform` surface.
     pub(super) fn set_platform_clipboard(&self, clipboard: Arc<dyn Clipboard>) {
-        *self.platform_clipboard.lock() = Some(clipboard);
+        let _prev = self.platform_clipboard.lock().replace(clipboard);
     }
 
     /// The explicit, deterministic teardown clear — the first of the two
@@ -1568,7 +1569,7 @@ impl AppRuntime {
         )
     )]
     pub(super) fn clear_platform_clipboard(&self) {
-        self.platform_clipboard.lock().take();
+        let _prev = self.platform_clipboard.lock().take();
     }
 
     /// Access the installed platform clipboard, if any.
@@ -1614,7 +1615,7 @@ impl Drop for AppRuntime {
     /// particular order relative to window/surface teardown, so this may
     /// run before, after, or never relative to those.
     fn drop(&mut self) {
-        self.platform_clipboard.lock().take();
+        let _prev = self.platform_clipboard.lock().take();
     }
 }
 
@@ -1999,7 +2000,7 @@ mod wake_and_clipboard_tests {
         let stored_waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
         let stored_for_task = Arc::clone(&stored_waker);
         let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            *stored_for_task.lock() = Some(cx.waker().clone());
+            let _prev = stored_for_task.lock().replace(cx.waker().clone());
             std::task::Poll::<()>::Pending
         })));
 
@@ -2230,7 +2231,7 @@ mod service_lifecycle_wiring_tests {
                             if release.load(Ordering::Acquire) {
                                 std::task::Poll::Ready(())
                             } else {
-                                *waker_slot.lock() = Some(context.waker().clone());
+                                let _prev = waker_slot.lock().replace(context.waker().clone());
                                 std::task::Poll::Pending
                             }
                         })

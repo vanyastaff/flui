@@ -393,6 +393,7 @@ struct SinkGuard;
 
 impl Drop for SinkGuard {
     fn drop(&mut self) {
+        // PORT-CHECK-OK-LOCK: plain data: Vec<CapturedRecord> has no Drop
         let _ = SINK.try_with(|sink| sink.borrow_mut().take());
     }
 }

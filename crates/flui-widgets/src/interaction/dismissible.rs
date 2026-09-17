@@ -864,7 +864,9 @@ impl ViewState<Dismissible> for DismissibleState {
         }
         self.move_controller.dispose();
 
-        if let Some(resize_controller) = self.drag.resize_controller.borrow_mut().take() {
+        let resize_controller = self.drag.resize_controller.borrow_mut().take();
+        if let Some(resize_controller) = resize_controller {
+            // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
             if let Some(id) = self.drag.resize_listener_id.borrow_mut().take() {
                 resize_controller.remove_listener(id);
             }
@@ -1233,6 +1235,7 @@ fn start_resize_animation(
         }
         rebuild_for_resize.schedule(flui_view::RebuildReason::AnimationTick);
     }));
+    // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
     *drag.resize_listener_id.borrow_mut() = Some(listener_id);
 
     if let Some(vsync) = vsync {
@@ -1241,7 +1244,10 @@ fn start_resize_animation(
     }
 
     let _ = resize_controller.forward();
-    *drag.resize_controller.borrow_mut() = Some(resize_controller);
+    let _prev = drag
+        .resize_controller
+        .borrow_mut()
+        .replace(resize_controller);
 }
 
 /// Flutter parity: `_handleResizeProgressChanged` (`dismissible.dart:599`) —
@@ -1675,7 +1681,7 @@ mod tests {
 
     impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
         fn init_state(&mut self, ctx: &dyn BuildContext) {
-            *self.captured.borrow_mut() = Some(ctx.rebuild_handle());
+            let _prev = self.captured.borrow_mut().replace(ctx.rebuild_handle());
         }
 
         fn build(&self, _view: &RebuildHandleCapture, _ctx: &dyn BuildContext) -> impl IntoView {

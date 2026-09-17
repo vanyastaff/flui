@@ -217,7 +217,7 @@ mod tests {
     impl ViewState<Capturing> for CapturingState {
         fn init_state(&mut self, ctx: &dyn BuildContext) {
             // The capability outlives the borrow of `ctx`.
-            *self.captured.lock() = Some(ctx.rebuild_handle());
+            let _prev = self.captured.lock().replace(ctx.rebuild_handle());
         }
 
         fn build(&self, _view: &Capturing, _ctx: &dyn BuildContext) -> impl IntoView {

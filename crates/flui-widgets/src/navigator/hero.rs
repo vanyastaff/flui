@@ -197,7 +197,9 @@ impl HeroRegistry {
     /// [`register_nested`](Self::register_nested), called from that
     /// `Navigator`'s `dispose` and whenever it re-publishes elsewhere.
     pub(crate) fn deregister_nested(&self, source: &NestedHeroSource) {
-        self.nested.lock().retain(|existing| !existing.is(source));
+        let mut nested = std::mem::take(&mut *self.nested.lock());
+        nested.retain(|existing| !existing.is(source));
+        let _prev = std::mem::replace(&mut *self.nested.lock(), nested);
     }
 
     /// Every hero visible for a flight through this route: this route's own,
@@ -611,6 +613,7 @@ impl HeroHandle {
         self.inner
             .include_child
             .store(include_child_in_placeholder, Ordering::Relaxed);
+        // PORT-CHECK-OK-LOCK: plain data: Size is Copy
         *self.inner.placeholder.lock() = Some(size);
         self.request_rebuild();
         Some(size)
@@ -874,8 +877,13 @@ impl ViewState<Hero> for HeroState {
     /// lifecycle hook that has a `BuildContext` and is not a frame phase: the route's
     /// registry, the render tree, and the rebuild capability (port-check trigger #22).
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        *self.handle.inner.owner.lock() = ctx.pipeline_owner();
-        *self.handle.inner.rebuild.lock() = Some(ctx.rebuild_handle());
+        let _prev = std::mem::replace(&mut *self.handle.inner.owner.lock(), ctx.pipeline_owner());
+        let _prev = self
+            .handle
+            .inner
+            .rebuild
+            .lock()
+            .replace(ctx.rebuild_handle());
 
         let registry = ctx.get::<HeroScope, _>(|scope| scope.registry.clone());
         if let Some(registry) = registry {

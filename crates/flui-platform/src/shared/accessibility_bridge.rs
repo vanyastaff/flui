@@ -78,6 +78,7 @@ impl BridgeShared {
     /// a fresh screen reader — see the `latest` field doc.
     pub(crate) fn retain_if_self_contained(&self, update: &TreeUpdate) {
         if update.tree.is_some() {
+            // PORT-CHECK-OK-LOCK: plain data: accesskit TreeUpdate has no Drop
             *self.latest.lock() = Some(update.clone());
         }
     }
@@ -95,12 +96,12 @@ impl BridgeShared {
 
     /// Register the attach/detach listener, replacing any previous one.
     pub(crate) fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        *self.activation_listener.lock() = Some(listener);
+        let _prev = self.activation_listener.lock().replace(listener);
     }
 
     /// Register the inbound-action listener, replacing any previous one.
     pub(crate) fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        *self.action_listener.lock() = Some(listener);
+        let _prev = self.action_listener.lock().replace(listener);
     }
 }
 

@@ -243,6 +243,7 @@ fn dispatch_notification_calls_handler_and_stops_on_true() {
         let received_delta = Arc::clone(&received_delta);
         NotificationListener::<ScrollNotification>::new(move |n| {
             inner_called.store(true, Ordering::Release);
+            // PORT-CHECK-OK-LOCK: plain data: f64 is Copy
             *received_delta.lock() = n.delta;
             true
         })

@@ -792,7 +792,7 @@ struct FocusOfProbe {
 
 impl StatelessView for FocusOfProbe {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        *self.found.borrow_mut() = Focus::maybe_of(ctx);
+        let _prev = std::mem::replace(&mut *self.found.borrow_mut(), Focus::maybe_of(ctx));
         leaf()
     }
 }
@@ -940,6 +940,7 @@ fn focus_is_lost_when_set_to_not_focusable_mid_focus() {
 
     assert!(node.has_focus(), "autofocus landed on mount");
     assert_eq!(got_focus.borrow().as_slice(), [true]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<bool>), no Drop
     got_focus.borrow_mut().clear();
 
     let recorded = Rc::clone(&got_focus);

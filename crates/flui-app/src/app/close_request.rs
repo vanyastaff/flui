@@ -372,13 +372,17 @@ impl CloseRequestRouter {
 
     /// Drop the entry for exactly this presentation.
     pub(crate) fn forget(&self, address: PresentationAddress) {
-        self.entries.lock().retain(|e| e.address != address);
+        let mut entries = std::mem::take(&mut *self.entries.lock());
+        entries.retain(|e| e.address != address);
+        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
 
     /// Drop every entry belonging to `realm` — the realm-wide uninstall
     /// counterpart of [`Self::forget`].
     pub(crate) fn forget_realm(&self, realm: RealmId) {
-        self.entries.lock().retain(|e| e.address.realm_id != realm);
+        let mut entries = std::mem::take(&mut *self.entries.lock());
+        entries.retain(|e| e.address.realm_id != realm);
+        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
 
     /// Drop every registration, for full loop-exit teardown.
@@ -399,7 +403,7 @@ impl CloseRequestRouter {
         )
     )]
     pub(crate) fn clear(&self) {
-        self.entries.lock().clear();
+        let _prev = std::mem::take(&mut *self.entries.lock());
     }
 
     /// Ask the application whether the window at `address` may close.

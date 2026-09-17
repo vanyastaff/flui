@@ -491,6 +491,7 @@ impl Timeline {
 
     /// Clear all events
     pub fn clear(&self) {
+        // PORT-CHECK-OK-LOCK: plain data: Vec<TimelineEvent>, no Drop
         self.inner.lock().clear();
     }
 

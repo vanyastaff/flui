@@ -159,6 +159,7 @@ pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKe
         move |key| {
             for (index, member) in lookup_members.iter().enumerate() {
                 if let Some(id) = member.lookup_element(key) {
+                    // PORT-CHECK-OK-LOCK: plain data: ElementId and usize are Copy
                     lookup_cache.borrow_mut().insert(id, index);
                     return Some(id);
                 }

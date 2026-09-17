@@ -993,7 +993,7 @@ impl RasterHandle {
     /// handle), matching `flui_scheduler`'s own
     /// `set_on_frame_scheduled`.
     pub fn set_wake_hook(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
-        *self.mailbox.accounting.wake.lock() = hook;
+        let _prev = std::mem::replace(&mut *self.mailbox.accounting.wake.lock(), hook);
     }
 
     /// The advanced pacing/capacity configuration this owner was

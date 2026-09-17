@@ -1149,7 +1149,7 @@ impl ServiceRegistry {
     /// earlier one (the platform request it wraps is idempotent and
     /// coalesced, so which instance fires is immaterial).
     pub(crate) fn set_exit_notifier(&mut self, notifier: Arc<dyn Fn() + Send + Sync>) {
-        *self.exit_notifier.lock() = Some(notifier);
+        let _prev = self.exit_notifier.lock().replace(notifier);
     }
 
     /// A clone of the installed notifier, for a caller that has its own
@@ -1512,7 +1512,7 @@ mod tests {
                 context.is_cancelled()
             })
             .expect("spawn must be admitted");
-        *handle_slot.lock() = Some(handle);
+        let _prev = handle_slot.lock().replace(handle);
         deterministic.run_until_idle();
         let handle = handle_slot.lock().take().expect("handle stored");
         assert_eq!(
@@ -1952,11 +1952,13 @@ mod tests {
             .publish(Event {
                 drops: Arc::clone(&drops),
                 on_drop: Some(Box::new(move || {
-                    drop(receiver_slot.lock().expect("receiver slot").take());
+                    let dropped = receiver_slot.lock().expect("receiver slot").take();
+                    drop(dropped);
                     let result = nested_publisher.publish(Event {
                         drops: nested_drops,
                         on_drop: None,
                     });
+                    // PORT-CHECK-OK-LOCK: plain data: Result<(), PublishError>, no Drop
                     *nested_result_in_drop.lock().expect("result slot") = Some(result);
                 })),
             })

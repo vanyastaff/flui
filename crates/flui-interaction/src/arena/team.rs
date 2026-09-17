@@ -380,7 +380,7 @@ impl GestureArenaTeam {
     /// The captain wins on behalf of the entire team when any member claims
     /// victory.
     pub fn set_captain(&self, captain: Option<Arc<dyn GestureArenaMember>>) {
-        *self.captain.lock() = captain;
+        let _prev = std::mem::replace(&mut *self.captain.lock(), captain);
     }
 
     /// Add a member to the team for a specific pointer.
@@ -569,7 +569,10 @@ mod tests {
 
         let entry = team.add(pointer, reentrant.clone(), &arena);
         let _other_entry = team.add(pointer, other.clone(), &arena);
-        *reentrant.entry.lock() = Some(team.add(pointer, reentrant.clone(), &arena));
+        let _prev = reentrant
+            .entry
+            .lock()
+            .replace(team.add(pointer, reentrant.clone(), &arena));
 
         // Rejecting the member fires reject_gesture, which re-enters the
         // combiner; must complete without deadlocking.

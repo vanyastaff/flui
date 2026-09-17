@@ -776,6 +776,7 @@ impl InteractionLane {
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
+            // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
             registry.borrow_mut().insert(lane_id, Rc::downgrade(&inner));
         });
         Ok(Self { inner })
@@ -2042,6 +2043,7 @@ mod tests {
             .get(&target.target_id)
             .cloned()
             .expect("registered probe cell");
+        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *cell.borrow_mut() = Some(Rc::downgrade(&handler_cell));
         target
     }

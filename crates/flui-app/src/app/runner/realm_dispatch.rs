@@ -1816,7 +1816,9 @@ mod realm_dispatch_tests {
                 window.on_close(Box::new(move || {
                     close_this_window(dispatcher);
                 }));
-                *installed_slot_for_on_ready.borrow_mut() = Some((dispatcher, window));
+                let _prev = installed_slot_for_on_ready
+                    .borrow_mut()
+                    .replace((dispatcher, window));
                 Ok(())
             }))
             .expect("headless run must not fail");
@@ -1847,7 +1849,8 @@ mod realm_dispatch_tests {
                                     if release.load(Ordering::Acquire) {
                                         std::task::Poll::Ready(())
                                     } else {
-                                        *waker_slot.lock() = Some(context.waker().clone());
+                                        let waker = context.waker().clone();
+                                        let _prev = waker_slot.lock().replace(waker);
                                         std::task::Poll::Pending
                                     }
                                 })
@@ -1888,7 +1891,8 @@ mod realm_dispatch_tests {
         // request the platform's exit re-evaluation. Bounded wait: this is
         // the only path that can ever end this app now.
         release.store(true, Ordering::Release);
-        if let Some(waker) = waker_slot.lock().take() {
+        let taken = waker_slot.lock().take();
+        if let Some(waker) = taken {
             waker.wake();
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1978,6 +1982,7 @@ mod realm_dispatch_tests {
                 let result =
                     dispatch_platform_realm(self.dispatcher, RealmTask::Frame(Box::new(|_| {})));
                 *self.result.borrow_mut() = Some(result);
+                // PORT-CHECK-OK-LOCK: plain data: Result<(), RealmDispatchError>, no Drop
             }
         }
 
@@ -2597,6 +2602,7 @@ mod realm_dispatch_tests {
             realm_b,
             RealmTask::Frame(Box::new(move |realm| {
                 *after_old_in_frame.borrow_mut() = Some(realm.drain_commands());
+                // PORT-CHECK-OK-LOCK: plain data: DrainReport (usize counts), no Drop
             })),
         )
         .expect("B frame dispatches");
@@ -2615,6 +2621,7 @@ mod realm_dispatch_tests {
             realm_b,
             RealmTask::Frame(Box::new(move |realm| {
                 *after_current_in_frame.borrow_mut() = Some(realm.drain_commands());
+                // PORT-CHECK-OK-LOCK: plain data: DrainReport (usize counts), no Drop
             })),
         )
         .expect("B frame dispatches");
@@ -3107,6 +3114,7 @@ mod realm_dispatch_tests {
             RealmTask::Frame(Box::new(move |realm| {
                 let mut backend = TestRasterBackend::always_presents().with_size(64, 64);
                 *presented_in_frame.borrow_mut() = realm.render_frame_entered(&mut backend);
+                // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             })),
         )
         .expect("realm B still dispatches after realm A's mid-dispatch teardown");
@@ -3626,7 +3634,9 @@ mod realm_dispatch_tests {
             window_a.on_close(Box::new(move || {
                 close_this_window(dispatcher_a);
             }));
-            *installed_slot_for_on_ready.borrow_mut() = Some((dispatcher_a, window_a));
+            let _prev = installed_slot_for_on_ready
+                .borrow_mut()
+                .replace((dispatcher_a, window_a));
             Ok(())
         }));
         ready.expect("installing realm A must not fail");
@@ -5952,6 +5962,7 @@ mod realm_dispatch_tests {
                 move |request| {
                     asked_in_handler.fetch_add(1, Ordering::SeqCst);
                     *refused_in_handler.lock() = Some(request.address());
+                    // PORT-CHECK-OK-LOCK: plain data: PresentationAddress is Copy
                     crate::app::close_request::CloseResponse::KeepOpen
                 },
             )),
@@ -6180,7 +6191,8 @@ mod realm_dispatch_tests {
                                     if release.load(Ordering::Acquire) {
                                         std::task::Poll::Ready(())
                                     } else {
-                                        *waker_slot.lock() = Some(context.waker().clone());
+                                        let waker = context.waker().clone();
+                                        let _prev = waker_slot.lock().replace(waker);
                                         std::task::Poll::Pending
                                     }
                                 })
@@ -6207,7 +6219,8 @@ mod realm_dispatch_tests {
             );
 
             release.store(true, Ordering::Release);
-            if let Some(waker) = waker_slot.lock().take() {
+            let taken = waker_slot.lock().take();
+            if let Some(waker) = taken {
                 waker.wake();
             }
             teardown_platform_realm();

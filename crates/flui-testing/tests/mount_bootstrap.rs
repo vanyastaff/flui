@@ -316,7 +316,7 @@ impl flui_view::StatefulView for HitTestCapture {
 
 impl flui_view::ViewState<HitTestCapture> for HitTestCaptureState {
     fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
-        *self.captured.borrow_mut() = ctx.hit_test_handle();
+        let _prev = std::mem::replace(&mut *self.captured.borrow_mut(), ctx.hit_test_handle());
     }
 
     fn build(

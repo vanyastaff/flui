@@ -194,7 +194,7 @@ impl PointerRouter {
 
     /// Clear all global handlers.
     pub fn clear_global_handlers(&self) {
-        self.global_handlers.borrow_mut().clear();
+        let _prev = std::mem::take(&mut *self.global_handlers.borrow_mut());
     }
 
     /// Route a pointer event to all registered handlers.
@@ -328,8 +328,8 @@ impl PointerRouter {
 
     /// Clear all routes (for testing or cleanup).
     pub fn clear(&self) {
-        self.routes.borrow_mut().clear();
-        self.global_handlers.borrow_mut().clear();
+        let _routes = std::mem::take(&mut *self.routes.borrow_mut());
+        let _global_handlers = std::mem::take(&mut *self.global_handlers.borrow_mut());
     }
 }
 

@@ -595,6 +595,7 @@ fn detects_pointer_exiting() {
     );
 
     laid.dispatch_pointer_hover(150.0, 150.0);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log.borrow_mut().clear();
 
     laid.dispatch_pointer_hover(10.0, 10.0);
@@ -624,6 +625,7 @@ fn removing_a_hovered_region_does_not_synthesize_an_exit() {
     );
 
     laid.dispatch_pointer_hover(150.0, 150.0);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log.borrow_mut().clear();
 
     laid.pump_widget(SizedBox::new(100.0, 100.0));
@@ -677,7 +679,9 @@ fn hover_works_with_nested_regions() {
     laid.dispatch_pointer_hover(100.0, 100.0);
     assert_eq!(inner_log.borrow().as_slice(), &["enter", "hover"]);
     assert_eq!(outer_log.borrow().as_slice(), &["enter", "hover"]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     inner_log.borrow_mut().clear();
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     outer_log.borrow_mut().clear();
 
     // Still within the outer 200x200 box, outside the inner 100x100 one.
@@ -728,18 +732,22 @@ fn hover_transfers_between_two_regions() {
     laid.dispatch_pointer_hover(50.0, 50.0);
     assert_eq!(log1.borrow().as_slice(), &["enter", "hover"]);
     assert!(log2.borrow().is_empty());
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log1.borrow_mut().clear();
 
     laid.dispatch_pointer_hover(50.0, 150.0);
     assert_eq!(log1.borrow().as_slice(), &["exit"]);
     assert_eq!(log2.borrow().as_slice(), &["enter", "hover"]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log1.borrow_mut().clear();
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log2.borrow_mut().clear();
 
     // Outside the 200-tall screen entirely -- outside both regions.
     laid.dispatch_pointer_hover(50.0, 205.0);
     assert!(log1.borrow().is_empty());
     assert_eq!(log2.borrow().as_slice(), &["exit"]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log2.borrow_mut().clear();
 
     laid.pump_widget(SizedBox::new(1.0, 1.0));
@@ -788,6 +796,7 @@ fn mouse_region_uses_updated_callbacks() {
     laid.dispatch_pointer_hover(50.0, 50.0);
     laid.dispatch_pointer_hover(150.0, 150.0);
     assert_eq!(log.borrow().as_slice(), &["enter1", "hover1", "exit1"]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log.borrow_mut().clear();
 
     laid.pump_widget(region(&log, "enter2", "hover2", "exit2"));
@@ -852,6 +861,7 @@ fn hit_test_transitions_correctly_through_a_2x_transform_scale() {
             ("hover", offset(51.0, 101.0)),
         ]
     );
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     events.borrow_mut().clear();
 
     // Just inside the scaled span's bottom-left corner (50, 300).
@@ -860,6 +870,7 @@ fn hit_test_transitions_correctly_through_a_2x_transform_scale() {
         events.borrow().as_slice(),
         &[("hover", offset(51.0, 299.0))]
     );
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     events.borrow_mut().clear();
 
     // Just outside the same corner.
@@ -976,6 +987,7 @@ fn opaque_defaults_to_true_and_blocks_the_region_below() {
         &["enterA", "enterC", "hoverC", "hoverA"],
         "C, opaque by default, must block B underneath — enterB/hoverB must not appear"
     );
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log.borrow_mut().clear();
 
     laid.dispatch_pointer_hover(160.0, 160.0);
@@ -1154,6 +1166,7 @@ fn stationary_pointer_over_a_region_that_moves_out_triggers_exit_next_frame() {
         &["enter", "hover"],
         "an ordinary dispatched hover still fires enter then hover"
     );
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log.borrow_mut().clear();
 
     // Same region, moved to top-left via a rebuild -- no new pointer
@@ -1212,6 +1225,7 @@ fn rebuilding_a_hovered_region_down_to_no_callbacks_fires_nothing() {
         &["enter"],
         "an ordinary dispatched hover over the mounted region fires enter"
     );
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log.borrow_mut().clear();
 
     // Same region, same position, rebuilt with every callback removed --
@@ -1325,6 +1339,7 @@ fn stylus_hover_delivers_enter_hover_exit_like_a_mouse() {
 
     laid.dispatch_pointer_hover_with_kind(5.0, 5.0, PointerType::Pen);
     assert_eq!(log.borrow().as_slice(), &["enter", "hover"]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
     log.borrow_mut().clear();
 
     laid.dispatch_pointer_hover_with_kind(20.0, 20.0, PointerType::Pen);

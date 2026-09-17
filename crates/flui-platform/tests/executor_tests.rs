@@ -36,6 +36,7 @@ fn test_background_executor_runs_on_worker_thread() {
     executor
         .spawn(async move {
             let current_id = thread::current().id();
+            // PORT-CHECK-OK-LOCK: plain data: ThreadId is Copy
             *task_thread_id_clone.lock() = Some(current_id);
             tracing::debug!("Task executing on thread {:?}", current_id);
         })

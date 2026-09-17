@@ -297,7 +297,7 @@ impl FocusManager {
         let mut applied = 0usize;
         loop {
             if self.closed.get() {
-                self.pending_focus_transitions.borrow_mut().clear();
+                let _prev = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
                 return;
             }
             let Some(node) = self.pending_focus_transitions.borrow_mut().pop_front() else {
@@ -332,7 +332,7 @@ impl FocusManager {
                     "reentrant focus requests exceeded the drain budget; \
                      dropping the rest of the queue"
                 );
-                self.pending_focus_transitions.borrow_mut().clear();
+                let _prev = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
                 return;
             }
             self.apply_focus_transition(node);
@@ -447,12 +447,14 @@ impl FocusManager {
 
     /// Remove one focus-change listener.
     pub fn remove_listener(&self, id: ListenerId) {
-        self.listeners.borrow_mut().retain(|(held, _)| *held != id);
+        let mut listeners = std::mem::take(&mut *self.listeners.borrow_mut());
+        listeners.retain(|(held, _)| *held != id);
+        let _prev = std::mem::replace(&mut *self.listeners.borrow_mut(), listeners);
     }
 
     /// Remove all focus-change listeners.
     pub fn clear_listeners(&self) {
-        self.listeners.borrow_mut().clear();
+        let _prev = std::mem::take(&mut *self.listeners.borrow_mut());
     }
 
     /// Number of registered listeners.
@@ -577,7 +579,7 @@ impl FocusManager {
 
     /// Remove all global key handlers.
     pub fn clear_global_key_handlers(&self) {
-        self.global_key_handlers.borrow_mut().clear();
+        let _prev = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
     }
 
     /// Dispatch a key event through global handlers, then focused leaf to root.
@@ -645,7 +647,9 @@ impl FocusManager {
             return;
         }
 
-        self.pending_focus_transitions.borrow_mut().clear();
+        {
+            let _prev = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
+        }
         let previous = self.primary_focus.borrow_mut().take();
         if let Some(previous) = previous {
             Self::notify_focus_nodes(Some(&previous), None);
@@ -653,8 +657,12 @@ impl FocusManager {
                 self.notify_listeners(Some(previous), None);
             }
         }
-        self.listeners.borrow_mut().clear();
-        self.global_key_handlers.borrow_mut().clear();
+        {
+            let _prev = std::mem::take(&mut *self.listeners.borrow_mut());
+        }
+        {
+            let _prev = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
+        }
         FocusNode::close_owned_tree(self.root_scope.as_focus_node());
     }
 
@@ -1211,6 +1219,7 @@ mod tests {
         assert_eq!(calls.borrow().as_slice(), &["leaf", "parent"]);
 
         child.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         calls.borrow_mut().clear();
         assert!(!manager.dispatch_key_event(&key_event()));
         assert!(calls.borrow().is_empty());
@@ -2140,6 +2149,7 @@ mod tests {
         // manager was left fully functional after the bounded drop.
         nodes[0].remove_listener(listener_0);
         nodes[1].remove_listener(listener_1);
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         edges.borrow_mut().clear();
         let settled = manager
             .primary_focus()
@@ -2268,6 +2278,7 @@ mod tests {
         let second_id_value = manager.add_listener(Rc::new(move |_, _| {
             second_calls_for_listener.set(second_calls_for_listener.get() + 1);
         }));
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *second_id.borrow_mut() = Some(second_id_value);
 
         nodes[1].request_focus();
@@ -2303,6 +2314,7 @@ mod tests {
         let second_id_value = node.add_listener(Rc::new(move || {
             second_calls_for_listener.set(second_calls_for_listener.get() + 1);
         }));
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *second_id.borrow_mut() = Some(second_id_value);
 
         node.request_focus();

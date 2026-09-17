@@ -479,7 +479,7 @@ mod tests {
         }
 
         fn insert_render_view(&self, view_id: u64, view: Arc<RwLock<RenderView>>) {
-            self.views.write().insert(view_id, view);
+            let _prev = self.views.write().insert(view_id, view);
         }
 
         fn remove_render_view_by_id(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {

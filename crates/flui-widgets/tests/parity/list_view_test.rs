@@ -158,6 +158,7 @@ fn large_scroll_jump_settles_the_new_window_without_materializing_the_skipped_ba
     // 30 items * 60px estimate = 1800px content in a 180px viewport ->
     // max_scroll_extent = 1620.
     let widget = ListView::builder(30, 60.0, move |index| {
+        // PORT-CHECK-OK-LOCK: plain data: recording log (HashSet<usize>), no Drop
         log.borrow_mut().insert(index);
         (index < 30).then(|| SizedBox::new(200.0, 60.0).boxed())
     })
@@ -166,6 +167,7 @@ fn large_scroll_jump_settles_the_new_window_without_materializing_the_skipped_ba
     let mut laid = lay_out(widget, tight(200.0, 180.0));
     laid.tick();
     laid.tick();
+    // PORT-CHECK-OK-LOCK: plain data: recording log (HashSet<usize>), no Drop
     built_indices.borrow_mut().clear();
 
     // Jump deep into the list — the new visible window sits around index 20

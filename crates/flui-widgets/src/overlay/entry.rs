@@ -316,18 +316,19 @@ impl OverlayEntry {
     /// Re-attaching a previously removed entry is legal — Flutter also allows it
     /// (`_overlay` is nulled, not poisoned; only `dispose` is terminal).
     pub(crate) fn attach(&self, shared: &Arc<OverlayShared>) {
+        // PORT-CHECK-OK-LOCK: plain data: Weak downgrade, no Drop
         *self.inner.overlay.lock() = Some(Arc::downgrade(shared));
     }
 
     /// Publish the mounted subtree's rebuild capability. Called from the entry
     /// view's `init_state`.
     pub(crate) fn publish_rebuild(&self, handle: RebuildHandle) {
-        *self.inner.rebuild.lock() = Some(handle);
+        let _prev = self.inner.rebuild.lock().replace(handle);
     }
 
     /// Drop the rebuild capability. Called from the entry view's `dispose`.
     pub(crate) fn clear_rebuild(&self) {
-        *self.inner.rebuild.lock() = None;
+        let _prev = self.inner.rebuild.lock().take();
     }
 
     /// Whether two handles name the same entry.

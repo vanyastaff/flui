@@ -1993,7 +1993,7 @@ impl Drop for WindowsWindow {
 
             // Remove from windows map
             let hwnd_key = self.hwnd.0 as isize;
-            self.windows_map.lock().remove(&hwnd_key);
+            let _prev = self.windows_map.lock().remove(&hwnd_key);
         }
     }
 }

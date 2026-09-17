@@ -81,7 +81,12 @@ impl RenderBox for LifecycleProbe {
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.log.attach_count.fetch_add(1, Ordering::SeqCst);
-        *self.log.captured_handle.lock().expect("lock poisoned") = Some(handle);
+        let _prev = self
+            .log
+            .captured_handle
+            .lock()
+            .expect("lock poisoned")
+            .replace(handle);
     }
 
     fn detach(&mut self) {
@@ -136,7 +141,12 @@ impl RenderSliver for LifecycleProbeSliver {
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.log.attach_count.fetch_add(1, Ordering::SeqCst);
-        *self.log.captured_handle.lock().expect("lock poisoned") = Some(handle);
+        let _prev = self
+            .log
+            .captured_handle
+            .lock()
+            .expect("lock poisoned")
+            .replace(handle);
     }
 
     fn detach(&mut self) {

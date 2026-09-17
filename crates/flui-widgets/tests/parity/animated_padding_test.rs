@@ -169,6 +169,7 @@ fn animated_padding_clamps_negative_overshoot_to_zero() {
     );
 
     // Retarget toward zero — the curve overshoots below 0 partway through.
+    // PORT-CHECK-OK-LOCK: plain data: EdgeInsets is Copy
     *padding.lock() = EdgeInsets::ZERO;
     laid.pump();
     laid.pump_for(Duration::ZERO); // detection frame: anchors the fresh run
