@@ -83,8 +83,12 @@ OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 565
 # number in between too). #619 is a genuinely separate, later-numbered
 # follow-up issue the app-level wall-clock-timeout consumer residual
 # `timer-service-for-frozen-tickers` hands off to once issue #556 itself
-# closes.
-OWNER_ISSUE_ALLOWLIST: set[int] = {619}
+# closes. #1148 is the macOS AppKit window close/teardown issue that owns the
+# executable-coverage contract `macos-window-close-path-executable` — the
+# registry's first owner outside the Runtime.1 epic (619 remains a #556
+# follow-up) and its first native-backend *executable* platform contract;
+# both of those predate it.
+OWNER_ISSUE_ALLOWLIST: set[int] = {619, 1148}
 
 # Runtime crates covered by the singleton and lock-surface nets.
 RUNTIME_CRATES = ["flui-app", "flui-scheduler", "flui-platform", "flui-engine"]
