@@ -1378,3 +1378,72 @@ one: replacing the handler invocation with a discarded binding turns
 halves are independently pinned), and the same mutation of `on_set_text` turns
 `a_set_text_request_carries_its_payload_into_the_handler` red with
 `left: [], right: ["hello"]`.
+
+### 18. Replacing a `HeroController` retires its in-flight flights, restoring both heroes
+
+**Rule:** Prime Directive #1 — the reference's observable behavior is the floor;
+where the reference has no behaviour (no analogue exists), FLUI names the rule,
+justifies it, and pins it with a test. This entry is local to the crate, so it
+lives here rather than in an ADR.
+
+**Oracle:** Flutter's `HeroController` is owned by its `NavigatorState` for the
+navigator's whole life (`widgets/navigator.dart`), so there is no "replaced
+controller" state to define. The two reference seams that do touch flight
+cleanup are `_HeroFlight.dispose` (`heroes.dart:654-665`) and
+`HeroController.dispose` (`heroes.dart:1112-1116`): dispose removes the overlay
+entry and un-links the proxy, but it does **not** call `endFlight` — both
+heroes' placeholders stay frozen, which is fine in Flutter only because the
+whole tree is being torn down with the navigator, so the blank placeholder is
+about to be destroyed anyway.
+
+**Choice:** when a `HeroController` is detached — replaced by
+`NavigatorHandle::add_observer` (which takes the auto-installed default),
+removed by `remove_observer`, or its navigator unmounts —
+`HeroController::did_detach` calls `FlightManager::finish_all`, which **aborts**
+every flight still in the air: it removes each overlay entry and calls
+`end_flight(false)` on **both** heroes. Distinguishing an abort from the
+ordinary `finish` is load-bearing: a normal `finish` ends one hero hidden and
+the other revealed, chosen by the terminal animation status (the
+`heroes.dart:608-614` comment), whereas an abort has no status to choose with
+and must leave both pages — which stay alive and in the stack — showing their
+real children rather than a blank placeholder.
+
+**Why the reference's shape does not transcribe.** Flutter's controller is never
+replaced in place, so its cleanup is a full-tree teardown that tolerates frozen
+placeholders. FLUI's controller is a swappable observer, and the flight it
+launched is retired through a `Weak<FlightManager>` held by the overlay entry's
+shuttle (`FlightManager::finish`'s `manager.upgrade()`). A detached controller
+drops its `FlightManager`, so that upgrade returns `None` from then on: the
+flight can never be retired, its overlay entry leaks, and the shuttle paints at
+its end rect forever. Finishing/cancelling (not transferring to the replacement)
+is the rule because a flight is owned by the controller that launched it — its
+`from`/`to` route animation values and its gesture wiring all belong to that
+controller's measurement pass, and re-parenting them onto a replacement would
+mean guessing a flight plan the replacement never measured.
+
+**Consequences, named rather than left to be discovered:**
+
+- **The auto observer's flight is gone the moment a manual controller is
+  installed.** `NavigatorHandle::add_observer` calls `did_detach` on the
+  auto-installed default before attaching the new observer, so installing a
+  `HeroController` mid-flight retires the auto observer's flight immediately —
+  the overlay count returns to its pre-flight value in the same call. The
+  fixture `gesture_fixture_with`'s doc documents this rather than the previous
+  "survives `install`" leak.
+- **`finish`'s retired-then-drain discipline is preserved.** An abort goes
+  through the same `retire` (drop the flight from the registry, park it in
+  `retired`, schedule the coalesced end-of-frame drain) as a normal `finish`,
+  because `did_detach` runs owner-local (from `add_observer`/`remove_observer`/
+  dispose) and never inside an animation status listener — but the park still
+  costs nothing and keeps the drop outside the animation listener family, the
+  one invariant the type docs rest on.
+
+**Replacement test**
+(`navigator::hero_gesture_tests::replacing_the_auto_hero_observer_retires_its_in_flight_flight`):
+pushes two same-tagged hero pages so the auto observer launches a real
+programmatic flight, then installs a manual controller and asserts (a) the
+overlay count returns to its pre-flight value, (b) the replacement controller
+inherited no flight, and (c) both heroes' placeholders are cleared. Red-check:
+deleting the `finish_all` call from `did_detach` leaves the overlay count one
+entry high (`left: 4, right: 3`) and both placeholders set.
+

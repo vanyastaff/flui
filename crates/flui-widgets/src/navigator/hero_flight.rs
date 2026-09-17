@@ -231,6 +231,7 @@ impl FlightInner {
             Some(from) => 1.0 - Interval::linear(from, 1.0).transform(self.proxy.value()),
             None => 1.0,
         };
+        // PORT-CHECK-OK-LOCK: plain data: f32, no Drop
         *self.opacity.lock() = opacity;
     }
 
@@ -276,12 +277,15 @@ impl Drop for FlightInner {
     ///
     /// [`gesture_wake_subscription`]: FlightInner::gesture_wake_subscription
     fn drop(&mut self) {
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         if let Some(status_id) = self.subscriptions.lock().take() {
             self.proxy.remove_status_listener(status_id);
         }
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         if let Some(id) = self.proxy_wake_subscription.lock().take() {
             self.proxy.remove_listener(id);
         }
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         if let Some(id) = self.gesture_wake_subscription.lock().take() {
             self.gesture_signal.notifier().remove_listener(id);
         }
@@ -373,22 +377,26 @@ impl HeroFlight {
             && self.inner.proxy.is_dismissed()
     }
 
-    /// `_HeroFlight._performAnimationUpdate` (`heroes.dart:600-618`), minus the
-    /// `onFlightEnded` callback — the manager does that half.
+    /// Tear this flight down and hand the two heroes back for the caller to
+    /// decide each placeholder's fate — the terminal animation status picks that,
+    /// and [`finish`](Self::finish) and [`abort`](Self::abort) disagree.
     ///
-    /// Idempotent: detaching the proxy re-fires its status listener, and a diverted
-    /// flight is ended by the manager before its own listener would.
-    fn finish(&self, status: AnimationStatus) {
+    /// Idempotent: detaching the proxy re-fires its status listener, and a
+    /// diverted flight is ended by the manager before its own listener would.
+    fn teardown(&self) -> Option<(HeroHandle, HeroHandle)> {
         if self.inner.ended.swap(true, Ordering::SeqCst) {
-            return;
+            return None;
         }
 
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         if let Some(status_id) = self.inner.subscriptions.lock().take() {
             self.inner.proxy.remove_status_listener(status_id);
         }
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         if let Some(id) = self.inner.proxy_wake_subscription.lock().take() {
             self.inner.proxy.remove_listener(id);
         }
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         if let Some(id) = self.inner.gesture_wake_subscription.lock().take() {
             self.inner.gesture_signal.notifier().remove_listener(id);
         }
@@ -399,16 +407,44 @@ impl HeroFlight {
             entry.remove();
         }
 
+        let state = self.inner.state.lock();
+        Some((state.from_hero.clone(), state.to_hero.clone()))
+    }
+
+    /// `_HeroFlight._performAnimationUpdate` (`heroes.dart:600-618`), minus the
+    /// `onFlightEnded` callback — the manager does that half.
+    fn finish(&self, status: AnimationStatus) {
+        let Some((from_hero, to_hero)) = self.teardown() else {
+            return;
+        };
+
         // "If [AnimationStatus.completed], toHero will be the one on top and we keep
         //  fromHero hidden. If [AnimationStatus.dismissed], the animation is triggered
         //  but canceled before it finishes. In this case, we keep toHero hidden
         //  instead." (`:608-614`)
-        let (from_hero, to_hero) = {
-            let state = self.inner.state.lock();
-            (state.from_hero.clone(), state.to_hero.clone())
-        };
         from_hero.end_flight(status.is_completed());
         to_hero.end_flight(status.is_dismissed());
+    }
+
+    /// Tear this flight down with no terminal animation status to decide the
+    /// heroes' fate — used when its controller is detached (replaced or removed
+    /// by `NavigatorHandle::add_observer` / `remove_observer`) while the
+    /// navigator, and therefore both heroes, stay alive.
+    ///
+    /// Unlike [`finish`](Self::finish), **both** heroes restore their children:
+    /// the flight is abandoned rather than undone in a particular direction, so
+    /// neither page keeps a blank placeholder where its hero was.
+    ///
+    /// Flutter has no direct analogue — its `HeroController` is owned by the
+    /// navigator for its whole life, and `_HeroFlight.dispose`
+    /// (`heroes.dart:654-665`) leaves the heroes' placeholders frozen because
+    /// the whole tree is being torn down anyway. Recorded in `ARCHITECTURE.md`.
+    fn abort(&self) {
+        let Some((from_hero, to_hero)) = self.teardown() else {
+            return;
+        };
+        from_hero.end_flight(false);
+        to_hero.end_flight(false);
     }
 
     /// `_HeroFlight.divert` (`heroes.dart:740-816`): a second transition for this tag
@@ -554,6 +590,7 @@ impl HeroFlight {
             rect.begin = new_begin;
             rect.end = new_end;
         }
+        // PORT-CHECK-OK-LOCK: plain data: Option<f32>, no Drop
         *self.inner.fade_from.lock() = None;
         self.inner.aborted.store(false, Ordering::Relaxed);
         // Re-read the new manifest's hooks (`manifest = newManifest`, `:815`): a divert
@@ -561,10 +598,10 @@ impl HeroFlight {
         // `flight_shuttle_builder`. The same-direction branch above already rebuilt the
         // shuttle with the new builder; the other branches keep the existing shuttle (as
         // Flutter does), so the stored builder only matters for a later same-tag divert.
-        *self.inner.rect_factory.lock() = new_rect_factory;
-        *self.inner.shuttle_builder.lock() = new_shuttle_builder;
+        let _prev = std::mem::replace(&mut *self.inner.rect_factory.lock(), new_rect_factory);
+        let _prev = std::mem::replace(&mut *self.inner.shuttle_builder.lock(), new_shuttle_builder);
         if let Some(shuttle) = new_shuttle.take() {
-            *self.inner.shuttle.lock() = Some(shuttle);
+            let _prev = self.inner.shuttle.lock().replace(shuttle);
         }
         {
             let mut state = self.inner.state.lock();
@@ -669,6 +706,7 @@ impl FlightManager {
     /// its own drain. Set from the controller's measurement pass, where the navigator
     /// still resolves it.
     pub(crate) fn set_post_frame(&self, handle: Option<LocalPostFrameHandle>) {
+        // PORT-CHECK-OK-LOCK: plain data: LocalPostFrameHandle (Weak+Weak), no Drop
         *self.post_frame.lock() = handle;
     }
 
@@ -832,7 +870,7 @@ impl FlightManager {
             })
         };
         overlay.insert(&entry, &InsertPosition::Top);
-        *inner.entry.lock() = Some(entry);
+        let _prev = inner.entry.lock().replace(entry);
 
         let flight = HeroFlight {
             inner: Arc::clone(&inner),
@@ -847,6 +885,7 @@ impl FlightManager {
         let proxy_wake_id = inner
             .proxy
             .add_listener(Arc::new(move || proxy_to_wake.notify_listeners()));
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         *inner.proxy_wake_subscription.lock() = Some(proxy_wake_id);
 
         // The status listener installed in the constructor (`:547`) must remain a
@@ -874,6 +913,7 @@ impl FlightManager {
                 _ => {}
             }
         }));
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         *inner.subscriptions.lock() = Some(status_id);
 
         // The deferred-replay half of `_handleAnimationUpdate` (`:639-649`): fires
@@ -901,9 +941,10 @@ impl FlightManager {
             }
             gesture_to_wake.notify_listeners();
         }));
+        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         *inner.gesture_wake_subscription.lock() = Some(gesture_wake_id);
 
-        self.flights.lock().insert(manifest.tag.clone(), flight);
+        let _prev = self.flights.lock().insert(manifest.tag.clone(), flight);
     }
 
     /// `HeroController._handleFlightEnded` (`heroes.dart:1069-1071`): drop the flight
@@ -911,12 +952,47 @@ impl FlightManager {
     /// is *retired*, not dropped — see the type docs.
     fn finish(self: &Arc<Self>, flight: &HeroFlight, status: AnimationStatus) {
         flight.finish(status);
+        self.retire(flight);
+    }
+
+    /// [`HeroFlight::abort`], then the same retire-and-drain `finish` uses.
+    fn abort(self: &Arc<Self>, flight: &HeroFlight) {
+        flight.abort();
+        self.retire(flight);
+    }
+
+    /// Drop the flight from the registry and park it for a safe end-of-frame
+    /// drop. Called both from the flight's own status listener (`finish`) and
+    /// from a detached controller's sweep (`abort`) — both park rather than
+    /// drop, so the flight is freed outside any animation listener (see the
+    /// type docs).
+    fn retire(self: &Arc<Self>, flight: &HeroFlight) {
         let removed = self.flights.lock().remove(flight.tag());
         if let Some(removed) = removed {
-            // Park it — we are inside its status listener — and schedule the drop for
-            // the end of this frame.
+            // Park it — we may be inside its status listener — and schedule the
+            // drop for the end of this frame.
             self.retired.lock().push(removed);
             self.schedule_drain();
+        }
+    }
+
+    /// `HeroController.dispose`'s flight sweep (`heroes.dart:1112-1116`):
+    /// cancel every flight still in the air, restoring both heroes and removing
+    /// every overlay entry.
+    ///
+    /// Called from `HeroController::did_detach` — when the controller is
+    /// replaced by `NavigatorHandle::add_observer`, removed by
+    /// `remove_observer`, or its navigator unmounts. A detached controller can
+    /// no longer service a flight's end-of-flight drain (the shuttle retires a
+    /// flight only through a live `FlightManager`), so leaving flights airborne
+    /// would strand their overlay entries and their shuttle's painting forever.
+    /// Owner-local, never from inside an animation listener, so aborting (which
+    /// parks a flight) is safe here, unlike the data-plane status listeners in
+    /// [`start`](Self::start).
+    pub(crate) fn finish_all(self: &Arc<Self>) {
+        let all: Vec<HeroFlight> = self.flights.lock().values().cloned().collect();
+        for flight in all {
+            self.abort(&flight);
         }
     }
 
