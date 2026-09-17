@@ -851,8 +851,8 @@ impl RenderNode {
     /// of protocol (Box or Sliver). Returns `None` if the stored object is not
     /// a `T`.
     ///
-    /// This is the View layer's hook for `RenderObjectElement`'s update path:
-    /// when a `RenderObjectWidget` updates, the framework downcasts the live
+    /// This is the View layer's hook for Flutter's `RenderObjectElement`
+    /// update path: when a `RenderObjectWidget` updates, the framework downcasts the live
     /// render object to the widget's concrete `RenderObject` type and calls
     /// `RenderView::update_render_object` to apply the new configuration in
     /// place (Flutter's `Widget.updateRenderObject`).

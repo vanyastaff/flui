@@ -172,8 +172,8 @@ pub use element::{
 };
 // Slot types for multi-child elements (re-exported from flui-tree, canonical home)
 pub use element::{ElementSlot, IndexedSlot};
-// RenderObjectElement traits
-pub use element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
+// Render-tree root element marker trait
+pub use element::RenderTreeRootElement;
 // Root element
 pub use element::{RootElement, RootElementImpl};
 // Behavior types

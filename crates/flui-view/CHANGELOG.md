@@ -31,3 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   descendant-only debug assert; a re-entered element rebuilds once per
   re-entry rather than being silently dropped; no latch suppressing the
   mid-drain frame request).
+
+### Removed
+
+- **The `RenderObjectElement` child-mutation seam (issue #1203).** The
+  `RenderObjectElement` trait (its five child-mutation methods
+  `attach_render_object` / `detach_render_object` /
+  `insert_render_object_child` / `move_render_object_child` /
+  `remove_render_object_child`, the type-erased `render_object_any`
+  accessors, and `find_`/`set_ancestor_render_object_element`), the
+  `RenderSlot` enum, and the seam's state on `RenderBehavior` (`slot`,
+  `ancestor_render_object_element`, and their accessors) are deleted as
+  dead code — zero production callers across the workspace; every Flutter
+  consumer family of the seam maps to a live FLUI equivalent running the
+  opposite direction (the child adopts itself at mount). The mapping
+  decision is recorded in this crate's `ARCHITECTURE.md`. The
+  `RenderTreeRootElement` marker trait stays: the root bootstrap it
+  documents is live.

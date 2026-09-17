@@ -56,8 +56,6 @@ Successfully unified all 6 element types (StatelessElement, ProxyElement, Statef
 #### RenderBehavior<V>
 - **Type**: Contains render-specific fields
   - `render_id: Option<RenderId>` - ID in RenderTree
-  - `slot: RenderSlot` - Position in parent
-  - `ancestor_render_object_element: Option<ElementId>` - Nearest ancestor RenderObjectElement
 - **Logic**: Creates RenderObject, manages RenderTree integration
 - **Arity**: Variable (N children)
 - **Lifecycle**: Creates RenderObject on mount, removes from RenderTree on unmount
@@ -97,27 +95,20 @@ pub type RenderElement<V> = Element<V, Variable, RenderBehavior<V>>;
 
 ## Implementation Details
 
-### RenderObjectElement Trait
+### Render Adoption (child-adopts-itself)
 
-The `RenderObjectElement` trait is implemented as a blanket impl for render elements:
-
-```rust
-impl<V> RenderObjectElement for Element<V, Variable, RenderBehavior<V>>
-where
-    V: RenderView,
-    flui_rendering::storage::RenderNode:
-        From<Box<dyn flui_rendering::traits::RenderObject<V::Protocol>>>,
-{
-    fn render_object_any(&self) -> Option<&dyn Any> {
-        self.behavior.render_id_ref().as_ref().map(|r| r as &dyn Any)
-    }
-
-    fn insert_render_object_child(&mut self, child: &dyn Any, slot: RenderSlot) {
-        // RenderTree manipulation through behavior fields
-    }
-    // ... other RenderObjectElement methods
-}
-```
+FLUI does not carry Flutter's element-side child-mutation seam
+(`RenderObjectElement.insertRenderObjectChild` and friends) — it was deleted
+as dead code with zero production callers. A render element adopts ITSELF at
+mount: `RenderBehavior::on_mount` takes the `parent_render_id` propagated
+before mount (`ElementBase::child_render_id` pass-through) and calls
+`PipelineOwner::adopt_render_child`. Removal runs through `on_unmount`
+(`remove_render_object_from_tree`), reordering through the post-build batch
+pass (`ElementTree::reorder_render_children_after_build`), and reparent /
+GlobalKey moves through relocation tokens (`detach_render_subtrees` /
+`attach_render_subtrees`). The full divergence accounting lives in this
+crate's `ARCHITECTURE.md` (`## Mapping decisions` → "Flutter:
+parent-inserts-child → FLUI: child-adopts-itself").
 
 ### Behavior Callbacks
 
@@ -146,7 +137,6 @@ Child management is delegated to `ElementChildStorage` implementations:
 2. `crates/flui-view/src/element/unified.rs` (373 lines)
    - Unified Element<V, A, B> struct
    - ElementBase implementation
-   - RenderObjectElement implementation
    - Convenience methods for StatefulElement, InheritedElement, RenderElement
 
 ## Cleanup Complete
@@ -201,7 +191,7 @@ impl<V: InheritedView> Element<V, Single, InheritedBehavior<V>> {
 All 116 tests in `flui-view` pass:
 - ✅ Element lifecycle tests
 - ✅ View-specific behavior tests
-- ✅ RenderObjectElement integration tests
+- ✅ Render adoption tests (on_mount / on_unmount)
 - ✅ StatefulElement state management tests
 
 ## Code Metrics

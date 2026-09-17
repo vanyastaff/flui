@@ -555,7 +555,6 @@ macro_rules! single_child_view_children {
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::RenderId;
     use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     use flui_types::geometry::px;
@@ -879,37 +878,5 @@ mod tests {
         assert!(element.render_id().is_none());
         // RenderObject should be removed from tree
         assert!(!pipeline_owner.with(|owner| owner.render_tree().contains(render_id)));
-    }
-
-    #[test]
-    fn test_render_object_element_trait() {
-        use crate::element::RenderObjectElement;
-
-        let view = SizedBoxView {
-            width: 100.0,
-            height: 100.0,
-        };
-        let mut element = RenderElement::new(&view, RenderBehavior::new());
-
-        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-        element.set_pipeline_owner(pipeline_owner.clone());
-        let mut build_owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut build_owner.element_owner_mut());
-
-        // Test RenderObjectElement methods - returns RenderId
-        assert!(RenderObjectElement::render_object_any(&element).is_some());
-
-        // Downcast to RenderId
-        let render_any = RenderObjectElement::render_object_any(&element).unwrap();
-        let render_id = render_any.downcast_ref::<RenderId>().unwrap();
-
-        // Verify we can access the RenderObject through RenderTree
-        pipeline_owner.with(|owner| {
-            let node = owner.render_tree().get(*render_id).unwrap();
-            let render_obj = node.box_render_object();
-            let sized_box = render_obj.as_any().downcast_ref::<RenderSizedBox>();
-            // RenderSizedBox exists - that's enough to verify
-            assert!(sized_box.is_some());
-        });
     }
 }
