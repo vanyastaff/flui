@@ -84,7 +84,7 @@ fn render_element_under_renderless_owner_parent_is_refused_not_silently_orphaned
             let render_id = tree
                 .get(child_id)
                 .and_then(|node| node.element().render_id())
-                .expect("the render element created its render object");
+                .expect("BUG: the render element created its render object");
             let parent_link = pipeline.with(|owner| owner.render_tree().parent(render_id));
             panic!(
                 "the render element {child_id:?} mounted through a render-less \
@@ -115,7 +115,7 @@ fn bare_mount_render_root_still_mounts_parentless() {
     let render_id = tree
         .get(root_id)
         .and_then(|node| node.element().render_id())
-        .expect("a bare-mount render root creates its render object");
+        .expect("BUG: a bare-mount render root creates its render object");
     let parent_link = pipeline.with(|owner| owner.render_tree().parent(render_id));
     assert!(
         parent_link.is_none(),
