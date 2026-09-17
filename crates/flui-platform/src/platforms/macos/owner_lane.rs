@@ -25,9 +25,10 @@
 //!   only **main-lane** instances — never nest across lanes.
 //!
 //! The reentrancy probe's exactness depends on the `OnceLock` caching in
-//! [`owner_queue`] / [`test_owner_queue`]: the marker is the lane queue's
-//! ADDRESS, so a per-call re-created `Queue::main()` / `Queue::create` would
-//! break the identity comparison. Keep the statics.
+//! [`owner_queue`] (and, under `#[cfg(test)]`, its sibling `test_owner_queue`):
+//! the marker is the lane queue's ADDRESS, so a per-call re-created
+//! `Queue::main()` / `Queue::create` would break the identity comparison. Keep
+//! the statics.
 
 use objc::{class, msg_send, sel, sel_impl};
 
@@ -64,8 +65,9 @@ thread_local! {
 /// lane? The marker is the lane identity itself — the owner queue's address —
 /// so this can tell "on THIS instance's lane" from "on some other lane a
 /// reused worker thread last ran". All production instances share [`owner_queue`]
-/// and all test instances share [`test_owner_queue`], so the probe is exact for
-/// every instance of either kind.
+/// and all test instances share `test_owner_queue` (a `#[cfg(test)]` sibling,
+/// absent from non-test doc builds, hence the plain-font reference), so the
+/// probe is exact for every instance of either kind.
 pub(super) fn on_owner_queue(owner: &'static dispatch::Queue) -> bool {
     ON_OWNER_QUEUE.with(std::cell::Cell::get) == Some(std::ptr::from_ref(owner))
 }
@@ -148,9 +150,56 @@ pub(super) fn exec_on_owner<R: Send>(
     }
 }
 
+/// Run `f` ON the owner lane, asynchronously, under the reentrancy guard and
+/// panic shield.
+///
+/// Unlike [`exec_on_owner`] this NEVER BLOCKS the caller: `f` is dispatched
+/// with `Queue::exec_async` and the function returns immediately. Its purpose
+/// is teardown tails that must not hang window close — `MacOSWindow`'s `Drop`
+/// routes its AppKit tail here and lets the lane run it if and when it
+/// services. If the lane is not servicing (pre-`run`, or the run loop is
+/// gone), `f` simply never runs and is dropped WITH ITS CAPTURES — which is
+/// exactly why `f` must be `'static` and own its state. `f` runs under the
+/// [`OnOwnerQueueGuard`] and is catch_unwind-wrapped (the GCD `exec_async`
+/// trampoline is `extern "C"` with no panic catch, the same hazard
+/// `exec_on_owner`'s shield exists for); a caught panic is logged here —
+/// fire-and-forget has no caller frame to resume to.
+pub(super) fn exec_async_guarded(
+    owner: &'static dispatch::Queue,
+    f: impl FnOnce() + Send + 'static,
+) {
+    owner.exec_async(move || {
+        // SAFETY: the guard is installed before the body runs, so
+        // `on_owner_queue` reports on-lane for the body's lifetime; the
+        // panic shield wraps `f` before any unwind could cross GCD's
+        // extern-"C" `exec_async` trampoline frames — the same reasoning as
+        // `exec_on_owner`'s dispatched arm. The post-catch log arm sits
+        // OUTSIDE the shield, but it is a plain-std statement (downcast +
+        // `tracing::warn!`) encased by the tracing subscriber's own panic
+        // containment, so no panic can escape this block.
+        let _guard = OnOwnerQueueGuard::new(owner);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        if let Err(payload) = result {
+            let message = if let Some(message) = payload.downcast_ref::<&str>() {
+                message
+            } else if let Some(message) = payload.downcast_ref::<String>() {
+                message.as_str()
+            } else {
+                "(a non-string panic payload)"
+            };
+            tracing::warn!(
+                "owner-lane teardown body panicked (swallowed; no caller frame to resume): \
+                 {message}"
+            );
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn exec_on_owner_runs_inline_when_already_on_the_lane() {
@@ -195,6 +244,60 @@ mod tests {
             on_lane,
             "the routed body must observe the owner-lane marker: exec_on_owner must run its \
              body only under the lane guard, never bare on the caller"
+        );
+    }
+
+    #[test]
+    fn exec_async_guarded_runs_body_under_lane_guard() {
+        let owner = test_owner_queue();
+        let witness = Arc::new(Mutex::new(None));
+        let body_witness = Arc::clone(&witness);
+        exec_async_guarded(owner, move || {
+            *body_witness
+                .lock()
+                .expect("test witness mutex is module-scoped and never poisoned") =
+                Some(on_owner_queue(owner));
+        });
+        // The helper must have returned immediately; the body runs asynchronously
+        // on the lane. Wait for the witness with a test-side timeout so a broken
+        // helper cannot hang the test.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let recorded = *witness
+                .lock()
+                .expect("test witness mutex is module-scoped and never poisoned");
+            if let Some(on_lane) = recorded {
+                assert!(
+                    on_lane,
+                    "the async body must run under the owner-lane guard: a bare un-guarded \
+                     execution would observe the marker unset"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the guarded async body must run within the test-side timeout"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn exec_async_guarded_never_blocks_the_caller() {
+        // A fresh serial queue that nothing ever drains: if the helper waited
+        // on the lane, the body would never run and the call would never
+        // return. The no-hang teardown contract (ADR-0045 decision 7) is
+        // exactly this property, pinned mechanically.
+        let never_serviced: &'static dispatch::Queue =
+            Box::leak(Box::new(dispatch::Queue::create(
+                "flui.owner-lane.never-serviced",
+                dispatch::QueueAttribute::Serial,
+            )));
+        let start = Instant::now();
+        exec_async_guarded(never_serviced, || {});
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "exec_async_guarded must return immediately even when the lane never services its block"
         );
     }
 }

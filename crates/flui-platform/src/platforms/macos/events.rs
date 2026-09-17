@@ -428,8 +428,8 @@ unsafe fn convert_scroll_event(ns_event: id, scale_factor: f64, view_height: f64
 }
 
 /// Assemble a `PointerEvent::Gesture` around an already-converted
-/// [`PointerGesture`] at the event's own location, with the shared
-/// synthetic gesture identity (see `shared::gestures`).
+/// `ui_events::pointer::PointerGesture` at the event's own location, with the
+/// shared synthetic gesture identity (see `shared::gestures`).
 ///
 /// # Safety
 ///

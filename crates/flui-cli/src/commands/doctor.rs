@@ -252,37 +252,34 @@ fn check_android_targets(all_ok: &mut bool) -> String {
 fn check_ios(verbose: bool, all_ok: &mut bool) -> String {
     let mut results = Vec::with_capacity(3);
 
-    match Command::new("xcode-select").arg("-p").output() {
-        Ok(output) => {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout);
-                results.push(format!(
-                    "{} Xcode: {}",
-                    style("✓").green(),
-                    style("Installed").cyan()
-                ));
-
-                if verbose {
-                    results.push(format!("  Path: {}", style(path.trim()).dim()));
-                }
-            } else {
-                *all_ok = false;
-                results.push(format!(
-                    "{} Xcode: {}\n  {}",
-                    style("✗").red(),
-                    style("Not found").red(),
-                    style("xcode-select --install").dim()
-                ));
-            }
-        }
-        Err(_) => {
-            *all_ok = false;
+    if let Ok(output) = Command::new("xcode-select").arg("-p").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout);
             results.push(format!(
                 "{} Xcode: {}",
+                style("✓").green(),
+                style("Installed").cyan()
+            ));
+
+            if verbose {
+                results.push(format!("  Path: {}", style(path.trim()).dim()));
+            }
+        } else {
+            *all_ok = false;
+            results.push(format!(
+                "{} Xcode: {}\n  {}",
                 style("✗").red(),
-                style("Not found").red()
+                style("Not found").red(),
+                style("xcode-select --install").dim()
             ));
         }
+    } else {
+        *all_ok = false;
+        results.push(format!(
+            "{} Xcode: {}",
+            style("✗").red(),
+            style("Not found").red()
+        ));
     }
 
     results.push(check_ios_targets(all_ok));
@@ -322,7 +319,7 @@ fn check_ios_targets(all_ok: &mut bool) -> String {
                 style("Missing").yellow()
             );
             for target in &missing {
-                result.push_str(&format!("\n  {} {}", style("⚠").yellow(), target));
+                let _ = write!(result, "\n  {} {}", style("⚠").yellow(), target);
             }
             result
         }
