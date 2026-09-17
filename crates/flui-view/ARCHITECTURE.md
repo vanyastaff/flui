@@ -107,17 +107,21 @@ build the current drain has not yet reconciled," which is out of scope for
 this change.
 
 **Divergence 3 (`on_build_scheduled` fires mid-drain; Flutter latches its
-frame request across both the dirty-heap and the equivalent of the inbox
-path):** Flutter drives `scheduleBuildFor` and a `Listenable`-triggered
-rebuild through a single `_scheduledFlushDirtyElements`-style latch, so a
-schedule landing while a flush is already underway does not ask for a
-second frame. FLUI's `ExternalBuildScheduler::schedule` has no equivalent
-latch: it fires `on_build_scheduled` on every newly-queued id regardless of
-whether a drain is already running (pinned by
+frame request through TWO nested guards, one at each level FLUI's
+`schedule` conflates):** at 3.44.0, `BuildOwner.scheduleBuildFor` guards its
+own frame-request callback with `if (!_scheduledFlushDirtyElements &&
+onBuildScheduled != null)` (`framework.dart`), then calls into
+`BuildScope._scheduleBuildFor`, which separately guards ITS OWN per-scope
+`scheduleRebuild?.call()` with `if (!_buildScheduled && !_building)`. Every
+Flutter schedule — `setState`, a `Listenable` firing, a `BuildOwner`-level
+reassemble — passes through BOTH guards uniformly, since there is only one
+`scheduleBuildFor` entry point. FLUI's `ExternalBuildScheduler::schedule`
+has no equivalent at either level: it fires `on_build_scheduled` on every
+newly-queued id regardless of whether a drain is already running (pinned by
 `mid_drain_schedule_still_requests_a_frame_like_an_out_of_frame_schedule`).
 Recorded as the deliberate alternative rather than built: the redundant
 frame request this can cause is discarded downstream by the ordinary
 dirty-state gate a wake-with-nothing-new-to-do already hits, so adding the
-latch would trade a real per-callsite invariant (every fresh inbox entry
-asks for a frame) for a saving with no measured cost — take it up only if
-a wake-count oracle ever shows the cost is real.
+latch(es) would trade a real per-callsite invariant (every fresh inbox
+entry asks for a frame) for a saving with no measured cost — take it up
+only if a wake-count oracle ever shows the cost is real.

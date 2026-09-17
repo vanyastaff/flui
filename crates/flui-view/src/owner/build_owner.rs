@@ -188,6 +188,57 @@ pub(crate) struct BuildDrainResult {
     pub(crate) target_rebuilt: bool,
 }
 
+/// Drain-scoped accumulator for ids [`BuildOwner::absorb_mid_drain_inbox`]
+/// capped this drain (see that method's doc for why this exists instead of
+/// putting each one straight back into the shared inbox). `Drop` — not a
+/// flush call placed after `drain_build_scope`'s loop — is what actually
+/// gets the accumulated ids back to `external_inbox`, because the loop's own
+/// per-element build and reconcile panics are caught, patched up, and
+/// RE-RAISED via `std::panic::resume_unwind` from several arms inside that
+/// loop: each one unwinds `drain_build_scope`'s stack frame immediately,
+/// skipping any code placed after the loop. Without this guard, an id
+/// already marked dirty on the tree and removed from `external_inbox` (by
+/// `absorb_mid_drain_inbox`'s own `drain()`) but capped by the budget would
+/// end up in none of `dirty_elements`, `dirty_reasons`, or `external_inbox`
+/// the moment a LATER build in the same drain panics — a silently lost
+/// rebuild request. A `Drop` impl runs on every exit path, unwind included,
+/// so this is the house pattern for cleanup that must survive a panicking
+/// callback (see the reentrancy-depth guard around ticker callbacks for the
+/// same shape). Holds a cloned `Arc`, not a borrow of `BuildOwner`, so it can
+/// coexist with `&mut self` calls elsewhere in the loop.
+struct CappedLeftoverGuard {
+    inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
+    leftover: HashMap<ElementId, RebuildReasons>,
+}
+
+impl CappedLeftoverGuard {
+    fn new(inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>) -> Self {
+        Self {
+            inbox,
+            leftover: HashMap::new(),
+        }
+    }
+}
+
+impl Drop for CappedLeftoverGuard {
+    fn drop(&mut self) {
+        if self.leftover.is_empty() {
+            return;
+        }
+        let mut inbox = self.inbox.lock();
+        for (id, reasons) in self.leftover.drain() {
+            match inbox.entry(id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(reasons);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().merge(reasons);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct BuildScopeQueues {
     /// Dirty work currently outside every live layout-builder scope.
@@ -374,11 +425,15 @@ pub struct BuildOwner {
 
     /// Remaining RE-ENTRY mid-drain absorb budget for the current frame
     /// (issue #1180, [`MAX_MID_DRAIN_ABSORBS`]). Reset at every
-    /// [`Self::build_scope`] entry and shared by every drain that frame runs
-    /// — including the layout-builder fixpoint's direct
-    /// `drain_prepared_build_target` calls, since none of them re-enters
-    /// `build_scope` itself. See [`Self::built_this_frame`] for what counts
-    /// as a re-entry.
+    /// [`Self::build_scope`] entry and shared by every drain that frame
+    /// runs — including the layout-builder fixpoint's own
+    /// `drain_prepared_build_target` calls AND
+    /// `Self::service_child_requests_impl`'s lazy-sliver service pass —
+    /// because `build_scope` is only the reset plus a call into
+    /// [`Self::build_scope_impl`], and every one of those mid-frame
+    /// re-entrant callers reaches `build_scope_impl` directly instead of
+    /// `build_scope`, so none of them re-runs the reset. See
+    /// [`Self::built_this_frame`] for what counts as a re-entry.
     pub(crate) mid_drain_absorbs_left: usize,
 
     /// Whether the mid-drain absorb budget ran out at some point since the
@@ -1370,9 +1425,11 @@ impl BuildOwner {
         let mut result = BuildDrainResult::default();
         let mut absorbed_mid_drain = 0usize;
         // Ids capped for the rest of THIS drain accumulate here instead of
-        // being put straight back into `self.external_inbox` — see the flush
-        // after the loop below and `Self::absorb_mid_drain_inbox`'s doc.
-        let mut capped_leftover: HashMap<ElementId, RebuildReasons> = HashMap::new();
+        // being put straight back into `self.external_inbox` — see
+        // `CappedLeftoverGuard`'s doc for why a guard, not a flush placed
+        // after the loop, and `Self::absorb_mid_drain_inbox`'s doc for the
+        // budget rules.
+        let mut capped_leftover = CappedLeftoverGuard::new(Arc::clone(&self.external_inbox));
 
         // Re-key every element already on the heap to its AUTHORITATIVE tree
         // depth before draining. `schedule_build_for` trusts the depth its
@@ -1428,7 +1485,8 @@ impl BuildOwner {
         // in progress, which is what the field name promises.
         let mut first_pop = true;
         loop {
-            let absorbed_this_pop = self.absorb_mid_drain_inbox(tree, &mut capped_leftover);
+            let absorbed_this_pop =
+                self.absorb_mid_drain_inbox(tree, &mut capped_leftover.leftover);
             if !first_pop {
                 absorbed_mid_drain += absorbed_this_pop;
             }
@@ -1751,25 +1809,10 @@ impl BuildOwner {
             }
         }
 
-        // Flush whatever this drain capped back into the real inbox, ONCE,
-        // now that the loop is done with it — not on every pop that found it
-        // still capped (see `Self::absorb_mid_drain_inbox`'s doc). Merge
-        // rather than overwrite: a concurrent `schedule` may have landed
-        // fresh reasons for the same id in `self.external_inbox` while it
-        // sat in `capped_leftover`.
-        if !capped_leftover.is_empty() {
-            let mut inbox = self.external_inbox.lock();
-            for (id, reasons) in capped_leftover {
-                match inbox.entry(id) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(reasons);
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().merge(reasons);
-                    }
-                }
-            }
-        }
+        // `capped_leftover`'s `Drop` flushes whatever this drain capped back
+        // into the real inbox here, on this normal-return path exactly like
+        // it would on an unwind through the loop above — see
+        // `CappedLeftoverGuard`'s doc.
 
         // The build drained: every render child has attached. Settle each
         // render parent's children into element-slot order (no-op unless an
@@ -1854,21 +1897,25 @@ impl BuildOwner {
     /// this every pop. Putting each one straight back into `self.external_inbox`
     /// would mean every LATER pop's `drain()` pulls the same already-capped
     /// ids back out, re-locks, and re-inserts them again, for no new
-    /// information. Accumulating them in `capped_leftover` — owned by
-    /// [`Self::drain_build_scope`] and passed in by `&mut` — means a capped id
-    /// is looked at once, and `self.external_inbox` can go and stay empty
-    /// for the remainder of the drain (the common case once budget is
-    /// exhausted), so later pops hit this function's early return instead of
-    /// a full lock-drain-collect cycle.
+    /// information. Accumulating them in `capped_leftover` — the
+    /// [`CappedLeftoverGuard`] [`Self::drain_build_scope`] owns, passed in
+    /// here by `&mut` to its `leftover` field — means a capped id is looked
+    /// at once, and `self.external_inbox` can go and stay empty for the
+    /// remainder of the drain (the common case once budget is exhausted), so
+    /// later pops hit this function's early return instead of a full
+    /// lock-drain-collect cycle.
     ///
     /// # Locking
     ///
     /// The inbox lock is held only for the `drain()` that empties it into an
     /// owned `Vec`, released before anything else runs. It is never held
     /// across a build — `parking_lot::Mutex` is non-reentrant, and a build
-    /// may call `schedule` synchronously. `capped_leftover` is a plain local,
-    /// not behind the lock; `Self::drain_build_scope` re-locks the inbox
-    /// exactly once, after the whole drain, to flush it back.
+    /// may call `schedule` synchronously. `capped_leftover` itself is a
+    /// plain, unlocked map; `CappedLeftoverGuard::drop` re-locks the inbox
+    /// exactly once, when the guard goes out of scope — on the drain's
+    /// normal return OR on an unwind through the loop, so a capped id
+    /// survives a later build's panic in the same drain instead of vanishing
+    /// with the guard's stack frame.
     fn absorb_mid_drain_inbox(
         &mut self,
         tree: &mut ElementTree,
@@ -4371,6 +4418,131 @@ mod tests {
         }
     }
 
+    /// The tree's own root, panicking from `did_change_dependencies` when
+    /// armed. Used ONLY as the panic source for the `capped_leftover`
+    /// unwind-safety regression below: root is the one element
+    /// `drain_build_scope`'s build-hook catch can never hand to
+    /// `replace_failed_lifecycle_element` (that recovery needs a parent to
+    /// re-point), so a panic here is the one legitimate way to reach the
+    /// catch's bare, unconditional `std::panic::resume_unwind` arm through
+    /// ordinary view code rather than through a framework-internal invariant
+    /// violation.
+    #[derive(Clone)]
+    struct MidDrainRootPanic {
+        trigger_panic: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    struct MidDrainRootPanicState {
+        trigger_panic: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl crate::StatefulView for MidDrainRootPanic {
+        type State = MidDrainRootPanicState;
+
+        fn create_state(&self) -> Self::State {
+            MidDrainRootPanicState {
+                trigger_panic: Arc::clone(&self.trigger_panic),
+            }
+        }
+    }
+
+    impl crate::ViewState<MidDrainRootPanic> for MidDrainRootPanicState {
+        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
+            assert!(
+                !self.trigger_panic.load(Ordering::Relaxed),
+                "MidDrainRootPanic: deliberate did_change_dependencies panic"
+            );
+        }
+
+        fn build(
+            &self,
+            _view: &MidDrainRootPanic,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            MidDrainStableLeaf
+        }
+    }
+
+    impl View for MidDrainRootPanic {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+    }
+
+    /// Regression test for the repair-round finding that `capped_leftover`
+    /// was flushed only textually after `drain_build_scope`'s loop: several
+    /// arms inside that loop restore heap/dirty-reasons entries and then
+    /// `std::panic::resume_unwind`, which unwinds the function's own stack
+    /// frame before a LATER flush placed after the loop ever runs.
+    ///
+    /// Pre-arms the exact capping precondition directly on `owner`'s
+    /// `pub(crate)` fields — a `victim` id already recorded in
+    /// `built_this_frame` with a fresh landing sitting in the inbox and the
+    /// budget already at zero — rather than grinding through
+    /// `MAX_MID_DRAIN_ABSORBS` real re-entries to reach it. This makes the
+    /// cap fire on the drain's very FIRST absorb call, before its first pop;
+    /// `root` (the only thing actually scheduled onto the heap) then builds
+    /// and panics from `did_change_dependencies` — the one hook whose panic
+    /// both reaches `drain_build_scope`'s own catch (unlike `build()`, which
+    /// `build_or_recover` absorbs, and unlike a fresh child's `init_state`,
+    /// which is converted to a `Result` before it ever unwinds that far) AND
+    /// takes its bare, unconditional `resume_unwind` arm rather than the
+    /// recoverable one (since root has no parent to substitute).
+    ///
+    /// Calls `build_scope_impl` directly, not `build_scope`: the public
+    /// entry point resets `mid_drain_absorbs_left`/`built_this_frame` at
+    /// every call, which would erase the precondition this test just armed.
+    #[test]
+    fn mid_drain_panic_after_a_cap_still_flushes_the_capped_id_to_the_inbox() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let trigger_panic = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let root = tree.mount_root(
+            &MidDrainRootPanic {
+                trigger_panic: Arc::clone(&trigger_panic),
+            },
+            &mut owner.element_owner_mut(),
+        );
+        settle_initial_builds(&mut tree, &mut owner);
+
+        // An otherwise-irrelevant already-mounted element stands in for "the
+        // id this drain already built once and capped a re-entry for" —
+        // only its presence in `built_this_frame` and the inbox matters,
+        // not anything about its own view.
+        let victim = insert_child(&mut tree, &mut owner, root, 0);
+        owner.built_this_frame.insert(victim);
+        owner.mid_drain_absorbs_left = 0;
+        owner.external_inbox.lock().insert(
+            victim,
+            RebuildReasons::from_reason(RebuildReason::StateChange),
+        );
+
+        tree.mark_needs_build(root);
+        owner.schedule_build_for(root, 0, RebuildReason::DependencyChange);
+        owner.pending_dependency_changes.insert(root);
+        trigger_panic.store(true, Ordering::Relaxed);
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.build_scope_impl(&mut tree);
+        }));
+        trigger_panic.store(false, Ordering::Relaxed);
+
+        assert!(
+            outcome.is_err(),
+            "root's did_change_dependencies must panic and propagate out of build_scope_impl \
+             — if this assertion fails, the fixture stopped exercising the bare \
+             resume_unwind arm this test targets"
+        );
+        assert_eq!(
+            owner.pending_external_builds(),
+            1,
+            "the pre-armed capped id must still reach the inbox even though root's build \
+             panicked in the SAME drain — this is what CappedLeftoverGuard's Drop fixes; \
+             before it, the panic unwound past the old post-loop flush and the capped id \
+             vanished (0 here)"
+        );
+    }
+
     /// The notifier's target is its own REAL child (declared every build, so
     /// the reconcile preserves the child element across the parent's
     /// rebuild) — pins per-pop absorption of a genuine descendant, not just
@@ -5086,6 +5258,148 @@ mod tests {
 
         // Cleanup.
         owner.build_scope(&mut tree);
+    }
+
+    /// A minimal [`crate::element::child_manager::ChildManager`] that mounts
+    /// `item_view` at every requested logical index via `SparseChildren::ensure`
+    /// — just enough real lazy-sliver plumbing to drive
+    /// [`BuildOwner::service_child_requests_impl`]'s own
+    /// `Self::build_scope_impl` call, without a real `Viewport`/
+    /// `RenderSliverList` layout pass.
+    struct MidDrainLazyManager {
+        host: ElementId,
+        item_view: MidDrainSelfRescheduler,
+        sparse_children: crate::element::sparse_children::SparseChildren,
+    }
+
+    impl crate::element::child_manager::ChildManager for MidDrainLazyManager {
+        fn service(
+            &mut self,
+            requested_indices: &[usize],
+            _retain_first: usize,
+            _retain_last: usize,
+            tree: &mut ElementTree,
+            owner: &mut crate::ElementOwner<'_>,
+            pipeline: &flui_rendering::pipeline::PipelineCell,
+        ) -> bool {
+            let mut did_work = false;
+            for &index in requested_indices {
+                self.sparse_children.ensure(
+                    index,
+                    &self.item_view,
+                    self.host,
+                    tree,
+                    owner,
+                    pipeline,
+                );
+                did_work = true;
+            }
+            did_work
+        }
+
+        fn forget_child(&mut self, child: ElementId) {
+            self.sparse_children.forget(child);
+        }
+    }
+
+    /// Pins option (a) at the ONE call site the layout-builder-fixpoint test
+    /// above does not reach: `Self::service_child_requests_impl`'s own
+    /// `Self::build_scope_impl` call. Mutation: swapping that call for
+    /// `Self::build_scope` passes every other test in this module (including
+    /// the layout-builder one above) but would let this test's lazy item
+    /// re-enter through a FRESH budget instead of the one the frame's own
+    /// `build_scope` already spent to zero.
+    ///
+    /// Seeds a pending child-build request directly via
+    /// `flui-rendering`'s `push_pending_child_request_for_test` (a
+    /// `testing`-feature-gated hook `flui-view` already enables as a
+    /// dev-dependency) — real `PipelineOwner`/`ChildManager` registry
+    /// wiring, without needing a real `Viewport`/`RenderSliverList` layout
+    /// pass just to populate the same queue.
+    #[test]
+    fn mid_drain_absorb_budget_is_shared_with_a_real_lazy_sliver_service_pass() {
+        let pipeline = flui_rendering::pipeline::PipelineCell::new(
+            flui_rendering::pipeline::PipelineOwner::new(),
+        );
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root_with_pipeline_owner(
+            &TestView,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        settle_initial_builds(&mut tree, &mut owner);
+
+        // Exhaust the WHOLE frame budget on an unrelated element first,
+        // through the frame's own top-level `build_scope` — matching a real
+        // frame's order (build_scope, then layout, then
+        // service_child_requests, all before the next frame's reset).
+        let outer_build_calls = Arc::new(AtomicUsize::new(0));
+        let outer_should_reschedule = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let outer_handle_slot = Arc::new(Mutex::new(None));
+        let outer = insert_and_settle(
+            &mut tree,
+            &mut owner,
+            root,
+            0,
+            &MidDrainSelfRescheduler {
+                build_calls: Arc::clone(&outer_build_calls),
+                should_reschedule: Arc::clone(&outer_should_reschedule),
+                handle_slot: Arc::clone(&outer_handle_slot),
+            },
+        );
+        let after_mount = outer_build_calls.load(Ordering::Relaxed);
+        outer_should_reschedule.store(true, Ordering::Relaxed);
+        let outer_depth = tree.get(outer).expect("outer").depth;
+        tree.mark_needs_build(outer);
+        owner.schedule_build_for(outer, outer_depth, RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        outer_should_reschedule.store(false, Ordering::Relaxed);
+        assert_eq!(
+            outer_build_calls.load(Ordering::Relaxed) - after_mount,
+            1 + MAX_MID_DRAIN_ABSORBS,
+            "sanity: the outer element must exhaust the whole frame budget before the \
+             service pass ever runs"
+        );
+        assert_eq!(
+            owner.mid_drain_absorbs_left, 0,
+            "sanity: budget is at zero going into the service pass"
+        );
+
+        // Register the manager and seed one pending request for a lazy item
+        // that self-reschedules from its own first build.
+        let sliver_id = RenderId::new(9999);
+        let item_build_calls = Arc::new(AtomicUsize::new(0));
+        let item_should_reschedule = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let item_handle_slot = Arc::new(Mutex::new(None));
+        owner.element_owner_mut().register_child_manager(
+            sliver_id,
+            Arc::new(Mutex::new(MidDrainLazyManager {
+                host: root,
+                item_view: MidDrainSelfRescheduler {
+                    build_calls: Arc::clone(&item_build_calls),
+                    should_reschedule: Arc::clone(&item_should_reschedule),
+                    handle_slot: Arc::clone(&item_handle_slot),
+                },
+                sparse_children: crate::element::sparse_children::SparseChildren::new(),
+            })),
+        );
+        pipeline.with_mut(|p| p.push_pending_child_request_for_test(sliver_id, 0));
+
+        let did_work = owner.service_child_requests(&mut tree, &pipeline);
+
+        assert!(
+            did_work,
+            "sanity: the service pass must have built the lazy item"
+        );
+        assert_eq!(
+            item_build_calls.load(Ordering::Relaxed),
+            1,
+            "the lazy item's own first build is free (never built this frame before), but \
+             its self-reschedule right after must be capped IMMEDIATELY — the frame's shared \
+             budget was already at zero from the outer element, and a re-entrant \
+             build_scope_impl call inside the service pass must not hand out a fresh one"
+        );
     }
 
     #[test]
