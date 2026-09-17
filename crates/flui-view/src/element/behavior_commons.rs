@@ -40,6 +40,8 @@ use crate::{
 };
 
 // ============================================================================
+// perform_build helpers
+// ============================================================================
 /// Guard for a behavior's `perform_build`. Returns `true` if the build
 /// body should proceed, `false` if the early-return path was taken.
 ///

@@ -188,11 +188,12 @@ impl<V: InheritedView> Element<V, Single, InheritedBehavior<V>> {
 
 ## Test Results
 
-All 116 tests in `flui-view` pass:
-- ✅ Element lifecycle tests
-- ✅ View-specific behavior tests
-- ✅ Render adoption tests (on_mount / on_unmount)
-- ✅ StatefulElement state management tests
+The `flui-view` test suite passes (run `cargo test -p flui-view` for the current count —
+do not trust a number quoted in this file, it rots):
+- Element lifecycle tests
+- View-specific behavior tests
+- Render adoption tests (on_mount / on_unmount)
+- StatefulElement state management tests
 
 ## Code Metrics
 
