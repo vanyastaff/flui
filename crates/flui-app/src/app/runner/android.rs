@@ -564,19 +564,22 @@ where
         // Two more invariants this registration rests on, stated where it is
         // made rather than assumed:
         //
-        // * It is idempotent-by-absence. Nothing clears `WindowCallbacks` on
-        //   this backend — no `callbacks().clear()` call exists anywhere under
-        //   `flui-platform/src/platforms/android/`, unlike every other
-        //   windowed backend's window-destroy path — so a second
-        //   `bootstrap_android` on the same window would leave two live leases
-        //   and release/rebuild the surface twice per event.
-        // * Adding that clear is NOT part of this change. `MainEvent::Destroy`
-        //   in `flui-platform`'s `platforms/android/mod.rs` is one line away
-        //   from becoming a clear site, and `WindowCallbacks::clear` forbids
-        //   re-registration, so adding it there would silently break this
-        //   callback for the rest of the window's life. Whether Android should
-        //   gain the site is a follow-up (recorded as a stated boundary in
-        //   ADR-0063), not an oversight here.
+        // * The slots are cleared exactly once, on `AndroidPlatform::run`'s
+        //   exit path (`flui-platform`'s `platforms/android/mod.rs`, after the
+        //   loop and before the quit hook), on the loop's three returning
+        //   routes: `MainEvent::Destroy`, a `quit()`, a bootstrap that failed,
+        //   plus one named exception, a panic that unwinds out of `run` and
+        //   skips the clear by decision (ADR-0063 decision 5). The clear drops
+        //   this closure and the frame closure above, which are the only
+        //   owners of `lane`, so the renderer and its surface lease go with
+        //   them and the window's `Arc` is released.
+        // * Nothing registers on the cleared set afterwards. `on_ready` is
+        //   `FnOnce`, so this bootstrap runs once per platform, and a recreated
+        //   activity is a new `android_main` with a new `AndroidApp`, a new
+        //   platform and a new window (`android-activity` 0.6.1,
+        //   `native_activity/glue.rs`'s `ANativeActivity_onCreate`); the
+        //   once-then-discarded rule `WindowCallbacks::clear` documents is
+        //   never reached by this runner.
         let lane_surface = Arc::clone(&lane);
         window.on_surface_status_change(Box::new(move |has_surface| {
             let mut lane = lane_surface.lock();

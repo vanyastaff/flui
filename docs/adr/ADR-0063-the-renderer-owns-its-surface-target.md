@@ -130,32 +130,103 @@ ownership discipline.
    - `WindowCallbacks::clear()` now latches; a `CallbackLease` returning after
      the clear drops its callback instead of restoring it. That is the #919
      hazard's structural close **on every backend that has a clear site** —
-     `platforms/{macos,windows,winit,headless}` all do, and the census is
-     `rg -n 'callbacks(\(\))?\.clear\(\)' crates/flui-platform/src/platforms`
-     — the optional `()` matters, because winit reaches the slots through the
-     `callbacks()` accessor while macOS, Windows and headless call
-     `callbacks.clear()` on the field, and a regex that requires the
-     parentheses reports only the winit files. Run today it prints hits under
-     `headless/`, `macos/`, `windows/` and `winit/` and none under `android/`.
-     Android has none, so the registration cycle stays closed there; that gap
-     is a boundary of this record rather than a claim it closes (see the
-     Android bullet below and decision 6).
+     `platforms/{android,macos,windows,winit,headless}` all do, and the census
+     is `rg -n 'callbacks(\(\))?\.clear\(\)' crates/flui-platform/src/platforms`
+     — the optional `()` matters, because both forms are in use: winit's
+     `complete_window_close` and `release_open_window_callbacks` and the
+     Android exit path reach the slots through the `callbacks()` accessor,
+     while macOS, Windows, headless and `WinitWindow::drop` call
+     `callbacks.clear()` on the field, so a regex that requires the
+     parentheses reports only the accessor sites. Run today it prints hits
+     under `android/`, `headless/`, `macos/`, `windows/` and `winit/`, so the
+     cycle is closed on all five backends.
+
+     > *Amended 2026-09-16 (#1187):* Android joined the census, with its site
+     > on the loop's exit path rather than in the `MainEvent::Destroy` arm —
+     > the bullet below has the decision. Before that this bullet listed four
+     > backends and named Android as the exception, a boundary of this record
+     > rather than a gap in it.
    - Android reports `Unavailable` for a *terminated* window, and only then:
      `native_window()` is `Some` across an ordinary pause and `None` between
      `MainEvent::TerminateWindow` and the next `InitWindow`. A backend that
      only ever released on a pause would therefore still present through a
      surface whose handle the activity destroyed, which is why the release is
      driven by decision 6's signal rather than by a `window_handle()` probe.
-   - **The one registration cycle that is still closed is Android's.** It
-     registers `on_request_frame` (`runner/android.rs`) and nothing clears
-     those slots: window → callbacks → frame callback → raster lane →
-     renderer → surface → `Arc<Window>`, exactly the cycle the four clear-site
-     comments describe. Adding the site is deliberately not part of this
-     change — it changes behavior on a path no gate here executes, it
-     interacts with activity recreation, and `MainEvent::Destroy` (the
-     candidate site) sits one line away from the callback registration
-     decision 6 adds, which `clear()` would silently break for the rest of the
-     window's life. Filed as a follow-up.
+   - **Android's registration cycle is closed on the loop's exit path, not in
+     the `Destroy` arm.** The site is `platforms/android/mod.rs`'s `run`,
+     between the loop's close and `invoke_quit()`: it `take()`s the platform's
+     `window` field and calls `WindowCallbacks::clear()` on the taken window,
+     which drops the `on_request_frame` (`runner/android.rs`) and
+     `on_surface_status_change` closures (the only owners of the raster lane),
+     and with them the renderer and the `Arc<AndroidWindow>` its surface
+     lease holds. The exit path rather than the arm, because `Destroy` is one
+     of three returning routes and not the one an application chooses: a
+     `quit()` breaks the loop and returns from `android_main`, and
+     `android-activity` 0.6.1's `rust_glue_entry` follows that return with
+     `ANativeActivity_finish`, so the `Destroy` the JVM thread writes
+     afterwards lands in a pipe this loop no longer reads. This mirrors the
+     hole winit closed with `release_open_window_callbacks`, whose own doc
+     names `owner.quit()` and a failed `on_ready` as the two routes
+     `complete_window_close` never runs for. On the `Destroy` route the
+     surface is already gone: AOSP's `NativeActivity.onDestroy` destroys it
+     before it unloads the native code, and `set_window(None)` parks the JVM
+     thread until `TermWindow` has been applied, so the
+     `MainEvent::TerminateWindow` callback has fully returned before `Destroy`
+     is written. The Rust half of that pair is read from `android-activity`
+     0.6.1's source; the AOSP half is read from `NativeActivity.java` on
+     `refs/heads/main` rather than a pinned tag, so it is the platform's shape
+     as of this record, not a frozen contract. Nothing can re-register on the
+     cleared set afterwards:
+     `on_ready` is `FnOnce`, and `ANativeActivity_onCreate` spawns one thread
+     with a fresh `AndroidApp` per activity instance, so a recreated activity
+     runs a new `android_main` against a new platform and a new window.
+
+     > *Amended 2026-09-16 (#1187):* this bullet read "**The one registration
+     > cycle that is still closed is Android's.**", and ended "Filed as a
+     > follow-up." The site landed as the exit-path release described above,
+     > under three returning routes plus the one exception below.
+   - **The one route not covered is named: a panic that unwinds out of `run`.**
+     `rust_glue_entry` wraps the call in `catch_unwind` and still finishes the
+     activity, so a panic anywhere inside the loop (a frame closure, a widget
+     build, an `expect("BUG: ..")`) unwinds past the exit region and leaves
+     that activity's window, lane and renderer stranded until the process
+     ends. A `Drop` guard armed before the loop would cover it and is
+     rejected: it would run the clear during unwind, dropping a configured
+     `wgpu::Surface`, which reaches `vkDeviceWaitIdle` and
+     `vkDestroySurfaceKHR` on a device that may itself be the panic's cause,
+     and a second panic there aborts the process instead of letting the glue's
+     `catch_unwind` finish the activity; `runner/host.rs`'s `OwnerHostClearGuard`
+     keeps its own `Drop` to a single `take()` for the same reason, and winit's
+     clear is reached only on a returning route too: `WinitApp::finish_shutdown`
+     runs from `exiting()` (`platforms/winit/platform.rs`, winit's own
+     loop-exit callback, which the `&ActiveEventLoop` it takes proves is inside
+     `run_app`), from `request_exit` (a `quit()` routed through the user-event
+     handler), and once more from the post-`run_app` tail — and a panic
+     unwinding out of a callback reaches none of them, so
+     `release_open_window_callbacks` is skipped there as well. Whether
+     `wgpu-hal`'s Vulkan release path can itself
+     panic on `VK_ERROR_DEVICE_LOST` is **unverified**; the decision does not
+     depend on it, because the abort hazard is the second panic, whatever
+     raises it.
+
+     > *Amended 2026-09-16 (#1187):* the coverage is "three returning routes,
+     > plus one named exception", never "every route".
+
+   - **Evidence.** A capture-release test on `WindowCallbacks` in
+     `shared/handlers.rs` (both cycle-closing slots are dropped by
+     `clear()`, probed through `Weak`, so a `clear_now` that took every slot
+     and `mem::forget` the tuple fails on a named assertion); a function-scoped
+     source guard in `crates/flui-platform/tests/` that locates `run`'s exit
+     region and refuses an inverted one; compilation of the site by
+     `cross-typecheck`'s Android line under `-D warnings` and by the NDK-free
+     `flui-app` check. Nothing on this host executes the site, and no test
+     here claims it does.
+   - **The site is interim under the shape that retires it.** Once the raster
+     lane is owned by the realm's slot and dropped by `teardown_platform_realm`
+     on every returning route, with the window's closures holding only a
+     handle, the platform no longer carries the cycle at all and the panic
+     route closes structurally rather than by text. That is the direction
+     ADR-0045 and issue #559 already point at, and it is out of scope here.
    - **Win32, AppKit, and Android are clippy-clean under `cross-typecheck`
      and never executed here.** Those three sentences are verification
      claims of that strength and no more.
@@ -382,8 +453,9 @@ backoff loop is the mechanism #1043 makes sound.
   compiled by no gate (`cross-typecheck` builds `flui-platform` only).
 - The frame-closure → lane → renderer → surface → `Arc<window>` cycle
   (present on every desktop backend through the pre-present hook) is broken
-  at native close, not only on winit; a close requested from inside a leased
-  callback can no longer resurrect the frame closure.
+  at native close, not only on winit, and on Android at loop exit; a close
+  requested from inside a leased callback can no longer resurrect the frame
+  closure.
 
 **Negative / trade-offs, stated**
 - `Renderer::new` is a breaking signature change on a `#[doc(hidden)]`
@@ -396,9 +468,11 @@ backoff loop is the mechanism #1043 makes sound.
 - **Still open, named rather than absorbed:** a surface created earlier is
   alive during `DestroyWindow` when the Win32 close is requested from inside
   a leased callback (rwh's contract calls a deleted HWND a logic error — the
-  swapchain fails — not memory unsafety); the Android backend still carries no
-  `callbacks().clear()` site, so its registration cycle stays closed (decision
-  5, last bullet); a quit that skips per-window close leaks
+  swapchain fails — not memory unsafety); a panic that unwinds out of
+  `AndroidPlatform::run` skips its exit-path clear, so that activity's window,
+  lane and renderer stay stranded for the process's life; left unguarded on
+  the double-panic argument in decision 5 rather than absorbed; a quit that
+  skips per-window close leaks
   window + surface silently — closed for the quit route by clearing every
   still-tracked window's callback slots in the winit shutdown path, pinned by
   a real-loop test. Both live-smoke harnesses asserted only the exit code
@@ -408,6 +482,12 @@ backoff loop is the mechanism #1043 makes sound.
   line — the one executed witness that the surface was released rather than
   orphaned. The X11 variant ran here; the Wayland variant runs in CI, where
   `weston` is installed.
+  > *Amended 2026-09-16 (#1187):* this bullet dropped its Android clause,
+  > which read "the Android backend still carries no `callbacks().clear()` site,
+  > so its registration cycle stays closed" — the site landed, on the loop's
+  > exit path (decision 5). What replaces it is the route that site cannot
+  > cover: a panic unwinding out of `AndroidPlatform::run`. The Win32 and
+  > quit-route clauses are unchanged.
 - The native backends' changes are compile-only verified (see decision 5).
 - **AppKit trades a use-after-free for a bounded leak, deliberately.** Both
   native backends' window maps are only ever inserted into (`rg -n

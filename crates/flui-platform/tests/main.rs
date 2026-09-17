@@ -12,6 +12,8 @@
 
 #[path = "accessibility_capability.rs"]
 mod accessibility_capability;
+#[path = "android_exit_path.rs"]
+mod android_exit_path;
 #[path = "contract.rs"]
 mod contract;
 #[path = "display_enumeration.rs"]
