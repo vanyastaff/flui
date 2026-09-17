@@ -11,7 +11,7 @@
 //! # Reference
 //! - macOS Tahoe 26 (Released September 15, 2025)
 //! - FINAL macOS version supporting Intel Macs
-//! - Design System: https://developer.apple.com/design/human-interface-guidelines/materials
+//! - Design System: <https://developer.apple.com/design/human-interface-guidelines/materials>
 
 /// Liquid Glass material variants introduced in macOS Tahoe 26
 ///

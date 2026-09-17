@@ -138,7 +138,7 @@ fn ios_simulators(details: bool) -> String {
 
             for line in output_str.lines() {
                 let line = line.trim();
-                if line.contains("(") && (line.contains("Booted") || line.contains("Shutdown")) {
+                if line.contains('(') && (line.contains("Booted") || line.contains("Shutdown")) {
                     let is_booted = line.contains("Booted");
 
                     if let Some(name_end) = line.find('(') {
@@ -150,18 +150,16 @@ fn ios_simulators(details: bool) -> String {
                             (style("○").dim(), style("shutdown").dim())
                         };
 
-                        simulators.push(format!("  {} {} ({})", icon, name, status));
+                        simulators.push(format!("  {icon} {name} ({status})"));
 
-                        if details && is_booted {
-                            if let Some(uuid_start) = line.find('(') {
-                                if let Some(uuid_end) = line[uuid_start..].find(')') {
-                                    let uuid = &line[uuid_start + 1..uuid_start + uuid_end];
-                                    simulators.push(format!(
-                                        "    {}",
-                                        style(format!("UUID: {}", uuid)).dim()
-                                    ));
-                                }
-                            }
+                        if details
+                            && is_booted
+                            && let Some(uuid_start) = line.find('(')
+                            && let Some(uuid_end) = line[uuid_start..].find(')')
+                        {
+                            let uuid = &line[uuid_start + 1..uuid_start + uuid_end];
+                            simulators
+                                .push(format!("    {}", style(format!("UUID: {uuid}")).dim()));
                         }
                     }
                 }
