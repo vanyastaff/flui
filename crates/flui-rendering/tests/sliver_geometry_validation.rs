@@ -142,6 +142,7 @@ impl RenderBox for BoxWithSliverChild {
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
     ) -> Size {
         let geometry = ctx.layout_sliver_child(0, self.sliver_constraints);
+        // PORT-CHECK-OK-LOCK: plain data: SliverGeometry has no Drop
         *self.captured.lock().unwrap() = Some(geometry);
         ctx.constraints().biggest()
     }

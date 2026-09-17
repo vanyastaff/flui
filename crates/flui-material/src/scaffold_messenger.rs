@@ -269,7 +269,7 @@ impl SnackBarController {
     /// [`ScaffoldMessengerHandle::clear_snack_bars`] (see that method's
     /// doc). A later call replaces an earlier, unfired callback.
     pub fn on_closed(&self, callback: impl FnOnce(SnackBarClosedReason) + 'static) {
-        *self.on_closed.borrow_mut() = Some(Box::new(callback));
+        let _prev = self.on_closed.borrow_mut().replace(Box::new(callback));
     }
 }
 
@@ -310,7 +310,8 @@ impl QueuedEntry {
     /// slot" section for why this fallback is not expected to be reachable).
     fn complete(&self) {
         let reason = self.reason.get().unwrap_or(SnackBarClosedReason::Remove);
-        if let Some(callback) = self.on_closed.borrow_mut().take() {
+        let taken = self.on_closed.borrow_mut().take();
+        if let Some(callback) = taken {
             callback(reason);
         }
     }
@@ -319,7 +320,7 @@ impl QueuedEntry {
     /// drop of a still-queued entry (oracle parity: an abandoned
     /// `Completer`).
     fn complete_silently(&self) {
-        self.on_closed.borrow_mut().take();
+        let _prev = self.on_closed.borrow_mut().take();
     }
 }
 
@@ -492,6 +493,7 @@ impl MessengerCore {
         );
         if let Some(vsync) = self.vsync.borrow().as_ref() {
             let registration = vsync.register(controller.clone());
+            // PORT-CHECK-OK-LOCK: plain data: VsyncRegistration(u64), no Drop
             *self.duration_vsync_registration.borrow_mut() = Some(registration);
         }
         if let Some(rebuild) = self.rebuild.borrow().clone() {
@@ -501,7 +503,7 @@ impl MessengerCore {
         }
         self.last_duration_status.set(AnimationStatus::Dismissed);
         let _ = controller.forward();
-        *self.duration_controller.borrow_mut() = Some(controller);
+        let _prev = self.duration_controller.borrow_mut().replace(controller);
     }
 
     fn cancel_display_timer(&self) {
@@ -510,7 +512,8 @@ impl MessengerCore {
         {
             vsync.unregister(registration);
         }
-        if let Some(controller) = self.duration_controller.borrow_mut().take() {
+        let taken = self.duration_controller.borrow_mut().take();
+        if let Some(controller) = taken {
             controller.dispose();
         }
         self.last_duration_status.set(AnimationStatus::Dismissed);
@@ -639,15 +642,17 @@ impl ScaffoldMessengerHandle {
             .add_status_listener(Arc::new(move |_status| {
                 rebuild_for_listener.schedule(flui_view::RebuildReason::AnimationTick);
             }));
-        *self.shared.rebuild.borrow_mut() = Some(rebuild);
+        let _prev = self.shared.rebuild.borrow_mut().replace(rebuild);
+        // PORT-CHECK-OK-LOCK: plain data: LocalPostFrameHandle (Weak+Weak), no Drop
         *self.shared.post_frame.borrow_mut() = ctx.local_post_frame_handle();
 
         let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         if let Some(vsync) = &vsync {
             let registration = vsync.register(self.shared.entry_controller.clone());
+            // PORT-CHECK-OK-LOCK: plain data: VsyncRegistration(u64), no Drop
             *self.shared.entry_vsync_registration.borrow_mut() = Some(registration);
         }
-        *self.shared.vsync.borrow_mut() = vsync;
+        let _prev = std::mem::replace(&mut *self.shared.vsync.borrow_mut(), vsync);
     }
 
     /// Unregisters from `Vsync` and disposes both controllers.
@@ -689,7 +694,7 @@ impl ScaffoldMessengerHandle {
 
     /// Unregisters a [`crate::Scaffold`] — called from its `dispose`.
     pub(crate) fn unregister_scaffold(&self, element_id: ElementId) {
-        self.shared.scaffolds.borrow_mut().remove(&element_id);
+        let _prev = self.shared.scaffolds.borrow_mut().remove(&element_id);
     }
 
     /// The number of currently-registered [`crate::Scaffold`]s — mainly a
@@ -1064,6 +1069,7 @@ mod tests {
         let reason_for_cb = Rc::clone(&reason);
         handle
             .show_snack_bar(snack_bar("a"))
+            // PORT-CHECK-OK-LOCK: plain data: SnackBarClosedReason, no Drop
             .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
 
         handle.shared.entry_controller.set_value(1.0); // fully shown
@@ -1266,10 +1272,12 @@ mod tests {
         let current_closed_for_cb = Rc::clone(&current_closed);
         handle
             .show_snack_bar(snack_bar("current"))
+            // PORT-CHECK-OK-LOCK: plain data: SnackBarClosedReason, no Drop
             .on_closed(move |reason| *current_closed_for_cb.borrow_mut() = Some(reason));
         let queued_closed_for_cb = Rc::clone(&queued_closed);
         handle
             .show_snack_bar(snack_bar("queued"))
+            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             .on_closed(move |_| *queued_closed_for_cb.borrow_mut() = true);
 
         handle.shared.entry_controller.set_value(1.0); // "current" fully shown
@@ -1325,6 +1333,7 @@ mod tests {
         let reason_for_cb = Rc::clone(&reason);
         handle
             .show_snack_bar(snack_bar("a"))
+            // PORT-CHECK-OK-LOCK: plain data: SnackBarClosedReason, no Drop
             .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
 
         handle.shared.entry_controller.set_value(1.0); // fully shown, display timer starts

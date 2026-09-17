@@ -50,6 +50,7 @@ impl Clipboard for WebClipboard {
             let _ = clipboard.write_text(&text);
         }
         // Always update the in-memory fallback for immediate read_text() access
+        // PORT-CHECK-OK-LOCK: plain data: String
         *self.fallback.lock() = Some(text);
     }
 

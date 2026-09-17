@@ -1458,6 +1458,7 @@ impl Clipboard for MockClipboard {
     }
 
     fn write_text(&self, text: String) {
+        // PORT-CHECK-OK-LOCK: plain data: String
         *self.content.lock() = Some(text);
     }
 }
@@ -1535,7 +1536,7 @@ mod tests {
                     "resolve_next's own return value must be the SAME window it delivered \
                      through the PendingWindow, not a second, different one"
                 );
-                *opened_for_ready.lock() = Some(delivered_window);
+                let _prev = opened_for_ready.lock().replace(delivered_window);
 
                 Ok(())
             }))
@@ -1696,6 +1697,7 @@ mod tests {
         let user = platform
             .open_window(WindowOptions::default())
             .expect("headless opens a second window");
+        // PORT-CHECK-OK-LOCK: plain data: WindowEvent carries only Copy ids
         seen.lock().clear(); // drop the two `Created` events
 
         programmatic.close();
@@ -1837,6 +1839,7 @@ mod tests {
         let window = platform
             .open_window(WindowOptions::default())
             .expect("headless opens a window");
+        // PORT-CHECK-OK-LOCK: plain data: WindowEvent carries only Copy ids
         seen.lock().clear();
 
         let window_id = window.id();

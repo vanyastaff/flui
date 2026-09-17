@@ -143,6 +143,7 @@ fn widget_updates_when_value_changes() {
         "initial: None -> side 1.0"
     );
 
+    // PORT-CHECK-OK-LOCK: plain data: String, no Drop
     *cell.lock() = Some("Gilfoyle".to_owned());
     notifier.notify();
     laid.tick();
@@ -152,6 +153,7 @@ fn widget_updates_when_value_changes() {
         "\"Gilfoyle\" is 8 chars"
     );
 
+    // PORT-CHECK-OK-LOCK: plain data: String, no Drop
     *cell.lock() = Some("Dinesh".to_owned());
     notifier.notify();
     laid.tick();
@@ -172,6 +174,7 @@ fn can_change_listenable() {
     let view = ValueListenableBuilder::new(first_listenable, sized_box_builder());
     let mut laid = lay_out(view, loose(100.0));
 
+    // PORT-CHECK-OK-LOCK: plain data: String, no Drop
     *first_cell.lock() = Some("Gilfoyle".to_owned());
     first.notify();
     laid.tick();
@@ -209,6 +212,7 @@ fn stops_listening_to_old_listenable_after_changing_listenable() {
     let view = ValueListenableBuilder::new(first_listenable, sized_box_builder());
     let mut laid = lay_out(view, loose(100.0));
 
+    // PORT-CHECK-OK-LOCK: plain data: String, no Drop
     *first_cell.lock() = Some("Gilfoyle".to_owned());
     first.notify();
     laid.tick();
@@ -230,6 +234,7 @@ fn stops_listening_to_old_listenable_after_changing_listenable() {
 
     // The old (now disconnected) listenable fires, but must not reach the
     // widget: no schedule, no rebuild, no size change.
+    // PORT-CHECK-OK-LOCK: plain data: String, no Drop
     *first_cell.lock() = Some("Big Head".to_owned());
     first.notify();
     laid.tick();
@@ -298,6 +303,7 @@ fn self_cleans_when_removed() {
         loose(100.0),
     );
 
+    // PORT-CHECK-OK-LOCK: plain data: String, no Drop
     *cell.lock() = Some("Gilfoyle".to_owned());
     notifier.notify();
     laid.tick();

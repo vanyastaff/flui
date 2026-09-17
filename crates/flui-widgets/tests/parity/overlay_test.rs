@@ -237,6 +237,7 @@ fn overlay_of_and_maybe_of_resolve_inside_a_mounted_navigators_route() {
                 Overlay::maybe_of(ctx).is_some(),
                 "maybe_of must resolve the same ancestor Overlay::of just did"
             );
+            // PORT-CHECK-OK-LOCK: plain data: String, no Drop
             *slot.lock() = Some(format!("{of_handle:?}"));
         })
         .into_view()

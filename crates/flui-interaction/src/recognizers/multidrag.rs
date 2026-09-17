@@ -290,7 +290,7 @@ impl MultiDragGestureRecognizer {
     /// Set the per-pointer start callback. The callback may return `None` to
     /// reject the drag (caller can read pointer position to filter by region).
     pub fn with_on_start(self: Arc<Self>, callback: MultiDragStartCallback) -> Arc<Self> {
-        *self.on_start.borrow_mut() = Some(callback);
+        let _prev = self.on_start.borrow_mut().replace(callback);
         self
     }
 
@@ -355,7 +355,7 @@ impl MultiDragGestureRecognizer {
         let entry = self.state.arena().add(pointer, member);
         state.arena_entry = Some(entry);
 
-        self.pointers.lock().insert(pointer, state);
+        let _prev = self.pointers.lock().insert(pointer, state);
     }
 
     /// Withdraw this recogniser's exact arena entry.
@@ -650,8 +650,10 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         // Detach every pointer before arena or user callbacks can re-enter.
         // Retire all exact arena entries first, then notify accepted clients;
         // one hostile callback cannot strand another pointer's arena entry.
-        let mut removed: Vec<(PointerId, MultiDragPointerState)> =
-            self.pointers.lock().drain().collect();
+        let mut removed: Vec<(PointerId, MultiDragPointerState)> = {
+            let mut pointers = self.pointers.lock();
+            pointers.drain().collect()
+        };
         removed.sort_unstable_by_key(|(pointer, _)| *pointer);
 
         let mut first_panic = None;
@@ -1110,7 +1112,7 @@ mod tests {
                     cancels: Rc::clone(&cancels_for_callback),
                 }) as _)
             }));
-        *recognizer_slot.borrow_mut() = Some(rec.clone());
+        let _prev = recognizer_slot.borrow_mut().replace(rec.clone());
 
         rec.add_pointer(
             PointerId::PRIMARY,

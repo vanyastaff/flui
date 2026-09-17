@@ -616,6 +616,7 @@ fn grid_view_count_control_test_taps_route_by_position_across_scroll() {
             &[state.to_string()],
             "tapping {state:?} must fire only its own callback"
         );
+        // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
         log.borrow_mut().clear();
     }
 
@@ -645,6 +646,7 @@ fn grid_view_count_control_test_taps_route_by_position_across_scroll() {
             &[state.to_string()],
             "tapping {state:?} after the scroll must fire only its own callback"
         );
+        // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
         log.borrow_mut().clear();
     }
 
@@ -674,6 +676,7 @@ fn grid_view_count_control_test_taps_route_by_position_across_scroll() {
 
     tap_text(&laid, "Tennessee");
     assert_eq!(log.borrow().as_slice(), &["Tennessee".to_string()]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.borrow_mut().clear();
 
     // tester.drag(Tennessee, Offset(0, 200)) — scroll back up by 200px.
@@ -686,10 +689,12 @@ fn grid_view_count_control_test_taps_route_by_position_across_scroll() {
         "'Tennessee' must still be found (by text, not stale coordinates) and still tappable \
          after scrolling back"
     );
+    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.borrow_mut().clear();
 
     tap_text(&laid, "Pennsylvania");
     assert_eq!(log.borrow().as_slice(), &["Pennsylvania".to_string()]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.borrow_mut().clear();
 }
 
@@ -717,6 +722,7 @@ fn grid_view_extent_control_test_taps_route_by_position_across_scroll() {
     for state in &K_STATES[0..8] {
         tap_text(&laid, state);
         assert_eq!(log.borrow().as_slice(), &[state.to_string()]);
+        // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
         log.borrow_mut().clear();
     }
 
@@ -737,6 +743,7 @@ fn grid_view_extent_control_test_taps_route_by_position_across_scroll() {
 
     tap_text(&laid, "Tennessee");
     assert_eq!(log.borrow().as_slice(), &["Tennessee".to_string()]);
+    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.borrow_mut().clear();
 }
 

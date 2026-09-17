@@ -56,7 +56,7 @@ impl HotReloader {
     where
         F: Fn(&Path) + Send + Sync + 'static,
     {
-        *self.on_change_callback.write() = Some(Box::new(callback));
+        let _prev = self.on_change_callback.write().replace(Box::new(callback));
     }
 
     /// Start watching (blocking). Runs until the process is interrupted.
@@ -79,7 +79,8 @@ impl HotReloader {
 
     /// Stop watching all paths.
     pub fn stop(&mut self) {
-        *self.watch_handle.write() = None;
+        let _prev = self.watch_handle.write().take();
+        // PORT-CHECK-OK-LOCK: plain data: Vec<PathBuf>, no Drop
         self.watched_paths.write().clear();
     }
 
@@ -114,7 +115,7 @@ impl HotReloader {
             }
         });
 
-        *self.watch_handle.write() = Some(handle);
+        let _prev = self.watch_handle.write().replace(handle);
         Ok(())
     }
 }

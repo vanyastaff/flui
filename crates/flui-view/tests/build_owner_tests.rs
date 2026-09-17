@@ -110,6 +110,7 @@ impl RenderView for InteractionContextView {
         let target = ctx
             .register_pointer(|_| {})
             .expect("mount runs with the BuildOwner interaction capability active");
+        // PORT-CHECK-OK-LOCK: plain data: PointerTarget holds only Copy ids
         *self.target.write() = Some(target);
         self.create_count.fetch_add(1, Ordering::Relaxed);
         RenderSizedBox::shrink()

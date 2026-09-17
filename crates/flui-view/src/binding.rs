@@ -740,7 +740,7 @@ impl WidgetsBinding {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        *self.on_need_frame.write() = Some(Box::new(callback));
+        let _prev = self.on_need_frame.write().replace(Box::new(callback));
     }
 
     // ========================================================================
@@ -2807,7 +2807,8 @@ mod tests {
         fn did_change_app_lifecycle_state(&self, _state: AppLifecycleState) {
             self.fired
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if let Some(handle) = self.self_handle.lock().take() {
+            let taken = self.self_handle.lock().take();
+            if let Some(handle) = taken {
                 self.binding.remove_observer(&handle);
             }
         }
@@ -2822,7 +2823,10 @@ mod tests {
             self_handle: parking_lot::Mutex::new(None),
             fired: std::sync::atomic::AtomicUsize::new(0),
         });
-        *observer.self_handle.lock() = Some(observer.clone() as Arc<dyn WidgetsBindingObserver>);
+        let _prev = observer
+            .self_handle
+            .lock()
+            .replace(observer.clone() as Arc<dyn WidgetsBindingObserver>);
         binding.add_observer(observer.clone() as Arc<dyn WidgetsBindingObserver>);
         assert_eq!(binding.observer_count(), 1);
 

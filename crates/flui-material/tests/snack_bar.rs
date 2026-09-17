@@ -81,7 +81,10 @@ struct HandleProbe {
 
 impl StatelessView for HandleProbe {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        *self.slot.borrow_mut() = ScaffoldMessengerScope::maybe_of(ctx);
+        let _prev = std::mem::replace(
+            &mut *self.slot.borrow_mut(),
+            ScaffoldMessengerScope::maybe_of(ctx),
+        );
         SizedBox::shrink()
     }
 }

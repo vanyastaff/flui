@@ -121,7 +121,7 @@ impl AttachSpy {
 impl NavigatorObserver for AttachSpy {
     fn did_attach(&self, navigator: NavigatorHandle) {
         self.log.lock().push(format!("attach:{}", self.name));
-        *self.handle.lock() = Some(navigator);
+        let _prev = self.handle.lock().replace(navigator);
     }
 
     fn did_detach(&self) {
@@ -230,6 +230,7 @@ fn observers_attach_and_detach_in_registration_order() {
     let mut harness = mount_navigator(&navigator);
     assert_eq!(*log.lock(), vec!["attach:a", "attach:b", "attach:c"]);
 
+    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.lock().clear();
     unmount_navigator(&mut harness, &navigator);
     assert_eq!(*log.lock(), vec!["detach:a", "detach:b", "detach:c"]);
@@ -251,6 +252,7 @@ fn unmounting_the_navigator_detaches_its_observers_exactly_once() {
     navigator.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
 
     let mut harness = mount_navigator(&navigator);
+    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.lock().clear();
 
     unmount_navigator(&mut harness, &navigator);
@@ -527,6 +529,7 @@ fn route_subtree_ids_are_published_before_layout_commits() {
         .boxed()
     }));
     let pushed = navigator.current().expect("pushed");
+    // PORT-CHECK-OK-LOCK: plain data: RouteId is Copy
     *route_cell.lock() = Some(pushed);
 
     // What the post-frame callback of the very same frame sees.
@@ -744,7 +747,7 @@ impl StackReader {
 
 impl NavigatorObserver for StackReader {
     fn did_attach(&self, navigator: NavigatorHandle) {
-        *self.handle.lock() = Some(navigator);
+        let _prev = self.handle.lock().replace(navigator);
         self.read("did_attach");
     }
     fn did_push(&self, _route: RouteId, _previous: Option<RouteId>) {
@@ -830,7 +833,7 @@ fn an_observer_may_push_from_did_push_without_deadlocking() {
     }
     impl NavigatorObserver for Reentrant {
         fn did_attach(&self, navigator: NavigatorHandle) {
-            *self.handle.lock() = Some(navigator);
+            let _prev = self.handle.lock().replace(navigator);
         }
         fn did_push(&self, _route: RouteId, _previous: Option<RouteId>) {
             let Some(navigator) = self.handle.lock().clone() else {
@@ -888,10 +891,11 @@ fn observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down() {
     }
     impl NavigatorObserver for EntryWatcher {
         fn did_attach(&self, navigator: NavigatorHandle) {
-            *self.handle.lock() = Some(navigator);
+            let _prev = self.handle.lock().replace(navigator);
         }
         fn did_pop(&self, _route: RouteId, _previous: Option<RouteId>) {
             if let Some(navigator) = self.handle.lock().clone() {
+                // PORT-CHECK-OK-LOCK: plain data: usize, no Drop
                 *self.entries_at_pop.lock() = Some(navigator.tracked_entry_count());
             }
         }

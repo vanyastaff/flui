@@ -4111,7 +4111,7 @@ mod tests {
     impl crate::ViewState<MidDrainLeaf> for MidDrainLeafState {
         fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
             if let Some(slot) = &self.handle_slot {
-                *slot.lock() = Some(ctx.rebuild_handle());
+                let _prev = slot.lock().replace(ctx.rebuild_handle());
             }
         }
 
@@ -4275,7 +4275,7 @@ mod tests {
 
     impl crate::ViewState<MidDrainSelfRescheduler> for MidDrainSelfReschedulerState {
         fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
-            *self.handle_slot.lock() = Some(ctx.rebuild_handle());
+            let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
         fn build(
@@ -4337,7 +4337,7 @@ mod tests {
 
     impl crate::ViewState<MidDrainCountedRescheduler> for MidDrainCountedReschedulerState {
         fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
-            *self.handle_slot.lock() = Some(ctx.rebuild_handle());
+            let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
         fn build(
@@ -4394,7 +4394,7 @@ mod tests {
 
     impl crate::ViewState<MidDrainChainLink> for MidDrainChainLinkState {
         fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
-            *self.own_handle_slot.lock() = Some(ctx.rebuild_handle());
+            let _prev = self.own_handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
         fn build(
@@ -4838,6 +4838,7 @@ mod tests {
             "sanity: depths"
         );
 
+        // PORT-CHECK-OK-LOCK: plain data: Vec<&'static str>, no Drop
         order.lock().clear();
         should_notify.store(true, Ordering::Relaxed);
         tree.mark_needs_build(current);
@@ -5634,7 +5635,7 @@ mod tests {
 
     impl crate::ViewState<StaleIdOldChild> for StaleIdOldChildState {
         fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
-            *self.handle_slot.lock() = Some(ctx.rebuild_handle());
+            let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
         fn build(

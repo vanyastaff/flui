@@ -892,6 +892,7 @@ mod tests {
                 // hasn't moved yet); snapshot right after it so the
                 // assertion below measures growth from THIS call's tick,
                 // not from `forward()` starting the run.
+                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *count_at_forward_for_listener.lock() = Some(*count_source_for_listener.lock());
             }
         }));

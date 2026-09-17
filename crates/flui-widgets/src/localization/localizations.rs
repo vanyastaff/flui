@@ -538,6 +538,7 @@ mod tests {
 
     impl<T: Clone + Send + Sync + 'static> StatelessView for Capture<T> {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            // PORT-CHECK-OK-LOCK: plain data: captured Locale, no Drop
             *self.captured.lock().expect("test mutex poisoned") = Some((self.read)(ctx));
             SizedBox::shrink()
         }

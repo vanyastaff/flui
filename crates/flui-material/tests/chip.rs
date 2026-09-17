@@ -122,6 +122,7 @@ fn tap_fires_on_selected_with_the_flipped_value_for_a_filter_chip() {
             FilterChip::new(Text::new("Vegetarian"))
                 .selected(false)
                 .on_selected(move |next| {
+                    // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
                     *recorder.borrow_mut() = Some(next);
                 }),
         ),

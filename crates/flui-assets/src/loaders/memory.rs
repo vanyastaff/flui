@@ -74,7 +74,7 @@ where
     /// loader.insert(AssetKey::new("test"), vec![1, 2, 3]);
     /// ```
     pub fn insert(&self, key: K, data: D) {
-        self.storage.write().insert(key, Arc::new(data));
+        let _prev = self.storage.write().insert(key, Arc::new(data));
     }
 
     /// Inserts an asset with metadata.
@@ -118,7 +118,8 @@ where
 
     /// Clears all assets from memory.
     pub fn clear(&self) {
-        self.storage.write().clear();
+        let _prev = std::mem::take(&mut *self.storage.write());
+        // PORT-CHECK-OK-LOCK: plain data: AssetMetadata has no Drop
         self.metadata.write().clear();
     }
 }

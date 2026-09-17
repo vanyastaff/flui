@@ -213,7 +213,7 @@ impl LocalHistoryRegistry {
         let entries = std::mem::take(&mut *self.inner.entries.lock());
         for entry in entries {
             entry.removed.store(true, Ordering::Release);
-            entry.on_remove.lock().take();
+            let _prev = entry.on_remove.lock().take();
         }
         // Owed callbacks were claimed by real pops before dispose: still
         // delivered by the pending `apply`.
@@ -295,7 +295,7 @@ impl LocalHistoryHandle {
             None => {
                 // Disposed route: mark the orphan removed so `remove` no-ops.
                 inner.removed.store(true, Ordering::Release);
-                inner.on_remove.lock().take();
+                let _prev = inner.on_remove.lock().take();
             }
         }
         LocalHistoryEntryHandle {

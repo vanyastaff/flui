@@ -198,6 +198,7 @@ impl ViewState<AnimationProbe> for AnimationProbeState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.init_count.fetch_add(1, Ordering::Relaxed);
         let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+        // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
         *self.found_ambient.lock() = Some(ambient.is_some());
         if let Some(vsync) = ambient {
             let registration = vsync.register(self.controller.clone());

@@ -6037,6 +6037,7 @@ fn harness_shader_mask_callback_receives_local_not_offset_rect() {
         let captured_write = Rc::clone(&captured);
         let target = handle
             .register_shader_mask(move |bounds: Rect| {
+                // PORT-CHECK-OK-LOCK: plain data: Rect is Copy
                 *captured_write.borrow_mut() = Some(bounds);
                 Shader::solid(Color::WHITE)
             })
@@ -11246,6 +11247,7 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
         ) -> Size {
             // Read the child's max intrinsic width through the new channel.
             let via_channel = ctx.child_max_intrinsic_width(0, f32::INFINITY);
+            // PORT-CHECK-OK-LOCK: plain data: f32 is Copy
             *self.captured.lock().unwrap() = via_channel;
             // Return the child dry size so the tree is structurally valid.
             ctx.child_dry_layout(0, constraints)

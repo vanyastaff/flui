@@ -326,6 +326,7 @@ fn drag_update_reports_delta_after_start() {
     let last_delta = Arc::new(StdMutex::new(None));
     let last_delta_for_cb = Arc::clone(&last_delta);
     let widget = Draggable::<i32>::new(child()).on_drag_update(move |details| {
+        // PORT-CHECK-OK-LOCK: plain data: Offset is Copy
         *last_delta_for_cb.lock().expect("not poisoned") = Some(details.delta);
     });
     let scoped = lay_out(widget, extent());
@@ -365,6 +366,7 @@ fn reported_offset_is_displacement_not_global_position() {
     let end_details: Arc<StdMutex<Option<DraggableDetails>>> = Arc::new(StdMutex::new(None));
     let end_for_cb = Arc::clone(&end_details);
     let widget = Draggable::<i32>::new(child()).on_drag_end(move |details| {
+        // PORT-CHECK-OK-LOCK: plain data: DraggableDetails (bool/Velocity/Offset), no Drop
         *end_for_cb.lock().expect("not poisoned") = Some(details);
     });
     let padded = Padding::new(EdgeInsets::new(px(40.0), px(0.0), px(0.0), px(60.0))).child(widget);
@@ -524,6 +526,7 @@ fn a_drop_over_no_target_reports_unaccepted_and_fires_canceled() {
     let completed_for_cb = Arc::clone(&completed);
     let widget = Draggable::<i32>::new(child())
         .on_drag_end(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: DraggableDetails (bool/Velocity/Offset), no Drop
             *end_for_cb.lock().expect("not poisoned") = Some(details);
         })
         .on_draggable_canceled(move |_velocity, _offset| {
@@ -773,6 +776,7 @@ fn data_delivered_to_on_accept_on_drop() {
     let accepted = Arc::new(StdMutex::new(None));
     let accepted_for_cb = Arc::clone(&accepted);
     let target = string_target().on_accept(move |details| {
+        // PORT-CHECK-OK-LOCK: plain data: String, no Drop
         *accepted_for_cb.lock().expect("not poisoned") = Some(details.data);
     });
     let state = target.create_state();
@@ -794,6 +798,7 @@ fn candidate_list_gains_and_loses_entries_across_enter_and_leave() {
     let left_with = Arc::new(StdMutex::new(None));
     let left_for_cb = Arc::clone(&left_with);
     let target = string_target().on_leave(move |data| {
+        // PORT-CHECK-OK-LOCK: plain data: String, no Drop
         *left_for_cb.lock().expect("not poisoned") = Some(data);
     });
     let state = target.create_state();
@@ -827,6 +832,7 @@ fn on_will_accept_veto_routes_to_rejected_not_candidate() {
     let target = string_target()
         .on_will_accept(|_details| false)
         .on_leave(move |data| {
+            // PORT-CHECK-OK-LOCK: plain data: String, no Drop
             *left_for_cb.lock().expect("not poisoned") = Some(data);
         });
     let state = target.create_state();
@@ -1469,6 +1475,7 @@ fn a_drop_over_an_accepting_target_completes_the_drag() {
             canceled_for_cb.fetch_add(1, Ordering::SeqCst);
         })
         .on_drag_end(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *accepted_for_cb.lock().expect("not poisoned") = Some(details.was_accepted);
         });
     let scoped = stack_with(logging_target(&log, "inbox"), draggable);
@@ -1551,6 +1558,7 @@ fn the_innermost_accepting_target_shadows_the_outer_one_it_sits_in() {
 
     // (50, 50) is inside both. Crossing that boundary leaves the outer and
     // enters the inner — and the outer, now shadowed, is not re-entered.
+    // PORT-CHECK-OK-LOCK: plain data: UpdateLog (usize + Option<Offset>), no Drop
     log.lock().expect("not poisoned").clear();
     scoped.dispatch_pointer_move(50.0, 50.0);
     assert_eq!(
@@ -1611,6 +1619,7 @@ fn a_vetoing_inner_target_is_still_entered_and_the_outer_one_accepts() {
                 .push("move outer".to_string());
         })
         .on_accept(move |details| {
+            // PORT-CHECK-OK-LOCK: plain data: String, no Drop
             *accepted_for_cb.lock().expect("not poisoned") = Some(details.data);
         })
     };
@@ -1745,6 +1754,7 @@ fn a_target_removed_mid_drag_receives_nothing_further_and_accepts_nothing() {
     let accepted_flag = Arc::new(StdMutex::new(None));
     let accepted_for_cb = Arc::clone(&accepted_flag);
     let draggable = parcel().on_drag_end(move |details| {
+        // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
         *accepted_for_cb.lock().expect("not poisoned") = Some(details.was_accepted);
     });
     let mut scoped = stack_with(logging_target(&log, "inbox"), draggable.clone());
@@ -1760,6 +1770,7 @@ fn a_target_removed_mid_drag_receives_nothing_further_and_accepts_nothing() {
     // Same tree shape, same slots — only the target's content is swapped for
     // a plain box, so the `Draggable`'s own element (and its in-flight drag)
     // survives while the `DragTarget` element is disposed.
+    // PORT-CHECK-OK-LOCK: plain data: UpdateLog (usize + Option<Offset>), no Drop
     log.lock().expect("not poisoned").clear();
     scoped.pump_widget(stack_root(SizedBox::expand(), draggable));
 
@@ -1897,6 +1908,7 @@ fn opaque_feedback_under_the_pointer_does_not_hide_the_target_beneath_it() {
     );
     settle_one_frame(&mut scoped); // the feedback anchor rebuilds at (80, 80)
 
+    // PORT-CHECK-OK-LOCK: plain data: UpdateLog (usize + Option<Offset>), no Drop
     log.lock().expect("not poisoned").clear();
     scoped.dispatch_pointer_move(101.0, 101.0);
 
@@ -1995,6 +2007,7 @@ fn a_drag_delivers_the_payload_it_started_with_after_the_widget_rebuilds() {
         Draggable::<String>::new(child()).data("second".to_string()),
     ));
 
+    // PORT-CHECK-OK-LOCK: plain data: UpdateLog (usize + Option<Offset>), no Drop
     log.lock().expect("not poisoned").clear();
     scoped.dispatch_pointer_move(140.0, 40.0);
 
@@ -2037,6 +2050,7 @@ fn the_probe_uses_the_feedback_offset_the_drag_started_with() {
         parcel().feedback_offset(offset(500.0, 500.0)),
     ));
 
+    // PORT-CHECK-OK-LOCK: plain data: UpdateLog (usize + Option<Offset>), no Drop
     log.lock().expect("not poisoned").clear();
     scoped.dispatch_pointer_move(51.0, 51.0);
 

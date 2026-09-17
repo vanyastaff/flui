@@ -558,7 +558,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
 
     /// `buildTransitions` (`routes.dart:1591`).
     pub(crate) fn transitions(self, transitions: RouteTransitionsBuilder) -> Self {
-        *self.inner.transitions.lock() = transitions;
+        let _prev = std::mem::replace(&mut *self.inner.transitions.lock(), transitions);
         self
     }
 
@@ -613,6 +613,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
 
     /// `barrierColor` (`routes.dart:1774`).
     pub(crate) fn barrier_color(self, color: Color) -> Self {
+        // PORT-CHECK-OK-LOCK: plain data: Color is Copy
         *self.inner.barrier_color.lock() = Some(color);
         self
     }

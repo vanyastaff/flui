@@ -2628,13 +2628,17 @@ impl ViewState<Navigator> for NavigatorState {
         // The navigator owns the clock its route transitions
         // register with — the FLUI shape of Flutter's `vsync: navigator!`. Read
         // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.
-        *self.shared.vsync.lock() = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let _prev = std::mem::replace(
+            &mut *self.shared.vsync.lock(),
+            ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()),
+        );
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
+        // PORT-CHECK-OK-LOCK: plain data: LocalPostFrameHandle (Weak+Weak), no Drop
         *self.shared.post_frame.lock() = ctx.local_post_frame_handle();
-        *self.shared.render_tree.lock() = ctx.pipeline_owner();
-        *self.shared.settle_wake.lock() = Some(ctx.rebuild_handle());
+        let _prev = std::mem::replace(&mut *self.shared.render_tree.lock(), ctx.pipeline_owner());
+        let _prev = self.shared.settle_wake.lock().replace(ctx.rebuild_handle());
 
         // Resolve the ambient `HeroControllerScope` and settle which
         // controller (if any) observes this navigator — before `attach_observers`, so
@@ -2723,12 +2727,14 @@ impl ViewState<Navigator> for NavigatorState {
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing, and a
         // push-completion continuation that outlives it finds no one to wake.
+        // PORT-CHECK-OK-LOCK: plain data: Option<LocalPostFrameHandle>, no Drop
         *self.shared.post_frame.lock() = None;
-        *self.shared.render_tree.lock() = None;
-        *self.shared.settle_wake.lock() = None;
+        let _prev = self.shared.render_tree.lock().take();
+        let _prev = self.shared.settle_wake.lock().take();
         // The mirror of `sync_nested_hero_registration`'s publish: a disposed
         // navigator's heroes must never be visited by an outer flight again.
-        if let Some((registry, source)) = self.shared.nested_hero_registration.lock().take() {
+        let nested_hero_registration = self.shared.nested_hero_registration.lock().take();
+        if let Some((registry, source)) = nested_hero_registration {
             registry.deregister_nested(&source);
         }
     }

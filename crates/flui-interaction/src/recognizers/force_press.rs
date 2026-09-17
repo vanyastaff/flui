@@ -180,6 +180,7 @@ impl ForcePressGestureRecognizer {
 
     /// Update gesture settings
     pub fn set_settings(&self, settings: GestureSettings) {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 
@@ -824,6 +825,7 @@ mod tests {
         let flag = started.clone();
         let arena = GestureArena::new();
         let recognizer =
+            // PORT-CHECK-OK-LOCK: plain data, no significant drop
             ForcePressGestureRecognizer::new(arena).with_on_start(move |_| *flag.lock() = true);
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");

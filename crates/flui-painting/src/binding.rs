@@ -191,22 +191,26 @@ impl ImageCache {
 
     /// Clears all cached images.
     pub fn clear(&self) {
+        // PORT-CHECK-OK-LOCK: plain data: CachedImage holds only u64/usize/Size
         self.cache.write().clear();
         self.current_size_bytes.store(0, Ordering::Relaxed);
     }
 
     /// Clears live images (images currently in use).
     pub fn clear_live_images(&self) {
+        // PORT-CHECK-OK-LOCK: plain data: CachedImage holds only u64/usize/Size
         self.live_images.write().clear();
     }
 
     /// Marks an image as "live" (in use, should not be evicted).
     pub fn mark_live(&self, key: String, image: CachedImage) {
+        // PORT-CHECK-OK-LOCK: plain data: CachedImage holds only u64/usize/Size
         self.live_images.write().insert(key, image);
     }
 
     /// Removes an image from live images.
     pub fn unmark_live(&self, key: &str) {
+        // PORT-CHECK-OK-LOCK: plain data: CachedImage holds only u64/usize/Size
         self.live_images.write().remove(key);
     }
 
@@ -309,7 +313,9 @@ impl SystemFontsNotifier {
     /// See [`Self::add_listener`] for the dead-code allowance rationale.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove_listener(&self, listener: &Arc<dyn Fn() + Send + Sync>) {
-        self.listeners.write().retain(|l| !Arc::ptr_eq(l, listener));
+        let mut listeners = std::mem::take(&mut *self.listeners.write());
+        listeners.retain(|l| !Arc::ptr_eq(l, listener));
+        let _prev = std::mem::replace(&mut *self.listeners.write(), listeners);
     }
 
     /// Notifies all listeners that fonts have changed.

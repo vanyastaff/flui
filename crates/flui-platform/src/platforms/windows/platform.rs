@@ -1543,7 +1543,7 @@ impl Platform for WindowsPlatform {
         let hwnd_value = window.hwnd().0 as isize;
 
         // Store window
-        self.windows.lock().insert(hwnd_value, window.clone());
+        let _prev = self.windows.lock().insert(hwnd_value, window.clone());
 
         Ok(window)
     }

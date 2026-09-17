@@ -149,6 +149,7 @@ fn animated_align_animates_child_offset_over_duration() {
         "first build sits at the initial alignment with no motion"
     );
 
+    // PORT-CHECK-OK-LOCK: plain data: Alignment is Copy
     *alignment.lock() = Alignment::BOTTOM_RIGHT;
     laid.pump();
     laid.pump_for(Duration::ZERO); // detection frame: anchors the fresh run

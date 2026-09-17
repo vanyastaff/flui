@@ -813,7 +813,9 @@ impl DeterministicExecutors {
 
             // Compact completed slots between passes (a slot with no future
             // and no pending re-queue is done).
-            self.inner.tasks.lock().retain(|task| task.future.is_some());
+            let mut tasks = std::mem::take(&mut *self.inner.tasks.lock());
+            tasks.retain(|task| task.future.is_some());
+            let _prev = std::mem::replace(&mut *self.inner.tasks.lock(), tasks);
 
             if !progressed {
                 return steps;
@@ -1281,7 +1283,7 @@ mod tests {
                 if finish_for_future.load(Ordering::Acquire) {
                     std::task::Poll::Ready(())
                 } else {
-                    *waker_for_future.lock() = Some(context.waker().clone());
+                    let _prev = waker_for_future.lock().replace(context.waker().clone());
                     std::task::Poll::Pending
                 }
             })))

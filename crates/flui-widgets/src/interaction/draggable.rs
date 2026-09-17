@@ -545,11 +545,12 @@ impl FeedbackSignal {
     }
 
     fn set_offset(&self, offset: Offset<Pixels>) {
+        // PORT-CHECK-OK-LOCK: plain data: Offset is Copy
         *self.offset.lock() = offset;
     }
 
     fn publish_rebuild(&self, handle: RebuildHandle) {
-        *self.rebuild.lock() = Some(handle);
+        let _prev = self.rebuild.lock().replace(handle);
     }
 
     /// Reposition the mounted anchor, if one is currently published. A no-op
@@ -673,7 +674,7 @@ fn evict_and_mount_feedback(
             let signal = FeedbackSignal::new();
             let entry = feedback_entry(builder, feedback_offset, signal.clone());
             handle.insert(&entry, &InsertPosition::Top);
-            *feedback_entry_slot.borrow_mut() = Some(entry);
+            let _prev = feedback_entry_slot.borrow_mut().replace(entry);
             Some(signal)
         }
         _ => None,
@@ -1042,8 +1043,8 @@ impl DragSession {
                 break;
             }
         }
-        *self.entered.borrow_mut() = newly_entered;
-        *self.active.borrow_mut() = new_active;
+        let _prev = std::mem::replace(&mut *self.entered.borrow_mut(), newly_entered);
+        let _prev = std::mem::replace(&mut *self.active.borrow_mut(), new_active);
 
         // Cloned out and the borrow dropped before any callback runs, the same
         // as the move-only path above.
@@ -1072,14 +1073,15 @@ impl DragSession {
     /// answers whether the data was actually taken, and this reports that.
     fn finish_drag(&self, dropped: bool) -> bool {
         let mut was_accepted = false;
-        if dropped && let Some(active) = self.active.borrow_mut().take() {
+        let active = self.active.borrow_mut().take();
+        if dropped && let Some(active) = active {
             was_accepted = active.slot.did_drop(self.pointer, active.at);
             self.entered
                 .borrow_mut()
                 .retain(|target| !Arc::ptr_eq(&target.slot, &active.slot));
         }
         self.leave_all_entered();
-        *self.active.borrow_mut() = None;
+        let _prev = self.active.borrow_mut().take();
         was_accepted
     }
 }
@@ -1229,9 +1231,9 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         // two-call shape `FocusScopeState` uses for `enclosing_focus_parent`
         // (`interaction/focus.rs`): resolve here for the first value, and
         // again in `did_change_dependencies` for later changes.
-        *self.overlay.lock() = Overlay::maybe_of(ctx);
-        *self.hit_test.borrow_mut() = ctx.hit_test_handle();
-        *self.pipeline.borrow_mut() = ctx.pipeline_owner();
+        let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));
+        let _prev = std::mem::replace(&mut *self.hit_test.borrow_mut(), ctx.hit_test_handle());
+        let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
 
         let active_count = Arc::clone(&self.active_count);
         let config = Arc::clone(&self.config);
@@ -1319,14 +1321,17 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// `Overlay::maybe_of` depends (ADR-0036), so a *different* enclosing
     /// overlay later replacing this one is exactly what re-fires this hook.
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
-        *self.overlay.lock() = Overlay::maybe_of(ctx);
-        *self.hit_test.borrow_mut() = ctx.hit_test_handle();
-        *self.pipeline.borrow_mut() = ctx.pipeline_owner();
+        let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));
+        let _prev = std::mem::replace(&mut *self.hit_test.borrow_mut(), ctx.hit_test_handle());
+        let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
     }
 
     fn build(&self, view: &Draggable<T>, _ctx: &dyn BuildContext) -> impl IntoView {
-        *self.config.lock() = DragConfig::from_view(view);
-        *self.feedback_config.borrow_mut() = FeedbackConfig::from_view(view);
+        let _prev = std::mem::replace(&mut *self.config.lock(), DragConfig::from_view(view));
+        let _prev = std::mem::replace(
+            &mut *self.feedback_config.borrow_mut(),
+            FeedbackConfig::from_view(view),
+        );
 
         let recognizer = self
             .recognizer
@@ -1487,7 +1492,7 @@ mod tests {
 
     impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
         fn init_state(&mut self, ctx: &dyn BuildContext) {
-            *self.captured.borrow_mut() = Some(ctx.rebuild_handle());
+            let _prev = self.captured.borrow_mut().replace(ctx.rebuild_handle());
         }
 
         fn build(&self, _view: &RebuildHandleCapture, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1724,11 +1729,11 @@ mod tests {
         }
 
         fn answer_with(&self, path: Vec<HitTestEntry>) {
-            *self.answer.borrow_mut() = ProbeAnswer::Path(path);
+            let _prev = std::mem::replace(&mut *self.answer.borrow_mut(), ProbeAnswer::Path(path));
         }
 
         fn report_busy(&self) {
-            *self.answer.borrow_mut() = ProbeAnswer::Busy;
+            let _prev = std::mem::replace(&mut *self.answer.borrow_mut(), ProbeAnswer::Busy);
         }
     }
 

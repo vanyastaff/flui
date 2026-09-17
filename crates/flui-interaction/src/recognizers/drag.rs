@@ -295,6 +295,7 @@ impl DragGestureRecognizer {
 
     /// Update gesture settings
     pub fn set_settings(&self, settings: GestureSettings) {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 
@@ -1157,6 +1158,7 @@ mod tests {
         let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
             .with_drag_start_behavior(DragStartBehavior::Down)
             .with_on_start(move |d| {
+                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *start_clone.lock() = Some(d.global_position);
             });
 
@@ -1185,6 +1187,7 @@ mod tests {
             // Default is already Start; this makes the test explicit.
             .with_drag_start_behavior(DragStartBehavior::Start)
             .with_on_start(move |d| {
+                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *start_clone.lock() = Some(d.global_position);
             });
 

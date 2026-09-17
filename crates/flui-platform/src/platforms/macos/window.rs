@@ -360,7 +360,7 @@ impl MacOSWindow {
 
             // Store in windows map
             let window_id = ns_window as u64;
-            windows_map.lock().insert(window_id, Arc::clone(&window));
+            let _prev = windows_map.lock().insert(window_id, Arc::clone(&window));
 
             tracing::info!(
                 "Created NSWindow {:p} with size {}x{} (scale: {})",
@@ -959,7 +959,7 @@ impl Drop for MacOSWindow {
 
         // Rust-only clean-up, never routed (no AppKit contact, no lane).
         let window_id = self.ns_window as u64;
-        self.windows_map.lock().remove(&window_id);
+        let _prev = self.windows_map.lock().remove(&window_id);
 
         // The AppKit tail, dispatched ONTO the owner lane and NOT awaited:
         // `Drop` never blocks, so teardown cannot hang (by construction),
@@ -2038,7 +2038,7 @@ impl MacOSWindow {
         // this ordering is safe here because the macOS map is private with no
         // content readers: the early removal is observable only as the intended
         // lifetime change. `Drop`'s removal stays as an idempotent safety net.
-        self.windows_map.lock().remove(&(self.ns_window as u64));
+        let _prev = self.windows_map.lock().remove(&(self.ns_window as u64));
 
         self.callbacks.dispatch_close();
         tracing::debug!("Window closed");
@@ -2183,7 +2183,7 @@ mod tests {
         // Every driving call is an off-lane arm, so every probe record is a
         // dispatch-guard witness and `all_on_lane()` is the routing assertion.
         let map = Arc::clone(&window.windows_map);
-        map.lock().remove(&(window.ns_window as u64));
+        let _prev = map.lock().remove(&(window.ns_window as u64));
         drop(map);
         let mut window = Arc::try_unwrap(window)
             .expect("removing the window from its map leaves the returned Arc alone");
@@ -2286,7 +2286,7 @@ mod tests {
         // wrapper reference, then unwrap to the owned value so the wrapper's
         // `Drop` is what runs on the background thread.
         let map = Arc::clone(&window.windows_map);
-        map.lock().remove(&(window.ns_window as u64));
+        let _prev = map.lock().remove(&(window.ns_window as u64));
         drop(map);
         let owned = Arc::try_unwrap(window)
             .expect("removing the window from its map leaves the returned Arc alone");

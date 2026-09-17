@@ -158,7 +158,10 @@ mod tests {
 
     impl ViewState<ArenaCapture> for ArenaCaptureState {
         fn init_state(&mut self, ctx: &dyn BuildContext) {
-            *self.captured.borrow_mut() = Some(GestureArenaScope::of(ctx));
+            let _prev = self
+                .captured
+                .borrow_mut()
+                .replace(GestureArenaScope::of(ctx));
         }
 
         fn build(&self, _view: &ArenaCapture, _ctx: &dyn BuildContext) -> impl IntoView {

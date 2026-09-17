@@ -388,10 +388,11 @@ mod tests {
         type Output = Result<Payload, Boom>;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            // PORT-CHECK-OK-LOCK: plain data: Result<Payload, Boom> holds only i32/&'static str
             if let Some(result) = self.result.lock().take() {
                 Poll::Ready(result)
             } else {
-                *self.waker.lock() = Some(cx.waker().clone());
+                let _prev = self.waker.lock().replace(cx.waker().clone());
                 Poll::Pending
             }
         }
@@ -416,6 +417,7 @@ mod tests {
         /// the Rust analogue of Dart's `SynchronousFuture`.
         fn ready(result: Result<Payload, Boom>) -> Self {
             let completer = Self::new();
+            // PORT-CHECK-OK-LOCK: plain data: Result<Payload, Boom> holds only i32/&'static str
             *completer.result.lock() = Some(result);
             completer
         }
@@ -433,6 +435,7 @@ mod tests {
 
         /// Complete from outside a frame, as a real async completion would.
         fn complete(&self, result: Result<Payload, Boom>) {
+            // PORT-CHECK-OK-LOCK: plain data: Result<Payload, Boom> holds only i32/&'static str
             *self.result.lock() = Some(result);
             if let Some(waker) = self.waker.lock().as_ref() {
                 waker.wake_by_ref();

@@ -4299,6 +4299,7 @@ mod tests {
         tree.get_mut(root)
             .unwrap()
             .set_child_ids(vec![donor_wrapper, destination_render_parent]);
+        // PORT-CHECK-OK-LOCK: plain data: Vec<&'static str>, no Drop
         events.lock().expect("events lock").clear();
 
         let _guard = tree.begin_reconcile(destination_wrapper);
@@ -4408,6 +4409,7 @@ mod tests {
             .element()
             .render_id()
             .expect("keyed render id");
+        // PORT-CHECK-OK-LOCK: plain data: Vec<&'static str>, no Drop
         events.lock().expect("events lock").clear();
 
         tree.remove(keyed_element, &mut owner.element_owner_mut());
@@ -5425,7 +5427,7 @@ mod tests {
         // it and calls `recompute_subtree_ancestry`.
         {
             let mut owner = owner.write();
-            tree.write().remove(k, &mut owner.element_owner_mut());
+            let _prev = tree.write().remove(k, &mut owner.element_owner_mut());
         }
         assert!(
             !tree

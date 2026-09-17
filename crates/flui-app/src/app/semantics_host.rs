@@ -226,7 +226,7 @@ impl SemanticsHost {
     where
         F: Fn(&str, Assertiveness) + Send + Sync + 'static,
     {
-        *self.announce_callback.write() = Some(Arc::new(callback));
+        let _prev = self.announce_callback.write().replace(Arc::new(callback));
     }
 
     /// Remove the registered announce callback — the platform-embedder
@@ -241,7 +241,7 @@ impl SemanticsHost {
     /// a host that never registered a callback in the first place already
     /// exercises.
     pub(crate) fn clear_announce_callback(&self) {
-        self.announce_callback.write().take();
+        let _prev = self.announce_callback.write().take();
     }
 
     /// Announces a message to assistive technology.
@@ -302,7 +302,7 @@ impl SemanticsHost {
     where
         F: Fn(&SemanticsEvent) + Send + Sync + 'static,
     {
-        *self.event_callback.write() = Some(Arc::new(callback));
+        let _prev = self.event_callback.write().replace(Arc::new(callback));
     }
 
     /// Remove the registered event callback — mirrors
@@ -310,7 +310,7 @@ impl SemanticsHost {
     /// announce-after-close decision, for `dispatch_event`/`tooltip` instead
     /// of `announce`.
     pub(crate) fn clear_event_callback(&self) {
-        self.event_callback.write().take();
+        let _prev = self.event_callback.write().take();
     }
 
     /// Dispatches a semantics event to the registered platform callback,

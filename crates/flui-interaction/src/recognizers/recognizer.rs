@@ -189,6 +189,7 @@ impl RecognizerBase {
     /// Forget the recorded contact. Set only by
     /// [`start_tracking`](Self::start_tracking), so the pair cannot drift.
     pub fn clear_initial_contact(&self) {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.initial_contact.lock() = None;
     }
 
@@ -265,6 +266,7 @@ impl RecognizerBase {
         // Register with the arena and retain the exact slot/member identity.
         let member: Arc<dyn GestureArenaMember> = recognizer.clone();
         let entry = self.arena.add(pointer, member);
+        // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
         *self.tracked_entry.lock() = Some(entry);
     }
 
@@ -325,6 +327,7 @@ impl RecognizerBase {
         }
         self.set_primary_pointer(None);
         self.clear_initial_contact();
+        // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
         self.tracked_entry.lock().take();
     }
 

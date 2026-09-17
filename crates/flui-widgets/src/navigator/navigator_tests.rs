@@ -54,6 +54,7 @@ impl Built {
         self.0.lock().contains(&name)
     }
     fn clear(&self) {
+        // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
         self.0.lock().clear();
     }
 }
@@ -81,7 +82,7 @@ fn probing_page(sink: &Arc<Mutex<Option<NavigatorHandle>>>, root: bool) -> Simpl
         } else {
             NavigatorHandle::maybe_of(ctx)
         };
-        *sink.lock() = found;
+        let _prev = std::mem::replace(&mut *sink.lock(), found);
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
 }
@@ -475,7 +476,7 @@ fn overlay_of_from_route_content_resolves_the_navigators_own_overlay() {
     handle.seed_initial(SimpleRoute::<i32>::new(move |_ctx| {
         let sink_for_peek = Arc::clone(&sink_for_route);
         OverlayPeek(move |ctx: &dyn BuildContext| {
-            *sink_for_peek.lock() = Overlay::maybe_of(ctx);
+            let _prev = std::mem::replace(&mut *sink_for_peek.lock(), Overlay::maybe_of(ctx));
         })
         .into_view()
         .boxed()
@@ -508,8 +509,8 @@ fn nested_navigator_lookup_prefers_nearest_and_root_finds_outermost() {
     {
         let (nearest, root) = (Arc::clone(&nearest), Arc::clone(&root));
         inner.seed_initial(SimpleRoute::<i32>::new(move |ctx| {
-            *nearest.lock() = NavigatorHandle::maybe_of(ctx);
-            *root.lock() = NavigatorHandle::maybe_of_root(ctx);
+            let _prev = std::mem::replace(&mut *nearest.lock(), NavigatorHandle::maybe_of(ctx));
+            let _prev = std::mem::replace(&mut *root.lock(), NavigatorHandle::maybe_of_root(ctx));
             SizedBox::new(5.0, 5.0).into_view().boxed()
         }));
     }
@@ -568,7 +569,8 @@ fn navigator_maybe_of_returns_none_when_absent() {
     impl StatelessView for Probe {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
             self.seen.ran.fetch_add(1, Ordering::Relaxed);
-            *self.seen.found.lock() = NavigatorHandle::maybe_of(ctx);
+            let _prev =
+                std::mem::replace(&mut *self.seen.found.lock(), NavigatorHandle::maybe_of(ctx));
             SizedBox::new(1.0, 1.0)
         }
     }
@@ -1635,7 +1637,8 @@ mod local_history {
 
     impl ViewState<HandleProbe> for HandleProbeState {
         fn init_state(&mut self, ctx: &dyn BuildContext) {
-            *self.sink.lock() = LocalHistoryHandle::maybe_of(ctx);
+            let _prev =
+                std::mem::replace(&mut *self.sink.lock(), LocalHistoryHandle::maybe_of(ctx));
         }
 
         fn build(&self, _view: &HandleProbe, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -2644,7 +2647,9 @@ fn a_subscriber_that_re_registers_while_handling_the_warning_cannot_skew_the_lat
     flui_testing::log_capture::disarm_interest_cache();
     let handle = NavigatorHandle::new();
     register_as_number(&handle);
-    REENTER_ON.with(|cell| *cell.borrow_mut() = Some(handle.clone()));
+    REENTER_ON.with(|cell| {
+        let _prev = cell.borrow_mut().replace(handle.clone());
+    });
 
     tracing::subscriber::with_default(ReentrantSubscriber, || register_as_text(&handle));
 
@@ -2954,6 +2959,7 @@ fn a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it
                 .boxed()
         }));
         harness.tick();
+        // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
         spy.0.lock().clear();
 
         let popped = handle.pop();

@@ -737,7 +737,10 @@ impl ViewState<Focus> for FocusState {
             // its stable-tree notification. Keep the previous `has_focus`
             // bit: when a focused descendant moves with the subtree, both old
             // and replacement nodes have focus and no synthetic edge fires.
-            *self.observed_node.borrow_mut() = Rc::clone(&replacement);
+            let _prev = std::mem::replace(
+                &mut *self.observed_node.borrow_mut(),
+                Rc::clone(&replacement),
+            );
             let attachment = self
                 .attachment
                 .take()
@@ -1920,8 +1923,8 @@ mod tests {
 
     impl StatelessView for FocusOfProbe {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            *self.found_node.borrow_mut() = Focus::maybe_of(ctx);
-            *self.found_scope.borrow_mut() = Some(FocusScope::of(ctx));
+            let _prev = std::mem::replace(&mut *self.found_node.borrow_mut(), Focus::maybe_of(ctx));
+            let _prev = self.found_scope.borrow_mut().replace(FocusScope::of(ctx));
             SizedBox::new(1.0, 1.0)
         }
     }
@@ -2162,7 +2165,7 @@ mod tests {
         let resolved: Rc<RefCell<Option<Rc<FocusNode>>>> = Rc::new(RefCell::new(None));
         let resolved_for_probe = Rc::clone(&resolved);
         let probe = Peek(move |ctx: &dyn BuildContext| {
-            *resolved_for_probe.borrow_mut() = Some(Focus::of(ctx));
+            let _prev = resolved_for_probe.borrow_mut().replace(Focus::of(ctx));
         });
 
         let _harness = mount(probe);

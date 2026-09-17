@@ -168,7 +168,7 @@ struct HandleProbe {
 impl StatelessView for HandleProbe {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let handle = ScaffoldScope::of(ctx);
-        *self.slot.borrow_mut() = Some(handle.clone());
+        let _prev = self.slot.borrow_mut().replace(handle.clone());
         let on_tap = Rc::clone(&self.on_tap);
         GestureDetector::new()
             .on_tap(move || on_tap(&handle))

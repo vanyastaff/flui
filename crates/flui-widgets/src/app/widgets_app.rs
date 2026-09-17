@@ -456,7 +456,7 @@ impl ViewState<WidgetsApp> for WidgetsAppState {
         // unconditionally, so the home route re-renders from the CURRENT
         // view configuration on every update.
         if let (Some((route, cell)), Some(home)) = (&self.home_route, &new_view.home) {
-            *cell.borrow_mut() = home.clone();
+            let _prev = std::mem::replace(&mut *cell.borrow_mut(), home.clone());
             if let Some(handle) = &self.navigator {
                 handle.mark_route_needs_build(*route);
             }
@@ -607,6 +607,7 @@ mod tests {
 
     impl<T: Clone + Send + Sync + 'static> StatelessView for Capture<T> {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            // PORT-CHECK-OK-LOCK: plain data: captured T (bool/Locale/Option<Locale>), no Drop
             *self.captured.lock().expect("test mutex poisoned") = Some((self.read)(ctx));
             SizedBox::shrink()
         }
@@ -835,6 +836,7 @@ mod tests {
         let received = Arc::clone(&received_none);
         let (probe, captured) = capture(|_ctx| true);
         mount(WidgetsApp::with_builder(move |_ctx, child| {
+            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *received.lock().expect("test mutex poisoned") = Some(child.is_none());
             probe.clone().boxed()
         }));
@@ -855,6 +857,7 @@ mod tests {
         let got_routing = Arc::new(Mutex::new(None::<bool>));
         let got = Arc::clone(&got_routing);
         mount(WidgetsApp::new(probe).builder(move |_ctx, child| {
+            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *got.lock().expect("test mutex poisoned") = Some(child.is_some());
             child.expect("routing must be present when home is set")
         }));
@@ -877,6 +880,7 @@ mod tests {
         let seen_locale = Arc::new(Mutex::new(None::<Option<Locale>>));
         let seen = Arc::clone(&seen_locale);
         mount(WidgetsApp::with_builder(move |ctx, _child| {
+            // PORT-CHECK-OK-LOCK: plain data: Option<Locale>, no Drop
             *seen.lock().expect("test mutex poisoned") = Some(Localizations::maybe_locale_of(ctx));
             SizedBox::shrink().boxed()
         }));

@@ -819,7 +819,7 @@ struct MoverState {
 
 impl ViewState<Mover> for MoverState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        *self.rebuild.lock() = Some(ctx.rebuild_handle());
+        let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
     }
 
     fn build(&self, _view: &Mover, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1148,7 +1148,7 @@ struct HeroGateState {
 }
 impl ViewState<HeroGate> for HeroGateState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        *self.rebuild.lock() = Some(ctx.rebuild_handle());
+        let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
     }
     fn build(&self, _view: &HeroGate, _ctx: &dyn BuildContext) -> impl IntoView {
         if self.present.load(Ordering::SeqCst) {

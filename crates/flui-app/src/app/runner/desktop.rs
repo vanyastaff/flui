@@ -854,7 +854,8 @@ where
     // Event loop exited: drop the runtime now (releases the at-most-one
     // claim; outstanding senders turn `OwnerGone`) instead of at thread
     // death.
-    drop(rebuild_registration.borrow_mut().take());
+    let detached = rebuild_registration.borrow_mut().take();
+    drop(detached);
     teardown_platform_realm();
 
     // Surface a fatal bootstrap failure (GPU init, `UiRealm` construction,

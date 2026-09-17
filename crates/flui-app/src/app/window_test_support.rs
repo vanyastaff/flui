@@ -196,6 +196,7 @@ impl PlatformWindow for TestWindow {
         &self,
         cursor: flui_platform::CursorIcon,
     ) -> Result<(), flui_platform::CursorError> {
+        // PORT-CHECK-OK-LOCK: plain data: CursorIcon is Copy
         *self.cursor.lock() = cursor;
         Ok(())
     }

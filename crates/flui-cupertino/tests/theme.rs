@@ -38,6 +38,7 @@ struct PrimaryColorCapture {
 impl StatelessView for PrimaryColorCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let primary_color = CupertinoTheme::of(ctx).primary_color();
+        // PORT-CHECK-OK-LOCK: plain data: Color is Copy
         *self.captured.lock().unwrap() = Some(primary_color);
         SizedBox::shrink()
     }

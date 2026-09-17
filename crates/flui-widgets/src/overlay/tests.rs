@@ -1096,7 +1096,7 @@ fn overlay_maybe_of_is_none_without_an_overlay_ancestor() {
     let found = Arc::new(Mutex::new(Some(OverlayHandle::new())));
     let found_for_probe = Arc::clone(&found);
     let probe = Peek(move |ctx: &dyn BuildContext| {
-        *found_for_probe.lock() = Overlay::maybe_of(ctx);
+        let _prev = std::mem::replace(&mut *found_for_probe.lock(), Overlay::maybe_of(ctx));
     });
 
     let _harness = mount(probe);
@@ -1127,6 +1127,7 @@ fn overlay_of_panics_with_a_helpful_message_without_an_overlay_ancestor() {
             let text = payload_text(payload.as_ref())
                 .unwrap_or_default()
                 .to_owned();
+            // PORT-CHECK-OK-LOCK: plain data: String, no Drop
             *message_for_probe.lock() = Some(text);
         }
     });
@@ -1172,7 +1173,7 @@ fn overlay_maybe_of_resolves_the_nearest_enclosing_overlay() {
     let inner_entry = OverlayEntry::new(move |_ctx| {
         let found_for_peek = Arc::clone(&found_for_entry);
         Peek(move |ctx: &dyn BuildContext| {
-            *found_for_peek.lock() = Overlay::maybe_of(ctx);
+            let _prev = std::mem::replace(&mut *found_for_peek.lock(), Overlay::maybe_of(ctx));
         })
         .into_view()
         .boxed()
