@@ -4508,7 +4508,11 @@ mod tests {
         // An otherwise-irrelevant already-mounted element stands in for "the
         // id this drain already built once and capped a re-entry for" —
         // only its presence in `built_this_frame` and the inbox matters,
-        // not anything about its own view.
+        // not anything about its own view. The three writes below fake the
+        // invariant a real frame establishes (`victim ∈ built_this_frame` ⇔
+        // it completed a build this `build_scope`; budget exhausted; a fresh
+        // schedule for it pending) so the test reaches the capped path
+        // without grinding through sixteen genuine re-entries.
         let victim = insert_child(&mut tree, &mut owner, root, 0);
         owner.built_this_frame.insert(victim);
         owner.mid_drain_absorbs_left = 0;
