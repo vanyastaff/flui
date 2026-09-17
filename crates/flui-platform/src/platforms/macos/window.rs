@@ -2022,6 +2022,24 @@ impl MacOSWindow {
     /// slot — and every other slot — is released.
     fn handle_close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+
+        // Untrack from the platform's window map here, on the owner thread the
+        // delegate notification runs on, rather than from `Drop` — `Drop` is the
+        // only other removal site and is unreachable while the map itself pins a
+        // wrapper clone (issue #1147). Removing the entry lets the wrapper reach
+        // `Drop`'s last-clone gate (and so the NSWindow release + a11y teardown
+        // tail) as soon as the application drops its final external handle;
+        // without it, every closed window stays pinned for the process lifetime.
+        //
+        // Removal precedes `dispatch_close()` so the closing window is already
+        // untracked when user close callbacks run. Unlike the repo's winit
+        // backend — which removes from tracking only AFTER its own close
+        // callbacks (winit/platform.rs dispatch_close before windows.remove) —
+        // this ordering is safe here because the macOS map is private with no
+        // content readers: the early removal is observable only as the intended
+        // lifetime change. `Drop`'s removal stays as an idempotent safety net.
+        self.windows_map.lock().remove(&(self.ns_window as u64));
+
         self.callbacks.dispatch_close();
         tracing::debug!("Window closed");
 
@@ -2279,6 +2297,50 @@ mod tests {
         handle.join().expect(
             "dropping the last window wrapper on a worker thread must return promptly \
                      and crash-free (Drop never waits on the lane)",
+        );
+    }
+
+    /// Closing a window must drain it from the platform's tracking map on the
+    /// owner thread (issue #1147). The map is `MacOSPlatform`'s only strong
+    /// reference that outlives the application's own handles, so a closed
+    /// window whose entry is never removed pins its wrapper — and through it
+    /// the native NSWindow and a11y adapter — for the process lifetime: `Drop`'s
+    /// own removal cannot run while the map holds a clone. This test drives the
+    /// real close route (`close()` → `-[NSWindow close]` → `windowWillClose:` →
+    /// `handle_close`) and asserts the map drains.
+    ///
+    /// Same opt-in constraint as its two siblings: a bare `cargo test` process
+    /// has no NSApplication connection and NSWindow construction SIGABRTs
+    /// through `_CFBundleGetValueForInfoKey` (observed on this machine); a
+    /// run-loop-pumping test process exercises the real close path, which is
+    /// the AppKit close-path validation this issue's Win32 half inherits.
+    #[test]
+    #[ignore = "requires an AppKit-run-loop-pumping test process; the always-run mechanism pins cover the routing, and the map-drain assertion needs a real window"]
+    fn close_drains_platform_map_entry() {
+        let owner = test_owner_queue();
+        let window = MacOSWindow::for_test(owner)
+            .expect("for_test must construct an NSWindow on the test lane");
+
+        let window_id = window.ns_window as u64;
+        let map = Arc::clone(&window.windows_map);
+        assert!(
+            map.lock().contains_key(&window_id),
+            "for_test must insert this window into its own map"
+        );
+        drop(map);
+
+        <MacOSWindow as PlatformWindow>::close(&window);
+
+        // The close route completes synchronously from the caller's
+        // perspective on an uncontended serial lane (dispatch_sync runs
+        // inline): `-[NSWindow close]` posts `windowWillClose:` synchronously,
+        // so `handle_close` — and with it the map removal — has run by the
+        // time `close` returns.
+        assert!(
+            !window.windows_map.lock().contains_key(&window_id),
+            "closing a window must remove its entry from the platform's tracking map \
+             (issue #1147); the map's clone otherwise pins the wrapper — and through \
+             it the NSWindow + a11y adapter — for the process lifetime"
         );
     }
 }
