@@ -16,6 +16,7 @@
 //!     -> MainEvent::Pause            -> lifecycle gate only
 //!     -> MainEvent::Destroy          -> break loop
 //!     -> each tick                   -> dispatch_request_frame()
+//!   -> loop exit                     -> window released, callbacks cleared, quit hook
 //! ```
 //!
 //! # Surface Lifecycle
@@ -489,6 +490,57 @@ impl Platform for AndroidPlatform {
             {
                 w.callbacks().dispatch_request_frame();
             }
+        }
+
+        // The loop's one exit, reached by its three returning routes: a
+        // `MainEvent::Destroy`, a `quit()` from any thread, a bootstrap
+        // that returned `Err`. A panic that unwinds out of this function
+        // skips it, by decision (ADR-0063 decision 5): a clear during
+        // unwind would drop a configured surface on a device that may be
+        // the panic's cause, and a second panic there aborts the process
+        // instead of letting `android-activity`'s `catch_unwind` finish the
+        // activity. This is where the window this backend tracked is
+        // released, in the order the winit and headless close bodies use:
+        // the platform's own reference first, then the callback slots.
+        //
+        // The slots are the platform's only owning path into the embedder's
+        // presentation. `flui-app` registers a frame callback and a
+        // surface-status callback that own the raster lane, which owns the
+        // renderer, whose surface lease holds an `Arc` of this window
+        // (ADR-0063 decision 5): window -> slot -> closure -> lane ->
+        // renderer -> `Arc<AndroidWindow>`. Only a clear breaks that cycle;
+        // without it every activity recreation strands one window, lane and
+        // renderer for the process's life.
+        //
+        // After the loop rather than in the `Destroy` arm, because `Destroy`
+        // is not the only way out: a `quit()` returns from `android_main`,
+        // and `android-activity` then finishes the activity without ever
+        // delivering `Destroy` here. Before `invoke_quit`, so a quit hook
+        // that panics still leaves the cycle broken. Outside the `window`
+        // lock, because it drops embedder closures (ADR-0038 §5); the
+        // `take()` is its own statement so its guard is gone before the
+        // clear runs. At the top level of the window's FIFO, because no
+        // `poll_events` callback is on the stack here, so no lease can
+        // restore what it takes (issue #919).
+        //
+        // The surface is safe on every returning route. On `Destroy` it is
+        // already gone: `NativeActivity.onDestroy` destroys the surface
+        // before it unloads the native code, and `android-activity`'s
+        // `set_window(None)` parks the JVM thread until `TermWindow` has
+        // been applied, so the `TerminateWindow` arm above released it
+        // before `Destroy` was even written. On a `quit()` the native
+        // window is still live, so the surface dies here, before it, which
+        // is the order issue #713 requires.
+        //
+        // No registration can land on the cleared set afterwards: `on_ready`
+        // is `FnOnce`, so the bootstrap runs once per platform, and a
+        // recreated activity gets a new `android_main`, a new `AndroidApp`,
+        // a new platform and a new window (`ANativeActivity_onCreate`
+        // spawns one thread per activity).
+        let window = platform.window.lock().take();
+        if let Some(window) = window {
+            window.callbacks().clear();
+            tracing::debug!("Android: loop exited; window released and its callbacks cleared");
         }
 
         // Invoke quit handlers

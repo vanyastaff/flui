@@ -485,15 +485,20 @@ impl WindowCallbacks {
     /// "callbacks\(\)\.clear\(\)|callbacks\.clear\(\)"
     /// crates/flui-platform/src` finds every call site that reaches this
     /// method at window close: winit's `complete_window_close`
-    /// (`platforms/winit/platform.rs`, the primary in-loop path),
-    /// `WinitWindow::drop` (`platforms/winit/window.rs`, a last-resort
-    /// guarantee for a window whose final `Arc` unwinds anywhere else), the
-    /// headless backend's `complete_close`
-    /// (`platforms/headless/platform.rs`), Win32's `WM_DESTROY` arm
-    /// (`platforms/windows/platform.rs`), and AppKit's `handle_close`
-    /// (`platforms/macos/window.rs`, reached from the `windowWillClose:`
-    /// delegate) — so that destruction order is pinned deterministically
-    /// instead of left to struct field order.
+    /// (`platforms/winit/platform.rs`, the primary in-loop path) and its
+    /// `WinitApp::release_open_window_callbacks` (same file, the quit route
+    /// `complete_window_close` never runs for — every window still tracked
+    /// when `event_loop.run_app` returns), `WinitWindow::drop`
+    /// (`platforms/winit/window.rs`, a last-resort guarantee for a window
+    /// whose final `Arc` unwinds anywhere else), the headless backend's
+    /// `complete_close` (`platforms/headless/platform.rs`), Win32's
+    /// `WM_DESTROY` arm (`platforms/windows/platform.rs`), AppKit's
+    /// `handle_close` (`platforms/macos/window.rs`, reached from the
+    /// `windowWillClose:` delegate), and the Android backend's loop exit
+    /// (`platforms/android/mod.rs`, `AndroidPlatform::run` after its `loop`,
+    /// reached by `Destroy`, `quit()` and a failed bootstrap; a panic out of
+    /// `run` skips it, by decision) — so that destruction order is pinned
+    /// deterministically instead of left to struct field order.
     ///
     /// **Drain-ordered, not immediate, when called while this window's FIFO
     /// is already draining.** A close requested from inside one of this
@@ -1114,6 +1119,57 @@ mod tests {
             callbacks.on_surface_status_change.lock().is_none(),
             "a surface-status callback that clears its window from inside \
              itself must not be resurrected by its own lease's Drop"
+        );
+    }
+
+    /// The sequence the Android backend's exit path performs, pinned on the
+    /// primitive it calls: both cycle-closing slots (`on_request_frame` and
+    /// `on_surface_status_change` own the raster lane in `flui-app`'s
+    /// wiring) are dispatched at the top level during the loop, their leases
+    /// restore them, `dispatch_close` consumes `on_close`, and then `clear()`
+    /// must drop both closures and with them everything they own. Two probes,
+    /// one per slot, so a `clear_now` that forgets either slot fails on a
+    /// named assertion. Slot emptiness is not the claim: a `clear_now` that
+    /// took every slot and then `mem::forget` the tuple would leave every
+    /// slot `None` and every capture alive, and only these probes see that.
+    #[test]
+    fn clear_after_top_level_dispatches_releases_what_the_cycle_closing_slots_own() {
+        let callbacks = WindowCallbacks::new();
+        let frame_owned = Arc::new(());
+        let frame_weak = Arc::downgrade(&frame_owned);
+        callbacks.on_request_frame.lock().replace(Box::new(move || {
+            let _ = &frame_owned;
+        }));
+        let surface_owned = Arc::new(());
+        let surface_weak = Arc::downgrade(&surface_owned);
+        callbacks
+            .on_surface_status_change
+            .lock()
+            .replace(Box::new(move |_has_surface| {
+                let _ = &surface_owned;
+            }));
+
+        callbacks.dispatch_request_frame();
+        callbacks.dispatch_surface_status_change(false);
+        callbacks.dispatch_close();
+        assert!(
+            frame_weak.upgrade().is_some(),
+            "an ordinary dispatch restores the frame callback"
+        );
+        assert!(
+            surface_weak.upgrade().is_some(),
+            "an ordinary dispatch restores the surface callback"
+        );
+
+        callbacks.clear();
+
+        assert!(
+            frame_weak.upgrade().is_none(),
+            "clear() must drop the frame callback and what it owns"
+        );
+        assert!(
+            surface_weak.upgrade().is_none(),
+            "clear() must drop the surface callback and what it owns"
         );
     }
 }

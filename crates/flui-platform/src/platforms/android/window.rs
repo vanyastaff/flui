@@ -166,9 +166,11 @@ impl PlatformWindow for AndroidWindow {
         // `MainEvent::TerminateWindow` callback returns (`pre_exec_cmd` →
         // callback → `post_exec_cmd`). The `'_` on the returned handle is the
         // borrow of `self` and does not encode that bound: `AndroidPlatform`
-        // keeps holding its `AndroidWindow` across a pause, nothing clears
-        // that field on a termination, so `self` — and the borrow — outlives
-        // the pointer.
+        // keeps holding its `AndroidWindow` across a pause, and the only
+        // writes to that field (`platforms/android/mod.rs`) are `open_window`,
+        // which fills it, and `AndroidPlatform::run`'s exit path, which takes
+        // it exactly once, after the last dispatch, so for every handle this
+        // method ever returns, `self` and the borrow outlive the pointer.
         //
         // The obligation that carries the weight is therefore
         // consumer-enforced, not type-enforced: nothing may dereference the
