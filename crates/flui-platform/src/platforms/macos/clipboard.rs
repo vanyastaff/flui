@@ -18,76 +18,15 @@
 //! to a live `id` on the owner lane for each operation, so no `id` is ever
 //! exchanged across threads. Cross-thread calls block on the lane until the
 //! operation completes.
+//!
+//! The lane machinery itself lives in the shared [`super::owner_lane`]
+//! module — this file only decides what runs on the lane.
 
 use cocoa::base::{id, nil};
 use cocoa::foundation::NSString;
 use objc::{class, msg_send, sel, sel_impl};
 
 use crate::traits::Clipboard;
-
-/// The production owner lane: the dispatch queue bound to the AppKit main
-/// thread. Calls from other threads are dispatched here synchronously.
-fn owner_queue() -> &'static dispatch::Queue {
-    static Q: std::sync::OnceLock<dispatch::Queue> = std::sync::OnceLock::new();
-    Q.get_or_init(dispatch::Queue::main)
-}
-
-/// The test-instance owner lane: one process-wide serial queue shared by
-/// every test instance. `cargo test` never pumps the AppKit main thread, so
-/// `owner_queue()` there would deadlock; a serial queue serializes
-/// pasteboard traffic exactly as the main lane does for production. Every
-/// test instance routes through this same lane so test traffic never
-/// straddles lanes.
-#[cfg(test)]
-fn test_owner_queue() -> &'static dispatch::Queue {
-    static Q: std::sync::OnceLock<dispatch::Queue> = std::sync::OnceLock::new();
-    Q.get_or_init(|| {
-        dispatch::Queue::create(
-            "flui.clipboard.test-owner",
-            dispatch::QueueAttribute::Serial,
-        )
-    })
-}
-
-/// RAII reentrancy marker: records the owner lane the current thread is
-/// executing a block on. GCD pools worker threads across queues, so a sticky
-/// flag would route a later call on a reused thread off-lane; this guard's
-/// `Drop` clears the marker when the block returns.
-///
-/// The marker is the lane identity itself — the owner queue's address — so
-/// the reentrancy probe can tell "on THIS instance's lane" from "on some
-/// other lane a reused worker thread last ran". All production instances
-/// share `owner_queue()` and all test instances share `test_owner_queue()`,
-/// so the probe is exact for every instance of either kind.
-struct OnOwnerQueueGuard {
-    owner: *const dispatch::Queue,
-}
-
-impl OnOwnerQueueGuard {
-    fn new(owner: &'static dispatch::Queue) -> Self {
-        let owner = std::ptr::from_ref(owner);
-        ON_OWNER_QUEUE.with(|on_lane| on_lane.set(Some(owner)));
-        OnOwnerQueueGuard { owner }
-    }
-}
-
-impl Drop for OnOwnerQueueGuard {
-    fn drop(&mut self) {
-        // Clear only if the marker is still ours: a nested block on a
-        // different lane overwrites it, and it is that block's own guard —
-        // which runs after this one — that clears it.
-        ON_OWNER_QUEUE.with(|on_lane| {
-            if on_lane.get() == Some(self.owner) {
-                on_lane.set(None);
-            }
-        });
-    }
-}
-
-thread_local! {
-    static ON_OWNER_QUEUE: std::cell::Cell<Option<*const dispatch::Queue>> =
-        const { std::cell::Cell::new(None) };
-}
 
 /// macOS NSPasteboard-based clipboard implementation
 ///
@@ -160,7 +99,7 @@ impl MacOSClipboard {
         tracing::debug!("Created macOS clipboard (NSPasteboard)");
         Self {
             pasteboard: None,
-            owner: owner_queue(),
+            owner: super::owner_lane::owner_queue(),
             owner_is_main: true,
         }
     }
@@ -207,36 +146,15 @@ impl MacOSClipboard {
     /// dispatched synchronously to the owner queue and the caller blocks
     /// until it completes.
     fn with_pasteboard_on_owner<R: Send>(&self, f: impl FnOnce(id) -> R + Send) -> R {
-        // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe class
-        // method with no arguments and a BOOL return; it may be called from
-        // any thread at any time.
-        let is_main: bool = unsafe { msg_send![class!(NSThread), isMainThread] };
         let name = self.pasteboard.clone();
-
-        if ON_OWNER_QUEUE.with(std::cell::Cell::get) == Some(std::ptr::from_ref(self.owner))
-            || (self.owner_is_main && is_main)
-        {
+        // The pasteboard id is re-resolved on the lane inside the closure —
+        // never captured from the calling thread. Routing itself (the direct
+        // in-lane path, the `isMainThread` shortcut for main-lane instances,
+        // and the catch_unwind-shielded `exec_sync` for everything else) is
+        // the shared `owner_lane` machinery's job.
+        super::owner_lane::exec_on_owner(self.owner, self.owner_is_main, || {
             objc::rc::autoreleasepool(|| f(resolve(name)))
-        } else {
-            // dispatch invokes the closure through an `extern "C"` trampoline
-            // with no panic catch, so a Rust panic unwinding through
-            // libdispatch's C frames would be undefined behaviour. The
-            // dispatched body is therefore catch_unwind-wrapped and the panic
-            // payload is replayed on the caller once `exec_sync` returns. The
-            // RAII guard and the `catch_unwind` call themselves sit in front
-            // of the shield, but both are infallible (`Cell::set` and a plain
-            // std call) while GCD is running the block.
-            let result = self.owner.exec_sync(move || {
-                let _guard = OnOwnerQueueGuard::new(self.owner);
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                    objc::rc::autoreleasepool(|| f(resolve(name)))
-                }))
-            });
-            match result {
-                Ok(value) => value,
-                Err(payload) => std::panic::resume_unwind(payload),
-            }
-        }
+        })
     }
 }
 
@@ -379,6 +297,7 @@ impl Clipboard for MacOSClipboard {
 
 #[cfg(test)]
 mod tests {
+    use super::super::owner_lane::test_owner_queue;
     use super::*;
 
     /// Unique board name per test name and per test process.

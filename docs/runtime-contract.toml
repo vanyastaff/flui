@@ -1800,10 +1800,18 @@ as the scheduler's `on_frame_scheduled` hook, an `AsyncDriver` task waker \
 fires on whichever thread completed the future, and `FrameWakeHandle::\
 wake_frame` calls `request_redraw` directly -- deliberately, pinned by \
 `frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler`. \
-So `MacOSWindow`'s `unsafe impl Send` precondition is falsifiable on a \
-shipping path today, and the relay is owed now rather than at thread-spawn \
-time. The ordering constraint on the raster thread stands unchanged; what \
-changes is that it is no longer the first thing to need the relay.\
+So the relay is owed now rather than at thread-spawn time, and the ordering \
+constraint on the raster thread stands unchanged. \
+\
+CORRECTION (2026-09-16, issue #949): `MacOSWindow::request_redraw`'s AppKit \
+body is now owner-routed -- its `contentView`/`setNeedsDisplay:` messages \
+execute on the owner lane (`MacOSWindow` carries its `owner` queue, via the \
+shared `owner_lane` machinery), so the async wake lane no longer falsifies \
+the `unsafe impl Send` SAFETY precondition on its own. This does NOT make \
+the async lane safe end-to-end: the wake hook still calls `request_redraw` \
+directly; only that method's AppKit body is routed. The relay requirement \
+stands on the two reasons above -- the off-lane raster-thread call itself, \
+and a `Send + Sync` hook that skips a relay compiling and being wrong.\
 """
 state = "partial"
 domain = "raster"
