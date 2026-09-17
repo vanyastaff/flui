@@ -697,9 +697,11 @@ impl LaidOut {
     }
 
     /// Drive a frame WITHOUT marking the root dirty — the headless equivalent of
-    /// a vsync/animation tick. `build_scope` (inside `pump_frame`) drains whatever
-    /// the external inbox holds (an `AnimatedView` scheduled by a listenable
-    /// change between frames), rebuilds those elements, and re-runs layout/paint.
+    /// a vsync/animation tick. `build_scope` (inside `pump_frame`) absorbs
+    /// whatever the external inbox holds (an `AnimatedView` scheduled by a
+    /// listenable change) throughout the drain — both entries already queued
+    /// between frames and ones a build in this same tick schedules mid-drain
+    /// (issue #1180) — rebuilds those elements, and re-runs layout/paint.
     /// This is what distinguishes an animation-driven rebuild from a
     /// `setState`/`pump` one.
     pub fn tick(&mut self) {
@@ -722,7 +724,9 @@ impl LaidOut {
     /// Advance `dt` of virtual time and drive a frame — the animation-frame
     /// analogue: ticks registered controllers (whose listenable notifications
     /// schedule the dependent `AnimatedView`/`FadeTransition` rebuild into the
-    /// build inbox), drains it, and re-runs layout/paint. No root dirtying.
+    /// build inbox), absorbs it throughout the drain — same-pump for a
+    /// notification a build in this tick triggers, not just ones already
+    /// queued (issue #1180) — and re-runs layout/paint. No root dirtying.
     pub fn pump_for(&mut self, dt: Duration) {
         self.binding.pump_frame(dt);
     }
