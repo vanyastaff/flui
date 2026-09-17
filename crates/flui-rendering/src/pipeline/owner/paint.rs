@@ -59,7 +59,29 @@ impl PipelineOwner<PaintPhase> {
     /// `Arc`. A boundary queued only for a composited-layer update is
     /// grafted too, with just the effect layers of the node that asked for
     /// the update rebuilt — see `layer_patches_for`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::RenderError::PaintBeforeLayout`] when the
+    /// paint phase begins with layout work still pending — the scheduler's
+    /// layout queue is non-empty. This is the one misuse the type system
+    /// cannot rule out: a caller may legally drive the phases directly
+    /// (`into_layout().into_compositing().into_paint()`, the bench
+    /// pattern) and skip
+    /// [`PipelineOwner::run_layout`](super::PipelineOwner::run_layout), so
+    /// completeness stays a runtime gate. The empty-queue variant of that
+    /// chain is designed behavior and keeps returning `Ok`.
     pub fn run_paint(&mut self) -> crate::error::RenderResult<()> {
+        // Frame-completeness gate, BEFORE the empty-paint-queue early
+        // return: the paint phase began with layout work still pending. A
+        // direct phase chain that skipped `run_layout` with a serviced
+        // queue must be refused, not silently paint stale geometry; the
+        // same chain with an EMPTY layout queue is the legitimate bench
+        // pattern (`benches/semantics_assembly.rs`) and passes through.
+        if self.scheduler.has_layout_work() {
+            return Err(crate::error::RenderError::PaintBeforeLayout);
+        }
+
         if !self.scheduler.has_paint_work() {
             return Ok(());
         }

@@ -57,6 +57,8 @@ mod placed_generation_gate;
 #[path = "retained_boundary_layers.rs"]
 mod retained_boundary_layers;
 
+#[path = "paint_before_layout.rs"]
+mod paint_before_layout;
 #[path = "paint_dirty_flag_discipline.rs"]
 mod paint_dirty_flag_discipline;
 #[path = "paint_fragment_snapshot.rs"]
