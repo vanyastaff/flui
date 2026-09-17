@@ -110,10 +110,31 @@ pub enum RenderError {
     },
 
     /// Layout performed during paint phase.
+    ///
+    /// Reserved variant: no production construction site exists yet. The
+    /// typestate phase machine makes the misuse structurally impossible —
+    /// `run_layout` is defined only on `PipelineOwner<Layout>`, a value in
+    /// the layout phase cannot reach paint-phase code, and the by-value
+    /// phase transitions (`rebind_phase`) move the whole owner across
+    /// phases rather than exposing two phases at once (the ordering
+    /// contract `PipelineOwner::run_frame_impl` states). Pre-adding the
+    /// variant keeps the error surface stable for a future re-entrant
+    /// seam (e.g. a paint-triggered relayout) that could reintroduce the
+    /// condition at runtime.
     #[error("layout cannot be performed during paint phase")]
     LayoutDuringPaint,
 
     /// Layout performed on detached node.
+    ///
+    /// Reserved variant: no production construction site exists yet. The
+    /// owner's layout entry points take `RenderId`s and walk the render
+    /// tree by id; detached subtrees are evicted from the dirty queues at
+    /// relocation, and a stale id (node already gone) is a silent no-op
+    /// in the boundary-walk mark and surfaces downstream as
+    /// [`NodeNotFound`](Self::NodeNotFound) in the tree walks. There is
+    /// no seam today where a layout step reaches a node that is present
+    /// but detached; pre-adding the variant keeps the error surface
+    /// stable for one that might.
     #[error("cannot layout detached render object")]
     LayoutDetached,
 
@@ -127,11 +148,39 @@ pub enum RenderError {
     // ========================================================================
     // Paint Errors
     // ========================================================================
-    /// Paint performed before layout.
-    #[error("paint performed before layout")]
+    /// The paint phase began with layout work still pending — the
+    /// scheduler's layout queue was non-empty when
+    /// [`PipelineOwner::run_paint`](crate::pipeline::PipelineOwner::run_paint)
+    /// was entered.
+    ///
+    /// The one phase-misuse variant with a production construction site.
+    /// Phase ORDERING is enforced by the type system (each `run_*` method
+    /// lives only on its phase's impl block; transitions are by-value
+    /// `rebind_phase`), but a caller may still legally drive the phases
+    /// directly (`into_layout().into_compositing().into_paint()`, the
+    /// manual-phase pattern the benches use) and skip `run_layout` with
+    /// the queue unserviced — completeness stays a runtime gate. The
+    /// empty-queue variant of that chain is designed behavior and returns
+    /// `Ok`.
+    ///
+    /// Frame-level by design: a paint `Err` aborts the whole frame
+    /// (`PipelineOwner::run_frame`'s error path), and this unit variant
+    /// carries no `RenderId` — per-node needs-layout gating is the paint
+    /// walk's own skip rule, not a frame contract breach.
+    #[error("paint phase began with layout work still pending")]
     PaintBeforeLayout,
 
     /// Paint performed on detached node.
+    ///
+    /// Reserved variant: no production construction site exists yet.
+    /// Paint reaches nodes only through the dirty paint queue, and
+    /// detached subtrees are evicted from the dirty queues at relocation
+    /// (`pipeline::owner::relocation`'s phase preflights); a queued id
+    /// that has left the tree is dropped by the walk and reported by the
+    /// end-of-pass residue scan instead of typed here. Pre-adding the
+    /// variant keeps the error surface stable for a future mid-pass
+    /// detach seam (a node whose presentation closes while the paint walk
+    /// is in flight).
     #[error("cannot paint detached render object")]
     PaintDetached,
 
@@ -146,6 +195,17 @@ pub enum RenderError {
     // Pipeline Errors
     // ========================================================================
     /// Pipeline phase executed in wrong order.
+    ///
+    /// Reserved variant: no production construction site exists yet. Phase
+    /// ORDERING is lifted into the type system — each `run_*` method lives
+    /// only on its phase's impl block and the transitions are by-value
+    /// `rebind_phase`, so an out-of-order call is a compile error
+    /// (E0599 "method not found"), not a runtime condition; `PipelineOwner::run_frame`
+    /// is the only sequencing authority. What remains runtime-checkable is
+    /// frame COMPLETENESS, which is
+    /// [`PaintBeforeLayout`](Self::PaintBeforeLayout)'s single semantics.
+    /// Pre-adding the variant keeps the error surface stable for a future
+    /// runtime seam that could still violate ordering.
     #[error("pipeline phase {phase} executed out of order")]
     PhaseOrderViolation {
         /// The phase that was executed incorrectly.

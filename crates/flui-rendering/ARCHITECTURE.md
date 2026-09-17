@@ -915,6 +915,23 @@ FLUI diverges on both arms, in the stricter direction: a panic in `paint_effects
 
 **Note:** `hit_test_raw` is part of the `RenderObject<P>` trait, but the current pipeline owner does not invoke it directly -- hit testing is dispatched at the `RenderView` layer outside the frame pipeline. The catch_unwind helper around hit_test will land when hit testing is wired through the pipeline.
 
+### Phase ORDERING lives in the type system; one runtime COMPLETENESS gate remains
+
+**Rule:** Flutter validates phase discipline at runtime, debug-side. `RenderObject._debugDoingThisLayout` / `_debugDoingThisPaint` (3.44.0, `object.dart`) guard re-entrancy per phase — `performLayout` opens with `assert(!_debugDoingThisLayout)` and `_paintWithContext` throws "Tried to paint a RenderObject reentrantly" on a second entry — and nothing stops a driver from calling `flushPaint` with `_nodesNeedingLayout` still holding entries — the pump runs the phases in a fixed order, but the invariant lives in convention plus asserts, not in types.
+
+**Choice:** FLUI lifts ORDERING into the type system entirely. Each `run_*` method lives only on its phase's impl block (`PipelineOwner<Layout>::run_layout`, `PipelineOwner<PaintPhase>::run_paint`, …) and the phase transitions are by-value `rebind_phase` moves, so `run_paint` cannot even be named on an owner that has not come back from the layout phase — an out-of-order call is error[E0599], not a runtime condition. `PipelineOwner::run_frame` is the only sequencing authority in-tree.
+
+What the type system cannot express is frame COMPLETENESS. A caller may legally drive the phases by hand — `into_layout().into_compositing().into_paint()` — and skip `run_layout`; the manual phase chain with empty queues is designed behavior (the benches drive the transitions this way; the paint-only frame-2 tests and `tests/paint_before_layout.rs` drive the chain all the way to `run_paint`). So `run_paint` keeps ONE runtime gate: on entry, before any paint work is served, `scheduler.has_layout_work()` returns `Err(RenderError::PaintBeforeLayout)`. The gate reads the scheduler's `needs_layout` QUEUE, not the per-node `NEEDS_LAYOUT` flag — a flag-only mark without an owner-side enqueue is the stale-geometry signal the paint walk's own needs-layout skip handles per node (see the catch-unwind entry above), not a frame-level contract breach. The variant is frame-level by design: a paint `Err` aborts the whole frame, and per-node needs-layout gating is the walk's skip rule, not an error.
+
+The remaining phase-misuse variants — `LayoutDuringPaint`, `LayoutDetached`, `PaintDetached`, `PhaseOrderViolation` — are deliberately UNWIRED, each documented in `src/error.rs` with the reason: the typestate machine forecloses its misuse site structurally (a layout-phase value cannot reach paint-phase code; detached subtrees are evicted from the dirty queues at relocation, and a stale id is a walk no-op or `NodeNotFound` downstream), and a variant no path can construct reads as a guard that guards nothing. They stay pre-added — the enum is already fully `#[non_exhaustive]`, so raising one later is not a breaking change — keeping the error surface stable for a future runtime seam (a paint-triggered relayout, a mid-pass detach).
+
+**Alternatives considered:**
+
+- **Hardening `into_compositing` to prove layout ran** (draining or asserting the queue in the transition) — rejected: it refuses the legitimate empty-queue chain the benches rely on, and the transition is a pure `rebind_phase` by design; completeness is the phase entry's obligation, not the transition's.
+- **A per-node `PaintBeforeLayout` carrying the node's `RenderId`** — rejected: the paint walk already skips needs-layout nodes (stale-geometry gate) and the residue scan reports unreached nodes; a paint `Err` aborts the whole frame, so a per-node variant shape would suggest recovery granularity the pipeline does not have.
+
+**Accepted trade-off:** the variant name predates the wiring and reads per-node ("paint performed before layout"); its semantics is frame-level, which the variant's Display string ("paint phase began with layout work still pending") and doc state. Renaming the variant would be a breaking change to a public error enum for a cosmetic gain.
+
 ### Multi-source design references in this crate
 
 Strategy clause "Behavior as floor, everything else designed for Rust" treats Flutter as the **semantic** floor, not the design. The structural shape of individual components in this crate has been informed by multiple Rust-side audited references as recorded in prior plans:
