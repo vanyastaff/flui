@@ -117,17 +117,11 @@ fn gesture_fixture_with(
     // tag `"shared"`) launches a real programmatic flight on the AUTO
     // observer's own `FlightManager` — a store this fixture's `controller`
     // never reads, so it cannot contaminate `controller.flights()`. `install`
-    // below only swaps which observer receives FUTURE notifications; it does
-    // not retroactively cancel a flight the auto observer already started
-    // (confirmed: the flight's overlay entry survives `install`, the
-    // `from_controller.set_value(1.0)` below, ten settle ticks, and a full
-    // gesture start/stop cycle — its retirement is gated on its OWN owning
-    // `HeroController` still being live to service it, not on frame count).
-    // Named rather than silently tolerated (tracked as issue #1195 — the
-    // auto observer's own flight/overlay entry is never retired by this
-    // fixture): it is real, but it cannot reach any assertion in this file,
-    // since nothing here ever reads the auto observer's own flights or
-    // overlay entries by identity.
+    // below both swaps which observer receives FUTURE notifications and —
+    // since `did_detach` sweeps the auto observer's in-flight flights — retires
+    // the flight that push launched, so the explicit `controller` starts clean
+    // (pinned by
+    // `replacing_the_auto_hero_observer_retires_its_in_flight_flight`).
     let mut harness = mount_navigator(&navigator);
 
     let to_route = hero_page(to_opt_in, 40.0, 24.0).maintain_state(to_maintain_state);
@@ -618,5 +612,88 @@ fn a_never_moved_drag_is_dismissed_once_the_gesture_genuinely_stops() {
     assert!(
         controller.flights().get(&hero_tag()).is_none(),
         "did_stop_user_gesture must manually dismiss a flight whose drag never moved"
+    );
+}
+
+// ============================================================================
+// 9. Replacing the auto observer retires its in-flight flight
+// ============================================================================
+
+/// `HeroController.did_detach` retires the flights its controller still has in
+/// the air — Flutter's `HeroController.dispose` sweeps `_flights`
+/// (`heroes.dart:1112-1116`) when the controller is released, and here a
+/// controller is released by *replacement* (`NavigatorHandle::add_observer`
+/// takes the auto-default) while the navigator and its heroes stay alive.
+///
+/// Flutter never hits this because its `HeroController` is owned by the
+/// navigator for its whole life; FLUI replaces the controller in place, so the
+/// flight it launched must be torn down — its overlay entry removed and both
+/// heroes' placeholders restored — rather than left to paint forever. Recorded
+/// in `ARCHITECTURE.md` §18.
+///
+/// Red-check: delete the `self.flights.finish_all()` call from
+/// `HeroController::did_detach` — the overlay count stays one entry high after
+/// `install`, and both heroes keep their placeholders.
+#[test]
+fn replacing_the_auto_hero_observer_retires_its_in_flight_flight() {
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
+        SizedBox::new(1.0, 1.0).into_view().boxed()
+    }));
+    let mut harness = mount_navigator(&navigator);
+
+    // First hero page — the base route carries no matching tag, so this push
+    // (from a non-PageRoute) launches nothing.
+    let to_route = hero_page(true, 40.0, 24.0);
+    let _to_push = harness.enter_owner_scope(|| navigator.push(to_route));
+    harness.tick();
+    let to = navigator
+        .current()
+        .expect("the destination route is pushed");
+    let pre_flight = navigator.overlay().len();
+
+    // Second hero page shares the tag: the auto observer launches a real
+    // programmatic flight during this settling tick, inserting one overlay entry.
+    let from_route = hero_page(true, 30.0, 18.0);
+    let _from_push = harness.enter_owner_scope(|| navigator.push(from_route));
+    harness.tick();
+    let from = navigator.current().expect("the dragged route is pushed");
+
+    assert_eq!(
+        navigator.overlay().len(),
+        pre_flight + 2,
+        "the second push added a route entry and the auto observer's flight entry"
+    );
+
+    // Replacing the auto observer must retire the flight it launched: the
+    // overlay entry comes out (only the still-pushed routes remain) and both
+    // heroes restore their children instead of a blank placeholder.
+    let controller = install(&navigator);
+
+    assert_eq!(
+        navigator.overlay().len(),
+        pre_flight + 1,
+        "replacing the auto observer retired its flight and removed its overlay entry"
+    );
+    assert!(
+        controller.flights().get(&hero_tag()).is_none(),
+        "the replacement controller inherited no flight"
+    );
+
+    let to_hero = navigator
+        .route_modal(to)
+        .and_then(|m| m.all_heroes().get(&hero_tag()).cloned())
+        .expect("the destination hero registered with its route");
+    let from_hero = navigator
+        .route_modal(from)
+        .and_then(|m| m.all_heroes().get(&hero_tag()).cloned())
+        .expect("the dragged hero registered with its route");
+    assert!(
+        to_hero.placeholder_size().is_none(),
+        "the destination hero's placeholder is restored on retirement"
+    );
+    assert!(
+        from_hero.placeholder_size().is_none(),
+        "the dragged hero's placeholder is restored on retirement"
     );
 }

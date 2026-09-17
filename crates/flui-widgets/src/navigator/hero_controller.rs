@@ -752,7 +752,16 @@ impl NavigatorObserver for HeroController {
     /// `… = null` (`:4108`). A controller that keeps observing a detached navigator
     /// would schedule against a dead binding.
     fn did_detach(&self) {
-        *self.navigator.lock() = None;
+        // Retire every flight still in the air before dropping the navigator slot.
+        // A detached controller can no longer service a flight's end-of-flight
+        // drain — the shuttle retires a flight only through a live `FlightManager`
+        // — so leaving flights airborne would strand their overlay entries and
+        // their shuttle's painting forever. Flutter never hits this because its
+        // `HeroController` is owned by the navigator for its whole life; FLUI
+        // replaces the controller through `add_observer`/`remove_observer` while
+        // the navigator stays alive. Recorded in `ARCHITECTURE.md` §18.
+        self.flights.finish_all();
+        let _prev = self.navigator.lock().take();
     }
 
     /// `HeroController.didChangeTop` (`heroes.dart:853-869`) — the **only** route
