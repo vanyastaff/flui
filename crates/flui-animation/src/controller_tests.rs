@@ -2019,6 +2019,72 @@ fn repeat_reverse_leg_velocity_is_negative() {
     c.dispose();
 }
 
+/// `velocity()` after a mid-run `set_value` must be 0.0, not the stale
+/// interrupted run's rate: `set_value` clears `active_run` via
+/// `stop_running()` but reports a *directional* running status at an
+/// interior value, so the `status.is_running()` gate `velocity()` used to
+/// consult read "running" and computed `(target_value - start_value) /
+/// current_duration()` from a run that no longer exists. `active_run.is_none()`
+/// is the always-consistent "is a run installed" fact (see `walk_probe`'s
+/// doc) — the same predicate `tick_at` already gates on.
+#[test]
+fn velocity_after_a_mid_run_set_value_is_zero_not_the_stale_runs_rate() {
+    let _serial = serial();
+    let c = controller(1000);
+    c.forward().unwrap();
+    c.tick_at(0.5);
+    assert!(
+        (c.value() - 0.5).abs() < 1e-6,
+        "sanity: value={}",
+        c.value()
+    );
+
+    c.set_value(0.2);
+    assert_eq!(c.status(), AnimationStatus::Forward);
+    assert!(!c.is_animating(), "set_value mid-run must stop the run");
+    assert_eq!(
+        c.velocity(),
+        0.0,
+        "velocity after a mid-run set_value must be 0.0, not the stale run's rate"
+    );
+
+    // A subsequent run installs a fresh active_run and reports again.
+    c.forward().unwrap();
+    assert!(
+        c.velocity() != 0.0,
+        "a fresh forward() must report a live velocity"
+    );
+    c.dispose();
+}
+
+/// Unbounded mirror of
+/// `velocity_after_a_mid_run_set_value_is_zero_not_the_stale_runs_rate`:
+/// `animate_to` (a finite target on an unbounded controller) interrupted by
+/// `set_value` reported the same stale-run velocity before the fix.
+#[test]
+fn velocity_after_a_mid_run_set_value_is_zero_on_unbounded() {
+    let _serial = serial();
+    let c = AnimationController::unbounded_with_detached_ticker(Duration::from_millis(1000));
+    c.animate_to(500.0, None).unwrap();
+    c.tick_at(0.5);
+    assert!(
+        (c.value() - 250.0).abs() < 1e-3,
+        "sanity: value={}",
+        c.value()
+    );
+
+    c.set_value(200.0);
+    assert!(!c.is_animating(), "set_value mid-run must stop the run");
+    assert_eq!(c.velocity(), 0.0);
+
+    c.animate_to(500.0, None).unwrap();
+    assert!(
+        c.velocity() != 0.0,
+        "a fresh animate_to must report a live velocity"
+    );
+    c.dispose();
+}
+
 /// A frame that spans several repeat cycles at once fires status
 /// listeners by PARITY, not once per retired cycle: an even number of
 /// skipped bounce legs cancels out (no net direction flip), an odd
@@ -2940,6 +3006,7 @@ fn every_delivery_runs_with_the_controller_lock_free() {
     let observed = Arc::new(Mutex::new(None));
     let observed2 = Arc::clone(&observed);
     future.when_complete_or_cancel(move |_outcome| {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *observed2.lock() = Some(inner.try_lock().is_some());
     });
 
@@ -3001,6 +3068,7 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     let seen = Arc::new(Mutex::new(None));
     let seen2 = Arc::clone(&seen);
     future.when_complete_or_cancel(move |outcome| {
+        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *seen2.lock() = Some(outcome);
     });
 
