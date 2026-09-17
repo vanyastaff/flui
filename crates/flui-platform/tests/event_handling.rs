@@ -38,6 +38,10 @@ fn get_test_platform() -> Box<dyn Platform> {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_mouse_click_pointer_event() {
     init_tracing();
     tracing::info!("Test T046: Mouse click fires PointerEvent::Down(Primary)");
@@ -85,6 +89,10 @@ fn test_mouse_click_pointer_event() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_keyboard_with_modifiers() {
     init_tracing();
     tracing::info!("Test T047: Keyboard press with modifier fires KeyboardEvent");
@@ -150,6 +158,10 @@ fn test_keyboard_with_modifiers() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_window_resize_event() {
     init_tracing();
     tracing::info!("Test T048: Window resize fires WindowEvent::Resized");
@@ -221,6 +233,10 @@ fn test_window_resize_event() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_mouse_movement_pointer_event() {
     init_tracing();
     tracing::info!("Test T049: Mouse movement fires PointerEvent::Move");
@@ -283,6 +299,10 @@ fn test_mouse_movement_pointer_event() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_multi_touch_pointer_events() {
     init_tracing();
     tracing::info!("Test T050: Multi-touch fires separate PointerEvent per touch point");
@@ -341,6 +361,10 @@ fn test_multi_touch_pointer_events() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_event_callback_registration() {
     init_tracing();
     tracing::info!("Integration test: Event callback registration");
@@ -365,6 +389,10 @@ fn test_event_callback_registration() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_event_coordinate_system() {
     init_tracing();
     tracing::info!("Contract test: Event coordinate system");

@@ -10,6 +10,10 @@ use flui_types::geometry::{Size, px};
 
 /// T016: Test window mode transitions (Normal, Maximized, Fullscreen)
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_window_modes() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -106,6 +110,10 @@ fn test_windows_mode_transitions() {
 /// T018: Verify mode transitions on macOS platform
 #[test]
 #[cfg(target_os = "macos")]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_macos_mode_transitions() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -150,6 +158,10 @@ fn test_macos_mode_transitions() {
 
 /// T019: Test DPI scaling change fires ScaleFactorChanged event
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_dpi_scaling_change() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -203,6 +215,10 @@ fn test_dpi_scaling_change() {
 
 /// T020: Verify per-monitor DPI v2 on Windows, Retina support on macOS
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_per_monitor_dpi() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 

@@ -9,6 +9,10 @@ use flui_types::geometry::{Size, px};
 
 /// T011: Test window creation with WindowOptions
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_window_creation_with_options() {
     // Initialize tracing for test debugging
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
@@ -76,6 +80,10 @@ fn test_window_creation_with_options() {
 
 /// T012: Test window close event fires on CloseRequested
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_window_close_event() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -118,6 +126,10 @@ fn test_window_close_event() {
 
 /// T015: Test creating multiple concurrent windows
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_multiple_concurrent_windows() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -179,6 +191,10 @@ fn test_multiple_concurrent_windows() {
 
 /// T021: Test window.request_redraw() fires RedrawRequested event
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_request_redraw() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -219,6 +235,10 @@ fn test_request_redraw() {
 
 /// T022: Test window resize fires Resized event with new logical size
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_window_resize_event() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 

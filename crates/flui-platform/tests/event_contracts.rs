@@ -28,6 +28,10 @@ fn init_tracing() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_platform_event_contract() {
     init_tracing();
     tracing::info!("Test T061: Platform event contract verification");
@@ -180,6 +184,10 @@ fn test_platform_event_contract() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_cross_platform_event_consistency() {
     init_tracing();
     tracing::info!("Test T061: Cross-platform event consistency");
@@ -260,6 +268,10 @@ fn test_cross_platform_event_consistency() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_event_dispatch_latency_benchmark() {
     init_tracing();
     tracing::info!("Test T063: Event dispatch latency benchmark");
@@ -328,6 +340,10 @@ fn test_event_dispatch_latency_benchmark() {
 // ============================================================================
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_event_handling_performance_baseline() {
     init_tracing();
     tracing::info!("Performance baseline: Event handling operations");

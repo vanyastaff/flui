@@ -279,6 +279,10 @@ fn contract_clipboard_error_handling() {
 
 /// T023: Test all platforms implement window lifecycle identically
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_window_lifecycle_contract() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -428,6 +432,10 @@ fn test_window_lifecycle_contract() {
 /// Test that all platform implementations provide consistent display
 /// information
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_display_enumeration_contract() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -474,6 +482,10 @@ fn test_display_enumeration_contract() {
 
 /// Test platform name consistency
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_platform_name_contract() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
