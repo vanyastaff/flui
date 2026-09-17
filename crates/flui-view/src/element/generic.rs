@@ -106,6 +106,14 @@ struct CoreState {
     /// This element's own `ElementId`, stamped at slab insertion.
     self_id: Option<ElementId>,
 
+    /// The element-tree parent this element was mounted under, as handed to
+    /// `mount`. Meaningful only while `on_mount` runs: the mount decision it
+    /// feeds (`RenderBehavior`'s adoption) happens there. A retake or
+    /// reparent re-parents through `set_parent_render_id` directly and never
+    /// re-runs `on_mount`, so this field goes stale for everything after the
+    /// mount frame — nothing may read it as current tree state.
+    element_parent: Option<ElementId>,
+
     /// Handle for scheduling THIS element's rebuild from a listener callback
     /// fired outside a frame; captured at mount.
     external_scheduler: Option<ExternalBuildScheduler>,
@@ -121,11 +129,18 @@ impl CoreState {
             parent_render_id: None,
             sliver_slot: None,
             self_id: None,
+            element_parent: None,
             external_scheduler: None,
         }
     }
 
-    fn mount(&mut self, slot: usize, owner: &mut crate::ElementOwner<'_>, view_type: TypeId) {
+    fn mount(
+        &mut self,
+        parent: Option<ElementId>,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+        view_type: TypeId,
+    ) {
         debug_assert!(
             self.lifecycle.is_initial(),
             "BUG: mount from {:?} — Flutter's contract is that mount runs once, \
@@ -134,6 +149,7 @@ impl CoreState {
         );
         self.lifecycle = Lifecycle::Active;
         self.depth = slot;
+        self.element_parent = parent;
         self.dirty.store(true, Ordering::Relaxed);
 
         // Capture the handle that lets an out-of-frame listener tick schedule
@@ -346,6 +362,18 @@ where
         self.state.self_id
     }
 
+    /// The element-tree parent this element was mounted under, stamped by
+    /// [`Self::mount`]. Mount-frame state: `RenderBehavior::on_mount` reads it
+    /// to tell a legal bare mount (element-tree root, no parent) from an
+    /// adoption that would orphan the render object. A retake or reparent
+    /// re-parents through [`Self::set_parent_render_id`] without re-running
+    /// `on_mount`, so this value is stale outside the mount frame and must
+    /// not be read as current tree state — the live parent edge lives on
+    /// [`crate::tree::ElementNode::parent`].
+    pub(crate) fn element_parent(&self) -> Option<ElementId> {
+        self.state.element_parent
+    }
+
     /// Push this element onto the dirty heap so
     /// [`BuildOwner::build_scope`](crate::BuildOwner) reaches it.
     ///
@@ -394,11 +422,11 @@ where
     #[inline]
     pub fn mount(
         &mut self,
-        _parent: Option<ElementId>,
+        parent: Option<ElementId>,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        self.state.mount(slot, owner, TypeId::of::<V>());
+        self.state.mount(parent, slot, owner, TypeId::of::<V>());
     }
 
     /// Unmount this element (permanently removed).

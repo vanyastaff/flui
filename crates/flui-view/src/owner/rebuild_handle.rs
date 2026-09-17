@@ -184,7 +184,7 @@ mod tests {
         BuildOwner, RebuildHandle, RebuildReason,
         context::BuildContext,
         tree::ElementTree,
-        view::{IntoView, RenderView, StatefulView, View, ViewState},
+        view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewState},
     };
 
     /// A stateful view whose state captures a `RebuildHandle` in `init_state` —
@@ -262,7 +262,8 @@ mod tests {
         }
     }
 
-    /// Mount `Capturing` as root; return the owner, tree, and the captured handle.
+    /// Mount `Capturing` under a render root and return the owner, tree, the
+    /// captured handle, the build counter, and the *stateful* element's id.
     fn mount() -> (
         BuildOwner,
         ElementTree,
@@ -279,16 +280,27 @@ mod tests {
 
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let root = tree.mount_root_with_pipeline_owner(
-            &view,
+        // Production shape (the bootstrap idiom): a render root carries the
+        // stateful view, so every render descendant mounts with a render
+        // parent — the component element pass-throughs `RootRenderElement`'s
+        // render id down to `Leaf`. A render-less root with a pipeline owner
+        // would orphan `Leaf`'s render object (the mount-time refusal shape).
+        let render_root = RootRenderView::new(view, 800.0, 600.0);
+        let render_root_element = tree.mount_root_with_pipeline_owner(
+            &render_root,
             Some(PipelineCell::new(PipelineOwner::new())),
             &mut owner.element_owner_mut(),
         );
 
-        // `init_state` runs during the first build.
-        owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+        // `init_state` runs during the first build, which also reconciles the
+        // content child under the render root.
+        owner.schedule_build_for(render_root_element, 0, RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 
+        let root = tree
+            .get(render_root_element)
+            .map(|node| node.child_ids()[0])
+            .expect("the stateful element must sit under the render root after the mount build");
         let handle = captured
             .lock()
             .clone()

@@ -500,6 +500,72 @@ mod tests {
             }
         }
 
+        /// [`Harness::mount`], but the caller's view sits below a
+        /// [`RootRenderView`](crate::view::RootRenderView) — the bootstrap's
+        /// production shape. Use it for a fixture whose root is a render-LESS
+        /// component: the composed render descendant then mounts with a render
+        /// parent (the component chain passes the render root's id down)
+        /// instead of orphaning under a render-less owner-carrying root.
+        ///
+        /// `root` is the caller's element below the render root (the rebuild
+        /// target); `root_render` is the caller's outermost composed render
+        /// object — the same node the bare `mount` scan produced — while the
+        /// frame lays out from the true pipeline root above it.
+        fn mount_wrapped<V: crate::View + Clone>(view: V, constraints: BoxConstraints) -> Self {
+            let pipeline = PipelineCell::new(PipelineOwner::new());
+            let mut owner = BuildOwner::new();
+            let mut tree = ElementTree::new();
+
+            let render_root = crate::view::RootRenderView::new(view, 800.0, 600.0);
+            let render_root_element = tree.mount_root_with_pipeline_owner(
+                &render_root,
+                Some(pipeline.clone()),
+                &mut owner.element_owner_mut(),
+            );
+
+            owner.schedule_build_for(render_root_element, 0, crate::RebuildReason::InitialMount);
+            owner.build_scope(&mut tree);
+
+            // The caller's element is the render root's single content child;
+            // its first render-owning descendant is the composed view's outer
+            // render object (here the LayoutBuilder's node).
+            let root = tree
+                .get(render_root_element)
+                .map(|node| node.child_ids()[0])
+                .expect("the render root must have reconciled its content child");
+            let root_render = tree
+                .get(root)
+                .map(|node| node.child_ids()[0])
+                .and_then(|id| tree.get(id).and_then(|node| node.element().render_id()))
+                .expect("the composed view must own a render object after the mount build");
+
+            // The frame lays out from the true pipeline root (the render
+            // root's node, the single parentless one), not from the caller's
+            // composed node.
+            let pipeline_root = pipeline.with(|owner| {
+                let render_tree = owner.render_tree();
+                let mut roots = render_tree
+                    .iter()
+                    .map(|(id, _)| id)
+                    .filter(|id| render_tree.parent(*id).is_none());
+                let found = roots.next().expect("the subtree must have a render root");
+                assert!(roots.next().is_none(), "exactly one render root expected");
+                found
+            });
+            pipeline.with_mut(|owner| {
+                owner.set_root_id(Some(pipeline_root));
+                owner.set_root_constraints(Some(constraints));
+            });
+
+            Self {
+                owner,
+                tree,
+                pipeline,
+                root,
+                root_render,
+            }
+        }
+
         /// One frame, exactly as `HeadlessBinding::pump_frame` drives it.
         fn frame(&mut self) {
             self.owner.build_scope(&mut self.tree);
@@ -877,7 +943,11 @@ mod tests {
             calls: Arc::clone(&calls),
         };
 
-        let mut h = Harness::mount(&parent, tight(120.0, 80.0));
+        // The parent is a render-less component, so it mounts under a render
+        // root (the bootstrap's shape) instead of as the bare element root —
+        // otherwise the LayoutBuilder's render object mounts with an owner but
+        // no render parent.
+        let mut h = Harness::mount_wrapped(parent, tight(120.0, 80.0));
         h.frame();
         assert_eq!(calls.load(Ordering::Relaxed), 1, "first frame builds once");
         let first_child = child_render_id(&h);

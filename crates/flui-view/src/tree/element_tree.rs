@@ -2898,6 +2898,8 @@ mod tests {
     #[cfg(test)]
     #[path = "../activation_recovery_tests.rs"]
     mod activation_recovery_tests;
+    #[path = "../orphaned_render_mount_tests.rs"]
+    mod orphaned_render_mount_tests;
     #[path = "replace_child_with_tests.rs"]
     mod replace_child_with_tests;
     #[cfg(test)]

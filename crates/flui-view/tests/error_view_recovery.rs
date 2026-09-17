@@ -444,19 +444,37 @@ fn lifecycle_recovery_mount_panic_does_not_publish_the_uncommitted_record() {
 
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root = tree.mount_root_with_pipeline_owner(
-        &WrapperView {
+    // The bootstrap's production shape: the component wrapper sits below a
+    // render root, so `InitPanicView`'s `ErrorView` build result (a render
+    // element) mounts with a render parent instead of orphaning under a
+    // render-less owner-carrying root. `root` below is the wrapper element,
+    // the same rebuild target the bare mount used to return.
+    let render_root = flui_view::RootRenderView::new(
+        WrapperView {
             child: InitPanicView {
                 failed_ids: std::sync::Arc::clone(&failed_ids),
             },
         },
+        800.0,
+        600.0,
+    );
+    let render_root_element = tree.mount_root_with_pipeline_owner(
+        &render_root,
         Some(flui_rendering::pipeline::PipelineCell::new(
             flui_rendering::pipeline::PipelineOwner::new(),
         )),
         &mut owner.element_owner_mut(),
     );
-    owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+    owner.schedule_build_for(
+        render_root_element,
+        0,
+        flui_view::RebuildReason::InitialMount,
+    );
     owner.build_scope(&mut tree);
+    let root = tree
+        .get(render_root_element)
+        .map(|node| node.child_ids()[0])
+        .expect("the wrapper element must sit under the render root");
     let prior_failed = failed_ids.lock().unwrap()[0];
 
     set_error_view_builder(recovery_mount_panics);
