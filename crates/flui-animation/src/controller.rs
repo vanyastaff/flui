@@ -1680,7 +1680,14 @@ impl AnimationController {
     #[must_use]
     pub fn velocity(&self) -> f32 {
         let inner = self.inner.lock();
-        if !inner.status.is_running() {
+        // `active_run.is_none()`, not `!status.is_running()`: `active_run`
+        // is the actual "is a run installed" fact (see `walk_probe`'s doc
+        // for the two ways `status.is_running()` diverges from it — a mid-run
+        // `dispose()`, and a mid-run `set_value()`). Gating on a stale
+        // running status here let a mid-run `set_value` report the
+        // interrupted run's `(target_value - start_value) / duration` rate
+        // for a run that no longer exists.
+        if inner.active_run.is_none() {
             return 0.0;
         }
 
