@@ -2,8 +2,11 @@
 
 Status: Fast path (Phase-0 triage: single obvious edit site, no design fork, no
 unsafe/public-API/cross-crate ripple, no new dependency). Scout complete (2026-09-16,
-this session); plan written per compaction directive before build. The issue's Win32
-half is explicitly out of scope on this Mac (needs a Windows machine) — noted in §6.
+this session); plan written per compaction directive before build. BUILD COMPLETE and
+reviewed (2026-09-17): rust-reviewer pass returned ACCEPTABLE with one advisory — an
+inverted winit-ordering citation — corrected in place (see §1 note); commit `da669ff1`,
+PR #1206. The issue's Win32 half is explicitly out of scope on this Mac (needs a
+Windows machine) — noted in §6.
 
 ## 1. Problem and resolution
 
@@ -94,14 +97,22 @@ Safety/lifetime analysis (why removing the map entry here cannot dangle `self`):
 `.cargo/` stays untouched (user constraint). `just runtime-conformance-check` needs the
 `/tmp/py312shim` python3 symlink; `just ci` needs `/tmp/bashshim` for port-check.
 
-## 5. Verification (expected at build close)
+## 5. Verification (observed at build close, 2026-09-17)
 
-- `cargo clippy -p flui-platform --all-targets -- -D warnings` exit 0; `cargo fmt --check`
-  clean; `cargo check` exit 0.
-- `cargo test -p flui-platform` — existing always-run counts unchanged (161 passed /
-  ignored-class grows by one real-window test, matching the issue's premise).
-- Attempt `--run-ignored=all close_drains_platform_map_entry` (nextest) / `--ignored`
-  (libtest) on this real Mac; report outcome honestly.
+- `cargo clippy -p flui-platform --all-targets --all-features -- -D warnings` exit 0 (0
+  warnings; the lone future-incompat notice is pre-existing `block v0.1.6`);
+  `cargo fmt --all --check` clean; `cargo check -p flui-platform --all-features` exit 0.
+- `cargo test -p flui-platform` (with the lld-strip wrapper) at the documented baseline:
+  lib **164 passed / 0 failed / 3 ignored** (161/1 baseline + this test → 164/3); headless
+  12 passed; `platform_it` 34 passed / 33 failed / 8 ignored — PRE-EXISTING live-Mac
+  ADR-0039 debug-assert class, identical on a clean tree, CI runs it headless on Linux.
+- Honest attempt to run `close_drains_platform_map_entry` (libtest `--ignored`) on this
+  real Mac: SIGABRT through `libc++abi: terminating due to uncaught exception NSException`
+  — exactly the documented AppKit-inaccessible-from-bare-test class; the test is
+  `#[ignore]`d with that reason, sibling to the two existing real-window tests. The
+  reviewer confirmed the test is non-vacuous in both directions: with the fix absent the
+  post-close `contains_key` assert would fail; with the close route broken the pre-close
+  assert catches it.
 - Win32 half: NOT verified (no Windows machine here) — recorded as the residual the
   issue still carries; the AppKit half is the resolution a Mac can prove.
 
