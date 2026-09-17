@@ -3147,12 +3147,17 @@ impl UpdateScheduler {
         }
     }
 
-    /// Schedule a frame if frames are enabled
+    /// Schedule a frame if frames are enabled.
     ///
-    /// Unlike `request_frame()`, this checks `frames_enabled` first.
-    pub fn schedule_frame_if_enabled(&self) {
+    /// Unlike `request_frame()`, this checks `frames_enabled` first. Returns
+    /// `true` iff a frame was actually requested (frames were enabled);
+    /// `false` when the demand was dropped by the enablement gate.
+    pub fn schedule_frame_if_enabled(&self) -> bool {
         if self.inner.binding.frames_enabled.load(Ordering::Acquire) {
             self.request_frame();
+            true
+        } else {
+            false
         }
     }
 
@@ -3192,25 +3197,28 @@ impl UpdateScheduler {
     /// gate stays silent on that thread until something resets the phase
     /// machine; production always drives frames through
     /// `drive_frame`/`drive_frame_with_lane`, both of which wrap
-    /// `drive_frame_impl`.) What actually keeps a same-thread caller's
-    /// demand from being lost is two carriers outside this method
-    /// entirely: pipeline visual-update demand travels
-    /// `PipelineOwner::request_visual_update`
-    /// (`flui-rendering/src/pipeline/owner/accessors.rs`) to the
-    /// presentation's own wake closure and `window.request_redraw()`
-    /// (`flui-app/src/app/presentation.rs`), never through this method;
-    /// ticker/animation demand travels `Ticker::schedule_tick_if_active`
-    /// (`ticker.rs`) to `schedule_frame_callback`, whose own registration
-    /// ends in an ungated `self.request_frame()` call, independent of this
-    /// method's phase gate.
+    /// `drive_frame_impl`.)
+    ///
+    /// # Return value
+    ///
+    /// Returns `true` iff a frame was actually requested — the phase gate
+    /// passed *and* frames were enabled — and `false` iff the demand was
+    /// dropped (the same-thread mid-frame no-op, or `frames_enabled ==
+    /// false`). It is **not** the `frame_scheduled` false→true edge: a
+    /// caller whose demand coincides with an already-scheduled frame still
+    /// gets `true`, because the gate passed. A caller that wants to poke a
+    /// per-window redraw (the presentation's `set_on_need_visual_update`
+    /// closure) uses this to poke only when the scheduler is actually going
+    /// to produce the frame, so a mid-frame same-thread dirty mark no longer
+    /// reaches `request_redraw`.
     ///
     /// Spelled out as a `match` with every phase named, not a wildcard arm,
     /// so a phase added to [`SchedulerPhase`] fails to compile here until
     /// it is classified.
-    pub fn ensure_visual_update(&self) {
+    pub fn ensure_visual_update(&self) -> bool {
         match self.phase() {
             SchedulerPhase::Idle | SchedulerPhase::PostFrameCallbacks => {
-                self.schedule_frame_if_enabled();
+                self.schedule_frame_if_enabled()
             }
             SchedulerPhase::TransientCallbacks
             | SchedulerPhase::MidFrameMicrotasks
@@ -3219,8 +3227,10 @@ impl UpdateScheduler {
                 // lock may be held across `schedule_frame_if_enabled`'s own
                 // `on_frame_scheduled` hook call.
                 let frame_thread = *self.inner.frame.frame_thread.lock();
-                if frame_thread != Some(std::thread::current().id()) {
-                    self.schedule_frame_if_enabled();
+                if frame_thread == Some(std::thread::current().id()) {
+                    false
+                } else {
+                    self.schedule_frame_if_enabled()
                 }
             }
         }

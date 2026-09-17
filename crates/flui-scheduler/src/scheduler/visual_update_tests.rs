@@ -247,3 +247,50 @@ fn ensure_visual_update_from_another_thread_mid_frame_still_schedules() {
          precedes it"
     );
 }
+
+/// The `bool` return is the seam the presentation's `on_need_visual_update`
+/// closure uses to gate its per-window `request_redraw` poke: `true` iff the
+/// phase gate passed AND frames are enabled (a frame was actually requested),
+/// `false` iff the demand was dropped (the same-thread mid-frame no-op, or
+/// `frames_enabled == false`). It is **not** the `frame_scheduled` false→true
+/// edge — a demand that coincides with an already-scheduled frame still
+/// reports `true`, because the gate passed.
+#[test]
+fn ensure_visual_update_reports_whether_a_frame_was_requested() {
+    let scheduler = UpdateScheduler::new();
+
+    // Idle: requested. A repeated call — demand coinciding with the
+    // already-scheduled frame — still passes the gate, so the per-window
+    // poke a presentation gates on this return is not lost to coalescing.
+    assert!(scheduler.ensure_visual_update(), "Idle demand is requested");
+    assert!(
+        scheduler.ensure_visual_update(),
+        "already-scheduled demand still passes the gate"
+    );
+
+    // Mid-frame on the driving thread: the no-op arm reports `false`.
+    let probe = scheduler.clone();
+    let mid_frame = Arc::new(OnceLock::new());
+    let mid_frame_for_callback = Arc::clone(&mid_frame);
+    scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
+        let _ = mid_frame_for_callback.set(probe.ensure_visual_update());
+    }));
+    scheduler.execute_frame();
+    assert_eq!(
+        mid_frame.get().copied(),
+        Some(false),
+        "driving-thread mid-frame demand is dropped, and reported as such"
+    );
+
+    // Frames disabled: even from Idle, the enablement gate drops the demand.
+    let mut disabled = UpdateScheduler::new();
+    disabled.set_frames_enabled(false);
+    assert!(
+        !disabled.ensure_visual_update(),
+        "frames-disabled demand is dropped"
+    );
+    assert!(
+        !disabled.is_frame_scheduled(),
+        "a dropped demand must not leave a scheduled frame behind"
+    );
+}
