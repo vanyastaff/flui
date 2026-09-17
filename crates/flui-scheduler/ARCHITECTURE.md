@@ -365,9 +365,7 @@ unpublished) depends on it.
 ### `request_visual_update` routes through the `frames_enabled` gate, not the raw one
 
 **Rule:** a caller of `UpdateScheduler::ensure_visual_update` must have its
-request honor `frames_enabled`. This governs the scheduler-owned demand
-carrier only; see the mapping entry below for the separate carrier this
-rule does not reach. It adopts Flutter's `ensureVisualUpdate`
+request honor `frames_enabled`. It adopts Flutter's `ensureVisualUpdate`
 (`scheduler/binding.dart` @ 3.44.0) in full: it calls the equally
 `framesEnabled`-gated `scheduleFrame()` from `SchedulerPhase.idle`/
 `.postFrameCallbacks` (a call from `.postFrameCallbacks` requests the NEXT
@@ -380,10 +378,12 @@ cross-thread wake is worse than a surplus frame). Even for the driving
 thread this is not a blanket guarantee that the in-flight frame observes
 the call: it holds for `.transientCallbacks`/`.midFrameMicrotasks`, which
 precede the pipeline in the frame's slot order, but not for
-`.persistentCallbacks`, where the pipeline itself runs. What actually
-keeps a same-thread caller's demand from being lost is two carriers
-outside this method: pipeline visual-update demand never reaches it at
-all (see the mapping entry below), and ticker/animation demand travels
+`.persistentCallbacks`, where the pipeline itself runs. What keeps a
+same-thread caller's demand from being lost is not these no-op arms but
+what the demand is for: a pipeline visual-update issued mid-frame is by
+construction already inside the frame that will observe it (the pipeline
+runs in `.persistentCallbacks`, and the other two mid-frame phases precede
+it), while ticker/animation demand travels
 `Ticker::schedule_tick_if_active` (`ticker.rs`) to `schedule_frame_callback`,
 whose own registration ends in an ungated `self.request_frame()` call,
 independent of this phase gate. `UpdateScheduler::ensure_visual_update`
@@ -439,48 +439,53 @@ schedule, don't ask" entry point every unconditional caller (tickers via
 `set_frames_enabled` re-enable edge) already reaches for, and its raw,
 unconditional contract is unchanged by this phase gate.
 
-### Pipeline visual updates are a second carrier the phase gate does not reach
+### Pipeline visual updates route through `ensure_visual_update`'s phase gate
 
 **Mapping decision** (ADR-0027 leapfrog zone: runtime/scheduling topology
-is a sanctioned divergence point): `ensure_visual_update`'s phase gate
-governs only the scheduler-owned demand carrier
-(`UpdateScheduler::frame_scheduled`, driven by tickers, `end_of_frame`,
-`request_frame`, and `ensure_visual_update`). Pipeline visual-update
-pacing is a second, independent carrier that never reaches this scheduler
-at all: `PipelineOwner::request_visual_update`
-(`flui-rendering/src/pipeline/owner/accessors.rs`) calls
+is a sanctioned divergence point): the pipeline carrier no longer bypasses
+`UpdateScheduler`. `PipelineOwner::request_visual_update`
+(`flui-rendering/src/pipeline/owner/accessors.rs`) still calls
 `VisualUpdateNotifier::fire_need_visual_update`
-(`flui-rendering/src/pipeline/notifier.rs`), which invokes the closure a
-presentation registers via `owner.set_on_need_visual_update`
-(`flui-app/src/app/presentation.rs`); that closure calls the realm's
-shared `visual_wake()` (setting `realm.needs_redraw()`) and then
-`window.request_redraw()` directly, bypassing `UpdateScheduler` entirely.
-The runner's `wake_action` (`flui-app/src/app/runner/frame_pacing.rs`) ORs
-both carriers when it decides whether a wake renders a frame: its `dirty`
-parameter folds in `realm.needs_redraw()` (the pipeline's carrier), and
-its `frame_scheduled` parameter is this scheduler's own flag. Realm-owned
-pacing answers "does this realm's content need a repaint," which has
-nothing to do with scheduler phase, so routing it through this crate
-would not answer that question.
+(`flui-rendering/src/pipeline/notifier.rs`), which still invokes the
+closure a presentation registers via `owner.set_on_need_visual_update`
+(`flui-app/src/app/presentation.rs`) — but that closure no longer calls
+the realm's shared `visual_wake()` and no longer pokes
+`window.request_redraw()` unconditionally. It now captures a
+`WeakUpdateScheduler` (matching `RenderingFlutterBinding.scheduler`'s
+convention) and calls `scheduler.ensure_visual_update()`; only when that
+returns `true` (phase gate passed AND frames enabled) does it poke
+`window.request_redraw()`.
 
-**#1157's "widget-tier frame-count" acceptance criterion is unsatisfiable
-today, and dropped by decision, not silently missed:** no widget-reachable
-path calls `ensure_visual_update`. Its only production caller is
-`RendererBinding::request_visual_update`
-(`flui-app/src/bindings/renderer_binding.rs`); the trait's own
-`handle_metrics_changed` default method
-(`flui-rendering/src/binding/mod.rs`'s `RendererBinding` trait, which
-`RenderingFlutterBinding` inherits unchanged) also reaches
-`request_visual_update`, and is likewise never invoked anywhere in
-`flui-app`. A widget rebuild's visual-update demand travels the pipeline's
-carrier described above, never through this phase gate. Unifying the two
-carriers so the phase check governs both is tracked as issue #1172
-(filed, not implemented here): it is a runtime-topology change, and the
-presentation's wake closure runs inside the pipeline's own
-reentrancy-safe zone (its own comment: "the callback fires while the
-CALLER holds the pipeline cell checked out"), a guarantee that would need
-to be re-proven, not assumed, before routing this carrier through the
-scheduler.
+The realm's `wake` was already registered as the scheduler's
+`on_frame_scheduled` hook (`ui_realm.rs`), so the `frame_scheduled`
+false→true edge fires the platform wake exactly as before — routing the
+pipeline carrier through `ensure_visual_update` makes the scheduler's
+`frame_scheduled` flag the single carrier, and the presentation closure
+keeps only the per-window `request_redraw()` poke. The runner's
+`wake_action` (`flui-app/src/app/runner/frame_pacing.rs`) still ORs its
+two parameters, but `realm.needs_redraw()` (the old pipeline carrier) is
+no longer set by this closure; the scheduler's `frame_scheduled` flag is
+now the one latch both a pipeline mark and every other demand source flip.
+
+**Why the bool is not the `frame_scheduled` false→true edge:**
+`ensure_visual_update` returns `true` iff the phase gate passed AND frames
+are enabled, not iff the demand flipped `frame_scheduled`. The per-window
+poke must fire even when a frame is already scheduled — a multi-window
+realm that dirties window B after window A, both from Idle, still expects
+B's window poked, so the closure must not gate the poke on the coalescing
+edge.
+
+**Re-entrancy re-proven, not assumed:** the closure fires while the caller
+holds the pipeline cell checked out, and now reaches
+`ensure_visual_update`, which locks `frame_thread` (mid-frame arm) and, via
+`request_frame_impl`, clones-and-drops `on_frame_scheduled` outside its
+lock. Deadlock would require a reverse path — a scheduler lock held across
+a call back into the pipeline — and none exists: `handle_begin_frame`
+stores `frame_thread` under a temporary statement-scoped guard released
+before the pipeline runs, and `drive_frame_impl` runs the lane closure
+with no scheduler lock held. A mid-frame pipeline mark therefore locks a
+free `frame_thread`, reads `Some(current)`, returns `false`, and pokes
+nothing.
 
 ### The ticker callback slot is a state machine, leased across user code
 

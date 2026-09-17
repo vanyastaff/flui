@@ -917,7 +917,7 @@ impl UiRealm {
     /// Called by each backend's bootstrap with
     /// `AppConfig::frame_failure_handler` right after realm construction.
     pub(crate) fn set_frame_failure_handler(&self, handler: Option<FrameFailureHandler>) {
-        *self.frame_failure_handler.borrow_mut() = handler;
+        let _prev = std::mem::replace(&mut *self.frame_failure_handler.borrow_mut(), handler);
     }
 
     /// Install the realm-scoped frame-failure text-retention policy.
@@ -3689,6 +3689,7 @@ impl UiRealm {
                 realm.focus_coordinator.note_focus_gained(surviving);
             }
             // Steps 2 + 3, composite (minus `id` itself) + capabilities active.
+            // PORT-CHECK-OK-LOCK: plain data: held pointer events (pointer data), no Drop
             presentation.held_pointer_input().borrow_mut().clear();
             presentation.close();
             true
@@ -5461,6 +5462,12 @@ mod tests {
             });
             pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
             realm.mark_rendered();
+            // The insert above already dirtied the pipeline and, through the
+            // unified carrier, flipped the scheduler's `frame_scheduled` latch
+            // (its false->true edge is what fires the wake hook). Clear that
+            // latch so the dirty mark below is a genuine false->true edge, the
+            // only edge the wake hook fires on.
+            realm.scheduler().finish_async_pump();
 
             pipeline.with_mut(|owner| owner.mark_needs_layout(id));
             assert!(
@@ -5747,6 +5754,7 @@ mod tests {
             post_frame_handle
                 .schedule_local(move |_timing| {
                     calls_cb.fetch_add(1, Ordering::SeqCst);
+                    // PORT-CHECK-OK-LOCK: plain data: Option<Size>, no Drop
                     *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
                 })
                 .expect("the realm's local post-frame lane outlives this call");
@@ -8172,6 +8180,94 @@ mod tests {
                 "a frame request raised off the owner thread must still reach the wake"
             );
         }
+
+        /// A pipeline visual update now routes through the realm scheduler's
+        /// phase gate: issuing it from Idle flips the scheduler's own
+        /// `frame_scheduled` edge — the unified carrier — so a quiescent
+        /// pacing loop that reads that latch observes the demand even though
+        /// the presentation no longer calls `wake` directly.
+        ///
+        /// If reverted (the presentation's `set_on_need_visual_update` closure
+        /// calling `wake` + `request_redraw` with no `ensure_visual_update`
+        /// hop): the scheduler latch never flips, and this observes it stay
+        /// cleared.
+        #[test]
+        fn a_pipeline_visual_update_flips_the_schedulers_frame_scheduled_edge() {
+            let (window_a, _calls) = counting_window(1);
+            let realm = UiRealm::new(noop_wake(), window_a, 1.0, Arc::new(AtomicBool::new(false)))
+                .expect("realm constructs");
+            // Clear the latch so the visual update below is the edge under
+            // test, not construction's own initial demand.
+            realm.scheduler().finish_async_pump();
+            assert!(
+                !realm.scheduler().is_frame_scheduled(),
+                "precondition: latch cleared"
+            );
+
+            realm
+                .presentations
+                .get(realm.presentation_id())
+                .expect("primary installed")
+                .pipeline()
+                .with(flui_rendering::pipeline::PipelineOwner::request_visual_update);
+
+            assert!(
+                realm.scheduler().is_frame_scheduled(),
+                "a pipeline visual update must flip the scheduler's \
+                 frame_scheduled edge — one carrier reads both"
+            );
+        }
+
+        /// The gating half of the unification: a pipeline visual update issued
+        /// while the realm's own scheduler is mid-frame on the driving thread
+        /// must NOT immediately poke the native window — the in-flight frame's
+        /// surplus-frame guard, not a second `request_redraw`, is what picks up
+        /// demand that lands after this frame's pipeline slot has opened.
+        ///
+        /// If reverted (the closure poking `request_redraw` unconditionally,
+        /// as the pre-unified carrier did): this observes the window's redraw
+        /// counter advance from inside the frame itself.
+        #[test]
+        fn a_pipeline_visual_update_during_the_realm_frame_does_not_redraw_immediately() {
+            let (window_a, calls_a) = counting_window(1);
+            let realm = UiRealm::new(
+                noop_wake(),
+                Arc::clone(&window_a),
+                1.0,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .expect("realm constructs");
+            let a_id = realm.presentation_id();
+
+            // Drive a full frame whose pipeline slot issues a visual update on
+            // the driving thread. The scheduler is in PersistentCallbacks here
+            // (the pipeline's slot), so the phase gate must no-op the poke.
+            realm.scheduler().drive_frame_with_lane(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {
+                    assert_eq!(
+                        realm.scheduler().phase(),
+                        flui_scheduler::SchedulerPhase::PersistentCallbacks,
+                        "precondition: the pipeline slot runs mid-frame"
+                    );
+                    realm
+                        .presentations
+                        .get(a_id)
+                        .expect("primary installed")
+                        .pipeline()
+                        .with(flui_rendering::pipeline::PipelineOwner::request_visual_update);
+                },
+                realm.local_post_frame_lane(),
+            );
+
+            assert_eq!(
+                calls_a.load(AtomicOrdering::Relaxed),
+                0,
+                "a mid-frame pipeline visual update must not reach \
+                 request_redraw — the phase gate drops it"
+            );
+        }
     }
 
     // ========================================================================
@@ -8257,7 +8353,10 @@ mod tests {
         impl ViewState<AsyncCaptureProbeView> for AsyncCaptureProbeState {
             fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
                 if let Some(driver) = ctx.async_driver() {
-                    *self.captured.borrow_mut() = Some((ctx.rebuild_handle(), driver));
+                    let _prev = self
+                        .captured
+                        .borrow_mut()
+                        .replace((ctx.rebuild_handle(), driver));
                 }
             }
 
@@ -8421,7 +8520,7 @@ mod tests {
         impl ViewState<DisposeProbeView> for DisposeProbeState {
             fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
                 let handle = ctx.rebuild_handle();
-                *self.handle_slot.borrow_mut() = Some(handle.clone());
+                let _prev = self.handle_slot.borrow_mut().replace(handle.clone());
                 self.handle = Some(handle);
             }
 
@@ -10042,13 +10141,14 @@ mod tests {
             // Dirty the real render tree once while hidden -- a genuine
             // repaint demand, not just the wake-only redraw bit, so the
             // eventual unhide pump below actually has something to paint.
-            // This ALSO fires the render pipeline's own independent,
-            // pre-existing wake wire (`PipelineOwner::
-            // set_on_need_visual_update` -> the realm's `wake` directly,
-            // unrelated to this slice's FrameClock gate) exactly once for
-            // this clean->dirty transition -- expected, not the property
-            // under test. What IS under test is the DELTA at unhide below:
-            // one MORE wake beyond whatever this mark already caused.
+            // This ALSO fires the render pipeline's own pre-existing wake
+            // wire (`PipelineOwner::set_on_need_visual_update` -> the
+            // scheduler's `ensure_visual_update` -> the `on_frame_scheduled`
+            // hook, the realm's `wake` -- unrelated to this slice's FrameClock
+            // gate) exactly once for this clean->dirty transition -- expected,
+            // not the property under test. What IS under test is the DELTA at
+            // unhide below: one MORE wake beyond whatever this mark already
+            // caused.
             realm.presentations.primary().pipeline().with_mut(|owner| {
                 if let Some(root_id) = owner.root_id() {
                     owner.mark_needs_paint(root_id);

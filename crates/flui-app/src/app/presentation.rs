@@ -72,8 +72,11 @@ pub(crate) struct RealmCapabilities<'a> {
     /// assembly; the constructed [`RenderingFlutterBinding`] keeps just a
     /// `WeakUpdateScheduler` derived from it.
     pub(crate) scheduler: &'a UpdateScheduler,
-    /// The realm's platform wake capability, cloned into this
-    /// presentation's pipeline as its `on_need_visual_update` callback.
+    /// The realm's platform wake capability. It is wired as the realm
+    /// scheduler's `on_frame_scheduled` hook (in `UiRealm::construct`) and
+    /// handed to the platform accessibility bridge; the presentation's own
+    /// pipeline wake now routes through the scheduler rather than cloning
+    /// this directly.
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
     /// A cross-thread sender into the realm's command inbox, already
     /// stamped with this presentation's id. Handed to the platform
@@ -506,28 +509,39 @@ impl PresentationState {
         // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
         // fires this callback so a quiescent event loop produces the frame.
         // Reentrancy-safe: the callback fires while the CALLER holds the
-        // pipeline cell checked out, and `wake` only touches `Send + Sync`
-        // runtime-level state — never this presentation's own `widgets` /
-        // `renderer` / gesture state.
+        // pipeline cell checked out, and the scheduler's `ensure_visual_update`
+        // only touches `Send + Sync` runtime-level state (its own atomic phase
+        // and, briefly, the `frame_thread`/`on_frame_scheduled` slots — none of
+        // which is held across a call back into the pipeline) — never this
+        // presentation's own `widgets` / `renderer` / gesture state.
         //
-        // Pokes THIS presentation's own window directly (`Weak`, exactly
-        // like `Self::window` below — never a strong ref kept past the
-        // platform's own teardown), in addition to the realm-wide
-        // `capabilities.wake` call: `capabilities.wake` sets the shared
-        // `needs_redraw` bit (still required — it is what wakes an idle
-        // event loop at all) but only pokes whichever ONE window
-        // `AppRuntime`'s own `redraw_window` slot happens to hold (issue
-        // #555's still-single-window wake contract). Once a realm hosts
-        // more than one presentation, each needs its OWN window poked when
-        // IT dirties — never a sibling's — or a redraw request stamped for
-        // this presentation would silently wake (or fail to wake) the wrong
-        // native window. See `redraw_request_from_a_does_not_wake_bs_window`.
-        let visual_wake = Arc::clone(&capabilities.wake);
+        // Routes through the scheduler's phase gate so this presentation's
+        // demand is subject to the SAME gate (and the SAME `frame_scheduled`
+        // edge) as ticker/`end_of_frame` demand: a dirty mark issued mid-frame
+        // on the driving thread no longer reaches `request_redraw` — the
+        // in-flight frame's own surplus-frame guard is what picks it up. The
+        // realm-wide wake still happens through the `on_frame_scheduled` hook
+        // (`UiRealm::construct` wires it to this same `wake`), so the closure
+        // no longer calls `wake` directly.
+        //
+        // Still pokes THIS presentation's own window directly (`Weak`,
+        // exactly like `Self::window` below — never a strong ref kept past
+        // the platform's own teardown), because `capabilities.wake` only
+        // pokes whichever ONE window `AppRuntime`'s own `redraw_window` slot
+        // happens to hold (issue #555's still-single-window wake contract).
+        // Once a realm hosts more than one presentation, each needs its OWN
+        // window poked when IT dirties — never a sibling's. The poke is gated
+        // on `ensure_visual_update`'s return so it fires only when the
+        // scheduler actually accepted the demand. See
+        // `redraw_request_from_a_does_not_wake_bs_window`.
+        let scheduler = capabilities.scheduler.downgrade();
         let redraw_window = Arc::downgrade(&window);
         pipeline.with_mut(|owner| {
             owner.set_on_need_visual_update(move || {
-                visual_wake();
-                if let Some(window) = redraw_window.upgrade() {
+                if let Some(scheduler) = scheduler.upgrade()
+                    && scheduler.ensure_visual_update()
+                    && let Some(window) = redraw_window.upgrade()
+                {
                     window.request_redraw();
                 }
             });
@@ -713,7 +727,7 @@ impl PresentationState {
                   itself also uncalled in production (see that method's own doc)"
     )]
     pub(crate) fn set_vsync(&self, vsync: Vsync) {
-        *self.vsync.borrow_mut() = vsync;
+        let _prev = std::mem::replace(&mut *self.vsync.borrow_mut(), vsync);
     }
 
     /// This presentation's own physical-time produce-gate state machine
@@ -1054,7 +1068,10 @@ impl PresentationState {
     /// [`Self::segment_probe`]'s field doc.
     #[cfg(test)]
     pub(crate) fn set_segment_probe(&self, phase: SegmentPhase, probe: Option<Box<dyn Fn()>>) {
-        *self.segment_probe.borrow_mut() = probe.map(|callback| SegmentProbe { phase, callback });
+        let _prev = std::mem::replace(
+            &mut *self.segment_probe.borrow_mut(),
+            probe.map(|callback| SegmentProbe { phase, callback }),
+        );
     }
 
     /// Arm the data-only one-shot fault at the build-to-finalize boundary.
@@ -1108,6 +1125,7 @@ impl PresentationState {
     /// rolling window, so toggling it at runtime does not report frame times
     /// from before the toggle.
     pub(crate) fn set_performance_overlay(&self, enabled: bool) {
+        // PORT-CHECK-OK-LOCK: plain data: PerformanceStats (counters), no Drop
         *self.performance_overlay.borrow_mut() = enabled.then(PerformanceStats::default);
     }
 
