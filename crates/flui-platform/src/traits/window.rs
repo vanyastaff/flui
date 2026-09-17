@@ -120,6 +120,18 @@ use winit::window::Window;
 /// default: it is callable from any thread the native API permits, and states
 /// per backend what the cross-thread route costs (AppKit excepted).
 ///
+/// The macOS backend enforces this default mechanically: every window-driving
+/// `PlatformWindow`/`WindowTrait`/`MacOSWindowExtTrait` body on `MacOSWindow`
+/// re-enters the owner lane through `route_on_owner`, so a call from any
+/// thread is marshaled onto the window's owner lane before any AppKit message
+/// is sent. Two carve-outs: the class-E raw-handle accessors
+/// (`raw_window_handle`/`window_handle`, and `display_handle` which carries no
+/// pointer) take their NSView outside the routing — `!Send` outputs whose
+/// enforcement is upstream (raw-window-metal's main-thread hard panic plus
+/// `debug_assert_appkit_main_thread`-guarded platform entries, ADR-0039); and
+/// the `enable_tiling`/`disable_tiling`/`is_tiling_enabled` trio never routes
+/// (recorded for observability only until the native API is adopted).
+///
 pub trait PlatformWindow: Send + Sync {
     /// This window's platform-internal identity.
     ///

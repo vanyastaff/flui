@@ -1812,6 +1812,18 @@ the async lane safe end-to-end: the wake hook still calls `request_redraw` \
 directly; only that method's AppKit body is routed. The relay requirement \
 stands on the two reasons above -- the off-lane raster-thread call itself, \
 and a `Send + Sync` hook that skips a relay compiling and being wrong.\
+\
+CORRECTION (2026-09-16, issue #1194): the previous line's "only that \
+method's AppKit body is routed" is superseded for the window surface. The \
+full class-A `MacOSWindow` public surface is now owner-routed through the \
+shared `route_on_owner` wrapper: every `PlatformWindow`, `WindowTrait`, and \
+`MacOSWindowExtTrait` method re-enters the window's owner lane before any \
+AppKit message is sent (`request_redraw` included). Delegators route \
+transitively through their routed callee; pure-Rust reads \
+(`position`/`size`/`scale_factor`/`id`/`bounds`) are exempt because they \
+never message AppKit. The relay requirement stands unchanged on the two \
+reasons -- the off-lane raster-thread call itself, and a `Send + Sync` hook \
+that skips a relay compiling and being wrong.\
 """
 state = "partial"
 domain = "raster"
