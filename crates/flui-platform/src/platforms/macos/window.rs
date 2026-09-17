@@ -63,6 +63,17 @@ pub struct MacOSWindow {
     /// Window configuration
     config: WindowConfiguration,
 
+    /// The owner lane every thread-affine AppKit message travels through
+    /// (see [`super::owner_lane`]). The AppKit main queue for windows created
+    /// by [`MacOSWindow::new`]; a caller-supplied serial lane for test
+    /// windows created by [`MacOSWindow::for_test`].
+    owner: &'static dispatch::Queue,
+
+    /// True when `owner` is the main queue, so "on the main thread" is
+    /// equivalent to "on the owner lane" for the direct-path probe in
+    /// [`super::owner_lane::exec_on_owner`].
+    owner_is_main: bool,
+
     /// This window's NSAccessibility bridge, subclassed onto the content
     /// view. A `OnceLock` slot rather than a plain field because the window
     /// value is constructed *before* its content view exists (the view
@@ -84,33 +95,37 @@ pub struct MacOSWindow {
 // defect on its own: it is what the next reader consults when deciding
 // whether their change is safe.
 //
-// Every delegate and view callback does arrive on the main thread, as AppKit
-// guarantees. What breaks the claim is [`PlatformWindow::request_redraw`],
-// which messages `contentView` and is called from whatever thread completed a
-// future: `AppRuntime::frame_wake_callback` is installed as the scheduler's
-// `on_frame_scheduled` hook and is deliberately `Send + Sync`, advertised for
-// "a spawned future's `Waker`", and pinned by
+// The `unsafe impl Send` states the reachable chain that used to deliver
+// `request_redraw`'s AppKit messages off the owner thread, and the resolution
+// that now routes them. `request_redraw` is called from whatever thread
+// completed a future: `AppRuntime::frame_wake_callback` is installed as the
+// scheduler's `on_frame_scheduled` hook, deliberately `Send + Sync`,
+// advertised for "a spawned future's `Waker`", and pinned by
 // `frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler`.
-// So an ordinary async completion on an IO-lane worker reaches
-// `setNeedsDisplay:` off the main thread. No raster thread is needed for it.
+// No raster thread is needed for that: an ordinary async completion on an
+// IO-lane worker reaches this method directly.
 //
-// Whether `-[NSView setNeedsDisplay:]` misbehaves there is a separate
-// question this comment does not answer: AppKit's contract is main-thread-only
-// except where documented, and this method is not among the documented
-// exceptions, but "not documented safe" and "observably broken" are different
-// claims and only a macOS host settles the second. This backend is compiled by
-// `cross-typecheck` and never linked or executed in CI, so no test or lint
-// here can observe it either way.
+// The method's AppKit body is now owner-routed (see its own doc): the
+// `contentView`/`setNeedsDisplay:` messages execute on the window's owner
+// lane, so the off-thread caller no longer reaches AppKit bare. That routing
+// is the mechanical enforcement for THIS method — the one enforced AppKit
+// message site in this file. Every other message reaches AppKit through
+// callbacks AppKit delivers on the main thread, `debug_assert_appkit_main_thread`-
+// guarded platform entries (ADR-0039), or the flui-app confinement of the
+// window lifecycle — call-graph facts, not enforcement. [`Drop`] is a
+// deliberate exception and may run off the owner thread; its a11y
+// `bridge.shutdown()` off-main is a TRACKED RESIDUAL owned by issue #1194.
 //
-// The fix is a wake relay: the hook posts, and the owner thread drains and
-// calls `request_redraw` (ADR-0045 decision 5). It needs an owner lane this
-// backend does not have — that is #551's slice-3 lane generalization — so
-// the honest state today is a stated hazard rather than an enforced
-// precondition. Issue #949 owns it.
+// What the routing does NOT provide is the wake relay ADR-0045 decision 5
+// mandates end-to-end: the hook still calls `request_redraw` directly. A relay
+// (the hook posts, the owner thread drains) remains the real fix for the async
+// lane and is scoped to the `PlatformProxy` redraw verb (#551/#559), not
+// built here.
 unsafe impl Send for MacOSWindow {}
 // SAFETY: see `Send` above, including its statement of what is NOT enforced.
 // Interior mutability is Mutex-guarded; the raw pointer's main-thread affinity
-// is an AppKit convention this type does not currently guarantee.
+// is enforced for the routed message site and otherwise rests on the call-graph
+// facts the `Send` comment states.
 unsafe impl Sync for MacOSWindow {}
 
 /// Mutable window state
@@ -137,7 +152,9 @@ struct MacOSWindowState {
 
 impl std::fmt::Debug for MacOSWindow {
     // Hand-written: `ns_window` is a raw Objective-C `id` and `WindowCallbacks`
-    // is a callback payload; neither has a useful Debug form.
+    // is a callback payload; neither has a useful Debug form. `owner` (the
+    // dispatch lane) has no useful Debug representation either, so it is
+    // skipped along with them by `finish_non_exhaustive`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacOSWindow")
             .field("ns_window", &(self.ns_window as usize))
@@ -156,9 +173,48 @@ impl MacOSWindow {
         windows_map: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
         config: WindowConfiguration,
     ) -> Result<Arc<Self>, OpenWindowError> {
-        // SAFETY: must run on the main thread (enforced by the platform's
-        // event-loop ownership); all messaged objects are alive: the freshly
-        // allocated NSWindow is checked for nil before further use.
+        // Production windows route every thread-affine AppKit message through
+        // the AppKit main queue — the one lane all other process AppKit
+        // traffic already serializes on (see `super::owner_lane`).
+        Self::new_inner(
+            options,
+            windows_map,
+            config,
+            super::owner_lane::owner_queue(),
+            true,
+        )
+    }
+
+    /// Construct a test window on a caller-supplied owner lane.
+    ///
+    /// AppKit window construction is thread-affine, and this path is exercised
+    /// off the AppKit main thread, so the whole construction sequence runs
+    /// inside [`super::owner_lane::exec_on_owner`] on the lane rather than as a
+    /// raw call from whichever thread the test runs on.
+    #[cfg(test)]
+    fn for_test(owner: &'static dispatch::Queue) -> Result<Arc<Self>, OpenWindowError> {
+        super::owner_lane::exec_on_owner(owner, false, || {
+            Self::new_inner(
+                WindowOptions::default(),
+                Arc::new(Mutex::new(HashMap::new())),
+                WindowConfiguration::default(),
+                owner,
+                false,
+            )
+        })
+    }
+
+    fn new_inner(
+        options: WindowOptions,
+        windows_map: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
+        config: WindowConfiguration,
+        owner: &'static dispatch::Queue,
+        owner_is_main: bool,
+    ) -> Result<Arc<Self>, OpenWindowError> {
+        // SAFETY: must run on the owner thread (enforced by the platform's
+        // event-loop ownership, or by `for_test` routing construction onto
+        // the lane); all messaged objects are alive: the freshly allocated
+        // NSWindow is checked for nil before further use.
         unsafe {
             // Convert logical size to NSRect
             let frame = NSRect::new(
@@ -256,6 +312,8 @@ impl MacOSWindow {
                 callbacks,
                 closed: Arc::new(AtomicBool::new(false)),
                 config,
+                owner,
+                owner_is_main,
                 #[cfg(feature = "a11y")]
                 accessibility: std::sync::OnceLock::new(),
             });
@@ -355,29 +413,55 @@ impl PlatformWindow for MacOSWindow {
         state.scale_factor
     }
 
-    /// # Thread affinity — currently unenforced, and reachably violated
+    /// # Thread affinity — owner-routed; the one mechanically-enforced site in this file
     ///
-    /// This messages `contentView`, an AppKit call whose contract is
-    /// main-thread-only. It is nevertheless called from whatever thread
-    /// completed a future, through the scheduler's `on_frame_scheduled` hook
-    /// (issue #949, and the `unsafe impl Send` above states the full chain).
+    /// The AppKit body (`contentView` + `setNeedsDisplay:`) is main-thread-only
+    /// by contract, yet this method is called from whatever thread completed a
+    /// future, through the scheduler's `on_frame_scheduled` hook (issue #949).
+    /// The body is therefore dispatched onto the window's owner lane — the
+    /// AppKit main queue for production windows, a caller-supplied serial lane
+    /// for test windows (see [`super::owner_lane`]) — so the messages always
+    /// execute on the owner thread, never bare on a caller on another thread.
     ///
-    /// Deliberately NOT given a `debug_assert_appkit_main_thread` guard: that
-    /// path is reachable in ordinary production use today, so the assert would
-    /// abort correct-by-current-design programs rather than catch a mistake.
-    /// The guard belongs here the moment the wake relay lands and makes the
-    /// off-thread call genuinely a bug.
+    /// This is the ONE mechanically-routed AppKit message site in this file.
+    /// Every other message in this file reaches AppKit through callbacks AppKit
+    /// itself delivers on the main thread, or platform-entry functions guarded
+    /// by `debug_assert_appkit_main_thread` (ADR-0039), or the flui-app
+    /// confinement of the window lifecycle — call-graph facts and assert
+    /// guards, not mechanical enforcement. [`Drop`] is a deliberate exception:
+    /// the scheduler can release its last `Arc<MacOSWindow>` wake-frame clone
+    /// on an IO-lane worker when a frame-scheduled wake races window teardown,
+    /// so [`Drop`] may run on a non-owner thread and is not routed. Its a11y
+    /// `bridge.shutdown()` may likewise execute off the main thread; that
+    /// off-main teardown is a TRACKED RESIDUAL owned by issue #1194.
+    ///
+    /// The [`unsafe impl Send`]/`Sync` pair below names this same chain for the
+    /// wrapper type; see it for the full reachable-provenance statement.
     fn request_redraw(&self) {
-        // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // content view is nil-checked before messaging. NOT sound with respect
-        // to thread affinity — see this method's own doc and issue #949.
-        unsafe {
-            // Tell the window's content view to redraw
-            let content_view: id = msg_send![self.ns_window, contentView];
-            if content_view != nil {
-                let _: () = msg_send![content_view, setNeedsDisplay: YES];
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        super::owner_lane::exec_on_owner(owner, owner_is_main, || {
+            // Test probe: record the routing witness — whether this body is
+            // executing under the owner-lane guard — at the message send, so
+            // the window test can assert the messages ran routed, not bare.
+            #[cfg(test)]
+            redraw_thread_probe::record(super::owner_lane::on_owner_queue(owner));
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and this
+            // closure captures `&self` (Send because `&MacOSWindow: Send`,
+            // via the `unsafe impl Sync` below), so the id accessed here is
+            // that same live window. The content view is nil-checked before
+            // messaging. Thread affinity is enforced by the owner-lane routing
+            // itself: this body runs on the owner thread — inline on the OS
+            // main thread for a main-lane owner, or dispatched onto the lane
+            // under the reentrancy guard — before either message is sent.
+            unsafe {
+                // Tell the window's content view to redraw
+                let content_view: id = msg_send![self.ns_window, contentView];
+                if content_view != nil {
+                    let _: () = msg_send![content_view, setNeedsDisplay: YES];
+                }
             }
-        }
+        });
     }
 
     fn is_focused(&self) -> bool {
@@ -646,6 +730,10 @@ impl Clone for MacOSWindow {
             callbacks: Arc::clone(&self.callbacks),
             closed: Arc::clone(&self.closed),
             config: self.config.clone(),
+            // The lane is a property of the window, not of any one handle:
+            // every clone of this wrapper routes through the same owner.
+            owner: self.owner,
+            owner_is_main: self.owner_is_main,
             // The clone shares the same window, so it shares the same
             // NSAccessibility bridge — one subclass per content view,
             // never two (`OnceLock<Arc<_>>` clones the shared handle).
@@ -1604,5 +1692,109 @@ impl MacOSWindow {
                 self.handle_backing_properties_changed();
             }
         }
+    }
+}
+
+// ============================================================================
+// Test probe + window integration test (issue #949)
+// ============================================================================
+
+/// Test probe: records whether `request_redraw`'s AppKit messages executed
+/// under the owner-lane guard.
+///
+/// `request_redraw` calls [`redraw_thread_probe::record`] immediately before
+/// its `contentView` message, passing [`super::owner_lane::on_owner_queue`] of
+/// the window's owner. Dispatched through the lane, the body observes the
+/// guard set; run bare (no dispatch, no guard) it observes it unset. A single
+/// window test reads the witness to assert the messages were routed onto the
+/// lane rather than sent bare on the caller.
+#[cfg(test)]
+mod redraw_thread_probe {
+    use std::sync::Mutex;
+
+    /// Shared witness: the reentrancy-marker value observed at the message
+    /// send, or `None` before the first record of a test phase. A single
+    /// window test is the only writer-reader, so no interleaving hazard.
+    static SINK: Mutex<Option<bool>> = Mutex::new(None);
+
+    /// Record whether the current thread was executing under the owner-lane
+    /// guard when the AppKit messages were sent.
+    pub(super) fn record(on_lane: bool) {
+        *SINK
+            .lock()
+            .expect("probe mutex is module-scoped and never poisoned") = Some(on_lane);
+    }
+
+    pub(super) fn clear() {
+        *SINK
+            .lock()
+            .expect("probe mutex is module-scoped and never poisoned") = None;
+    }
+
+    pub(super) fn last_record() -> Option<bool> {
+        *SINK
+            .lock()
+            .expect("probe mutex is module-scoped and never poisoned")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::owner_lane::test_owner_queue;
+    use super::*;
+
+    /// The window integration test for issue #949. It uses the shared test lane
+    /// EXCLUSIVELY: it constructs a real NSWindow on the lane and routes
+    /// `request_redraw` through it, so it must not run interleaved with any
+    /// other test sharing that lane (the AppKit-free `owner_lane` tests never
+    /// touch a window, and this is the only window test).
+    ///
+    /// Opt-in on a Mac with an active GUI session; the AppKit-free
+    /// [`super::owner_lane`] tests are the always-run routing carrier.
+    ///
+    /// A bare `cargo test` process has no NSApplication connection, so
+    /// `[NSWindow initWithContentRect:]` throws an NSException from any thread:
+    /// a construction probe on this machine aborted with SIGABRT through
+    /// `-[NSWindow _initContent:...]` + `-`CFBundleGetValueForInfoKey`. Run with
+    /// `cargo test -p flui-platform -- --ignored request_redraw_is_owner_routed`
+    /// only from a test process that pumps an AppKit run loop.
+    #[test]
+    #[ignore = "requires an AppKit-run-loop-pumping test process; the AppKit-free owner_lane tests are the always-run routing carrier"]
+    fn request_redraw_is_owner_routed() {
+        let owner = test_owner_queue();
+        let window = MacOSWindow::for_test(owner)
+            .expect("for_test must construct an NSWindow on the test lane");
+
+        // (a) On-lane entry: a nested `request_redraw` must complete INLINE on
+        // the lane with no dispatch and no deadlock — the reentrancy marker
+        // doing its job for the real window path. Its probe record is
+        // discarded by the `clear()` ahead of (b).
+        super::super::owner_lane::exec_on_owner(owner, false, || {
+            window.request_redraw();
+        });
+
+        // (b)+(c) Off-lane worker: `request_redraw` from a spawned thread must
+        // complete crash-free, AND it must route through the owner lane: the
+        // probe observed the lane guard set at the message send. A bare
+        // (un-routed) body runs with no guard, observes the marker unset, and
+        // records false — so this assertion can genuinely fail. It does NOT
+        // assert a different thread: modern libdispatch executes an
+        // uncontended `dispatch_sync` to a serial queue INLINE on the calling
+        // thread, so thread identity is not the routing contract for a serial
+        // lane; lane membership (the guard) is the stable and sufficient
+        // proof.
+        redraw_thread_probe::clear();
+        let handle = std::thread::spawn(move || {
+            window.request_redraw();
+        });
+        handle
+            .join()
+            .expect("an off-lane request_redraw must complete without crashing or panicking");
+        assert_eq!(
+            redraw_thread_probe::last_record(),
+            Some(true),
+            "routing assertion: the AppKit messages must be sent under the owner-lane guard, \
+             which a bare un-routed body would record as unset"
+        );
     }
 }
