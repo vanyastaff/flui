@@ -125,3 +125,70 @@ dirty-state gate a wake-with-nothing-new-to-do already hits, so adding the
 latch(es) would trade a real per-callsite invariant (every fresh inbox
 entry asks for a frame) for a saving with no measured cost — take it up
 only if a wake-count oracle ever shows the cost is real.
+
+### Flutter: parent-inserts-child → FLUI: child-adopts-itself
+
+**Rule:** a render child enters the render tree by adopting ITSELF at mount
+time. FLUI has no element-side child-mutation seam — the port of Flutter's
+`RenderObjectElement` seam (`insertRenderObjectChild` /
+`moveRenderObjectChild` / `removeRenderObjectChild` /
+`attachRenderObject` / `detachRenderObject`, `framework.dart`, pinned tag
+3.44.0) was deleted as dead code: it had zero production callers across the
+workspace, and every Flutter consumer family of that seam has a live FLUI
+equivalent reached by a different direction. The audit table behind this
+decision is recorded in issue #1203; it mapped all ten Flutter consumer
+families, including the hard cases (multi-child reorder, GlobalKey
+reparent, parent-data attach).
+
+**Flutter's model:** the PARENT acts. `attachRenderObject` walks up to the
+nearest `RenderObjectElement` ancestor, which then calls
+`insertRenderObjectChild(child, slot)` to slot the child into its own
+render object; `move`/`remove` go through the same parent-driven surface;
+the root overrides `attachRenderObject` to set
+`pipelineOwner.rootNode` instead (`RenderTreeRootElement`).
+
+**FLUI's live equivalents, family by family:**
+
+- *Adopt/insert* — the freshly mounted element adopts itself:
+  `RenderBehavior::on_mount` reads the `parent_render_id` propagated
+  BEFORE mount (`ElementTree::insert` reads the parent's
+  `child_render_id()` off the node and hands it to the child via
+  `set_parent_render_id` before `mount` runs; the pass-through that
+  forwards the nearest render ancestor through component elements is
+  `ElementBase::child_render_id` / `ElementCore::child_parent_render_id`,
+  and the root passes its own render id for its child), then calls
+  `PipelineOwner::adopt_render_child`, which writes both link directions
+  in one call. The sliver-slot half of Flutter's `didAdoptChild` rides the
+  same propagation and is stamped at adoption time.
+- *Remove* — `RenderBehavior::on_unmount` → `remove_render_object_from_tree`
+  (the dispose cascade), with keyed soft-remove relocation tokens for
+  children that are merely leaving view rather than dying.
+- *Move/reorder* — no per-child mutation at all: a post-build batch pass,
+  `ElementTree::reorder_render_children_after_build`, settles render
+  children into slot order after a build; its own doc calls it "the arena
+  analogue of Flutter slotting each child via `insertRenderObjectChild`".
+- *Attach/detach* — pipeline-owner wiring at mount/unmount (`on_mount` /
+  `on_unmount`) and, for GlobalKey reparent, the render-relocation tokens
+  (`PipelineOwner::detach_render_subtrees` / `attach_render_subtrees`,
+  carried through the inactive-element record).
+
+The slab-resident architecture superseded the old box-graph propagation
+this trait ported (the `element_tree.rs` "E3 atomic box→arena swap"
+comment records that supersession).
+
+**Replacement guarantee:** the loud half-state gate on the LIVE adoption
+path — `RenderBehavior::on_mount`'s diagnostic when an element-tree parent
+with an active `PipelineOwner` leaves the chain with no render ancestor,
+plus its `orphaned_render_mount` test family
+(`crates/flui-view/tests/orphaned_render_mount.rs` and
+`crates/flui-view/src/tree/element_tree/orphaned_render_mount_tests.rs`).
+That gate and its tests arrived with the #1198 fix and are untouched here;
+the else-arm diagnostics the same fix added to the six (now deleted) seam
+methods vanish with them, as intended.
+
+**Reference-tag caveat:** the 3.44.0 pin for the Flutter citations above
+was verified via the `.flutter` clone's `.git` refs as part of the #1203
+audit (the clone is a local gitignored checkout, so the tag's version file
+is gitignored/absent and the tag is read from the clone's refs); a fresh
+clone must re-run `git describe --tags` inside `.flutter` before citing
+further.

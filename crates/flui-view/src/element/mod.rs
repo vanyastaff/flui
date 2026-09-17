@@ -65,7 +65,7 @@ pub use notification::{
     LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
     SizeChangedNotification,
 };
-pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
+pub use render_object_element::RenderTreeRootElement;
 pub use root::{RootElement, RootElementImpl};
 // The lazy multi-box adaptor and its extension point: a render object that
 // implements `LazyMultiBoxRender` gets the element-owned child lifecycle by

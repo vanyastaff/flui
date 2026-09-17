@@ -42,47 +42,6 @@ use crate::{
 // ============================================================================
 // perform_build helpers
 // ============================================================================
-
-/// Report a render-tree child operation the guarding `if let`s skipped.
-///
-/// The `insert/move/remove_render_object_child` seams mutate the render tree
-/// only when the parent carries both its own render id and a `PipelineOwner`;
-/// a skip is never a no-op — `consequence` names what it costs (an insert
-/// orphans the child, a remove leaks the render-tree edge, a move loses the
-/// reordering). The skip must therefore be loud in both profiles:
-/// `tracing::error` in release, `debug_assert!` in debug.
-///
-/// `site` is the seam's stable type tag (e.g. `"RootRenderElement"`) —
-/// tracing only. `child_id` is `None` where the seam does not name a child
-/// (the move seams reorder the parent's whole child list).
-pub(crate) fn report_skipped_render_child_operation(
-    site: &'static str,
-    operation: &'static str,
-    consequence: &'static str,
-    child_id: Option<flui_foundation::RenderId>,
-    slot: crate::element::RenderSlot,
-    pipeline_owner_present: bool,
-    parent_render_id: Option<flui_foundation::RenderId>,
-) {
-    tracing::error!(
-        site,
-        operation,
-        ?child_id,
-        ?slot,
-        pipeline_owner_present,
-        ?parent_render_id,
-        "BUG: {site} skipped the {operation} (child {child_id:?}, slot {slot:?}): \
-         pipeline owner present = {pipeline_owner_present}, parent render id = \
-         {parent_render_id:?}. {consequence}"
-    );
-    debug_assert!(
-        pipeline_owner_present && parent_render_id.is_some(),
-        "BUG: {site} silently skipped the {operation} (child {child_id:?}, slot \
-         {slot:?}) — pipeline owner present = {pipeline_owner_present}, parent \
-         render id = {parent_render_id:?}. {consequence}"
-    );
-}
-
 /// Guard for a behavior's `perform_build`. Returns `true` if the build
 /// body should proceed, `false` if the early-return path was taken.
 ///

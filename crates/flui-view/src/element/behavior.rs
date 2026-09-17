@@ -21,7 +21,6 @@ use flui_rendering::{
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     context::{BuildContext, BuildCtx},
-    element::RenderSlot,
     owner::LifecycleHook,
     view::{
         AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
@@ -957,10 +956,6 @@ where
 pub struct RenderBehavior<V: RenderView> {
     /// The RenderObject ID in RenderTree.
     pub render_id: Option<RenderId>,
-    /// Current slot in parent.
-    pub slot: RenderSlot,
-    /// Ancestor RenderObjectElement (for render tree attachment).
-    pub ancestor_render_object_element: Option<ElementId>,
     /// Marker for RenderObject type.
     _phantom: PhantomData<V::RenderObject>,
 }
@@ -970,8 +965,6 @@ impl<V: RenderView> RenderBehavior<V> {
     pub fn new() -> Self {
         Self {
             render_id: None,
-            slot: RenderSlot::default(),
-            ancestor_render_object_element: None,
             _phantom: PhantomData,
         }
     }
@@ -979,31 +972,6 @@ impl<V: RenderView> RenderBehavior<V> {
     /// Get the RenderObject ID if created.
     pub fn render_id(&self) -> Option<RenderId> {
         self.render_id
-    }
-
-    /// Get a reference to the RenderObject ID.
-    pub fn render_id_ref(&self) -> &Option<RenderId> {
-        &self.render_id
-    }
-
-    /// Get the current slot in parent.
-    pub fn slot(&self) -> &RenderSlot {
-        &self.slot
-    }
-
-    /// Set the slot in parent.
-    pub fn set_slot(&mut self, slot: RenderSlot) {
-        self.slot = slot;
-    }
-
-    /// Get the ancestor RenderObjectElement ID.
-    pub fn ancestor_render_object_element(&self) -> Option<ElementId> {
-        self.ancestor_render_object_element
-    }
-
-    /// Set the ancestor RenderObjectElement ID.
-    pub fn set_ancestor_render_object_element(&mut self, ancestor: Option<ElementId>) {
-        self.ancestor_render_object_element = ancestor;
     }
 }
 

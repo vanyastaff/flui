@@ -8,7 +8,7 @@
 //! This corresponds to Flutter's `_RawViewInternal` and `_RawViewElement`
 //! which bootstrap the render tree for a FlutterView.
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::{
@@ -19,7 +19,7 @@ use flui_rendering::{
 use flui_types::{Size, geometry::px};
 
 use crate::{
-    element::{Lifecycle, RenderObjectElement, RenderSlot, RenderTreeRootElement},
+    element::{Lifecycle, RenderTreeRootElement},
     view::{ElementBase, View},
 };
 
@@ -97,8 +97,6 @@ pub struct RootRenderElement<V: View + Clone> {
     lifecycle: Lifecycle,
     /// Depth (always 0 for root)
     depth: usize,
-    /// Current slot
-    slot: RenderSlot,
     /// Whether this element needs a rebuild (its child reconcile must run).
     ///
     /// E3 (atomic box→arena swap): the root's single child is a
@@ -123,7 +121,6 @@ impl<V: View + Clone + 'static> RootRenderElement<V> {
             pipeline_owner: None,
             lifecycle: Lifecycle::Initial,
             depth: 0,
-            slot: RenderSlot::Single,
             needs_build: true,
         }
     }
@@ -384,130 +381,6 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
 
     fn set_parent_render_id(&mut self, _parent_id: Option<RenderId>) {
         // Root element has no parent render object
-    }
-}
-
-// ============================================================================
-// RenderObjectElement Implementation
-// ============================================================================
-
-impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
-    fn render_object_any(&self) -> Option<&dyn Any> {
-        // With RenderTree, we don't have direct access to RenderObject
-        // Use render_id and access via PipelineOwner.render_tree()
-        None
-    }
-
-    fn render_object_any_mut(&mut self) -> Option<&mut dyn Any> {
-        None
-    }
-
-    fn attach_render_object(&mut self, slot: RenderSlot) {
-        self.slot = slot;
-        // RootRenderElement handles attachment in mount()
-    }
-
-    fn detach_render_object(&mut self) {
-        // RootRenderElement handles detachment in unmount()
-    }
-
-    fn insert_render_object_child(&mut self, child: &dyn Any, slot: RenderSlot) {
-        // child should be RenderId of the child RenderObject
-        if let Some(child_render_id) = child.downcast_ref::<RenderId>() {
-            tracing::debug!(
-                "RootRenderElement::insert_render_object_child child_id={:?} slot={:?}",
-                child_render_id,
-                slot
-            );
-
-            // Set parent-child relationship in RenderTree. `adopt_child`
-            // writes both link directions in one call — see
-            // `RenderTree::adopt_child`.
-            if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
-            {
-                pipeline_owner.with_mut(|owner| {
-                    owner.adopt_render_child(parent_id, *child_render_id);
-                });
-            } else {
-                crate::element::behavior_commons::report_skipped_render_child_operation(
-                    "RootRenderElement",
-                    "insert_render_object_child",
-                    "the child render object was never adopted — it sits in the \
-                     render tree with no parent link, invisible to layout/paint",
-                    Some(*child_render_id),
-                    slot,
-                    self.pipeline_owner.is_some(),
-                    self.render_id,
-                );
-            }
-        }
-    }
-
-    fn move_render_object_child(
-        &mut self,
-        _child: &dyn Any,
-        old_slot: RenderSlot,
-        new_slot: RenderSlot,
-    ) {
-        tracing::debug!(
-            "RootRenderElement::move_render_object_child old={:?} new={:?}",
-            old_slot,
-            new_slot
-        );
-        if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id) {
-            pipeline_owner.with_mut(|owner| owner.note_render_children_reordered(parent_id));
-        } else {
-            crate::element::behavior_commons::report_skipped_render_child_operation(
-                "RootRenderElement",
-                "move_render_object_child",
-                "the child reordering is never noted and the render tree keeps the \
-                 stale child order",
-                None,
-                new_slot,
-                self.pipeline_owner.is_some(),
-                self.render_id,
-            );
-        }
-    }
-
-    fn remove_render_object_child(&mut self, child: &dyn Any, slot: RenderSlot) {
-        if let Some(child_render_id) = child.downcast_ref::<RenderId>() {
-            tracing::debug!(
-                "RootRenderElement::remove_render_object_child child_id={:?} slot={:?}",
-                child_render_id,
-                slot
-            );
-
-            // Clear parent-child relationship in RenderTree. `drop_child`
-            // clears both link directions in one call — see
-            // `RenderTree::drop_child`.
-            if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
-            {
-                pipeline_owner.with_mut(|owner| {
-                    owner.drop_render_child(parent_id, *child_render_id);
-                });
-            } else {
-                crate::element::behavior_commons::report_skipped_render_child_operation(
-                    "RootRenderElement",
-                    "remove_render_object_child",
-                    "the render-tree edge is leaked — the child stays attached to a \
-                     parent that no longer has it",
-                    Some(*child_render_id),
-                    slot,
-                    self.pipeline_owner.is_some(),
-                    self.render_id,
-                );
-            }
-        }
-    }
-
-    fn find_ancestor_render_object_element(&self) -> Option<ElementId> {
-        // Root element has no ancestor
-        None
-    }
-
-    fn set_ancestor_render_object_element(&mut self, _ancestor: Option<ElementId>) {
-        // Root element ignores this - it has no ancestor
     }
 }
 
