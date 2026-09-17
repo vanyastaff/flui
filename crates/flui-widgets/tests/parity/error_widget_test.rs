@@ -264,6 +264,16 @@ fn panicking_build_survives_a_full_pump_and_lays_out_the_registered_error_view()
 /// the recovery.
 #[test]
 fn sliver_list_item_builder_panic_becomes_an_error_box_at_that_index() {
+    // This test CONSUMES the process-global error-view builder rather than
+    // installing one: its oracle is the BUILT-IN default (`RenderErrorBox`).
+    // It must therefore serialize against every builder-installing test —
+    // under the single-process cargo-test fallback, a concurrent
+    // `panicking_build_survives_a_full_pump...` window would otherwise
+    // intercept this test's per-item substitution with the custom
+    // `SizedBox` (0 `RenderErrorBox` rows) and inflate that test's
+    // `CUSTOM_BUILDER_HITS` past one. Same lock, same reason as above.
+    let _guard = acquire_error_builder_guard();
+
     use std::rc::Rc;
 
     use flui_objects::ERROR_BOX_FALLBACK_EXTENT;

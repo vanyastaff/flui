@@ -428,6 +428,17 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
                 pipeline_owner.with_mut(|owner| {
                     owner.adopt_render_child(parent_id, *child_render_id);
                 });
+            } else {
+                crate::element::behavior_commons::report_skipped_render_child_operation(
+                    "RootRenderElement",
+                    "insert_render_object_child",
+                    "the child render object was never adopted — it sits in the \
+                     render tree with no parent link, invisible to layout/paint",
+                    Some(*child_render_id),
+                    slot,
+                    self.pipeline_owner.is_some(),
+                    self.render_id,
+                );
             }
         }
     }
@@ -445,6 +456,17 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
         );
         if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id) {
             pipeline_owner.with_mut(|owner| owner.note_render_children_reordered(parent_id));
+        } else {
+            crate::element::behavior_commons::report_skipped_render_child_operation(
+                "RootRenderElement",
+                "move_render_object_child",
+                "the child reordering is never noted and the render tree keeps the \
+                 stale child order",
+                None,
+                new_slot,
+                self.pipeline_owner.is_some(),
+                self.render_id,
+            );
         }
     }
 
@@ -464,6 +486,17 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
                 pipeline_owner.with_mut(|owner| {
                     owner.drop_render_child(parent_id, *child_render_id);
                 });
+            } else {
+                crate::element::behavior_commons::report_skipped_render_child_operation(
+                    "RootRenderElement",
+                    "remove_render_object_child",
+                    "the render-tree edge is leaked — the child stays attached to a \
+                     parent that no longer has it",
+                    Some(*child_render_id),
+                    slot,
+                    self.pipeline_owner.is_some(),
+                    self.render_id,
+                );
             }
         }
     }

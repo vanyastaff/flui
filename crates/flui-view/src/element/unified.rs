@@ -450,6 +450,17 @@ where
                 pipeline_owner.with_mut(|owner| {
                     owner.adopt_render_child(parent_id, *child_render_id);
                 });
+            } else {
+                super::behavior_commons::report_skipped_render_child_operation(
+                    "Element",
+                    "insert_render_object_child",
+                    "the child render object was never adopted — it sits in the \
+                     render tree with no parent link, invisible to layout/paint",
+                    Some(*child_render_id),
+                    slot,
+                    self.core.pipeline_owner().is_some(),
+                    self.behavior.render_id(),
+                );
             }
         }
     }
@@ -469,6 +480,17 @@ where
             && let Some(pipeline_owner) = self.core.pipeline_owner()
         {
             pipeline_owner.with_mut(|owner| owner.note_render_children_reordered(parent_id));
+        } else {
+            super::behavior_commons::report_skipped_render_child_operation(
+                "Element",
+                "move_render_object_child",
+                "the child reordering is never noted and the render tree keeps the \
+                 stale child order",
+                None,
+                new_slot,
+                self.core.pipeline_owner().is_some(),
+                self.behavior.render_id(),
+            );
         }
     }
 
@@ -488,6 +510,17 @@ where
                 pipeline_owner.with_mut(|owner| {
                     owner.drop_render_child(parent_id, *child_render_id);
                 });
+            } else {
+                super::behavior_commons::report_skipped_render_child_operation(
+                    "Element",
+                    "remove_render_object_child",
+                    "the render-tree edge is leaked — the child stays attached to a \
+                     parent that no longer has it",
+                    Some(*child_render_id),
+                    slot,
+                    self.core.pipeline_owner().is_some(),
+                    self.behavior.render_id(),
+                );
             }
         }
     }

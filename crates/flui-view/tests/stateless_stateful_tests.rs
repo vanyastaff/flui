@@ -165,16 +165,29 @@ fn test_stateless_element_mark_needs_build() {
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root_id = tree.mount_root_with_pipeline_owner(
-        &view,
+    // Production shape (the bootstrap idiom): a render root carries the
+    // stateless view, so `LeafView`'s render object mounts with a render
+    // parent instead of orphaning under a render-less owner-carrying root.
+    // `root_id` is the stateless element itself — the render root's content
+    // child — so every dirty-flag assertion below addresses the same element
+    // as before.
+    let render_root_element = tree.mount_root_with_pipeline_owner(
+        &flui_view::RootRenderView::new(view, 800.0, 600.0),
         Some(flui_rendering::pipeline::PipelineCell::new(
             flui_rendering::pipeline::PipelineOwner::new(),
         )),
         &mut owner.element_owner_mut(),
     );
-
-    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.schedule_build_for(
+        render_root_element,
+        0,
+        flui_view::RebuildReason::InitialMount,
+    );
     owner.build_scope(&mut tree);
+    let root_id = tree
+        .get(render_root_element)
+        .expect("render root stays live")
+        .child_ids()[0];
     assert!(
         !tree.get(root_id).unwrap().element().is_dirty(),
         "initial build_scope clears the dirty flag"

@@ -1105,6 +1105,35 @@ where
                 // independently (see `RenderTree::adopt_child`).
                 if let Some(parent_id) = core.parent_render_id() {
                     pipeline_owner.adopt_render_child(parent_id, render_id);
+                } else if let Some(element_parent) = core.element_parent() {
+                    // A render element mounted under an element-tree parent
+                    // with an active PipelineOwner must have a render parent
+                    // in the chain. Reaching here means it has none: the
+                    // adoption is skipped and the render object just created
+                    // sits in the render tree with no parent link — present
+                    // in render space, invisible to layout/paint. The legal
+                    // bare mount (element-tree root, no parent) has
+                    // `element_parent == None` and stays silent — it is
+                    // pinned by `mount_bootstrap.rs` /
+                    // `orphaned_render_mount_tests`.
+                    tracing::error!(
+                        element_id = ?core.self_id(),
+                        ?element_parent,
+                        ?render_id,
+                        "BUG: a render element mounted under an element-tree parent \
+                         with an active PipelineOwner has no render parent — \
+                         adoption would orphan the render object"
+                    );
+                    debug_assert!(
+                        core.parent_render_id().is_some(),
+                        "BUG: render element {:?} mounted under element-tree parent \
+                         {:?} with an active PipelineOwner but no render ancestor in \
+                         the chain — a render element mounted under an active \
+                         PipelineOwner must have a render parent; adoption would \
+                         orphan the render object",
+                        core.self_id(),
+                        element_parent,
+                    );
                 }
 
                 // Adopt-time stamp — Flutter's `didAdoptChild`. The inherited

@@ -420,8 +420,12 @@ mod tests {
 
         let mut tree = crate::ElementTree::new();
         let mut owner = crate::BuildOwner::new();
+        // Production shape (the bootstrap idiom): a render root carries the
+        // animated view, so `LeafView`'s render object mounts with a render
+        // parent instead of orphaning under a render-less owner-carrying root.
+        let render_root = crate::view::RootRenderView::new(view, 800.0, 600.0);
         let root = tree.mount_root_with_pipeline_owner(
-            &view,
+            &render_root,
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(),
             )),
@@ -470,8 +474,14 @@ mod tests {
 
         let mut tree = crate::ElementTree::new();
         let mut owner = crate::BuildOwner::new();
+        // Same bootstrap idiom as the direct-mount case above: the render root
+        // carries the wrapper, so the nested animated view's render child
+        // mounts with a render parent. The animated element now sits at tree
+        // depth 2 (render root → Wrapper → animated) — still >= 1, which is
+        // what this test's depth-key guard needs.
+        let render_root = crate::view::RootRenderView::new(view, 800.0, 600.0);
         let root = tree.mount_root_with_pipeline_owner(
-            &view,
+            &render_root,
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(),
             )),

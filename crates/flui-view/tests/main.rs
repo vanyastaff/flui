@@ -57,6 +57,8 @@ mod lifecycle_panic_containment;
 mod lifecycle_tests;
 #[path = "notifications.rs"]
 mod notifications;
+#[path = "orphaned_render_mount.rs"]
+mod orphaned_render_mount;
 #[path = "production_reconcile_emits.rs"]
 mod production_reconcile_emits;
 #[path = "reconcile_capture.rs"]

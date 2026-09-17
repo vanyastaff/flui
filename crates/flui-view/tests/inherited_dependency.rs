@@ -58,8 +58,13 @@ struct MyTheme {
 struct DummyChild;
 
 impl StatelessView for DummyChild {
+    // Bottom out at the shared terminal leaf. This used to recurse on
+    // `self.clone().boxed()`, which no test observed because no fixture ever
+    // built a `DummyChild` element — the render-root helper below does, and a
+    // self-recursive build drives `build_scope`'s drain forever. The file's
+    // terminal-leaf rule says build chains bottom out in `LeafView`.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        self.clone().boxed()
+        LeafView.boxed()
     }
 }
 
@@ -710,25 +715,43 @@ mod did_change_dependencies_on_inherited_update {
             child: DummyChild,
         };
 
-        let provider_id = tree.mount_root_with_pipeline_owner(
-            &provider,
+        // The bootstrap's production shape: the provider sits under a render
+        // root, so each dependent's render child (the probe fixtures build a
+        // `LeafView`) mounts with a render parent instead of orphaning under
+        // a render-less owner-carrying root.
+        let render_root = flui_view::RootRenderView::new(provider, 800.0, 600.0);
+        let render_root_element = tree.mount_root_with_pipeline_owner(
+            &render_root,
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(),
             )),
             &mut owner.element_owner_mut(),
         );
+        owner.schedule_build_for(
+            render_root_element,
+            0,
+            flui_view::RebuildReason::InitialMount,
+        );
+        owner.build_scope(tree);
 
+        let provider_id = tree
+            .get(render_root_element)
+            .map(|node| node.child_ids()[0])
+            .expect("the provider element must sit under the render root");
+
+        // The provider's own build materialized its `DummyChild` at slot 0,
+        // so the manually-inserted dependent takes the next slot.
         let dep_id = tree.insert(
             dependent_view,
             provider_id,
-            0,
+            1,
             &mut owner.element_owner_mut(),
         );
 
         // Drive the dependent's real build. Each fixture calls `depend_on`
         // there, so registration passes through the same owner-owned forward
         // and reverse indexes as production.
-        owner.schedule_build_for(dep_id, 1, flui_view::RebuildReason::DependencyChange);
+        owner.schedule_build_for(dep_id, 2, flui_view::RebuildReason::DependencyChange);
         owner.build_scope(tree);
 
         (provider_id, dep_id)
@@ -1143,15 +1166,23 @@ mod did_change_dependencies_on_inherited_update {
                 ],
             },
         };
-        let provider_id = tree.mount_root_with_pipeline_owner(
-            &provider_v1,
+        // Production shape (the bootstrap idiom): the provider sits under a
+        // render root, so `DcdHost`'s render object mounts with a render
+        // parent instead of orphaning under a render-less owner-carrying
+        // root.
+        let render_root_element = tree.mount_root_with_pipeline_owner(
+            &flui_view::RootRenderView::new(provider_v1.clone(), 800.0, 600.0),
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(),
             )),
             &mut owner.element_owner_mut(),
         );
-        owner.schedule_build_for(provider_id, 0, RebuildReason::InitialMount);
+        owner.schedule_build_for(render_root_element, 0, RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
+        let provider_id = tree
+            .get(render_root_element)
+            .expect("render root stays live")
+            .child_ids()[0];
         let host = tree
             .get(provider_id)
             .expect("provider stays live")
@@ -1358,15 +1389,28 @@ mod live_inherited_during_build {
         // Mount the provider and drive a full build: build_scope reconciles
         // and builds the whole subtree (ThemeRoot -> Middle -> Consumer ->
         // Leaf), so the consumer's real `build()` runs under a live context.
-        let root_id = tree.mount_root_with_pipeline_owner(
-            &root_v1,
+        // Production shape (the bootstrap idiom): the provider sits under a
+        // render root, so the consumer's `LeafView` render object mounts with
+        // a render parent instead of orphaning under a render-less
+        // owner-carrying root. `root_id` stays the `ThemeRoot` element — the
+        // render root's content child.
+        let render_root_element = tree.mount_root_with_pipeline_owner(
+            &flui_view::RootRenderView::new(root_v1, 800.0, 600.0),
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(),
             )),
             &mut owner.element_owner_mut(),
         );
-        owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+        owner.schedule_build_for(
+            render_root_element,
+            0,
+            flui_view::RebuildReason::InitialMount,
+        );
         owner.build_scope(&mut tree);
+        let root_id = tree
+            .get(render_root_element)
+            .expect("render root stays live")
+            .child_ids()[0];
 
         // CRUX — pre-PR-K this is `None` (empty dummy tree); now the consumer
         // resolved the provider two ancestor hops up through the live tree.
