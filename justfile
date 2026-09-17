@@ -261,6 +261,15 @@ live-smoke-wayland:
     target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
 
 [group("test")]
+[doc("Executable AppKit close/teardown coverage on a real Mac (issue #1148 AppKit half): builds the close_path_probe example, stages it into a minimal .app bundle — the committed Info.plist clears _CFBundleGetValueForInfoKey, and the binary's fn main IS the AppKit main thread, the two floors that make unbundled libtest unable to host real AppKit windows — then runs it with RUST_LOG=info and asserts exit 0 plus the CLOSE_PATH_PROBE_RESULT=PASS marker. macOS-only by construction; skips with a message on other hosts")]
+macos-close-path:
+    {{ if os() == "macos" {
+"cargo build -p flui-platform --locked --example close_path_probe\nAPP=target/macos-close-path/ClosePathProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.close_path_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/close_path_probe \"$APP/Contents/MacOS/close_path_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/close_path_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'CLOSE_PATH_PROBE_RESULT=PASS'; then\n  echo 'macos-close-path FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
+} else {
+"echo 'Skipping macos-close-path on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle (AppKit window construction requires the main thread and a bundle); on a Mac run: just macos-close-path'"
+} }}
+
+[group("test")]
 [doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast

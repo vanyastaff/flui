@@ -2627,6 +2627,37 @@ evidence = [
     { kind = "source-gate", file = "justfile", contains = "panic-policy-check:" },
 ]
 
+[[contract]]
+key = "macos-window-close-path-executable"
+statement = """
+The AppKit window close/teardown path (issue #1148, AppKit half) is \
+executable on a real macOS host. A probe binary staged into a minimal `.app` \
+bundle (`crates/flui-platform/examples/close_path_probe.rs`, launched by \
+`just macos-close-path`) drives `current_platform()` → `open_window()` → \
+`PlatformWindow::close()` → `windowWillClose:` → `handle_close` on the \
+AppKit main thread and must emit `CLOSE_PATH_PROBE_RESULT=PASS` and exit 0. \
+It asserts: `window_handle` is `Ok` before / `HandleError::Unavailable` \
+after close (the `closed` flag), the `on_close` callback fires during close, \
+programmatic `close()` bypasses the should-close veto (`on_should_close` is \
+never consulted), and dropping the last wrapper does not immediately \
+over-release the NSWindow (`setReleasedWhenClosed: NO`). Recorded residuals, \
+NOT claimed: the #1147 map-drain step (`windows_map.remove`) is unobservable \
+through the public surface and stays pinned only by the (`#[ignore]`d) \
+`close_drains_platform_map_entry` unit test; the red-button/`performClose:` \
+veto consultation and on-screen teardown, the engine-side `surface_released` \
+line and device-loss `recover()`, and Win32 remain unexecuted elsewhere.\
+"""
+state = "partial"
+domain = "platform"
+owner_issue = 1148
+mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/macos/window.rs", contains = "fn handle_close(" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/macos/window.rs", contains = "closed: Arc<AtomicBool>" },
+    { kind = "symbol", file = "crates/flui-platform/examples/close_path_probe.rs", contains = "CLOSE_PATH_PROBE_RESULT" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/macos/window.rs", contains = "fn close_drains_platform_map_entry" },
+]
+
 # =============================================================================
 # Public runtime surface classification
 # =============================================================================
