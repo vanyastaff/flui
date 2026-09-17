@@ -31,7 +31,7 @@ gate's `EVIDENCE:` is human text instead, as above.
   CHECK: env CC_aarch64-linux-android=clang AR_aarch64-linux-android=ar cargo check -p flui-app --locked --target aarch64-linux-android > /tmp/a1-android-check.log 2>&1 && FLUI_HEADLESS=1 cargo nextest run -p flui-platform --all-features -E 'test(android_run_) or test(clear_after_top_level_dispatches)'
   EXPECT: /3 tests run: 3 passed/
   CWD: .
-  EVIDENCE: rs-acceptance/v1 def=d92acce7a48d8f77 exit=0 expect=matched out=7abcc6e336ee49e6:783 cwd=. shell=sh at=2026-09-17T02:26:23.490Z
+  EVIDENCE: rs-acceptance/v1 def=d92acce7a48d8f77 exit=0 expect=matched out=2e173c995c7a0b23:783 cwd=. shell=sh at=2026-09-17T03:22:59.520Z
 
 - [x] A2: a recreated activity re-registers on a fresh window rather than on the cleared set
   EVIDENCE: Read 2026-09-16 in `android-activity` 0.6.1's registry source and in this tree, by the plan, by `rust-reviewer` and by the orchestrator: `native_activity/glue.rs`'s `ANativeActivity_onCreate` spawns exactly one thread per activity instance running `rust_glue_entry`, which builds a fresh `AndroidApp` and calls `android_main` again; `platforms/android/mod.rs`'s `open_window` constructs `Arc::new(AndroidWindow::new(..))`, so a new platform carries a new window with fresh `WindowCallbacks`; and `runner/android.rs`'s `bootstrap_android` runs only from `on_ready`, which `run` `take()`s exactly once (`PlatformReadyCallback` is `FnOnce`). Nothing in `run` or `run_android` registers after the clear, so the once-then-discarded rule `WindowCallbacks::clear` documents is unreachable from this runner.
