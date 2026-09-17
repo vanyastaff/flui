@@ -47,6 +47,7 @@
 mod accessibility;
 mod clipboard;
 mod display;
+mod display_pass;
 mod events;
 mod liquid_glass;
 mod owner_lane;

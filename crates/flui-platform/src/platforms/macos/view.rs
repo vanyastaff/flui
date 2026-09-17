@@ -130,14 +130,29 @@ extern "C" fn mouse_exited(this: &Object, sel: Sel, event: id) {
 /// calls this method on the next display pass, which is where the
 /// per-window `on_request_frame` contract fires (the macOS analogue of the
 /// Windows backend's WM_PAINT dispatch).
+///
+/// The frame runs inside this callback, so any redraw the frame asks for is
+/// asked for *while AppKit is displaying this view* — the one moment a
+/// `setNeedsDisplay:` is discarded. [`DisplayPassGuard`] marks this thread for
+/// the duration so `request_redraw` can tell that case apart from a request
+/// made at any other moment and defer only the former.
+///
+/// [`DisplayPassGuard`]: super::display_pass::DisplayPassGuard
 extern "C" fn draw_rect(this: &Object, _sel: Sel, dirty_rect: NSRect) {
     // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
     // is the documented NSView teardown of the dirty region.
     unsafe {
-        if let Some(ctx) = get_context(this)
-            && let Some(callbacks) = ctx.callbacks.upgrade()
-        {
+        let _display_pass = super::display_pass::DisplayPassGuard::enter();
+        if let Some(callbacks) = get_context(this).and_then(|ctx| ctx.callbacks.upgrade()) {
+            tracing::trace!("FLUIContentView drawRect: dispatching frame request");
             callbacks.dispatch_request_frame();
+        } else {
+            // The window's callbacks are gone (torn down, or the view outlived
+            // its window). AppKit still owns this display pass, so the super
+            // call below runs either way — but a missing callback here is why a
+            // frame that AppKit asked for produced no frame request, which is
+            // otherwise indistinguishable from AppKit never asking at all.
+            tracing::trace!("FLUIContentView drawRect: no live callbacks; frame request dropped");
         }
 
         let superclass = class!(NSView);

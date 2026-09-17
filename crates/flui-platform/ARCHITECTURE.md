@@ -223,3 +223,133 @@ FIFO and lease behavior. The Android arms themselves are **type-checked by
 `just cross-typecheck` and executed by nothing**: no gate on this host runs the
 Android backend, so their mapping is an inference from `android-activity`'s
 documented contract, recorded rather than measured.
+
+### AppKit's frame source stays `drawRect:`, and its re-arm crosses one owner-lane turn
+
+**Rule:** a display-driven backend's produce signal must be able to re-arm itself
+from inside the frame it just produced. AppKit discards a `setNeedsDisplay:`
+issued while it is displaying the view, so a backend whose only frame source is
+`drawRect:` and whose re-arm happens there is circular — one frame, no wake, no
+frame. A re-arm AppKit silently drops is worse than a missing feature: the pump
+stops with no error, no log line, and a perfectly healthy-looking request behind
+it.
+
+**Choice:** `drawRect:` stays the frame source. It is the signal AppKit actually
+delivers — the view is live and the frame carries its own dirty rect — and the
+produce contract the engine consumes is dispatched from it (`view.rs::draw_rect`
+→ `WindowCallbacks::dispatch_request_frame`). What changed is the re-arm.
+`platforms/macos/display_pass.rs` marks the thread for the duration of the frame
+AppKit asked for (an RAII guard, nesting-safe, thread-local), and
+`window.rs::dispatch_redraw_request` — the single decision point `request_redraw`
+calls — sends the `setNeedsDisplay:` inline at any other moment, but hands it to
+the next owner-lane turn when the caller is inside that pass. This is ADR-0039
+§4(c) realised on AppKit: the frame transaction is a region the drain gate is
+closed for, and a wake arriving while it is closed defers rather than draining.
+The deferred turn re-checks the marker before messaging AppKit and re-defers,
+bounded at `MAX_DEFER_HOPS`, because a display pass that opens a nested run loop
+services the same lane from inside itself — which the deferral would otherwise
+reproduce silently.
+
+Measured on macOS 15.7 (Darwin 24.6), a 100 Hz panel, isolated probe arms of 4 s
+each, every arm with the window fully visible (`occlusionState` carries the
+visible bit):
+
+| re-arm issued from inside `drawRect:` | draws over 4 s |
+|---|---|
+| `[view setNeedsDisplay:YES]` | 1 |
+| nothing at all (control) | 1 |
+| `[view.layer setNeedsDisplay]` | 1 |
+| `setNeedsDisplay:` deferred to the next main-queue turn | 396 |
+
+**Alternatives considered:**
+
+- Re-arm through the backing layer (`[view.layer setNeedsDisplay]`). Rejected by
+  measurement, not by taste: the layer's `needsDisplay` reads `YES` right after
+  the call while the view is still never redisplayed — the flag that survives is
+  not the flag AppKit acts on, so it is not a usable signal to test against
+  either.
+- Move the frame off the display pass entirely (`CADisplayLink`, i.e.
+  `NSView.displayLink(target:selector:)` on macOS 14+, or `CVDisplayLink`).
+  Deferred, not rejected: ADR-0044 names `CADisplayLink` as macOS's intended
+  produce signal, and ADR-0045 (Proposed) keeps macOS on `RasterMode::Inline`
+  until the locked `wgpu-hal`'s Metal path stops messaging `NSView`/`NSWindow`
+  from the calling thread. Until that lands, the frame has to be able to re-arm
+  from where it runs.
+- A diagnostic redraw tick in the backend (an `NSTimer`/thread poke behind a
+  `FLUI_MACOS_REDRAW_POKE_MS`-style knob, which was implemented while diagnosing
+  this). Deleted, not deferred: it contradicts ADR-0058 — the platform paces
+  production, a sleep never does — and it pre-empts the `PlatformProxy` redraw
+  verb ADR-0045 decision 5 scopes to #559 by shipping a second, private frame
+  source. The primer that starts a measurement belongs to the probe, which is
+  where it now lives (`examples/frame_pump_probe.rs`).
+
+**Market lineage:** nobody shipping a Rust macOS UI builds its frame loop this
+way. gpui-ce (`crates/gpui_macos/src/display_link.rs`, `main` @ `8e36ac0`,
+2026-09-15) and upstream Zed (the same crate, `main` @ `c24e309`, 2026-09-17)
+both pace on `CVDisplayLink` — one immortal link per `CGDirectDisplayID` in a
+`static Mutex<Registry>`, windows subscribing rather than owning, driven by
+`NSWindowOcclusionState::Visible` as the master start/stop switch and re-armed on
+screen change — and render **directly** from the link's callback on the main
+queue, with `displayLayer:` as the second, AppKit-initiated entry; both paths
+stop the link, render, and restart it. `CADisplayLink` /
+`NSView.displayLink(target:selector:)` appears nowhere in either repository, and
+**neither calls `setNeedsDisplay:` at all** (the sole hit is
+`setNeedsDisplayOnBoundsChange(true)` on the `CAMetalLayer`), nor has any
+`drawRect` path (`0` hits). That last point is the one worth keeping straight:
+it is evidence that the path this backend was on is a path the market left, not
+evidence about AppKit's behaviour — the discarded in-pass `setNeedsDisplay:` is
+this entry's own four-arm measurement, and the market never reaches the
+question. Their link is also leaked by design, because `CVDisplayLinkStop` is
+asynchronous and releasing raced its io thread (upstream segfaults #32116 /
+ZED-7XR) — the wart `CADisplayLink` does not have, which reads as support for
+ADR-0044's choice with the caveat that the market sits on the API macOS 15
+deprecates. Their deferral is a different one and not to be confused with the
+one above: upstream Zed PR #3592 (`f12510b8`, 2023-12-11) defers *drawing* until
+CoreAnimation calls `displayLayer:`, i.e. defers to a platform signal rather than
+around a discarded request; core gpui's `deferring re-entrant window draw
+request` is its own comment's description of a Windows-only re-entrancy case.
+One behaviour of theirs this backend still lacks is the fix for the stall that
+keeps a cold start from beginning: a single synchronous frame on re-activation,
+gated on `activated_least_once`.
+
+Basis for the above: source reading at the two commits named (clone grep plus
+`gh search code`, which agree), not by running either project — the clones are
+shallow, so an older revision containing a `setNeedsDisplay:` call is not ruled
+out, and no Apple documentation was consulted for the API-deprecation claim.
+
+**Trade-off:** this deferral is AppKit-local, and the same defect has a second
+instance on another backend with the opposite sign. Web's `request_redraw`
+dispatches the frame immediately and `WindowCallbacks::drain_events` drains
+synchronously until the queue is empty, so a frame callback that re-arms recurses
+*within* the originating call rather than reaching a browser frame turn — measured
+at 4 frames inside one JS-to-Rust call, with no RAF turn, GPU setup or renderer
+involved (issue #1047, open). AppKit drops the re-arm that never crosses out of
+the display pass; web honours one that never crosses into a future turn. Both are
+the same contract failing: **a redraw request issued from inside a frame request
+must be deferred to the platform's next frame turn, not serviced in place.** The
+macOS half is correct now and the web half is not, which is the cost this entry
+books — the concept lives in `platforms/macos/display_pass.rs` rather than in a
+shared place both backends could hold, so a third backend writing a frame loop
+has to rediscover it. Lifting it to the `WindowCallbacks`/`request_redraw` layer
+is the obvious shape and is not done here: it would edit the web backend, which
+no gate on this host executes, and §Definition-of-Done forbids claiming a fix on
+a path nothing runs.
+
+**Replacement coverage:** three tiers, because no single one reaches the claim.
+`display_pass.rs`'s four tests pin the marker (set inside a pass, restored on
+drop, nesting, thread grain). Two always-run window tests pin the decision
+without an NSWindow
+(`a_redraw_request_inside_a_display_pass_defers_and_never_sends_inline` and its
+complement — deleting the deferral branch fails the first, checked by mutation:
+with `dispatch_redraw_request`'s body replaced by an unconditional inline send,
+that test fails and the other five in scope still pass), because a bare test
+process cannot construct an NSWindow at all. The behavioural end-to-end pin is
+`examples/frame_pump_probe.rs` (`just macos-frame-pump`): a real visible window
+on the real AppKit run loop, whose frame callback re-arms the way the engine's
+frame does, behind a primer that stops at the first frame so the measurement
+cannot be explained by it. Measured 2026-09-17: 301 frames in 3.010 s (100.0 fps
+on the 100 Hz panel) with the deferral, against 1 frame total and 0 in the
+measurement window with the deferral branch removed. Both runs' marker lines are
+recorded in the plan beside their probe
+(`.rust-studio/specs/macos-native-vsync-pacing-evidence/plan.md` §4); the raw
+run logs are not tracked, since `.gitignore` excludes `*.log` repo-wide.

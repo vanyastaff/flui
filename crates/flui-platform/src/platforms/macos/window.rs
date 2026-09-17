@@ -105,6 +105,13 @@ pub struct MacOSWindow {
 // scheduler's frame-wake hook completing on an IO-lane worker) therefore
 // observe the routing, not a call-graph fact.
 //
+// One of those bodies reaches the lane by an extra hop rather than by a second
+// door: `request_redraw`'s deferral hands its `setNeedsDisplay:` to
+// `owner_lane::exec_async_guarded`, which installs the lane guard *before* the
+// body runs and then routes that body through `route_on_owner` like the rest.
+// The deferral changes *when* the call lands, never *which thread* issues it —
+// which is why it does not weaken this argument.
+//
 // What remains outside the routed surface, and why each part is still sound:
 // AppKit-delivered callbacks (delegate/view/event closures) run on the main
 // thread by construction — AppKit does not deliver them elsewhere; the
@@ -426,6 +433,38 @@ pub(super) fn route_on_owner<R: Send>(
     })
 }
 
+/// Choose which arm a redraw request takes — the display-pass deferral, or the
+/// inline send — and start it.
+///
+/// Free-standing for the same reason [`route_on_owner`] is: an always-run test
+/// can pin the *choice* without an NSWindow, which a bare test process cannot
+/// construct. Both arms arrive as closures, so what a test observes is exactly
+/// which one started; what the window's own `request_redraw` supplies for them
+/// is pinned by the bundled frame-pump probe, which reads frames rather than
+/// closures.
+///
+/// AppKit discards a `setNeedsDisplay:` issued while it is displaying the view,
+/// and the frame a display pass runs asks for its next frame from exactly there
+/// (`drawRect:` → frame request → scheduler wake): that one request is dropped
+/// and the pump stops for good — no frame, no wake, no frame. See
+/// `super::display_pass` for the measurement behind that. The same call one turn
+/// of the owner lane later is honoured instead, because the pass has unwound by
+/// then; this is ADR-0039 §4(c) realised on AppKit — a wake that arrives while
+/// the drain gate is closed defers rather than draining.
+///
+/// A request from any other moment is already delivered after the pass (its lane
+/// hop waits for it), so it stays inline rather than paying a turn. The marker's
+/// grain is the thread, not this window's pass, so a request for another window
+/// issued while any view on this thread is displaying also defers: conservative,
+/// and one lane turn late at worst, never dropped.
+fn dispatch_redraw_request(defer: impl FnOnce(), send_inline: impl FnOnce() + Send) {
+    if super::display_pass::in_display_pass() {
+        defer();
+        return;
+    }
+    send_inline();
+}
+
 #[cfg(test)]
 mod routing_probe {
     use std::sync::Mutex;
@@ -481,6 +520,239 @@ mod routing_probe {
 // precisely why `exec_on_owner` runs its direct paths bare. Test assertions
 // against the probe must therefore be scoped to the off-lane arm (i).
 
+impl MacOSWindow {
+    /// Ask AppKit to display this window's content view.
+    ///
+    /// The one place `setNeedsDisplay:` is sent: `request_redraw`'s inline path
+    /// calls it from inside its routed body, and the deferred path calls it
+    /// from inside a routed body too, one turn of the lane later. `deferred`
+    /// records which of the two sent it, because the two are only
+    /// distinguishable in a log by their timing otherwise, and telling "the
+    /// frame re-armed itself and the pump continued" from "the frame re-armed
+    /// itself and was discarded" is what this whole path exists to make
+    /// observable.
+    ///
+    /// # Safety
+    ///
+    /// - The caller must be on this window's owner lane: `ns_window` and its
+    ///   content view are thread-affine AppKit objects. Both call sites reach
+    ///   here from inside a `route_on_owner` body, which is what makes that
+    ///   true; the `debug_assert` below re-checks it against the same predicate
+    ///   `route_on_owner` routes with, so a caller that skips the routing
+    ///   throat fails loudly in debug builds instead of messaging AppKit
+    ///   off-lane.
+    /// - `self` must own a live `ns_window`, which `&self` guarantees: the
+    ///   wrapper's balancing `release` runs only from [`Drop`], and the
+    ///   deferred path finds this window through the shared map, so a window
+    ///   that closed first is absent from it rather than messaged.
+    unsafe fn set_needs_display(&self, deferred: bool) {
+        debug_assert!(
+            super::owner_lane::on_owner_thread(self.owner, self.owner_is_main),
+            "BUG: set_needs_display must run on the window's owner lane"
+        );
+        unsafe {
+            // SAFETY: per the function's contract, the caller is on the owner
+            // lane (re-checked by the assertion above) and `ns_window` is live.
+            // The content view is nil-checked before messaging.
+            let content_view: id = msg_send![self.ns_window, contentView];
+            if content_view == nil {
+                tracing::trace!(
+                    deferred,
+                    "request_redraw: window has no content view; request dropped"
+                );
+            } else {
+                let _: () = msg_send![content_view, setNeedsDisplay: YES];
+                // AppKit owns the display pass that turns this into a
+                // `drawRect:` — nothing in this backend can observe it, so the
+                // two ends of the pump are instrumented separately: this line
+                // (the request went out) and `view.rs`'s `draw_rect` (AppKit
+                // asked for content). A request with no matching `drawRect:` is
+                // otherwise invisible from here, so when a trace subscriber is
+                // attached, report the AppKit state the display pass is gated
+                // on. The reads are msg_sends, so they are behind the level
+                // check rather than unconditional fields.
+                if tracing::enabled!(tracing::Level::TRACE) {
+                    let window_visible: bool = msg_send![self.ns_window, isVisible];
+                    let occlusion: usize = msg_send![self.ns_window, occlusionState];
+                    let needs_display: bool = msg_send![content_view, needsDisplay];
+                    let view_window: id = msg_send![content_view, window];
+                    let is_key: bool = msg_send![self.ns_window, isKeyWindow];
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let app_active: bool = msg_send![app, isActive];
+                    let policy: i64 = msg_send![app, activationPolicy];
+                    let window_number: i64 = msg_send![self.ns_window, windowNumber];
+                    let on_active_space: bool = msg_send![self.ns_window, isOnActiveSpace];
+                    let screen: id = msg_send![self.ns_window, screen];
+                    let alpha: f64 = msg_send![self.ns_window, alphaValue];
+                    let level: i64 = msg_send![self.ns_window, level];
+                    let view_hidden: bool = msg_send![content_view, isHiddenOrHasHiddenAncestor];
+                    let view_frame: NSRect = msg_send![content_view, frame];
+                    let backing_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
+                    tracing::trace!(
+                        window_visible,
+                        occlusion,
+                        needs_display,
+                        view_in_window = view_window != nil,
+                        is_key,
+                        app_active,
+                        policy,
+                        window_number,
+                        on_active_space,
+                        has_screen = screen != nil,
+                        alpha,
+                        level,
+                        view_hidden,
+                        vx = view_frame.origin.x,
+                        vy = view_frame.origin.y,
+                        vw = view_frame.size.width,
+                        vh = view_frame.size.height,
+                        backing_scale,
+                        deferred,
+                        "request_redraw: setNeedsDisplay sent to content view"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Start the deferral of a redraw request onto the next turn of the owner
+    /// lane. See [`Self::defer_redraw`] for the mechanism.
+    fn defer_redraw_request(&self) {
+        Self::defer_redraw(
+            self.owner,
+            self.owner_is_main,
+            Arc::clone(&self.windows_map),
+            self.ns_window as u64,
+            0,
+        );
+    }
+
+    /// Defer a redraw request to the next turn of the owner lane, delivering it
+    /// there if that turn lands outside AppKit's display pass.
+    ///
+    /// The caller is inside AppKit's display pass of this window's view, where
+    /// `setNeedsDisplay:` is discarded; this hands the same call to the lane so
+    /// it lands after the pass has unwound instead of during it. This is
+    /// ADR-0039 §4(c) realised on AppKit: the frame transaction is a region the
+    /// drain gate is closed for, and a wake arriving while it is closed defers
+    /// rather than draining.
+    ///
+    /// The body must NOT ride `route_on_owner`'s inline arm, which is where a
+    /// call from inside `drawRect:` otherwise lands — a display pass runs on
+    /// the owner thread, so `exec_on_owner` takes its main-thread shortcut, and
+    /// the `setNeedsDisplay:` would be issued *during* the pass: the exact call
+    /// AppKit discards, i.e. the bug this path exists to fix. Hence
+    /// asynchronous, and never blocking. A synchronous dispatch would also
+    /// self-deadlock on a serial *test* lane dispatching to itself; on the
+    /// main-lane production path it would not hang — it would silently do the
+    /// wrong thing, which is worse.
+    ///
+    /// The turn reaches the window through the shared window map rather than
+    /// capturing a raw AppKit pointer, so a window that closed before the turn
+    /// runs is simply no longer found — no dangling `id`, and no `Weak` cycle
+    /// for the window to hold on itself. Two honest limits of that scheme:
+    ///
+    /// - The key is the NSWindow pointer — the pointer-as-id ADR-0039 §4 already
+    ///   names as an ABA hazard for multi-window sessions. Address reuse cannot
+    ///   make this message a *dead* object (the wrapper's balancing `release`
+    ///   is queued on this same lane and runs only from [`Drop`], so a free
+    ///   always follows any block already queued ahead of it), but it could in
+    ///   principle make it message a *different* live window: one spurious
+    ///   redraw, and the reason that ADR's monotonic-mint follow-up is the real
+    ///   fix rather than this lookup.
+    /// - Membership in the map is the whole test, so a window removed from the
+    ///   map while still open (only a test harness does that today) drops a
+    ///   deferred request that the inline path — which messages `self.ns_window`
+    ///   directly — would have delivered.
+    ///
+    /// `hop` counts the turns this request has already taken; see the re-check
+    /// below for why it exists and [`MAX_DEFER_HOPS`] for why it is bounded.
+    fn defer_redraw(
+        owner: &'static dispatch::Queue,
+        owner_is_main: bool,
+        windows_map: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
+        key: u64,
+        hop: u8,
+    ) {
+        super::owner_lane::exec_async_guarded(owner, move || {
+            // The hop onto the lane is asynchronous, but the AppKit message
+            // inside it is still routed: `exec_async_guarded` installed the lane
+            // guard before this body, so `route_on_owner` runs it inline and
+            // records its witness. One routed throat for every AppKit-messaging
+            // body, with no second door beside it.
+            route_on_owner(owner, owner_is_main, || {
+                // This turn is supposed to run after the pass has unwound, and
+                // that is what a lane turn normally is: the run loop services
+                // the lane at its top level, after AppKit's display pass has
+                // returned. The premise is only as strong as the drain, though.
+                // A display pass that opens a nested run loop — a modal panel, a
+                // drag session, a menu track — services this same lane from
+                // *inside* itself, so a turn can land in a pass after all, and
+                // messaging AppKit from there would discard the request again,
+                // silently: a discarded deferral leaves the same trace as a
+                // working one. So the turn re-checks and re-defers rather than
+                // trusting the timing.
+                if super::display_pass::in_display_pass() {
+                    if hop < MAX_DEFER_HOPS {
+                        tracing::trace!(
+                            hop,
+                            "request_redraw: the deferred turn landed inside another display \
+                             pass (a nested run loop is draining the owner lane); deferring again"
+                        );
+                        Self::defer_redraw(owner, owner_is_main, windows_map, key, hop + 1);
+                    } else {
+                        // Dropped rather than sent: a `setNeedsDisplay:` issued
+                        // here is the call AppKit throws away, so sending it
+                        // would only produce a misleading "sent" trace. The pump
+                        // stays stalled until the nested loop returns and
+                        // something requests a redraw again, which is the
+                        // residual this backend has anyway — the warning names
+                        // the situation instead of leaving it to look like a
+                        // healthy request.
+                        tracing::warn!(
+                            hop = MAX_DEFER_HOPS,
+                            "request_redraw: a redraw re-arm is still inside a display pass \
+                             after the deferral budget; dropping it. A nested run loop is \
+                             draining the owner lane from inside a display pass, so no turn of \
+                             that lane can land outside one; frames stay stalled until that \
+                             loop returns and something requests a redraw again."
+                        );
+                    }
+                    return;
+                }
+                // The lookup clones the `Arc` and drops the guard with the
+                // statement: the map lock is never held across an AppKit call.
+                let window = windows_map.lock().get(&key).cloned();
+                if let Some(window) = window {
+                    // SAFETY: `route_on_owner` ran this body on the owner lane,
+                    // and finding the wrapper in the map means its NSWindow is
+                    // live (the entry is removed before the wrapper's release).
+                    unsafe { window.set_needs_display(true) };
+                } else {
+                    // Closed (or never in the map) before the deferred turn:
+                    // the request has nothing left to redraw, which is not an
+                    // error.
+                    tracing::trace!(
+                        "request_redraw: window closed before the deferred request ran; request dropped"
+                    );
+                }
+            });
+        });
+    }
+}
+
+/// How many owner-lane turns a deferred redraw request may take before it is
+/// dropped ([`MacOSWindow::defer_redraw`]).
+///
+/// One turn is the point of the deferral, so a value above 1 only exists for
+/// the nested-run-loop case: each retry re-queues onto a lane that is being
+/// drained from inside a display pass, and a lane drained that way hands every
+/// retry straight back into a pass. The budget therefore has to be small — it
+/// trades a bounded number of discarded turns for the log line that says the
+/// nest exists, where an unbounded retry would spin at the lane's full rate for
+/// as long as the nested loop runs.
+const MAX_DEFER_HOPS: u8 = 4;
+
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         WindowId(self.ns_window as u64)
@@ -532,32 +804,34 @@ impl PlatformWindow for MacOSWindow {
     /// longer this method's distinction: every class-A body — the 12
     /// `PlatformWindow` mutators, this method, the 12 `WindowTrait` bodies, and
     /// the 11 `MacOSWindowExtTrait` bodies — travels through the same
-    /// `route_on_owner` throat. What is not on that surface is sound for the
-    /// reasons the `unsafe impl Send`/`Sync` SAFETY block states
-    /// (AppKit-delivered callbacks, upstream-enforced raw-handle accessors, the
-    /// fire-and-forget `Drop` tail).
+    /// `route_on_owner` throat, and the one body that has to arrive a lane turn
+    /// later (the deferral below) is wrapped in it too, so it is witnessed like
+    /// the rest. What is not on that surface is sound for the reasons the
+    /// `unsafe impl Send`/`Sync` SAFETY block states (AppKit-delivered
+    /// callbacks, upstream-enforced raw-handle accessors, the fire-and-forget
+    /// `Drop` tail).
     ///
     /// What the routing does NOT provide is the wake relay ADR-0045 decision 5
     /// mandates end-to-end: the hook still calls this method directly. A relay
     /// (the hook posts, the owner thread drains) remains scoped to the
-    /// `PlatformProxy` redraw verb (#551/#559).
+    /// `PlatformProxy` redraw verb (#559).
     fn request_redraw(&self) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and this
-            // closure captures `&self` (Send because `&MacOSWindow: Send`, via
-            // the `unsafe impl Sync` below), so the id accessed here is that
-            // same live window. The content view is nil-checked before
-            // messaging. Thread affinity is enforced by the owner-lane routing
-            // itself: this body runs on the owner thread — inline on the OS
-            // main thread for a main-lane owner, or dispatched onto the lane
-            // under the reentrancy guard — before either message is sent.
-            let content_view: id = msg_send![self.ns_window, contentView];
-            if content_view != nil {
-                let _: () = msg_send![content_view, setNeedsDisplay: YES];
-            }
-        });
+        dispatch_redraw_request(
+            // The deferral re-derives everything it needs from `self` because
+            // it runs a lane turn later, after this call has returned — it
+            // cannot borrow anything of this frame's.
+            || self.defer_redraw_request(),
+            || {
+                route_on_owner(owner, owner_is_main, || unsafe {
+                    // SAFETY: the body runs on the window's owner lane — inline
+                    // on the OS main thread for a main-lane owner, or dispatched
+                    // onto the lane under the reentrancy guard.
+                    self.set_needs_display(false);
+                });
+            },
+        );
     }
 
     fn is_focused(&self) -> bool {
@@ -2150,6 +2424,67 @@ mod tests {
             Some(true),
             "routing assertion: the off-lane body must observe the owner-lane guard at the \
              probe point, which a bare un-routed body would record as unset"
+        );
+    }
+
+    /// Always-run, AppKit-free pin on the display-pass decision: a redraw
+    /// request issued while this thread is inside a display pass must take the
+    /// deferral arm and must NOT send inline. The inline `setNeedsDisplay:` is
+    /// precisely the call AppKit discards mid-pass, and the reason the pump used
+    /// to stop after one frame — so this is the branch that carries the fix, and
+    /// deleting it must fail here.
+    ///
+    /// Both arms arrive as closures, so both are observable without an NSWindow
+    /// (a bare test process cannot construct one). The `DisplayPassGuard` is the
+    /// real marker the production decision reads, entered on this thread the way
+    /// `view.rs`'s `draw_rect` enters it around a dispatched frame.
+    #[test]
+    fn a_redraw_request_inside_a_display_pass_defers_and_never_sends_inline() {
+        let deferred = Arc::new(AtomicBool::new(false));
+        let inline = Arc::new(AtomicBool::new(false));
+        let (deferred_flag, inline_flag) = (Arc::clone(&deferred), Arc::clone(&inline));
+
+        {
+            let _pass = super::super::display_pass::DisplayPassGuard::enter();
+            dispatch_redraw_request(
+                || deferred_flag.store(true, Ordering::SeqCst),
+                move || inline_flag.store(true, Ordering::SeqCst),
+            );
+        }
+
+        assert!(
+            deferred.load(Ordering::SeqCst),
+            "a request from inside a display pass must defer: the inline call is the one AppKit \
+             discards during the pass, and the frame it belonged to has already gone"
+        );
+        assert!(
+            !inline.load(Ordering::SeqCst),
+            "the inline arm must not run inside a display pass — it is the stalled-pump bug"
+        );
+    }
+
+    /// The complementary arm, so the pin above cannot be satisfied by a
+    /// `dispatch_redraw_request` that defers unconditionally (which would add a
+    /// lane turn to every ordinary request).
+    #[test]
+    fn a_redraw_request_outside_a_display_pass_sends_inline() {
+        let deferred = Arc::new(AtomicBool::new(false));
+        let inline = Arc::new(AtomicBool::new(false));
+        let (deferred_flag, inline_flag) = (Arc::clone(&deferred), Arc::clone(&inline));
+
+        dispatch_redraw_request(
+            || deferred_flag.store(true, Ordering::SeqCst),
+            move || inline_flag.store(true, Ordering::SeqCst),
+        );
+
+        assert!(
+            inline.load(Ordering::SeqCst),
+            "a request from outside a display pass is already delivered after the pass — its lane \
+             hop waits for it — so it must not pay a turn"
+        );
+        assert!(
+            !deferred.load(Ordering::SeqCst),
+            "the deferral must not start"
         );
     }
 

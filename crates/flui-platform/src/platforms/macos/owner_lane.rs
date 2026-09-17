@@ -106,6 +106,29 @@ impl Drop for OnOwnerQueueGuard {
     }
 }
 
+/// Is the calling thread the owner thread — i.e. would [`exec_on_owner`] run
+/// `f` directly instead of dispatching it?
+///
+/// The routing predicate lives here once: `exec_on_owner` decides with it, and
+/// the AppKit-messaging bodies assert with it, so an assert cannot drift from
+/// the decision it checks.
+///
+/// What it promises, exactly: the caller is on the lane (the reentrancy probe
+/// above), or the owner is the OS main queue and the caller is the OS main
+/// thread — `exec_on_owner`'s inline arm, which deliberately covers a main
+/// thread that never entered the lane. It is not a claim that a guard was
+/// installed; `on_owner_queue` is that, and is strictly narrower.
+pub(super) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bool) -> bool {
+    on_owner_queue(owner)
+        || (owner_is_main && {
+            // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
+            // class method with no arguments and a BOOL return; it may be
+            // called from any thread at any time.
+            let is_main: bool = unsafe { msg_send![class!(NSThread), isMainThread] };
+            is_main
+        })
+}
+
 /// Run `f` ON the owner lane.
 ///
 /// When the caller is already executing on the lane (the reentrancy probe), or
@@ -120,15 +143,7 @@ pub(super) fn exec_on_owner<R: Send>(
     owner_is_main: bool,
     f: impl FnOnce() -> R + Send,
 ) -> R {
-    if on_owner_queue(owner)
-        || (owner_is_main && {
-            // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
-            // class method with no arguments and a BOOL return; it may be
-            // called from any thread at any time.
-            let is_main: bool = unsafe { msg_send![class!(NSThread), isMainThread] };
-            is_main
-        })
-    {
+    if on_owner_thread(owner, owner_is_main) {
         f()
     } else {
         // SAFETY: dispatch invokes the closure through an `extern "C"`

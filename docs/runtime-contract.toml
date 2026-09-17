@@ -1824,6 +1824,18 @@ transitively through their routed callee; pure-Rust reads \
 never message AppKit. The relay requirement stands unchanged on the two \
 reasons -- the off-lane raster-thread call itself, and a `Send + Sync` hook \
 that skips a relay compiling and being wrong.\
+\
+CORRECTION (2026-09-17, macOS frame source): `request_redraw` now has two \
+paths, and BOTH are routed. When the caller is inside an AppKit display pass \
+the call is deferred by one owner-lane turn (`defer_redraw_request` -> \
+`exec_async_guarded` -> `route_on_owner`), because AppKit discards a \
+`setNeedsDisplay:` issued while it is displaying the view; the inline path \
+(`route_on_owner` -> `set_needs_display`) is unchanged. The deferral changes \
+*when* the call lands, never *which* thread issues it: `exec_async_guarded` \
+installs the lane guard before the deferred body runs and that body travels \
+the same `route_on_owner` throat, so this entry's premise -- that no AppKit \
+body reaches `NSWindow` off the owner lane -- holds for both paths. The relay \
+requirement stands unchanged on the two reasons above.\
 """
 state = "partial"
 domain = "raster"

@@ -270,6 +270,15 @@ macos-close-path:
 } }}
 
 [group("test")]
+[doc("Executable AppKit frame-pump coverage on a real Mac: builds the frame_pump_probe example, stages it into a minimal .app the same way macos-close-path does, runs it with RUST_LOG=info, and asserts exit 0 plus the FRAME_PUMP_PROBE_RESULT=PASS marker. The probe counts frames from a REAL visible window whose frame callback re-arms itself the way the engine's frame does, and requires frames to keep arriving after the primer that started them stopped — the AppKit display pass discards an in-pass setNeedsDisplay:, so a backend without the deferral runs exactly one frame and reports FAIL. macOS-only by construction; skips with a message on other hosts")]
+macos-frame-pump:
+    {{ if os() == "macos" {
+"cargo build -p flui-platform --locked --example frame_pump_probe\nAPP=target/macos-frame-pump/FramePumpProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.frame_pump_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/frame_pump_probe \"$APP/Contents/MacOS/frame_pump_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/frame_pump_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'FRAME_PUMP_PROBE_RESULT=PASS'; then\n  echo 'macos-frame-pump FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
+} else {
+"echo 'Skipping macos-frame-pump on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle — it measures frames from a visible window, so it cannot run headless or on another OS; on a Mac run: just macos-frame-pump'"
+} }}
+
+[group("test")]
 [doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
