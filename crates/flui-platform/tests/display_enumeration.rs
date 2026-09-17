@@ -22,6 +22,10 @@ fn init_tracing() {
 /// Test that platform.displays() returns all connected displays with valid
 /// properties
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_displays_enumeration() {
     init_tracing();
     tracing::info!("Testing display enumeration");
@@ -96,6 +100,10 @@ fn test_displays_enumeration() {
 
 /// Test that platform.primary_display() returns the OS-marked primary display
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_primary_display_detection() {
     init_tracing();
     tracing::info!("Testing primary display detection");
@@ -148,6 +156,10 @@ fn test_primary_display_detection() {
 
 /// Test that HiDPI/Retina displays report scale factors >= 1.5
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_high_dpi_scale_factor() {
     init_tracing();
     tracing::info!("Testing high DPI scale factor detection");
@@ -229,6 +241,10 @@ fn test_high_dpi_scale_factor() {
 /// Test that display.usable_bounds() correctly excludes taskbar and menu bar
 /// areas
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_usable_bounds_exclude_system_ui() {
     init_tracing();
     tracing::info!("Testing usable bounds (excludes taskbar/menu bar)");
@@ -352,6 +368,10 @@ fn test_windows_enum_display_monitors() {
 /// Verify macOS display enumeration via NSScreen API
 #[test]
 #[cfg(target_os = "macos")]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_macos_nsscreen_enumeration() {
     init_tracing();
     tracing::info!("Verifying macOS NSScreen enumeration");
@@ -408,6 +428,10 @@ fn test_macos_nsscreen_enumeration() {
 /// Test that display bounds don't overlap incorrectly in multi-monitor
 /// configurations
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_multi_monitor_bounds_arrangement() {
     init_tracing();
     tracing::info!("Testing multi-monitor bounds arrangement");
@@ -557,6 +581,10 @@ fn test_scale_factor_changed_event() {
 /// Benchmark display enumeration latency to ensure it's under 10ms even with
 /// multiple monitors
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_display_enumeration_performance() {
     init_tracing();
     tracing::info!("Benchmarking display enumeration performance");

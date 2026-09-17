@@ -9,6 +9,13 @@
 //! Convention: tests that WRITE process-global state (e.g. the
 //! `FLUI_HEADLESS` env var) live in their own [[test]] target instead —
 //! process isolation beats opt-in locking. See headless.
+//!
+//! macOS invariant: any `platform_it` test that constructs the platform
+//! through `current_platform()` (or a helper reaching it) must carry
+//! `#[cfg_attr(target_os = "macos", ignore = "requires an AppKit-run-loop-
+//! pumping test process (ADR-0039): …")]` — the macOS platform surface
+//! asserts the AppKit main thread, which a bare `cargo test` cannot host
+//! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
 
 #[path = "accessibility_capability.rs"]
 mod accessibility_capability;

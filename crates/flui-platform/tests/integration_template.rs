@@ -83,6 +83,10 @@ fn create_test_window() -> Result<Arc<dyn flui_platform::PlatformWindow>, anyhow
 
 /// Template: Test window handle compatibility with raw-window-handle
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_window_handle_compatibility() {
     init_tracing();
 
@@ -231,6 +235,10 @@ fn test_event_propagation() {
 
 /// Template: Test clipboard + UI component integration
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_clipboard_integration() {
     init_tracing();
 
@@ -266,6 +274,10 @@ fn test_clipboard_integration() {
 
 /// Template: Test executor + async rendering pipeline
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039): the macOS platform surface asserts the owner main thread, a bare macOS cargo test cannot pump it and unbundled NSWindow construction aborts the process — these run headless on CI (FLUI_HEADLESS=1) and from an AppKit-pumping process only"
+)]
 fn test_executor_integration() {
     init_tracing();
 
