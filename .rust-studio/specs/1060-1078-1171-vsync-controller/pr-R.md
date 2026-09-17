@@ -1,0 +1,31 @@
+## Summary
+
+A repeating run's `value`, `status` and `direction` are now a pure function of the elapsed time since the run started — `tick_at(1.25)` reads the same as `tick_at(1.0); tick_at(1.25)`, `tick_at(2.25)` twice is idempotent, and a frame that skips several periods lands exactly where the clock says. The old branch retired whole cycles by advancing a mutable epoch and left the fractional remainder for the next tick, so the first tick after a skipped boundary reported the boundary instead of the real phase (#1078's three probes).
+
+The model is the timing model every standard and mainstream framework uses — the W3C Web Animations spec (`overall progress = active time / iteration duration`, `simple iteration progress = overall % 1.0`, `alternate` by iteration parity), Android `ValueAnimator.animateBasedOnTime`, Compose `VectorizedRepeatableSpec`, Flutter's own `_RepeatingSimulation` — re-derived for FLUI, with the arithmetic in **integer nanoseconds** as Compose and GPUI do it: the f64 predicate `total >= count * period` is false at `0.3 >= 3 * 0.1`, so a 3-count 100 ms repeat sampled at exactly 300 ms would have stayed a frame late. One private helper pair (`repeat_leg`, `repeat_landing`) owns the leg/landing parity for every site.
+
+Contracts aligned or improved, each recorded in `docs/ARCHITECTURE.md` `## Mapping decisions` ("Repeat sampling is a pure function of elapsed time") and the CHANGELOG:
+
+- **Phase continuity (Flutter parity).** `repeat`/`repeat_with` start from the *current* value clamped into `[min, max]` (Flutter 3.44's `_RepeatingSimulation._initialT`; flutter/flutter#67507's confusion, answered in the docs), so a repeat started mid-range does not jump and a `repeat()`-per-build pattern progresses instead of freezing. FLUI snapped to `min` — an unrecorded divergence. The at-call value and status are the same phase sample (`_startSimulation` runs `x(0.0)` before computing `_status`), so a bounce started at `max` reports `Reverse` before any tick. `count` boundaries are measured from the phase origin (Flutter `_exitTimeInSeconds = count·period − _initialT`, Compose `iterations·duration − initialOffset`).
+- **Exhaustion lands on the END of the last cycle (improvement over Flutter).** Flutter's `% 1.0` wraps a 1-count restart repeat to `min` at `completed` (`animation_controller_test.dart` 'calling repeat by setting count as valid with reverse as false' expects 0 at 100 ms) and reports the *next* leg's direction at a bounce exhaustion; the Web spec ("holding the endpoint of the final iteration rather than the start of the next"), Android (`getCurrentIteration`'s decrement at the exact end) and Compose (`min(…, iterations − 1)`) all land on the end. FLUI lands on the final leg's endpoint with that leg's settled status; the replacement oracles are the ported tests.
+- **One period for both legs; `set_duration` is inert mid-repeat.** `current_duration()` fell through to `reverse_duration` on a bounce's reverse leg, contradicting `repeat_with`'s own doc and Flutter (`period ??= duration`, captured by the simulation).
+- **Zero period settles at the call, for any count** (Android's "0 duration animator, ignore the repeat count and skip to the end"; Compose's `InfiniteRepeatableSpec` throws, Flutter asserts) — the documented exception to "an infinite repeat's future resolves only by cancellation"; a zero-period infinite repeat ticking once per frame would hold the frame loop open doing nothing. `count: Some(0)` (zero cycles) likewise settles at the call, at the clamped current value.
+- A leftover `animate_to_curved` curve no longer shapes a following repeat (`repeat_with` now clears the run modes like every other run start); `min == max` stays rejected, with the reason recorded; `velocity()` stays signed on a reverse leg (deliberate divergence from Flutter's unsigned `dx`).
+
+`run_epoch_secs` (a constant 0 after the epoch stopped moving) and `repeat_done` are deleted; README/GUIDE no longer call a non-existent `repeat_with_reverse`.
+
+## Tests
+
+20 new tests (14 red on the previous model, 6 pins added in review) (run against the old production code with the new test module: 0/14 passed): the issue's partition-invariance probes (restart and bounce, odd/even skipped cycles, custom bounds, same-timestamp idempotence); Flutter's `animation_controller_test.dart` repeat cases ported with their case names — including the finite-count case's **rewind** (`tick(100 ms)` then `tick(60 ms)` → 0.6: Flutter's `tick(d)` is an absolute frame timestamp) and the single-tick jump to a checkpoint that the sequential port alone could not redden; bounce from `max` reports `Reverse` at the call; the exact f64-unsafe exhaustion boundary (c = 3, 300 ms); finite count from a mid-range phase origin; zero period finite and infinite settle at the call; a leftover curve; `set_duration` mid-repeat; notification counts across a multi-cycle frame. Existing repeat tests stay green as pins.
+
+## Review
+
+Plan reviewed before code by harsh-critic (two rounds), concurrency-specialist, api-design-lead and an outside glm-5.3 lens; the diff by rust-reviewer (mutation probes in a scratch checkout), an outside deepseek-v4.1-flash agentic lens, and api-design-lead's API gate. Both code reviewers caught the same blocking gap in the first cut — the at-call value of a restart repeat started at `max` was the clamped input, not the cycle-0 sample the model promises (1.0 at the call, 0.0 on the first tick) — which is now closed by one `repeat_sample` sampler serving both the call and the tick, inside a typed `Option<RepeatRun>` state whose period is non-zero by construction (the `expect`s and the zero-period guard in the tick path are gone). They also found that an unrepresentable elapsed time rewound to the phase origin (now saturates), that `count: Some(0)` was undocumented (now settles at the call with no cycle run), and that three claimed pins (`clear_run_modes`, signed reverse-leg `velocity()`, `min == max`) had no test — each has one now, and the mapping entry names them.
+
+Market survey behind the model: `.rust-studio/research/animation-repeat-zero-duration-registry-market-survey.md` (untracked planning artefact).
+
+Closes #1078.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+https://claude.ai/code/session_01G4A6sok5VeWcNfxFTpgXRm

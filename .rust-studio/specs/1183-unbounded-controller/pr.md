@@ -1,0 +1,27 @@
+## Summary
+
+An unbounded `AnimationController` is now a **constructor fact**, not a bound value: `AnimationController::unbounded(duration, &scheduler)`, `unbounded_without_ticker(duration)` and `unbounded_with_detached_ticker(duration)` are infallible, fix the bounds at `(-∞, ∞)` and start at `0.0` (Flutter's `AnimationController.unbounded`: value 0.0, status `forward` per `_internalSetValue`). The three production fling controllers (`scrollable`, `scroll_controller`, `refresh_indicator`) migrate to `unbounded_without_ticker` and lose their `.expect("NEG_INFINITY < INFINITY …")`.
+
+`with_bounds` / `without_ticker_bounds` / `with_detached_ticker_bounds` and the builder's `bounds` now **reject** a bound that is NaN or infinite, a half-open pair, and a finite pair whose span overflows f32 (`(-f32::MAX, f32::MAX)`) — before, `with_bounds(NaN, 1.0)` returned `Ok` and the next `f32::clamp` against that bound panicked even in release, and a span-overflowing pair published `value = inf` on the first tick. This is a declared **breaking** narrowing of an `Ok` into an `Err` on an unchanged signature; `cargo public-api` and `cargo semver-checks` cannot see it, so the CHANGELOG carries it under `### Breaking`.
+
+**Bound-targeting runs on an unbounded controller are refused, never started**: `forward`/`forward_from`, `reverse`/`reverse_from`, `fling`/`fling_with`, and `repeat`/`repeat_with` with a non-finite effective range return the new `AnimationError::NonFiniteTarget(String)` (additive on the `#[non_exhaustive]` enum). `reset()` on an unbounded controller lands on `0.0` (the defined beginning; flutter/flutter#76014's reporter asks for exactly this; Flutter gives `-∞`). On **any** controller a NaN `target`/`from` is refused and `±∞` clamps to a finite bound or is refused toward an infinite one; `fling_with` refuses a non-finite velocity; `drive_simulation` refuses a non-finite `x(0)`. Every refusal runs before any state mutation — including `fling_with`'s `direction` write, which used to happen before its pre-existing `InvalidSpring` refusal and corrupted a later `stop()`'s status — and every refusal is also emitted as a `tracing::warn!` after the lock drops, because the production callers discard the `Result`.
+
+**No path reads NaN**: `tick_time_based` reads `start_value`/`target_value` exactly at the endpoints instead of computing `start + range * 0.0` (Flutter's `_InterpolationSimulation.x` shape); a simulation whose sample turns non-finite mid-run ends the run at the last finite value (settled status, future `Ok`, ticker stopped) instead of becoming an immortal run that holds the frame loop open; `set_value(non-finite)` stays infallible — NaN → lower bound on a bounded controller (existing pin), a full no-op on an unbounded one (a poisoned drag must not snap the list to 0 or kill a live fling), ±∞ → the finite bound — with one latched warn. `scroll_controller` raises `is_scrolling` only after a run actually started (a refused start used to park the scrollable in "scrolling" forever).
+
+Flutter leaves all of this undefined (flutter/flutter#76014, open: `forward()` on `unbounded` "jumps to infinity", `reset()` → `-Infinity`, "behavior … is simply not defined"); FLUI defines it and records the rules, the parity points and the divergences (`reset` → 0.0; the initial `Forward` status's costs; the `InvalidBounds`/`NonFiniteTarget` split) in `docs/ARCHITECTURE.md` `## Mapping decisions`.
+
+Also: `controller.rs`'s test module (56 % of a 5.7k-line file) moved to `controller_tests.rs` via `#[path]`; `scripts/check-panic-policy.sh` now resolves a top-level `#[path = "…"]` override when excluding test-support modules (it only knew the default sibling-directory convention; a self-test fixture pins it).
+
+## Tests
+
+~40 new or rewritten tests in flui-animation (constructors; every rejection with counting value/status listeners and a `stop()`-probed twin proving nothing mutated; the `(-f32::MAX, f32::MAX)` span; `fling` `InvalidSpring` ordering; the immortal-run end; the warn latch through a test-only accessor; the two former "accepts wide-open bounds" oracles inverted and explained), plus `scroll_controller`'s `is_scrolling` ordering. Mutation probes by the reviewer (moving a refusal after `clear_run_modes`, restoring the early `direction` write, dropping the span check, continuing on a NaN sample, hard-coding `last_reported_status`, calling `stop_running` from the unbounded `set_value` no-op) each redden a named test.
+
+## Review
+
+Plan attacked twice by harsh-critic (v1 → v2 took its ALT-1: unboundedness as a constructor fact; v3 folded its recheck) and by api-design-lead; the diff by rust-reviewer (mutation probes in a scratch checkout, two rounds), an outside glm-5.3 agentic lens, and api-design-lead's API gate (`public-api`: 4 added items, 0 changed/removed; `semver-checks` clean — which is why the breaking narrowing is declared in prose). The reviewer found that finite endpoints do not make a finite range and that the "untouched after refusal" battery could not see a misordered `clear_run_modes`; the lens found the stale `# Errors` docs on the public constructors and a misattributed Flutter citation.
+
+Closes #1183. Refs flutter/flutter#76014. Follow-up: #1192 (`velocity()` after a mid-run `set_value` reads the stale run's span).
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+https://claude.ai/code/session_01G4A6sok5VeWcNfxFTpgXRm

@@ -211,6 +211,12 @@ flamegraph.svg
 # Local Pi runtime state
 .atl/
 
+# Rust Code Studio planning artefacts (`.rust-studio/specs`, `.rust-studio/research`) are
+# committed with the change they planned — AGENTS.md lists them among the archival roots.
+# Raw dumps of upstream issue threads pulled in during triage are not: the triage ledger
+# beside them records what each thread established.
+.rust-studio/specs/**/flutter-issues/[0-9]*.md
+
 # Serena MCP — keep the shared project config (`.serena/project.yml`), ignore the
 # per-developer cache + local override. The cache/`project.local.yml` ignores live
 # in `.serena/.gitignore` (committed); nothing more is needed at the repo root.
