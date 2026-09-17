@@ -62,6 +62,16 @@
 //! dynamic proof: reloading the unchanged same path must map a fresh image and
 //! reset this image-local counter.
 //!
+//! **Platform scope of the strict proof.** That test runs where the loader
+//! actually honors `dlclose` unload — Linux and Android's glibc/bionic. macOS
+//! is a deferred-unmap runtime: dyld does not unmap a `dlclose`'d dylib, so a
+//! same-path reload there necessarily serves the retained image and the
+//! freshness assertion cannot hold. The test is therefore
+//! `#[cfg(not(target_os = "macos"))]`-gated with that reason stated at the
+//! gate; [`dlclose_then_reload_keeps_the_lifecycle_working`] still runs on
+//! every platform, covering that the load → drive → unload → reload cycle
+//! stays functional even where the mapping is reused.
+//!
 //! Removing that deferred-unmap pin exposed a second hazard: the old affinity
 //! check called `std::thread::current` inside the cdylib. The plugin's private
 //! std copy registered a pthread-key destructor pointing into its own image;
@@ -74,12 +84,16 @@
 //! feature (`-Z bindeps`, confirmed unavailable on this toolchain by direct
 //! probe) or a second nested build — the exact thing being avoided.
 
-use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use flui_hot_reload::PluginKind;
 use flui_hot_reload::ScenePlugin;
+// Only the strict freshness test (non-macOS) drives the fixture's exported
+// symbol through a raw handle; see the `tick` helper below.
+#[cfg(not(target_os = "macos"))]
 use flui_hot_reload::dynlib::DynLib;
+#[cfg(not(target_os = "macos"))]
+use std::ffi::c_void;
 
 /// A self-cleaning temp file path unique to this test process (mirrors
 /// `tests/loader.rs`'s `TempPath` — duplicated rather than shared, since
@@ -201,6 +215,11 @@ fn fixture_artifact_path() -> PathBuf {
 /// open handle. Keeping one handle across several calls proves the counter is
 /// image-local (1 → 2 → 3); dropping it before opening the next handle then
 /// proves whether `dlclose` really unmapped that image.
+///
+/// Only the strict freshness test uses this, and that test is
+/// `not(target_os = "macos")`-gated (dyld does not unmap on `dlclose`), so
+/// this helper is gated with it.
+#[cfg(not(target_os = "macos"))]
 fn tick(lib: &DynLib) -> u32 {
     // SAFETY: `fixture_tick` is the fixture's own exported `extern "C" fn()
     // -> u32` (see examples/hot_reload_lifecycle_fixture/src/lib.rs); the
@@ -265,6 +284,12 @@ fn dlclose_then_reload_keeps_the_lifecycle_working() {
 /// Strict freshness check for the GlobalKey registry TLS contract. A stale
 /// mapping returns 4 on the final assertion; a freshly unloaded and remapped
 /// image restarts its independent counter at 1.
+///
+/// Excluded on macOS: dyld is a deferred-unmap runtime — it does not unmap a
+/// `dlclose`'d dylib, so a same-path reload there serves the retained image
+/// and a fresh counter cannot be demonstrated. (This is the failure mode this
+/// file's module doc names; the mechanical test above still covers macOS.)
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn dlclose_then_reload_same_path_serves_a_fresh_image() {
     let source = fixture_artifact_path();
