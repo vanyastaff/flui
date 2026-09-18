@@ -12,7 +12,7 @@ use std::sync::Arc;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::NSScreen;
-use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSRect, NSString};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 
@@ -87,7 +87,7 @@ fn display_id_of(screen: &NSScreen) -> u64 {
     else {
         return 0;
     };
-    value.unsignedLongLongValue() as u64
+    value.unsignedLongLongValue()
 }
 
 impl PlatformDisplay for MacOSDisplay {
