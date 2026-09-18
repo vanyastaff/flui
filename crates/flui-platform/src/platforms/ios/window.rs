@@ -365,7 +365,7 @@ impl PlatformWindow for IOSWindow {
         let view_ptr = Retained::as_ptr(&self.view);
         let handle = raw_window_handle::UiKitWindowHandle::new(
             std::ptr::NonNull::new(view_ptr as *mut std::ffi::c_void)
-                .expect("a live UIView pointer is never null"),
+                .ok_or(raw_window_handle::HandleError::Unavailable)?,
         );
         // SAFETY: the `UIView` is retained by `self.view`, which outlives the
         // returned handle's borrow of `self`.
