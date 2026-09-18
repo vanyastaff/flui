@@ -99,11 +99,10 @@ windows = { version = "0.62", features = [
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
-# `objc2` is the migration target the module header names: `objc` has not
-# released since 2019 and `cocoa` deprecates in favor of this family. Both
-# stacks are present while the migration proceeds file by file (the two macro
-# systems cannot coexist inside one file). Versions are the ones `wgpu-hal`
-# already pins, so this adds no new crate generation.
+# `objc2` is the backend's binding stack. The `cocoa`/`objc` pair it replaced
+# is gone entirely: `objc` had not released since 2019, and `cocoa` deprecated
+# its whole surface in favor of this family. Versions are the ones `wgpu-hal`
+# already pins, so no new crate generation was introduced.
 objc2 = { version = "0.6.4", features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",

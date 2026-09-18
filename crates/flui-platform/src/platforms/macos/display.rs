@@ -1,11 +1,6 @@
 //! macOS display (NSScreen) implementation.
 //!
-//! Migrated to `objc2` / `objc2-app-kit`. [`refresh_period_for_screen`] keeps a
-//! raw-pointer parameter on purpose: the window module (still on the older
-//! `cocoa`/`objc` stack mid-migration) calls it with an `id`, and the two macro
-//! systems cannot coexist in one file. The pointer is cast to a typed
-//! `&NSScreen` inside, which is the only unsafe step and is covered by this
-//! module's own contract.
+//! On `objc2` / `objc2-app-kit`, like the rest of the backend.
 
 use std::sync::Arc;
 
@@ -126,24 +121,11 @@ impl PlatformDisplay for MacOSDisplay {
 /// reports 0 for modes it cannot describe, and some displays do — is treated
 /// as unknown rather than turned into an infinite period.
 ///
-/// Takes a raw pointer because the caller is `window.rs`, still on the
-/// `cocoa`/`objc` stack: the two macro systems cannot coexist in one file, so
-/// this module's boundary accepts the pointer and casts it here.
+/// A typed `&NSScreen`, so no raw-pointer boundary survives.
 ///
-/// # Safety
-///
-/// `screen` must be a live `NSScreen*` or null. Call on the owner lane: this
-/// messages the screen, which is AppKit traffic this backend keeps there.
-pub(super) unsafe fn refresh_period_for_screen(
-    screen: *mut std::ffi::c_void,
-) -> Option<std::time::Duration> {
-    if screen.is_null() {
-        return None;
-    }
-    // SAFETY: the caller guarantees `screen` points to a live `NSScreen`; the
-    // borrow is scoped to this call.
-    let screen: &NSScreen = unsafe { &*(screen as *const NSScreen) };
-
+/// Call on the owner lane: this messages the screen, which is AppKit traffic
+/// this backend keeps there.
+pub(super) fn refresh_period_for_screen(screen: &NSScreen) -> Option<std::time::Duration> {
     let display_id = display_id_of(screen);
     // `CGDirectDisplayID` is a `u32`; the `NSScreenNumber` number is a wider
     // CFNumber, so narrow it explicitly.

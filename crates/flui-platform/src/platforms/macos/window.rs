@@ -370,8 +370,11 @@ impl MacOSWindow {
             // measured at this exact stage rather than assumed, by the
             // `scale_order.m` probe, which reports the screen live and the
             // display id reachable before `makeKeyAndOrderFront:`.
+            // `screen` is nil only for a window not yet on any screen, which
+            // cannot happen here (the window is created at the origin); a nil
+            // therefore means no period, not a panic.
             let screen: ObjcId = msg_send![ns_window, screen];
-            let refresh_period = refresh_period_for_screen(screen.cast::<std::ffi::c_void>());
+            let refresh_period = screen_refresh_period(screen);
 
             let callbacks = Arc::new(WindowCallbacks::new());
 
@@ -402,15 +405,10 @@ impl MacOSWindow {
                 text_input: std::sync::OnceLock::new(),
             });
 
-            // Create content view for input events. `frame` is cocoa's
-            // `NSRect`; the view module takes objc2's `CGRect` alias, and the
-            // two are layout-identical C structs mid-migration.
-            let frame_cg = objc2_foundation::NSRect::new(
-                objc2_foundation::NSPoint::new(frame.origin.x, frame.origin.y),
-                objc2_foundation::NSSize::new(frame.size.width, frame.size.height),
-            );
+            // Create content view for input events. `frame` is
+            // objc2-foundation's `NSRect`, the type `create_content_view` takes.
             let content_view =
-                view::create_content_view(frame_cg, scale, Arc::downgrade(&window.callbacks));
+                view::create_content_view(frame, scale, Arc::downgrade(&window.callbacks));
             let _: () = msg_send![ns_window, setContentView: content_view];
 
             // Subclass the freshly installed content view for VoiceOver.
@@ -1833,9 +1831,9 @@ impl MacOSWindowExtTrait for MacOSWindow {
 
             // Remove visual effect view and restore normal content view
             let content_view = view::create_content_view(
-                objc2_foundation::NSRect::new(
-                    objc2_foundation::NSPoint::new(0.0, 0.0),
-                    objc2_foundation::NSSize::new(frame.size.width, frame.size.height),
+                NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(frame.size.width, frame.size.height),
                 ),
                 PlatformWindow::scale_factor(self),
                 Arc::downgrade(&self.callbacks),
@@ -2066,6 +2064,24 @@ impl MacOSWindowExtTrait for MacOSWindow {
 // ============================================================================
 
 use std::sync::Weak;
+
+/// The refresh period of the display a raw `NSScreen*` names, or `None` when
+/// the pointer is nil or the display reports no rate.
+///
+/// # Safety
+///
+/// `screen` must be null or a live `NSScreen*`, and the call must run on the
+/// owner lane (this messages the screen).
+unsafe fn screen_refresh_period(screen: ObjcId) -> Option<Duration> {
+    // SAFETY: the caller's contract — nil or a live `NSScreen*` on the owner
+    // lane; the borrow is scoped to the `and_then` closure.
+    let screen = unsafe { screen.as_ref() }?;
+    // SAFETY: `NSScreen` and `AnyObject` share the Objective-C object layout,
+    // and the caller guarantees the pointee really is an `NSScreen`.
+    let screen: &objc2_app_kit::NSScreen =
+        unsafe { &*std::ptr::from_ref::<AnyObject>(screen).cast() };
+    refresh_period_for_screen(screen)
+}
 
 /// Create a window delegate for lifecycle events
 fn create_window_delegate(window: Weak<MacOSWindow>) -> ObjcId {
@@ -2489,7 +2505,7 @@ impl MacOSWindow {
             // invalidate layout, and the runner re-reads the period when it
             // does resize.
             let screen: ObjcId = msg_send![self.ns_window, screen];
-            let new_refresh_period = refresh_period_for_screen(screen.cast::<std::ffi::c_void>());
+            let new_refresh_period = screen_refresh_period(screen);
 
             // Update window state
             let (changed, size) = {

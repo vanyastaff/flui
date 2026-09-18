@@ -43,12 +43,15 @@
 //! }))?;
 //! ```
 
-// cocoa 0.26 deprecates its entire API surface in favor of the objc2 family;
-// this backend deliberately stays on the single cocoa/objc stack until a
-// dedicated objc2 migration replaces it wholesale.
+// The backend is on the `objc2` family (`objc2`/`objc2-app-kit`/
+// `objc2-foundation`): the `cocoa` 0.27 / `objc` 0.2 pair it used to carry is
+// gone entirely. `expect(deprecated)` stays because a handful of AppKit
+// accessors this backend uses (`UIScreen.mainScreen`'s macOS analogues, the
+// non-scene `NSApplication` entry points) are deprecated in the multi-scene
+// era, and the module documents each such use at its call site.
 #![expect(deprecated)]
 // This module (and its submodules) is one of the workspace's sanctioned
-// `unsafe` FFI islands — direct AppKit/Cocoa objc calls have no safe
+// `unsafe` FFI islands — direct AppKit objc calls have no safe
 // wrapper. The workspace lint `unsafe_code = "warn"` is opted out here, at
 // the module boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
