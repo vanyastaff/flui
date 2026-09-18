@@ -113,9 +113,8 @@ pub struct LayerDispatcher<'frame> {
     /// `LayerStateStack` method on `LayerDispatcher` (`push_clip_*`,
     /// `pop_clip`, `push_offset`, `push_transform`, `pop_transform`,
     /// `push_opacity`, `pop_opacity`, `push_color_filter`,
-    /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`),
-    /// and the explicit [`LayerDispatcher::restore`](Self::restore) escape
-    /// hatch. These `LayerStateStack` flush points are required: without
+    /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`).
+    /// These `LayerStateStack` flush points are required: without
     /// them, a `push_clip → with_transform → pop_clip` sequence would pop
     /// the lazy save instead of the clip, corrupting state across sibling
     /// layers.
@@ -126,10 +125,10 @@ pub struct LayerDispatcher<'frame> {
     /// The `Drop` impl provides a final safety-net flush: if a future
     /// code path forgets to call `flush_active_transform()` before
     /// the LayerDispatcher goes out of scope, Drop balances the deferred save
-    /// so the borrowed painter is left in a clean state. The 21 eager
-    /// call sites above are NOT replaced by Drop — they flush at
-    /// precisely the right point for correctness; Drop is the backstop
-    /// for any site that is missed.
+    /// so the borrowed painter is left in a clean state. The eager call
+    /// sites are NOT replaced by Drop — they flush at precisely the right
+    /// point for correctness; Drop is the backstop for any site that is
+    /// missed.
     active_transform: Option<Matrix4>,
     /// One entry per clip layer that is currently open, innermost last.
     ///
@@ -345,8 +344,7 @@ impl<'frame> LayerDispatcher<'frame> {
     /// trait method (push_clip_* / pop_clip / push_offset /
     /// push_transform / pop_transform / push_opacity / pop_opacity
     /// / push_color_filter / pop_color_filter / push_image_filter
-    /// / pop_image_filter), the public `LayerDispatcher::restore` escape
-    /// hatch, and the `Drop` impl (so the borrowed painter is
+    /// / pop_image_filter) and the `Drop` impl (so the borrowed painter is
     /// balanced when the LayerDispatcher leaves scope). See
     /// [`Self::active_transform`] for the full list of flush points and why
     /// each one is needed.
@@ -405,7 +403,7 @@ impl<'frame> LayerDispatcher<'frame> {
     /// Called from every site that mutates the painter save stack
     /// outside the coalescing path: `with_transform`'s identity /
     /// mismatch arms, every `LayerStateStack` method on `LayerDispatcher`,
-    /// the public `LayerDispatcher::restore`, and the `Drop` impl. See the
+    /// and the `Drop` impl. See the
     /// [`active_transform`](Self::active_transform) field doc for
     /// the full list of flush points and why each one is needed.
     fn flush_active_transform(&mut self) {
@@ -569,10 +567,9 @@ impl<'frame> LayerDispatcher<'frame> {
 
 impl Drop for LayerDispatcher<'_> {
     /// Safety-net: balance any deferred lazy-coalescing save that was left on
-    /// the painter stack by `with_transform`. The 21 eager `flush_active_transform`
-    /// call sites throughout the impl (every `LayerStateStack` method, the identity
-    /// / mismatch arms of `with_transform`, and the `restore` escape hatch) flush at
-    /// the correct semantic point. This `Drop` impl is a backstop for any future call
+    /// the painter stack by `with_transform`. Every `LayerStateStack` method and
+    /// both arms of `with_transform` flush at the correct semantic point. This
+    /// `Drop` impl is a backstop for any future call
     /// path that forgets to flush: when the LayerDispatcher goes out of scope the painter is
     /// left balanced and ready for its next use (`painter.render`,
     /// `end_frame_maintenance`, or the next frame's LayerDispatcher).

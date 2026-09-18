@@ -33,7 +33,7 @@ impl super::WgpuPainter {
     ) {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
-        tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
+        tracing::trace!("WgpuPainter::draw_rect: rect={:?}, paint={:?}", rect, paint);
 
         let opacity = self.compositor.current_opacity();
         self.batcher.draw_rect(
@@ -82,7 +82,7 @@ impl super::WgpuPainter {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
-            "WgpuPainter::circle: center={:?}, radius={}, paint={:?}",
+            "WgpuPainter::draw_circle: center={:?}, radius={}, paint={:?}",
             center,
             radius,
             paint
@@ -113,7 +113,7 @@ impl super::WgpuPainter {
     ) {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
-        tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
+        tracing::trace!("WgpuPainter::draw_oval: rect={:?}, paint={:?}", rect, paint);
 
         let opacity = self.compositor.current_opacity();
         self.batcher.draw_oval(
@@ -213,7 +213,7 @@ impl super::WgpuPainter {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
-            "WgpuPainter::line: p1={:?}, p2={:?}, paint={:?}",
+            "WgpuPainter::draw_line: p1={:?}, p2={:?}, paint={:?}",
             p1,
             p2,
             paint
@@ -253,7 +253,7 @@ impl super::WgpuPainter {
             ?position,
             font_size,
             color = ?paint.color,
-            "WgpuPainter::text"
+            "WgpuPainter::draw_text"
         );
         let transformed_position = self.state.apply_transform(position);
         let placement = self.text_placement();
@@ -335,7 +335,7 @@ impl super::WgpuPainter {
             base_font_size,
             ?base_color,
             ?wrap_width,
-            "WgpuPainter::rich_text"
+            "WgpuPainter::draw_rich_text"
         );
         let transformed_position = self.state.apply_transform(position);
         let placement = self.text_placement();
