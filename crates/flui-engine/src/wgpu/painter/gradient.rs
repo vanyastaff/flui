@@ -28,7 +28,7 @@ impl WgpuPainter {
     /// use flui_types::{Rect, geometry::px, styling::Color};
     ///
     /// // Vertical gradient from red to blue, with rounded corners
-    /// painter.gradient_rect(
+    /// painter.draw_gradient_rect(
     ///     Rect::from_ltrb(px(10.0), px(10.0), px(210.0), px(110.0)),
     ///     glam::Vec2::new(0.0, 0.0),   // Top
     ///     glam::Vec2::new(0.0, 100.0), // Bottom
@@ -37,7 +37,7 @@ impl WgpuPainter {
     /// );
     /// # }
     /// ```
-    pub fn gradient_rect(
+    pub fn draw_gradient_rect(
         &mut self,
         bounds: Rect<Pixels>,
         gradient_start: glam::Vec2,
@@ -45,7 +45,7 @@ impl WgpuPainter {
         stops: &[GradientStop],
         corner_radius: f32,
     ) {
-        DrawBatcher::gradient_rect(
+        DrawBatcher::draw_gradient_rect(
             &mut self.current_segment,
             &self.state,
             bounds,
@@ -81,7 +81,7 @@ impl WgpuPainter {
     /// use flui_types::{Rect, geometry::px, styling::Color};
     ///
     /// // Radial gradient from white center to transparent edge
-    /// painter.radial_gradient_rect(
+    /// painter.draw_radial_gradient_rect(
     ///     Rect::from_ltrb(px(10.0), px(10.0), px(110.0), px(110.0)),
     ///     glam::Vec2::new(50.0, 50.0), // Center
     ///     50.0,                        // Radius
@@ -93,7 +93,7 @@ impl WgpuPainter {
     /// );
     /// # }
     /// ```
-    pub fn radial_gradient_rect(
+    pub fn draw_radial_gradient_rect(
         &mut self,
         bounds: Rect<Pixels>,
         center: glam::Vec2,
@@ -101,7 +101,7 @@ impl WgpuPainter {
         stops: &[GradientStop],
         corner_radius: f32,
     ) {
-        DrawBatcher::radial_gradient_rect(
+        DrawBatcher::draw_radial_gradient_rect(
             &mut self.current_segment,
             &self.state,
             bounds,
@@ -130,7 +130,7 @@ impl WgpuPainter {
     /// * `end_angle`     - End angle in radians
     /// * `stops`         - Gradient color stops (max 8)
     /// * `corner_radius` - Corner radius (uniform, 0.0 = sharp corners)
-    pub fn sweep_gradient_rect(
+    pub fn draw_sweep_gradient_rect(
         &mut self,
         bounds: Rect<Pixels>,
         center: glam::Vec2,
@@ -139,7 +139,7 @@ impl WgpuPainter {
         stops: &[GradientStop],
         corner_radius: f32,
     ) {
-        DrawBatcher::sweep_gradient_rect(
+        DrawBatcher::draw_sweep_gradient_rect(
             &mut self.current_segment,
             &self.state,
             bounds,
@@ -180,7 +180,7 @@ impl WgpuPainter {
     /// use glam::Vec2;
     ///
     /// // Material Design elevation 2 shadow (offset.y=2, sigma=4, ~0.16 alpha)
-    /// painter.shadow_rect(
+    /// painter.draw_shadow_rect(
     ///     [10.0, 10.0],
     ///     [200.0, 100.0],
     ///     12.0,
@@ -188,14 +188,14 @@ impl WgpuPainter {
     /// );
     /// # }
     /// ```
-    pub fn shadow_rect(
+    pub fn draw_shadow_rect(
         &mut self,
         rect_pos: [f32; 2],
         rect_size: [f32; 2],
         corner_radius: f32,
         params: &ShadowParams,
     ) {
-        DrawBatcher::shadow_rect(
+        DrawBatcher::draw_shadow_rect(
             &mut self.current_segment,
             &mut self.draw_order,
             rect_pos,

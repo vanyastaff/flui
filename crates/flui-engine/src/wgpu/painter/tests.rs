@@ -32,7 +32,7 @@ fn tessellated_line_bakes_current_transform() {
         (200, 200),
     );
     // current_transform == IDENTITY at construction
-    painter.line(
+    painter.draw_line(
         Point::new(px(10.0), px(0.0)),
         Point::new(px(20.0), px(0.0)),
         &Paint::stroke(black, 2.0),
@@ -54,7 +54,7 @@ fn tessellated_line_bakes_current_transform() {
         (200, 200),
     );
     painter2.scale(2.0, 2.0);
-    painter2.line(
+    painter2.draw_line(
         Point::new(px(10.0), px(0.0)),
         Point::new(px(20.0), px(0.0)),
         &Paint::stroke(black, 2.0),
@@ -231,7 +231,7 @@ fn draw_texture_captures_scissor() {
     // Establish a clip region, then draw the texture inside it.
     painter.clip_rect(
         Rect::from_xywh(px(10.0), px(10.0), px(80.0), px(60.0)),
-        true,
+        flui_types::painting::Clip::HardEdge,
     );
     let scissor_before = painter.current_scissor_for_test();
     assert!(
@@ -343,7 +343,7 @@ fn reset_frame_state_clears_damage_scissor() {
     // Simulate the per-frame damage clip the Renderer applies (unpaired).
     painter.clip_rect(
         Rect::from_origin_size(Point::ZERO, Size::new(px(50.0), px(50.0))),
-        true,
+        flui_types::painting::Clip::HardEdge,
     );
     assert!(
         painter.current_scissor_for_test().is_some(),
@@ -463,7 +463,7 @@ fn midtone_fill_is_not_srgb_double_encoded() {
 
     let (device, queue) = test_device_and_queue();
     let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
             &Paint::fill(flui_types::Color::rgb(128, 128, 128)),
         );
@@ -497,7 +497,7 @@ fn opacity_layer_composites_premultiplied() {
     let (device, queue) = test_device_and_queue();
     let px = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
         painter.save_layer(None, &Paint::fill(flui_types::Color::WHITE).with_alpha(128));
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
             &Paint::fill(flui_types::Color::rgba(255, 0, 0, 128)),
         );
@@ -560,7 +560,7 @@ fn nested_opacity_layers_compose_at_depth_2() {
         // Inner group opacity 0.5 nested inside the outer.
         painter.save_layer(None, &Paint::fill(flui_types::Color::WHITE).with_alpha(128));
         // Opaque RED fills the full canvas (center pixel fully covered).
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
             &Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
         );
@@ -606,12 +606,12 @@ fn color_filter_layer_shifts_hue() {
 
     let (device, queue) = test_device_and_queue();
     // Blue chroma at opacity 0.5 via the explicit tint entry point — exactly
-    // what `Backend::push_color_filter` now calls for a white->blue
+    // what `LayerDispatcher::push_color_filter` now calls for a white->blue
     // ColorMatrix. (`save_layer` deliberately ignores paint RGB, so chroma
     // must come through `save_layer_with_tint`.)
     let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
         painter.save_layer_with_tint(None, 0.5, [0.0, 0.0, 1.0]);
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
             &Paint::fill(flui_types::Color::WHITE),
         );
@@ -654,7 +654,7 @@ fn alpha_only_layer_paint_does_not_tint_black() {
     let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
         // Mirror the canvas opacity helper: TRANSPARENT (RGB 0,0,0) + alpha.
         painter.save_layer(None, &Paint::fill(flui_types::Color::rgba(0, 0, 0, 128)));
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
             &Paint::fill(flui_types::Color::WHITE),
         );
@@ -1133,7 +1133,7 @@ fn blend_srcover_stroked_rect_pixel_identity() {
     let rgba = render_to_rgba(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
         // Inset rect so its left edge centerline sits at x=8; a 16px stroke
         // fully covers the band around x=8.
-        painter.rect(
+        painter.draw_rect(
             Rect::from_ltrb(px(8.0), px(8.0), px(56.0), px(56.0)),
             &Paint::stroke(flui_types::Color::rgba(255, 0, 0, 128), 16.0),
         );
@@ -1335,7 +1335,7 @@ fn a_gradient_fill_carrying_clear_erases_the_target() {
         .with_blend_mode(BlendMode::Clear);
 
     let cleared = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
             &paint,
         );
@@ -1390,7 +1390,7 @@ fn blend_clear_respects_draw_order() {
         let green = flui_types::Color::rgb(0, 255, 0);
 
         // Step 1: fill frame RED via instanced path (SrcOver → S0 rect_batch).
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(red),
         );
@@ -1410,7 +1410,7 @@ fn blend_clear_respects_draw_order() {
         // Step 3: fill frame GREEN via instanced path (SrcOver → S1 rect_batch).
         // With the fix: S1 flushes entirely AFTER S0 (which ended with Clear),
         // so GREEN is drawn on top of transparent → GREEN visible.
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(green),
         );
@@ -1491,7 +1491,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
 
         // Step 1: fill the frame RED via the fast instanced path.
         // axis-aligned + SrcOver → S0 rect_batch.
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(red),
         );
@@ -1508,7 +1508,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         painter.translate(flui_types::Offset::new(px(half), px(half)));
         painter.rotate(FRAC_PI_4);
         painter.translate(flui_types::Offset::new(px(-half), px(-half)));
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(red).with_blend_mode(BlendMode::Clear),
         );
@@ -1516,7 +1516,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
 
         // Step 3: fill the frame GREEN via the fast instanced path (SrcOver).
         // After step 2 sealed S0, this goes into S1.
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(green),
         );
@@ -1597,11 +1597,11 @@ fn clip_rrect_sdf_removes_corner_pixels() {
             ),
             px(RADIUS),
         );
-        painter.clip_rrect(rrect, false);
+        painter.clip_rrect(rrect, flui_types::painting::Clip::AntiAlias);
 
         // Fill the entire canvas RED. Only pixels passing the rrect SDF will
         // actually be painted; the rest remain BLACK (clear colour).
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(flui_types::Color::rgb(255, 0, 0)),
         );
@@ -1681,9 +1681,9 @@ fn clip_rsuperellipse_sdf_removes_corner_pixels() {
             px(RADIUS),
             px(RADIUS),
         );
-        painter.clip_rsuperellipse(rse, false);
+        painter.clip_rsuperellipse(rse, flui_types::painting::Clip::AntiAlias);
 
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(flui_types::Color::rgb(0, 0, 255)),
         );
@@ -1746,7 +1746,7 @@ fn nested_save_clip_restore_removes_scissor() {
         let blue = flui_types::Color::rgb(0, 0, 255);
 
         // Step 1: paint the full canvas GREEN (baseline for both halves).
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &Paint::fill(green),
         );
@@ -1756,9 +1756,9 @@ fn nested_save_clip_restore_removes_scissor() {
         painter.save();
         painter.clip_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(SIZE as f32)),
-            true,
+            flui_types::painting::Clip::HardEdge,
         );
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(50.0), px(0.0), px(50.0), px(SIZE as f32)),
             &Paint::fill(red),
         );
@@ -1766,7 +1766,7 @@ fn nested_save_clip_restore_removes_scissor() {
 
         // Step 3: after restore the scissor must be cleared. Paint a BLUE column
         // at x=60..62 which is in the right half (would be clipped if scissor leaked).
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(60.0), px(0.0), px(2.0), px(SIZE as f32)),
             &Paint::fill(blue),
         );
@@ -1856,7 +1856,7 @@ fn draw_shadow_save_restore_is_balanced() {
             // Paint a 4×4 red square at (10, 10) in absolute canvas space.
             // If CTM has leaked a translation this lands somewhere else and the
             // pixel at (12, 12) reads black (background), not red.
-            painter.rect(
+            painter.draw_rect(
                 Rect::from_xywh(px(10.0), px(10.0), px(4.0), px(4.0)),
                 &Paint::fill(Color::rgba(255, 0, 0, 255)),
             );
@@ -1881,7 +1881,7 @@ fn draw_shadow_save_restore_is_balanced() {
 /// # Discriminating strategy
 ///
 /// A 64×64 frame is cleared to TRANSPARENT (alpha=0).  A horizontal red→blue
-/// linear gradient is painted over the full width via `painter.rect(…, &paint)`
+/// linear gradient is painted over the full width via `painter.draw_rect(…, &paint)`
 /// where `paint` carries a `LinearGradient` shader.
 ///
 /// We sample:
@@ -1912,7 +1912,7 @@ fn linear_gradient_rect_dispatches_through_thin_shim() {
     let gradient_paint = Paint::fill(Color::WHITE).with_shader(gradient_shader);
 
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::TRANSPARENT, |painter| {
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
             &gradient_paint,
         );
@@ -2602,7 +2602,7 @@ fn external_texture_unregistered_at_replay_is_skipped() {
 
         // Step 4: record a solid-RED rect in the bottom-right quadrant as a
         // "frame is alive" marker.  This must survive the external-texture skip.
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(
                 px(half as f32),
                 px(half as f32),
@@ -2659,7 +2659,7 @@ fn opacity_layer_zero_viewport_is_noop() {
     // Draw inside a save_layer so a PendingOpacityLayer is enqueued.
     // Use a semi-transparent paint so opacity < 1 (group-opacity layer).
     painter.save_layer(None, &Paint::fill(flui_types::Color::rgba(255, 0, 0, 128)));
-    painter.rect(
+    painter.draw_rect(
         flui_types::Rect::from_xywh(px(0.0), px(0.0), px(1.0), px(1.0)),
         &Paint::fill(flui_types::Color::RED),
     );
@@ -2699,4 +2699,78 @@ fn opacity_layer_zero_viewport_is_noop() {
             timeout: None,
         })
         .expect("device poll must complete after zero-viewport render");
+}
+
+/// An offscreen result composited with a blend mode other than `SrcOver`
+/// must actually use that mode.
+///
+/// `ShaderMaskLayer` carries its own `blend_mode()`; before this test the
+/// layer path accepted it, threaded it into `render_masked`, and that
+/// function dropped it on the floor — every masked layer composited
+/// `SrcOver` regardless of what the caller asked for. The mode now rides on
+/// `DrawItem::OffscreenTexture` and selects the composite pipeline, so a
+/// `Clear` result erases what is under it rather than drawing over it.
+///
+/// The scene: an opaque red frame, then a full-surface offscreen result
+/// composited with `Clear`. `Clear` ignores the source entirely and writes
+/// zero, so the centre must come back transparent. `SrcOver` (the pre-fix
+/// behaviour) would leave red.
+#[test]
+fn an_offscreen_result_composites_with_its_own_blend_mode() {
+    use flui_painting::Paint;
+
+    const SIZE: u32 = 64;
+    let (device, queue) = test_device_and_queue();
+
+    let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+        // Step 1: opaque red, so the frame has something to erase.
+        painter.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            &Paint::fill(flui_types::Color::rgb(255, 0, 0)),
+        );
+
+        // Step 2: an all-zero offscreen texture, composited with Clear. A
+        // `Clear` composite ignores the source colour, which makes this the
+        // discriminating case: SrcOver leaves the red, Clear erases it.
+        let mut pool = crate::wgpu::texture_pool::TexturePool::new(Arc::clone(&device));
+        let texture = pool.acquire(SIZE, SIZE, READBACK_FORMAT);
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("clear-composite source"),
+            });
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("clear-composite source fill"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: texture.view(),
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        painter.queue_offscreen_result(
+            texture,
+            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            BlendMode::Clear,
+        );
+    });
+
+    let center = pixel_at(&rgba, SIZE, SIZE / 2, SIZE / 2);
+    assert_eq!(
+        center,
+        [0, 0, 0, 0],
+        "centre pixel = {center:?}; a Clear composite of a GREEN offscreen \
+         must erase the red frame to transparent."
+    );
 }

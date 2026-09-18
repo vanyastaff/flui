@@ -30,8 +30,8 @@
 //! `self.state.debug_assert_balanced()` **before** calling `self.state.reset()`.
 //! The assertion logic lives in `GpuStateStack::debug_assert_balanced` so it
 //! can be exercised in unit tests without a GPU.
-//! No `Drop` impl is provided: the Backend implicit-single-save (a lazy
-//! `active_transform` save, balanced by `Backend`'s own `Drop`) must not
+//! No `Drop` impl is provided: the LayerDispatcher implicit-single-save (a lazy
+//! `active_transform` save, balanced by `LayerDispatcher`'s own `Drop`) must not
 //! false-positive-panic, and a `Drop` panic during unwind would trigger an abort.
 
 use flui_types::{

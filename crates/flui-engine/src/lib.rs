@@ -1,14 +1,13 @@
 // Engine crate -- many types contain wgpu handles that don't implement Debug.
-// `missing_debug_implementations` stays suppressed because wgpu's resource
-// handles (Device, Queue, Texture, Buffer, etc.) intentionally do not impl
-// Debug (large, not human-readable). The `dead_code` global suppression was
-// removed; surviving `#[allow(dead_code)]` markers are scoped
-// to specific modules where forward-looking infrastructure has named consumers
-// that are not yet wired up.
+// `missing_debug_implementations` is suppressed crate-wide because wgpu's
+// resource handles (Device, Queue, Texture, Buffer, etc.) intentionally do
+// not impl Debug (large, not human-readable), and most public types here hold
+// one. It is an `expect`, not an `allow`: if the last such type leaves, the
+// attribute must go with it.
 #![expect(missing_debug_implementations)]
-// GPU capability structs legitimately use many bools; field name postfixes
-// are unavoidable when wrapping distinct pipeline/stack types. Both live in
-// the wgpu backend, so without that feature there is nothing to expect.
+// The wgpu backend's instance batches carry a `*_batch` field per primitive
+// family, and the segment enum is dominated by its largest variant; both are
+// deliberate. Gated on the feature because neither type exists without it.
 #![cfg_attr(
     feature = "wgpu-backend",
     expect(clippy::struct_field_names, clippy::large_enum_variant)
@@ -124,11 +123,16 @@ compile_error!(
 /// Common error types for all rendering backends
 pub mod error;
 
-/// Abstract rendering traits (CommandRenderer, Painter)
-pub mod traits;
+/// The command dispatch surface (`CommandRenderer`). Crate plumbing: the
+/// layer walk dispatches through it, no embedder implements it today.
+pub(crate) mod command_renderer;
 
-/// RenderCommand dispatch functions
-pub mod commands;
+/// The layer-tree state hand-off (`LayerStateStack`), the sibling of
+/// `command_renderer`.
+pub(crate) mod layer_state_stack;
+
+/// `DrawCommand` dispatch functions. Crate plumbing, same as the traits.
+pub(crate) mod dispatch;
 
 /// Backend-agnostic superellipse (iOS squircle) path generation.
 /// Pure geometry — no wgpu, no lyon.
@@ -158,10 +162,6 @@ pub mod raster;
 /// Generic over [`RasterBackend`]; unconditional like `raster` itself.
 pub mod raster_owner;
 
-/// Advanced raster pacing/capacity configuration ([`RasterOptions`]).
-/// Unconditional, like `raster_owner` itself.
-pub mod raster_options;
-
 /// The font faces embedded in this crate, as bytes.
 /// Unconditional: they are data, not a backend, and a caller pinning a
 /// deterministic face set needs them without the wgpu stack.
@@ -186,21 +186,7 @@ pub mod wgpu;
 // ============================================================================
 
 // Abstract traits and errors
-pub use commands::{dispatch_command, dispatch_commands};
 pub use error::{EngineError, EngineResult, Recoverability};
-// Re-export layer types from flui-layer
-pub use flui_layer::{
-    CanvasLayer, DamageRegion, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder,
-    SceneCompositor, SceneSnapshot, ShaderMaskLayer,
-};
-// Re-export Paint from flui_painting
-pub use flui_painting::Paint;
-// CommandRenderer trait split into render-visitor
-// (CommandRenderer, ~34 methods) + layer-tree state-stack
-// (LayerStateStack). Backends that only emit
-// commands implement CommandRenderer only; compositors implement
-// both. See traits.rs for the split's commentary.
-pub use traits::{CommandRenderer, LayerStateStack};
 // RasterBackend: the frame-driver swap point. The trait is unconditional;
 // only the wgpu impl is feature-gated.
 pub use raster::{PrePresentHook, RasterBackend};
@@ -209,13 +195,20 @@ pub use raster_owner::{
     FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner,
     RasterSubmitError, SurfaceState,
 };
-// Advanced raster pacing/capacity configuration.
-pub use raster_options::RasterOptions;
-#[cfg(all(feature = "wgpu-backend", debug_assertions))]
-pub use wgpu::DebugBackend;
-// wgpu backend exports
+// The GPU-resource freshness stamp (ADR-0045 decision 4); declared in
+// `flui-foundation` and re-exported here so `flui_engine::GpuResourceGeneration`
+// keeps resolving — the compile-fail fixture for its private field cites this
+// path, and `RasterAck`/`FrameStamp` compare this axis.
 #[cfg(feature = "wgpu-backend")]
-pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};
-// Shared per-owner-thread GPU services (ADR-0045 decision 2).
+pub use wgpu::GpuResourceGeneration;
+// The one renderer type an embedder names; the rest of the wgpu backend
+// (painter, backend, layer dispatch, shader/command plumbing) is
+// `pub(crate)` — embedders drive it through `Renderer`/`RasterBackend`, and
+// in-workspace callers name the concrete types through `flui_engine::wgpu`.
 #[cfg(feature = "wgpu-backend")]
-pub use wgpu::{GpuResourceGeneration, GpuServices};
+pub use wgpu::Renderer;
+// The per-frame painter. Public because `examples/painting_demo` (a separate
+// workspace crate) drives its own painter to exercise the drawing API
+// directly; it is the embedder-facing half of the engine beside `Renderer`.
+#[cfg(feature = "wgpu-backend")]
+pub use wgpu::WgpuPainter;

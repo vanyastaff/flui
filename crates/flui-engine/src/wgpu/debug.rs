@@ -10,22 +10,19 @@ use flui_types::{
     typography::TextStyle,
 };
 
-use crate::traits::{CommandRenderer, LayerStateStack};
+use crate::command_renderer::CommandRenderer;
+use crate::layer_state_stack::LayerStateStack;
 
 /// Debug backend that logs all commands to tracing.
 #[derive(Debug)]
 pub struct DebugBackend {
-    viewport: Rect<Pixels>,
     command_count: usize,
 }
 
 impl DebugBackend {
-    /// Create a new debug backend with the given viewport.
-    pub fn new(viewport: Rect<Pixels>) -> Self {
-        Self {
-            viewport,
-            command_count: 0,
-        }
+    /// Create a new debug backend.
+    pub fn new() -> Self {
+        Self { command_count: 0 }
     }
 
     /// Get the total number of commands processed.
@@ -359,10 +356,6 @@ impl CommandRenderer for DebugBackend {
         _transform: &Matrix4,
     ) {
         self.log_command("clip_path", &format!("commands={}", path.commands().len()));
-    }
-
-    fn viewport_bounds(&self) -> Rect<Pixels> {
-        self.viewport
     }
 
     fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, _transform: &Matrix4) {

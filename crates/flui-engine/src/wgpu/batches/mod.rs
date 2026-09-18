@@ -48,7 +48,7 @@ use flui_types::{Rect, geometry::Pixels};
 use super::{
     command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase, SsaaPathOp, TessellatedBatch},
     path_cache::PathCache,
-    pipeline::PipelineKey,
+    pipeline_cache::PipelineKey,
     state_stack::GpuStateStack,
     tessellator::Tessellator,
     vertex::Vertex,
@@ -633,7 +633,7 @@ mod unit_tests {
             },
         ];
 
-        DrawBatcher::gradient_rect(
+        DrawBatcher::draw_gradient_rect(
             &mut segment,
             &state,
             Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),

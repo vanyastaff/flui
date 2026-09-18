@@ -36,13 +36,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_engine::{
-    CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
-};
+use flui_engine::{EngineError, RasterBackend, RasterOwner};
 use flui_foundation::{
     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId, RealmId,
     SurfaceGeneration,
 };
+use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene, SceneSnapshot};
 use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
 

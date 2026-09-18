@@ -184,13 +184,13 @@ mod tests {
         let red = Color::rgba(255, 0, 0, 255);
 
         // Phase 1: instanced rect
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(px(10.0), px(10.0), px(20.0), px(20.0)),
             &Paint::fill(white),
         );
 
         // Phase 2: instanced circle
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(px(48.0), px(48.0)),
             10.0,
             &Paint::fill(red),
@@ -200,7 +200,7 @@ mod tests {
         let blue = StyledColor::rgba(0, 0, 255, 255);
         let transparent = StyledColor::rgba(0, 0, 255, 0);
         let gradient_stops = [GradientStop::start(blue), GradientStop::end(transparent)];
-        painter.gradient_rect(
+        painter.draw_gradient_rect(
             Rect::from_xywh(px(5.0), px(30.0), px(30.0), px(30.0)),
             glam::Vec2::new(5.0, 30.0),
             glam::Vec2::new(35.0, 60.0),

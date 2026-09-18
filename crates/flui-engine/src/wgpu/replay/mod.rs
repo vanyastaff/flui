@@ -47,8 +47,8 @@ use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
     command_ir::{DrawItem, DrawSegment},
     instancing::{InstanceBatch, TextureInstance},
-    opacity_layer::apply_image_filter_passes,
-    pipelines::PipelineSet,
+    layer_offscreen::apply_image_filter_passes,
+    pipeline_set::PipelineSet,
     render_target::RenderTarget,
     resources::GpuResources,
     text::TextRenderer,
@@ -305,7 +305,17 @@ impl GpuReplay {
                     // an identity (white) tint so it is not re-multiplied by
                     // its own alpha (same defect class as BUG 2; fixed
                     // consistently here).
-                    self.flush_texture_batch_premultiplied(
+                    //
+                    // The mode the producer recorded rides on the item rather
+                    // than being assumed SrcOver: a `ShaderMaskLayer` may carry
+                    // any blend, and accepting it then compositing SrcOver is
+                    // the accept-and-discard contract violation mapping
+                    // decision 8 names. `flush_texture_batch_premultiplied_with_mode`
+                    // builds the exact per-mode pipeline; the source is a
+                    // finished, full-coverage offscreen, so every mode
+                    // `blend_state_for` names is expressible here.
+                    self.flush_texture_batch_premultiplied_with_mode(
+                        p.blend,
                         device,
                         queue,
                         pipelines,

@@ -393,7 +393,8 @@ impl TextureAtlas {
 
     /// Get number of allocated images
     #[must_use]
-    pub fn image_count(&self) -> usize {
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    fn image_count(&self) -> usize {
         self.entries.len()
     }
 

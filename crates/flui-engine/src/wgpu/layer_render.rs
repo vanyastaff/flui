@@ -12,8 +12,8 @@ use flui_layer::{
 use flui_painting::DisplayListCore;
 
 use crate::{
-    commands::dispatch_commands,
-    traits::{CommandRenderer, LayerStateStack},
+    command_renderer::CommandRenderer, dispatch::dispatch_commands,
+    layer_state_stack::LayerStateStack,
 };
 
 // ============================================================================
@@ -28,19 +28,8 @@ use crate::{
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 /// The generic parameter `R` is on the trait level for cleaner implementations.
 ///
-/// # Example
-///
-/// ```rust,no_run
-/// use flui_engine::wgpu::{Backend, LayerRender};
-/// use flui_layer::{CanvasLayer, Layer};
-///
-/// # fn draw(layer: &Layer, backend: &mut Backend<'_>) {
-/// layer.render(backend);
-/// # }
-/// // `Backend` is minted per frame by `WgpuPainter`; a caller supplies one
-/// // it already holds.
-/// # let _ = Layer::Canvas(Box::new(CanvasLayer::new()));
-/// ```
+/// `LayerDispatcher` implements this for every `flui_layer::Layer` variant; the
+/// layer walk calls `render` on enter and `cleanup` on exit.
 pub trait LayerRender<R: CommandRenderer + LayerStateStack + ?Sized> {
     /// Render this layer using the provided command renderer.
     fn render(&self, renderer: &mut R);
@@ -692,11 +681,6 @@ mod tests {
             _clip_behavior: flui_types::painting::Clip,
             _transform: &Matrix4,
         ) {
-        }
-
-        // ===== Viewport =====
-        fn viewport_bounds(&self) -> Rect<Pixels> {
-            Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0))
         }
 
         // ===== Layer Operations (recorded) =====

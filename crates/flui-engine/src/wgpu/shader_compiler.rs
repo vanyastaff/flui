@@ -214,16 +214,6 @@ impl ShaderCache {
         tracing::debug!("Compiled and cached shader module: {:?}", shader_type);
         compiled
     }
-
-    /// Pre-compile all shaders
-    ///
-    /// Useful for avoiding frame time spikes on first use.
-    pub fn precompile_all(&self) {
-        let _ = self.get_or_compile(ShaderType::SolidMask);
-        let _ = self.get_or_compile(ShaderType::LinearGradientMask);
-        let _ = self.get_or_compile(ShaderType::RadialGradientMask);
-        let _ = self.get_or_compile(ShaderType::SweepGradientMask);
-    }
 }
 
 // `ShaderCache` deliberately exposes no `clear` method: compiled shader
@@ -232,12 +222,6 @@ impl ShaderCache {
 // flush the cache. A hot-reload/devtools flow that recompiles shaders should
 // add a method next to its concrete consumer rather than keeping an unused
 // entry point suppressed from the dead-code lint here.
-
-impl Default for ShaderCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 // The 5 forward-looking uniform helpers (`SolidMaskUniforms`,
 // `LinearGradientUniforms`, `RadialGradientUniforms`,
@@ -328,21 +312,6 @@ mod tests {
         // Second access should hit cache
         let shader2 = cache.get_or_compile(ShaderType::SolidMask);
         assert!(Arc::ptr_eq(&shader1, &shader2));
-    }
-
-    #[test]
-    fn test_shader_cache_precompile() {
-        let cache = ShaderCache::new();
-        cache.precompile_all();
-
-        // All shaders should be in cache now
-        let solid = cache.get_or_compile(ShaderType::SolidMask);
-        let linear = cache.get_or_compile(ShaderType::LinearGradientMask);
-        let radial = cache.get_or_compile(ShaderType::RadialGradientMask);
-
-        assert_eq!(solid.shader_type, ShaderType::SolidMask);
-        assert_eq!(linear.shader_type, ShaderType::LinearGradientMask);
-        assert_eq!(radial.shader_type, ShaderType::RadialGradientMask);
     }
 
     // The 4 tests (`test_solid_mask_uniforms`,

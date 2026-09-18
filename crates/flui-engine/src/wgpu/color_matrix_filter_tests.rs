@@ -187,7 +187,7 @@ mod gpu_tests {
         // Without filter.
         {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(bounds, &Paint::fill(source_color));
+            painter.draw_rect(bounds, &Paint::fill(source_color));
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             painter
@@ -204,7 +204,7 @@ mod gpu_tests {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             let identity = ColorMatrix::identity();
             painter.save_layer_with_filter(None, LayerFilter::ColorMatrix(identity.values));
-            painter.rect(bounds, &Paint::fill(source_color));
+            painter.draw_rect(bounds, &Paint::fill(source_color));
             painter.restore_layer();
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -307,7 +307,7 @@ mod gpu_tests {
         let bounds = full_surface_bounds();
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save_layer_with_filter(None, LayerFilter::ColorMatrix(swap_rb.values));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -372,7 +372,7 @@ mod gpu_tests {
         let identity = ColorMatrix::identity();
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save_layer_with_filter(None, LayerFilter::ColorMatrix(identity.values));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -454,7 +454,7 @@ mod gpu_tests {
         let bounds = full_surface_bounds();
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save_layer_with_filter(None, LayerFilter::ColorMatrix(grayscale_matrix.values));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -534,7 +534,7 @@ mod gpu_tests {
         let bounds = full_surface_bounds();
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save_layer_with_filter(None, LayerFilter::ColorMatrix(brightness_matrix.values));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -603,7 +603,7 @@ mod gpu_tests {
             .with_opacity(0.5);
         painter.save_layer(Some(bounds), &outer_paint);
         painter.save_layer_with_filter(None, LayerFilter::ColorMatrix(identity.values));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer(); // pop filter layer
         painter.restore_layer(); // pop opacity layer
 

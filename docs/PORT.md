@@ -103,7 +103,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 ### 7. `Arc<Mutex<*Renderer | *Pool | wgpu::*>>` field in `flui-engine` wgpu module 🔮
 
-A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mutator into a single-mutator design. One file is excluded by glob — `!**/texture_pool.rs`, where `Arc<Mutex<TexturePoolInner>>` is still the real shape — and that exclusion must go in the same change as the lock. The exclusions for `renderer.rs` and `backend.rs` have been retired: `Renderer` now owns its `OffscreenRenderer` outright and `Backend<'frame>` borrows one, so both files are watched again.
+A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mutator into a single-mutator design. One file is excluded by glob — `!**/texture_pool.rs`, where `Arc<Mutex<TexturePoolInner>>` is still the real shape — and that exclusion must go in the same change as the lock. The exclusions for `renderer.rs` and the dispatcher file have been retired: `Renderer` now owns its `OffscreenRenderer` outright and `LayerDispatcher<'frame>` borrows one, so both files are watched again.
 
 **Why:** the wgpu single-mutator runtime invariant means `Arc<Mutex<T>>` on engine subsystems hides a single-thread access pattern behind shared-mutability ceremony. The lock is uncontended in production but the shape mismatches the type-level invariant; a future regression would re-introduce the same maintenance burden.
 
@@ -373,11 +373,11 @@ was chosen deliberately over splitting them across two mechanisms.
 
 ### 19. `Matrix4` in the DrawBatcher record side, `PipelineCache`/`PipelineBuilder`, or `GpuReplay` replay side
 
-**C4 rule: the `Matrix4`↔glam conversion happens at the `Backend` trait boundary; the record, pipeline, and replay modules are glam-only.** `GpuStateStack` stores transforms as `glam::Mat4`. The single structural conversion edge is `current_transform_matrix()` in `painter.rs` (outbound, returning a `Matrix4` to `Backend`/`LayerStateStack`) and `Backend::with_transform` (inbound, converting an incoming `Matrix4` into the glam state). Every record method below that boundary — `batches/{shapes,gradients,paths,images}.rs` — the pipeline-cache module (`pipelines.rs`), and the replay/submit module (`replay.rs`) work entirely in glam primitives and pixel-typed geometry.
+**C4 rule: the `Matrix4`↔glam conversion happens at the `LayerDispatcher` trait boundary; the record, pipeline, and replay modules are glam-only.** `GpuStateStack` stores transforms as `glam::Mat4`. The single structural conversion edge is `current_transform_matrix()` in `painter.rs` (outbound, returning a `Matrix4` to `LayerDispatcher`/`LayerStateStack`) and `LayerDispatcher::with_transform` (inbound, converting an incoming `Matrix4` into the glam state). Every record method below that boundary — `batches/{shapes,gradients,paths,images}.rs` — the pipeline-set module (`pipeline_set.rs`), and the replay/submit module (`replay.rs`) work entirely in glam primitives and pixel-typed geometry.
 
-Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side leaks the flui-types coordinate abstraction into GPU plumbing, defeats the `GpuStateStack` encapsulation, and couples every record-method caller to both coordinate systems. The replay side must stay glam-only for the same reason: the `Matrix4`↔glam conversion must not migrate into the GPU-emit path. The correct fix is always to extract the needed scalars (translation, scale) at the `painter.rs` or `backend.rs` call site and pass primitives down.
+Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side leaks the flui-types coordinate abstraction into GPU plumbing, defeats the `GpuStateStack` encapsulation, and couples every record-method caller to both coordinate systems. The replay side must stay glam-only for the same reason: the `Matrix4`↔glam conversion must not migrate into the GPU-emit path. The correct fix is always to extract the needed scalars (translation, scale) at the `painter.rs` or `layer_dispatcher.rs` call site and pass primitives down.
 
-**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/pipelines.rs`, and `crates/flui-engine/src/wgpu/replay.rs`. (Extended to `replay.rs` in T10e — the scope tracks the seam contract: wherever the record-IR is consumed, the glam-only rule applies.)
+**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/pipeline_set.rs`, and `crates/flui-engine/src/wgpu/replay.rs`. (Extended to `replay.rs` in T10e — the scope tracks the seam contract: wherever the record-IR is consumed, the glam-only rule applies.)
 
 **Allowlist:** none. Doc-comment lines (`//!`, `///`, `//`) are excluded (the rg filter strips them).
 
@@ -405,11 +405,11 @@ Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side 
 
 ### 20. Gradient/image SrcOver warn-fallback strings in producer files
 
-**PR-5 deleted three warn-fallback blocks** that previously made gradient and image producers silently fall through to SrcOver when an advanced (dst-read) blend mode was requested. If any of the deleted strings reappear in `batches/`, `renderer.rs`, or `backend.rs`, a producer has regressed to the fallback path: callers requesting Multiply, Screen, Overlay, etc. will silently receive SrcOver output instead of the correct advanced blend result.
+**PR-5 deleted three warn-fallback blocks** that previously made gradient and image producers silently fall through to SrcOver when an advanced (dst-read) blend mode was requested. If any of the deleted strings reappear in `batches/`, `renderer.rs`, or `layer_dispatcher.rs`, a producer has regressed to the fallback path: callers requesting Multiply, Screen, Overlay, etc. will silently receive SrcOver output instead of the correct advanced blend result.
 
 The two sentinel patterns are `"is not supported by the"` and `"rendering as SrcOver"`. Both were exclusive to the deleted warn-fallback blocks; their reappearance on the producer side is unambiguous evidence of regression.
 
-**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/renderer.rs`, `crates/flui-engine/src/wgpu/backend.rs`. `replay.rs` is explicitly excluded — it is the replay/submit side, not a producer, and may legitimately use similar language in its own documentation.
+**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/renderer.rs`, `crates/flui-engine/src/wgpu/layer_dispatcher.rs`. `replay.rs` is explicitly excluded — it is the replay/submit side, not a producer, and may legitimately use similar language in its own documentation.
 
 **Runtime companion:** `PipelineCache::get_or_create` contains a `debug_assert!(!key.blend_mode().is_advanced(), …)` that panics in debug/test builds if any advanced mode reaches the pipeline cache instead of diverting to `DrawItem::AdvancedShape`. This is the runtime half of the gate; the static grep above is the compile-time half. Both must remain active.
 

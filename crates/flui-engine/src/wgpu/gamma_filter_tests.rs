@@ -203,7 +203,7 @@ mod gpu_tests {
         let bounds = full_surface_bounds();
         let mut painter = build_painter(Arc::clone(device), Arc::clone(queue));
         painter.save_layer_with_filter(None, LayerFilter::Gamma(direction));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -311,7 +311,7 @@ mod gpu_tests {
         painter.save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::LinearToSrgb));
         // Inner filter: SrgbToLinear (applied first during fold).
         painter.save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::SrgbToLinear));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer(); // pop inner (SrgbToLinear)
         painter.restore_layer(); // pop outer (LinearToSrgb)
 
@@ -593,7 +593,7 @@ mod gpu_tests {
         // Fold order: inner first → LinearToSrgb(SrgbToLinear(x)).
         painter.save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::LinearToSrgb));
         painter.save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::SrgbToLinear));
-        painter.rect(bounds, &Paint::fill(source_color));
+        painter.draw_rect(bounds, &Paint::fill(source_color));
         painter.restore_layer();
         painter.restore_layer();
 

@@ -56,7 +56,6 @@ use parking_lot::{Condvar, Mutex};
 
 use crate::error::EngineError;
 use crate::raster::RasterBackend;
-use crate::raster_options::RasterOptions;
 
 /// Telemetry ack channel capacity.
 ///
@@ -159,21 +158,25 @@ pub struct SurfaceState {
 struct InFlightAccounting {
     /// # Atomics orderings
     ///
-    /// Every read-modify-write (`fetch_add` on ticket creation, `fetch_sub`
-    /// on ticket drop) uses [`Ordering::AcqRel`]; the plain read
-    /// ([`RasterHandle::in_flight`]) uses [`Ordering::Acquire`]. `SeqCst` is
-    /// deliberately not used: the frame *data* this counter accounts for is
-    /// synchronized by `RasterMailbox::state`'s own mutex — the real
-    /// happens-before edge for the `SceneSnapshot` itself. This counter
-    /// guards only the produce *decision* a caller's clock makes from it,
-    /// and the sole cross-thread invariant that decision depends on is "a
-    /// stale read defers at most one produce", which the retire→wake edge
-    /// (see [`Self::notify_retired`]) resolves on the very next pump
-    /// regardless. There is no second atomic this counter must stay
-    /// globally ordered against — `AcqRel`/`Acquire` already gives every
-    /// thread that observes a post-retire count a happens-before view of
-    /// everything that retire's own processing did before the decrement,
-    /// which is the only ordering guarantee anything here actually needs.
+    /// `fetch_sub` (ticket drop) uses [`Ordering::Release`]: a thread that
+    /// reads the count and sees a retirement must also be able to see
+    /// everything that retire's processing did before the decrement — the
+    /// release/acquire pair is what carries it. `fetch_add` (ticket
+    /// creation) uses [`Ordering::Relaxed`]: it publishes nothing (the
+    /// frame data itself is synchronized by `RasterMailbox::state`'s mutex,
+    /// the real happens-before edge for the `SceneSnapshot`) and nothing
+    /// reads the count at creation time and then depends on data the
+    /// increment itself guards. The plain read
+    /// ([`RasterHandle::in_flight`]) uses [`Ordering::Acquire`], paired with
+    /// the decrement's release.
+    ///
+    /// `SeqCst` is deliberately not used: this counter guards only the
+    /// produce *decision* a caller's clock makes from it, and the sole
+    /// cross-thread invariant that decision depends on is "a stale read
+    /// defers at most one produce", which the retire→wake edge (see
+    /// [`Self::notify_retired`]) resolves on the very next pump regardless.
+    /// There is no second atomic this counter must stay globally ordered
+    /// against.
     count: AtomicU32,
     /// Invoked, unconditionally, every time a frame retires — see
     /// [`InFlightTicket`]'s doc for the three sites, plus the panic-unwind
@@ -283,7 +286,7 @@ struct InFlightTicket {
 
 impl InFlightTicket {
     fn new(accounting: &Arc<InFlightAccounting>) -> Self {
-        accounting.count.fetch_add(1, Ordering::AcqRel);
+        accounting.count.fetch_add(1, Ordering::Relaxed);
         Self {
             accounting: Arc::clone(accounting),
         }
@@ -292,7 +295,7 @@ impl InFlightTicket {
 
 impl Drop for InFlightTicket {
     fn drop(&mut self) {
-        self.accounting.count.fetch_sub(1, Ordering::AcqRel);
+        self.accounting.count.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -401,7 +404,7 @@ struct MailboxState {
     /// acquisition that drains this field, and adopts THAT — see
     /// [`RasterOwner::pump`]'s own doc at the resize-apply site.
     pending_resize: Option<(u32, u32)>,
-    /// The most recent coalesced `GpuServices` generation this lane has been
+    /// The most recent coalesced GPU-resource generation this lane has been
     /// told to bind to, applied at the top of the next [`RasterOwner::pump`]
     /// before the frame-freshness compare — the same "applies at its next
     /// command drain" shape [`pending_resize`](Self::pending_resize) uses.
@@ -462,12 +465,6 @@ struct RasterMailbox {
     /// [`InFlightAccounting`]'s own doc for why this is a separate
     /// allocation rather than a field directly here.
     accounting: Arc<InFlightAccounting>,
-    /// The advanced pacing/capacity configuration this owner was
-    /// constructed with ([`RasterOwner::new`] uses
-    /// [`RasterOptions::default`]). Read-only after construction; this
-    /// module never acts on it — see [`RasterOptions`]'s own doc for the
-    /// full honest-scope statement of what these numbers are for instead.
-    options: RasterOptions,
 }
 
 impl RasterMailbox {
@@ -608,7 +605,7 @@ pub enum RasterAck {
         current: SurfaceGeneration,
     },
     /// A frame was dropped because its `GpuResourceGeneration` no longer
-    /// matches the `GpuServices` generation this lane is currently bound to
+    /// matches the GPU-resource generation this lane is currently bound to
     /// (ADR-0045 decision 4's second freshness axis) — rejected proactively
     /// before ever reaching the backend. Distinct from
     /// [`RasterAck::SurfaceOutdated`] because the two axes guard different
@@ -905,14 +902,14 @@ impl RasterHandle {
         generation
     }
 
-    /// Coalesces a `GpuServices` generation binding into the mailbox: any
+    /// Coalesces a GPU-resource generation binding into the mailbox: any
     /// number of pending bindings collapse into the most recent one, applied
     /// on the owner's next [`RasterOwner::pump`], before that pump checks a
     /// pending frame's `GpuResourceGeneration` against it (ADR-0045
     /// decision 4's second freshness axis).
     ///
     /// Unlike [`Self::resize`], this call does not mint: `GpuResourceGeneration`
-    /// is minted by `GpuServices` (an owner-thread resource), never by this
+    /// is minted by whoever owns the GPU resource stack, never by this
     /// mailbox, so this method only carries an already-minted value to the
     /// lane.
     ///
@@ -965,9 +962,11 @@ impl RasterHandle {
     /// The current reliable, cross-thread count of frames this owner has
     /// accepted but not yet retired. See the module docs for the accounting
     /// contract (three retire sites, RAII, panic-safe) and its atomics
-    /// orderings. For today's synchronous owner this reads at most 2 —
-    /// see `RasterOptions::max_frames_in_flight`'s own doc for the full
-    /// honest statement of that structural ceiling and what would widen it.
+    /// orderings. For today's synchronous owner this reads at most 2: a
+    /// ticket lives in the mailbox's single `pending_frame` slot and in the
+    /// one `pump` currently rendering, and the supersede-not-queue rule
+    /// makes a third simultaneously-live ticket impossible. Widening that
+    /// ceiling needs the planned threaded raster owner.
     #[must_use]
     pub fn in_flight(&self) -> u32 {
         self.mailbox.accounting.count.load(Ordering::Acquire)
@@ -994,14 +993,6 @@ impl RasterHandle {
     /// `set_on_frame_scheduled`.
     pub fn set_wake_hook(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
         let _prev = std::mem::replace(&mut *self.mailbox.accounting.wake.lock(), hook);
-    }
-
-    /// The advanced pacing/capacity configuration this owner was
-    /// constructed with — see [`RasterOptions`]'s own doc for what these
-    /// numbers are (and are not) for.
-    #[must_use]
-    pub fn options(&self) -> RasterOptions {
-        self.mailbox.options
     }
 }
 
@@ -1056,7 +1047,7 @@ pub enum PumpOutcome {
         current: SurfaceGeneration,
     },
     /// The pending frame's `GpuResourceGeneration` no longer matched the
-    /// `GpuServices` generation this lane is bound to; the frame was dropped
+    /// GPU-resource generation this lane is bound to; the frame was dropped
     /// without rendering. Mirrors [`RasterAck::ResourceOutdated`] — see its
     /// field docs and the type doc above for why this is a distinct variant
     /// from [`PumpOutcome::SurfaceOutdated`].
@@ -1116,11 +1107,11 @@ pub struct RasterOwner<B: RasterBackend> {
     /// [`RasterMailbox::set_attached`] every time this changes. See that
     /// field's own doc.
     attached: bool,
-    /// The `GpuServices` generation this lane is currently bound to
+    /// The GPU-resource generation this lane is currently bound to
     /// (ADR-0045 decision 4's second freshness axis). Assigned only from a
     /// value carried by an applied `pending_gpu_resource_generation`
     /// command — this lane never mints one itself, since
-    /// `GpuResourceGeneration` is minted by `GpuServices`, an owner-thread
+    /// `GpuResourceGeneration` is minted by the owner-thread GPU resource
     /// resource, not by this mailbox. Starts at
     /// [`GpuResourceGeneration::ZERO`], which a frame stamped with the same
     /// unset sentinel matches trivially — see that type's own doc for why
@@ -1160,24 +1151,6 @@ impl<B: RasterBackend> RasterOwner<B> {
         backend: B,
         address: PresentationAddress,
     ) -> (Self, RasterHandle, Receiver<RasterAck>, Receiver<()>) {
-        Self::with_options(backend, address, RasterOptions::default())
-    }
-
-    /// The advanced constructor: as [`Self::new`], but with an explicit
-    /// [`RasterOptions`] instead of the default pacing/capacity numbers.
-    ///
-    /// This slice does not ACT on `options` anywhere in this module — the
-    /// raster mailbox stays capacity-1/latest-frame-wins regardless of
-    /// `max_frames_in_flight`, and no wgpu surface setting is touched by
-    /// `target_frame_rate` (see [`RasterOptions`]'s own doc for why). A
-    /// caller reads the numbers back via [`RasterHandle::options`] to
-    /// configure its own clock instead.
-    #[must_use]
-    pub fn with_options(
-        backend: B,
-        address: PresentationAddress,
-        options: RasterOptions,
-    ) -> (Self, RasterHandle, Receiver<RasterAck>, Receiver<()>) {
         let (ack_tx, ack_rx) = bounded(ACK_CHANNEL_CAPACITY);
         let (shutdown_complete_tx, shutdown_complete_rx) =
             bounded(SHUTDOWN_COMPLETE_CHANNEL_CAPACITY);
@@ -1195,7 +1168,6 @@ impl<B: RasterBackend> RasterOwner<B> {
                 last_completion: None,
             }),
             accounting: Arc::new(InFlightAccounting::new()),
-            options,
         });
         let owner = Self {
             backend,
@@ -1226,13 +1198,6 @@ impl<B: RasterBackend> RasterOwner<B> {
     #[must_use]
     pub fn in_flight(&self) -> u32 {
         self.mailbox.accounting.count.load(Ordering::Acquire)
-    }
-
-    /// The advanced pacing/capacity configuration this owner was
-    /// constructed with — see [`RasterHandle::options`].
-    #[must_use]
-    pub fn options(&self) -> RasterOptions {
-        self.mailbox.options
     }
 
     /// One synchronous pump: applies the latest coalesced resize (if any),
@@ -1347,7 +1312,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             self.current_gpu_resource_generation = generation;
             tracing::debug!(
                 gpu_resource_generation = ?generation,
-                "raster owner: bound to a new GpuServices generation"
+                "raster owner: bound to a new GPU-resource generation"
             );
         }
 
@@ -1637,6 +1602,20 @@ impl<B: RasterBackend> Drop for RasterOwner<B> {
             drop(orphaned);
             self.mailbox.accounting.notify_retired();
         }
+        // The one-shot shutdown-completion signal, sent here as well as from
+        // `pump`: a consumer parked in `run_until_shutdown` waits on this
+        // channel, not on `owner_alive`, and an owner dropped without an
+        // explicit shutdown would otherwise leave that consumer waiting
+        // forever on a lane that no longer exists. `try_send` cannot block.
+        // Gated on the owner's own latch rather than only on the channel's
+        // capacity: once a consumer has received and drained the first
+        // signal, a second `try_send` would succeed and a later consumer
+        // would observe a completion for an owner that had already been
+        // reported complete. `has_signaled_shutdown_complete` is this
+        // half's own state, so the gate needs no lock.
+        if !self.has_signaled_shutdown_complete {
+            let _ = self.mailbox.shutdown_complete_tx.try_send(());
+        }
     }
 }
 
@@ -1647,7 +1626,7 @@ impl<B: RasterBackend> Drop for RasterOwner<B> {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::num::{NonZeroU8, NonZeroU32};
+    use std::num::NonZeroU32;
     use std::sync::Barrier;
     use std::sync::mpsc;
     use std::thread;
@@ -1864,33 +1843,47 @@ mod tests {
         assert_send::<RasterAck>();
     }
 
-    /// `with_options`/`options()` is a public configuration round-trip with
-    /// no other structural check on the value in between -- a dropped or
-    /// mis-copied field would compile and pass every other test. Builds
-    /// with a non-default `RasterOptions` (both fields set away from their
-    /// defaults, so a mutant that forgets to store either one fails this),
-    /// reads it back through both `RasterOwner::options` and
-    /// `RasterHandle::options` (they read the same shared value), and
-    /// asserts full equality.
+    /// Asserts the reliable cross-thread in-flight counter reads an exact
+    /// sequence across submit, supersede, and pump — a value this type
+    /// exposes to a caller's own pacing logic, so a mutant that dropped a
+    /// `fetch_add`/`fetch_sub` must fail here rather than silently
+    /// under-count.
     #[test]
-    fn with_options_round_trips_through_both_options_accessors() {
-        let options = RasterOptions::default()
-            .with_target_frame_rate(NonZeroU32::new(30).expect("nonzero"))
-            .with_max_frames_in_flight(NonZeroU8::new(1).expect("nonzero"));
+    fn in_flight_reads_exact_counts_across_submit_and_pump() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+        let primed = handle.resize(1, 1);
 
-        let (owner, handle, _ack_rx, _shutdown_complete_rx) =
-            RasterOwner::with_options(FakeBackend::default(), test_address(), options);
+        assert_eq!(owner.in_flight(), 0);
+        assert_eq!(handle.in_flight(), 0);
+
+        let epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch, primed))
+            .expect("submit must be accepted");
+        assert_eq!(
+            owner.in_flight(),
+            1,
+            "one accepted frame must be one outstanding ticket"
+        );
+
+        let superseding = epoch.next();
+        handle
+            .submit(test_frame(superseding, primed))
+            .expect("submit must be accepted");
+        assert_eq!(
+            owner.in_flight(),
+            1,
+            "a superseding submit must retire the frame it replaced: net one ticket"
+        );
 
         assert_eq!(
-            owner.options(),
-            options,
-            "RasterOwner::options must return exactly what with_options was constructed with"
+            owner.pump(),
+            PumpOutcome::Presented {
+                epoch: superseding,
+                address: test_address(),
+            }
         );
-        assert_eq!(
-            handle.options(),
-            options,
-            "RasterHandle::options must read back the same value RasterOwner::options does"
-        );
+        assert_eq!(owner.in_flight(), 0, "a completed pump retires its ticket");
     }
 
     // -----------------------------------------------------------------------
@@ -2385,6 +2378,39 @@ mod tests {
         assert!(
             ack_rx.try_iter().next().is_none(),
             "no telemetry ack is produced by the shutdown-complete path"
+        );
+    }
+
+    #[test]
+    fn dropping_the_owner_signals_shutdown_complete() {
+        // A consumer parked in `run_until_shutdown` waits on this channel,
+        // not on `owner_alive` -- so an owner that is dropped without ever
+        // being shut down must still release it. Before this, the channel
+        // simply went silent and the consumer waited on a lane that no
+        // longer existed.
+        let (owner, _handle, _ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
+        drop(owner);
+        assert_eq!(
+            shutdown_complete_rx.try_recv(),
+            Ok(()),
+            "owner drop must release a consumer waiting on shutdown completion"
+        );
+    }
+
+    #[test]
+    fn owner_drop_after_a_completed_shutdown_does_not_double_signal() {
+        let (mut owner, handle, _ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
+        handle.shutdown();
+        assert_eq!(owner.pump(), PumpOutcome::ShutdownComplete);
+        assert_eq!(
+            shutdown_complete_rx.try_recv(),
+            Ok(()),
+            "pump signals first"
+        );
+        drop(owner);
+        assert!(
+            shutdown_complete_rx.try_recv().is_err(),
+            "the drop must not add a second signal to a one-shot channel"
         );
     }
 

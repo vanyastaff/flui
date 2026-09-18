@@ -10,14 +10,14 @@
 //! SceneBuilder::push_{image,color}_filter
 //!   → LayerTree containing {ImageFilterLayer, ColorFilterLayer}
 //!   → LayerRender::render (same impl render_scene's render_layer_recursive calls)
-//!   → Backend::{push_image_filter, push_color_filter}
+//!   → LayerDispatcher::{push_image_filter, push_color_filter}
 //!   → WgpuPainter::save_layer_with_filter / save_layer_with_image_filter
 //!   → GPU shader → pixels → readback
 //! ```
 //!
 //! ## Relationship to existing tests
 //!
-//! `color_filter_producer_tests` (P1-P4) prove that `Backend::push_color_filter`
+//! `color_filter_producer_tests` (P1-P4) prove that `LayerDispatcher::push_color_filter`
 //! dispatches correctly when called **directly**.  These SC tests (`SC1`-`SC5`)
 //! prove the same pixels appear when the call originates via
 //! `SceneBuilder → LayerTree → LayerRender` — i.e., the **additional layer of
@@ -33,7 +33,7 @@
 //! 1. `SceneBuilder` builds the `LayerTree` (same as production).
 //! 2. A minimal recursive walk mirrors `render_layer_recursive` for the subset
 //!    of layer types used here (no `BackdropFilter`, no offscreen OffscreenRenderer).
-//! 3. `Backend` dispatches filter/canvas commands to `WgpuPainter`.
+//! 3. `LayerDispatcher` dispatches filter/canvas commands to `WgpuPainter`.
 //! 4. `WgpuPainter::render(RenderTarget::sampleable(...))` submits to the GPU.
 //! 5. GPU readback asserts oracle match.
 //!
@@ -63,7 +63,8 @@ mod gpu_tests {
     };
 
     use crate::wgpu::{
-        Backend, layer_render::LayerRender, painter::WgpuPainter, render_target::RenderTarget,
+        layer_dispatcher::LayerDispatcher, layer_render::LayerRender, painter::WgpuPainter,
+        render_target::RenderTarget,
     };
 
     // ── Harness constants ─────────────────────────────────────────────────────
@@ -165,7 +166,7 @@ mod gpu_tests {
     // color-filter containers).  Backdrop-filter special-casing is omitted
     // because none of the test scenes use it.
 
-    fn walk_layer_tree(tree: &LayerTree, node_id: LayerId, backend: &mut Backend<'_>) {
+    fn walk_layer_tree(tree: &LayerTree, node_id: LayerId, backend: &mut LayerDispatcher<'_>) {
         let Some(layer) = tree.get_layer(node_id) else {
             return;
         };
@@ -182,7 +183,7 @@ mod gpu_tests {
         }
     }
 
-    /// Render a `LayerTree` built by `SceneBuilder` through `Backend` into
+    /// Render a `LayerTree` built by `SceneBuilder` through `LayerDispatcher` into
     /// `surface_view`/`surface_tex`, then readback all pixels.
     ///
     /// This is the headless equivalent of the per-frame segment of
@@ -197,7 +198,7 @@ mod gpu_tests {
     ) -> Vec<[u8; 4]> {
         let mut painter = build_painter(Arc::clone(device), Arc::clone(queue));
         {
-            let mut backend = Backend::new(&mut painter);
+            let mut backend = LayerDispatcher::new(&mut painter);
 
             if let Some(root_id) = root_id {
                 walk_layer_tree(tree, root_id, &mut backend);
@@ -262,7 +263,7 @@ mod gpu_tests {
     ///
     /// **Proves:**
     /// - `SceneBuilder::push_image_filter` builds an `ImageFilterLayer` in the tree.
-    /// - `LayerRender::render` on `ImageFilterLayer` calls `Backend::push_image_filter`.
+    /// - `LayerRender::render` on `ImageFilterLayer` calls `LayerDispatcher::push_image_filter`.
     /// - The blur shader fires and diffuses pixels, producing edge attenuation.
     ///
     /// **Discriminating assertions:**
@@ -342,7 +343,7 @@ mod gpu_tests {
     ///
     /// **Proves:**
     /// - `SceneBuilder::push_color_filter` builds a `ColorFilterLayer` in the tree.
-    /// - `LayerRender::render` on `ColorFilterLayer` calls `Backend::push_color_filter`.
+    /// - `LayerRender::render` on `ColorFilterLayer` calls `LayerDispatcher::push_color_filter`.
     /// - The mode-filter GPU shader produces the correct Multiply result.
     ///
     /// **Red-before-green discriminator:** this would produce opaque coral (no
@@ -392,7 +393,7 @@ mod gpu_tests {
     /// mid-range canvas produces pixels matching the linear→sRGB oracle.
     ///
     /// **Proves:** the `LinearToSrgbGamma` arm of `ColorFilterLayer::render` /
-    /// `Backend::push_color_filter` fires the correct GPU gamma shader.
+    /// `LayerDispatcher::push_color_filter` fires the correct GPU gamma shader.
     #[test]
     fn sc3_scenebuilder_linear_to_srgb_gamma_reaches_pixels() {
         let (device, queue) = acquire_test_device_and_queue();
@@ -489,7 +490,7 @@ mod gpu_tests {
     /// grayscale.
     ///
     /// **Proves:** the `Matrix` arm of `ColorFilterLayer::render` /
-    /// `Backend::push_color_filter` fires the colour-matrix GPU shader via
+    /// `LayerDispatcher::push_color_filter` fires the colour-matrix GPU shader via
     /// `SceneBuilder`.
     ///
     /// **Discriminating:** a no-op would leave the coral pixel unchanged

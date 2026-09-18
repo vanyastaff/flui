@@ -33,7 +33,7 @@ impl DrawBatcher {
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
                   the remaining args mirror the gradient's own parameters"
     )]
-    pub(in super::super) fn gradient_rect(
+    pub(in super::super) fn draw_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
         bounds: Rect<Pixels>,
@@ -132,7 +132,7 @@ impl DrawBatcher {
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
                   the remaining args mirror the gradient's own parameters"
     )]
-    pub(in super::super) fn radial_gradient_rect(
+    pub(in super::super) fn draw_radial_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
         bounds: Rect<Pixels>,
@@ -229,7 +229,7 @@ impl DrawBatcher {
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
                   the remaining args mirror the gradient's own parameters"
     )]
-    pub(in super::super) fn sweep_gradient_rect(
+    pub(in super::super) fn draw_sweep_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
         bounds: Rect<Pixels>,
@@ -320,7 +320,7 @@ impl DrawBatcher {
     /// * `rect_size`      — rectangle size [width, height]
     /// * `corner_radius`  — uniform corner radius
     /// * `params`         — shadow offset, blur sigma, and color
-    pub(in super::super) fn shadow_rect(
+    pub(in super::super) fn draw_shadow_rect(
         segment: &mut DrawSegment,
         draw_order: &mut Vec<super::super::command_ir::DrawItem>,
         rect_pos: [f32; 2],
@@ -552,7 +552,7 @@ impl DrawBatcher {
                 let start =
                     glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
                 let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
-                Self::gradient_rect(
+                Self::draw_gradient_rect(
                     segment,
                     state,
                     transformed,
@@ -566,7 +566,7 @@ impl DrawBatcher {
             Shader::RadialGradient { center, radius, .. } => {
                 let c =
                     glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
-                Self::radial_gradient_rect(
+                Self::draw_radial_gradient_rect(
                     segment,
                     state,
                     transformed,
@@ -585,7 +585,7 @@ impl DrawBatcher {
             } => {
                 let c =
                     glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
-                Self::sweep_gradient_rect(
+                Self::draw_sweep_gradient_rect(
                     segment,
                     state,
                     transformed,

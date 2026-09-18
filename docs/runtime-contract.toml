@@ -196,25 +196,22 @@ declarations = [
 [[export_root]]
 file = "crates/flui-engine/src/lib.rs"
 declarations = [
+    # The embedder-facing surface, narrowed 2026-09-17: the layer/painter
+    # dispatch plumbing (`traits`, `commands`), the `flui-layer`/`flui_painting`
+    # re-exports, `Backend`, `LayerRender`, `FontLoader`, and `DebugBackend`
+    # moved to `pub(crate)`/module paths — no consumer outside the crate named
+    # them. The entry points below are what an embedder composes.
     "pub mod error;",
-    "pub mod traits;",
-    "pub mod commands;",
     "pub mod raster;",
     "pub mod raster_owner;",
-    "pub mod raster_options;",
     "pub mod fonts;",
     "pub mod wgpu;",
-    "pub use commands::{dispatch_command, dispatch_commands};",
     "pub use error::{EngineError, EngineResult, Recoverability};",
-    "pub use flui_layer::{ CanvasLayer, DamageRegion, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor, SceneSnapshot, ShaderMaskLayer, };",
-    "pub use flui_painting::Paint;",
-    "pub use traits::{CommandRenderer, LayerStateStack};",
     "pub use raster::{PrePresentHook, RasterBackend};",
     "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner, RasterSubmitError, SurfaceState, };",
-    "pub use raster_options::RasterOptions;",
-    "pub use wgpu::DebugBackend;",
-    "pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};",
-    "pub use wgpu::{GpuResourceGeneration, GpuServices};",
+    "pub use wgpu::GpuResourceGeneration;",
+    "pub use wgpu::Renderer;",
+    "pub use wgpu::WgpuPainter;",
 ]
 
 [[export_root]]
@@ -1045,8 +1042,9 @@ instead of the backend. Still partial: the web runner keeps the direct sink \
 (its renderer arrives asynchronously and recovers across an `.await`, a \
 shape the lane does not yet accommodate — stated in `FrameSink`'s doc), the \
 lane is pumped inline on the owner thread (no produce/present overlap; the \
-dedicated raster thread is ADR-0045's remaining ladder), and `RasterOptions` \
-still governs nothing.\
+dedicated raster thread is ADR-0045's remaining ladder), and no \
+frame-pacing configuration surface exists (the unwired `RasterOptions` was \
+deleted rather than carried; it returns with the threaded lane).\
 """
 state = "partial"
 domain = "raster"
@@ -2258,12 +2256,16 @@ clock. Issue #556 removed both fields outright rather than wire them to \
 something they were never designed to control, and the checker enforces \
 their absence mechanically (`forbidden_pattern` entries below). \
 `flui_engine::RasterOptions` (`target_frame_rate`, `max_frames_in_flight`) \
-is the SHAPE a future frame-pacing configuration surface would take, not a \
-consumed replacement today: `RasterOwner` stores its own `RasterOptions` \
-and never acts on it (that module's own doc says so directly), and \
+was the SHAPE a future frame-pacing configuration surface would have taken, \
+and it was deleted instead of kept: `RasterOwner` stored it and never acted \
+on it (that module's own doc said so directly), ADR-0045 decision 6 had \
+already decided to replace `max_frames_in_flight` with `PipelineDepth`, and \
+a public type whose every consumer is its own test is a misleading API \
+rather than unfinished infrastructure. The frame-pacing surface returns \
+with the threaded raster lane that can actually act on it. \
 `FrameClock::set_min_produce_interval`/`set_max_in_flight` have zero \
-callers outside this workspace's own test code. Wiring `RasterOptions` to a \
-real consumer is the same #559 raster-adoption work the \
+callers outside this workspace's own test code. Wiring a frame-pacing \
+configuration to a real consumer is the same #559 raster-adoption work the \
 `raster-owner-in-shipping-path` contract already tracks as `partial` — this \
 contract does not duplicate that claim or imply it is further along than \
 that one states. The superseded `target-fps-advisory-documented` contract \
@@ -2274,9 +2276,8 @@ otherwise cite text this change deletes.\
 state = "implemented"
 domain = "application"
 mechanical = true
-mechanism = "forbidden_pattern entries below assert both fields are absent from AppConfig -- the mechanically checked claim is the fields' absence, not that RasterOptions is consumed anywhere"
+mechanism = "forbidden_pattern entries below assert both fields are absent from AppConfig -- the mechanically checked claim is the fields' absence, not that a frame-pacing configuration is consumed anywhere"
 evidence = [
-    { kind = "symbol", file = "crates/flui-engine/src/raster_options.rs", contains = "pub struct RasterOptions" },
     { kind = "symbol", file = "crates/flui-app/src/app/config.rs", contains = "issue #556 removed the unwired" },
     { kind = "test", file = "crates/flui-app/src/app/config.rs", contains = "fn test_default_config" },
 ]
@@ -2621,7 +2622,7 @@ registry is the only one in the workspace that tracks a contract's \
 listed, and a listed file that has been fully burned down must be delisted. \
 Seeded 2026-08-04 at 65 listed files / 125 sites, down from 158 non-conforming \
 sites at introduction after burning down the five worst-offender files \
-(flui-hot-reload's worker.rs, flui-engine's wgpu/backend.rs, flui-painting's \
+(flui-hot-reload's worker.rs, flui-engine's wgpu/layer_dispatcher.rs, flui-painting's \
 text_painter/paint.rs, flui-widgets' scroll/refresh_indicator.rs, and one \
 site in flui-app's runner.rs). flui-rendering's testing/harness.rs was never \
 in scope -- it lives under a `#[cfg(any(test, feature = "testing"))]`-gated \
@@ -3161,41 +3162,7 @@ owner = "the the raster mailbox contract mailbox protocol — implemented and th
 failure_semantics = "typed RasterSubmitError {MailboxClosed, ...}; acks carry frame identity; shutdown is a one-shot handshake"
 consumers = ["threaded protocol tests only"]
 owner_issue = 559
-notes = "Every RasterAck/PumpOutcome variant now carries address: flui_foundation::PresentationAddress (the full realm_id + presentation_id pair, replacing a bare presentation_id field), echoed from the submitted SceneSnapshot's own stamp (the owner mints epoch/surface-generation feedback, never a presentation identity). Two different realm incarnations can mint an identical PresentationId, so the owner is bound to its expected PresentationAddress at construction and RasterHandle::submit validates every frame against it, rejecting a mismatch as RasterSubmitError::AddressMismatch rather than accepting it. Per-variant #[non_exhaustive] added to both enums (enum-level non_exhaustive alone does not block exact-field destructuring); the two former tuple variants (Presented, DeviceLost) became named-field variants since non_exhaustive cannot apply to a tuple/unit variant. #556 adds a reliable, cross-thread in-flight counter at this exact mailbox seam (RasterHandle::in_flight/set_wake_hook, RasterOwner::with_options) — see the RasterOptions surface entry below. Honest scope on the retire->wake edge specifically: the threaded release-stall test (stalled_capacity_then_released_wakes_with_no_external_trigger) and the panic-unwind wake test (panic_mid_render_still_wakes_a_wake_driven_consumer) prove the registered hook FIRES with no external event; with zero production consumers wired (this entry's own owner line), that is the honest limit today. No test claims a frame is actually PRODUCED end-to-end from that wake, since nothing in this codebase yet consumes the hook to drive a produce call -- closing that gap end-to-end is #559's wiring, not proven by this slice."
-
-[[surface]]
-path = "flui_engine::RasterOptions"
-crate = "flui-engine"
-kind = "type"
-declared_in = "crates/flui-engine/src/raster_options.rs"
-contains = "pub struct RasterOptions"
-classification = "experimental"
-thread_affinity = "plain Copy value type; Send + Sync"
-owner = "advanced pacing/capacity configuration carried at the raster boundary — a typed DTO only, read back out by a caller's own FrameClock (flui-scheduler); this crate never acts on it"
-failure_semantics = "infallible by construction (NonZeroU8/NonZeroU32 rule out the zero-threshold hazard); no Result-returning constructor needed"
-consumers = [
-    "RasterOwner::with_options (stores it, unread by this crate)",
-    "a future FrameClock wiring (#559) reads it back via RasterHandle::options",
-]
-owner_issue = 559
-notes = "Introduced in #556 alongside the reliable in-flight counter (RasterOwner surface entry above) — max_frames_in_flight is the CLOCK-side counting threshold only (flui_scheduler::FrameClock::set_max_in_flight), deliberately never threaded into wgpu::SurfaceConfiguration::desired_maximum_frame_latency (pinned at 1, see crate::wgpu::renderer's own doc); target_frame_rate converts via min_produce_interval() to the Duration FrameClock::set_min_produce_interval expects. flui-engine does not depend on flui-scheduler, so this type carries plain std::num/std::time values rather than referencing FrameClock directly. Production wiring (a live FrameClock actually reading these numbers back) is #559's job, same boundary as RasterOwner/RasterHandle above."
-
-[[surface]]
-path = "flui_engine::{GpuServices, GpuResourceGeneration}"
-crate = "flui-engine"
-kind = "type"
-declared_in = "crates/flui-engine/src/wgpu/gpu_services.rs"
-contains = "pub struct GpuServices"
-classification = "experimental"
-thread_affinity = "not Send-blocked (device_lost is designed to cross to a raster thread); scoped to one owner thread and CHECKED via a #[cfg(debug_assertions)] created_on: ThreadId asserted on every owner-affine accessor"
-owner = "instance/adapter/device/queue/capabilities plus the shared ShaderCache and the one device_lost flag behind exactly one set_device_lost_callback install, for exactly one owner thread (ADR-0045 decision 2) — never process-wide; two realms on two owner threads resolve two independent GpuServices"
-failure_semantics = "typed EngineError (AdapterRequest/DeviceCreation) from resolve_offscreen; the owner-thread check is an assert (BUG-class), not a Result; recover() on a Renderer built from GpuServices returns EngineError::SharedServicesNotRecoverable rather than rebuilding a private stack"
-consumers = [
-    "Renderer::from_offscreen_services (the offscreen sharing path)",
-    "unit tests in gpu_services.rs and renderer.rs",
-]
-owner_issue = 559
-notes = "This slice ships the value type, ONE resolution path (resolve_offscreen, mirroring Renderer::new_offscreen's adapter-selection policy field-for-field apart from the device label), and the offscreen sharing seam (Renderer::from_offscreen_services) that proves the device is actually shared, not merely shareable — pinned by Arc::ptr_eq tests on both the device and the device_lost flag, plus a test that recover() on a shared-services Renderer is rejected before touching any GPU state (GpuStackOrigin, in renderer.rs) rather than silently installing a second set_device_lost_callback. A windowed resolve_for_surface was drafted and cut: Instance::new builds a fresh wgpu-core Global with its own surface registry, and request_adapter resolves compatible_surface by raw id against the RECEIVING instance's registry, so a surface built from any other instance panics there — the instance and surface must be created together (Renderer::build_windowed_gpu_stack's own shape), which needs the raw-handle/surface-lifecycle plumbing ADR-0045 decision 1 ties to the raster lane. NOT wired into flui-app's AppRuntime yet, and Renderer::new's eight existing call sites (three in flui-app's runner module — desktop.rs, android.rs, web.rs — one in direct.rs, the Android demo example, and three in the root package's own examples: scene_render.rs, filter_demo.rs, color_filter_demo.rs) are unmigrated — Renderer::new is #[doc(hidden)] this slice as the signal, not deleted. Recovery (ReplaceServices, the interior-mutable Option container decision 2 names) is also not built here: this slice's GpuServices values are immutable once constructed, and 'a re-settable container' is a property of whatever later slice stores one (e.g. a RefCell<Option<GpuServices>> on AppRuntime), not of this type itself. ADR-0045 decision 2's own prose calls the generation field 'ResourceGeneration'; it is named GpuResourceGeneration here instead because flui_foundation::epoch already declares a pub struct ResourceGeneration for a different domain (worker-cache freshness) and port-check trigger 10 (SP-3) mechanically forbids the collision. UPDATE (decision 4 slice): GpuResourceGeneration's DEFINITION moved to flui_foundation::epoch — the promotion gpu_services.rs's own doc named as 'expected and deferred' — because decision 4 gave it its first real cross-crate consumer: flui_foundation::FrameStamp now carries a gpu_resource_generation field, checked at the raster boundary's freshness gate alongside SurfaceGeneration, and FrameStamp (layer 1) cannot name a layer-4 flui-engine type without inverting docs/workspace-layers.toml's dependency direction. flui_engine::GpuResourceGeneration is now a re-export (`declared_in`/`contains` above still cite GpuServices, which did NOT move, so this citation stays valid); see flui_foundation::epoch::GpuResourceGeneration's own doc for the full reasoning, including why the epoch_counters! macro is still not used for it."
+notes = "Every RasterAck/PumpOutcome variant now carries address: flui_foundation::PresentationAddress (the full realm_id + presentation_id pair, replacing a bare presentation_id field), echoed from the submitted SceneSnapshot's own stamp (the owner mints epoch/surface-generation feedback, never a presentation identity). Two different realm incarnations can mint an identical PresentationId, so the owner is bound to its expected PresentationAddress at construction and RasterHandle::submit validates every frame against it, rejecting a mismatch as RasterSubmitError::AddressMismatch rather than accepting it. Per-variant #[non_exhaustive] added to both enums (enum-level non_exhaustive alone does not block exact-field destructuring); the two former tuple variants (Presented, DeviceLost) became named-field variants since non_exhaustive cannot apply to a tuple/unit variant. #556 adds a reliable, cross-thread in-flight counter at this exact mailbox seam (RasterHandle::in_flight/set_wake_hook). Honest scope on the retire->wake edge specifically: the threaded release-stall test (stalled_capacity_then_released_wakes_with_no_external_trigger) and the panic-unwind wake test (panic_mid_render_still_wakes_a_wake_driven_consumer) prove the registered hook FIRES with no external event; with zero production consumers wired (this entry's own owner line), that is the honest limit today. No test claims a frame is actually PRODUCED end-to-end from that wake, since nothing in this codebase yet consumes the hook to drive a produce call -- closing that gap end-to-end is #559's wiring, not proven by this slice."
 
 [[surface]]
 path = "flui_foundation::GpuResourceGeneration"
@@ -3205,12 +3172,12 @@ declared_in = "crates/flui-foundation/src/epoch.rs"
 contains = "pub struct GpuResourceGeneration"
 classification = "experimental"
 thread_affinity = "plain Copy value type; Send + Sync"
-owner = "generational stamp for a flui-engine GpuServices construction (ADR-0045 decisions 2 and 4) — declared here, not in flui-engine, because FrameStamp (this crate) checks it at the same freshness gate as SurfaceGeneration and cannot name a flui-engine type without inverting the workspace's layer direction"
+owner = "generational stamp for a GPU-resource stack construction (ADR-0045 decisions 2 and 4) — declared here, not in flui-engine, because FrameStamp (this crate) checks it at the same freshness gate as SurfaceGeneration and cannot name a flui-engine type without inverting the workspace's layer direction"
 failure_semantics = "generation mismatch compares unequal; RasterOwner::pump rejects a frame whose stamp does not match the lane's currently bound generation as PumpOutcome::ResourceOutdated"
 consumers = [
     "flui_foundation::FrameStamp",
-    "flui_engine::GpuServices (mints via mint(), re-exports the type at its own root)",
-    "RasterOwner::pump / RasterHandle::bind_gpu_resource_generation",
+    "flui_engine::RasterOwner / RasterHandle::bind_gpu_resource_generation",
+    "flui_engine::RasterAck::ResourceOutdated (re-exports the type at its own root)",
 ]
 owner_issue = 559
 notes = "Promoted from flui-engine's wgpu::gpu_services module in the ADR-0045 decision 4 slice — that module's own doc had already flagged the promotion as 'expected and deferred' once a real cross-crate consumer existed, and FrameStamp's new gpu_resource_generation field is that consumer. The tuple field stays private to this module (mint() is the only public constructor), so flui_engine::GpuResourceGeneration(5) still fails to compile from outside either crate — crates/flui-engine/tests/compile_fail/gpu_resource_generation_private_field.rs pins the diagnostic, now pointing at this file instead of flui-engine's former definition site. Not the epoch_counters! macro family (FrameEpoch/SurfaceGeneration/ResourceGeneration): this type mints fresh from a process-wide counter with no persistent owner to call next() on, a different enough model to warrant its own hand-written mint()."
@@ -3607,7 +3574,7 @@ allow_files = [
     "crates/flui-engine/src/wgpu/batches/shapes.rs",
     "crates/flui-engine/src/wgpu/layer_blend_tests.rs",
     "crates/flui-engine/src/wgpu/mod.rs",
-    "crates/flui-engine/src/wgpu/pipeline.rs",
+    "crates/flui-engine/src/wgpu/pipeline_cache.rs",
     "crates/flui-engine/src/wgpu/replay/mod.rs",
     "crates/flui-engine/src/wgpu/ssaa.rs",
 ]
@@ -3620,7 +3587,7 @@ allow_files = [
     "crates/flui-engine/src/wgpu/batches/paths.rs",
     "crates/flui-engine/src/wgpu/batches/shapes.rs",
     "crates/flui-engine/src/wgpu/mod.rs",
-    "crates/flui-engine/src/wgpu/pipeline.rs",
+    "crates/flui-engine/src/wgpu/pipeline_cache.rs",
     "crates/flui-engine/src/wgpu/replay/mod.rs",
     "crates/flui-engine/src/wgpu/shape_blend_tests.rs",
     "crates/flui-engine/src/wgpu/ssaa.rs",
@@ -3630,7 +3597,7 @@ allow_files = [
 pattern = "PR-5"
 why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
 allow_files = [
-    "crates/flui-engine/src/wgpu/backend.rs",
+    "crates/flui-engine/src/wgpu/layer_dispatcher.rs",
     "crates/flui-engine/src/wgpu/batches/gradients.rs",
     "crates/flui-engine/src/wgpu/batches/images.rs",
     "crates/flui-engine/src/wgpu/batches/mod.rs",
@@ -3638,7 +3605,7 @@ allow_files = [
     "crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs",
     "crates/flui-engine/src/wgpu/mod.rs",
     "crates/flui-engine/src/wgpu/painter/draw.rs",
-    "crates/flui-engine/src/wgpu/pipeline.rs",
+    "crates/flui-engine/src/wgpu/pipeline_cache.rs",
 ]
 
 [[forbidden_pattern]]

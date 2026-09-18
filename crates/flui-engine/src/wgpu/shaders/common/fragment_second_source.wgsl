@@ -4,7 +4,7 @@
 // Requires `wgpu::Features::DUAL_SOURCE_BLENDING`, and the `enable
 // dual_source_blending;` directive that each assembly prepends. Used only for
 // the blend modes whose destination factor does NOT absorb `1 - coverage` —
-// see `pipeline::coverage_blend_state_for`, which pairs it with
+// see `pipeline_cache::coverage_blend_state_for`, which pairs it with
 // `dst_factor = OneMinusSrc1`.
 //
 // The module this is appended to supplies `VertexOutput` and `shadeFragment`.
@@ -14,7 +14,7 @@
 /// `0.0` for the modes whose destination factor is `Zero` (`Clear`, `Src`,
 /// `SrcIn`, `SrcOut`, `Modulate`); `1.0` for those whose factor is `SrcAlpha`
 /// (`DstIn`, `DstATop`). Supplied per pipeline by
-/// `pipeline::destination_alpha_scale_for` — it is uniform across a pipeline
+/// `pipeline_cache::destination_alpha_scale_for` — it is uniform across a pipeline
 /// by construction (one pipeline per blend mode), so it is an overridable
 /// constant rather than instance data that could disagree with the blend
 /// state it must match.

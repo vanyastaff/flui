@@ -7,12 +7,12 @@
 //!
 //! ```text
 //! ColorFilterLayer::render
-//!   → Backend::push_color_filter(&ColorFilter::Mode/LinearToSrgbGamma/...)
+//!   → LayerDispatcher::push_color_filter(&ColorFilter::Mode/LinearToSrgbGamma/...)
 //!   → WgpuPainter::save_layer_with_filter(LayerFilter::Mode{...} / LayerFilter::Gamma(...))
 //!   → GPU mode/gamma filter shader
 //! ```
 //!
-//! Before T1, `Backend::push_color_filter` only accepted `&ColorMatrix`; the
+//! Before T1, `LayerDispatcher::push_color_filter` only accepted `&ColorMatrix`; the
 //! `LayerFilter::Mode` and `LayerFilter::Gamma` variants had no production caller
 //! (only `#[cfg(test)]`-gated uses).  These tests would have **failed to compile**
 //! on `main` because the old trait signature did not accept `&ColorFilter`.
@@ -47,8 +47,11 @@ mod gpu_tests {
     };
 
     use crate::{
-        traits::{CommandRenderer, LayerStateStack},
-        wgpu::{Backend, painter::WgpuPainter, render_target::RenderTarget},
+        command_renderer::CommandRenderer,
+        layer_state_stack::LayerStateStack,
+        wgpu::{
+            layer_dispatcher::LayerDispatcher, painter::WgpuPainter, render_target::RenderTarget,
+        },
     };
 
     // ── Harness constants ─────────────────────────────────────────────────────
@@ -150,17 +153,17 @@ mod gpu_tests {
         }
     }
 
-    /// Render using the **producer path**: `Backend::push_color_filter(&ColorFilter)`,
-    /// draw a rect via `render_rect`, `Backend::pop_color_filter`, submit, readback.
+    /// Render using the **producer path**: `LayerDispatcher::push_color_filter(&ColorFilter)`,
+    /// draw a rect via `render_rect`, `LayerDispatcher::pop_color_filter`, submit, readback.
     ///
     /// This is the code path exercised by `ColorFilterLayer::render` in production.
-    /// Using `Backend` directly instead of `WgpuPainter::save_layer_with_filter`
-    /// is the distinguishing property: it proves `Backend::push_color_filter`
+    /// Using `LayerDispatcher` directly instead of `WgpuPainter::save_layer_with_filter`
+    /// is the distinguishing property: it proves `LayerDispatcher::push_color_filter`
     /// dispatches the right `LayerFilter` variant for each `ColorFilter` arm.
     ///
     /// Draw calls go through `CommandRenderer::render_rect` (which is what real
     /// display-list dispatch does); `WgpuPainter::rect` is a painter-internal
-    /// method not exposed on `Backend`.
+    /// method not exposed on `LayerDispatcher`.
     fn render_via_producer_path(
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
@@ -172,7 +175,7 @@ mod gpu_tests {
         let bounds = full_surface_bounds();
         let mut painter = build_painter(Arc::clone(device), Arc::clone(queue));
         {
-            let mut backend = Backend::new(&mut painter);
+            let mut backend = LayerDispatcher::new(&mut painter);
 
             // The same call that `ColorFilterLayer::render` issues (via LayerStateStack).
             backend.push_color_filter(&filter);
@@ -245,11 +248,11 @@ mod gpu_tests {
     // ── P1: Mode filter via producer path ─────────────────────────────────────
 
     /// P1: `ColorFilter::Mode { Multiply, half-opacity red }` dispatched through
-    /// `Backend::push_color_filter` produces the same GPU output as the
+    /// `LayerDispatcher::push_color_filter` produces the same GPU output as the
     /// mode-oracle for the same input color.
     ///
     /// **Proves:**
-    /// - `Backend::push_color_filter` now accepts `&ColorFilter` (not just `&ColorMatrix`).
+    /// - `LayerDispatcher::push_color_filter` now accepts `&ColorFilter` (not just `&ColorMatrix`).
     /// - The `ColorFilter::Mode` arm correctly translates to `LayerFilter::Mode`.
     /// - `color.to_f32_array()` produces the right channel order for the GPU shader.
     ///
@@ -298,7 +301,7 @@ mod gpu_tests {
     // ── P2: LinearToSrgbGamma via producer path ───────────────────────────────
 
     /// P2: `ColorFilter::LinearToSrgbGamma` dispatched through
-    /// `Backend::push_color_filter` applies the linear→sRGB transfer per channel.
+    /// `LayerDispatcher::push_color_filter` applies the linear→sRGB transfer per channel.
     ///
     /// **Proves:**
     /// - The `LinearToSrgbGamma` arm correctly translates to
@@ -358,7 +361,7 @@ mod gpu_tests {
     // ── P3: SrgbToLinearGamma via producer path ───────────────────────────────
 
     /// P3: `ColorFilter::SrgbToLinearGamma` dispatched through
-    /// `Backend::push_color_filter` applies the sRGB→linear transfer per channel.
+    /// `LayerDispatcher::push_color_filter` applies the sRGB→linear transfer per channel.
     ///
     /// **Proves:**
     /// - The `SrgbToLinearGamma` arm correctly translates to
@@ -408,7 +411,7 @@ mod gpu_tests {
 
     // ── P4: Matrix filter via producer path matches direct-painter path ───────
 
-    /// P4: `ColorFilter::Matrix(grayscale)` through `Backend::push_color_filter`
+    /// P4: `ColorFilter::Matrix(grayscale)` through `LayerDispatcher::push_color_filter`
     /// produces output byte-identical (tolerance=2) to the same filter applied
     /// via `WgpuPainter::save_layer_with_filter(LayerFilter::ColorMatrix(...))`.
     ///
@@ -442,11 +445,11 @@ mod gpu_tests {
         let grayscale = ColorMatrix::grayscale();
         let bounds = full_surface_bounds();
 
-        // Producer path: Backend::push_color_filter(&ColorFilter::Matrix(grayscale)).
+        // Producer path: LayerDispatcher::push_color_filter(&ColorFilter::Matrix(grayscale)).
         {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             {
-                let mut backend = Backend::new(&mut painter);
+                let mut backend = LayerDispatcher::new(&mut painter);
                 backend.push_color_filter(&ColorFilter::Matrix(grayscale));
                 backend.render_rect(bounds, &Paint::fill(layer_color), &Matrix4::IDENTITY);
                 backend.pop_color_filter();
@@ -468,7 +471,7 @@ mod gpu_tests {
         {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             painter.save_layer_with_filter(None, LayerFilter::ColorMatrix(grayscale.values));
-            painter.rect(bounds, &Paint::fill(layer_color));
+            painter.draw_rect(bounds, &Paint::fill(layer_color));
             painter.restore_layer();
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("P4 Direct Encoder"),

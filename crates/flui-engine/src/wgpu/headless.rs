@@ -17,7 +17,8 @@ use std::sync::Arc;
 use flui_layer::{LayerId, LayerTree};
 
 use super::{
-    Backend, layer_render::LayerRender, painter::WgpuPainter, render_target::RenderTarget,
+    layer_dispatcher::LayerDispatcher, layer_render::LayerRender, painter::WgpuPainter,
+    render_target::RenderTarget,
 };
 use crate::error::{EngineError, EngineResult};
 
@@ -141,7 +142,7 @@ impl HeadlessRenderer {
             (width, height),
         );
         {
-            let mut backend = Backend::new(&mut painter);
+            let mut backend = LayerDispatcher::new(&mut painter);
             if let Some(root) = tree.root() {
                 let mut visitor = CaptureVisitor {
                     backend: &mut backend,
@@ -306,7 +307,7 @@ impl HeadlessRenderer {
 /// same way, with no diverted subtree handlers, so this is the plain shape
 /// [`walk_layer_tree`](super::layer_walk::walk_layer_tree) drives.
 struct CaptureVisitor<'a, 'b> {
-    backend: &'a mut Backend<'b>,
+    backend: &'a mut LayerDispatcher<'b>,
 }
 
 impl super::layer_walk::LayerVisitor for CaptureVisitor<'_, '_> {

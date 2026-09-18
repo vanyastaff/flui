@@ -226,7 +226,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // );
 //
 // // 2. Render card on top
-// painter.rect(rect, Color::WHITE, corner_radius: 12.0);
+// painter.draw_rect(rect, Color::WHITE, corner_radius: 12.0);
 // ```
 //
 // =============================================================================

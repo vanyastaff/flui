@@ -206,11 +206,11 @@ where
     // advisory-only `vsync`/`target_fps` fields it used to have were removed
     // rather than kept misleading. The desktop runner's steady-state pacing
     // comes entirely from the GPU-side blocking Fifo present
-    // (`flui-engine::wgpu::Renderer::render_scene`) today. `flui_engine::
-    // RasterOptions` exists as the shape a future frame-pacing surface would
-    // take, but nothing reads it at the raster boundary yet (`RasterOwner`
-    // stores its `RasterOptions` and never acts on it) — that wiring is
-    // #559's job, not a claim this comment gets to make in the meantime.
+    // (`flui-engine::wgpu::Renderer::render_scene`) today. The unwired
+    // `RasterOptions` DTO was deleted with no reader rather than kept as a
+    // shape; a frame-pacing surface returns with the threaded lane that can
+    // act on one — that wiring is #559's job, not a claim this comment gets
+    // to make in the meantime.
     tracing::info!(
         title = %config.title,
         size = ?config.size,

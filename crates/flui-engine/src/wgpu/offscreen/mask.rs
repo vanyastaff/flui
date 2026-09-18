@@ -139,8 +139,14 @@ impl OffscreenRenderer {
     ///   sizing it at device resolution keeps a HiDPI masked layer crisp instead
     ///   of allocating it at half resolution and upscaling on composite.
     /// * `shader` - Shader (gradient, solid, etc.)
-    /// * `blend_mode` - Blend mode for compositing
     /// * `child_texture` - Pre-rendered child content texture (device-sized)
+    ///
+    /// The composite blend mode is deliberately **not** a parameter: this
+    /// pass produces a premultiplied offscreen result, and the mode belongs
+    /// to the compositing step that draws it back. `ShaderMaskLayer` carries
+    /// its own `blend_mode()` and the layer path passes that to
+    /// `queue_offscreen_result`; taking one here would be a parameter no
+    /// pass in this function could act on.
     ///
     /// # Returns
     ///
@@ -158,7 +164,6 @@ impl OffscreenRenderer {
         child_bounds: Rect<Pixels>,
         result_size: Size<Pixels>,
         shader: &Shader,
-        blend_mode: flui_types::painting::BlendMode,
         child_texture: &wgpu::Texture,
     ) -> MaskedRenderResult {
         // Get shader type for this shader
@@ -269,10 +274,6 @@ impl OffscreenRenderer {
             result_size.height
         );
 
-        MaskedRenderResult {
-            texture,
-            shader_type,
-            blend_mode,
-        }
+        MaskedRenderResult { texture }
     }
 }

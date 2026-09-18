@@ -148,6 +148,18 @@ impl Drop for PooledTexture {
     }
 }
 
+/// Texture pool statistics, produced by the test-only [`TexturePool::stats`].
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+#[derive(Debug, Clone, Copy)]
+pub struct PoolStats {
+    /// Total number of textures allocated (in-use + idle)
+    pub total_allocated: usize,
+    /// Total memory used by textures (bytes, approximate)
+    pub total_memory_bytes: usize,
+    /// Number of textures currently idle in the pool
+    pub available_count: usize,
+}
+
 /// Internal texture pool state
 struct TexturePoolInner {
     /// Available (idle) textures keyed by descriptor
@@ -192,6 +204,18 @@ impl TexturePoolInner {
         }
     }
 
+    /// Clear all idle textures from the pool. Test-only, like its caller
+    /// [`TexturePool::clear`].
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    fn clear(&mut self) {
+        let count = self.available.len();
+        let freed_bytes: usize = self.available.iter().map(|t| t.desc.size_bytes()).sum();
+        self.available.clear();
+        self.total_allocated = self.total_allocated.saturating_sub(count);
+        self.total_memory_bytes = self.total_memory_bytes.saturating_sub(freed_bytes);
+        tracing::info!("Texture pool cleared ({count} textures released)");
+    }
+
     /// Return a texture to the pool for future reuse
     fn return_texture(&mut self, gpu_tex: GpuTexture) {
         if self.available.len() < self.max_pool_size {
@@ -206,16 +230,6 @@ impl TexturePoolInner {
             tracing::trace!("Texture pool full, discarding: {:?}", gpu_tex.desc);
             // gpu_tex is dropped here, releasing the GPU resource
         }
-    }
-
-    /// Clear all idle textures from the pool
-    fn clear(&mut self) {
-        let count = self.available.len();
-        let freed_bytes: usize = self.available.iter().map(|t| t.desc.size_bytes()).sum();
-        self.available.clear();
-        self.total_allocated = self.total_allocated.saturating_sub(count);
-        self.total_memory_bytes = self.total_memory_bytes.saturating_sub(freed_bytes);
-        tracing::info!("Texture pool cleared ({count} textures released)");
     }
 }
 
@@ -242,7 +256,8 @@ impl TexturePoolInner {
 ///
 /// // Texture automatically returned to pool when dropped
 /// ```
-#[expect(missing_debug_implementations)]
+// `missing_debug_implementations` is a crate-level `#[expect]`: these types
+// hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
 pub struct TexturePool {
     inventory: TexturePoolInner,
     return_tx: Sender<GpuTexture>,
@@ -331,19 +346,10 @@ impl TexturePool {
         self.acquire(w, h, format)
     }
 
-    /// Return `texture` to the pool immediately, bypassing the drop channel.
-    ///
-    /// Equivalent to dropping it — the explicit form for call sites that
-    /// already hold the pool exclusively and want the texture reusable for
-    /// their very next `acquire`.
-    pub fn release(&mut self, mut texture: PooledTexture) {
-        if let Some(gpu_tex) = texture.gpu_texture.take() {
-            self.inventory.return_texture(gpu_tex);
-        }
-    }
-
-    /// Get pool statistics
-    #[must_use]
+    /// Get pool statistics. Test-only: the frame path reads the pool's
+    /// inventory through its own accounting, and nothing in production
+    /// asks for a snapshot.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
     pub fn stats(&mut self) -> PoolStats {
         self.drain_returns();
         PoolStats {
@@ -353,7 +359,10 @@ impl TexturePool {
         }
     }
 
-    /// Clear all idle textures from the pool
+    /// Clear all idle textures from the pool. Test-only: the frame path
+    /// never drops the pool's inventory mid-session (textures are returned
+    /// by drop and reclaimed by the pool's own size bound).
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
     pub fn clear(&mut self) {
         self.drain_returns();
         self.inventory.clear();
@@ -388,17 +397,6 @@ impl TexturePool {
             desc: *desc,
         }
     }
-}
-
-/// Texture pool statistics
-#[derive(Debug, Clone, Copy)]
-pub struct PoolStats {
-    /// Total number of textures allocated (in-use + idle)
-    pub total_allocated: usize,
-    /// Total memory used by textures (bytes, approximate)
-    pub total_memory_bytes: usize,
-    /// Number of textures currently idle in the pool
-    pub available_count: usize,
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]

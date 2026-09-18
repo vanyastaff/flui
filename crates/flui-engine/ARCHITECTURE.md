@@ -16,12 +16,12 @@ The relevant external APIs the crate consumes:
 |---|---|---|
 | [`src/wgpu/renderer.rs`](src/wgpu/renderer.rs) `Renderer` | `wgpu::Instance`, `wgpu::Adapter`, `wgpu::Device`, `wgpu::Queue`, `wgpu::Surface<'static>`, `wgpu::SurfaceConfiguration`, `wgpu::TextureFormat`, `wgpu::PresentMode`, `wgpu::SurfaceError`, `wgpu::CommandEncoderDescriptor`, `wgpu::RenderPassDescriptor`, `wgpu::CompositeAlphaMode` | The single owner of all per-window GPU state. Backend selection per platform: Metal (macOS/iOS) / DX12 (Windows) / Vulkan (Linux/Android) / WebGPU+GL (Web). |
 | [`src/wgpu/painter/`](src/wgpu/painter/mod.rs) `WgpuPainter` | `wgpu::Buffer`, `wgpu::RenderPipeline`, `wgpu::BindGroup`, `wgpu::ShaderModule`, `wgpu::Texture`, `wgpu::TextureView`, `wgpu::Sampler`, `wgpu::ShaderSource::Wgsl`, `wgpu::RenderPassColorAttachment`, `wgpu::LoadOp`, `wgpu::StoreOp` | Batched recording + per-frame submission. Uses instancing (`RectInstance`, `CircleInstance`, `ArcInstance`, `TextureInstance`) for fast axis-aligned primitives; falls back to `lyon`-tessellated paths for arbitrary geometry. |
-| [`src/wgpu/backend.rs`](src/wgpu/backend.rs) `Backend` | -- | Visitor over `flui_painting::DrawCommand`; implements `CommandRenderer`; bridges per-command to `WgpuPainter` inherent methods. |
+| [`src/wgpu/layer_dispatcher.rs`](src/wgpu/layer_dispatcher.rs) `LayerDispatcher` | -- | Routes each `flui_painting::DrawCommand` to `WgpuPainter`; implements `CommandRenderer` + `LayerStateStack`. |
 | [`src/wgpu/layer_render.rs`](src/wgpu/layer_render.rs) `LayerRender<R>` | -- | Closed extension trait per `flui_layer::Layer` variant. 19 impls. Static dispatch via generic `R: CommandRenderer + ?Sized`. |
-| [`src/commands.rs`](src/commands.rs) `dispatch_command` | -- | Closed visitor over the ~30-variant `flui_painting::DrawCommand` enum. Static dispatch via generic `R: CommandRenderer + ?Sized`. |
+| [`src/dispatch.rs`](src/dispatch.rs) `dispatch_command` | -- | Closed match over the `flui_painting::DrawCommand` enum. Static dispatch via generic `R: CommandRenderer + ?Sized`. |
 | [`src/wgpu/offscreen/`](src/wgpu/offscreen/mod.rs) `OffscreenRenderer` | `wgpu::RenderPipeline`, `wgpu::BindGroupLayout`, `wgpu::BindGroup`, `wgpu::Sampler` | Offscreen-texture pipelines for `ShaderMaskLayer` (compose with mask shader) and `BackdropFilterLayer` (Dual-Kawase blur). |
 | [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs) `ShaderCache` | `wgpu::ShaderModule`, `wgpu::ShaderSource` | Caches compiled WGSL modules per `ShaderType` enum (Solid/LinearGradient/RadialGradient mask shaders; BlurHorizontal/Vertical/Downsample/Upsample; MorphDilate/Erode). |
-| [`src/wgpu/pipeline.rs`](src/wgpu/pipeline.rs) `PipelineCache` + [`src/wgpu/pipelines.rs`](src/wgpu/pipelines.rs) `PipelineSet` | `wgpu::RenderPipelineDescriptor`, `wgpu::VertexBufferLayout`, `wgpu::ColorTargetState`, `wgpu::BlendState`, `wgpu::DepthStencilState` | `PipelineCache` caches shape pipelines per `PipelineKey` (paint-style + blend-mode + format); `PipelineSet` owns the named instanced/gradient/shadow pipelines, all specs over its shared unit-quad constructor. |
+| [`src/wgpu/pipeline_cache.rs`](src/wgpu/pipeline_cache.rs) `PipelineCache` + [`src/wgpu/pipeline_set.rs`](src/wgpu/pipeline_set.rs) `PipelineSet` | `wgpu::RenderPipelineDescriptor`, `wgpu::VertexBufferLayout`, `wgpu::ColorTargetState`, `wgpu::BlendState`, `wgpu::DepthStencilState` | `PipelineCache` caches shape pipelines per `PipelineKey` (paint-style + blend-mode + format); `PipelineSet` owns the named instanced/gradient/shadow pipelines, all specs over its shared unit-quad constructor. |
 | [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) `TexturePool` | `wgpu::TextureDescriptor`, `wgpu::TextureUsages` | Per-frame texture reuse for offscreen renders. Directly-owned inventory + mpsc return channel (no lock, `Send`-only). |
 | [`src/wgpu/tessellator.rs`](src/wgpu/tessellator.rs) `Tessellator` | -- | Adapter over `lyon::tessellation::FillTessellator` + `StrokeTessellator`. |
 | [`src/wgpu/text.rs`](src/wgpu/text.rs) `TextRenderer` | -- | Adapter over `glyphon` (cosmic-text + glyph atlas + GPU sampling). |
@@ -76,7 +76,7 @@ This section records places where the Rust shape diverges from the patterns the 
 
 **Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior as floor, everything else designed for Rust" (here: wgpu/Vulkan/Metal semantics as the floor).
 
-**Choice:** `LayerRender<R: CommandRenderer + ?Sized>` is a closed extension trait with 19 impls (one per `flui_layer::Layer` variant) ([`src/wgpu/layer_render.rs`](src/wgpu/layer_render.rs)). Dispatch is static via generics; no `Box<dyn Layer>`, no `Box<dyn Backend>`, no vtable on the hot path. `CommandRenderer` itself has exactly **one production impl** (`Backend` in [`src/wgpu/backend.rs`](src/wgpu/backend.rs)) and **one test mock** (`MockRenderer` in `layer_render.rs:683-965`). The trait earns its existence via the test mock and via the static-dispatch generic boundary; a future second backend (Skia/Vello/software) would add a second impl, not displace the trait.
+**Choice:** `LayerRender<R: CommandRenderer + ?Sized>` is a closed extension trait with 19 impls (one per `flui_layer::Layer` variant) ([`src/wgpu/layer_render.rs`](src/wgpu/layer_render.rs)). Dispatch is static via generics; no `Box<dyn Layer>`, no `Box<dyn Backend>`, no vtable on the hot path. `CommandRenderer` itself has exactly **one production impl** (`LayerDispatcher` in [`src/wgpu/layer_dispatcher.rs`](src/wgpu/layer_dispatcher.rs)) and **one test mock** (`MockRenderer` in `layer_render.rs:683-965`). The trait earns its existence via the test mock and via the static-dispatch generic boundary; a future second backend (Skia/Vello/software) would add a second impl, not displace the trait.
 
 **Alternatives:**
 - `Box<dyn Backend>` plugin trait for "multiple rendering backends without changing high-level code" -- rejected. No second backend exists or is planned in any document in the repo. Static dispatch + closed `CommandRenderer` already provides the abstraction `flui-rendering` needs.
@@ -251,6 +251,32 @@ A difference clip keeps the shape's COMPLEMENT. A scissor is one rectangle and c
 
 **Alternatives rejected:** honouring it needs the machinery exact path clipping needs — a stencil pass, or a shader carrying a clip STACK that can evaluate `1 − coverage`. For the SDF shapes the second is nearly free (one flag, one sign), and for a plain rect it is not expressible at all short of splitting each draw across up to four scissor bands. Doing it for the rounded shapes alone would leave the four disagreeing again, in the opposite direction, so it waits for the clip stack. Downgrading the report to `debug!` was rejected for the reason `WgpuPainter::clip_path`'s own message was raised to `warn!`: an unhonoured clip renders content the caller asked to remove, which a production scrape must be able to see.
 
+### 12. An offscreen result composites with the mode its producer recorded
+
+**Rule:** Prime Directive #1 — a contract the framework user can express is one the engine honours or refuses, never one it accepts and discards. Same rule as entry 8, on a different producer.
+
+**Reference:** `dart:ui`'s `Layer` API carries a `Paint` per layer, and `ShaderMaskLayer::paint` (`layer.dart:2229`) composites the masked result with the layer's own blend. `BackdropFilterLayer` carries one too.
+
+**The defect and its shape.** `Backend::render_shader_mask` / `Renderer`'s `ShaderMaskLayer` handler read `ShaderMaskLayer::blend_mode()`, passed it to `OffscreenRenderer::render_masked`, and that function bound the parameter and never used it. The result texture was then queued as `DrawItem::OffscreenTexture`, whose replay arm always composited with the premultiplied `SrcOver` pipeline. Every masked layer therefore rendered `SrcOver` regardless of what the caller asked for — `Clear` drew content instead of erasing it. It is entry 8's exact failure one layer down: a mode the API accepts, carries on the wire, and drops at the last step.
+
+**Choice:** `PendingOffscreenTexture` carries a `blend` field; `queue_offscreen_result` takes it; the replay arm routes every mode through `flush_texture_batch_premultiplied_with_mode`, which builds the exact per-mode pipeline via `PipelineSet::ensure_texture_composite`. `BackdropFilterLayer::blend_mode()` is threaded through `apply_backdrop_blur` the same way instead of being bound as `_blend_mode`. `render_masked` no longer takes a blend mode at all: it produces a premultiplied full-coverage offscreen, and the mode belongs to the step that draws it back — a parameter no line in that function could act on is not kept as a courtesy.
+
+**The per-mode cache is not restricted to the SSAA-eligibility table.** `is_tile_safe_for_ssaa` asks a narrower question — may a *downsampled tile* take this mode, which additionally requires the destination factor to absorb partial coverage. A finished offscreen is premultiplied and full-coverage by construction, so every Porter-Duff mode `blend_state_for` names is expressible. The shared cache was renamed `texture_composite_cache` accordingly; the SSAA tile composite uses the same entry point.
+
+**Test:** `an_offscreen_result_composites_with_its_own_blend_mode` (painter readback): an opaque red frame plus a green full-surface offscreen composited `Clear` must read back transparent. It fails on the pre-fix code — the red stays.
+
+### 13. `GpuServices` and `RasterOptions`: deleted, not carried
+
+**Rule:** the same audit principle as entries 3 and 4 — every module justifies its existence with a production caller, not a re-export and not a future plan.
+
+**Choice:** two public types whose every reader was their own test were deleted rather than kept as unwired infrastructure.
+
+`GpuServices` (ADR-0045 decision 2) shipped its offscreen-only half: a value type holding instance/adapter/device/queue plus a shared `ShaderCache`, and `Renderer::from_offscreen_services`. No production caller existed — `flui-app`'s runners built a private stack per renderer through `Renderer::new`, which was `#[doc(hidden)]` as the signal. The windowed half could not exist before `ReplaceServices`, because recovery on a shared device cannot be a per-renderer `recover()` without installing a second `set_device_lost_callback`. Carrying the offscreen half made docs.rs advertise a constructor no windowed caller could reach while the working entry point was hidden. Deleted; the decision's implementation-status paragraph in ADR-0045 records why, and `Renderer::new` is again the advertised entry point. `EngineError::SharedServicesNotRecoverable` went with it.
+
+`RasterOptions` (ADR-0045 decision 6) was a DTO `RasterOwner` stored and never read. Its `max_frames_in_flight` advertised `1..=255` while the capacity-one mailbox made `1..=2` reachable, and the decision had already replaced it with `PipelineDepth`; the carrier went with the field rather than waiting. `RasterOwner::with_options`/`options` and `RasterHandle::options` are gone. `PipelineDepth` and `select_pipeline_policy` arrive with the threaded lane that can act on them.
+
+**Consequence:** ADR-0045's decision 2 and decision 6 both carry an implementation-status paragraph naming what landed and what is deferred. The pacing surface returns with a real consumer, not before.
+
 ### `Clip::AntiAliasWithSaveLayer`: what the offscreen costs, and where it is declined
 
 **Reference:** `.flutter/packages/flutter/lib/src/painting/clip.dart`'s `ClipContext._clipAndPaint` clips anti-aliased and then calls `canvas.saveLayer(bounds, Paint())` — for every clip shape, and with the clip's BOUNDS passed explicitly. `Backend::push_clip_rect` / `push_clip_rrect` / `push_clip_rsuperellipse` / `push_clip_path` match the shape of that, and `save_layer_clipped` passes the bounds. Two places diverge, both recorded here.
@@ -272,7 +298,7 @@ A difference clip keeps the shape's COMPLEMENT. A scissor is one rectangle and c
 | Delete `utils/` | -809 | 0 | 0 |
 | Delete `wgpu/scene.rs` + `wgpu/compositor.rs` | -2,185 | 0 | 0 |
 | Delete platform stubs | -2,182 | 0 | 0 |
-| Delete `wgpu/commands.rs` shim | -6 | 0 | 0 |
+| Delete the `wgpu` command-shim | -6 | 0 | 0 |
 | Delete `Painter` trait | -492 | 0 | 0 |
 | `anyhow::Result` → `EngineResult` | ~+20 | 0 | 0 |
 | Dead-code audit + `text_renderer.rs` deletion | ~-330 | 0 | 0 |
@@ -297,7 +323,7 @@ The engine uses two distinct IRs in a strict producer/consumer chain.  Understan
 
 **Level 1 — Scene IR (`DisplayList` / `DrawCommand`).**  Lives in `flui-painting`
 (`crates/flui-painting/src/display_list.rs`).  Produced by the widget tree's
-`Canvas` API; consumed by `Backend` in `flui-engine/src/wgpu/backend.rs`.  Every
+`Canvas` API; consumed by `LayerDispatcher` in `flui-engine/src/wgpu/layer_dispatcher.rs`.  Every
 `DrawCommand` variant is high-level and coordinate-system–agnostic: it carries
 `Paint`, logical `Rect`/`Path`/`TextSpan`, and `flui_types::Matrix4` transforms.
 This IR is **not GPU-specific** — it is the contract between the scene-graph layer
@@ -348,7 +374,7 @@ GpuReplay::submit (replay/mod.rs)
      owns 5 GPU-plumbing fields + texture-batch scratch; the dispatch
      core (submit / reintegrate_offscreen_content) is in replay/mod.rs,
      the five-phase segment-flush machinery in replay/flush.rs;
-     flush_opacity_layer recursion (in opacity_layer.rs)
+     flush_opacity_layer recursion (in layer_offscreen.rs)
      Matrix4-free; glam-only (C4 rule, Trigger 19)
 ```
 
@@ -361,7 +387,7 @@ GpuReplay::submit (replay/mod.rs)
 | `state: GpuStateStack` | transform / scissor / rrect-clip / rsuperellipse stacks; Copy accessors; depth + `Drop` assert | [`src/wgpu/state_stack.rs`](src/wgpu/state_stack.rs) |
 | `compositor: LayerCompositor` | `SavedLayer` + `PendingOpacityLayer` + opacity stack | [`src/wgpu/layer_compositor.rs`](src/wgpu/layer_compositor.rs) |
 | `resources: GpuResources` | `TexturePool` / `BufferPool` / `TextureCache` / `ExternalTextureRegistry` | [`src/wgpu/resources.rs`](src/wgpu/resources.rs) |
-| `pipelines: PipelineSet` | 9 named `RenderPipeline` fields + `PipelineCache` (composition) | [`src/wgpu/pipelines.rs`](src/wgpu/pipelines.rs) |
+| `pipelines: PipelineSet` | 9 named `RenderPipeline` fields + `PipelineCache` (composition) | [`src/wgpu/pipeline_set.rs`](src/wgpu/pipeline_set.rs) |
 | `current_segment: DrawSegment`, `draw_order: Vec<DrawItem>` | Command IR — the record output | [`src/wgpu/command_ir.rs`](src/wgpu/command_ir.rs) |
 | `replay: GpuReplay` | GPU-emit/submit path — the replay side | [`src/wgpu/replay/`](src/wgpu/replay/mod.rs) |
 
@@ -374,7 +400,7 @@ Record methods (per-primitive draw calls) are owned by `DrawBatcher` in `batches
 | [`src/wgpu/batches/paths.rs`](src/wgpu/batches/paths.rs) | `draw_path`, `draw_vertices` |
 | [`src/wgpu/batches/images.rs`](src/wgpu/batches/images.rs) | `draw_image`, `draw_image_repeat`, `draw_image_nine_slice`, `draw_image_filtered`, `draw_atlas`, `draw_texture` |
 
-`GpuReplay` (`replay/`) owns the replay/submit path: it holds the viewport_buffer, viewport_bind_group, two unit_quad buffers, the default_sampler, and the texture_batch scratch. The dispatch core (`new` / `update_viewport` / `submit` / `reintegrate_offscreen_content`) lives in `replay/mod.rs`; the segment-flush machinery in `replay/flush.rs` — `flush_segment` (the canonical five-phase entry point) drives `flush_all_instanced_batches`, `flush_gradient_batches`, `flush_tessellated_geometry`, `flush_segment_cached_images`, and `flush_segment_external_images`, plus the four `flush_texture_batch*` blend variants. `GpuReplay::submit` is the top-level dispatch loop that consumes `&DrawSegment` / `&[DrawItem]` and drives GPU encoding, including `flush_opacity_layer` recursion (defined in `opacity_layer.rs`) and `reintegrate_offscreen_content`.
+`GpuReplay` (`replay/`) owns the replay/submit path: it holds the viewport_buffer, viewport_bind_group, two unit_quad buffers, the default_sampler, and the texture_batch scratch. The dispatch core (`new` / `update_viewport` / `submit` / `reintegrate_offscreen_content`) lives in `replay/mod.rs`; the segment-flush machinery in `replay/flush.rs` — `flush_segment` (the canonical five-phase entry point) drives `flush_all_instanced_batches`, `flush_gradient_batches`, `flush_tessellated_geometry`, `flush_segment_cached_images`, and `flush_segment_external_images`, plus the four `flush_texture_batch*` blend variants. `GpuReplay::submit` is the top-level dispatch loop that consumes `&DrawSegment` / `&[DrawItem]` and drives GPU encoding, including `flush_opacity_layer` recursion (defined in `layer_offscreen.rs`) and `reintegrate_offscreen_content`.
 
 `text` / `rich_text` remain on `WgpuPainter` pending the text-vs-Command-IR seam decision.
 
@@ -398,7 +424,7 @@ fn draw_*(
 
 ### C1 definition — module file size limit
 
-Each module file in `batches/` must stay **< 1 500 non-test LOC**. `/spec-verify` measures non-test LOC (i.e., lines outside `#[cfg(test)]` blocks and `mod tests { … }` sections). The same limit applies to `state_stack.rs`, `layer_compositor.rs`, `resources.rs`, `pipelines.rs`, the `painter/` submodules, and the `replay/` submodules.
+Each module file in `batches/` must stay **< 1 500 non-test LOC**. `/spec-verify` measures non-test LOC (i.e., lines outside `#[cfg(test)]` blocks and `mod tests { … }` sections). The same limit applies to `state_stack.rs`, `layer_compositor.rs`, `resources.rs`, `pipeline_set.rs`, the `painter/` submodules, and the `replay/` submodules.
 
 `WgpuPainter`'s code is split across the `painter/` directory (`mod` / `draw` / `transform_clip` / `layer` / `gradient`), each file **< 1 500 non-test LOC**. **C1 is closed.** The replay/submit path (`render()` / `flush_segment` / `flush_*`) was extracted into `GpuReplay`, then split into `replay/{mod,flush}.rs` (both < 1 500 non-test LOC).
 
@@ -432,26 +458,26 @@ path end-to-end (red-by-revert: restoring the recursion `SIGABRT`s it).
 `clear_needs_add_to_scene_subtree` are the other half of issue #1083 and belong
 to that crate, not this one.
 
-### C4 rule — Matrix4 must not appear in batches/, pipelines.rs, or replay/
+### C4 rule — Matrix4 must not appear in batches/, pipeline_set.rs, or replay/
 
 `GpuStateStack` stores transforms as `glam::Mat4`. The conversion to/from `flui_types::Matrix4` happens at exactly one structural edge:
 
 - `painter::current_transform_matrix()` (`painter/mod.rs`) — Copy-accessor returning a `Matrix4` to callers outside the engine's wgpu module.
-- `backend.rs::with_transform` and the `render_*` methods — the `CommandRenderer` implementation that converts incoming `Matrix4` arguments into `glam::Mat4` before calling painter record methods.
+- `layer_dispatcher.rs::with_transform` and the `render_*` methods — the `CommandRenderer` implementation that converts incoming `Matrix4` arguments into `glam::Mat4` before calling painter record methods.
 
-**`Matrix4` must not appear in `batches/`, `pipelines.rs`, or `replay/`** — these modules work entirely in glam primitives. Port-check Trigger 19 (`scripts/port-check.sh`) enforces this with an `rg` grep on every CI run and locally via `just port-check`. The replay submodules are included because the `Matrix4`↔glam conversion must not migrate into the GPU-emit path.
+**`Matrix4` must not appear in `batches/`, `pipeline_set.rs`, or `replay/`** — these modules work entirely in glam primitives. Port-check Trigger 19 (`scripts/port-check.sh`) enforces this with an `rg` grep on every CI run and locally via `just port-check`. The replay submodules are included because the `Matrix4`↔glam conversion must not migrate into the GPU-emit path.
 
 If a record method receives per-sprite transforms (e.g., `draw_atlas`), the conversion to pixel-space origins (`Offset<Pixels>`) happens at the `painter` call site before the batcher is invoked.
 
 ### Replay side
 
-The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extracted into `GpuReplay`, then split into `replay/{mod,flush}.rs` for the C1 cap. `GpuReplay` owns: 5 GPU-plumbing fields (viewport_buffer, viewport_bind_group, unit_quad×2, default_sampler), the texture_batch scratch, the five-phase segment-flush machinery (`replay/flush.rs`), the `submit` dispatch loop (`replay/mod.rs`), `flush_opacity_layer` recursion (`opacity_layer.rs`), and `reintegrate_offscreen_content`. `WgpuPainter::render()` is now: record-finish + `self.replay.submit(…)`. C1 is closed.
+The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extracted into `GpuReplay`, then split into `replay/{mod,flush}.rs` for the C1 cap. `GpuReplay` owns: 5 GPU-plumbing fields (viewport_buffer, viewport_bind_group, unit_quad×2, default_sampler), the texture_batch scratch, the five-phase segment-flush machinery (`replay/flush.rs`), the `submit` dispatch loop (`replay/mod.rs`), `flush_opacity_layer` recursion (`layer_offscreen.rs`), and `reintegrate_offscreen_content`. `WgpuPainter::render()` is now: record-finish + `self.replay.submit(…)`. C1 is closed.
 
 ---
 
 ## Thread safety
 
-`flui-engine` runs on the render thread; wgpu handles its own thread-safety via `Arc<Device>` / `Arc<Queue>` (cheap ref-counted handles, not lock-protected). Per strategy clause "sync hot path, async at edges," neither the layer walk nor the per-command dispatch is multi-threaded; `Renderer::render_scene` is sync. Async only at the acquisition edges -- `Renderer::new`, `Renderer::new_offscreen`, `Renderer::recover`, and `GpuServices::resolve_offscreen`, all of which now share `wgpu/adapter.rs`'s acquisition helpers (wgpu's `request_adapter` and `request_device` are async at the wgpu boundary).
+`flui-engine` runs on the render thread; wgpu handles its own thread-safety via `Arc<Device>` / `Arc<Queue>` (cheap ref-counted handles, not lock-protected). Per strategy clause "sync hot path, async at edges," neither the layer walk nor the per-command dispatch is multi-threaded; `Renderer::render_scene` is sync. Async only at the acquisition edges -- `Renderer::new`, `Renderer::new_offscreen`, and `Renderer::recover`, all of which share `wgpu/adapter.rs`'s acquisition helpers (wgpu's `request_adapter` and `request_device` are async at the wgpu boundary).
 
 | Site | Primitive | Category | Notes |
 |---|---|---|---|
@@ -520,7 +546,7 @@ The clones are gone, by deletion rather than by borrowing: `RenderContext` no lo
 carries `device`/`queue` at all (the mid-frame backdrop-blur path that needed them now
 sources them from the offscreen renderer inside `Backend::apply_backdrop_blur`, so the
 fields were removed as dead). Every remaining `Arc::clone(&device)` / `Arc::clone(&queue)`
-in `renderer.rs` is setup-phase (constructors, recovery, `from_offscreen_services`) --
+in `renderer.rs` is setup-phase (constructors, recovery) --
 acceptable per the strategy clause -- or test-only.
 
 ### `painter.rs` god module — RESOLVED (split into `painter/`)
@@ -540,15 +566,15 @@ lives in `wgpu/morphology/` as one of the format-matched filter pipelines.
 
 ### Forward-looking helpers in `effects`, `instancing`, `pipeline`, `shader_compiler` modules -- RESOLVED (helpers deleted per-item)
 
-**Sites:** [`src/wgpu/effects.rs`](src/wgpu/effects.rs), [`src/wgpu/instancing.rs`](src/wgpu/instancing.rs), [`src/wgpu/pipeline.rs`](src/wgpu/pipeline.rs), [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs).
+**Sites:** [`src/wgpu/effects/`](src/wgpu/effects/mod.rs), [`src/wgpu/instancing.rs`](src/wgpu/instancing.rs), [`src/wgpu/pipeline_cache.rs`](src/wgpu/pipeline_cache.rs), [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs).
 
 The module-level `#[allow(dead_code)]` masks are gone from all four files and the forward-looking helpers behind them were deleted per-item rather than kept against hypothetical consumers. See the DONE entry in [Outstanding refactors](#outstanding-refactors) for the item-by-item disposition.
 
-### `wgpu/texture_cache.rs` + `wgpu/external_texture_registry.rs` + `wgpu/path_cache.rs` + `wgpu/multi_draw.rs` -- RESOLVED (audited: all four live)
+### `wgpu/texture_cache.rs` + `wgpu/external_texture_registry.rs` + `wgpu/path_cache.rs` -- RESOLVED (audited: all three live; `multi_draw.rs` deleted)
 
-**Sites:** [`src/wgpu/resources.rs`](src/wgpu/resources.rs) (`GpuResources` owns `texture_cache` + `external_texture_registry`), [`src/wgpu/batches/mod.rs`](src/wgpu/batches/mod.rs) (`DrawBatcher` owns `path_cache`), [`src/wgpu/replay/flush.rs`](src/wgpu/replay/flush.rs) (the `multi_draw` use site).
+**Sites:** [`src/wgpu/resources.rs`](src/wgpu/resources.rs) (`GpuResources` owns `texture_cache` + `external_texture_registry`), [`src/wgpu/batches/mod.rs`](src/wgpu/batches/mod.rs) (`DrawBatcher` owns `path_cache`).
 
-An earlier cleanup proposed deleting all four modules because no external caller exists; the deferred per-field audit has since run and found each one populated **and** queried on a production path, so all four stay. Call paths are documented in the DONE audit entry in [Outstanding refactors](#outstanding-refactors).
+An earlier cleanup proposed deleting all four modules because no external caller exists; the deferred per-field audit found three populated **and** queried on a production path, so those stay. The fourth, `multi_draw.rs`, did not survive its own re-read: `MultiDrawBatcher` was a pair of counters feeding one `debug_assertions`-gated trace line, `PipelineId` was never read, and three of `add_quad_draw`'s four parameters were `_`-prefixed. The trace now counts the batches directly at the call site, and the module is gone. Call paths for the surviving three are documented in the DONE audit entry in [Outstanding refactors](#outstanding-refactors).
 
 ### Doctest sweep: `ignore` masked four stale examples — DONE
 
@@ -621,20 +647,20 @@ The move-only split of `wgpu/painter.rs` into `painter/{mod,draw,transform_clip,
 filter ended up in `wgpu/morphology/` with the other filter pipelines instead of an
 `offscreen/morph.rs`). See the Friction-log entry above.
 
-### Audit `painter/` consumers of `texture_cache`, `external_texture_registry`, `path_cache`, `multi_draw` — DONE (all four live; nothing deleted)
+### Audit `painter/` consumers of `texture_cache`, `external_texture_registry`, `path_cache`, `multi_draw` — DONE (three live; `multi_draw` deleted)
 
 The per-field audit ran and reached the opposite of the outcome the deletion budget anticipated: every one of the four modules is populated **and** queried on a production path, so per this entry's own decision rule ("populated + queried → document the path and leave the module") all four stay. The former `WgpuPainter` fields now live behind the borrow-seam facades — `GpuResources` ([`src/wgpu/resources.rs`](src/wgpu/resources.rs)) owns `texture_cache` and `external_texture_registry`; `DrawBatcher` ([`src/wgpu/batches/mod.rs`](src/wgpu/batches/mod.rs)) owns `path_cache`. The live paths, per module:
 
 - **`texture_cache`** — populated at record time by the image-draw family (`WgpuPainter::draw_image*` → `batches/images.rs` → `TextureCache::load_from_rgba` via `GpuResources::texture_cache_mut`); queried at replay time (`replay/flush.rs::flush_segment_cached_images` resolves each `TextureId` to its view via `TextureCache::get`); maintained once per frame (`WgpuPainter` calls `end_frame_maintenance`: stale-atlas reset → budget eviction → use-counter reset).
 - **`external_texture_registry`** — the embedder-facing surface for platform textures (video, camera): registered/updated through `WgpuPainter::external_texture_registry_mut`, size-queried at record time in `draw_texture` (src-UV normalization), and resolved ID→view at replay time in `replay/flush.rs::flush_segment_external_images`. Reached from the layer tree via `TextureLayer` → `Backend` → `WgpuPainter::draw_texture`.
 - **`path_cache`** — hit on every arbitrary-path draw: `batches/paths.rs::draw_path` computes the path hash, queries `PathCache::get`, and inserts fresh tessellation on miss; `advance_frame` runs once per frame from `WgpuPainter::render`. Also measured by `benches/render_throughput.rs`.
-- **`multi_draw`** — an earlier pass already trimmed it to its live surface (~150 LOC; the module doc records what was cut). What remains is reachable, not dead: `MultiDrawBatcher` accumulates draw/instance counts inside `replay/flush.rs::flush_all_instanced_batches` and feeds the `debug_assertions`-gated trace log via `stats()`. Deleting it would remove observable (traced) telemetry, so it stays.
+- **`multi_draw`** — deleted. This entry previously argued it stayed because deleting it "would remove observable (traced) telemetry"; re-reading it showed the telemetry was two counters whose values are already in hand at the call site (`segment.*_batch.len()` and the `has_*` flags), `PipelineId` was constructed but never read, and three of `add_quad_draw`'s four parameters were discarded. `replay/flush.rs` now logs the same numbers directly.
 
-Net deletion from these four modules: 0 LOC — the ~1,955 LOC budget was conditioned on "if all confirmed unused", and none were. One honest residue, named rather than silently kept: `TextureCache` carries public convenience surface with no in-workspace caller today (`get_or_load`/`from_path` file loading, the memory-budget constructor/setters, atlas introspection). That is exported API on a `pub mod` — reachable by embedders — not unreachable code; pruning it would be an API-design decision, out of scope for a dead-code audit.
+Net deletion from these four modules: ~150 LOC (`multi_draw.rs`). The other three remain, as this entry records. One further residue was resolved in the public-surface pass: `TextureCache`'s unreachable convenience surface (`get_or_load`/`from_path` file loading, the memory-budget constructor/setters, atlas introspection, `stats`) is deleted — that was an API-design decision this entry deferred, and the pass made it.
 
 ### Per-item audit of `effects`, `instancing`, `pipeline`, `shader_compiler` dead helpers — DONE
 
-The keep-or-delete audit is complete: **no module-wide `#[allow(dead_code)]` remains in any of the four files**, and no item-level one either. Most of the inventory fell in earlier cleanup passes (each recorded in the module docs in [`src/wgpu/mod.rs`](src/wgpu/mod.rs)): `effects.rs` lost `ShadowParams::elevation_1..5`, `BlurIntensity`, `LinearGradientBuilder`, and its parallel `BlurParams`; `instancing.rs` lost the six constructor shortcuts (`RectInstance::rounded_rect` / `with_clip_rsuperellipse` / `with_transform`, `CircleInstance::ellipse`, `ArcInstance::ellipse`, `TextureInstance::with_rotation` — `with_uv` from the inventory below turned out live, with multiple `batches`/`replay`/`opacity_layer` callers); `pipeline.rs` lost its unused constants/methods/cache helpers, keeping only the `PipelineKey`/`PipelineCache`/`pipeline_key_from_paint` surface `painter` consumes; `shader_compiler.rs` lost the four `*Uniforms` structs and the `create_uniforms_from_shader` dispatcher (and the `ShaderCache::cached_count` named in the old inventory never existed). The final residue — `ShaderCache::clear`, the one item still suppressed with an item-level `#[allow(dead_code)]` ("reserved for devtools", but no `devtools` feature exists in this crate, so it was unreachable in every build configuration) — is now deleted as well; a comment at the impl block records why no cache-flush entry point is needed.
+The keep-or-delete audit is complete: **no module-wide `#[allow(dead_code)]` remains in any of the four files**, and no item-level one either. Most of the inventory fell in earlier cleanup passes (each recorded in the module docs in [`src/wgpu/mod.rs`](src/wgpu/mod.rs)): `effects/` lost `ShadowParams::elevation_1..5`, `BlurIntensity`, `LinearGradientBuilder`, and its parallel `BlurParams`; `instancing.rs` lost the six constructor shortcuts (`RectInstance::rounded_rect` / `with_clip_rsuperellipse` / `with_transform`, `CircleInstance::ellipse`, `ArcInstance::ellipse`, `TextureInstance::with_rotation` — `with_uv` from the inventory below turned out live, with multiple `batches`/`replay`/`layer_offscreen` callers); `pipeline_cache.rs` lost its unused constants/methods/cache helpers, keeping only the `PipelineKey`/`PipelineCache`/`pipeline_key_from_paint` surface `painter` consumes; `shader_compiler.rs` lost the four `*Uniforms` structs and the `create_uniforms_from_shader` dispatcher (and the `ShaderCache::cached_count` named in the old inventory never existed). The final residue — `ShaderCache::clear`, the one item still suppressed with an item-level `#[allow(dead_code)]` ("reserved for devtools", but no `devtools` feature exists in this crate, so it was unreachable in every build configuration) — is now deleted as well; a comment at the impl block records why no cache-flush entry point is needed.
 
 ### `catch_unwind` boundary on `Renderer::render_scene` (forward-looking)
 
@@ -667,4 +693,4 @@ The following pre-existing concerns are tracked outside this Outstanding refacto
 - **`port-check.sh` was extended during this chain** -- see [`docs/PORT.md`](../../docs/PORT.md) `## Refusal triggers` for the current trigger inventory.
 - **`Arc<Mutex<>>` shapes for `OffscreenRenderer` and `TexturePoolInner` survived the chain.** Documented in Friction log + Outstanding refactors with concrete blockers. The chain prioritised dead-code deletion (largest LOC wins) over lock-shape refactoring (substantial lifetime gymnastics for marginal runtime benefit).
 - **Two test counts** at chain end: `cargo test -p flui-engine --lib` shows 48 passed (down from 53 pre-chain, with 5 tests deleted alongside `text_renderer.rs`). The doctest count the chain left open is now resolved: **12 passed / 0 ignored**, up from 0 passed / 17 ignored — see [Outstanding refactors](#outstanding-refactors).
-- **`anyhow::Result` is no longer in the engine's public API.** `Renderer::new`, `Renderer::new_offscreen`, `FontLoader::load_file`, `FontLoader::load_directory` all return `EngineResult<T>`. The `anyhow` crate stays in `Cargo.toml` (transitive via wgpu) but is no longer used in any signature; the workspace-wide consistency win.
+- **`anyhow::Result` is no longer in the engine's public API.** `Renderer::new` / `Renderer::new_offscreen` return `EngineResult<T>` (the `FontLoader` pair this entry originally named was deleted with the rest of the unwired public surface; `flui_painting::PaintingBinding::register_font` is where font registration lives). The `anyhow` crate stays in `Cargo.toml` (transitive via wgpu) but is no longer used in any signature; the workspace-wide consistency win.

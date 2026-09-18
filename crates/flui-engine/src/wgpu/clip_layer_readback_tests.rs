@@ -879,7 +879,7 @@ fn erase_everything(canvas: &mut Canvas) {
 ///
 /// That render object is the mode's only production consumer, and its fill goes
 /// through `Canvas::draw_paint`, which has no geometry of its own:
-/// `Backend::render_paint` expands it to the whole viewport, so its extent is
+/// `LayerDispatcher::render_paint` expands it to the whole viewport, so its extent is
 /// decided entirely by the clip.
 fn fill_everything(canvas: &mut Canvas) {
     canvas.draw_paint(&Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false));
@@ -1044,7 +1044,7 @@ fn a_path_clip_installs_its_box_and_the_save_layer_mode_isolates() {
 ///
 /// **All three modes, not just the reported one.** Under
 /// `AntiAliasWithSaveLayer` the offscreen's composite rect is itself
-/// `clip_bounds()` (`Backend::open_clip_frame`), so that mode crops TWICE and
+/// `clip_bounds()` (`LayerDispatcher::open_clip_frame`), so that mode crops TWICE and
 /// would go green on the composite alone even if the per-draw scissor never
 /// reached a draw. `AntiAlias` and `HardEdge` open no layer, so there the
 /// scissor is the only mechanism there is — and `AntiAlias` is what
@@ -1347,7 +1347,7 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
 /// discard `offscreen_items`. A `DrawItem::OpacityLayer` opened inside one is
 /// therefore thrown away — and so is every sibling already flushed into the
 /// enclosing layer's draw order, because opening the layer finalises the pending
-/// segment first. `Backend::opens_offscreen` declines the offscreen there and
+/// segment first. `LayerDispatcher::opens_offscreen` declines the offscreen there and
 /// falls back to per-draw coverage: losing an edge beats losing the picture.
 ///
 /// Both samples matter. The blue is the clip's own subtree; the red is the
@@ -1573,7 +1573,7 @@ fn nested_mixed_clip_tree(outer: Clip, inner: Clip) -> LayerTree {
 ///
 /// `pop_clip` serves all three `push_clip_*` variants and takes no argument, so
 /// nothing in the call can say whether the push it balances opened an offscreen
-/// — only `Backend`'s frame stack can. Nesting the two modes is what makes a
+/// — only `LayerDispatcher`'s frame stack can. Nesting the two modes is what makes a
 /// desynchronised stack observable: each pop would close the other's frame.
 ///
 /// Both orders run, because only one of the two pops is the save-layer one in

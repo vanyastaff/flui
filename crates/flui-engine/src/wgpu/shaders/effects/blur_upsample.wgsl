@@ -171,7 +171,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 // // Glass panel effect
 // let blurred_background = blur.apply(&mut encoder, &background_texture, 3);
 // painter.texture(panel_bounds, blurred_background);
-// painter.rect(panel_bounds, Color::rgba(255, 255, 255, 0.1)); // Tint overlay
+// painter.draw_rect(panel_bounds, Color::rgba(255, 255, 255, 0.1)); // Tint overlay
 //
 // // Bloom effect
 // let bright_pass = extract_bright_pixels(&scene);

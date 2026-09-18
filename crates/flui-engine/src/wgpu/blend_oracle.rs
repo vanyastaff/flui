@@ -18,7 +18,7 @@
 use flui_painting::BlendMode;
 use flui_types::Color;
 
-use super::pipeline::blend_state_for;
+use super::pipeline_cache::blend_state_for;
 
 /// Every fixed-function mode [`blend_state_for`] maps, so a sweep over the
 /// Porter-Duff set cannot quietly skip one.

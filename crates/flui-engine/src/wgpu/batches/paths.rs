@@ -12,7 +12,7 @@ use super::{
     super::{
         command_ir::{DrawItem, DrawSegment},
         path_cache::PathCache,
-        pipeline::{self, PipelineKey},
+        pipeline_cache::{self as pipeline, PipelineKey},
         state_stack::GpuStateStack,
         vertex::Vertex,
     },
@@ -26,7 +26,7 @@ impl DrawBatcher {
     ///
     /// Always tessellated (no instanced stroke pipeline).
     /// `line` does not read opacity — no opacity baking is performed.
-    pub(in super::super) fn line(
+    pub(in super::super) fn draw_line(
         &mut self,
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
@@ -204,7 +204,7 @@ impl DrawBatcher {
         let shadow_color = Color::rgba(color.r, color.g, color.b, alpha);
 
         let params = super::super::effects::ShadowParams::new(offset, blur_sigma, shadow_color);
-        Self::shadow_rect(
+        Self::draw_shadow_rect(
             segment,
             draw_order,
             rect_pos,
@@ -545,7 +545,7 @@ mod threshold_tests {
     use super::{
         super::super::{
             command_ir::{DrawItem, DrawSegment},
-            pipeline::SSAA_AREA_THRESHOLD_PX_SQ,
+            pipeline_cache::SSAA_AREA_THRESHOLD_PX_SQ,
             state_stack::GpuStateStack,
         },
         DrawBatcher,

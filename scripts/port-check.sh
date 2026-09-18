@@ -200,8 +200,8 @@ check() {
 # objects -- the crate is #[forbid(unsafe_code)] and uses closed enums -- but
 # the scope extension catches any reintroduction post-split). Mythos Step 9 of
 # the flui-engine chain added `crates/flui-engine/src` plus the `CommandRenderer`
-# trait-name to the regex so engine-storage types (`Backend`, etc.) are caught
-# if wrapped in `RwLock<Box<dyn CommandRenderer>>`.
+# trait-name to the regex so engine-storage types (`LayerDispatcher`, etc.)
+# are caught if wrapped in `RwLock<Box<dyn CommandRenderer>>`.
 # -----------------------------------------------------------------------------
 check "1" \
   "RwLock<Box<dyn ...>> in render/view/layer/painting/engine crates" \
@@ -286,15 +286,15 @@ check "4" \
 #
 # *** SCOPE EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
 #
-# `flui-engine/src/wgpu/backend.rs` is NOT in the scope. The
+# `flui-engine/src/wgpu/layer_dispatcher.rs` is NOT in the scope. The
 # `Arc<Mutex<OffscreenRenderer>>` refactor this exclusion originally tracked
 # has landed, but per-effect-frame `Arc::clone` sites survived it: the
 # offscreen-painter cache initialisation and the device/queue handle grabs
 # inside the backdrop-blur / shader-mask paths (cheap ref-count bumps, per
 # effect application, not per layer; documented in
 # `crates/flui-engine/ARCHITECTURE.md`'s thread-safety table). Adding
-# `backend.rs` to the scope requires either removing those clones or a
-# function-level exclusion mechanism this script does not have.
+# `layer_dispatcher.rs` to the scope requires either removing those clones or
+# a function-level exclusion mechanism this script does not have.
 #
 # `flui-engine/src/wgpu/renderer.rs` is NOT in the scope because:
 # - `Renderer::new`, `new_offscreen`, `recover`, and
@@ -348,9 +348,9 @@ check "6" \
 # mpsc return channel), and the glob was removed in the same change per the
 # obligation this comment used to carry.
 #
-# Two other exclusions once sat here, for `renderer.rs` and `backend.rs`,
+# Two other exclusions once sat here, for `renderer.rs` and the dispatcher file,
 # both waiting on the same refactor. That refactor landed -- `Renderer` now
-# owns its `OffscreenRenderer` outright and `Backend` borrows one for a frame
+# owns its `OffscreenRenderer` outright and `LayerDispatcher` borrows one per frame
 # -- and nobody removed the globs, so both files went unwatched for however
 # long. A stale exclusion is worse than none: it reads as "known to violate"
 # while the file is clean, and it permits the next real violation in exactly
@@ -1445,9 +1445,9 @@ fi
 # `Matrix4` in the DrawBatcher record side, `PipelineCache`/`PipelineBuilder`
 # (record/pipeline modules), or `GpuReplay` (replay/submit module).
 #
-# C4 rule: `Matrix4`↔glam conversions must happen at the `Backend` trait
-# boundary (crates/flui-engine/src/wgpu/backend.rs). The hot record path
-# (`batches/`), the pipeline-cache module (`pipelines.rs`), and the
+# C4 rule: `Matrix4`↔glam conversions must happen at the `LayerDispatcher`
+# trait boundary (crates/flui-engine/src/wgpu/layer_dispatcher.rs). The hot record path
+# (`batches/`), the pipeline-set module (`pipeline_set.rs`), and the
 # replay/submit module (`replay/`) must be glam-only; importing or
 # accepting `Matrix4` in any of these leaks the flui-types coordinate type
 # into the GPU plumbing layer and breaks the seam contract established in
@@ -1456,25 +1456,25 @@ fi
 # conversion must not migrate into the GPU-emit path.
 #
 # Allowlist: none. The correct fix is always to extract the needed scalar
-# fields (translation, scale) at the caller in backend.rs / painter.rs and
+# fields (translation, scale) at the caller in layer_dispatcher.rs / painter.rs and
 # pass primitives down.
 # -----------------------------------------------------------------------------
 trigger19_hits=$(rg --line-number --column '\bMatrix4\b' \
     crates/flui-engine/src/wgpu/batches \
-    crates/flui-engine/src/wgpu/pipelines.rs \
+    crates/flui-engine/src/wgpu/pipeline_set.rs \
     crates/flui-engine/src/wgpu/replay 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   || true)
 
 if [[ -n "${trigger19_hits}" ]]; then
-  echo 'VIOLATION 19: Matrix4 in batches/, pipelines.rs, or replay/ (record/pipeline/replay side must be glam-only; convert at the trait boundary)'
+  echo 'VIOLATION 19: Matrix4 in batches/, pipeline_set.rs, or replay/ (record/pipeline/replay side must be glam-only; convert at the trait boundary)'
   echo "see ${trigger_doc} (trigger 19)"
   echo "${trigger19_hits}"
   echo ""
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    19: no Matrix4 in batches/, pipelines.rs, or replay/"
+    echo "ok    19: no Matrix4 in batches/, pipeline_set.rs, or replay/"
   fi
 fi
 
@@ -1514,7 +1514,7 @@ check "Cross.H3" \
 #
 # PR-5 deleted three warn-fallback blocks that previously made gradient and
 # image producers silently fall through to SrcOver for advanced blend modes.
-# If any of these strings reappear in batches/, renderer.rs, or backend.rs,
+# If any of these strings reappear in batches/, renderer.rs, or layer_dispatcher.rs,
 # a producer has regressed to the fallback path and advanced blend will
 # silently produce wrong output for those draw calls.
 #
@@ -1530,11 +1530,11 @@ trigger20_hits=$(rg --line-number --column \
     -e 'rendering as SrcOver' \
     crates/flui-engine/src/wgpu/batches \
     crates/flui-engine/src/wgpu/renderer.rs \
-    crates/flui-engine/src/wgpu/backend.rs 2>/dev/null \
+    crates/flui-engine/src/wgpu/layer_dispatcher.rs 2>/dev/null \
   || true)
 
 if [[ -n "${trigger20_hits}" ]]; then
-  echo 'VIOLATION 20: gradient/image warn-fallback strings found in batches/, renderer.rs, or backend.rs'
+  echo 'VIOLATION 20: gradient/image warn-fallback strings found in batches/, renderer.rs, or layer_dispatcher.rs'
   echo '  These strings were deleted by PR-5; their reappearance signals a producer has regressed to SrcOver fallback.'
   echo "see ${trigger_doc} (trigger 20)"
   echo "${trigger20_hits}"
@@ -1542,7 +1542,7 @@ if [[ -n "${trigger20_hits}" ]]; then
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    20: no warn-fallback strings in batches/, renderer.rs, or backend.rs"
+    echo "ok    20: no warn-fallback strings in batches/, renderer.rs, or layer_dispatcher.rs"
   fi
 fi
 

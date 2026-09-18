@@ -6,7 +6,7 @@
 //!   and pipeline layout)
 //! - the analytical shadow pipeline
 //!
-//! All of them are specs over [`super::pipelines::create_unit_quad_pipeline`],
+//! All of them are specs over [`super::pipeline_set::create_unit_quad_pipeline`],
 //! the shared unit-quad instanced constructor.
 
 use std::collections::HashMap;
@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use flui_painting::BlendMode;
 
 use super::effects::GradientStop;
-use super::pipeline::{CoverageShaderSources, select_coverage_blend};
-use super::pipelines::{QuadPipelineSpec, create_unit_quad_pipeline};
+use super::pipeline_cache::{CoverageShaderSources, select_coverage_blend};
+use super::pipeline_set::{QuadPipelineSpec, create_unit_quad_pipeline};
 
 /// Create bind group layout for gradient stops (storage buffer)
 pub fn create_gradient_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {

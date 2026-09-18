@@ -100,7 +100,7 @@ macro_rules! epoch_counters {
     };
 }
 
-/// Generational stamp for a `flui-engine` `GpuServices` construction
+/// Generational stamp for a GPU-resource stack construction
 /// (ADR-0045 decisions 2 and 4).
 ///
 /// Lives here, not in `flui-engine`, for exactly the reason
@@ -127,7 +127,7 @@ macro_rules! epoch_counters {
 ///
 /// The macro's `next()` is an owner bumping an existing value **in place**;
 /// this type is minted **fresh** from a process-wide counter with no
-/// persistent owner (a `GpuServices` value never advances its own
+/// persistent owner (a GPU-resource stack never advances its own
 /// generation — a new one is a new construction), so it gets its own
 /// hand-written `mint()` instead of forcing that different mint model
 /// through `next()`.
@@ -135,7 +135,7 @@ macro_rules! epoch_counters {
 pub struct GpuResourceGeneration(u64);
 
 impl GpuResourceGeneration {
-    /// The sentinel value: no `GpuServices` bound yet. Never returned by
+    /// The sentinel value: no GPU-resource stack bound yet. Never returned by
     /// [`Self::mint`] (its counter starts at 1), so a frame stamped with
     /// this value trivially matches only a checker that has likewise never
     /// bound one — the same "typed absence" role [`SurfaceGeneration::ZERO`]
@@ -147,13 +147,13 @@ impl GpuResourceGeneration {
 
     /// Mints the next generation from a process-wide monotonic counter.
     ///
-    /// Public because minting now crosses the `flui-foundation`/`flui-engine`
-    /// boundary: `GpuServices::resolve_offscreen` is the only production
-    /// call site, but this function is not otherwise restricted to it —
-    /// `flui-engine`'s own test suites call it directly to fabricate test
-    /// values, which is exactly what a public associated function allows.
-    /// The tuple field stays private, so a tuple-struct literal remains the
-    /// one construction path this blocks from outside this module.
+    /// Public because minting crosses the `flui-foundation`/`flui-engine`
+    /// boundary: a raster lane binds a freshly minted value when it attaches
+    /// a new GPU resource stack, and `flui-engine`'s own test suites call
+    /// this directly to fabricate test values — exactly what a public
+    /// associated function allows. The tuple field stays private, so a
+    /// tuple-struct literal remains the one construction path this blocks
+    /// from outside this module.
     #[must_use]
     pub fn mint() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);

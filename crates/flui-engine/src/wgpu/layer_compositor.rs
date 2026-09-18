@@ -259,7 +259,7 @@ impl LayerCompositor {
     /// into `FilterOp::input` and discard `offscreen_items` wholesale — so a
     /// `DrawItem::OpacityLayer` opened anywhere inside one takes not just its
     /// own subtree but every sibling already flushed into the enclosing
-    /// layer's draw order. `Backend::push_clip_*` consults this and declines
+    /// layer's draw order. `LayerDispatcher::push_clip_*` consults this and declines
     /// the offscreen rather than open one that will be thrown away; degrading
     /// `Clip::AntiAliasWithSaveLayer` to per-draw coverage loses an edge, and
     /// opening it here loses the content.

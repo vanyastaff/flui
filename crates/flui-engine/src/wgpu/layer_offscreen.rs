@@ -44,7 +44,7 @@ use super::{
     gamma::apply_gamma,
     mode::apply_mode,
     morphology::apply_morphology,
-    pipelines::PipelineSet,
+    pipeline_set::PipelineSet,
     render_target::RenderTarget,
     replay::GpuReplay,
     resources::GpuResources,
@@ -1149,7 +1149,7 @@ fn fold_layer_filter_chain(
     input_tex: PooledTexture,
     viewport_size: (u32, u32),
     surface_format: wgpu::TextureFormat,
-    pipelines: &mut super::pipelines::PipelineSet,
+    pipelines: &mut super::pipeline_set::PipelineSet,
     resources: &mut super::resources::GpuResources,
     device: &std::sync::Arc<wgpu::Device>,
     encoder: &mut wgpu::CommandEncoder,
@@ -1333,7 +1333,7 @@ pub(in crate::wgpu) fn apply_image_filter_passes(
 mod grown_offscreen_clip_tests {
     use super::super::command_ir::{DrawSegment, TessellatedBatch};
     use super::super::instancing::{CircleInstance, ClippableInstance, RectInstance};
-    use super::super::pipeline::PipelineKey;
+    use super::super::pipeline_cache::PipelineKey;
     use super::super::state_stack::ResolvedClip;
     use flui_types::{Color, Point, Rect, geometry::Pixels};
 

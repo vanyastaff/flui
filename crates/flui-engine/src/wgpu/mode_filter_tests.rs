@@ -211,7 +211,7 @@ mod gpu_tests {
                 blend_mode: mode,
             },
         );
-        painter.rect(bounds, &Paint::fill(layer_color));
+        painter.draw_rect(bounds, &Paint::fill(layer_color));
         painter.restore_layer();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
