@@ -391,6 +391,11 @@ mod new_probes_before_gpu_work_tests {
 /// using needs no struct change and no `struct_field_names` suppression), and
 /// the tables are what a caller needs when it wants to ask something this
 /// type does not.
+///
+/// `#[non_exhaustive]`: wgpu adds features and limit buckets, and this struct
+/// tracks them. Construction is [`Self::detect`] — an embedder reads the
+/// fields, it does not build one.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GpuCapabilities {
     /// The backend in use (Metal, DX12, Vulkan, WebGPU, …).

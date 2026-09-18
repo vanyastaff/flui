@@ -9,6 +9,11 @@ use glam::Vec2;
 // =============================================================================
 
 /// Shadow parameters for Material Design elevation levels
+///
+/// `#[non_exhaustive]`: a drop-shadow parameter set grows (spread, offset
+/// ratio, per-corner radius), and a caller-built literal would break on the
+/// next field. Build one through [`Self::new`].
+#[non_exhaustive]
 #[derive(Copy, Clone, Debug)]
 pub struct ShadowParams {
     /// Shadow offset (x, y)
