@@ -1,4 +1,3 @@
-#[cfg(not(target_os = "ios"))]
 use flui_scheduler::AppLifecycleState;
 
 // ============================================================================
@@ -12,7 +11,6 @@ use flui_scheduler::AppLifecycleState;
 /// `(visible, focused)` pair, never on which of the two changed most
 /// recently — occlusion-before-focus-loss and focus-loss-before-occlusion
 /// converge to the same derived state once both signals have landed.
-#[cfg(not(target_os = "ios"))]
 pub(super) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecycleState {
     if !visible {
         AppLifecycleState::Hidden
@@ -61,7 +59,6 @@ pub(super) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecyc
 /// for the whole re-derivation lives: a wake that doesn't change the derived
 /// state emits nothing, to neither the scheduler nor `WidgetsBinding`
 /// observers.
-#[cfg(not(target_os = "ios"))]
 fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLifecycleState> {
     if old == new {
         return Vec::new();
@@ -110,7 +107,6 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
 /// parameter), so no such resolution is ever needed — the frames-reenable
 /// redirty below reads and writes it directly, in the same stack frame
 /// that owns it for the whole call.
-#[cfg(not(target_os = "ios"))]
 pub(super) fn emit_lifecycle_transition(
     realm: &crate::app::ui_realm::UiRealm,
     old: AppLifecycleState,
@@ -198,7 +194,6 @@ pub(super) fn emit_lifecycle_transition(
     }
 }
 
-#[cfg(not(target_os = "ios"))]
 fn preserve_first_lifecycle_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
     candidate: Option<Box<dyn std::any::Any + Send>>,
@@ -221,7 +216,7 @@ fn preserve_first_lifecycle_panic(
     }
 }
 
-#[cfg(all(test, not(target_os = "ios")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod lifecycle_derivation_tests {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
