@@ -57,6 +57,9 @@ one states what the thing is without opening the file:
   `bool`. On `clip_rect` the parameter was also dead (`let _ = hard;`); the
   enum is now the caller's contract and the painter's `debug_assert` states
   what it may not receive.
+- **`RasterBackend`'s query methods are `#[must_use]`** (`is_device_lost`,
+  `has_damage`, `size`), with the `Renderer` getters that mirror them.
+  Discarding a device-lost or damage answer is always a bug.
 - **Module names that described a fraction of their contents**:
   `traits.rs` → `command_renderer.rs` + `layer_state_stack.rs` (one trait
   each), `commands.rs` → `dispatch.rs`, `pipeline.rs` → `pipeline_cache.rs`
@@ -108,6 +111,17 @@ one states what the thing is without opening the file:
 
 ### Fixed
 
+- **`HeadlessRenderer::new` is `async`.** It was the crate's only production
+  `pollster::block_on`: a blocking constructor beside `Renderer::new`, which
+  is `async` and awaited. An embedder calling it from an async context stalled
+  the executor thread for the whole acquisition. Both now have one shape, and
+  `pollster` leaves `[dependencies]` for `[dev-dependencies]` — the library no
+  longer picks a blocking strategy on the caller's behalf.
+- **`GradientStop`'s `padding` field is private.** It is GPU alignment: the
+  three floats are uploaded verbatim as the shader's `_pad0.._pad2`, so a
+  caller could write arbitrary values into data the fragment shader reads.
+  Construction goes through `new` / `from_rgba`, which zero it;
+  `from_rgba` covers callers holding a channel array.
 - **A `ShaderMaskLayer`'s blend mode is now honoured.** `render_masked`
   accepted a `blend_mode`, never used it, and every masked layer composited
   `SrcOver` — the accept-and-discard contract violation mapping decision 8
