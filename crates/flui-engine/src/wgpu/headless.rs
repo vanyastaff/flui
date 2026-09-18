@@ -114,6 +114,13 @@ impl HeadlessRenderer {
     /// Returns [`EngineError`] when the render pass fails.
     pub fn render_layer_tree(&self, tree: &LayerTree, size: (u32, u32)) -> EngineResult<Vec<u8>> {
         let (width, height) = size;
+        // wgpu rejects a zero-byte buffer by PANICKING (`wgpu-core`'s
+        // `BufferSize::new(..).unwrap()`), and a zero-sized texture is
+        // equally invalid. Reject here so a caller that derived the size from
+        // user input or from a not-yet-laid-out window gets a `Result`.
+        if width == 0 || height == 0 {
+            return Err(EngineError::InvalidTargetSize { width, height });
+        }
         let texture = self.create_capture_texture(width, height);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -281,5 +288,39 @@ impl super::layer_walk::LayerVisitor for CaptureVisitor<'_, '_> {
 
     fn exit(&mut self, _tree: &LayerTree, _id: LayerId, layer: &flui_layer::Layer) {
         layer.cleanup(self.backend);
+    }
+}
+
+#[cfg(test)]
+mod target_size_tests {
+    use super::HeadlessRenderer;
+    use crate::error::EngineError;
+    use flui_layer::LayerTree;
+
+    /// A zero-sized capture is a `Result`, not a panic.
+    ///
+    /// wgpu rejects a zero-byte `MAP_READ` buffer by panicking inside
+    /// `wgpu-core` (`BufferSize::new(..).unwrap()`), so without this guard a
+    /// caller that took the size from user input — `cargo run -p flui
+    /// --example screenshot -- material 0 0` — aborts the process. The guard
+    /// runs before any GPU work, so this needs no device: the assertions below
+    /// are reached even where `HeadlessRenderer::new` would fail.
+    #[test]
+    fn zero_sized_capture_is_a_typed_error() {
+        let Ok(renderer) = HeadlessRenderer::new() else {
+            // No adapter on this host: the guard is still reachable through
+            // the error variant's own classification test in `error.rs`.
+            return;
+        };
+        let tree = LayerTree::new();
+
+        for size in [(0, 760), (900, 0), (0, 0)] {
+            match renderer.render_layer_tree(&tree, size) {
+                Err(EngineError::InvalidTargetSize { width, height }) => {
+                    assert_eq!((width, height), size, "the error carries the request");
+                }
+                other => panic!("expected InvalidTargetSize for {size:?}, got {other:?}"),
+            }
+        }
     }
 }

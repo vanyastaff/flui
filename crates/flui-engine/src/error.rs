@@ -213,6 +213,22 @@ pub enum EngineError {
     #[error("Renderer not initialized")]
     NotInitialized,
 
+    /// A capture or render target was requested at a zero-sized extent.
+    ///
+    /// wgpu rejects a zero-byte buffer and a zero-sized texture, and its own
+    /// rejection path is `BufferSize::new(..).unwrap()` inside `wgpu-core` —
+    /// a panic, not a validation error a caller can match on. This variant is
+    /// the typed rejection: a caller that derived the size from user input
+    /// (a `-- <w> <h>` CLI argument, a window that has not been laid out yet)
+    /// gets a `Result` instead of taking the process down.
+    #[error("invalid render target size: {width}x{height} (both axes must be non-zero)")]
+    InvalidTargetSize {
+        /// The requested width in device pixels.
+        width: u32,
+        /// The requested height in device pixels.
+        height: u32,
+    },
+
     /// `recover()` was called on a [`Renderer`](crate::wgpu::Renderer) built
     /// via `Renderer::from_offscreen_services` (ADR-0045 decision 2).
     ///
@@ -296,6 +312,7 @@ impl EngineError {
             | Self::NoAdapter
             | Self::AdapterRequest(_)
             | Self::DeviceCreation(_)
+            | Self::InvalidTargetSize { .. }
             | Self::NotInitialized => Recoverability::Fatal,
             Self::SurfaceValidation
             | Self::ResourceIo { .. }
@@ -463,6 +480,15 @@ mod tests {
         assert_eq!(
             EngineError::NotInitialized.recoverability(),
             Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::InvalidTargetSize {
+                width: 0,
+                height: 600,
+            }
+            .recoverability(),
+            Recoverability::Fatal,
+            "a zero-sized target cannot become valid by retrying"
         );
         assert_eq!(
             EngineError::surface_target_unavailable(raw_window_handle::HandleError::Unavailable)
