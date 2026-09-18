@@ -15,30 +15,48 @@ use glam::Vec2;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct GradientStop {
-    /// RGBA color (0.0 - 1.0 range)
+    /// RGBA color, straight (not premultiplied), each channel in `0.0..=1.0`.
     pub color: [f32; 4],
-    /// Position along gradient (0.0 = start, 1.0 = end)
+    /// Position along the gradient, clamped to `0.0..=1.0` at construction.
     pub position: f32,
-    /// Padding for GPU alignment
-    pub padding: [f32; 3],
+    /// GPU alignment padding, always zero.
+    ///
+    /// Private on purpose: this value is uploaded verbatim as the shader's
+    /// `_pad0.._pad2`, so a caller-supplied value would be GPU-visible data
+    /// the caller has no reason to control. Construction goes through
+    /// [`Self::new`] / [`Self::from_rgba`], which zero it.
+    padding: [f32; 3],
 }
 
 impl GradientStop {
-    /// Create a new gradient stop
+    /// Create a new gradient stop. `position` is clamped to `0.0..=1.0`.
+    #[must_use]
     pub fn new(color: Color, position: f32) -> Self {
+        Self::from_rgba(color.to_rgba_f32().into(), position)
+    }
+
+    /// Create a stop from straight RGBA channels, each in `0.0..=1.0`.
+    ///
+    /// The `Color`-taking constructor covers the common path; this exists for
+    /// callers already holding a channel array (a colour filter's output, a
+    /// vertex colour) that would otherwise round-trip through `Color`.
+    #[must_use]
+    pub fn from_rgba(rgba: [f32; 4], position: f32) -> Self {
         Self {
-            color: color.to_rgba_f32().into(),
+            color: rgba,
             position: position.clamp(0.0, 1.0),
             padding: [0.0; 3],
         }
     }
 
     /// Create a stop at the start (position = 0.0)
+    #[must_use]
     pub fn start(color: Color) -> Self {
         Self::new(color, 0.0)
     }
 
     /// Create a stop at the end (position = 1.0)
+    #[must_use]
     pub fn end(color: Color) -> Self {
         Self::new(color, 1.0)
     }

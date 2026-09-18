@@ -210,11 +210,11 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
 // ```rust
 // // Spotlight effect from center
 // let stops = vec![
-//     GradientStop { color: Color::WHITE, position: 0.0 },
-//     GradientStop { color: Color::TRANSPARENT, position: 1.0 },
+//     GradientStop::new(Color::WHITE, 0.0),
+//     GradientStop::new(Color::TRANSPARENT, 1.0),
 // ];
 //
-// painter.radial_gradient_rect(
+// painter.draw_radial_gradient_rect(
 //     bounds,
 //     center: bounds.center(),
 //     radius: bounds.width * 0.5,
@@ -222,13 +222,13 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
 // );
 //
 // // Offset spotlight (hover effect)
-// painter.radial_gradient_rect(
+// painter.draw_radial_gradient_rect(
 //     bounds,
 //     center: mouse_pos,  // Follow cursor
 //     radius: 100.0,
 //     stops: vec![
-//         GradientStop { color: Color::rgba(255, 255, 255, 0.3), position: 0.0 },
-//         GradientStop { color: Color::TRANSPARENT, position: 1.0 },
+//         GradientStop::new(Color::rgba(255, 255, 255, 0.3), 0.0),
+//         GradientStop::new(Color::TRANSPARENT, 1.0),
 //     ],
 // );
 // ```

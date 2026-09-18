@@ -621,16 +621,8 @@ mod unit_tests {
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
         let stops = [
-            GradientStop {
-                color: [1.0, 0.0, 0.0, 1.0],
-                position: 0.0,
-                padding: [0.0; 3],
-            },
-            GradientStop {
-                color: [1.0, 0.0, 0.0, 1.0],
-                position: 1.0,
-                padding: [0.0; 3],
-            },
+            GradientStop::from_rgba([1.0, 0.0, 0.0, 1.0], 0.0),
+            GradientStop::from_rgba([1.0, 0.0, 0.0, 1.0], 1.0),
         ];
 
         DrawBatcher::draw_gradient_rect(

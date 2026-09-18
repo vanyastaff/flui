@@ -538,16 +538,8 @@ mod gpu_tests {
 
         let solid = |rgba: [f32; 4]| {
             [
-                crate::wgpu::effects::GradientStop {
-                    color: rgba,
-                    position: 0.0,
-                    padding: [0.0; 3],
-                },
-                crate::wgpu::effects::GradientStop {
-                    color: rgba,
-                    position: 1.0,
-                    padding: [0.0; 3],
-                },
+                crate::wgpu::effects::GradientStop::from_rgba(rgba, 0.0),
+                crate::wgpu::effects::GradientStop::from_rgba(rgba, 1.0),
             ]
         };
 
