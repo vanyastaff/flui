@@ -2088,15 +2088,28 @@ fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
 /// The capture walk is iterative (`layer_walk.rs`), so depth costs heap rather
 /// than Rust stack frames. Before that, `walk_layer_tree` recursed once per
 /// layer, and a stack overflow in Rust is a process abort — not a panic a test
-/// could catch — so this shape took the whole capture path down. The depth and
-/// the stack budget match `flui-layer`'s own diagnostic-walker oracle
-/// (`testing/inspect.rs::walkers_survive_a_deep_chain_on_a_small_stack`), so
-/// the production walker is held to the standard the diagnostic one already
-/// set.
+/// could catch — so this shape took the whole capture path down.
+///
+/// **The budget is 1 MiB, not the 64 KiB the CPU walker is held to.** That
+/// number is measured, not copied: the same walk on a 64 KiB stack (no
+/// capture) is `layer_walk::a_deep_chain_survives_a_small_stack`, which is
+/// where the "depth is O(heap)" property is proven. This test adds the whole
+/// capture path on top — `HeadlessRenderer::render_layer_tree` holds a
+/// `WgpuPainter` (4 KiB), a `LayerDispatcher` (4.2 KiB), a `TextRenderer` and
+/// its encode frames as live locals — and that cost is a per-frame constant:
+/// measured at 40/48/56 KiB it fails identically at depth 100 and depth 10 000,
+/// so it is the frame, not the walk, that needs the room. 64 KiB passed on
+/// Linux and aborted on Windows/WARP (os error 1001, `0xc00000fd`), where the
+/// frames are larger.
+///
+/// 1 MiB keeps this test meaningful rather than merely green: reverting to the
+/// recursive walk still aborts here (measured — it overflows 1 MiB and needs
+/// between 1 and 2 MiB at this depth on Linux, more on Windows), while the
+/// iterative walk has ~17x headroom over the ~60 KiB it actually uses.
 ///
 /// The walk runs on this test's thread (the capture call is synchronous), so
-/// the small stack is supplied by rendering inside a spawned thread rather than
-/// by changing the process's stack.
+/// the stack is supplied by rendering inside a spawned thread rather than by
+/// changing the process's stack.
 #[test]
 fn a_deep_layer_chain_captures_without_overflowing_a_small_stack() {
     const DEPTH: usize = 10_000;
@@ -2106,7 +2119,7 @@ fn a_deep_layer_chain_captures_without_overflowing_a_small_stack() {
     };
 
     let pixels = std::thread::Builder::new()
-        .stack_size(64 * 1024)
+        .stack_size(1024 * 1024)
         .spawn(move || {
             let mut tree = LayerTree::new();
             let mut parent = tree.insert(flui_layer::Layer::Canvas(Box::new(
