@@ -297,6 +297,15 @@ macos-ime:
 } }}
 
 [group("test")]
+[doc("Runs the iOS demo on an iOS Simulator (the only executing coverage of the native UIKit backend). Builds examples/ios_demo for aarch64-apple-ios-sim, stages it into a minimal .app, boots a simulator, installs and launches it, captures a screenshot, and asserts the app got as far as a created Metal device and a rendered frame — read out of the simulator's unified log, since UIApplicationMain owns the process and no test harness can. macOS-host only (needs Xcode + simctl); skips with a message elsewhere.")]
+ios-sim:
+    {{ if os() == "macos" {
+"set -e\nDEVICE=\"${FLUI_IOS_SIM_DEVICE:-iPhone 17 Pro}\"\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-sim/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\nxcrun simctl boot \"$DEVICE\" 2>/dev/null || true\nxcrun simctl bootstatus \"$DEVICE\" -b >/dev/null 2>&1 || true\nxcrun simctl install booted \"$APP\"\nxcrun simctl terminate booted \"$BUNDLE\" 2>/dev/null || true\nxcrun simctl launch booted \"$BUNDLE\" >/dev/null\nsleep 12\nLOG=target/ios-sim/app.log\nxcrun simctl spawn booted log show --last 5m --predicate 'process == \"ios_demo\"' > \"$LOG\" 2>/dev/null || true\nxcrun simctl io booted screenshot target/ios-sim/screen.png >/dev/null 2>&1 || true\nif grep -q 'Selected GPU:.*Metal' \"$LOG\" && grep -q 'First frame rendered' \"$LOG\"; then\n  echo 'IOS_SIM_RESULT=PASS (Metal device created, first frame rendered)';\n  echo 'screenshot: target/ios-sim/screen.png';\nelse\n  echo 'IOS_SIM_RESULT=FAIL - expected \"Selected GPU ... Metal\" and \"First frame rendered\" in the log; tail:';\n  grep 'flui]' \"$LOG\" | tail -20;\n  exit 1;\nfi"
+} else {
+"echo 'Skipping ios-sim on this host: it needs a macOS host with Xcode and the iOS Simulator (xcrun simctl) plus the aarch64-apple-ios-sim target; on a Mac run: just ios-sim'"
+} }}
+
+[group("test")]
 [doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast

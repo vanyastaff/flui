@@ -19,6 +19,11 @@
 //!
 //! On every non-iOS target this is a compile-time no-op `main`.
 
+// Only iOS uses the tree, so the `#[path]` inclusion is gated with it: an
+// unconditional include would compile the whole Material tree on every host
+// and then fail `-D warnings` for `never used`, since the non-iOS `main` is a
+// no-op.
+#[cfg(target_os = "ios")]
 #[path = "material_demo/tree.rs"]
 mod tree;
 
