@@ -582,3 +582,44 @@ arithmetic. The engine-side portability fix this uncovered —
 `required_limits` clamped to the adapter's own, because the simulator's Metal
 adapter caps `max_inter_stage_shader_variables` at 15 where
 `wgpu::Limits::default()` asks for 16 — carries a comment at the clamp.
+
+### macOS and iOS share the `objc2` binding stack; the `cocoa`/`objc` pair is gone
+
+**Decision.** Both Apple backends bind their platform frameworks through the
+`objc2` family (`objc2`, `objc2-app-kit` for macOS/AppKit, `objc2-ui-kit` for
+iOS/UIKit, `objc2-foundation`, `objc2-quartz-core`, `objc2-metal`) at the
+versions `wgpu-hal` already pins. The `cocoa` 0.27 / `objc` 0.2 dependency pair
+and the `build.rs` that existed only for its `cfg` macros are removed from the
+crate; neither appears in `Cargo.lock` any more. ADR-0068 carries the full
+record (ADR-0067 chose the stack for iOS first).
+
+**Why.** `objc` has not released since 2019 and points at `objc2` as its
+successor; `cocoa` deprecated its whole surface in the same direction and has no
+UIKit bindings at all. Every shipping Rust Apple stack is on `objc2` (winit since
+0.30, `wgpu-hal`, egui, slint, gpui). Carrying both stacks was a two-generation
+wart with a `build.rs` to feed.
+
+**The raw `msg_send!` shape is kept on purpose, not left un-migrated.** objc2's
+macro accepts a raw `*mut AnyObject` receiver, `Bool` arguments and a manual
+`release`, so `window.rs`'s already-reviewed safety shape survives. The concrete
+reason: `NSWindow`/`NSView` are `MainThreadOnly` in objc2's typed API, while the
+backend constructs test windows on a caller-supplied off-main serial lane
+(`MacOSWindow::for_test`), which a `MainThreadMarker`-gated method would refuse.
+`ClassBuilder` replaces `objc` 0.2's `ClassDecl` for the two runtime classes
+(`FLUIContentView`, `FLUIWindowDelegate`).
+
+**Two defects the stricter macro caught.** objc2's `msg_send!` verifies return
+types against the selector encoding at run time and found `makeFirstResponder:`
+declared `void` where AppKit returns `BOOL` — silently accepted by objc 0.2. It
+also made the cursor-icon match's explicit `arrowCursor` arm list
+`clippy::match_same_arms`-visible (kept as documentation under a scoped allow).
+The newer macro is a stricter oracle; that is part of the migration's value.
+
+**Trade-off.** A second `objc2` generation is still in the lock via
+`accesskit_macos` 0.27 and winit 0.30 (both on 0.5); resolved when those move
+(H10), not by anything here.
+
+**Replacement coverage.** The four bundled macOS probes are unchanged in what
+they assert and all PASS on `objc2`, driving the migrated `msg_send!` sites
+through the production launch path; the five real-`NSPasteboard` tests and the
+`display.rs` arithmetic run in the normal suite.

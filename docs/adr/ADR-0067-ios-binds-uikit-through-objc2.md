@@ -61,6 +61,11 @@ bindings, so the choice is not "consistency with macOS" versus "modern" — it i
 "a stack that can express the platform" versus one that cannot. The macOS
 backend's own module comment commits to migrating the same direction.
 
+*Addendum (2026-09-18):* that migration is now done — macOS moved to `objc2`
+too, and the `cocoa`/`objc` crates are gone from the workspace entirely. See
+[ADR-0068](ADR-0068-macos-binds-appkit-through-objc2.md); the two Apple backends
+now share one binding stack.
+
 **D2 — `applicationWillTerminate:` is the framework's loop-exit signal on
 iOS.** The platform fires its registered quit handler from that delegate
 method, and the iOS runner runs `teardown_platform_realm()` inside it. This is
