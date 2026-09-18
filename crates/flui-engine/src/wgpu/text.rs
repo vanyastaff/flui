@@ -989,17 +989,6 @@ impl TextRenderer {
     pub fn text_count(&self) -> usize {
         self.batch.len()
     }
-
-    /// Returns `(hits, misses, plain_cache_size, rich_cache_size)`.
-    #[expect(dead_code)] // exposed for diagnostics / tests
-    pub fn cache_stats(&self) -> (u64, u64, usize, usize) {
-        (
-            self.cache_hits,
-            self.cache_misses,
-            self.plain_cache.len(),
-            self.rich_cache.len(),
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------
