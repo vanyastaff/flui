@@ -45,43 +45,28 @@ use flui_scheduler::{AsyncDriver, LocalPostFrameLane, UpdateScheduler};
 // the imports only they need -- stay `#[cfg(not(target_os = "ios"))]`,
 // matching the cfg the absorbed `RealmHost`/`OWNER_PLATFORM_HOST` carried.
 
-#[cfg(not(target_os = "ios"))]
 use std::cell::OnceCell;
-#[cfg(not(target_os = "ios"))]
 use std::collections::VecDeque;
-#[cfg(not(target_os = "ios"))]
 use std::sync::Arc;
-#[cfg(not(target_os = "ios"))]
 use std::sync::atomic::AtomicBool;
-#[cfg(not(target_os = "ios"))]
 use std::thread::ThreadId;
 
-#[cfg(not(target_os = "ios"))]
 use flui_foundation::PresentationAddress;
-#[cfg(not(target_os = "ios"))]
 use flui_painting::PaintingBinding;
-#[cfg(not(target_os = "ios"))]
 use flui_platform::OwnerPlatform;
-#[cfg(not(target_os = "ios"))]
 use flui_platform::traits::{Clipboard, PlatformWindow};
-#[cfg(not(target_os = "ios"))]
 use flui_semantics::AccessibilityFeatures;
-#[cfg(not(target_os = "ios"))]
 use parking_lot::{Mutex, RwLock};
 
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 use super::execution::SpawnError;
-#[cfg(not(target_os = "ios"))]
 use super::execution::{ExecutionServices, HostExecutors};
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::{
     ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
 };
-#[cfg(not(target_os = "ios"))]
 use super::runner::{RealmTask, SurfaceApplier};
-#[cfg(not(target_os = "ios"))]
 use super::ui_realm::UiRealm;
-#[cfg(not(target_os = "ios"))]
 use super::window_registry::{RegistryError, WindowRegistry};
 
 /// Process-level engine services, each resolved **once** per owner thread in
@@ -106,7 +91,6 @@ use super::window_registry::{RegistryError, WindowRegistry};
 /// more: each realm now owns its own `UpdateScheduler` strong root (see
 /// [`RealmServices::construct`]), so there is no process-level scheduler
 /// left for this struct to resolve.
-#[cfg(not(target_os = "ios"))]
 pub(crate) struct SharedEngineServices {
     #[cfg_attr(
         not(test),
@@ -131,7 +115,6 @@ pub(crate) struct SharedEngineServices {
     pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
 }
 
-#[cfg(not(target_os = "ios"))]
 impl SharedEngineServices {
     /// Current accessibility features (by value — mirrors the retired
     /// `SemanticsBinding::accessibility_features` accessor's shape).
@@ -255,7 +238,6 @@ pub(crate) fn next_identity() -> (RealmId, PresentationId) {
 /// no mutable UI tree through `AppRuntime` (sharing happens only through
 /// explicit `SharedEngineServices`/app-model injection, never through this
 /// registry).
-#[cfg(not(target_os = "ios"))]
 pub(super) struct RealmSlot {
     /// `None` while this realm is checked OUT of the registry for
     /// [`dispatch_platform_realm`](super::runner) — the other four fields
@@ -303,13 +285,11 @@ pub(super) struct RealmSlot {
 /// not a real cost, and a `Vec` gives insertion order for free with no extra
 /// bookkeeping — the same reasoning `WindowRegistry` already applies to its
 /// own `Vec<(WindowId, PresentationAddress)>` storage.
-#[cfg(not(target_os = "ios"))]
 #[derive(Default)]
 pub(super) struct RealmRegistry {
     slots: Vec<(RealmId, RealmSlot)>,
 }
 
-#[cfg(not(target_os = "ios"))]
 impl RealmRegistry {
     pub(super) const fn new() -> Self {
         Self { slots: Vec::new() }
@@ -331,8 +311,12 @@ impl RealmRegistry {
     /// out here would make it briefly invisible to a real dispatch racing
     /// against this read).
     // Its only production caller is the desktop wake-deadline hook, which
-    // wasm does not build.
+    // neither the mobile runners nor wasm build.
     #[cfg(any(test, not(target_arch = "wasm32")))]
+    #[cfg_attr(
+        all(not(test), any(target_os = "android", target_os = "ios")),
+        expect(dead_code, reason = "consumed only by the desktop wake-deadline hook")
+    )]
     pub(super) fn get(&self, id: &RealmId) -> Option<&RealmSlot> {
         self.slots
             .iter()
@@ -411,7 +395,6 @@ impl RealmRegistry {
 /// construct this enum directly — keeping the window-registration step
 /// (see [`AppRuntime::apply_install`]) bundled with the registry insert
 /// atomically, instead of requiring every call site to remember both.
-#[cfg(not(target_os = "ios"))]
 enum RealmMapMutation {
     /// Add a newly-constructed realm to the registry (never displaces a
     /// sibling — see `install_realm_alongside` in `super::runner`), plus the
@@ -421,7 +404,14 @@ enum RealmMapMutation {
     /// queueing it) from paying that size for every entry regardless of
     /// variant.
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        not(any(
+            test,
+            all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            )
+        )),
         expect(
             dead_code,
             reason = "constructed only by request_realm_install, whose one production caller \
@@ -511,6 +501,13 @@ pub enum ExitPolicy {
 /// `RealmId` grows a public handle) must not break an exhaustive match.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    all(not(test), any(target_os = "ios", target_arch = "wasm32")),
+    expect(
+        dead_code,
+        reason = "secondary-window policy; only the desktop runner opens a second window"
+    )
+)]
 pub enum WindowPolicy {
     /// The new window becomes its own realm — independent `GlobalKeyScope`,
     /// independent `UpdateScheduler`, sharing nothing but injected
@@ -538,14 +535,12 @@ pub enum WindowPolicy {
 /// host) find the WRONG one — this handle's `Arc` clones sidestep thread-local
 /// resolution entirely, so firing it only ever touches shared, thread-safe
 /// state and always reaches the intended owner.
-#[cfg(not(target_os = "ios"))]
 #[derive(Clone)]
 struct FrameWakeHandle {
     needs_redraw: Arc<AtomicBool>,
     redraw_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
 }
 
-#[cfg(not(target_os = "ios"))]
 impl FrameWakeHandle {
     fn wake_frame(&self) {
         self.needs_redraw.store(true, Ordering::Relaxed);
@@ -581,7 +576,6 @@ impl FrameWakeHandle {
 /// an insertion-ordered map of any number of hosted realms (issue #555) —
 /// `next_identity` above already mints from a shape that never needed to
 /// change for this to land.
-#[cfg(not(target_os = "ios"))]
 pub(crate) struct AppRuntime {
     /// Every hosted realm, keyed by `RealmId`, in mount (insertion) order.
     /// Replaces the single `Option<UiRealm>` slot (plus its four sibling
@@ -746,7 +740,6 @@ pub(crate) struct AppRuntime {
     platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
 }
 
-#[cfg(not(target_os = "ios"))]
 impl AppRuntime {
     /// Construct the composition root: cheap, side-effect-free.
     /// Called as the `APP_RUNTIME` TLS slot's own initializer (`runner.rs`),
@@ -839,7 +832,14 @@ impl AppRuntime {
     // Its one production caller (bootstrap_desktop's config wiring) is
     // desktop-only; android/wasm have no host-injection entry point yet.
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        not(any(
+            test,
+            all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            )
+        )),
         expect(
             dead_code,
             reason = "host executors are injected via AppConfig on the desktop bootstrap \
@@ -1207,7 +1207,14 @@ impl AppRuntime {
     /// itself inside a live `APP_RUNTIME` borrow) must drop it only after
     /// that borrow releases.
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        not(any(
+            test,
+            all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            )
+        )),
         expect(
             dead_code,
             reason = "runner.rs::install_realm_alongside (its one production caller) is \
@@ -1328,7 +1335,7 @@ impl AppRuntime {
     /// `Install` mutation might still be holding) unnoticed.
     ///
     /// `cfg`-gated to match that one caller exactly: `teardown_platform_realm`
-    /// is `#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]`
+    /// is `#[cfg(not(target_arch = "wasm32"))]`
     /// (the web host never tears down at all — see that function's own
     /// module doc), so on wasm32 this method has no caller at all and must
     /// not compile there either, or it is dead code under `wasm-check`'s
@@ -1351,7 +1358,14 @@ impl AppRuntime {
     /// main-window-open landing in the same idle tick could observe "no
     /// realms installed" and exit before the queued install ever lands.
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        not(any(
+            test,
+            all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            )
+        )),
         expect(
             dead_code,
             reason = "runner.rs::install_exit_policy_hook (its one production caller) is \
@@ -1605,7 +1619,6 @@ impl AppRuntime {
     }
 }
 
-#[cfg(not(target_os = "ios"))]
 impl Drop for AppRuntime {
     /// The third, last-resort clipboard clear: the deterministic path is the explicit
     /// `teardown_platform_realm` clear; this is only a backstop for

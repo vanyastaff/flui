@@ -1,14 +1,9 @@
-#[cfg(not(target_os = "ios"))]
 use std::collections::VecDeque;
 
-#[cfg(not(target_os = "ios"))]
 use flui_foundation::RealmId;
-#[cfg(not(target_os = "ios"))]
 use flui_scheduler::AppLifecycleState;
 
-#[cfg(not(target_os = "ios"))]
 use super::host::APP_RUNTIME;
-#[cfg(not(target_os = "ios"))]
 use super::lifecycle_ladder::{derive_lifecycle_state, emit_lifecycle_transition};
 #[cfg(all(
     not(target_os = "android"),
@@ -16,7 +11,6 @@ use super::lifecycle_ladder::{derive_lifecycle_state, emit_lifecycle_transition}
     not(target_arch = "wasm32")
 ))]
 use super::secondary_window::drain_pending_secondary_window_completions;
-#[cfg(not(target_os = "ios"))]
 use crate::app::runtime::RealmSlot;
 
 /// A registration-lifetime renderer-surface applier: `FnMut(size,
@@ -24,7 +18,6 @@ use crate::app::runtime::RealmSlot;
 /// declaration reads plainly instead of spelling out the boxed closure type
 /// inline. `pub(in crate::app)` (rather than private) so [`RealmSlot`]'s struct
 /// definition in the sibling `runtime` module can name this type.
-#[cfg(not(target_os = "ios"))]
 pub(in crate::app) type SurfaceApplier =
     Box<dyn FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32)>;
 
@@ -41,14 +34,12 @@ pub(in crate::app) type SurfaceApplier =
 /// torn down while the applier's own call was still running, restoring into
 /// a now-missing slot is a silent no-op, matching this file's existing "the
 /// realm may be gone by the time a destructor runs" discipline.
-#[cfg(not(target_os = "ios"))]
 #[must_use = "dropping this immediately restores the applier with no call in between"]
 struct SurfaceApplierRestoreGuard {
     realm_id: RealmId,
     applier: Option<SurfaceApplier>,
 }
 
-#[cfg(not(target_os = "ios"))]
 impl SurfaceApplierRestoreGuard {
     fn call(&mut self, size: flui_types::Size<flui_types::geometry::Pixels>, scale_factor: f32) {
         if let Some(applier) = self.applier.as_mut() {
@@ -57,7 +48,6 @@ impl SurfaceApplierRestoreGuard {
     }
 }
 
-#[cfg(not(target_os = "ios"))]
 impl Drop for SurfaceApplierRestoreGuard {
     fn drop(&mut self) {
         if let Some(applier) = self.applier.take() {
@@ -72,14 +62,12 @@ impl Drop for SurfaceApplierRestoreGuard {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[cfg(not(target_os = "ios"))]
 pub(super) struct RealmDispatcher {
     pub(super) owner_thread: std::thread::ThreadId,
     pub(super) address: flui_foundation::PresentationAddress,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(not(target_os = "ios"))]
 pub(super) enum RealmDispatchError {
     WrongThread,
     /// The realm incarnation this dispatcher was minted for is gone — the
@@ -118,7 +106,21 @@ pub(super) enum RealmDispatchError {
 // `pub(in crate::app)` because `RealmTask::Event` (also `pub(in crate::app)`, for
 // `AppRuntime`'s sake) carries this type in a field the compiler considers
 // reachable at that same visibility.
-#[cfg(not(target_os = "ios"))]
+// The window-event variants (`WindowFocus`, `WindowVisibility`,
+// `AppearanceChanged`, `WindowHover`) are produced only by the desktop
+// runner's `on_window_event` wiring; the mobile and web runners drive their
+// lifecycle from platform callbacks instead, so those variants are
+// unconstructed there.
+#[cfg_attr(
+    all(
+        not(test),
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32")
+    ),
+    expect(
+        dead_code,
+        reason = "window-event variants are produced only by the desktop runner"
+    )
+)]
 pub(in crate::app) enum PlatformToUi {
     Input(flui_platform::traits::PlatformInput),
     Resized {
@@ -199,14 +201,12 @@ pub(in crate::app) enum PlatformToUi {
 /// `&UiRealm` receiver.
 // `pub(in crate::app)` (rather than private) so `AppRuntime`'s `queue` field, defined
 // in the sibling `runtime` module, can name this type.
-#[cfg(not(target_os = "ios"))]
 pub(in crate::app) enum RealmTask {
     Event(PlatformToUi),
     Frame(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
     ClosePresentation(flui_foundation::PresentationId),
 }
 
-#[cfg(not(target_os = "ios"))]
 impl RealmTask {
     /// Runs an `Event`/`Frame` task against the realm's shared capabilities.
     ///
@@ -242,7 +242,6 @@ impl RealmTask {
     }
 }
 
-#[cfg(not(target_os = "ios"))]
 impl PlatformToUi {
     /// `presentation_id` is the exact presentation this event was stamped
     /// for at enqueue time (see [`RealmTask::run`]'s doc). `Input` delivers
@@ -440,7 +439,6 @@ impl PlatformToUi {
 /// silent no-op, because the failure mode otherwise is silent forever — that
 /// realm's `Resized` events would coalesce onto a `None` applier for its
 /// entire lifetime with nothing ever pointing at why.
-#[cfg(not(target_os = "ios"))]
 pub(super) fn install_surface_applier(
     realm_id: RealmId,
     applier: impl FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32) + 'static,
@@ -479,7 +477,6 @@ pub(super) fn install_surface_applier(
 /// all. A second, non-displacing realm (a genuinely independent window
 /// alongside this one) is installed through
 /// [`install_realm_alongside`] instead.
-#[cfg(not(target_os = "ios"))]
 pub(super) fn install_platform_realm(
     realm: crate::app::ui_realm::UiRealm,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -602,9 +599,15 @@ pub(super) fn install_platform_realm(
 /// seam issue #555 adds. Also exercised directly by this module's own
 /// tests.
 ///
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "open_secondary_window (its production caller) is desktop-only -- android/wasm32 \
@@ -658,9 +661,15 @@ pub(super) fn install_realm_alongside(
 /// mean "the realm is fine, but this specific window id collided" —
 /// mislabeling that as `RealmUnavailable` (the pre-fix shape) told a caller
 /// the wrong thing about what actually went wrong.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "install_presentation_alongside (its only producer) is desktop-only -- \
@@ -742,9 +751,15 @@ pub(super) enum InstallPresentationError {
 /// presentation-install requests is follow-up work, not silently skipped:
 /// this refuses loudly (a `debug_assert!` in debug builds) rather than
 /// corrupting `AppRuntime` state.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "open_secondary_window (its production caller) is desktop-only -- android/wasm32 \
@@ -843,7 +858,6 @@ pub(super) fn install_presentation_alongside(
 /// tests (which construct scenarios `close_this_window` cannot, e.g. forcibly
 /// tearing down a realm that still hosts more than one presentation, to pin
 /// this function's own "whole group, unconditionally" contract in isolation).
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
     not(test),
     expect(
@@ -891,9 +905,15 @@ fn uninstall_platform_realm(realm_id: RealmId) {
 /// one of several (removes just this one, siblings and realm survive) —
 /// #555 closes with this slice; there is no further slice deferring this.
 /// Also exercised directly by this module's own tests.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "close_this_window (its one production caller) is desktop-only -- \
@@ -918,9 +938,15 @@ fn close_presentation(
 /// survive otherwise — never [`uninstall_platform_realm`] directly, which
 /// would tear down an ENTIRE `SharedRealm` group out from under a still-open
 /// sibling window.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "its production callers (run_desktop, open_secondary_window) are desktop-only \
@@ -933,7 +959,6 @@ pub(super) fn close_this_window(dispatcher: RealmDispatcher) {
     }
 }
 
-#[cfg(not(target_os = "ios"))]
 pub(super) fn dispatch_platform_realm(
     dispatcher: RealmDispatcher,
     event: RealmTask,
@@ -1330,7 +1355,6 @@ pub(super) fn dispatch_platform_realm(
 /// dispatched realm through its own frame callback; a driver that visits
 /// every hosted realm is this issue's follow-up. Exercised directly by this
 /// module's own tests in the meantime.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
     not(test),
     expect(
@@ -1434,7 +1458,6 @@ fn for_each_installed_realm(mut f: impl FnMut(&crate::app::ui_realm::UiRealm)) {
 /// lets the inbox fill until it hard-errors, and a coalesced redraw request
 /// that nothing consumes never wakes the loop again (`take_redraw_request`
 /// only flips back to `false` once observed here).
-#[cfg(not(target_os = "ios"))]
 pub(super) fn drain_owner_inbox(realm: &crate::app::ui_realm::UiRealm) -> bool {
     let report = realm.drain_commands();
     if report != crate::app::ui_realm::DrainReport::default() {
@@ -1447,7 +1470,7 @@ pub(super) fn drain_owner_inbox(realm: &crate::app::ui_realm::UiRealm) -> bool {
 /// loop-exit teardown. Bounds a hung compute job's ability to wedge process
 /// exit; running work that finishes sooner ends shutdown sooner (the
 /// deadline is a cap, not a sleep).
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 const EXECUTION_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Deadline for the staged SERVICE shutdown (issue #558) that runs just
@@ -1457,10 +1480,17 @@ const EXECUTION_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_
 /// reported (`DeadlineExceeded`) and force-abandoned by the pool shutdown
 /// that follows; it cannot wedge process exit past this deadline plus the
 /// per-pool grace above.
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+/// Full loop-exit teardown: drop every hosted realm, close-request
+/// registration, service and execution pool, and the platform clipboard.
+///
+/// Reached from each backend's loop exit — `run_desktop`/`run_android` after
+/// `Platform::run` returns, and iOS from `applicationWillTerminate:`, which is
+/// the only pre-exit signal a `UIApplicationMain` loop that never returns can
+/// offer.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn teardown_platform_realm() {
     let realms = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -1577,12 +1607,7 @@ pub(super) fn teardown_platform_realm() {
     drop(released);
 }
 
-#[cfg(all(
-    test,
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 mod realm_dispatch_tests {
     use std::{
         cell::{Cell, RefCell},

@@ -6,13 +6,11 @@ use std::path::PathBuf;
 use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
-#[cfg(not(target_os = "ios"))]
 use super::close_request::CloseRequestHandler;
 use super::execution::HostExecutors;
 use super::frame_failure::{FrameFailureDetail, FrameFailureHandler};
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
-#[cfg(not(target_os = "ios"))]
 use super::runtime::ExitPolicy;
 
 /// Default diagnostics policy for a managed application.
@@ -152,7 +150,6 @@ pub struct AppConfig {
     /// iOS: [`ExitPolicy`]/`AppRuntime` are themselves not compiled there
     /// (`run_ios` never reads any field of this config beyond ignoring it
     /// entirely — see that function's own doc).
-    #[cfg(not(target_os = "ios"))]
     pub exit_policy: ExitPolicy,
 
     /// Host-injected background executors (issue #557).
@@ -202,7 +199,6 @@ pub struct AppConfig {
     /// platform seam; on web and Android a registered handler is inert.
     /// Not present on iOS, where the realm-hosting machinery this rides on
     /// is not compiled at all.
-    #[cfg(not(target_os = "ios"))]
     pub close_request_handler: Option<CloseRequestHandler>,
 
     /// Application services to start at bootstrap (issue #558) — durable,
@@ -241,12 +237,10 @@ impl Default for AppConfig {
             debug_paint: false,
             #[cfg(feature = "hot-reload")]
             worker_plugin_path: None,
-            #[cfg(not(target_os = "ios"))]
             exit_policy: ExitPolicy::default(),
             executors: None,
             frame_failure_handler: None,
             frame_failure_detail: FrameFailureDetail::default(),
-            #[cfg(not(target_os = "ios"))]
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
@@ -328,7 +322,6 @@ impl AppConfig {
 
     /// Set the policy governing when the platform loop exits once every
     /// hosted window has closed. See [`ExitPolicy`]'s own doc.
-    #[cfg(not(target_os = "ios"))]
     pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
         self.exit_policy = policy;
         self
@@ -367,7 +360,6 @@ impl AppConfig {
     /// [`Self::close_request_handler`]'s doc for what it is asked and
     /// when, and [`CloseRequestHandler`]'s for the contract the callback
     /// must honor.
-    #[cfg(not(target_os = "ios"))]
     pub fn with_close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
         self.close_request_handler = Some(handler);
         self

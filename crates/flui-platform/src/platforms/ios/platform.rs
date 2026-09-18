@@ -119,6 +119,14 @@ impl IOSPlatform {
     fn active(&self) -> Option<Arc<IOSWindow>> {
         self.window.lock().window.clone()
     }
+
+    /// Fire the registered quit handler. Called from
+    /// `applicationWillTerminate:` — iOS's one pre-exit notification — so the
+    /// framework gets the loop-exit signal `UIApplicationMain`'s own
+    /// never-returning loop would otherwise swallow.
+    fn invoke_quit(&self) {
+        self.handlers.lock().invoke_quit();
+    }
 }
 
 // The bootstrap the `AppDelegate` runs once `didFinishLaunching` arrives, and
@@ -364,6 +372,16 @@ define_class!(
                     w.set_frame_tick_paused(false);
                 }
             });
+        }
+
+        /// The process is about to exit. This is the one pre-exit
+        /// notification iOS sends, and the only place the framework can run
+        /// its loop-exit signal: `UIApplicationMain`'s loop never returns, so
+        /// there is no "after `run`" for the runner to use.
+        #[unsafe(method(applicationWillTerminate:))]
+        fn will_terminate(&self, _application: &UIApplication) {
+            tracing::info!("UIApplication willTerminate — firing the quit handler");
+            Self::with_platform(IOSPlatform::invoke_quit);
         }
     }
 

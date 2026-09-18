@@ -184,11 +184,11 @@ pub(super) fn keeps_frame_gate_open(
     needs_redraw || frame_scheduled || has_pending_work
 }
 
-/// The pace a BACKGROUNDED pump (frames disabled) is bounded to on Android,
-/// whose frame source has no wake-deadline hook to arm instead — see
-/// `bootstrap_android`'s `PumpAsync` arm. Desktop no longer sleeps on the
-/// loop thread at all (ADR-0058, [`FallbackWake`]).
-#[cfg(target_os = "android")]
+/// The pace a BACKGROUNDED pump (frames disabled) is bounded to on the mobile
+/// backends, whose frame sources have no wake-deadline hook to arm instead —
+/// see `bootstrap_android`'s and `bootstrap_ios`'s `PumpAsync` arms. Desktop
+/// no longer sleeps on the loop thread at all (ADR-0058, [`FallbackWake`]).
+#[cfg(any(target_os = "android", target_os = "ios"))]
 pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// The display period assumed when the platform cannot report one (no

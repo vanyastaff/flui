@@ -422,10 +422,13 @@ impl UiCommandSender {
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(
+            not(test),
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32")
+        ),
         expect(
             dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+            reason = "consumed only by the desktop runner's inbox-capacity read and by tests"
         )
     )]
     pub fn capacity(&self) -> usize {
@@ -1367,13 +1370,14 @@ impl UiRealm {
     /// A new cross-thread sender into this runtime's inbox.
     #[must_use]
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
-    // non-test consumer, so the wasm lib check sees this as dead.
+    // non-test consumer outside the desktop runner, so the non-desktop lib
+    // checks see this as dead.
     #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
-        )
+        all(
+            not(test),
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32")
+        ),
+        expect(dead_code, reason = "consumed only by the desktop runner and tests")
     )]
     pub fn command_sender(&self) -> UiCommandSender {
         self.sender_prototype.clone()

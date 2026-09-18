@@ -18,6 +18,8 @@ mod desktop;
 mod device_recovery;
 mod frame_pacing;
 mod host;
+#[cfg(target_os = "ios")]
+mod ios;
 mod lifecycle_ladder;
 mod realm_dispatch;
 mod secondary_window;
@@ -36,9 +38,9 @@ pub use android::{run_app_android, run_app_android_with_config};
     not(target_arch = "wasm32")
 ))]
 use desktop::run_desktop;
-#[cfg(not(target_os = "ios"))]
 pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
-#[cfg(not(target_os = "ios"))]
+#[cfg(target_os = "ios")]
+pub use ios::{run_app_ios, run_app_ios_with_config};
 pub(in crate::app) use realm_dispatch::{RealmTask, SurfaceApplier};
 #[cfg(all(
     not(target_os = "android"),
@@ -75,9 +77,15 @@ use web::run_web;
 /// causal rather than chosen — see
 /// [`CloseRequestRouter::consult`](crate::app::close_request::CloseRequestRouter::consult)'s
 /// own doc.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "its production callers (run_desktop, open_secondary_window) are desktop-only \
@@ -156,7 +164,6 @@ pub(crate) fn install_close_request_wiring(
 /// already closed), and
 /// [`CloseRequestError::WindowGone`](crate::CloseRequestError::WindowGone)
 /// when its native window is already destroyed.
-#[cfg(not(target_os = "ios"))]
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
 ) -> Result<(), crate::app::close_request::CloseRequestError> {
@@ -241,29 +248,13 @@ where
 
     #[cfg(target_os = "ios")]
     {
-        run_ios(root, config);
+        run_app_ios_with_config(root, config);
     }
 
     #[cfg(target_arch = "wasm32")]
     {
         run_web(root, config);
     }
-}
-
-// ============================================================================
-// iOS Implementation
-// ============================================================================
-
-#[cfg(target_os = "ios")]
-fn run_ios<V>(_root: V, _config: AppConfig)
-where
-    V: View + StatelessView + Clone + 'static,
-{
-    // Native iOS (UIKit windowing + surface) is a Cross.P (Platform breadth)
-    // deliverable — see docs/ROADMAP.md's Cross.P section. This stub exists
-    // only so `#[cfg(target_os = "ios")]` builds compile; there is no
-    // UIKit-backed `flui-platform` implementation to call into yet.
-    tracing::info!("iOS platform - not yet implemented");
 }
 
 #[cfg(test)]

@@ -10,15 +10,8 @@
 //! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
 //! the runner drives the scheduler directly.
 
-#[cfg(not(target_os = "ios"))]
 pub(crate) mod close_request;
 mod config;
-// `run_direct` drives its bootstrap through the loop-scoped
-// `OwnerHostClearGuard`/`install_owner_platform` host, which is itself
-// `#[cfg(not(target_os = "ios"))]` (`runner/host.rs`): iOS has no
-// `AppRuntime` yet (that arrives with the native iOS runner), so the module
-// is gated rather than left to reference items that are compiled out.
-#[cfg(not(target_os = "ios"))]
 pub mod direct;
 mod epoch;
 pub(crate) mod execution;
@@ -42,10 +35,8 @@ pub(crate) mod window_registry;
 #[cfg(test)]
 pub(crate) mod window_test_support;
 
-#[cfg(not(target_os = "ios"))]
 pub use close_request::{CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse};
 pub use config::{AppConfig, DiagnosticsProfile};
-#[cfg(not(target_os = "ios"))]
 pub use direct::run_direct;
 pub use execution::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,

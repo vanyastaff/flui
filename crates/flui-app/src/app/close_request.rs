@@ -182,12 +182,11 @@ pub enum CloseResponse {
 #[derive(Clone)]
 pub struct CloseRequestHandler(
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
-            reason = "reached only through install_close_request_wiring, whose production callers \
-                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
-                      no close-request wiring yet"
+            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
+                      no loop-exit teardown at all"
         )
     )]
     Arc<dyn Fn(&CloseRequest) -> CloseResponse + Send + Sync>,
@@ -200,12 +199,11 @@ impl CloseRequestHandler {
     }
 
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
-            reason = "reached only through install_close_request_wiring, whose production callers \
-                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
-                      no close-request wiring yet"
+            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
+                      no loop-exit teardown at all"
         )
     )]
     fn call(&self, request: &CloseRequest) -> CloseResponse {
@@ -278,12 +276,11 @@ struct PresentationCloseEntry {
     /// established.
     window: Weak<dyn PlatformWindow>,
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
-            reason = "reached only through install_close_request_wiring, whose production callers \
-                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
-                      no close-request wiring yet"
+            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
+                      no loop-exit teardown at all"
         )
     )]
     handler: Option<CloseRequestHandler>,
@@ -343,12 +340,11 @@ impl CloseRequestRouter {
     /// the same live presentation, never a stale incarnation colliding with
     /// a fresh one.
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
-            reason = "reached only through install_close_request_wiring, whose production callers \
-                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
-                      no close-request wiring yet"
+            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
+                      no loop-exit teardown at all"
         )
     )]
     pub(crate) fn register(
@@ -394,12 +390,11 @@ impl CloseRequestRouter {
     /// same thread reuses this `AppRuntime`, those would otherwise be
     /// consulted by the NEXT loop's windows.
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
-            reason = "reached only through install_close_request_wiring, whose production callers \
-                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
-                      no close-request wiring yet"
+            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
+                      no loop-exit teardown at all"
         )
     )]
     pub(crate) fn clear(&self) {
@@ -428,12 +423,11 @@ impl CloseRequestRouter {
     /// An unregistered address answers [`CloseResponse::Close`], matching
     /// the platform seam's own "no callback means close is allowed".
     #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        all(target_arch = "wasm32", not(test)),
         expect(
             dead_code,
-            reason = "reached only through install_close_request_wiring, whose production callers \
-                      (run_desktop, open_secondary_window) are desktop-only -- android/wasm32 have \
-                      no close-request wiring yet"
+            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
+                      no loop-exit teardown at all"
         )
     )]
     pub(crate) fn consult(&self, address: PresentationAddress) -> CloseResponse {
