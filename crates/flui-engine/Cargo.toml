@@ -7,6 +7,8 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "GPU-accelerated rendering engine for FLUI using wgpu"
+documentation = "https://docs.rs/flui-engine"
+readme = "README.md"
 keywords = ["rendering", "gpu", "wgpu", "ui", "graphics"]
 categories = ["rendering::engine", "graphics", "gui"]
 

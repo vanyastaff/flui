@@ -41,6 +41,9 @@ mechanism; see `docs/adr/ADR-0045-raster-lane.md`.
 
 - `ARCHITECTURE.md` — wgpu API mapping, the record/replay boundary, mapping
   decisions, friction log.
+- `CONTRIBUTING.md` — build, test, debug, and the invariant list for this
+  crate.
+- `AGENTS.md` — the crate's hard constraints.
 - `docs/PORT.md` — the port methodology and refusal triggers.
 
 ## License

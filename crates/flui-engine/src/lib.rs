@@ -42,65 +42,84 @@
 // until wgpu adds the impls upstream (same class as rust-lang/rust#160036).
 #![recursion_limit = "256"]
 
-//! FLUI Rendering Engine - GPU-accelerated rendering for FLUI
+//! GPU compositor for FLUI: it turns a [`flui_layer::Scene`] into wgpu draw
+//! calls (Vulkan / Metal / DX12 / WebGPU).
 //!
-//! This crate provides GPU rendering backends for FLUI. The default backend
-//! uses wgpu (Vulkan/Metal/DX12/WebGPU).
+//! # Which entry point do you want?
 //!
-//! # Architecture
+//! | You are | Use |
+//! |---|---|
+//! | rendering into a window | [`wgpu::Renderer::new`] — owns one window's device, queue, and surface, and recovers from device loss |
+//! | rendering without a window (tests, screenshots, thumbnails, CI) | [`wgpu::HeadlessRenderer::new`] — rasterizes a layer tree to RGBA8 bytes |
+//! | driving draw calls yourself | [`WgpuPainter`] — the per-frame painter; `examples/painting_demo` is the worked example |
+//! | writing the application frame loop | [`RasterBackend`] — the trait FLUI's own runners call, so the backend is one construction site |
 //!
-//! ```text
-//! Scene (flui-layer)
-//!     │
-//!     ▼
-//! Renderer
-//!     │ renders the LayerTree (Scene)
-//!     ▼
-//! Layer + LayerRender trait
-//!     │ dispatch commands
-//!     ▼
-//! LayerDispatcher
-//!     │ implements the CommandRenderer + LayerStateStack traits,
-//!     │ routing each DrawCommand to the painter
-//!     ▼
-//! WgpuPainter → GpuReplay
-//!     │ record: batched Command IR; replay: wgpu draw calls
-//!     ▼
-//! GPU (wgpu)
-//! ```
+//! All three constructors are `async`, because wgpu's adapter and device
+//! requests are. The library does not choose a blocking strategy for you: an
+//! embedder with an async runtime awaits, and one without wraps the call in
+//! its own `block_on`.
 //!
-//! # Usage
+//! # One frame
 //!
 //! ```rust,no_run
-//! # async fn render(
+//! # async fn frame(
 //! #     window: impl flui_engine::wgpu::WindowTarget,
+//! #     scene: &flui_layer::Scene,
 //! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::wgpu::Renderer;
-//! use flui_layer::{Scene, CanvasLayer, Layer};
-//! use flui_types::{Size, geometry::px};
 //!
-//! // 1. Build a Scene (in framework layer)
-//! let scene = Scene::from_layer(
-//!     Size::new(px(800.0), px(600.0)),
-//!     Layer::Canvas(Box::new(CanvasLayer::new())),
-//!     0,
-//! );
-//!
-//! // 2. Render the Scene (in the engine layer) — `Renderer` owns per-window
-//! //    GPU state, and owns its target itself (an owned, `'static` handle
-//! //    source — see `flui_engine::wgpu::WindowTarget` — not a borrow).
-//! //    `window` is any `WindowTarget`: usually an
-//! //    `Arc<dyn PlatformWindow>`, or an owned raw-window-handle type.
+//! // `window` is an OWNED, `'static` handle source (`WindowTarget`), not a
+//! // borrow: the renderer keeps it for as long as its surface lives, so it
+//! // outlives this stack frame. Almost anything that implements
+//! // `HasWindowHandle + HasDisplayHandle + Send + Sync + 'static` qualifies —
+//! // including `Arc<dyn PlatformWindow>` from `flui-platform`.
 //! let mut renderer = Renderer::new(window).await?;
-//! renderer.render_scene(&scene)?;
+//!
+//! // Render on every frame your event loop asks for; `render_scene` is sync
+//! // and does not block on vsync unless the surface does.
+//! // `Ok(false)` means the frame was skipped (no damage, or an occluded
+//! // surface) rather than drawn.
+//! renderer.render_scene(scene)?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! # Feature Flags
+//! # Architecture
 //!
-//! - `wgpu` (default) - wgpu GPU backend
-//! - Future: `skia`, `vello`, `software`
+//! Everything below [`Scene`](flui_layer::Scene) is this crate's internals,
+//! reached through the entry point you picked above:
+//!
+//! ```text
+//! Scene (flui-layer)          built by the widget tree's Canvas
+//!     │
+//!     ▼
+//! Renderer                    owns one window's GPU stack
+//!     │ walks the LayerTree
+//!     ▼
+//! LayerDispatcher             routes each DrawCommand to the painter
+//!     │
+//!     ▼
+//! WgpuPainter                 record: batched Command IR
+//!     │
+//!     ▼
+//! GpuReplay                   replay: Command IR → wgpu draw calls
+//!     │
+//!     ▼
+//! GPU (wgpu)
+//! ```
+//!
+//! # Cargo features
+//!
+//! - `wgpu-backend` *(default)* — the wgpu backend. Disabling it builds the
+//!   raster-boundary types alone (`RasterOwner`, `RasterBackend`), which is
+//!   what a test of the mailbox protocol needs and nothing else.
+//! - `vulkan` / `metal` / `dx12` / `webgpu` / `gles` — add a wgpu backend API
+//!   explicitly. These are additive pass-throughs to wgpu's own features, not
+//!   selectors: the right one for the target OS is already enabled by this
+//!   crate's per-target dependency entries, and enabling two compiles both.
+//! - `gpu-profiler` — per-pass GPU timings, off by default; no-ops at runtime
+//!   on an adapter without timestamp-query support. Rejected on wasm32.
+//! - `enable-wgpu-tests` — test support only; not part of the public API.
 
 // Ship bar (wave 2): every public item is documented; keep it that way.
 #![deny(missing_docs)]
