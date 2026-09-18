@@ -227,7 +227,7 @@ wasm-link-check:
 # Green here means "compiles clean under the workspace lints", nothing more.
 # Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
 [group("build")]
-[doc("Clippy flui-platform's Windows, macOS, and Android backends from this host (mirrors the CI cross-typecheck job)")]
+[doc("Clippy flui-platform's Windows, macOS, Android, and iOS backends from this host (mirrors the CI cross-typecheck job)")]
 cross-typecheck:
     # `--features a11y` on every line: the UIA/NSAccessibility bridges are
     # feature-gated and this job is the ONLY gate that compiles them at all
@@ -236,6 +236,12 @@ cross-typecheck:
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target x86_64-pc-windows-msvc -- -D warnings
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-darwin -- -D warnings
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
+    # iOS: the native UIKit backend had no lint gate at all before this line,
+    # and it did not compile for the target until the platform work landed.
+    # `aarch64-apple-ios` (device) rather than `-sim`, matching the other
+    # targets: sim and device differ only in the slice, not in the API surface
+    # this lint sees, and `just ios-sim` executes the simulator one.
+    cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
 
 # =============================================================================
 # Testing

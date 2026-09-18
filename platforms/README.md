@@ -11,7 +11,7 @@ FLUI is a cross-platform UI framework built in Rust with **wgpu** for GPU-accele
 | Platform | Status | Rendering Backend | Build System |
 |----------|--------|-------------------|--------------|
 | **Android** | ✅ Production | Vulkan | Gradle + NDK |
-| **iOS** | 🚧 Native backend in progress | Metal | Xcode |
+| **iOS** | 🟡 Native backend, simulator-verified | Metal | Xcode |
 | **Web** | ✅ Production | WebGPU | wasm-pack |
 | **Windows** | 🚧 Win32 backend, lint-only in CI | DirectX 12 / Vulkan | CMake + MSVC |
 | **Linux** | 🪟 winit fallback | Vulkan | cargo + `just` |
@@ -107,8 +107,8 @@ FLUI uses [wgpu](https://wgpu.rs/) for cross-platform GPU rendering. The backend
 - Mobile GPU optimization
 - App lifecycle management
 
-*(Android is the implemented backend; the iOS half is Cross.P / P5. The bullet
-list describes the target contract, not shipped iOS behavior.)*
+*(Both are now implemented backends; iOS was verified on a simulator via
+`just ios-sim`. A real-device run still needs signing.)*
 
 ### Web (WASM)
 - WebGPU rendering
@@ -181,7 +181,7 @@ When adding platform support or features:
 - **Android**: Primary development platform
 - **Web**: Production ready
 - **macOS**: Native AppKit backend complete; lint-only in CI plus local bundled probes
-- **iOS**: Native UIKit backend in progress (Cross.P / P5)
+- **iOS**: Native UIKit backend, simulator-verified (`just ios-sim`); real-device run needs signing
 - **Windows**: Win32 backend present; needs a Windows session to close H9
 - **Linux**: winit fallback in production use; native Wayland/X11 still open
 

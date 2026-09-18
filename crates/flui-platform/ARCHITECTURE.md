@@ -529,3 +529,56 @@ arm is mutation-checked against the ungated `key_up`: removing the check leaks a
 probe. Its own module doc states that a synthesized `NSEvent` proves the
 *routing* and is not a genuine input method, so real composition (press-and-hold
 or a CJK source) remains **not driven**.
+
+### iOS binds UIKit through `objc2`, and its loop-exit signal is `applicationWillTerminate:`
+
+**Decision.** The iOS backend (`platforms/ios/`) binds UIKit through `objc2`
+0.6 / `objc2-ui-kit` 0.3 / `objc2-quartz-core` / `objc2-metal` / `block2` /
+`dispatch2`, and takes its framework loop-exit signal from
+`applicationWillTerminate:`. ADR-0067 carries the full record.
+
+**Why `objc2` and not the macOS backend's `cocoa`/`objc`.** The choice is not
+consistency-versus-modernity: `objc` has not released since 2019 and `cocoa`
+has **no UIKit surface at all**, so the macOS stack cannot express this platform
+even in principle. `icrate`, which this module's stub doc once named, is a
+deprecated alias split into the `objc2-*` crates. Every shipping Rust Apple
+stack is on `objc2` (winit's iOS backend since 0.30, wgpu-hal, egui, slint,
+gpui), and the macOS module's own header already commits to migrating there.
+
+**Why `applicationWillTerminate:`.** `UIApplicationMain` never returns, so
+there is no "after `Platform::run`" for the runner to use — the desktop and
+Android runners call `teardown_platform_realm()` there. Without a deliberate
+choice the framework never receives its loop-exit signal on iOS and leaks every
+realm, service pool and the clipboard for the process's life. That delegate
+method is the only pre-exit notification iOS sends, so the platform fires its
+quit handler from it and the runner runs the teardown.
+
+**Alternatives considered.**
+- *A process-global for the delegate's session state* — rejected: it would add
+  a new entry to the ambient-reach ratchet (`docs/runtime-contract.toml`), and
+  the state is main-thread-only anyway. A thread-local is the owner-affine
+  scope ADR-0027 prefers and matches winit's own `ACTIVE_EVENT_LOOP`.
+- *`UIScene` adoption* — deferred, not dropped. It is the multi-window iPadOS
+  feature and would make `UIScreen.mainScreen` (deprecated in the scene era)
+  scene-relative; this backend presents one full-screen window, so the app-wide
+  accessor is the honest spelling and the module carries an
+  `expect(deprecated)` with that reason.
+- *`objc2-ui-kit` with default features* — rejected: it enables all ~456
+  header features, compiling the whole framework's bindings for a handful of
+  classes. The backend names the classes it messages, as `winit-uikit` does.
+
+**Trade-off.** Two `objc2` generations are in the tree: this backend uses
+0.6.4/0.3.2 (already there via `wgpu-hal`), while `winit` 0.30 and
+`accesskit_macos` 0.27 still pull 0.5.2/0.2.2. The duplicate resolves when
+those move (H10 / winit 0.31), not by anything here. A real device is not
+covered — the simulator slice is, via `just ios-sim` — and no CI job boots a
+simulator; `cross-typecheck` gained an `aarch64-apple-ios` clippy line so a
+broken iOS build is at least loud.
+
+**Replacement coverage.** `just ios-sim` (executing; asserts a Metal device
+and a rendered frame from the app's own log, plus a screenshot) for the
+end-to-end path, and three host-run unit tests on `display.rs`'s bounds
+arithmetic. The engine-side portability fix this uncovered —
+`required_limits` clamped to the adapter's own, because the simulator's Metal
+adapter caps `max_inter_stage_shader_variables` at 15 where
+`wgpu::Limits::default()` asks for 16 — carries a comment at the clamp.

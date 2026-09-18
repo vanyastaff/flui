@@ -133,10 +133,10 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 | # | Deliverable | Status | Owner | Exit |
 |---|---|---|---|---|
 | P1 | Finish Windows backend in `flui-platform` | ☐ todo | — | trivial app runs on Windows; per-platform smoke test green |
-| P2 | Finish macOS backend | ☐ todo | — | trivial app runs on macOS |
+| P2 | Finish macOS backend | ◐ native AppKit backend complete (2026-09-17) | — | trivial app runs on macOS — **met**: `just macos-frame-pump`/`-close-path`/`-ime`/`-resize-jitter` all PASS on a real Mac, and a full Material app renders in a native window (pixel-verified). Residuals named: an AppKit-pumping test harness that would revoke the 41 documented-ignore tests, and `#1147`/`#654`. Not a CI job — macOS-host only |
 | P3 | Complete `winit` fallback | ☐ todo | — | trivial app runs via winit on any host |
 | P4 | Native **Android** backend (`STRATEGY.md` first-class commitment) | ☐ todo | examples scaffolds present (`examples/android_*`) | trivial app runs on Android device/emulator |
-| P5 | Native **iOS** backend (`STRATEGY.md` first-class commitment) | ☐ todo | — | trivial app runs on iOS device/simulator |
+| P5 | Native **iOS** backend (`STRATEGY.md` first-class commitment) | ◐ simulator-verified (2026-09-17) | — | trivial app runs on iOS device/simulator — **simulator half met**: `just ios-sim` boots an iPhone 17 Pro simulator, renders the full Material tree on the native UIKit/Metal backend, and screenshots it. Built on `objc2`/`objc2-ui-kit`. Not covered: a real device (needs signing), and CI (macOS-host only, no CI job) |
 | P6 | Wayland support | ☐ todo | — | trivial app runs on Wayland |
 | P7 | Engine backend breadth — DX12 / Metal / Vulkan / WebGPU surface management | ☐ todo | `flui-engine` | per-backend smoke test |
 

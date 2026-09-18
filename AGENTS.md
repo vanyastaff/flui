@@ -205,11 +205,14 @@ CI runs on PR + push to main (+ merge queue). All jobs are gated on the fast `ch
 The job list and its exact commands live in `.github/workflows/ci.yml` — read them there. What the
 workflow file does *not* tell you, and what you will misjudge without it:
 
-- **cross-typecheck is the only gate on the Win32, AppKit, and Android backends.** It lints
+- **cross-typecheck is the only gate on the Win32, AppKit, Android, and iOS backends.** It lints
   `flui-platform` (`cargo clippy`, not plain `cargo check` — the latter let ~80 deny-level
   violations accumulate unseen before this switched) for `x86_64-pc-windows-msvc`,
-  `aarch64-apple-darwin`, and `aarch64-linux-android`; `cargo clippy` does not link — no link, no
-  tests, and `flui-platform` is excluded from the `test` job. Green means "compiles clean under
+  `aarch64-apple-darwin`, `aarch64-linux-android`, and `aarch64-apple-ios`; `cargo clippy` does not
+  link — no link, no tests, and `flui-platform` is excluded from the `test` job. iOS joined the
+  matrix when the native UIKit backend landed (it had no compile gate at all before, so the stub
+  and its first real implementation were both unlinted); `just ios-sim` is the only step that
+  EXECUTES any of these, and it is macOS-host-only, not a CI job. Green means "compiles clean under
   the workspace lints", nothing more. Before this job existed those backends were only ever
   compiled by whoever happened to develop on that OS, and the Windows one did not compile at all;
   Android joined the matrix later (#556's device-recovery wake fix) for the identical reason —

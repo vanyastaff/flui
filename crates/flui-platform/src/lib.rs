@@ -282,7 +282,9 @@ pub use traits::{
 ///   `winit-backend` for Linux builds.
 /// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap
 ///   available)
-/// - **iOS**: Returns `IOSPlatform` - stub (unimplemented, roadmap available)
+/// - **iOS**: Returns `IOSPlatform` - the native UIKit backend: windows, touch
+///   input, clipboard, displays, a `CADisplayLink` frame source, and the
+///   background/foreground lifecycle (verified on a real simulator)
 /// - **Web/WASM**: Returns `WebPlatform` - stub (unimplemented, roadmap
 ///   available)
 ///
@@ -294,7 +296,7 @@ pub use traits::{
 /// | macOS | ✅ Native AppKit | 9/10 | Windowing, input, clipboard, IME, displays, vsync-paced frame loop; lint-only + bundled probes locally, no CI test job |
 /// | Linux | 🪟 winit fallback (`winit-backend`) | 5/10 | Windowing + input; native Wayland/X11 still a stub |
 /// | Android | 📋 Stub | 2/10 | Roadmap complete |
-/// | iOS | 📋 Stub | 2/10 | Roadmap complete |
+/// | iOS | ✅ Native UIKit | 7/10 | Windowing, touch, clipboard, displays, `CADisplayLink` frame source; lint-only in CI plus `just ios-sim` locally (simulator verified) |
 /// | Web | 📋 Stub | 2/10 | Roadmap complete |
 ///
 /// # Errors
@@ -302,7 +304,7 @@ pub use traits::{
 /// Returns [`PlatformError::Init`] if:
 /// - Platform initialization fails (e.g., COM failure on Windows)
 /// - Platform is not supported (should not happen with cfg guards)
-/// - Platform stub is called (Android, iOS, Web)
+/// - Platform stub is called (Android, Web)
 /// - Linux is reached without the `winit-backend` feature enabled
 ///
 /// # Examples

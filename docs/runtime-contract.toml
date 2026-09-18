@@ -2952,7 +2952,7 @@ thread_affinity = "invoked once, synchronously, on the event-loop owner thread b
 owner = "backend run() contract"
 failure_semantics = "fallible: Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>> where BootstrapError = Box<dyn std::error::Error + Send + Sync> (opaque on purpose: embedder bootstrap is application-land and returns arbitrary errors). Platform::run itself returns Result<(), PlatformError> and propagates on_ready's Err out of it as PlatformError::Bootstrap with the embedder error as source; every backend stops entering (or promptly exits) its loop on Err rather than continuing to run a half-built app."
 consumers = [
-    "all eight backends (winit, windows, macos, web, android, headless, linux stub, ios stub)",
+    "all eight backends (winit, windows, macos, web, android, headless, linux stub, iOS)",
     "runner",
 ]
 owner_issue = 551
