@@ -901,6 +901,15 @@ jobs:
       - name: cargo miri test (owner::global_key)
         run: cargo +nightly miri test -p flui-view --lib --locked owner::global_key
 
+      # The surface-ownership protocol (ADR-0063, issue #1043): the whole
+      # wgpu-free `SurfaceLease` protocol, which is where the two test-only
+      # `borrow_raw` calls and the load-bearing surface-before-target drop
+      # order live. `SurfaceLease` is generic over its surface type precisely
+      # so this needs no GPU — the lib target links wgpu, but Miri never
+      # enters it. Measured 6 tests / ~3.3s warm, in budget.
+      - name: cargo miri test (wgpu::surface_lease)
+        run: cargo +nightly miri test -p flui-engine --lib --locked wgpu::surface_lease
+
   # ─────────────────────────────────────────────────────────────────────────
   # feature-matrix — xilem-style per-feature clippy via cargo-hack. The plain
   # `clippy` job compiles the whole workspace under feature unification with
