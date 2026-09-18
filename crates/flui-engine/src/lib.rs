@@ -8,6 +8,16 @@
 // The wgpu backend's instance batches carry a `*_batch` field per primitive
 // family, and the segment enum is dominated by its largest variant; both are
 // deliberate. Gated on the feature because neither type exists without it.
+// Two lints are suppressed crate-wide for the wgpu backend, each with a
+// named site rather than a blanket rationale:
+//
+// - `struct_field_names`: the instance batches carry one `*_batch` field per
+//   primitive family (`rect_batch`, `circle_batch`, …), which is the field's
+//   domain name, not a redundant suffix.
+// - `large_enum_variant`: `command_ir::ImageFilterSpec` and
+//   `layer_compositor::RestoreOutcome` are dominated by one variant each;
+//   both are short-lived per-frame values, so boxing the large variant would
+//   trade an allocation on the frame path for a stack-size nit.
 #![cfg_attr(
     feature = "wgpu-backend",
     expect(clippy::struct_field_names, clippy::large_enum_variant)
