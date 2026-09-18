@@ -324,7 +324,7 @@ struct CachedBuffer {
 ///   of any kind reached text: scrolled rows painted through the app bar above
 ///   them.
 #[derive(Debug, Clone, Copy)]
-pub struct TextPlacement {
+pub(crate) struct TextPlacement {
     /// Uniform scale taken from the CTM at record time.
     ///
     /// Applied as `TextArea::scale`, which glyphon threads into
@@ -426,7 +426,7 @@ enum BatchEntry {
 /// text_renderer.render_range(&device, &queue, &view, &mut encoder, (800, 600), 0..usize::MAX)?;
 /// text_renderer.finish_pass();
 /// ```
-pub struct TextRenderer {
+pub(crate) struct TextRenderer {
     /// The framework's single shared font system (ADR-0016), injected by the
     /// caller rather than resolved ambiently.
     ///
@@ -577,7 +577,7 @@ impl TextRenderer {
     /// renderer shapes against, so constructing a `TextRenderer` on a
     /// non-owner thread (the raster thread) never has to stand up a second,
     /// disconnected binding of its own just to reach the font DB.
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
@@ -665,7 +665,7 @@ impl TextRenderer {
     ///
     /// Buffers are cached by `(text, font_size)` to avoid re-layout when the
     /// same string appears in subsequent frames.
-    pub fn add_text(
+    pub(crate) fn add_text(
         &mut self,
         text: &str,
         position: Point<Pixels>,
@@ -711,7 +711,7 @@ impl TextRenderer {
     /// Buffers are cached by a style fingerprint that covers all layout- and
     /// paint-affecting fields so that differently-styled identical strings
     /// never collide.
-    pub fn add_rich_text(
+    pub(crate) fn add_rich_text(
         &mut self,
         runs: &[(String, Option<TextStyle>)],
         position: Point<Pixels>,
@@ -986,7 +986,7 @@ impl TextRenderer {
 
     /// Returns the number of text areas queued for the current frame.
     #[inline]
-    pub fn text_count(&self) -> usize {
+    pub(crate) fn text_count(&self) -> usize {
         self.batch.len()
     }
 }

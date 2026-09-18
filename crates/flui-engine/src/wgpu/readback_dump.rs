@@ -31,7 +31,7 @@ const DUMP_DIR_ENV: &str = "FLUI_READBACK_DUMP_DIR";
 /// readback helpers stay one-liners.
 ///
 /// No-op unless `FLUI_READBACK_DUMP_DIR` is set. Never panics.
-pub fn dump_frame(width: u32, height: u32, rgba: &[u8]) {
+pub(crate) fn dump_frame(width: u32, height: u32, rgba: &[u8]) {
     let thread = std::thread::current();
     let test_name = thread.name().unwrap_or("flui_readback");
     dump_rgba_png(test_name, width, height, rgba);
@@ -43,7 +43,7 @@ pub fn dump_frame(width: u32, height: u32, rgba: &[u8]) {
 /// and any other character outside `[A-Za-z0-9._-]` become `_`. No-op unless
 /// `FLUI_READBACK_DUMP_DIR` is set. Never panics; write failures are logged
 /// and swallowed.
-pub fn dump_rgba_png(test_name: &str, width: u32, height: u32, rgba: &[u8]) {
+pub(crate) fn dump_rgba_png(test_name: &str, width: u32, height: u32, rgba: &[u8]) {
     let dir = {
         let _guard = ENV_LOCK.lock();
         std::env::var_os(DUMP_DIR_ENV).map(PathBuf::from)

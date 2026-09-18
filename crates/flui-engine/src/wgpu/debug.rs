@@ -15,18 +15,18 @@ use crate::layer_state_stack::LayerStateStack;
 
 /// Debug backend that logs all commands to tracing.
 #[derive(Debug)]
-pub struct DebugBackend {
+pub(crate) struct DebugBackend {
     command_count: usize,
 }
 
 impl DebugBackend {
     /// Create a new debug backend.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { command_count: 0 }
     }
 
     /// Get the total number of commands processed.
-    pub fn command_count(&self) -> usize {
+    pub(crate) fn command_count(&self) -> usize {
         self.command_count
     }
 

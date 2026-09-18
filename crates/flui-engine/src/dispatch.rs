@@ -31,7 +31,10 @@ use crate::command_renderer::CommandRenderer;
 /// The match statement compiles to a jump table, making dispatch O(1).
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
-pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, renderer: &mut R) {
+pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
+    command: &DrawCommand,
+    renderer: &mut R,
+) {
     match command {
         // === Drawing Commands ===
         DrawCommand::DrawRect {
@@ -368,7 +371,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
 ///
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
-pub fn dispatch_commands<'a, I, R>(commands: I, renderer: &mut R)
+pub(crate) fn dispatch_commands<'a, I, R>(commands: I, renderer: &mut R)
 where
     I: IntoIterator<Item = &'a DrawCommand>,
     R: CommandRenderer + ?Sized,

@@ -81,7 +81,7 @@ fn build_gradient_stops(
 /// don't implement Debug.
 // `missing_debug_implementations` is a crate-level `#[expect]`: these types
 // hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
-pub struct LayerDispatcher<'frame> {
+pub(crate) struct LayerDispatcher<'frame> {
     painter: &'frame mut WgpuPainter,
     offscreen: Option<&'frame mut super::offscreen::OffscreenRenderer>,
     /// Cached offscreen painter reused across shader mask invocations.
@@ -163,7 +163,7 @@ impl<'frame> LayerDispatcher<'frame> {
     /// [`bind_surface`](Self::bind_surface) when the frame surface
     /// is available to enable the DisplayList-backdrop-filter
     /// command path.
-    pub fn new(painter: &'frame mut WgpuPainter) -> Self {
+    pub(crate) fn new(painter: &'frame mut WgpuPainter) -> Self {
         Self {
             painter,
             offscreen: None,
@@ -176,7 +176,7 @@ impl<'frame> LayerDispatcher<'frame> {
     }
 
     /// Create a new LayerDispatcher that borrows the given painter and offscreen renderer.
-    pub fn with_offscreen(
+    pub(crate) fn with_offscreen(
         painter: &'frame mut WgpuPainter,
         offscreen: &'frame mut super::offscreen::OffscreenRenderer,
     ) -> Self {
@@ -200,7 +200,7 @@ impl<'frame> LayerDispatcher<'frame> {
     /// flush + blur the surface contents; without it the backdrop-
     /// filter path falls back to dispatching the child display list
     /// without applying the filter (visible regression vs Flutter).
-    pub fn bind_surface(
+    pub(crate) fn bind_surface(
         &mut self,
         view: &'frame wgpu::TextureView,
         texture: &'frame wgpu::Texture,
@@ -210,17 +210,17 @@ impl<'frame> LayerDispatcher<'frame> {
     }
 
     /// Access the offscreen renderer mutably (for shader mask, backdrop filter).
-    pub fn offscreen_mut(&mut self) -> Option<&mut super::offscreen::OffscreenRenderer> {
+    pub(crate) fn offscreen_mut(&mut self) -> Option<&mut super::offscreen::OffscreenRenderer> {
         self.offscreen.as_deref_mut()
     }
 
     /// Get a reference to the underlying painter.
-    pub fn painter(&self) -> &WgpuPainter {
+    pub(crate) fn painter(&self) -> &WgpuPainter {
         self.painter
     }
 
     /// Get a mutable reference to the underlying painter.
-    pub fn painter_mut(&mut self) -> &mut WgpuPainter {
+    pub(crate) fn painter_mut(&mut self) -> &mut WgpuPainter {
         &mut *self.painter
     }
 

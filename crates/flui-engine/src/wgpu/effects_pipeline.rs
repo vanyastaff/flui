@@ -18,7 +18,7 @@ use super::pipeline_cache::{CoverageShaderSources, select_coverage_blend};
 use super::pipeline_set::{QuadPipelineSpec, create_unit_quad_pipeline};
 
 /// Create bind group layout for gradient stops (storage buffer)
-pub fn create_gradient_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+pub(crate) fn create_gradient_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Gradient Stops Bind Group Layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -40,10 +40,10 @@ pub fn create_gradient_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGro
 /// frame. The three `*_gradient_rect` methods in `painter::gradient` enforce this
 /// limit by dropping instances that would overflow it rather than writing
 /// past the end of the buffer.
-pub const MAX_GRADIENT_STOPS: usize = 8 * 100;
+pub(crate) const MAX_GRADIENT_STOPS: usize = 8 * 100;
 
 /// Create gradient stops buffer with initial capacity
-pub fn create_gradient_stops_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+pub(crate) fn create_gradient_stops_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     // Max 8 stops per gradient, support up to 100 gradients per frame
     let capacity = MAX_GRADIENT_STOPS;
     let size = (capacity * std::mem::size_of::<GradientStop>()) as u64;
@@ -251,7 +251,7 @@ impl GradientPipelines {
 }
 
 /// Create shadow rendering pipeline
-pub fn create_shadow_pipeline(
+pub(crate) fn create_shadow_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
     viewport_bind_group_layout: &wgpu::BindGroupLayout,

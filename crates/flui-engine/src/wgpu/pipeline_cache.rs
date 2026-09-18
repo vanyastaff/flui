@@ -25,7 +25,7 @@ use wgpu::RenderPipeline;
 /// [`Self::ALPHA_BLEND`] bit). Opaque keys carry `BlendMode::SrcOver` purely as
 /// a canonical value so equal opaque keys hash equal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PipelineKey {
+pub(crate) struct PipelineKey {
     bits: u32,
     /// Fixed-function blend mode for the color target. Only consulted when
     /// [`Self::is_alpha_blended`] is true.
@@ -39,7 +39,7 @@ impl PipelineKey {
     const MSAA_8X: u32 = 1 << 3; // 8x MSAA enabled
 
     /// Create opaque pipeline key (no blending, fastest)
-    pub fn opaque() -> Self {
+    pub(crate) fn opaque() -> Self {
         Self {
             bits: 0,
             blend_mode: BlendMode::SrcOver,
@@ -47,7 +47,7 @@ impl PipelineKey {
     }
 
     /// Create an alpha-blending pipeline key for the default `SrcOver` mode.
-    pub fn alpha_blend() -> Self {
+    pub(crate) fn alpha_blend() -> Self {
         Self {
             bits: Self::ALPHA_BLEND,
             blend_mode: BlendMode::SrcOver,
@@ -62,7 +62,7 @@ impl PipelineKey {
     /// [`BlendMode::is_advanced`] (see `DrawBatcher::add_tessellated_with_key`)
     /// before the key reaches [`PipelineCache`], so an advanced key never selects
     /// a fixed-function pipeline.
-    pub fn with_blend(mode: BlendMode) -> Self {
+    pub(crate) fn with_blend(mode: BlendMode) -> Self {
         Self {
             bits: Self::ALPHA_BLEND,
             blend_mode: mode,
@@ -70,18 +70,18 @@ impl PipelineKey {
     }
 
     /// Check if pipeline requires alpha blending
-    pub fn is_alpha_blended(self) -> bool {
+    pub(crate) fn is_alpha_blended(self) -> bool {
         self.bits & Self::ALPHA_BLEND != 0
     }
 
     /// The fixed-function blend mode this key selects (only meaningful when
     /// [`Self::is_alpha_blended`] is true).
-    pub fn blend_mode(self) -> BlendMode {
+    pub(crate) fn blend_mode(self) -> BlendMode {
         self.blend_mode
     }
 
     /// Get MSAA sample count
-    pub fn msaa_samples(self) -> u32 {
+    pub(crate) fn msaa_samples(self) -> u32 {
         if self.bits & Self::MSAA_8X != 0 {
             8
         } else if self.bits & Self::MSAA_4X != 0 {
@@ -108,7 +108,7 @@ impl PipelineKey {
 /// [`PipelineCache::get_or_create`] debug-asserts that no advanced key reaches the
 /// cache. The defensive `_` arm below maps any stray advanced mode to `SrcOver`
 /// in release rather than panicking — but that path is a routing logic error.
-pub fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
+pub(crate) fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
     use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
 
     // Helper: build a BlendState whose color and alpha components share the
@@ -205,7 +205,7 @@ pub fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 ///
 /// Advanced (dst-reading) modes never reach a fixed-function blend state and
 /// return `None`.
-pub fn destination_alpha_scale_for(mode: BlendMode) -> Option<f32> {
+pub(crate) fn destination_alpha_scale_for(mode: BlendMode) -> Option<f32> {
     match mode {
         BlendMode::Clear
         | BlendMode::Src
@@ -228,7 +228,7 @@ pub fn destination_alpha_scale_for(mode: BlendMode) -> Option<f32> {
 /// Only valid on a device with [`wgpu::Features::DUAL_SOURCE_BLENDING`], and
 /// only paired with that shader. `PipelineCache` owns both halves of that
 /// pairing.
-pub fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
+pub(crate) fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
     let folded = blend_state_for(mode);
     if destination_alpha_scale_for(mode).is_none() {
         return folded;
@@ -292,7 +292,7 @@ pub fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 /// to destination pixels outside the shape's geometric boundary.
 /// The aliased result is COMPLETE and CORRECT in coverage region — only the
 /// 1px edge band is aliased, which is the same quality as the pre-PR-3 engine.
-pub fn is_tile_safe_for_ssaa(mode: BlendMode) -> bool {
+pub(crate) fn is_tile_safe_for_ssaa(mode: BlendMode) -> bool {
     matches!(
         mode,
         BlendMode::SrcOver
@@ -313,7 +313,7 @@ pub fn is_tile_safe_for_ssaa(mode: BlendMode) -> bool {
 ///
 /// Previously declared in `batches/paths.rs` (private to that module);
 /// centralised here so all batch modules share one constant.
-pub const SSAA_AREA_THRESHOLD_PX_SQ: f32 = 256.0;
+pub(crate) const SSAA_AREA_THRESHOLD_PX_SQ: f32 = 256.0;
 
 /// Returns `true` when SSAA tiling is both blend-safe and large enough to
 /// justify the 2× oversample overhead.
@@ -336,7 +336,7 @@ pub const SSAA_AREA_THRESHOLD_PX_SQ: f32 = 256.0;
 ///   must stay on the tessellated path.
 /// - **drrect** (`batches/shapes.rs`): the `mode == BlendMode::SrcOver ||`
 ///   prefix was dropped (it is subsumed by `is_tile_safe_for_ssaa(SrcOver)` == `true`).
-pub fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
+pub(crate) fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
     (is_tile_safe_for_ssaa(mode) || mode.is_advanced()) && device_area >= SSAA_AREA_THRESHOLD_PX_SQ
 }
 
@@ -360,7 +360,7 @@ const DESTINATION_ALPHA_SCALE_OVERRIDE: &str = "destination_alpha_scale";
 /// Not shape-specific: `shaders::coverage_correct_shader!` builds one of these
 /// for the tessellated shape and for each of the three instanced gradients.
 #[derive(Debug, Clone, Copy)]
-pub struct CoverageShaderSources {
+pub(crate) struct CoverageShaderSources {
     /// Coverage folded into the source alpha. Compiles on every device.
     pub folded: &'static str,
     /// Coverage emitted as `@blend_src(1)`. Requires
@@ -420,7 +420,7 @@ pub(super) fn select_coverage_blend<S>(
 ///
 /// Automatically creates and caches pipelines on-demand based on PipelineKey.
 /// Avoids expensive pipeline recreation by reusing cached variants.
-pub struct PipelineCache {
+pub(crate) struct PipelineCache {
     /// Cached pipelines indexed by key
     cache: HashMap<PipelineKey, RenderPipeline>,
 
@@ -472,7 +472,7 @@ impl PipelineCache {
     /// target this workspace ships, and the alternative — spending a paint's
     /// alpha channel on coverage — would change what a translucent `Clear`
     /// paint means on every backend to fix an edge on one.
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         shader_sources: CoverageShaderSources,
         format: wgpu::TextureFormat,
@@ -522,7 +522,11 @@ impl PipelineCache {
     ///
     /// Returns cached pipeline if available, otherwise creates and caches new
     /// one.
-    pub fn get_or_create(&mut self, device: &wgpu::Device, key: PipelineKey) -> &RenderPipeline {
+    pub(crate) fn get_or_create(
+        &mut self,
+        device: &wgpu::Device,
+        key: PipelineKey,
+    ) -> &RenderPipeline {
         // Invariant: advanced (dst-read) modes are NOT fixed-function and must never
         // build a `PipelineCache` entry — shape records divert to
         // `DrawItem::AdvancedShape` in `add_tessellated_with_key` before a key is
@@ -644,13 +648,13 @@ impl PipelineCache {
     /// This is needed to create bind groups that are compatible with pipelines
     /// created by this cache. In wgpu, bind groups must be created with the
     /// exact same layout object that the pipeline expects.
-    pub fn viewport_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+    pub(crate) fn viewport_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.viewport_bind_group_layout
     }
 
     /// The per-batch SDF clip bind-group layout (group 1) every tessellated
     /// draw binds against.
-    pub fn clip_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+    pub(crate) fn clip_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.clip_bind_group_layout
     }
 }
@@ -669,7 +673,7 @@ impl PipelineCache {
 ///   [`PipelineCache::get_or_create`] debug-asserts against it.
 /// - `SrcOver` keeps the legacy fast heuristic: opaque source (`a == 255`) skips
 ///   the blend stage entirely; translucent source uses the SrcOver blend.
-pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
+pub(crate) fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
     let mode = paint.blend_mode;
 
     if mode == BlendMode::SrcOver {

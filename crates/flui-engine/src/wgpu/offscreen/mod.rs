@@ -54,6 +54,12 @@ const MAX_BLUR_ITERATIONS: usize = 5;
 /// ```
 // `missing_debug_implementations` is a crate-level `#[expect]`: these types
 // hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
+//
+// `pub` (not `pub(crate)`) because the `enable-wgpu-tests` feature re-exports
+// this type for the `offscreen_resource_cache` bench; in a default build the
+// crate-wide `unreachable_pub` warn has nothing else to say about it, so the
+// expectation is scoped to the configuration that makes it true.
+#[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
 pub struct OffscreenRenderer {
     /// Texture pool for offscreen rendering — owned directly; borrow it via
     /// [`Self::texture_pool_mut`]. The pool is single-mutator by
@@ -152,6 +158,9 @@ impl OffscreenRenderer {
     /// * `device` - wgpu device for GPU operations
     /// * `queue` - wgpu queue for command submission
     /// * `surface_format` - texture format for framebuffer
+    // `pub` under `enable-wgpu-tests`: the `offscreen_resource_cache` bench
+    // (a separate crate target) constructs one. Private otherwise.
+    #[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -316,22 +325,24 @@ impl OffscreenRenderer {
     }
 
     /// Access the wgpu device
-    pub fn device(&self) -> &Arc<wgpu::Device> {
+    pub(crate) fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
     }
 
     /// Access the wgpu queue
-    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+    pub(crate) fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.queue
     }
 
     /// Get the surface texture format
-    pub fn surface_format(&self) -> wgpu::TextureFormat {
+    pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
         self.surface_format
     }
 
     /// Exclusive access to the texture pool (all pool operations take
     /// `&mut` — the inventory is directly owned, not behind a lock).
+    // `pub` under `enable-wgpu-tests` for the `offscreen_resource_cache` bench.
+    #[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
     pub fn texture_pool_mut(&mut self) -> &mut TexturePool {
         &mut self.texture_pool
     }
@@ -344,6 +355,7 @@ impl OffscreenRenderer {
 /// Contains the offscreen texture with the masked content.
 /// The texture will be automatically returned to the pool when dropped.
 #[derive(Debug)]
+#[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
 pub struct MaskedRenderResult {
     /// Offscreen texture containing masked result
     pub texture: PooledTexture,
@@ -351,7 +363,7 @@ pub struct MaskedRenderResult {
 
 impl MaskedRenderResult {
     /// Consume the result and extract the pooled texture for compositing.
-    pub fn into_texture(self) -> PooledTexture {
+    pub(crate) fn into_texture(self) -> PooledTexture {
         self.texture
     }
 }
@@ -359,7 +371,7 @@ impl MaskedRenderResult {
 /// Uniform parameters for Dual Kawase blur shaders
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct BlurParams {
+pub(crate) struct BlurParams {
     /// Size of the source texture in pixels
     pub texture_size: [f32; 2],
     /// Sample offset multiplier (controls blur spread)
@@ -388,7 +400,7 @@ struct BlurPipelines {
 /// Used to render the masked texture as a fullscreen quad.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct FullscreenVertex {
+pub(crate) struct FullscreenVertex {
     pub position: [f32; 2],
     pub tex_coords: [f32; 2],
 }
@@ -397,7 +409,7 @@ impl FullscreenVertex {
     /// Create fullscreen quad vertices
     ///
     /// Returns 6 vertices forming 2 triangles that cover the entire screen.
-    pub fn fullscreen_quad() -> [FullscreenVertex; 6] {
+    pub(crate) fn fullscreen_quad() -> [FullscreenVertex; 6] {
         [
             // Triangle 1
             FullscreenVertex {

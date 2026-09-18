@@ -62,7 +62,7 @@ pub(crate) const IMAGE_TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm
 /// Cache key for a texture: what a caller asks for, not an external texture
 /// identity (that is `flui_types::painting::TextureId`).
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub enum TextureKey {
+pub(crate) enum TextureKey {
     /// Data-based texture with hash
     Data(u64),
     /// Pointer-based identity (Arc data pointer address).
@@ -75,7 +75,7 @@ pub enum TextureKey {
 
 impl TextureKey {
     /// Create from raw bytes with hash
-    pub fn from_data(data: &[u8]) -> Self {
+    pub(crate) fn from_data(data: &[u8]) -> Self {
         use std::{
             collections::hash_map::DefaultHasher,
             hash::{Hash, Hasher},
@@ -91,14 +91,14 @@ impl TextureKey {
     /// Use with [`flui_types::painting::Image::data_ptr()`] so that images
     /// sharing the same underlying allocation are deduplicated without
     /// hashing the full pixel buffer.
-    pub fn from_ptr(ptr: usize) -> Self {
+    pub(crate) fn from_ptr(ptr: usize) -> Self {
         Self::Pointer(ptr)
     }
 }
 
 /// Cached texture entry
 #[derive(Debug)]
-pub struct CachedTexture {
+pub(crate) struct CachedTexture {
     /// Texture view for rendering. The underlying `wgpu::Texture` is kept
     /// alive by the view itself (`wgpu::TextureView` holds a clone of it),
     /// so a separate `texture` field would be a second strong reference no
@@ -150,7 +150,7 @@ impl CachedTexture {
 
     /// Returns `true` when this entry is stored inside the shared atlas.
     #[must_use]
-    pub fn is_atlas_entry(&self) -> bool {
+    pub(crate) fn is_atlas_entry(&self) -> bool {
         self.uv_rect.is_some()
     }
 
@@ -162,7 +162,7 @@ impl CachedTexture {
 
 /// Outcome of one frame-boundary [`TextureCache::end_frame_maintenance`] pass.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FrameMaintenance {
+pub(crate) struct FrameMaintenance {
     /// Number of standalone textures evicted to stay within the memory budget.
     pub evicted: usize,
     /// `true` when the shared atlas was reclaimed this frame.
@@ -183,7 +183,7 @@ pub struct FrameMaintenance {
 /// `end_frame_maintenance`.
 // `missing_debug_implementations` is a crate-level `#[expect]`: these types
 // hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
-pub struct TextureCache {
+pub(crate) struct TextureCache {
     /// Cached textures by ID
     textures: HashMap<TextureKey, CachedTexture>,
     /// Statistics
@@ -212,7 +212,7 @@ impl TextureCache {
     /// # Arguments
     /// * `device` - WGPU device for creating textures (Arc for safe sharing)
     /// * `queue` - WGPU queue for uploading texture data (Arc for safe sharing)
-    pub fn new(device: Arc<Device>, queue: Arc<Queue>) -> Self {
+    pub(crate) fn new(device: Arc<Device>, queue: Arc<Queue>) -> Self {
         let atlas = super::atlas::TextureAtlas::new(
             &device,
             super::atlas::ATLAS_DEFAULT_SIZE,
@@ -245,7 +245,7 @@ impl TextureCache {
     /// * `width` - Texture width
     /// * `height` - Texture height
     /// * `data` - RGBA8 pixel data (width × height × 4 bytes)
-    pub fn load_from_rgba(
+    pub(crate) fn load_from_rgba(
         &mut self,
         id: TextureKey,
         width: u32,
@@ -372,12 +372,12 @@ impl TextureCache {
     /// hit/miss through `load_from_rgba`'s own entry lookup, and no
     /// production caller asks this question separately.
     #[cfg(all(test, feature = "enable-wgpu-tests"))]
-    pub fn contains(&self, id: &TextureKey) -> bool {
+    pub(crate) fn contains(&self, id: &TextureKey) -> bool {
         self.textures.contains_key(id)
     }
 
     /// Get cached texture (without loading)
-    pub fn get(&mut self, id: &TextureKey) -> Option<&CachedTexture> {
+    pub(crate) fn get(&mut self, id: &TextureKey) -> Option<&CachedTexture> {
         if let Some(cached) = self.textures.get_mut(id) {
             cached.record_use();
             self.cache_hits += 1;
@@ -388,7 +388,7 @@ impl TextureCache {
     }
 
     /// Total memory used by all cached textures in bytes
-    pub fn memory_bytes(&self) -> usize {
+    pub(crate) fn memory_bytes(&self) -> usize {
         self.textures.values().map(|t| t.size_bytes).sum()
     }
 
@@ -396,7 +396,7 @@ impl TextureCache {
     ///
     /// Removes textures with `use_count == 0` until memory is within budget.
     /// Returns the number of evicted textures.
-    pub fn evict_over_budget(&mut self) -> usize {
+    pub(crate) fn evict_over_budget(&mut self) -> usize {
         let current = self.memory_bytes();
         if current <= self.max_memory_bytes {
             return 0;
@@ -432,7 +432,7 @@ impl TextureCache {
     /// Sets all `use_count` to 0 so the next frame can detect unused textures.
     /// Run at the END of frame maintenance, after eviction has read this
     /// frame's counts — see [`Self::end_frame_maintenance`].
-    pub fn reset_use_counters(&mut self) {
+    pub(crate) fn reset_use_counters(&mut self) {
         for texture in self.textures.values_mut() {
             texture.use_count = 0;
         }
@@ -480,7 +480,7 @@ impl TextureCache {
     /// `use_count == 0` entry, which wiped the entire cache every frame and
     /// defeated cross-frame reuse. Encapsulating the sequence here keeps callers
     /// from reintroducing that ordering bug.
-    pub fn end_frame_maintenance(&mut self) -> FrameMaintenance {
+    pub(crate) fn end_frame_maintenance(&mut self) -> FrameMaintenance {
         let atlas_reset = self.maybe_reset_atlas();
         let evicted = self.evict_over_budget();
         self.reset_use_counters();

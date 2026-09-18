@@ -30,7 +30,7 @@ use crate::{
 ///
 /// `LayerDispatcher` implements this for every `flui_layer::Layer` variant; the
 /// layer walk calls `render` on enter and `cleanup` on exit.
-pub trait LayerRender<R: CommandRenderer + LayerStateStack + ?Sized> {
+pub(crate) trait LayerRender<R: CommandRenderer + LayerStateStack + ?Sized> {
     /// Render this layer using the provided command renderer.
     fn render(&self, renderer: &mut R);
 

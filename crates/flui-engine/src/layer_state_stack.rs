@@ -37,7 +37,7 @@ use flui_types::{
 /// [`CommandRenderer`]: the clip/transform/effect nesting has to mirror the
 /// tree or the rendered output is wrong. A recorder that only counts
 /// commands can skip this half, which is what the split buys.
-pub trait LayerStateStack {
+pub(crate) trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);
 

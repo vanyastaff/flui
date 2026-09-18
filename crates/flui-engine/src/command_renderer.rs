@@ -27,7 +27,7 @@ use flui_types::{
 /// `Backend` (the production path) and, in tests, a command recorder. The
 /// dispatch itself is `dispatch_command`, which is the match over
 /// `flui_painting::DrawCommand` — read them together.
-pub trait CommandRenderer {
+pub(crate) trait CommandRenderer {
     // ===== Primitive Shapes =====
 
     /// Render a filled or stroked rectangle

@@ -5,9 +5,15 @@
 // one. It is an `expect`, not an `allow`: if the last such type leaves, the
 // attribute must go with it.
 #![expect(missing_debug_implementations)]
-// The wgpu backend's instance batches carry a `*_batch` field per primitive
-// family, and the segment enum is dominated by its largest variant; both are
-// deliberate. Gated on the feature because neither type exists without it.
+// `unreachable_pub` is a warning, not an error, because the workspace lint set
+// does not carry it: it fires for a `pub` item in a private or `pub(crate)`
+// module, which is a real finding (it claims reachability it does not have)
+// but not a correctness one. It caught 180 such declarations in this crate
+// when it was enabled, and every remaining `pub` now either reaches the crate
+// root or carries a scoped `#[cfg_attr(..., expect(unreachable_pub))]` naming
+// the feature that makes it reachable. Keep it on: the next one is a warning,
+// not a discovery.
+#![warn(unreachable_pub)]
 // Two lints are suppressed crate-wide for the wgpu backend, each with a
 // named site rather than a blanket rationale:
 //

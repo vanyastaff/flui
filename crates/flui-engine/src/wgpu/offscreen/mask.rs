@@ -159,6 +159,8 @@ impl OffscreenRenderer {
     /// 3. Setup render pass targeting offscreen texture
     /// 4. Execute shader mask pipeline
     /// 5. Return masked texture
+    // `pub` under `enable-wgpu-tests` for the `offscreen_resource_cache` bench.
+    #[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
     pub fn render_masked(
         &mut self,
         child_bounds: Rect<Pixels>,

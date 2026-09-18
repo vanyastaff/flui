@@ -48,6 +48,7 @@
     non_upper_case_globals,
     elided_lifetimes_in_paths,
     unused_doc_comments,
+    unreachable_pub,
     clippy::all,
     clippy::pedantic
 )]

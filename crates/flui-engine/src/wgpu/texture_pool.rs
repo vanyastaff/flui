@@ -56,7 +56,7 @@ impl TextureDesc {
 ///
 /// Holds ownership of a `wgpu::Texture` and a default `wgpu::TextureView`.
 /// These are moved in and out of the pool — never cloned.
-pub struct GpuTexture {
+pub(crate) struct GpuTexture {
     /// The actual GPU texture
     pub texture: wgpu::Texture,
     /// Default texture view (created at allocation time)
@@ -258,6 +258,10 @@ impl TexturePoolInner {
 /// ```
 // `missing_debug_implementations` is a crate-level `#[expect]`: these types
 // hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
+//
+// `pub` for the same reason as `OffscreenRenderer`: the `enable-wgpu-tests`
+// feature re-exports it for the bench.
+#[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
 pub struct TexturePool {
     inventory: TexturePoolInner,
     return_tx: Sender<GpuTexture>,
@@ -269,12 +273,12 @@ impl TexturePool {
     /// Create new texture pool with default settings
     ///
     /// Default max pool size: 16 idle textures
-    pub fn new(device: Arc<wgpu::Device>) -> Self {
+    pub(crate) fn new(device: Arc<wgpu::Device>) -> Self {
         Self::with_capacity(device, 16)
     }
 
     /// Create texture pool with specific max pool size for idle textures
-    pub fn with_capacity(device: Arc<wgpu::Device>, max_pool_size: usize) -> Self {
+    pub(crate) fn with_capacity(device: Arc<wgpu::Device>, max_pool_size: usize) -> Self {
         let (return_tx, return_rx) = channel();
         Self {
             inventory: TexturePoolInner::new(max_pool_size),
@@ -298,6 +302,7 @@ impl TexturePool {
     /// The returned [`PooledTexture`] automatically returns the GPU texture
     /// to the pool when dropped.
     #[must_use]
+    #[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
     pub fn acquire(
         &mut self,
         width: u32,
@@ -336,7 +341,7 @@ impl TexturePool {
 
     /// Acquire a texture sized from a `Size<Pixels>` value
     #[must_use]
-    pub fn acquire_from_size(
+    pub(crate) fn acquire_from_size(
         &mut self,
         size: Size<Pixels>,
         format: wgpu::TextureFormat,

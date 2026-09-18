@@ -12,7 +12,7 @@ use wgpu::{
 
 /// Rectangle in atlas space
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct AtlasRect {
+pub(crate) struct AtlasRect {
     /// X coordinate (pixels)
     pub x: u32,
     /// Y coordinate (pixels)
@@ -26,7 +26,7 @@ pub struct AtlasRect {
 impl AtlasRect {
     /// Create a new atlas rectangle
     #[must_use]
-    pub const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
+    pub(crate) const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
         Self {
             x,
             y,
@@ -54,7 +54,7 @@ impl AtlasRect {
     ///
     /// `([min_u, min_v], [max_u, max_v])` in normalized atlas space.
     #[must_use]
-    pub fn uv_coords(&self, atlas_width: u32, atlas_height: u32) -> ([f32; 2], [f32; 2]) {
+    pub(crate) fn uv_coords(&self, atlas_width: u32, atlas_height: u32) -> ([f32; 2], [f32; 2]) {
         let aw = atlas_width as f32;
         let ah = atlas_height as f32;
         let min_u = self.x as f32 / aw;
@@ -74,7 +74,7 @@ impl AtlasRect {
 /// is the canonical ID source, and the field was duplicate
 /// bookkeeping.
 #[derive(Clone, Debug)]
-pub struct AtlasEntry {
+pub(crate) struct AtlasEntry {
     /// Rectangle in atlas
     pub rect: AtlasRect,
 }
@@ -84,10 +84,10 @@ pub struct AtlasEntry {
 /// Images with both width and height at or below this threshold are routed to
 /// the atlas instead of getting a standalone GPU texture. Typical icons and
 /// thumbnails are well below 256x256.
-pub const ATLAS_MAX_DIMENSION: u32 = 256;
+pub(crate) const ATLAS_MAX_DIMENSION: u32 = 256;
 
 /// Default atlas texture size (2048x2048).
-pub const ATLAS_DEFAULT_SIZE: u32 = 2048;
+pub(crate) const ATLAS_DEFAULT_SIZE: u32 = 2048;
 
 /// Transparent padding, in pixels, reserved on the right and bottom of every
 /// packed entry.
@@ -102,11 +102,11 @@ pub const ATLAS_DEFAULT_SIZE: u32 = 2048;
 /// texel boundaries so a 1:1 draw samples each texel crisply. Impeller's glyph
 /// atlas uses a 2px gutter for mip safety; this atlas is mip-free
 /// (`mip_level_count: 1`), so a single texel is sufficient.
-pub const GUTTER: u32 = 1;
+pub(crate) const GUTTER: u32 = 1;
 
 /// Returns `true` when the given image dimensions fit inside the atlas.
 #[must_use]
-pub fn fits_in_atlas(width: u32, height: u32) -> bool {
+pub(crate) fn fits_in_atlas(width: u32, height: u32) -> bool {
     width <= ATLAS_MAX_DIMENSION && height <= ATLAS_MAX_DIMENSION && width > 0 && height > 0
 }
 
@@ -114,7 +114,7 @@ pub fn fits_in_atlas(width: u32, height: u32) -> bool {
 ///
 /// Packs images into horizontal shelves to minimize wasted space.
 /// Good for images of varying sizes.
-pub struct TextureAtlas {
+pub(crate) struct TextureAtlas {
     /// GPU texture
     texture: Texture,
 
@@ -149,7 +149,7 @@ impl TextureAtlas {
     /// * `width` - Atlas width in pixels
     /// * `height` - Atlas height in pixels
     /// * `format` - Texture format
-    pub fn new(device: &Device, width: u32, height: u32, format: TextureFormat) -> Self {
+    pub(crate) fn new(device: &Device, width: u32, height: u32, format: TextureFormat) -> Self {
         let texture = device.create_texture(&TextureDescriptor {
             label: Some("Texture Atlas"),
             size: Extent3d {
@@ -192,7 +192,7 @@ impl TextureAtlas {
     /// # Returns
     ///
     /// Image ID and atlas rectangle, or None if atlas is full
-    pub fn allocate(&mut self, width: u32, height: u32) -> Option<(u32, AtlasRect)> {
+    pub(crate) fn allocate(&mut self, width: u32, height: u32) -> Option<(u32, AtlasRect)> {
         // Footprint including the right/bottom gutter. `saturating_add` keeps the
         // comparison sound even for pathological dimensions near u32::MAX (the
         // routing gate `fits_in_atlas` already bounds real inputs to 256).
@@ -256,7 +256,7 @@ impl TextureAtlas {
     /// future uploads. Callers that cache atlas UVs (e.g. `TextureCache`) MUST
     /// drop those cached entries in the same step. Old pixels are not cleared;
     /// they become garbage that the next `upload_image` overwrites.
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.entries.clear();
         self.current_shelf_y = 0;
         self.current_shelf_height = 0;
@@ -276,7 +276,7 @@ impl TextureAtlas {
     /// * `queue` - GPU queue
     /// * `image_id` - Image ID from allocate()
     /// * `data` - Image data (RGBA8, `width * height * 4` bytes)
-    pub fn upload_image(&self, queue: &Queue, image_id: u32, data: &[u8]) {
+    pub(crate) fn upload_image(&self, queue: &Queue, image_id: u32, data: &[u8]) {
         if let Some(entry) = self.entries.get(&image_id) {
             let rect = entry.rect;
 
@@ -380,14 +380,14 @@ impl TextureAtlas {
     /// render pipeline so that all atlas-backed images can be drawn in a
     /// single instanced draw call.
     #[must_use]
-    pub fn create_view(&self) -> wgpu::TextureView {
+    pub(crate) fn create_view(&self) -> wgpu::TextureView {
         self.texture
             .create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     /// Get atlas dimensions
     #[must_use]
-    pub const fn dimensions(&self) -> (u32, u32) {
+    pub(crate) const fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 
@@ -400,7 +400,7 @@ impl TextureAtlas {
 
     /// Calculate atlas utilization (0.0 - 1.0)
     #[must_use]
-    pub fn utilization(&self) -> f32 {
+    pub(crate) fn utilization(&self) -> f32 {
         let mut used_pixels = 0u32;
 
         for entry in self.entries.values() {

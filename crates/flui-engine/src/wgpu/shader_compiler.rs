@@ -17,7 +17,7 @@ use parking_lot::RwLock;
 
 /// Shader type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ShaderType {
+pub(crate) enum ShaderType {
     /// Solid color mask shader
     SolidMask,
     /// Linear gradient mask shader
@@ -42,7 +42,7 @@ pub enum ShaderType {
 
 impl ShaderType {
     /// Get the WGSL source code for this shader type
-    pub fn source_code(self) -> &'static str {
+    pub(crate) fn source_code(self) -> &'static str {
         match self {
             ShaderType::SolidMask => include_str!("shaders/masks/solid.wgsl"),
             ShaderType::LinearGradientMask => include_str!("shaders/masks/linear_gradient.wgsl"),
@@ -58,7 +58,7 @@ impl ShaderType {
     }
 
     /// Get the shader label (for debugging)
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             ShaderType::SolidMask => "Solid Mask Shader",
             ShaderType::LinearGradientMask => "Linear Gradient Mask Shader",
@@ -70,7 +70,7 @@ impl ShaderType {
     }
 
     /// Get the shader type from a Shader
-    pub fn from_shader(shader: &Shader) -> Self {
+    pub(crate) fn from_shader(shader: &Shader) -> Self {
         match shader {
             Shader::LinearGradient { .. } => ShaderType::LinearGradientMask,
             Shader::RadialGradient { .. } => ShaderType::RadialGradientMask,
@@ -95,7 +95,7 @@ impl ShaderType {
 /// The module field is `None` when created via `get_or_compile` (source-only),
 /// and populated when created via `get_or_compile_module` (GPU-ready).
 #[derive(Clone)]
-pub struct CompiledShader {
+pub(crate) struct CompiledShader {
     pub shader_type: ShaderType,
     pub source: String,
     /// Cached GPU shader module. `None` for source-only inspection.
@@ -118,13 +118,13 @@ impl std::fmt::Debug for CompiledShader {
 /// Caches compiled shader modules to avoid recompilation.
 /// Thread-safe via RwLock.
 #[derive(Debug)]
-pub struct ShaderCache {
+pub(crate) struct ShaderCache {
     cache: RwLock<HashMap<ShaderType, Arc<CompiledShader>>>,
 }
 
 impl ShaderCache {
     /// Create new empty shader cache
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             cache: RwLock::new(HashMap::new()),
         }
@@ -134,7 +134,7 @@ impl ShaderCache {
     ///
     /// Returns cached shader if available, otherwise compiles and caches it.
     #[must_use]
-    pub fn get_or_compile(&self, shader_type: ShaderType) -> Arc<CompiledShader> {
+    pub(crate) fn get_or_compile(&self, shader_type: ShaderType) -> Arc<CompiledShader> {
         // Try to get from cache first (read lock)
         {
             let cache = self.cache.read();
@@ -169,7 +169,7 @@ impl ShaderCache {
     /// source is already cached but lacks a module, compiles and caches the module.
     /// Uses double-check locking to avoid redundant compilation under contention.
     #[must_use]
-    pub fn get_or_compile_module(
+    pub(crate) fn get_or_compile_module(
         &self,
         shader_type: ShaderType,
         device: &wgpu::Device,
