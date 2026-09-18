@@ -101,6 +101,38 @@ windows = { version = "0.62", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.27.0"
 objc = "0.2"
+# `objc2` is the migration target the module header names: `objc` has not
+# released since 2019 and `cocoa` deprecates in favor of this family. Both
+# stacks are present while the migration proceeds file by file (the two macro
+# systems cannot coexist inside one file). Versions are the ones `wgpu-hal`
+# already pins, so this adds no new crate generation.
+objc2 = { version = "0.6.4", features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSObject",
+    "NSString",
+    "NSArray",
+    "NSDictionary",
+    "NSValue",
+    "NSThread",
+    "NSGeometry",
+    "NSEnumerator",
+    "NSRunLoop",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "objc2-core-foundation",
+    "NSApplication",
+    "NSView",
+    "NSWindow",
+    "NSResponder",
+    "NSEvent",
+    "NSScreen",
+    "NSPasteboard",
+    "NSGraphics",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false }
+dispatch2 = "0.3.1"
 # CoreGraphics, for the one display property Cocoa does not expose: the
 # refresh rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
 # which is what `PlatformWindow::refresh_period` needs. NSScreen has no

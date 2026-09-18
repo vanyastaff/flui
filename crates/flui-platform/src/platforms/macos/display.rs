@@ -1,17 +1,24 @@
-//! macOS display (NSScreen) implementation
+//! macOS display (NSScreen) implementation.
+//!
+//! Migrated to `objc2` / `objc2-app-kit`. [`refresh_period_for_screen`] keeps a
+//! raw-pointer parameter on purpose: the window module (still on the older
+//! `cocoa`/`objc` stack mid-migration) calls it with an `id`, and the two macro
+//! systems cannot coexist in one file. The pointer is cast to a typed
+//! `&NSScreen` inside, which is the only unsafe step and is covered by this
+//! module's own contract.
 
 use std::sync::Arc;
 
-use cocoa::{
-    base::{id, nil},
-    foundation::NSRect,
-};
+use objc2::MainThreadMarker;
+use objc2::rc::Retained;
+use objc2_app_kit::NSScreen;
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSRect, NSString};
+
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
-use objc::{class, msg_send, sel, sel_impl};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 
-/// macOS display wrapper around NSScreen
+/// macOS display wrapper around `NSScreen`.
 #[derive(Debug)]
 pub struct MacOSDisplay {
     id: DisplayId,
@@ -23,65 +30,64 @@ pub struct MacOSDisplay {
 }
 
 impl MacOSDisplay {
-    /// Create a MacOSDisplay from NSScreen
+    /// Create a `MacOSDisplay` from a live `NSScreen`.
     ///
-    /// # Safety
-    ///
-    /// `screen` must be a valid, live `NSScreen*` for the duration of the
-    /// call.
-    pub unsafe fn new(screen: id, is_primary: bool) -> Self {
-        // SAFETY: caller guarantees `screen` is a live NSScreen*; all
-        // messages are documented NSScreen getters, and `deviceDescription`
-        // values are read before the autorelease pool drains.
-        unsafe {
-            // Get screen frame (full bounds including menu bar)
-            let frame: NSRect = msg_send![screen, frame];
+    /// Must run on the main thread (`NSScreen` is main-thread-only in objc2's
+    /// model).
+    pub fn new(screen: &NSScreen, is_primary: bool) -> Self {
+        let frame = screen.frame();
+        let visible_frame = screen.visibleFrame();
+        let scale = screen.backingScaleFactor();
 
-            // Get visible frame (excluding menu bar and dock)
-            let visible_frame: NSRect = msg_send![screen, visibleFrame];
+        // NSScreen frames are in points (logical units, bottom-left origin);
+        // the PlatformDisplay contract wants device pixels, so scale by
+        // `backingScaleFactor` before converting.
+        let to_device =
+            |points: f64| flui_types::geometry::device_px((points * scale).round() as i32);
 
-            // Get backing scale factor (1.0 for non-Retina, 2.0 for Retina)
-            let scale: f64 = msg_send![screen, backingScaleFactor];
+        let bounds = Bounds {
+            origin: Point::new(to_device(frame.origin.x), to_device(frame.origin.y)),
+            size: Size::new(to_device(frame.size.width), to_device(frame.size.height)),
+        };
+        let usable_bounds = Bounds {
+            origin: Point::new(
+                to_device(visible_frame.origin.x),
+                to_device(visible_frame.origin.y),
+            ),
+            size: Size::new(
+                to_device(visible_frame.size.width),
+                to_device(visible_frame.size.height),
+            ),
+        };
 
-            // Get device description for display ID
-            let description: id = msg_send![screen, deviceDescription];
-            let display_id_key: id =
-                msg_send![class!(NSString), stringWithUTF8String: c"NSScreenNumber".as_ptr()];
-            let display_id_value: id = msg_send![description, objectForKey: display_id_key];
-            let display_id: u64 = msg_send![display_id_value, unsignedLongLongValue];
+        let display_id = display_id_of(screen);
 
-            // NSScreen frames are in points (logical units, bottom-left
-            // origin); the PlatformDisplay contract wants device pixels, so
-            // scale by backingScaleFactor before converting.
-            let to_device =
-                |points: f64| flui_types::geometry::device_px((points * scale).round() as i32);
-
-            let bounds = Bounds {
-                origin: Point::new(to_device(frame.origin.x), to_device(frame.origin.y)),
-                size: Size::new(to_device(frame.size.width), to_device(frame.size.height)),
-            };
-
-            let usable_bounds = Bounds {
-                origin: Point::new(
-                    to_device(visible_frame.origin.x),
-                    to_device(visible_frame.origin.y),
-                ),
-                size: Size::new(
-                    to_device(visible_frame.size.width),
-                    to_device(visible_frame.size.height),
-                ),
-            };
-
-            Self {
-                id: DisplayId(display_id),
-                name: format!("Display {display_id}"),
-                bounds,
-                usable_bounds,
-                scale_factor: scale,
-                is_primary,
-            }
+        Self {
+            id: DisplayId(display_id),
+            name: format!("Display {display_id}"),
+            bounds,
+            usable_bounds,
+            scale_factor: scale,
+            is_primary,
         }
     }
+}
+
+/// The `CGDirectDisplayID` a screen carries in its `deviceDescription`'s
+/// `"NSScreenNumber"` entry, or `0` when the screen reports none.
+fn display_id_of(screen: &NSScreen) -> u64 {
+    // The `deviceDescription` value for "NSScreenNumber" is an `NSNumber`
+    // holding the display id; `unsignedLongLongValue` reads it at full width.
+    let key = NSString::from_str("NSScreenNumber");
+    let description: Retained<NSDictionary<NSString, objc2::runtime::AnyObject>> =
+        screen.deviceDescription();
+    let Some(value) = description
+        .objectForKey(&key)
+        .and_then(|value| value.downcast::<NSNumber>().ok())
+    else {
+        return 0;
+    };
+    value.unsignedLongLongValue() as u64
 }
 
 impl PlatformDisplay for MacOSDisplay {
@@ -120,36 +126,31 @@ impl PlatformDisplay for MacOSDisplay {
 /// reports 0 for modes it cannot describe, and some displays do — is treated
 /// as unknown rather than turned into an infinite period.
 ///
+/// Takes a raw pointer because the caller is `window.rs`, still on the
+/// `cocoa`/`objc` stack: the two macro systems cannot coexist in one file, so
+/// this module's boundary accepts the pointer and casts it here.
+///
 /// # Safety
 ///
-/// `screen` must be a valid, live `NSScreen*`. Call on the owner lane: this
+/// `screen` must be a live `NSScreen*` or null. Call on the owner lane: this
 /// messages the screen, which is AppKit traffic this backend keeps there.
-pub(super) unsafe fn refresh_period_for_screen(screen: id) -> Option<std::time::Duration> {
-    // SAFETY: the caller guarantees `screen` is live; `deviceDescription` and
-    // its values are read before the autorelease pool drains, and
-    // `CGDisplay::new`/`display_mode` are safe wrappers whose `CGDisplayMode`
-    // is released on drop (create rule).
-    unsafe {
-        if screen == nil {
-            return None;
-        }
-
-        let description: id = msg_send![screen, deviceDescription];
-        let display_id_key: id =
-            msg_send![class!(NSString), stringWithUTF8String: c"NSScreenNumber".as_ptr()];
-        let display_id_value: id = msg_send![description, objectForKey: display_id_key];
-        if display_id_value == nil {
-            return None;
-        }
-
-        // `unsignedIntValue`, not the `unsignedLongLongValue` the bounds read
-        // above uses: `NSScreenNumber` holds a `CGDirectDisplayID`, which is a
-        // `u32`, so this is the CFNumber's actual width.
-        let display_id: u32 = msg_send![display_id_value, unsignedIntValue];
-
-        let mode = core_graphics::display::CGDisplay::new(display_id).display_mode()?;
-        period_from_refresh_hz(mode.refresh_rate())
+pub(super) unsafe fn refresh_period_for_screen(
+    screen: *mut std::ffi::c_void,
+) -> Option<std::time::Duration> {
+    if screen.is_null() {
+        return None;
     }
+    // SAFETY: the caller guarantees `screen` points to a live `NSScreen`; the
+    // borrow is scoped to this call.
+    let screen: &NSScreen = unsafe { &*(screen as *const NSScreen) };
+
+    let display_id = display_id_of(screen);
+    // `CGDirectDisplayID` is a `u32`; the `NSScreenNumber` number is a wider
+    // CFNumber, so narrow it explicitly.
+    let display_id = u32::try_from(display_id).ok()?;
+
+    let mode = core_graphics::display::CGDisplay::new(display_id).display_mode()?;
+    period_from_refresh_hz(mode.refresh_rate())
 }
 
 /// Convert a refresh rate in Hz into the interval between two frames, or
@@ -167,33 +168,24 @@ pub(super) fn period_from_refresh_hz(hz: f64) -> Option<std::time::Duration> {
     Some(std::time::Duration::from_secs_f64(1.0 / hz))
 }
 
-/// Enumerate all displays using NSScreen
+/// Enumerate all displays using `+[NSScreen screens]`. Main-thread only.
 pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
-    // SAFETY: `+[NSScreen screens]` returns an autoreleased NSArray of live
-    // NSScreen objects; all elements are consumed before the pool drains.
-    unsafe {
-        let screens: id = msg_send![class!(NSScreen), screens];
-        if screens == nil {
-            tracing::warn!("NSScreen.screens returned nil");
-            return Vec::new();
-        }
+    let Some(mtm) = MainThreadMarker::new() else {
+        tracing::warn!("NSScreen enumeration requested off the main thread; returning none");
+        return Vec::new();
+    };
 
-        let count: usize = msg_send![screens, count];
-        let mut displays: Vec<Arc<dyn PlatformDisplay>> = Vec::with_capacity(count);
+    let screens: Retained<NSArray<NSScreen>> = NSScreen::screens(mtm);
+    let mut displays: Vec<Arc<dyn PlatformDisplay>> = Vec::with_capacity(screens.count());
 
-        // First screen is always primary (main display)
-        for i in 0..count {
-            let screen: id = msg_send![screens, objectAtIndex: i];
-            if screen != nil {
-                let is_primary = i == 0;
-                let display = Arc::new(MacOSDisplay::new(screen, is_primary));
-                displays.push(display);
-            }
-        }
-
-        tracing::debug!("Enumerated {} displays", displays.len());
-        displays
+    // First screen is always primary (main display).
+    for (i, screen) in screens.iter().enumerate() {
+        let display = Arc::new(MacOSDisplay::new(&screen, i == 0));
+        displays.push(display);
     }
+
+    tracing::debug!("Enumerated {} displays", displays.len());
+    displays
 }
 
 #[cfg(test)]

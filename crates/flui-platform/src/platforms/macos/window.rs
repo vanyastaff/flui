@@ -369,7 +369,7 @@ impl MacOSWindow {
             // `scale_order.m` probe, which reports the screen live and the
             // display id reachable before `makeKeyAndOrderFront:`.
             let screen: id = msg_send![ns_window, screen];
-            let refresh_period = refresh_period_for_screen(screen);
+            let refresh_period = refresh_period_for_screen(screen as *mut std::ffi::c_void);
 
             let callbacks = Arc::new(WindowCallbacks::new());
 
@@ -2463,7 +2463,7 @@ impl MacOSWindow {
             // invalidate layout, and the runner re-reads the period when it
             // does resize.
             let screen: id = msg_send![self.ns_window, screen];
-            let new_refresh_period = refresh_period_for_screen(screen);
+            let new_refresh_period = refresh_period_for_screen(screen as *mut std::ffi::c_void);
 
             // Update window state
             let (changed, size) = {
