@@ -1,10 +1,12 @@
 //! Device-scoped pipeline collection for `WgpuPainter`.
 //!
-//! [`PipelineSet`] is the single owner of the named instanced/shadow
-//! `wgpu::RenderPipeline`s that were previously held as separate fields on
-//! [`super::painter::WgpuPainter`], plus the two on-demand caches composed as
-//! sub-fields: the shape-pipeline cache ([`PipelineCache`]) and the gradient
-//! cache ([`GradientPipelines`]).
+//! [`PipelineSet`](crate::wgpu::pipeline_set::PipelineSet) is the single owner
+//! of the named instanced/shadow `wgpu::RenderPipeline`s that were previously
+//! held as separate fields on `WgpuPainter`, plus the two on-demand caches
+//! composed as sub-fields: the shape-pipeline cache
+//! ([`PipelineCache`](crate::wgpu::pipeline_cache::PipelineCache)) and the
+//! gradient cache
+//! ([`GradientPipelines`](crate::wgpu::effects_pipeline::GradientPipelines)).
 //!
 //! | Previous painter field                   | Location in `PipelineSet`               |
 //! |------------------------------------------|-----------------------------------------|
@@ -29,17 +31,21 @@
 //! colliding `PipelineCache` + `PipelineBuilder` pair with zero
 //! non-self consumers. **This file is not a resurrection of that module.** It
 //! introduces a distinct type (`PipelineSet`) that *composes* the live
-//! [`PipelineCache`] from `pipeline.rs` (singular) and adds the named
+//! [`PipelineCache`](crate::wgpu::pipeline_cache::PipelineCache) from
+//! `pipeline_cache.rs` and adds the named
 //! pipelines previously scattered across painter fields.
 //!
 //! ## Viewport bind-group layout identity (HAZARD — must read)
 //!
 //! wgpu requires that a `BindGroup` and every `RenderPipeline` it is bound to
 //! share the **exact same** `BindGroupLayout` object (identity, not structural
-//! equality). The layout is owned by [`PipelineCache`] and exposed via
-//! [`PipelineSet::viewport_bind_group_layout`], which delegates to
-//! [`PipelineCache::viewport_bind_group_layout`]. All pipelines that bind group 0
-//! (viewport uniform) are constructed in [`PipelineSet::new`] against that same
+//! equality). The layout is owned by
+//! [`PipelineCache`](crate::wgpu::pipeline_cache::PipelineCache) and exposed via
+//! [`PipelineSet::viewport_bind_group_layout`](crate::wgpu::pipeline_set::PipelineSet::viewport_bind_group_layout),
+//! which delegates to
+//! [`PipelineCache::viewport_bind_group_layout`](crate::wgpu::pipeline_cache::PipelineCache::viewport_bind_group_layout).
+//! All pipelines that bind group 0 (viewport uniform) are constructed in
+//! [`PipelineSet::new`](crate::wgpu::pipeline_set::PipelineSet::new) against that same
 //! accessor — ensuring a single shared object. The `viewport_bind_group` on the
 //! painter must also be created against this accessor; substituting any other
 //! layout object causes a wgpu validation error at the first draw.
@@ -47,12 +53,13 @@
 //! ## Borrow-split safety
 //!
 //! The gradient bind-group update is encapsulated in
-//! [`PipelineSet::refresh_gradient_bind_group`], which takes `device` and `queue`
+//! [`PipelineSet::refresh_gradient_bind_group`](crate::wgpu::pipeline_set::PipelineSet::refresh_gradient_bind_group),
+//! which takes `device` and `queue`
 //! as shared references and manages both the buffer write and bind-group
 //! recreation internally. This prevents a borrow conflict that would arise if the
 //! caller needed `&mut self.gradient_bind_group` while also holding
 //! `&self.gradient_bind_group_layout`. The pattern mirrors
-//! [`super::resources::GpuResources`].
+//! [`GpuResources`](crate::wgpu::resources::GpuResources).
 
 use std::collections::HashMap;
 
@@ -232,7 +239,7 @@ pub(crate) struct PipelineSet {
     /// Shared layout for the SSAA tile composite pipelines.
     ///
     /// Stored at construction so that on-demand pipeline creation in
-    /// [`Self::ensure_ssaa_tile_composite`] does not need to recreate it.
+    /// [`Self::ensure_texture_composite`] does not need to recreate it.
     ssaa_tile_composite_layout: wgpu::PipelineLayout,
 
     /// Surface format stored for on-demand composite pipeline creation.
@@ -823,7 +830,7 @@ fn create_instanced_texture_premul_pipeline(
 /// Creates a premultiplied-source texture composite pipeline with an arbitrary
 /// `blend_state`.
 ///
-/// Used by [`PipelineSet::ensure_ssaa_tile_composite`] to build
+/// Used by [`PipelineSet::ensure_texture_composite`] to build
 /// per-blend-mode variants for SSAA 1× tile compositing.  The SSAA tile is
 /// always premultiplied (box-downsample averages premultiplied values), so the
 /// shader is the same as `TEXTURE_INSTANCED`; only the wgpu `blend_state`
@@ -920,7 +927,8 @@ mod gpu_tests {
         let _ = &pipeline_set.shadow;
     }
 
-    /// A `BindGroup` created with the layout from [`PipelineSet::viewport_bind_group_layout`]
+    /// A `BindGroup` created with the layout from
+    /// [`Self::viewport_bind_group_layout`]
     /// is accepted by wgpu — proving the identity contract (HAZARD 1).
     ///
     /// wgpu validates layout identity at bind-group creation time; if the layout

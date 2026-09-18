@@ -17,7 +17,7 @@ use flui_types::{
 /// Compositor hand-off interface for the flui-layer clip/transform/effect
 /// stacks.
 ///
-/// These methods used to live on [`CommandRenderer`] alongside its 34
+/// These methods used to live on `CommandRenderer` alongside its 34
 /// per-command visitor methods. They were split out into this dedicated
 /// trait because:
 ///
@@ -34,9 +34,10 @@ use flui_types::{
 ///   internal state stack.
 ///
 /// Implemented by every backend that renders a real layer tree, alongside
-/// [`CommandRenderer`]: the clip/transform/effect nesting has to mirror the
-/// tree or the rendered output is wrong. A recorder that only counts
-/// commands can skip this half, which is what the split buys.
+/// [`CommandRenderer`](crate::command_renderer::CommandRenderer): the
+/// clip/transform/effect nesting has to mirror the tree or the rendered
+/// output is wrong. A recorder that only counts commands can skip this half,
+/// which is what the split buys.
 pub(crate) trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);

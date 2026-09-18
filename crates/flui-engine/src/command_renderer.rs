@@ -1,6 +1,6 @@
 //! The command dispatch surface between the layer walk and the GPU backend.
 //!
-//! [`CommandRenderer`] mirrors the closed `DrawCommand` enum: one method per
+//! [`CommandRenderer`](self) mirrors the closed `DrawCommand` enum: one method per
 //! variant, and `dispatch_command` (in `crate::dispatch`) is the match that
 //! routes each variant to its method. The layer-tree state hand-off — clips,
 //! transforms, effects — is the sibling trait in `crate::layer_state_stack`.

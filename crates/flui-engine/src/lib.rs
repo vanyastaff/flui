@@ -159,7 +159,7 @@ compile_error!(
 /// Common error types for all rendering backends
 pub mod error;
 
-/// The command dispatch surface (`CommandRenderer`). Crate plumbing: the
+/// The command dispatch surface (`CommandRenderer` — crate-private). Plumbing: the
 /// layer walk dispatches through it, no embedder implements it today.
 ///
 /// Gated on `wgpu-backend` with the rest of the backend: the layer walk is
@@ -174,7 +174,7 @@ pub(crate) mod command_renderer;
 #[cfg(feature = "wgpu-backend")]
 pub(crate) mod layer_state_stack;
 
-/// `DrawCommand` dispatch functions. Crate plumbing, same as the traits.
+/// `DrawCommand` dispatch functions (crate-private). Same as the traits.
 #[cfg(feature = "wgpu-backend")]
 pub(crate) mod dispatch;
 

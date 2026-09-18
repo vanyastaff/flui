@@ -156,9 +156,9 @@ pub mod path_cache;
 /// (opaque/alpha-blend factory methods + bitfield queries), `PipelineCache`
 /// (get_or_create, viewport_bind_group_layout), and `pipeline_key_from_paint`.
 mod pipeline_cache;
-/// `PipelineSet` composes the live `PipelineCache` from `pipeline.rs`
-/// (singular) and adds the nine named pipelines previously scattered as
-/// painter fields. The name-colliding earlier file with its own
+/// `pipeline_set.rs` — `PipelineSet` composes the live `PipelineCache` from
+/// `pipeline_cache.rs` and adds the nine named pipelines previously scattered
+/// as painter fields. The name-colliding earlier file with its own
 /// `PipelineCache`/`PipelineBuilder` is gone; this module is the surviving
 /// half.
 pub(crate) mod pipeline_set;
