@@ -319,14 +319,36 @@ impl PlatformWindow for IOSWindow {
         self.view.contentScaleFactor()
     }
 
+    /// Ask for a frame.
+    ///
+    /// A demand signal only — it neither dispatches a frame nor marks the
+    /// view dirty. Both were wrong, and the animated demo proved it on a real
+    /// simulator:
+    ///
+    /// - **No `dispatch_request_frame()`.** Dispatching here runs the frame
+    ///   synchronously on the caller. A static tree runs one frame and
+    ///   returns, which is why the Material and ColoredBox demos looked fine;
+    ///   an *animated* tree re-arms from inside that frame (its ticker wakes
+    ///   through `request_redraw` again), so the `WindowCallbacks` drain
+    ///   never empties and `didFinishLaunching` never returns to UIKit. iOS's
+    ///   scene-create watchdog then kills the app at ~19.6 s
+    ///   (`0x8BADF00D`) with a blank window. The `CADisplayLink` this view
+    ///   installs is the frame source (the iOS counterpart of Android's poll
+    ///   loop and macOS's display pass) and delivers the frame on the next
+    ///   refresh, off the caller's stack.
+    /// - **No `setNeedsDisplay()`.** That asks UIKit to repaint the `UIView`'s
+    ///   *own* layer, which is opaque and empty, so UIKit draws white over the
+    ///   `CAMetalLayer` sublayer the renderer presents into — the frames
+    ///   arrived and the screen stayed white. Metal presents a drawable to the
+    ///   layer directly; the view's display machinery is not part of this
+    ///   path.
+    ///
+    /// The `needs_redraw` flag the caller set before reaching here is what the
+    /// next tick's `wake_action` reads, so the request is not lost — it is
+    /// deferred to the display's own cadence, which is the pacing contract
+    /// this backend has.
     fn request_redraw(&self) {
-        // A UIKit view redraws on the next display pass; `setNeedsDisplay`
-        // is the request. It is legal to call from any thread only for the
-        // window's OWN thread, so this must be on the main thread — which
-        // `PlatformWindow::request_redraw`'s callers are, because the whole
-        // iOS loop is single-threaded.
-        self.view.setNeedsDisplay();
-        self.callbacks.dispatch_request_frame();
+        tracing::trace!("request_redraw: demand recorded; the CADisplayLink delivers the frame");
     }
 
     fn is_focused(&self) -> bool {
