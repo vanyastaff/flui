@@ -118,7 +118,15 @@ impl HeadlessRenderer {
         // `BufferSize::new(..).unwrap()`), and a zero-sized texture is
         // equally invalid. Reject here so a caller that derived the size from
         // user input or from a not-yet-laid-out window gets a `Result`.
-        if width == 0 || height == 0 {
+        // Bound the request by the device's own limit HERE, where the input
+        // enters. It has to be checked by hand rather than left to
+        // `create_texture`: that call reports an over-limit size through
+        // wgpu's uncaptured-error path, which panics by default instead of
+        // returning, so an oversized request would abort rather than reach a
+        // caller as a `Result`. With this check the readback row arithmetic
+        // below is provably in range, and its conversions are invariants.
+        let max_dim = self.device.limits().max_texture_dimension_2d;
+        if width == 0 || height == 0 || width > max_dim || height > max_dim {
             return Err(EngineError::InvalidTargetSize { width, height });
         }
         let texture = self.create_capture_texture(width, height);
@@ -203,15 +211,25 @@ impl HeadlessRenderer {
 
     /// Copy the texture to a mappable buffer and de-pad the 256-byte-aligned
     /// rows into a tight `width * height * 4` RGBA8 buffer.
+    ///
+    /// The row arithmetic is `u64` throughout, and that is hardening rather
+    /// than a fix: `render_layer_tree` bounds both axes by
+    /// `max_texture_dimension_2d` before any GPU work, so `width * 4` cannot
+    /// reach `u32::MAX` and the `u32` form would not wrap today. It is `u64`
+    /// so that the invariant is local to this function instead of resting on
+    /// a check in a different one — the failure mode it avoids is a *silent*
+    /// wrap (`width = 2^30` makes `width * 4` zero) that would size the
+    /// staging buffer at zero bytes and re-enter the `wgpu-core` panic, which
+    /// is worth one conversion not to have to re-derive later.
     fn readback_rgba(&self, texture: &wgpu::Texture, width: u32, height: u32) -> Vec<u8> {
-        const BYTES_PER_PIXEL: u32 = 4;
-        let unpadded_row_bytes = width * BYTES_PER_PIXEL;
-        let padded_row_bytes = unpadded_row_bytes.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        const BYTES_PER_PIXEL: u64 = 4;
+        let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let unpadded_row_bytes = u64::from(width) * BYTES_PER_PIXEL;
+        let padded_row_bytes = unpadded_row_bytes.div_ceil(align) * align;
 
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FLUI Headless Capture Readback Staging"),
-            size: u64::from(padded_row_bytes * height),
+            size: padded_row_bytes * u64::from(height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -232,7 +250,15 @@ impl HeadlessRenderer {
                 buffer: &staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(padded_row_bytes),
+                    // `u32` because wgpu's layout field is. In range by
+                    // construction: `render_layer_tree` bounds `width` by
+                    // `max_texture_dimension_2d` before any GPU work, so
+                    // `width * 4` padded to 256 is far below `u32::MAX`.
+                    bytes_per_row: Some(
+                        u32::try_from(padded_row_bytes).expect(
+                            "BUG: render_layer_tree bounds width by                              max_texture_dimension_2d before readback",
+                        ),
+                    ),
                     rows_per_image: Some(height),
                 },
             },
@@ -258,12 +284,20 @@ impl HeadlessRenderer {
             "BUG: readback staging buffer must be mapped — the poll above waited for the \
              map_async issued on this same slice",
         );
-        let mut pixels = Vec::with_capacity((unpadded_row_bytes * height) as usize);
-        for row in 0..height {
+        // `usize` for indexing; the `u64` row math above is already known to
+        // fit this address space or `create_buffer` would have failed first.
+        let tight_size = (unpadded_row_bytes * u64::from(height)) as usize;
+        let mut pixels = Vec::with_capacity(tight_size);
+        for row in 0..u64::from(height) {
             let start = (row * padded_row_bytes) as usize;
             let end = start + unpadded_row_bytes as usize;
             pixels.extend_from_slice(&mapped[start..end]);
         }
+        debug_assert_eq!(
+            pixels.len(),
+            tight_size,
+            "the de-padded readback must be exactly width*height*4"
+        );
         pixels
     }
 }
@@ -314,7 +348,11 @@ mod target_size_tests {
         };
         let tree = LayerTree::new();
 
-        for size in [(0, 760), (900, 0), (0, 0)] {
+        // `2^30` is the case that matters most: it is NOT zero, so it passes a
+        // naive zero-check, and `width * 4` in `u32` wraps to exactly zero —
+        // which would size the staging buffer at zero bytes and re-enter the
+        // panic this guard exists to prevent.
+        for size in [(0, 760), (900, 0), (0, 0), (1 << 30, 1), (65536, 65536)] {
             match renderer.render_layer_tree(&tree, size) {
                 Err(EngineError::InvalidTargetSize { width, height }) => {
                     assert_eq!((width, height), size, "the error carries the request");
