@@ -12,7 +12,7 @@ Scene (flui-layer)                    built by the widget tree's Canvas
 Renderer (flui-engine)                owns one window's GPU stack (instance,
     |                                 adapter, device, queue, surface)
     v
-LayerTree walk -> Backend -> WgpuPainter
+LayerTree walk -> LayerDispatcher -> WgpuPainter
     |                                 record: batched Command IR (command_ir.rs)
     v
 GpuReplay                             replay: Command IR -> wgpu draw calls
@@ -20,10 +20,14 @@ GpuReplay                             replay: Command IR -> wgpu draw calls
 GPU (wgpu)
 ```
 
+All three constructors are `async` — wgpu's adapter and device requests are,
+so the library does not choose a blocking strategy on the caller's behalf:
+
 - `Renderer::new(window)` — windowed; owns its surface, recovers from device loss.
 - `Renderer::new_offscreen()` — no surface.
-- `HeadlessRenderer` — rasterizes a `LayerTree` to RGBA8 without a window
-  (the `flui --example screenshot` path).
+- `HeadlessRenderer::new()` — rasterizes a `LayerTree` to RGBA8 without a
+  window (the `flui --example screenshot` path).
+
 - `RasterBackend` — the frame-driver trait `flui-app`'s runners call, so a
   future backend swaps in at one construction site.
 - `WgpuPainter` — the per-frame painter, for embedders driving draw calls

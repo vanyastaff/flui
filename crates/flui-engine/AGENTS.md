@@ -5,7 +5,7 @@ GPU rendering engine via wgpu. Converts Layer trees into GPU draw calls.
 ## What lives here
 
 - **Renderer** — owns one window's GPU stack and drives the layer walk (the embedder entry point)
-- **WgpuPainter / Backend / LayerRender** — the per-frame painter and its layer-type dispatch (crate-internal)
+- **WgpuPainter / LayerDispatcher / LayerRender** — the per-frame painter and its layer-type dispatch (crate-internal)
 - **CommandRenderer trait** — the command dispatch surface (`crate::traits`, crate-internal)
 - **GpuReplay / CommandIR** — the record/replay split: batched IR, then wgpu encoding
 - **LayerDispatcher** — the per-frame command route from the layer walk to `WgpuPainter` (crate-internal)
@@ -20,7 +20,7 @@ GPU rendering engine via wgpu. Converts Layer trees into GPU draw calls.
 - **`#![expect(missing_debug_implementations)]`** — wgpu handles (Device, Queue, Texture, Buffer) don't impl Debug.
 - **Outstanding refactors** (tracked in ARCHITECTURE.md): the headline list is fully landed —
   the `Arc<Mutex<OffscreenRenderer>>` removal (`Renderer` owns its `OffscreenRenderer`,
-  `Backend<'frame>` borrows one), the painter take/reassign cleanup (`render_scene_content`
+  `LayerDispatcher<'frame>` borrows one), the painter take/reassign cleanup (`render_scene_content`
   borrows in place), the per-frame `Arc::clone` entry (resolved when `RenderContext` lost its
   device/queue fields), and the `Arc<Mutex<TexturePoolInner>>` removal (`TexturePool` owns its
   inventory directly, `Send`-only, with an mpsc return channel for drop — see ARCHITECTURE.md

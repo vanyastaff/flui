@@ -53,11 +53,12 @@
 //! Layer + LayerRender trait
 //!     │ dispatch commands
 //!     ▼
-//! CommandRenderer trait (abstract)
-//!     │
+//! LayerDispatcher
+//!     │ implements the CommandRenderer + LayerStateStack traits,
+//!     │ routing each DrawCommand to the painter
 //!     ▼
-//! Backend → WgpuPainter
-//!     │
+//! WgpuPainter → GpuReplay
+//!     │ record: batched Command IR; replay: wgpu draw calls
 //!     ▼
 //! GPU (wgpu)
 //! ```
