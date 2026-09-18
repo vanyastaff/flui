@@ -1719,6 +1719,7 @@ impl Renderer {
     }
 
     /// Get GPU capabilities
+    #[must_use]
     pub fn capabilities(&self) -> &GpuCapabilities {
         &self.capabilities
     }
@@ -1744,6 +1745,7 @@ impl Renderer {
     /// that called `release_surface` or [`Renderer::recreate_surface`]. Every
     /// in-crate caller wants the surface object or nothing, which is what
     /// this returns.
+    #[must_use]
     pub fn surface(&self) -> Option<&wgpu::Surface<'_>> {
         match &self.gpu_stack_origin {
             GpuStackOrigin::OwnedWindowed { lease } => lease.surface(),
@@ -1767,6 +1769,7 @@ impl Renderer {
     }
 
     /// Check if the renderer has pending damage.
+    #[must_use]
     pub fn has_damage(&self) -> bool {
         self.damage_tracker.has_damage()
     }
