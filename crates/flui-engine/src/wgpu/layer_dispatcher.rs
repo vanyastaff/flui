@@ -1296,10 +1296,9 @@ impl CommandRenderer for LayerDispatcher<'_> {
     }
 
     fn render_paint(&mut self, paint: &Paint, transform: &Matrix4) {
-        let paint = paint.clone();
         self.with_transform(transform, |painter| {
             let viewport_bounds = painter.viewport_bounds();
-            painter.draw_rect(viewport_bounds, &paint);
+            painter.draw_rect(viewport_bounds, paint);
         });
     }
 
