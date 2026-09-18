@@ -533,6 +533,21 @@ struct RenderLayerVisitor<'a, 'b> {
     ctx: &'a RenderContext,
     surface_texture: &'a wgpu::Texture,
     surface_view: &'a wgpu::TextureView,
+    /// The `Follower` nodes whose resolved offset this visitor has pushed and
+    /// not yet popped, innermost last.
+    ///
+    /// A `Follower` must push its offset on enter and pop it on exit — the
+    /// offset applies to its whole subtree. `exit` is not told what `enter`
+    /// decided, and a node's own `Layer::cleanup` is not where a walk-owned
+    /// transform belongs, so the visitor tracks it: the walk is depth-first
+    /// and LIFO, so the innermost un-popped push is always the node now
+    /// exiting.
+    ///
+    /// Recursing from `enter` instead would put the walk back on the call
+    /// stack, one frame per `Follower` — the exact failure this module exists
+    /// to remove, merely narrowed to chains whose every node is a `Follower`
+    /// (measured: a 10 000-long `Follower` chain still `SIGABRT`s).
+    pushed_follower_offsets: Vec<flui_foundation::LayerId>,
 }
 
 impl super::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
@@ -595,31 +610,24 @@ impl super::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
         // plain unlinked fallback) before descending into children; an
         // unlinked follower with `show_when_unlinked == false` hides its
         // subtree entirely (oracle `FollowerLayer.addToScene`,
-        // `layer.dart:2857-2865`). Its children are walked here, under the
-        // pushed offset, which is why the node itself is skipped.
+        // `layer.dart:2857-2865`), which is the one case that skips.
+        //
+        // A resolved offset is pushed here and popped in `exit` for THIS id —
+        // see `pushed_follower_offsets`. Descending rather than walking the
+        // children here is what keeps a chain of Followers off the call stack.
         if let flui_layer::Layer::Follower(follower_layer) = layer {
-            use crate::traits::LayerStateStack;
+            let Some(resolved) =
+                flui_layer::resolve_follower_offset(tree, self.link_registry, id, follower_layer)
+            else {
+                return super::layer_walk::Step::SkipSubtree;
+            };
 
-            if let Some(node) = tree.get(id)
-                && let Some(resolved) = flui_layer::resolve_follower_offset(
-                    tree,
-                    self.link_registry,
-                    id,
-                    follower_layer,
-                )
-            {
-                let has_offset = resolved != flui_types::geometry::Offset::ZERO;
-                if has_offset {
-                    self.backend.push_offset(resolved);
-                }
-                for &child_id in node.children() {
-                    super::layer_walk::walk_layer_tree(tree, child_id, self);
-                }
-                if has_offset {
-                    self.backend.pop_transform();
-                }
+            if resolved != flui_types::geometry::Offset::ZERO {
+                use crate::traits::LayerStateStack;
+                self.backend.push_offset(resolved);
+                self.pushed_follower_offsets.push(id);
             }
-            return super::layer_walk::Step::SkipSubtree;
+            return super::layer_walk::Step::Descend;
         }
 
         // Fall through to the normal LayerRender path (clip + filter
@@ -631,9 +639,18 @@ impl super::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
     fn exit(
         &mut self,
         _tree: &flui_layer::LayerTree,
-        _id: flui_foundation::LayerId,
+        id: flui_foundation::LayerId,
         layer: &flui_layer::Layer,
     ) {
+        // A `Follower`'s pushed offset is popped before its own cleanup, so
+        // whatever `cleanup` does runs in the parent's frame, exactly as the
+        // old `push_offset` / children / `pop_transform` sequence did.
+        if self.pushed_follower_offsets.last() == Some(&id) {
+            use crate::traits::LayerStateStack;
+            self.pushed_follower_offsets.pop();
+            self.backend.pop_transform();
+        }
+
         use super::layer_render::LayerRender;
         layer.cleanup(self.backend);
     }
@@ -2650,6 +2667,7 @@ impl Renderer {
             ctx,
             surface_texture,
             surface_view,
+            pushed_follower_offsets: Vec::new(),
         };
         super::layer_walk::walk_layer_tree(tree, layer_id, &mut visitor);
     }

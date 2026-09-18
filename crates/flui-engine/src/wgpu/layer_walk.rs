@@ -17,7 +17,7 @@
 //! diverts `BackdropFilter`, `ShaderMask`, and `Follower` subtrees to
 //! specialized handlers, while the headless path renders every node the same
 //! way. A caller expresses that by matching on the layer inside its visitor
-//! and returning [`Step::SkipChildren`] for a subtree its handler already
+//! and returning [`Step::SkipSubtree`] for a subtree its handler already
 //! consumed.
 
 use flui_foundation::LayerId;
@@ -226,6 +226,81 @@ mod tests {
             ),
             "the diverted subtree contributes no enter for its child and no cleanup"
         );
+    }
+
+    /// A visitor that re-enters the walker from `enter` does NOT get a
+    /// stack frame per level — proven by the engine's own `Follower` handler,
+    /// which used to do exactly that.
+    ///
+    /// This is the shape that made the first version of this module's fix
+    /// incomplete: `RenderLayerVisitor::enter` walked a `Follower`'s children
+    /// by calling `walk_layer_tree` re-entrantly, so a chain whose every node
+    /// was a `Follower` still consumed one stack frame per link and still
+    /// `SIGABRT`ed at depth 10 000. Measured, not assumed — the recursive
+    /// version of this test aborted with signal 6.
+    ///
+    /// The engine's visitor no longer re-enters (it pushes the offset, tracks
+    /// it in `pushed_follower_offsets`, and returns `Descend`), and this pins
+    /// the property that makes that safe: re-entrancy is what costs stack, so
+    /// a visitor must not depend on it.
+    #[test]
+    fn a_reentrant_visitor_is_the_only_thing_that_costs_call_stack() {
+        const DEPTH: usize = 10_000;
+
+        /// Re-enters on every node, standing in for the old `Follower` arm.
+        struct ReEntering;
+
+        impl LayerVisitor for ReEntering {
+            fn enter(&mut self, tree: &LayerTree, id: LayerId, _layer: &flui_layer::Layer) -> Step {
+                if let Some(node) = tree.get(id) {
+                    for &child_id in node.children() {
+                        walk_layer_tree(tree, child_id, self);
+                    }
+                }
+                Step::SkipSubtree
+            }
+
+            fn exit(&mut self, _tree: &LayerTree, _id: LayerId, _layer: &flui_layer::Layer) {}
+        }
+
+        /// Descends without re-entering — the engine visitor's shape.
+        struct Descending;
+
+        impl LayerVisitor for Descending {
+            fn enter(&mut self, _t: &LayerTree, _i: LayerId, _l: &flui_layer::Layer) -> Step {
+                Step::Descend
+            }
+
+            fn exit(&mut self, _t: &LayerTree, _i: LayerId, _l: &flui_layer::Layer) {}
+        }
+
+        // Built INSIDE the thread: `LayerTree::clone_subtree` still recurses
+        // and would abort on this stack before the walk even ran (issue #1083's
+        // `flui-layer` half, still open).
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                let mut tree = LayerTree::new();
+                let root = tree.insert(offset());
+                tree.set_root(Some(root));
+                let mut parent = root;
+                for _ in 1..DEPTH {
+                    let child = tree.insert(offset());
+                    tree.add_child(parent, child);
+                    parent = child;
+                }
+
+                let mut v = Descending;
+                walk_layer_tree(&tree, root, &mut v);
+            })
+            .expect("spawn the descending walker thread")
+            .join()
+            .expect("a descending visitor must not consume the call stack");
+
+        // The re-entering shape is the hazard, kept here as the control that
+        // explains why the engine's visitor was restructured. It is not run at
+        // depth — that aborts the process and would take the suite with it.
+        let _ = ReEntering;
     }
 
     /// The property the module exists for: a deep chain walks on a small
