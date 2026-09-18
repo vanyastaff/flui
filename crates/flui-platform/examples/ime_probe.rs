@@ -104,22 +104,33 @@ mod appkit_ime_probe {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use cocoa::base::{BOOL, NO, YES, id, nil};
-    use cocoa::foundation::{NSNotFound, NSPoint, NSRect, NSString, NSUInteger};
     use flui_platform::traits::{Key, PlatformInput};
     use flui_platform::{
         DispatchEventResult, Platform, PlatformTextInput, PlatformWindow, WindowOptions,
     };
     use flui_types::ImeEvent;
     use flui_types::geometry::{Bounds, Point, Size, px};
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    use objc2::{ClassType, msg_send};
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSString};
     // Named from the dependency, not from a re-export: `KeyboardEvent` is
     // re-exported by `flui_platform::traits` but its `state` field's type is
     // not, so `KeyState` is unnameable through this crate's public surface even
     // though the field reading it is public. Assertion E judges an event on
     // that field, so it names the type at its source.
     use keyboard_types::KeyState;
-    use objc::{class, msg_send, sel, sel_impl};
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    /// `id`/`nil`/`YES`/`NO` spelled as this probe's raw `msg_send!` shape
+    /// expects. `NSWindow` is `MainThreadOnly` in objc2's typed API, and this
+    /// probe messages windows from a main-queue block inside a bundled `.app`,
+    /// so it stays on the raw macro (which objc2 accepts a raw pointer for).
+    type ObjcId = *mut AnyObject;
+    const NIL: ObjcId = std::ptr::null_mut();
+    type BObjC = Bool;
+    const YES: Bool = Bool::YES;
+    const NO: Bool = Bool::NO;
 
     /// The window title the probe opens and then finds its window by.
     const TITLE: &str = "FLUI IME probe";
@@ -289,9 +300,9 @@ mod appkit_ime_probe {
             let Some(window) = window_with_title(title) else {
                 return false;
             };
-            let app: id = msg_send![class!(NSApplication), sharedApplication];
-            let active: BOOL = msg_send![app, isActive];
-            let key: BOOL = msg_send![window, isKeyWindow];
+            let app: ObjcId = msg_send![NSApplication::class(), sharedApplication];
+            let active: BObjC = msg_send![app, isActive];
+            let key: BObjC = msg_send![window, isKeyWindow];
             active == YES && key == YES
         }
     }
@@ -301,29 +312,29 @@ mod appkit_ime_probe {
     /// By title rather than by index: nothing promises this is the only window
     /// the platform has open, and "the first one" is an assumption a probe
     /// should not bake in.
-    fn window_with_title(title: &str) -> Option<id> {
+    fn window_with_title(title: &str) -> Option<ObjcId> {
         // SAFETY: main thread; `sharedApplication`/`windows` are AppKit's own
         // accessors, every object messaged below comes from that array, and the
         // comparison string is copied into a fresh NSString that outlives the
         // loop.
         unsafe {
-            let app: id = msg_send![class!(NSApplication), sharedApplication];
-            if app == nil {
+            let app: ObjcId = msg_send![NSApplication::class(), sharedApplication];
+            if app == NIL {
                 return None;
             }
-            let windows: id = msg_send![app, windows];
-            if windows == nil {
+            let windows: ObjcId = msg_send![app, windows];
+            if windows == NIL {
                 return None;
             }
             let expected = ns_string(title);
-            let count: NSUInteger = msg_send![windows, count];
+            let count: usize = msg_send![windows, count];
             for index in 0..count {
-                let window: id = msg_send![windows, objectAtIndex: index];
-                if window == nil {
+                let window: ObjcId = msg_send![windows, objectAtIndex: index];
+                if window == NIL {
                     continue;
                 }
-                let window_title: id = msg_send![window, title];
-                let matches: BOOL = msg_send![window_title, isEqualToString: expected];
+                let window_title: ObjcId = msg_send![window, title];
+                let matches: BObjC = msg_send![window_title, isEqualToString: expected];
                 if matches == YES {
                     return Some(window);
                 }
@@ -341,36 +352,20 @@ mod appkit_ime_probe {
     /// # Safety
     ///
     /// Main thread only, like every other AppKit call in this file.
-    fn ns_string(text: &str) -> id {
-        // SAFETY: `NSString::alloc` is a class constructor on a class AppKit
-        // always provides, and `init_str` returns a live string object.
-        unsafe {
-            let string = NSString::alloc(nil);
-            NSString::init_str(string, text)
-        }
+    fn ns_string(text: &str) -> ObjcId {
+        // `NSString::from_str` allocates and inits a live string object. The
+        // returned `Retained` is deliberately leaked (`ManuallyDrop`) because
+        // the probe never drains an autorelease pool, so a release would buy
+        // nothing; the raw pointer is what the raw `msg_send!` shape wants.
+        let string = NSString::from_str(text);
+        let ptr = objc2::rc::Retained::as_ptr(&string) as ObjcId;
+        std::mem::forget(string);
+        ptr
     }
 
-    /// AppKit's `NSRange`, mirrored here because the crate's own is private.
-    ///
-    /// Layout-identical to the C struct: two machine words, in UTF-16 units.
-    /// Written out rather than imported so the probe reaches the view through
-    /// AppKit's own surface instead of the crate's internals.
-    #[repr(C)]
-    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-    struct NsRange {
-        location: usize,
-        length: usize,
-    }
-
-    impl NsRange {
-        const fn new(location: usize, length: usize) -> Self {
-            Self { location, length }
-        }
-
-        /// The pair AppKit uses to say "no range".
-        fn not_found() -> Self {
-            Self::new(NSNotFound as usize, 0)
-        }
+    /// The pair AppKit uses to say "no range": `{NSNotFound, 0}`.
+    fn not_found_range() -> NSRange {
+        NSRange::new(NSNotFound as usize, 0)
     }
 
     /// Send the content view one synthesized `keyDown:` for [`LETTER`].
@@ -379,7 +374,7 @@ mod appkit_ime_probe {
     /// is the probe standing in for the platform's event delivery, not a human
     /// keystroke — see this file's module doc for what that does and does not
     /// establish.
-    fn send_letter_key_down(window_number: isize, content_view: id) {
+    fn send_letter_key_down(window_number: isize, content_view: ObjcId) {
         send_letter_key(window_number, content_view, true);
     }
 
@@ -389,7 +384,7 @@ mod appkit_ime_probe {
     /// path even while a text input is attached — a commit returns the input
     /// context to ground before the release arrives — except while a
     /// composition is still open, which is the gate assertion E measures.
-    fn send_letter_key_up(window_number: isize, content_view: id) {
+    fn send_letter_key_up(window_number: isize, content_view: ObjcId) {
         send_letter_key(window_number, content_view, false);
     }
 
@@ -399,7 +394,7 @@ mod appkit_ime_probe {
     /// class AppKit always provides (its result is nil-checked below), and the
     /// `keyDown:`/`keyUp:` message goes to the live content view AppKit handed
     /// us. The event is autoreleased and retained for the duration of the send.
-    fn send_letter_key(window_number: isize, content_view: id, is_down: bool) {
+    fn send_letter_key(window_number: isize, content_view: ObjcId, is_down: bool) {
         send_key(
             window_number,
             content_view,
@@ -437,7 +432,7 @@ mod appkit_ime_probe {
     /// class AppKit always provides (its result is nil-checked below), and the
     /// `keyDown:`/`keyUp:` message goes to the live content view AppKit handed
     /// us. The event is autoreleased and retained for the duration of the send.
-    fn send_key(window_number: isize, content_view: id, stroke: KeyStroke, is_down: bool) {
+    fn send_key(window_number: isize, content_view: ObjcId, stroke: KeyStroke, is_down: bool) {
         // SAFETY: as this function's own note above.
         unsafe {
             let characters = ns_string(stroke.characters);
@@ -446,21 +441,21 @@ mod appkit_ime_probe {
             } else {
                 NS_EVENT_TYPE_KEY_UP
             };
-            let event: id = msg_send![class!(NSEvent),
+            let event: ObjcId = msg_send![AnyClass::get(c"NSEvent").expect("BUG: NSEvent is always registered"),
                 keyEventWithType: event_type
                 location: NSPoint::new(10.0, 10.0)
                 modifierFlags: stroke.modifier_flags
                 timestamp: 0.0f64
                 windowNumber: window_number
-                context: nil
+                context: NIL
                 characters: characters
                 charactersIgnoringModifiers: ns_string(stroke.characters_ignoring_modifiers)
                 isARepeat: NO
                 keyCode: stroke.key_code
             ];
-            if event == nil {
+            if event == NIL {
                 fatal(format!(
-                    "+[NSEvent keyEventWithType:...] returned nil for the synthesized key \
+                    "+[NSEvent keyEventWithType:...] returned NIL for the synthesized key \
                      {direction}, so the press could not be delivered and the assertion that \
                      depends on it cannot be driven",
                     direction = if is_down { "press" } else { "release" },
@@ -483,7 +478,7 @@ mod appkit_ime_probe {
     /// F reports rather than requires. A `setMarkedText:` would be this probe
     /// standing in for the input method again, which is the one thing this
     /// sequence exists to stop doing.
-    fn send_dead_key_sequence(window_number: isize, content_view: id) {
+    fn send_dead_key_sequence(window_number: isize, content_view: ObjcId) {
         send_key(
             window_number,
             content_view,
@@ -510,31 +505,31 @@ mod appkit_ime_probe {
 
     /// `setMarkedText:selectedRange:replacementRange:` — the composition
     /// update an input method sends while composing.
-    fn set_marked_text(content_view: id, text: &str, selected: NsRange) {
+    fn set_marked_text(content_view: ObjcId, text: &str, selected: NSRange) {
         // SAFETY: main thread; `content_view` is the live content view and
         // `text` is copied into a fresh NSString before the message is sent.
         unsafe {
             let _: () = msg_send![content_view,
                 setMarkedText: ns_string(text)
                 selectedRange: selected
-                replacementRange: NsRange::not_found()
+                replacementRange: not_found_range()
             ];
         }
     }
 
     /// `insertText:replacementRange:` — the commit an input method sends.
-    fn insert_text(content_view: id, text: &str) {
+    fn insert_text(content_view: ObjcId, text: &str) {
         // SAFETY: as `set_marked_text`.
         unsafe {
             let _: () = msg_send![content_view,
                 insertText: ns_string(text)
-                replacementRange: NsRange::not_found()
+                replacementRange: not_found_range()
             ];
         }
     }
 
     /// `unmarkText` — the input method abandoning a composition.
-    fn unmark_text(content_view: id) {
+    fn unmark_text(content_view: ObjcId) {
         // SAFETY: main thread; `unmarkText` is an `NSTextInputClient` message
         // sent to the live content view.
         unsafe {
@@ -724,13 +719,13 @@ mod appkit_ime_probe {
         };
         // SAFETY: main thread; `contentView` and `windowNumber` are AppKit's
         // own getters on the live window.
-        let (content_view, window_number): (id, isize) = unsafe {
+        let (content_view, window_number): (ObjcId, isize) = unsafe {
             (
                 msg_send![ns_window, contentView],
                 msg_send![ns_window, windowNumber],
             )
         };
-        if content_view == nil {
+        if content_view == NIL {
             fatal(format!("the window titled {title:?} has no content view"));
         }
 
@@ -738,7 +733,7 @@ mod appkit_ime_probe {
         // focused it does: the probe is playing that application.
         // SAFETY: main thread; `makeFirstResponder:` on the live window with
         // AppKit's own content view.
-        let became_responder: BOOL =
+        let became_responder: BObjC =
             unsafe { msg_send![ns_window, makeFirstResponder: content_view] };
         if became_responder != YES {
             failures.push(
@@ -754,11 +749,11 @@ mod appkit_ime_probe {
         // own rather than letting assertion A fail without a reason.
         // SAFETY: main thread; `inputContext` is AppKit's own getter on the
         // live content view.
-        let input_context: id = unsafe { msg_send![content_view, inputContext] };
-        if input_context == nil {
+        let input_context: ObjcId = unsafe { msg_send![content_view, inputContext] };
+        if input_context == NIL {
             failures.push(
                 "the content view has no NSTextInputContext: `-[NSView inputContext]` answers \
-                 nil unless the receiver conforms to `NSTextInputClient`, so no key event can \
+                 NIL unless the receiver conforms to `NSTextInputClient`, so no key event can \
                  reach the input method at all and assertion A cannot be driven"
                     .to_string(),
             );
@@ -828,7 +823,7 @@ mod appkit_ime_probe {
         // `set_ime_allowed(false)` DROPS an in-progress composition rather than
         // committing it, so a Commit announced by the disable would insert text
         // the user never confirmed. Give it something to drop.
-        set_marked_text(content_view, LETTER, NsRange::new(0, LETTER.len()));
+        set_marked_text(content_view, LETTER, NSRange::new(0, LETTER.len()));
         let composed_before_disable = observed.wait_for(|events| !preedits(events).is_empty());
         if !composed_before_disable {
             failures.push(format!(
@@ -905,12 +900,12 @@ mod appkit_ime_probe {
         let _ = observed.take();
 
         let utf16_len = COMPOSITION.encode_utf16().count();
-        let marked = NsRange::new(0, utf16_len);
+        let marked = NSRange::new(0, utf16_len);
         set_marked_text(content_view, COMPOSITION, marked);
         let preedit_arrived = observed.wait_for(|events| !preedits(events).is_empty());
         // SAFETY: main thread; both are `NSTextInputClient` queries AppKit
         // answers on the live content view.
-        let (is_marked, reported_range): (BOOL, NsRange) = unsafe {
+        let (is_marked, reported_range): (BObjC, NSRange) = unsafe {
             (
                 msg_send![content_view, hasMarkedText],
                 msg_send![content_view, markedRange],
@@ -952,7 +947,7 @@ mod appkit_ime_probe {
         }
         tracing::info!(
             preedits = ?preedits(&composing),
-            has_marked_text = is_marked,
+            has_marked_text = bool::from(is_marked),
             marked_range = ?(reported_range.location, reported_range.length),
             "assertion B (composition) measured"
         );
@@ -961,7 +956,7 @@ mod appkit_ime_probe {
         let commit_of_composition = observed.wait_for(|events| !commits(events).is_empty());
         let committed = observed.take();
         // SAFETY: main thread; `NSTextInputClient` query on the live view.
-        let still_marked: BOOL = unsafe { msg_send![content_view, hasMarkedText] };
+        let still_marked: BObjC = unsafe { msg_send![content_view, hasMarkedText] };
 
         if !commit_of_composition {
             failures.push(format!(
@@ -985,7 +980,7 @@ mod appkit_ime_probe {
         }
         tracing::info!(
             commits = ?commits(&committed),
-            has_marked_text = still_marked,
+            has_marked_text = bool::from(still_marked),
             "assertion B (commit) measured"
         );
 
@@ -996,13 +991,13 @@ mod appkit_ime_probe {
         // "the character range corresponding to the returned area", so a query
         // that comes back with a real rect and a not-found range is telling the
         // input method the opposite of what it returned.
-        let mut actual = NsRange::new(0, 0);
+        let mut actual = NSRange::new(0, 0);
         // SAFETY: main thread; `firstRectForCharacterRange:actualRange:` is an
         // `NSTextInputClient` query on the live view, and `actual` is a live,
         // writable `NSRange` for the duration of the call.
         let rect: NSRect = unsafe {
             msg_send![content_view,
-                firstRectForCharacterRange: NsRange::new(0, utf16_len)
+                firstRectForCharacterRange: NSRange::new(0, utf16_len)
                 actualRange: &raw mut actual
             ]
         };
@@ -1032,7 +1027,7 @@ mod appkit_ime_probe {
                  method there is no range behind a rect it was just given"
                     .to_string(),
             );
-        } else if actual != NsRange::new(0, 0) {
+        } else if actual != NSRange::new(0, 0) {
             // No composition is open at this point (assertion B committed, and
             // the empty preedit of a commit clears the marked range), so the
             // area is the caret's and the range that goes with it is zero-length
@@ -1061,7 +1056,7 @@ mod appkit_ime_probe {
         let unmark_arrived = observed.wait_for(|events| !events.is_empty());
         let unmarked = observed.take();
         // SAFETY: main thread; `NSTextInputClient` query on the live view.
-        let marked_after_unmark: BOOL = unsafe { msg_send![content_view, hasMarkedText] };
+        let marked_after_unmark: BObjC = unsafe { msg_send![content_view, hasMarkedText] };
 
         if !unmark_arrived {
             failures.push(format!(
@@ -1087,7 +1082,7 @@ mod appkit_ime_probe {
         }
         tracing::info!(
             after_unmark = ?ime_events(&unmarked),
-            has_marked_text = marked_after_unmark,
+            has_marked_text = bool::from(marked_after_unmark),
             "assertion D measured"
         );
 
@@ -1199,13 +1194,13 @@ mod appkit_ime_probe {
         observed.settle();
         let composed = observed.take();
         // SAFETY: main thread; `NSTextInputClient` query on the live view.
-        let marked_after_composition: BOOL = unsafe { msg_send![content_view, hasMarkedText] };
+        let marked_after_composition: BObjC = unsafe { msg_send![content_view, hasMarkedText] };
 
         tracing::info!(
             preedits = ?preedits(&composed),
             commits = ?commits(&composed),
             typed = ?typed_characters(&composed),
-            has_marked_text = marked_after_composition,
+            has_marked_text = bool::from(marked_after_composition),
             "assertion F (modified key: Option-E then `e`) measured"
         );
 

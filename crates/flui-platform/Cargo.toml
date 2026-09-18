@@ -99,8 +99,6 @@ windows = { version = "0.62", features = [
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.27.0"
-objc = "0.2"
 # `objc2` is the migration target the module header names: `objc` has not
 # released since 2019 and `cocoa` deprecates in favor of this family. Both
 # stacks are present while the migration proceeds file by file (the two macro
