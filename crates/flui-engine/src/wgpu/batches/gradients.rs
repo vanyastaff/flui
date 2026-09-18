@@ -6,12 +6,75 @@ use flui_types::painting::Shader;
 use flui_types::{Point, Rect, geometry::Pixels};
 
 use super::{
-    super::{command_ir::DrawSegment, effects, effects_pipeline, state_stack::GpuStateStack},
+    super::{
+        command_ir::DrawSegment, effects::GradientStop, effects_pipeline,
+        state_stack::GpuStateStack,
+    },
     DrawBatcher,
 };
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
+/// Names the gradient kind in its own overflow warning, so three callers can
+/// share one implementation without losing which one fired.
+///
+/// Kept for `tracing`'s own message rather than as a `Display` type: the
+/// warning is the only consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GradientKind {
+    Linear,
+    Radial,
+    Sweep,
+}
+
+impl GradientKind {
+    const fn operation(self) -> &'static str {
+        match self {
+            Self::Linear => "gradient_rect",
+            Self::Radial => "radial_gradient_rect",
+            Self::Sweep => "sweep_gradient_rect",
+        }
+    }
+
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Linear => "linear",
+            Self::Radial => "radial",
+            Self::Sweep => "sweep",
+        }
+    }
+}
+
+/// Check the shared gradient-stop budget for one more instance of `kind`.
+///
+/// Returns the offset to write the stop at, or `None` when the budget is
+/// exhausted — in which case the instance is dropped and the overflow is
+/// warned about once per process (a frame over the limit would otherwise
+/// spam this for every overflowing instance, every frame).
+fn reserve_gradient_stops(
+    segment: &DrawSegment,
+    kind: GradientKind,
+    stops: &[GradientStop],
+) -> Option<u32> {
+    let stop_count = stops.len().min(8);
+    let current_len = segment.current_gradient_stops.len();
+    if current_len + stop_count > effects_pipeline::MAX_GRADIENT_STOPS {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                operation = kind.operation(),
+                current_stops = current_len,
+                requested = stop_count,
+                limit = effects_pipeline::MAX_GRADIENT_STOPS,
+                "gradient stop buffer full; dropping {} gradient instance; further                  overflows this process will not be logged",
+                kind.description(),
+            );
+        }
+        return None;
+    }
+    Some(current_len as u32)
+}
+
 impl DrawBatcher {
     /// Record a rectangle with a linear gradient.
     ///
@@ -39,7 +102,7 @@ impl DrawBatcher {
         bounds: Rect<Pixels>,
         gradient_start: glam::Vec2,
         gradient_end: glam::Vec2,
-        stops: &[effects::GradientStop],
+        stops: &[GradientStop],
         corner_radii: [f32; 4],
         blend: BlendMode,
     ) {
@@ -67,25 +130,10 @@ impl DrawBatcher {
         // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
         // (shape_blend_tests) are the guards.
 
-        let stop_count = stops.len().min(8);
-        let current_len = segment.current_gradient_stops.len();
-        if current_len + stop_count > effects_pipeline::MAX_GRADIENT_STOPS {
-            // Logged once per process: a >MAX_GRADIENT_STOPS frame would otherwise
-            // spam this for every overflowing instance, every frame.
-            static WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                tracing::warn!(
-                    current_stops = current_len,
-                    requested = stop_count,
-                    limit = effects_pipeline::MAX_GRADIENT_STOPS,
-                    "gradient_rect: gradient stop buffer full; dropping linear gradient \
-                     instance (logged once per process)"
-                );
-            }
+        let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Linear, stops) else {
             return;
-        }
-        let stop_offset = current_len as u32;
+        };
+        let stop_count = stops.len().min(8);
         segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -138,7 +186,7 @@ impl DrawBatcher {
         bounds: Rect<Pixels>,
         center: glam::Vec2,
         radius: f32,
-        stops: &[effects::GradientStop],
+        stops: &[GradientStop],
         corner_radii: [f32; 4],
         blend: BlendMode,
     ) {
@@ -165,23 +213,10 @@ impl DrawBatcher {
         // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
         // (shape_blend_tests) are the guards.
 
-        let stop_count = stops.len().min(8);
-        let current_len = segment.current_gradient_stops.len();
-        if current_len + stop_count > effects_pipeline::MAX_GRADIENT_STOPS {
-            static WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                tracing::warn!(
-                    current_stops = current_len,
-                    requested = stop_count,
-                    limit = effects_pipeline::MAX_GRADIENT_STOPS,
-                    "radial_gradient_rect: gradient stop buffer full; dropping radial \
-                     gradient instance (logged once per process)"
-                );
-            }
+        let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Radial, stops) else {
             return;
-        }
-        let stop_offset = current_len as u32;
+        };
+        let stop_count = stops.len().min(8);
         segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -236,7 +271,7 @@ impl DrawBatcher {
         center: glam::Vec2,
         start_angle: f32,
         end_angle: f32,
-        stops: &[effects::GradientStop],
+        stops: &[GradientStop],
         corner_radii: [f32; 4],
         blend: BlendMode,
     ) {
@@ -263,23 +298,10 @@ impl DrawBatcher {
         // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
         // (shape_blend_tests) are the guards.
 
-        let stop_count = stops.len().min(8);
-        let current_len = segment.current_gradient_stops.len();
-        if current_len + stop_count > effects_pipeline::MAX_GRADIENT_STOPS {
-            static WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                tracing::warn!(
-                    current_stops = current_len,
-                    requested = stop_count,
-                    limit = effects_pipeline::MAX_GRADIENT_STOPS,
-                    "sweep_gradient_rect: gradient stop buffer full; dropping sweep \
-                     gradient instance (logged once per process)"
-                );
-            }
+        let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Sweep, stops) else {
             return;
-        }
-        let stop_offset = current_len as u32;
+        };
+        let stop_count = stops.len().min(8);
         segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -326,7 +348,7 @@ impl DrawBatcher {
         rect_pos: [f32; 2],
         rect_size: [f32; 2],
         corner_radius: f32,
-        params: &effects::ShadowParams,
+        params: &super::super::effects::ShadowParams,
     ) {
         use super::super::instancing::ShadowInstance;
 
