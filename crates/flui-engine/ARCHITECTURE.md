@@ -514,6 +514,48 @@ There is **no `unsafe impl Sync`** anywhere in the crate. The remaining producti
 - `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`; the struct has no interior-mutability sync primitives).
 - `TexturePool` -- `Send`-only (the mpsc `Receiver` is `!Sync`), exactly the narrowing the refactor predicted: the pool is single-mutator by construction and lives on one renderer thread.
 
+### Concurrency model-checking on `raster_owner`: what was measured, and what is declined
+
+`raster_owner` is the one module in this crate with its own memory model — a
+mutex-guarded mailbox, a condvar, two atomics, and two bounded crossbeam
+channels — and its orderings are argued in prose (`InFlightAccounting`'s own
+doc). Two model-checking routes were evaluated and **both are unavailable
+without substituting the primitives under test**; the decision is recorded
+here rather than left as an untried idea.
+
+**Miri cannot execute it.** `cargo +nightly miri test -p flui-engine raster_owner`
+aborts on the first test that reaches the condvar:
+`parking_lot_core`'s Linux parker issues a `syscall(SYS_futex, ..)` whose
+second argument Miri sees as `*mut u32` rather than the `Atomic<i32>` the
+library passes — outside Miri's model, not a defect in it. Miri's CI job
+covers `pipeline::owner`, which uses no `parking_lot`.
+
+**Loom would test replacements, not this code.** Loom 0.7.2 models
+`std::sync::{Mutex, Condvar}` (poisoning `LockResult`, `wait` returning a
+guard) and an unbounded, std-shaped `mpsc` with no `try_send` and no bound.
+This module uses `parking_lot` (no poisoning, guard-by-value) and
+`crossbeam_channel::bounded` with `try_send`/`TrySendError::Full` — and the
+lossy-ack-overflow and one-shot-shutdown paths are *about* the bound and the
+full channel. A `cfg(loom)` shim would therefore have to reimplement the
+bound and the full-case semantics, so a loom run would pass or fail on
+approximations of the two mechanisms the module's trickiest invariants live
+in. That is the same objection that keeps `MultiDrawBatcher` out of the tree:
+a fixture that compiles while exercising something other than the production
+code is worse than a stated gap.
+
+**What stands in its place, and its honest limit.** The threaded harness in
+this module runs real OS threads against the real primitives: two-thread
+races (`in_flight_counter_survives_a_real_submit_retire_race_many_times`,
+`resize_stamp_submit_pump_interleaved_across_two_threads_never_stalls_entirely`),
+a panic-unwind wake test, a self-deregistering wake hook, and a stalled
+capacity release. Those exercise interleavings but schedule them by timing,
+not exhaustively; they cannot prove an ordering wrong the way a model checker
+can. The module's ordering arguments therefore remain prose plus
+high-repetition threading, and the reopen condition is concrete: if
+`parking_lot` or `crossbeam` grows a loom backend, or the mailbox migrates to
+`std::sync` primitives, the shim argument above stops applying and loom
+becomes worth building.
+
 ---
 
 ## Friction log
