@@ -56,11 +56,12 @@ pub(crate) async fn request_flui_device(
     capabilities: &GpuCapabilities,
     label: &str,
 ) -> EngineResult<(wgpu::Device, wgpu::Queue)> {
+    let adapter_limits = adapter.limits();
     adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some(label),
             required_features: Renderer::required_features(capabilities),
-            required_limits: Renderer::required_limits(capabilities),
+            required_limits: Renderer::required_limits(capabilities, &adapter_limits),
             // Desktop UI: trade VRAM for faster per-frame GPU allocations.
             memory_hints: wgpu::MemoryHints::Performance,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),

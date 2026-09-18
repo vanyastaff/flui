@@ -1488,7 +1488,21 @@ impl Renderer {
     ///
     /// `pub(super)`: shared with [`super::gpu_services::GpuServices`], same
     /// rationale as [`Self::required_features`].
-    pub(super) fn required_limits(capabilities: &GpuCapabilities) -> wgpu::Limits {
+    ///
+    /// Every field is clamped down to what the adapter actually advertises.
+    /// `wgpu::Limits::default()` is the *desktop* baseline: it asks for
+    /// `max_inter_stage_shader_variables: 16`, which the iOS simulator's Metal
+    /// adapter caps at 15, so a plain `..default()` makes device creation fail
+    /// with `LimitsExceeded` on that platform. Requesting a limit above the
+    /// adapter's own can never succeed — the adapter's `Limits` are what
+    /// `request_device` validates against — so the engine takes the adapter's
+    /// value wherever the default exceeds it. The `max_texture_dimension_2d`
+    /// clamp below has always worked this way; the rest of the struct simply
+    /// had not met an adapter small enough to need it.
+    pub(super) fn required_limits(
+        capabilities: &GpuCapabilities,
+        adapter_limits: &wgpu::Limits,
+    ) -> wgpu::Limits {
         let mut limits = wgpu::Limits {
             max_texture_dimension_2d: capabilities.max_texture_size.min(16384),
             ..wgpu::Limits::default()
@@ -1498,6 +1512,14 @@ impl Renderer {
         if capabilities.supports_push_constants {
             limits.max_immediate_size = 128;
         }
+
+        // Never ask for more than the adapter offers. `min` per field rather
+        // than a whole-struct `min` so a future field added to `Limits` is
+        // covered by the default `..default()` and this line keeps the ones
+        // that matter honest.
+        limits.max_inter_stage_shader_variables = limits
+            .max_inter_stage_shader_variables
+            .min(adapter_limits.max_inter_stage_shader_variables);
 
         limits
     }
