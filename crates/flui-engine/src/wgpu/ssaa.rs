@@ -36,8 +36,8 @@ use flui_types::{Rect, geometry::Pixels};
 use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
     command_ir::SsaaPathOp,
-    pipeline::is_tile_safe_for_ssaa,
-    pipelines::PipelineSet,
+    pipeline_cache::is_tile_safe_for_ssaa,
+    pipeline_set::PipelineSet,
     replay::GpuReplay,
     resources::GpuResources,
     texture_pool::PooledTexture,
@@ -225,7 +225,11 @@ impl SsaaDownsamplePipeline {
 /// dimensions are bounded by `max_tex_dim` before this function is called).
 ///
 /// # Examples
-/// ```ignore
+///
+/// `round_up_to_alignment` is private to this module, so the arithmetic is
+/// shown rather than compiled:
+///
+/// ```text
 /// assert_eq!(round_up_to_alignment(130, 64), 192);
 /// assert_eq!(round_up_to_alignment(128, 64), 128); // already aligned
 /// assert_eq!(round_up_to_alignment(1, 64), 64);
@@ -864,7 +868,7 @@ mod unit_tests {
     /// `DrawItem::Segment` before the `DrawItem::SsaaPath` (Z-order correctness).
     #[test]
     fn divert_path_to_ssaa_seals_prior_content() {
-        use super::super::pipeline::PipelineKey;
+        use super::super::pipeline_cache::PipelineKey;
 
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();

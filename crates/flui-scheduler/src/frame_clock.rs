@@ -1876,10 +1876,10 @@ mod tests {
     // caller-requested cadence lower than the feed's own rate is enforced
     // entirely through `poll`'s existing capacity check and the caller's
     // own next-wake scheduling — never a sleep or timer this clock owns.
-    // `RasterOptions::target_frame_rate` (`flui-engine`) feeds this knob via
-    // `RasterOptions::min_produce_interval`; this test proves the cadence
-    // the two crates cannot otherwise prove together, since flui-engine
-    // does not depend on flui-scheduler (see `RasterOptions`'s own doc).
+    // A caller converts its target Hz into this knob's `Duration` itself
+    // (`Duration::from_secs_f64(1.0 / hz)`); this test proves the cadence a
+    // raster-side consumer would observe, with no cross-crate dependency
+    // (flui-engine does not depend on flui-scheduler).
     // ----------------------------------------------------------------
 
     /// A 144 Hz demand feed throttled to a 30 Hz target frame rate produces
@@ -1893,11 +1893,8 @@ mod tests {
     fn target_frame_rate_thirty_throttles_a_one_hundred_forty_four_hertz_feed_with_no_sleep_in_the_clock()
      {
         let (clock, manual) = manual();
-        // The exact conversion `RasterOptions { target_frame_rate:
-        // Some(30), .. }.min_produce_interval()` performs (flui-engine
-        // does not depend on flui-scheduler, so this is the identical
-        // arithmetic inlined rather than a cross-crate call — see that
-        // method's own doc and its dedicated unit tests in flui-engine).
+        // A caller's own conversion from a target cadence: 30 Hz means one
+        // produce per 1/30 s, which is the `Duration` this knob takes.
         let target_frame_rate_hz = 30u32;
         clock.set_min_produce_interval(Some(Duration::from_secs_f64(
             1.0 / f64::from(target_frame_rate_hz),

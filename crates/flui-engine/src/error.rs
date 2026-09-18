@@ -37,7 +37,7 @@ use thiserror::Error;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use flui_engine::EngineError;
 ///
 /// fn render_frame() -> Result<(), EngineError> {
@@ -156,25 +156,15 @@ pub enum EngineError {
         source: raw_window_handle::HandleError,
     },
 
-    /// No suitable GPU adapter found (sentinel; carries no underlying error).
-    ///
-    /// Use this variant when `request_adapter` returns no underlying error
-    /// (e.g. the future resolved to `None` semantically). For wgpu 30's
-    /// `Result<Adapter, RequestAdapterError>` returns prefer
-    /// [`EngineError::AdapterRequest`] which preserves the wgpu diagnostic
-    /// (`NotFound { active_backends, requested_backends, supported_backends,
-    /// no_fallback_backends, no_adapter_backends, incompatible_surface_backends }`)
-    /// via `#[source]`.
-    #[error("No suitable GPU adapter found")]
-    NoAdapter,
-
     /// Adapter request failed with a backend-specific diagnostic payload.
     ///
     /// Wraps wgpu's `RequestAdapterError` (or any other backend-specific
     /// adapter-acquisition error) via `#[source]` so operators get the full
     /// diagnostic context (`NotFound { active_backends, ... }`,
-    /// `EnvNotSet`, ...). Use this in preference to [`EngineError::NoAdapter`]
-    /// when the underlying API exposes structured diagnostics.
+    /// `EnvNotSet`, ...). The structured payload is the reason this variant
+    /// exists rather than a sentinel: wgpu 30's `request_adapter` returns a
+    /// `Result` whose error names which backends were tried and why each was
+    /// rejected.
     #[error("GPU adapter request failed: {0}")]
     AdapterRequest(#[source] Box<dyn Error + Send + Sync>),
 
@@ -213,27 +203,21 @@ pub enum EngineError {
     #[error("Renderer not initialized")]
     NotInitialized,
 
-    /// `recover()` was called on a [`Renderer`](crate::wgpu::Renderer) built
-    /// via `Renderer::from_offscreen_services` (ADR-0045 decision 2).
+    /// A capture or render target was requested at a zero-sized extent.
     ///
-    /// Such a renderer does not own the device/adapter/instance it renders
-    /// with — every renderer built from the same `GpuServices` shares them.
-    /// Letting `recover()` rebuild a private stack here would install a
-    /// second `set_device_lost_callback` that only this renderer observes,
-    /// breaking the "exactly one callback, one shared flag" invariant every
-    /// sibling renderer depends on. Recovery for a shared-services renderer
-    /// is the owner thread's job — mint a new `GpuServices` and re-point
-    /// every renderer at it — not something this method can do alone.
-    /// Retrying this call never succeeds, so it is not
-    /// [`Recoverability::Recoverable`]; recreating just THIS renderer does
-    /// not fix it either (a fresh `GpuServices` is what's needed), so it is
-    /// not [`Recoverability::Fatal`] in the usual "recreate the renderer"
-    /// sense — classified [`Recoverability::Unrecoverable`].
-    #[error(
-        "recover() is not valid on a renderer sharing GpuServices; recovery is \
-         the owner thread's job (rebuild GpuServices and re-point every renderer at it)"
-    )]
-    SharedServicesNotRecoverable,
+    /// wgpu rejects a zero-byte buffer and a zero-sized texture, and its own
+    /// rejection path is `BufferSize::new(..).unwrap()` inside `wgpu-core` —
+    /// a panic, not a validation error a caller can match on. This variant is
+    /// the typed rejection: a caller that derived the size from user input
+    /// (a `-- <w> <h>` CLI argument, a window that has not been laid out yet)
+    /// gets a `Result` instead of taking the process down.
+    #[error("invalid render target size: {width}x{height} (both axes must be non-zero)")]
+    InvalidTargetSize {
+        /// The requested width in device pixels.
+        width: u32,
+        /// The requested height in device pixels.
+        height: u32,
+    },
 }
 
 // ============================================================================
@@ -293,15 +277,14 @@ impl EngineError {
             },
             Self::DeviceLost
             | Self::SurfaceCreation(_)
-            | Self::NoAdapter
             | Self::AdapterRequest(_)
             | Self::DeviceCreation(_)
+            | Self::InvalidTargetSize { .. }
             | Self::NotInitialized => Recoverability::Fatal,
             Self::SurfaceValidation
             | Self::ResourceIo { .. }
             | Self::TextPrepare(_)
-            | Self::TextRender(_)
-            | Self::SharedServicesNotRecoverable => Recoverability::Unrecoverable,
+            | Self::TextRender(_) => Recoverability::Unrecoverable,
         }
     }
 }
@@ -406,10 +389,6 @@ mod tests {
     fn test_display() {
         assert_eq!(EngineError::SurfaceLost.to_string(), "Surface was lost");
         assert_eq!(
-            EngineError::NoAdapter.to_string(),
-            "No suitable GPU adapter found"
-        );
-        assert_eq!(
             EngineError::SurfaceValidation.to_string(),
             "Surface texture validation error"
         );
@@ -445,10 +424,6 @@ mod tests {
             Recoverability::Fatal
         );
         assert_eq!(
-            EngineError::NoAdapter.recoverability(),
-            Recoverability::Fatal
-        );
-        assert_eq!(
             EngineError::surface_creation(std::io::Error::other("test")).recoverability(),
             Recoverability::Fatal
         );
@@ -463,6 +438,15 @@ mod tests {
         assert_eq!(
             EngineError::NotInitialized.recoverability(),
             Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::InvalidTargetSize {
+                width: 0,
+                height: 600,
+            }
+            .recoverability(),
+            Recoverability::Fatal,
+            "a zero-sized target cannot become valid by retrying"
         );
         assert_eq!(
             EngineError::surface_target_unavailable(raw_window_handle::HandleError::Unavailable)
@@ -488,10 +472,6 @@ mod tests {
         );
         assert_eq!(
             EngineError::text_render(std::io::Error::other("render boom")).recoverability(),
-            Recoverability::Unrecoverable
-        );
-        assert_eq!(
-            EngineError::SharedServicesNotRecoverable.recoverability(),
             Recoverability::Unrecoverable
         );
     }

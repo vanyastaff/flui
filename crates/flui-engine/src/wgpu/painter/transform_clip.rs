@@ -87,11 +87,17 @@ impl WgpuPainter {
     /// properly means giving the shader a clip *stack* and routing text
     /// through the same mask — a different piece of work, tracked on #848.
     ///
-    /// `hard` is still taken so these call sites read like the rounded ones,
-    /// and so that the day the SDF can carry a rect clip safely, only this
-    /// body changes.
-    pub fn clip_rect(&mut self, rect: Rect<Pixels>, hard: bool) {
-        let _ = hard;
+    /// The mode is taken as [`Clip`](flui_types::painting::Clip) even though
+    /// `AntiAlias` and `HardEdge` currently take the same path here: the two
+    /// differ on the rounded shapes, and a caller that switches shape should
+    /// not have to switch parameter types. `Clip::None` is refused by the
+    /// dispatcher before this call; reaching here with it would clip, so the
+    /// guard stays on the caller's side.
+    pub fn clip_rect(&mut self, rect: Rect<Pixels>, clip: flui_types::painting::Clip) {
+        debug_assert!(
+            !matches!(clip, flui_types::painting::Clip::None),
+            "BUG: Clip::None must be refused by the dispatcher; this method always clips"
+        );
         self.state.clip_rect(rect, self.size);
     }
 
@@ -107,7 +113,8 @@ impl WgpuPainter {
     /// instead of feathering it. Both go through the SDF either way — unlike a
     /// rect, a rounded clip has no scissor equivalent that would keep the
     /// corners.
-    pub fn clip_rrect(&mut self, rrect: RRect, hard: bool) {
+    pub fn clip_rrect(&mut self, rrect: RRect, clip: flui_types::painting::Clip) {
+        let hard = matches!(clip, flui_types::painting::Clip::HardEdge);
         self.state.clip_rrect(rrect, self.size, hard);
     }
 
@@ -173,11 +180,16 @@ impl WgpuPainter {
     /// scissor for early rasterizer rejection, and relies on
     /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
     /// outside the iOS-squircle curve.
-    /// `hard` selects the layer's `Clip` mode, exactly as for
-    /// [`Self::clip_rrect`]: a squircle has no scissor equivalent that keeps
-    /// its corners, so both modes go through the SDF and the mode chooses
-    /// between thresholding and feathering.
-    pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse, hard: bool) {
+    /// `clip` selects the layer's mode, exactly as for [`Self::clip_rrect`]:
+    /// a squircle has no scissor equivalent that keeps its corners, so both
+    /// modes go through the SDF and the mode chooses between thresholding and
+    /// feathering.
+    pub fn clip_rsuperellipse(
+        &mut self,
+        rse: flui_types::geometry::RSuperellipse,
+        clip: flui_types::painting::Clip,
+    ) {
+        let hard = matches!(clip, flui_types::painting::Clip::HardEdge);
         self.state.clip_rsuperellipse(rse, self.size, hard);
     }
 

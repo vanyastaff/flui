@@ -8,7 +8,7 @@
 //! # Eviction
 //!
 //! Entries not accessed for 120 frames are automatically evicted during
-//! [`PathCache::advance_frame`].
+//! [`PathCache::advance_frame`](crate::wgpu::path_cache::PathCache::advance_frame).
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};

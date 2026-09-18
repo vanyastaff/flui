@@ -52,7 +52,7 @@ fn fill_rule_for(fill_type: flui_types::painting::PathFillType) -> FillRule {
 /// `#[non_exhaustive]` future-compat marker.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum TessellationError {
+pub(crate) enum TessellationError {
     #[error("Fill tessellation failed: {0}")]
     FillFailed(String),
 
@@ -67,7 +67,7 @@ pub enum TessellationError {
     // painting-side path builder.
 }
 
-pub type Result<T> = std::result::Result<T, TessellationError>;
+pub(crate) type Result<T> = std::result::Result<T, TessellationError>;
 
 /// Vertex constructor for fill tessellation
 struct FillVertexConstructor {
@@ -103,7 +103,7 @@ impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstru
 ///
 /// Converts vector paths into triangle meshes using Lyon.
 /// Provides both fill and stroke tessellation.
-pub struct Tessellator {
+pub(crate) struct Tessellator {
     /// Lyon fill tessellator
     fill_tessellator: FillTessellator,
 
@@ -137,7 +137,7 @@ impl Default for Tessellator {
 
 impl Tessellator {
     /// Create a new tessellator
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -146,7 +146,7 @@ impl Tessellator {
     /// upper-left 2x2 (mirroring Impeller's `GetMaxBasisLengthXY`). The painter
     /// must call this immediately before tessellating so curves are subdivided
     /// finely enough at the magnification they will be drawn at.
-    pub fn set_max_scale(&mut self, max_scale: f32) {
+    pub(crate) fn set_max_scale(&mut self, max_scale: f32) {
         // Guard against zero/NaN/negative collapsing the tolerance to infinity.
         self.max_scale = if max_scale.is_finite() && max_scale > f32::EPSILON {
             max_scale
@@ -189,7 +189,7 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
-    pub fn tessellate_fill(
+    pub(crate) fn tessellate_fill(
         &mut self,
         path: &Path,
         paint: &Paint,
@@ -227,7 +227,7 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
-    pub fn tessellate_stroke(
+    pub(crate) fn tessellate_stroke(
         &mut self,
         path: &Path,
         paint: &Paint,
@@ -297,7 +297,7 @@ impl Tessellator {
     }
 
     /// Tessellate a circle
-    pub fn tessellate_circle(
+    pub(crate) fn tessellate_circle(
         &mut self,
         center: Point<Pixels>,
         radius: f32,
@@ -317,7 +317,7 @@ impl Tessellator {
     }
 
     /// Tessellate an ellipse
-    pub fn tessellate_ellipse(
+    pub(crate) fn tessellate_ellipse(
         &mut self,
         center: Point<Pixels>,
         radii: Point<Pixels>,
@@ -351,7 +351,7 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
-    pub fn tessellate_arc(
+    pub(crate) fn tessellate_arc(
         &mut self,
         rect: Rect<Pixels>,
         start_angle: f32,
@@ -436,7 +436,7 @@ impl Tessellator {
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
     #[expect(clippy::similar_names)] // tl_x/tl_y, tr_x/tr_y, etc. are intentional corner names
-    pub fn tessellate_drrect(
+    pub(crate) fn tessellate_drrect(
         &mut self,
         outer: &RRect,
         inner: &RRect,
@@ -563,7 +563,7 @@ impl Tessellator {
     }
 
     /// Create a lyon path from points (polyline)
-    pub fn create_polyline_path(points: &[Point<Pixels>], closed: bool) -> Path {
+    pub(crate) fn create_polyline_path(points: &[Point<Pixels>], closed: bool) -> Path {
         if points.is_empty() {
             return Path::builder().build();
         }
@@ -591,7 +591,7 @@ impl Tessellator {
     ///
     /// Builds a lyon path with independent corner arcs, supporting
     /// different radii for each corner of the rectangle.
-    pub fn tessellate_rrect(
+    pub(crate) fn tessellate_rrect(
         &mut self,
         rrect: RRect,
         paint: &Paint,
@@ -660,7 +660,7 @@ impl Tessellator {
     }
 
     /// Tessellate a stroked rectangle
-    pub fn tessellate_rect_stroke(
+    pub(crate) fn tessellate_rect_stroke(
         &mut self,
         rect: Rect<Pixels>,
         paint: &Paint,
@@ -678,7 +678,7 @@ impl Tessellator {
     }
 
     /// Tessellate a line
-    pub fn tessellate_line(
+    pub(crate) fn tessellate_line(
         &mut self,
         p1: Point<Pixels>,
         p2: Point<Pixels>,
@@ -720,7 +720,7 @@ impl Tessellator {
     /// observable: `PathFillType::NonZero` (the FLUI default) fills overlaps
     /// solid, `EvenOdd` punches holes. This is the only fill entry point that
     /// reads [`flui_types::painting::path::Path::fill_type`].
-    pub fn tessellate_flui_path_fill(
+    pub(crate) fn tessellate_flui_path_fill(
         &mut self,
         flui_path: &flui_types::painting::path::Path,
         paint: &Paint,
@@ -730,7 +730,7 @@ impl Tessellator {
     }
 
     /// Tessellate a FLUI Path (stroked)
-    pub fn tessellate_flui_path_stroke(
+    pub(crate) fn tessellate_flui_path_stroke(
         &mut self,
         flui_path: &flui_types::painting::path::Path,
         paint: &Paint,
@@ -745,7 +745,7 @@ impl Tessellator {
     /// [`Self::tessellate_dashed_stroke`].  The caller is responsible for
     /// verifying that `dash_pattern` is valid before calling this method;
     /// an invalid pattern falls back to a solid stroke.
-    pub fn tessellate_flui_path_dashed_stroke(
+    pub(crate) fn tessellate_flui_path_dashed_stroke(
         &mut self,
         flui_path: &flui_types::painting::path::Path,
         paint: &Paint,
@@ -767,7 +767,7 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
-    pub fn tessellate_dashed_stroke(
+    pub(crate) fn tessellate_dashed_stroke(
         &mut self,
         path: &Path,
         paint: &Paint,
@@ -967,7 +967,7 @@ impl Tessellator {
 }
 
 /// Helper trait for creating lyon paths from FLUI types
-pub trait IntoLyonPath {
+pub(crate) trait IntoLyonPath {
     /// Convert to lyon path
     fn to_lyon_path(&self) -> Path;
 }

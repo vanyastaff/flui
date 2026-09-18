@@ -17,7 +17,8 @@ use std::sync::Arc;
 use flui_layer::{LayerId, LayerTree};
 
 use super::{
-    Backend, layer_render::LayerRender, painter::WgpuPainter, render_target::RenderTarget,
+    layer_dispatcher::LayerDispatcher, layer_render::LayerRender, painter::WgpuPainter,
+    render_target::RenderTarget,
 };
 use crate::error::{EngineError, EngineResult};
 
@@ -43,10 +44,16 @@ impl HeadlessRenderer {
     /// renderer does — `Renderer::required_features` makes the same request for
     /// the same reason. Nothing else about the device is negotiated.
     ///
+    /// Async because wgpu's adapter and device requests are async. Calling
+    /// `Renderer::new` and this from the same async context is the point: a
+    /// blocking constructor would stall whichever executor thread it ran on,
+    /// and the sync wrapper belongs to the caller (an example, a test) that
+    /// owns its runtime, not to the library.
+    ///
     /// # Errors
     /// Returns [`EngineError`] when no GPU adapter or device is available.
-    pub fn new() -> EngineResult<Self> {
-        Self::acquire(wgpu::Features::DUAL_SOURCE_BLENDING)
+    pub async fn new() -> EngineResult<Self> {
+        Self::acquire(wgpu::Features::DUAL_SOURCE_BLENDING).await
     }
 
     /// [`Self::new`] with [`wgpu::Features::DUAL_SOURCE_BLENDING`] withheld
@@ -61,29 +68,34 @@ impl HeadlessRenderer {
     /// # Errors
     /// Returns [`EngineError`] when no GPU adapter or device is available.
     #[cfg(test)]
-    pub(crate) fn without_dual_source_blending() -> EngineResult<Self> {
-        Self::acquire(wgpu::Features::empty())
+    pub(crate) async fn without_dual_source_blending() -> EngineResult<Self> {
+        Self::acquire(wgpu::Features::empty()).await
     }
 
     /// Acquires the capture device, requesting whichever of `wanted_features`
     /// the adapter actually offers.
-    fn acquire(wanted_features: wgpu::Features) -> EngineResult<Self> {
+    async fn acquire(wanted_features: wgpu::Features) -> EngineResult<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(
-            &super::adapter::trusted_adapter_options(wgpu::PowerPreference::HighPerformance, None),
-        ))
-        .map_err(EngineError::adapter_request)?;
+        let adapter = instance
+            .request_adapter(&super::adapter::trusted_adapter_options(
+                wgpu::PowerPreference::HighPerformance,
+                None,
+            ))
+            .await
+            .map_err(EngineError::adapter_request)?;
 
         // Deliberately NOT `adapter::request_flui_device`: capture wants
         // wgpu's default (downlevel-friendly) device rather than the
         // renderer's capability-negotiated one — plus the features above,
         // which change what the captured pixels look like.
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("FLUI Headless Capture Device"),
-            required_features: adapter.features() & wanted_features,
-            ..Default::default()
-        }))
-        .map_err(EngineError::device_creation)?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("FLUI Headless Capture Device"),
+                required_features: adapter.features() & wanted_features,
+                ..Default::default()
+            })
+            .await
+            .map_err(EngineError::device_creation)?;
 
         Ok(Self {
             device: Arc::new(device),
@@ -114,6 +126,21 @@ impl HeadlessRenderer {
     /// Returns [`EngineError`] when the render pass fails.
     pub fn render_layer_tree(&self, tree: &LayerTree, size: (u32, u32)) -> EngineResult<Vec<u8>> {
         let (width, height) = size;
+        // wgpu rejects a zero-byte buffer by PANICKING (`wgpu-core`'s
+        // `BufferSize::new(..).unwrap()`), and a zero-sized texture is
+        // equally invalid. Reject here so a caller that derived the size from
+        // user input or from a not-yet-laid-out window gets a `Result`.
+        // Bound the request by the device's own limit HERE, where the input
+        // enters. It has to be checked by hand rather than left to
+        // `create_texture`: that call reports an over-limit size through
+        // wgpu's uncaptured-error path, which panics by default instead of
+        // returning, so an oversized request would abort rather than reach a
+        // caller as a `Result`. With this check the readback row arithmetic
+        // below is provably in range, and its conversions are invariants.
+        let max_dim = self.device.limits().max_texture_dimension_2d;
+        if width == 0 || height == 0 || width > max_dim || height > max_dim {
+            return Err(EngineError::InvalidTargetSize { width, height });
+        }
         let texture = self.create_capture_texture(width, height);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -126,9 +153,12 @@ impl HeadlessRenderer {
             (width, height),
         );
         {
-            let mut backend = Backend::new(&mut painter);
+            let mut backend = LayerDispatcher::new(&mut painter);
             if let Some(root) = tree.root() {
-                walk_layer_tree(tree, root, &mut backend);
+                let mut visitor = CaptureVisitor {
+                    backend: &mut backend,
+                };
+                super::layer_walk::walk_layer_tree(tree, root, &mut visitor);
             }
             // `backend` drops here → its `Drop` flushes the active transform.
         }
@@ -193,15 +223,25 @@ impl HeadlessRenderer {
 
     /// Copy the texture to a mappable buffer and de-pad the 256-byte-aligned
     /// rows into a tight `width * height * 4` RGBA8 buffer.
+    ///
+    /// The row arithmetic is `u64` throughout, and that is hardening rather
+    /// than a fix: `render_layer_tree` bounds both axes by
+    /// `max_texture_dimension_2d` before any GPU work, so `width * 4` cannot
+    /// reach `u32::MAX` and the `u32` form would not wrap today. It is `u64`
+    /// so that the invariant is local to this function instead of resting on
+    /// a check in a different one — the failure mode it avoids is a *silent*
+    /// wrap (`width = 2^30` makes `width * 4` zero) that would size the
+    /// staging buffer at zero bytes and re-enter the `wgpu-core` panic, which
+    /// is worth one conversion not to have to re-derive later.
     fn readback_rgba(&self, texture: &wgpu::Texture, width: u32, height: u32) -> Vec<u8> {
-        const BYTES_PER_PIXEL: u32 = 4;
-        let unpadded_row_bytes = width * BYTES_PER_PIXEL;
-        let padded_row_bytes = unpadded_row_bytes.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        const BYTES_PER_PIXEL: u64 = 4;
+        let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let unpadded_row_bytes = u64::from(width) * BYTES_PER_PIXEL;
+        let padded_row_bytes = unpadded_row_bytes.div_ceil(align) * align;
 
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FLUI Headless Capture Readback Staging"),
-            size: u64::from(padded_row_bytes * height),
+            size: padded_row_bytes * u64::from(height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -222,7 +262,15 @@ impl HeadlessRenderer {
                 buffer: &staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(padded_row_bytes),
+                    // `u32` because wgpu's layout field is. In range by
+                    // construction: `render_layer_tree` bounds `width` by
+                    // `max_texture_dimension_2d` before any GPU work, so
+                    // `width * 4` padded to 256 is far below `u32::MAX`.
+                    bytes_per_row: Some(
+                        u32::try_from(padded_row_bytes).expect(
+                            "BUG: render_layer_tree bounds width by                              max_texture_dimension_2d before readback",
+                        ),
+                    ),
                     rows_per_image: Some(height),
                 },
             },
@@ -248,31 +296,81 @@ impl HeadlessRenderer {
             "BUG: readback staging buffer must be mapped — the poll above waited for the \
              map_async issued on this same slice",
         );
-        let mut pixels = Vec::with_capacity((unpadded_row_bytes * height) as usize);
-        for row in 0..height {
+        // `usize` for indexing; the `u64` row math above is already known to
+        // fit this address space or `create_buffer` would have failed first.
+        let tight_size = (unpadded_row_bytes * u64::from(height)) as usize;
+        let mut pixels = Vec::with_capacity(tight_size);
+        for row in 0..u64::from(height) {
             let start = (row * padded_row_bytes) as usize;
             let end = start + unpadded_row_bytes as usize;
             pixels.extend_from_slice(&mapped[start..end]);
         }
+        debug_assert_eq!(
+            pixels.len(),
+            tight_size,
+            "the de-padded readback must be exactly width*height*4"
+        );
         pixels
     }
 }
 
-/// Depth-first walk mirroring `Renderer::render_layer_recursive`: render a
-/// node, recurse into its children, then run the node's post-children cleanup
-/// (e.g. a filter container popping its offscreen scope).
-fn walk_layer_tree(tree: &LayerTree, node_id: LayerId, backend: &mut Backend<'_>) {
-    let Some(layer) = tree.get_layer(node_id) else {
-        return;
-    };
-    layer.render(backend);
+/// The headless capture's visit steps: every node renders and cleans up the
+/// same way, with no diverted subtree handlers, so this is the plain shape
+/// [`walk_layer_tree`](super::layer_walk::walk_layer_tree) drives.
+struct CaptureVisitor<'a, 'b> {
+    backend: &'a mut LayerDispatcher<'b>,
+}
 
-    let children: Vec<LayerId> = tree.children(node_id).unwrap_or_default().to_vec();
-    for child_id in children {
-        walk_layer_tree(tree, child_id, backend);
+impl super::layer_walk::LayerVisitor for CaptureVisitor<'_, '_> {
+    fn enter(
+        &mut self,
+        _tree: &LayerTree,
+        _id: LayerId,
+        layer: &flui_layer::Layer,
+    ) -> super::layer_walk::Step {
+        layer.render(self.backend);
+        super::layer_walk::Step::Descend
     }
 
-    if let Some(layer) = tree.get_layer(node_id) {
-        layer.cleanup(backend);
+    fn exit(&mut self, _tree: &LayerTree, _id: LayerId, layer: &flui_layer::Layer) {
+        layer.cleanup(self.backend);
+    }
+}
+
+#[cfg(test)]
+mod target_size_tests {
+    use super::HeadlessRenderer;
+    use crate::error::EngineError;
+    use flui_layer::LayerTree;
+
+    /// A zero-sized capture is a `Result`, not a panic.
+    ///
+    /// wgpu rejects a zero-byte `MAP_READ` buffer by panicking inside
+    /// `wgpu-core` (`BufferSize::new(..).unwrap()`), so without this guard a
+    /// caller that took the size from user input — `cargo run -p flui
+    /// --example screenshot -- material 0 0` — aborts the process. The guard
+    /// runs before any GPU work, so this needs no device: the assertions below
+    /// are reached even where `HeadlessRenderer::new` would fail.
+    #[test]
+    fn zero_sized_capture_is_a_typed_error() {
+        let Ok(renderer) = pollster::block_on(HeadlessRenderer::new()) else {
+            // No adapter on this host: the guard is still reachable through
+            // the error variant's own classification test in `error.rs`.
+            return;
+        };
+        let tree = LayerTree::new();
+
+        // `2^30` is the case that matters most: it is NOT zero, so it passes a
+        // naive zero-check, and `width * 4` in `u32` wraps to exactly zero —
+        // which would size the staging buffer at zero bytes and re-enter the
+        // panic this guard exists to prevent.
+        for size in [(0, 760), (900, 0), (0, 0), (1 << 30, 1), (65536, 65536)] {
+            match renderer.render_layer_tree(&tree, size) {
+                Err(EngineError::InvalidTargetSize { width, height }) => {
+                    assert_eq!((width, height), size, "the error carries the request");
+                }
+                other => panic!("expected InvalidTargetSize for {size:?}, got {other:?}"),
+            }
+        }
     }
 }

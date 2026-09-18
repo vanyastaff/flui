@@ -396,7 +396,7 @@ mod gpu_tests {
 
         let multiply_paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Multiply);
         painter.save_layer(Some(layer_bounds), &multiply_paint);
-        painter.rect(layer_bounds, &Paint::fill(source_color));
+        painter.draw_rect(layer_bounds, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -477,7 +477,7 @@ mod gpu_tests {
         // Direct draw — no layer.
         {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(draw_bounds, &Paint::fill(source_color));
+            painter.draw_rect(draw_bounds, &Paint::fill(source_color));
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             painter
@@ -494,7 +494,7 @@ mod gpu_tests {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             let src_over_paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::SrcOver);
             painter.save_layer(Some(draw_bounds), &src_over_paint);
-            painter.rect(draw_bounds, &Paint::fill(source_color));
+            painter.draw_rect(draw_bounds, &Paint::fill(source_color));
             painter.restore_layer();
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -554,7 +554,7 @@ mod gpu_tests {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             let blend_paint = Paint::fill(Color::WHITE).with_blend_mode(non_advanced_mode);
             painter.save_layer(Some(draw_bounds), &blend_paint);
-            painter.rect(draw_bounds, &Paint::fill(source_color));
+            painter.draw_rect(draw_bounds, &Paint::fill(source_color));
             painter.restore_layer();
 
             let mut encoder =
@@ -613,12 +613,12 @@ mod gpu_tests {
         painter.save_layer(Some(full_bounds), &screen_paint);
 
         // Content drawn into the Screen layer's offscreen.
-        painter.rect(full_bounds, &Paint::fill(outer_source));
+        painter.draw_rect(full_bounds, &Paint::fill(outer_source));
 
         // Inner Multiply layer (nested inside Screen).
         let multiply_paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Multiply);
         painter.save_layer(Some(full_bounds), &multiply_paint);
-        painter.rect(full_bounds, &Paint::fill(inner_source));
+        painter.draw_rect(full_bounds, &Paint::fill(inner_source));
         painter.restore_layer(); // close Multiply
 
         painter.restore_layer(); // close Screen
@@ -699,13 +699,13 @@ mod gpu_tests {
         // Left: Multiply saveLayer.
         let multiply_paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Multiply);
         painter.save_layer(Some(left_bounds), &multiply_paint);
-        painter.rect(left_bounds, &Paint::fill(left_source));
+        painter.draw_rect(left_bounds, &Paint::fill(left_source));
         painter.restore_layer();
 
         // Right: SrcOver saveLayer (opaque → reintegrates, same as direct draw).
         let src_over_paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::SrcOver);
         painter.save_layer(Some(right_bounds), &src_over_paint);
-        painter.rect(right_bounds, &Paint::fill(right_source));
+        painter.draw_rect(right_bounds, &Paint::fill(right_source));
         painter.restore_layer();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

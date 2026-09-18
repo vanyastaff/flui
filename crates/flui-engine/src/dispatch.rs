@@ -1,24 +1,20 @@
-//! RenderCommand dispatch
+//! `DrawCommand` dispatch.
 //!
-//! This module provides the dispatch functions that route DrawCommands to the
-//! appropriate CommandRenderer methods. It follows the Visitor pattern to
-//! separate command data from execution logic.
-//!
-//! # Architecture
+//! The match that routes each `flui_painting::DrawCommand` variant to its
+//! [`CommandRenderer`](crate::command_renderer::CommandRenderer) method — the
+//! two are read together, since the enum and the trait are the two halves of
+//! one contract.
 //!
 //! ```text
 //! DrawCommand (flui_painting)
 //!     │
 //!     ▼
-//! dispatch_command() ─────► CommandRenderer.render_*()
-//!                                 │
-//!                                 ▼
-//!                           Backend (wgpu, skia, etc.)
+//! dispatch_command() ─────► CommandRenderer::render_*()
 //! ```
 
 use flui_painting::DrawCommand;
 
-use crate::traits::CommandRenderer;
+use crate::command_renderer::CommandRenderer;
 
 /// Dispatch a single DrawCommand to the appropriate CommandRenderer method
 ///
@@ -36,7 +32,10 @@ use crate::traits::CommandRenderer;
 /// The match statement compiles to a jump table, making dispatch O(1).
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
-pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, renderer: &mut R) {
+pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
+    command: &DrawCommand,
+    renderer: &mut R,
+) {
     match command {
         // === Drawing Commands ===
         DrawCommand::DrawRect {
@@ -373,7 +372,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
 ///
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
-pub fn dispatch_commands<'a, I, R>(commands: I, renderer: &mut R)
+pub(crate) fn dispatch_commands<'a, I, R>(commands: I, renderer: &mut R)
 where
     I: IntoIterator<Item = &'a DrawCommand>,
     R: CommandRenderer + ?Sized,
@@ -403,7 +402,7 @@ mod tests {
     };
 
     use super::dispatch_commands;
-    use crate::wgpu::DebugBackend;
+    use crate::wgpu::debug::DebugBackend;
 
     #[test]
     fn dispatch_handles_interned_paint() {
@@ -419,8 +418,7 @@ mod tests {
         );
         let dl = canvas.finish();
 
-        let mut backend =
-            DebugBackend::new(Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let mut backend = DebugBackend::new();
         dispatch_commands(dl.commands(), &mut backend);
 
         // Two `render_rect` arms must have fired — proves dispatch

@@ -88,7 +88,7 @@ pub struct FrameStamp {
     pub epoch: FrameEpoch,
     /// The raster surface generation this frame was produced against.
     pub surface_generation: SurfaceGeneration,
-    /// The `flui-engine` `GpuServices` generation this frame was produced
+    /// The GPU-resource generation this frame was produced
     /// against (ADR-0045 decision 4). See the type doc above for why this
     /// is a separate axis from `surface_generation` rather than folded into
     /// it.

@@ -3,7 +3,7 @@
 // These methods used to be the `impl Painter for WgpuPainter` trait impl;
 // the `Painter` trait was deleted (1 production impl, 6 default
 // `tracing::warn!("not implemented")` impls, no second backend planned).
-// The methods stay as inherent on `WgpuPainter` for direct use by `Backend`
+// The methods stay as inherent on `WgpuPainter` for direct use by `LayerDispatcher`
 // (the CommandRenderer impl) and external callers like `examples/painting_demo`.
 //
 // Moved from `painter.rs` into `painter/draw.rs` as part of the C1 LOC-cap
@@ -26,17 +26,17 @@ impl super::WgpuPainter {
     ///
     /// `paint.style` determines fill vs stroke; `paint.color` and
     /// `paint.blend_mode` are applied at composite time.
-    pub fn rect(
+    pub fn draw_rect(
         &mut self,
         rect: flui_types::Rect<flui_types::geometry::Pixels>,
         paint: &flui_painting::Paint,
     ) {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
-        tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
+        tracing::trace!("WgpuPainter::draw_rect: rect={:?}, paint={:?}", rect, paint);
 
         let opacity = self.compositor.current_opacity();
-        self.batcher.rect(
+        self.batcher.draw_rect(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -53,10 +53,10 @@ impl super::WgpuPainter {
     /// the SDF evaluator in `rect_instanced.wgsl` clips to the rounded
     /// boundary in the fragment shader, so no tessellation is needed for
     /// simple rounded rects.
-    pub fn rrect(&mut self, rrect: flui_types::geometry::RRect, paint: &flui_painting::Paint) {
+    pub fn draw_rrect(&mut self, rrect: flui_types::geometry::RRect, paint: &flui_painting::Paint) {
         self.seal_text_tail();
         let opacity = self.compositor.current_opacity();
-        self.batcher.rrect(
+        self.batcher.draw_rrect(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -73,7 +73,7 @@ impl super::WgpuPainter {
     /// device pixels; the current transform's scale is baked into the instance
     /// by `DrawBatcher::circle` so the analytical SDF always operates in
     /// the correct device-pixel space.
-    pub fn circle(
+    pub fn draw_circle(
         &mut self,
         center: flui_types::Point<flui_types::geometry::Pixels>,
         radius: f32,
@@ -82,14 +82,14 @@ impl super::WgpuPainter {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
-            "WgpuPainter::circle: center={:?}, radius={}, paint={:?}",
+            "WgpuPainter::draw_circle: center={:?}, radius={}, paint={:?}",
             center,
             radius,
             paint
         );
 
         let opacity = self.compositor.current_opacity();
-        self.batcher.circle(
+        self.batcher.draw_circle(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -106,17 +106,17 @@ impl super::WgpuPainter {
     /// rendered via the circle-SDF pipeline with a non-uniform transform that
     /// stretches the unit circle to the ellipse aspect ratio — no tessellation
     /// required.
-    pub fn oval(
+    pub fn draw_oval(
         &mut self,
         rect: flui_types::Rect<flui_types::geometry::Pixels>,
         paint: &flui_painting::Paint,
     ) {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
-        tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
+        tracing::trace!("WgpuPainter::draw_oval: rect={:?}, paint={:?}", rect, paint);
 
         let opacity = self.compositor.current_opacity();
-        self.batcher.oval(
+        self.batcher.draw_oval(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -204,7 +204,7 @@ impl super::WgpuPainter {
     /// (minimum 0.5 px) and submitted via the tessellated-path pipeline.
     /// `paint.color` sets the stroke color; `paint.style` is ignored (lines are
     /// always stroked).
-    pub fn line(
+    pub fn draw_line(
         &mut self,
         p1: flui_types::Point<flui_types::geometry::Pixels>,
         p2: flui_types::Point<flui_types::geometry::Pixels>,
@@ -213,13 +213,13 @@ impl super::WgpuPainter {
         self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
-            "WgpuPainter::line: p1={:?}, p2={:?}, paint={:?}",
+            "WgpuPainter::draw_line: p1={:?}, p2={:?}, paint={:?}",
             p1,
             p2,
             paint
         );
 
-        self.batcher.line(
+        self.batcher.draw_line(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -234,12 +234,12 @@ impl super::WgpuPainter {
     /// `font_size` is in device pixels.  The text is submitted to
     /// `TextRenderer` (glyphon) as a single-style run; shaping and atlas
     /// upload happen during the next `render` call.  For styled spans
-    /// with per-run fonts, weights, or colors use [`Self::rich_text`] instead.
+    /// with per-run fonts, weights, or colors use [`Self::draw_rich_text`] instead.
     ///
     /// The current transform is applied to `position` before submission so that
     /// glyphs land at the correct device-pixel coordinate even inside a
     /// `save`/`restore` transform block.
-    pub fn text(
+    pub fn draw_text(
         &mut self,
         text: &str,
         position: flui_types::Point<flui_types::geometry::Pixels>,
@@ -253,7 +253,7 @@ impl super::WgpuPainter {
             ?position,
             font_size,
             color = ?paint.color,
-            "WgpuPainter::text"
+            "WgpuPainter::draw_text"
         );
         let transformed_position = self.state.apply_transform(position);
         let placement = self.text_placement();
@@ -321,7 +321,7 @@ impl super::WgpuPainter {
     /// into `style.font_size`.  `base_font_size` is the buffer-level default
     /// for runs with no explicit size; `base_color` is the fallback for runs
     /// with no color.
-    pub fn rich_text(
+    pub fn draw_rich_text(
         &mut self,
         runs: &[(String, Option<flui_types::typography::TextStyle>)],
         position: flui_types::Point<flui_types::geometry::Pixels>,
@@ -335,7 +335,7 @@ impl super::WgpuPainter {
             base_font_size,
             ?base_color,
             ?wrap_width,
-            "WgpuPainter::rich_text"
+            "WgpuPainter::draw_rich_text"
         );
         let transformed_position = self.state.apply_transform(position);
         let placement = self.text_placement();
@@ -349,30 +349,6 @@ impl super::WgpuPainter {
             placement,
         );
         self.claim_text_entry(entry_index);
-    }
-
-    /// Draw a registered external texture into `dst_rect`.
-    ///
-    /// `texture_id` must have been registered via
-    /// [`Self::external_texture_registry_mut`] before this call.  The full
-    /// texture is composited at `dst_rect` (UV `[0,1]×[0,1]`); for a sub-rect
-    /// source use [`Self::draw_texture`], which accepts an optional `src` rect.
-    ///
-    /// The current transform is baked into the instance; no sub-rect UV
-    /// remapping is performed by this variant.
-    pub fn texture(
-        &mut self,
-        texture_id: flui_types::painting::TextureId,
-        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
-    ) {
-        self.seal_text_tail();
-        super::super::batches::DrawBatcher::texture(
-            &mut self.current_segment,
-            &mut self.draw_order,
-            &self.state,
-            texture_id,
-            dst_rect,
-        );
     }
 
     /// Draw an arbitrary path.

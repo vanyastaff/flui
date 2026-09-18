@@ -1,14 +1,12 @@
-//! Abstract rendering traits
+//! The command dispatch surface between the layer walk and the GPU backend.
 //!
-//! This module defines the abstract traits that rendering backends must
-//! implement. These traits enable multiple backend implementations (wgpu, skia,
-//! vello, software) without changing the high-level rendering code.
+//! [`CommandRenderer`](self) mirrors the closed `DrawCommand` enum: one method per
+//! variant, and `dispatch_command` (in `crate::dispatch`) is the match that
+//! routes each variant to its method. The layer-tree state hand-off — clips,
+//! transforms, effects — is the sibling trait in `crate::layer_state_stack`.
 //!
-//! # Design Principles
-//!
-//! - **Backend Agnostic**: Traits define what to render, not how
-//! - **Dependency Inversion**: High-level code depends on abstractions (SOLID)
-//! - **Extensible**: New backends implement these traits
+//! Both halves are crate plumbing: the layer walk is the only production
+//! caller, and `Backend` is the only production implementor.
 
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
@@ -18,35 +16,18 @@ use flui_types::{
     typography::TextStyle,
 };
 
-// ============================================================================
-// COMMAND RENDERER TRAIT
-// ============================================================================
-
-/// Visitor interface for rendering DrawCommands
+/// The command half of the backend dispatch surface: one method per
+/// `flui_painting::DrawCommand` variant.
 ///
-/// Backends implement this trait to provide concrete rendering logic.
-/// Each method corresponds to one DrawCommand variant.
+/// `dispatch_command` is the match that routes each variant here, so the two
+/// are read together.
 ///
-/// This trait enables:
-/// - Multiple rendering backends without changing DisplayList
-/// - Type-safe dispatch without giant match statements
-/// - Easy testing via TestRenderer implementation
+/// # Implementors
 ///
-/// # Example
-///
-/// ```rust,ignore
-/// pub struct WgpuBackend { /* ... */ }
-///
-/// impl CommandRenderer for WgpuBackend {
-///     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
-///         self.with_transform(transform, |painter| {
-///             painter.rect(rect, paint);
-///         });
-///     }
-///     // ... other methods
-/// }
-/// ```
-pub trait CommandRenderer {
+/// `Backend` (the production path) and, in tests, a command recorder. The
+/// dispatch itself is `dispatch_command`, which is the match over
+/// `flui_painting::DrawCommand` — read them together.
+pub(crate) trait CommandRenderer {
     // ===== Primitive Shapes =====
 
     /// Render a filled or stroked rectangle
@@ -310,11 +291,6 @@ pub trait CommandRenderer {
         transform: &Matrix4,
     );
 
-    // ===== Viewport Information =====
-
-    /// Get the viewport bounds
-    fn viewport_bounds(&self) -> Rect<Pixels>;
-
     // ===== Layer Operations =====
 
     /// Save canvas state and create a new compositing layer
@@ -364,121 +340,4 @@ pub trait CommandRenderer {
         total_frames: u64,
         diagnostic_line: Option<&str>,
     );
-}
-
-// ============================================================================
-// LAYER-STATE-STACK TRAIT
-// ============================================================================
-
-/// Compositor hand-off interface for the flui-layer clip/transform/effect
-/// stacks.
-///
-/// These methods used to live on [`CommandRenderer`] alongside its 34
-/// per-command visitor methods. They were split out into this dedicated
-/// trait because:
-///
-/// - The visitor methods (render_rect / render_text / ...) are the
-///   `DrawCommand` dispatch contract every backend implements -- a
-///   software fallback, a debug recorder, a Skia backend, all
-///   conceptually answer "given this draw command, produce these
-///   pixels".
-/// - The push/pop methods are flui-layer's clip-stack hand-off
-///   mechanism. They are framework-internal: the layer tree (see
-///   `crates/flui-engine/src/wgpu/layer_render.rs`) walks layers
-///   recursively, calling `push_clip_*` / `pop_clip` / `push_opacity`
-///   / etc. to mirror the layer-tree's nesting onto the painter's
-///   internal state stack.
-///
-/// Backends that ONLY emit commands (a `DebugBackend` recorder, a
-/// command-stream test fixture, a software fallback that does its
-/// own state tracking) implement only [`CommandRenderer`]. Backends
-/// that participate in flui-layer's clip-stack handshake -- the
-/// compositor route -- implement both. The trait split lets new
-/// command-only backends materialize without the 13-method overhead.
-///
-/// # Rationale
-///
-/// See `docs/research/2026-05-22-flui-rendering-engine-audit.md` for the
-/// full write-up. This follows the same trait-split intuition as the
-/// earlier `SemanticsConfiguration` split: separate the minimal
-/// command-only surface from the fuller stateful one so implementers only
-/// pay for what they use.
-pub trait LayerStateStack {
-    /// Push a rectangular clip onto the clip stack
-    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);
-
-    /// Push a rounded rectangular clip onto the clip stack
-    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip);
-
-    /// Push an arbitrary path clip onto the clip stack
-    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip);
-
-    /// Push a rounded-superellipse (iOS squircle) clip onto the clip stack.
-    ///
-    /// Required rather than defaulted. The obvious default —
-    /// approximating with the rounded rectangle that shares this shape's outer
-    /// rect and radii — is not the conservative choice it reads as: that rrect
-    /// is **inscribed** in the squircle, so it clips strictly MORE and silently
-    /// discards corner content. (`a_clip_superellipse_layer_clips_to_the_squircle_
-    /// not_its_bounding_rrect` measures the gap: 2.9 px at a 64 px shape.) A
-    /// default forwarding to [`push_clip_path`](Self::push_clip_path) would be
-    /// worse still on a backend where path clipping is a no-op — it would
-    /// reinstate the silent no-op this method exists to remove (issue #921).
-    ///
-    /// The in-tree precedent for a degrading default on this trait has already
-    /// misfired: `MockRenderer` never overrode
-    /// [`push_opacity_blend`](Self::push_opacity_blend), so a blend-mode
-    /// opacity is still recorded as a plain `push_opacity`. An implementor that
-    /// cannot evaluate a squircle should choose its approximation deliberately
-    /// and say so, which a compile error asks for and a default does not.
-    fn push_clip_rsuperellipse(
-        &mut self,
-        rse: &RSuperellipse,
-        clip_behavior: flui_types::painting::Clip,
-    );
-
-    /// Pop the most recent clip from the clip stack
-    fn pop_clip(&mut self);
-
-    /// Push a translation offset onto the transform stack
-    fn push_offset(&mut self, offset: Offset<Pixels>);
-
-    /// Push a full matrix transformation onto the transform stack
-    fn push_transform(&mut self, transform: &Matrix4);
-
-    /// Pop the most recent transform from the transform stack
-    fn pop_transform(&mut self);
-
-    /// Push an opacity value onto the effect stack
-    fn push_opacity(&mut self, alpha: f32);
-
-    /// Push an opacity layer with an explicit blend mode onto the effect stack.
-    ///
-    /// The default implementation forwards to [`push_opacity`](Self::push_opacity),
-    /// which is correct for command-only backends that do not participate in the
-    /// dst-read compositor path.  The `wgpu` backend overrides this to route
-    /// advanced blend modes through `save_layer` with the blend propagated.
-    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
-        let _ = blend;
-        self.push_opacity(alpha);
-    }
-
-    /// Pop the most recent opacity from the effect stack
-    fn pop_opacity(&mut self);
-
-    /// Push a color filter onto the effect stack.
-    ///
-    /// Accepts the full [`flui_types::painting::ColorFilter`] enum — `Matrix`,
-    /// `Mode`, `LinearToSrgbGamma`, and `SrgbToLinearGamma` — so all engine
-    /// GPU passes are reachable from a single trait method.
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter);
-
-    /// Pop the most recent color filter from the effect stack
-    fn pop_color_filter(&mut self);
-
-    /// Push an image filter onto the effect stack
-    fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter);
-
-    /// Pop the most recent image filter from the effect stack
-    fn pop_image_filter(&mut self);
 }

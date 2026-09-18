@@ -879,7 +879,7 @@ fn erase_everything(canvas: &mut Canvas) {
 ///
 /// That render object is the mode's only production consumer, and its fill goes
 /// through `Canvas::draw_paint`, which has no geometry of its own:
-/// `Backend::render_paint` expands it to the whole viewport, so its extent is
+/// `LayerDispatcher::render_paint` expands it to the whole viewport, so its extent is
 /// decided entirely by the clip.
 fn fill_everything(canvas: &mut Canvas) {
     canvas.draw_paint(&Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false));
@@ -1044,7 +1044,7 @@ fn a_path_clip_installs_its_box_and_the_save_layer_mode_isolates() {
 ///
 /// **All three modes, not just the reported one.** Under
 /// `AntiAliasWithSaveLayer` the offscreen's composite rect is itself
-/// `clip_bounds()` (`Backend::open_clip_frame`), so that mode crops TWICE and
+/// `clip_bounds()` (`LayerDispatcher::open_clip_frame`), so that mode crops TWICE and
 /// would go green on the composite alone even if the per-draw scissor never
 /// reached a draw. `AntiAlias` and `HardEdge` open no layer, so there the
 /// scissor is the only mechanism there is — and `AntiAlias` is what
@@ -1347,7 +1347,7 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
 /// discard `offscreen_items`. A `DrawItem::OpacityLayer` opened inside one is
 /// therefore thrown away — and so is every sibling already flushed into the
 /// enclosing layer's draw order, because opening the layer finalises the pending
-/// segment first. `Backend::opens_offscreen` declines the offscreen there and
+/// segment first. `LayerDispatcher::opens_offscreen` declines the offscreen there and
 /// falls back to per-draw coverage: losing an edge beats losing the picture.
 ///
 /// Both samples matter. The blue is the clip's own subtree; the red is the
@@ -1573,7 +1573,7 @@ fn nested_mixed_clip_tree(outer: Clip, inner: Clip) -> LayerTree {
 ///
 /// `pop_clip` serves all three `push_clip_*` variants and takes no argument, so
 /// nothing in the call can say whether the push it balances opened an offscreen
-/// — only `Backend`'s frame stack can. Nesting the two modes is what makes a
+/// — only `LayerDispatcher`'s frame stack can. Nesting the two modes is what makes a
 /// desynchronised stack observable: each pop would close the other's frame.
 ///
 /// Both orders run, because only one of the two pops is the save-layer one in
@@ -2053,7 +2053,7 @@ fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
     let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     // The fallback half runs on every device, including one whose adapter
@@ -2080,5 +2080,70 @@ fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
         "an anti-aliased eraser must feather its edge: with coverage on its \
          own blend channel, `Clear` erases a fringe pixel in proportion to how \
          much of it the clip admits, leaving a partial value. Found none"
+    );
+}
+
+/// A deep layer chain rasterizes instead of aborting the process.
+///
+/// The capture walk is iterative (`layer_walk.rs`), so depth costs heap rather
+/// than Rust stack frames. Before that, `walk_layer_tree` recursed once per
+/// layer, and a stack overflow in Rust is a process abort — not a panic a test
+/// could catch — so this shape took the whole capture path down.
+///
+/// **The budget is 1 MiB, not the 64 KiB the CPU walker is held to.** That
+/// number is measured, not copied: the same walk on a 64 KiB stack (no
+/// capture) is `layer_walk::a_deep_chain_survives_a_small_stack`, which is
+/// where the "depth is O(heap)" property is proven. This test adds the whole
+/// capture path on top — `HeadlessRenderer::render_layer_tree` holds a
+/// `WgpuPainter` (4 KiB), a `LayerDispatcher` (4.2 KiB), a `TextRenderer` and
+/// its encode frames as live locals — and that cost is a per-frame constant:
+/// measured at 40/48/56 KiB it fails identically at depth 100 and depth 10 000,
+/// so it is the frame, not the walk, that needs the room. 64 KiB passed on
+/// Linux and aborted on Windows/WARP (os error 1001, `0xc00000fd`), where the
+/// frames are larger.
+///
+/// 1 MiB keeps this test meaningful rather than merely green: reverting to the
+/// recursive walk still aborts here (measured — it overflows 1 MiB and needs
+/// between 1 and 2 MiB at this depth on Linux, more on Windows), while the
+/// iterative walk has ~17x headroom over the ~60 KiB it actually uses.
+///
+/// The walk runs on this test's thread (the capture call is synchronous), so
+/// the stack is supplied by rendering inside a spawned thread rather than by
+/// changing the process's stack.
+#[test]
+fn a_deep_layer_chain_captures_without_overflowing_a_small_stack() {
+    const DEPTH: usize = 10_000;
+
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
+        return;
+    };
+
+    let pixels = std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(move || {
+            let mut tree = LayerTree::new();
+            let mut parent = tree.insert(flui_layer::Layer::Canvas(Box::new(
+                flui_layer::CanvasLayer::new(),
+            )));
+            tree.set_root(Some(parent));
+            for _ in 1..DEPTH {
+                let child = tree.insert(flui_layer::Layer::Canvas(Box::new(
+                    flui_layer::CanvasLayer::new(),
+                )));
+                tree.add_child(parent, child);
+                parent = child;
+            }
+            renderer
+                .render_layer_tree(&tree, (SIDE, SIDE))
+                .expect("a deep but valid chain must rasterize")
+        })
+        .expect("spawn the small-stack capture thread")
+        .join()
+        .expect("the walk must not overflow a small stack on a deep chain");
+
+    assert_eq!(
+        sample(&pixels, SAMPLE_X, SAMPLE_Y),
+        [255, 255, 255, 255],
+        "the (empty) chain paints nothing, so the cleared white surface shows through"
     );
 }

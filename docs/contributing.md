@@ -15,7 +15,7 @@ Before opening a PR or even a planning issue, read:
 3. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
 4. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three architectural rules ("Flutter is the reference and the oracle, not the ceiling").
 5. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
-6. [`AGENTS.md`](../AGENTS.md) — the cross-tool agent guide and this workspace's non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc. `docs/FOUNDATIONS.md` (item 2 above) is the full architectural-rules-and-anti-patterns reference. Neither `.specify/memory/constitution.md`, `.ai-factory/ARCHITECTURE.md`, nor `.ai-factory/rules/base.md` exists in this checkout — those are stale paths this repo no longer carries.
+6. [`AGENTS.md`](../AGENTS.md) — the non-negotiable rules of this workspace: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, no polling render loops. `docs/FOUNDATIONS.md` (item 2 above) carries the full rule and anti-pattern reference.
 7. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
 8. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
 
@@ -34,35 +34,41 @@ benchmark compilation, and the configured nextest/GPU jobs.
 
 See [Testing](testing.md) for per-crate commands, coverage targets, and benchmark setup.
 
-## Speckit Workflow (large changes)
+## Planning a Large Change
 
-For new features, breaking changes, or architecture shifts, follow spec → plan → tasks → implement using the speckit skills:
+For new features, breaking changes, or architecture shifts, write the shape
+down before the code, in this order:
 
-```
-/speckit.specify   create or update the feature spec
-/speckit.clarify   ask up to 5 targeted clarification questions
-/speckit.plan      generate the design / planning artifacts
-/speckit.tasks     produce a dependency-ordered task list
-/speckit.analyze   cross-artifact consistency check
-/speckit.implement execute the planned tasks
-```
+1. **Problem** — what a user cannot do today, with a concrete example.
+2. **Alternatives** — at least one you rejected, and why. A design decision
+   with no rejected alternative has not been decided, only defaulted into.
+3. **Contract** — what changes for callers: public API, observable behavior,
+   error cases, edge cases.
+4. **Reference check** — if the change touches render/layout/paint/hit-test/
+   semantics/scheduling, what does `.flutter/` do (see [`PORT.md`](PORT.md))? If
+   FLUI diverges, name what is better and how a test proves it.
+5. **Plan** — the dependency-ordered steps, each one shippable.
 
-Spec artifacts live in `specs/<NNN-feature-slug>/` (e.g. `specs/001-cli-completion/`). Reuse the templates in `.specify/templates/` and never copy stale specs.
+Put the record where the change is: an ADR under `docs/adr/` for a
+protocol-level or cross-crate contract, a `## Mapping decisions` entry in the
+crate's `ARCHITECTURE.md` for a local one. A design document with no code and
+a code change with no record are both incomplete.
 
-## AI Factory Workflow (smaller changes)
+Existing specs live in `specs/`; check whether one already covers your area
+before writing a new document.
 
-For task-level work the AI Factory skills speed up planning and verification:
+## Working With an AI Agent
 
-```
-/aif-plan         scoped plan with optional git branch flow
-/aif-implement    execute tasks from the active plan
-/aif-review       review staged changes / current PR
-/aif-verify       confirm completion against the plan
-/aif-fix          targeted bug fix flow
-/aif-commit       conventional commit message generator
-```
+This repository carries `AGENTS.md` files at the root and per crate — they are
+the cross-tool agent guide, and they are written for humans too (the root one
+opens with the three rules every change is measured against). A contributor
+using an agent should have it read the root `AGENTS.md` and the target crate's
+`crates/<crate>/AGENTS.md` before starting.
 
-`config.yaml` (`.ai-factory/config.yaml`) controls language, paths, and git workflow for these skills.
+The agent-facing rules are the same as the human ones: run `just ci`, do not
+skip hooks, do not commit without being asked, and do not report work as done
+without the verification [Definition of Done](../AGENTS.md#definition-of-done-anti-cheating)
+requires.
 
 ## Conventional Commits
 
@@ -107,7 +113,7 @@ parts of that contract. Do not copy a subset into a crate and let it drift.
 - **No `wgpu` types in widget or layout code.** GPU access flows through `flui-painting`'s abstract canvas API.
 - **No polling render loops.** Use `ControlFlow::Wait`. Constitution-mandated.
 
-For the full anti-pattern list see [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) (`.ai-factory/ARCHITECTURE.md` does not exist in this checkout).
+For the full anti-pattern list see [`docs/FOUNDATIONS.md`](FOUNDATIONS.md).
 
 ## Reviewing a Change
 
@@ -120,7 +126,9 @@ A change is ready for review when:
 - ✅ Tests cover the new behavior; coverage targets are met for the affected category.
 - ✅ The commit message follows the conventional-commits format.
 
-`/aif-review` automates the routine portions of this checklist on the staged diff.
+Review the diff against this checklist before you ask for review — the routine
+failures (a fmt diff, a stale doc link, a test that would pass without the
+change) are cheapest to catch yourself.
 
 ## Reporting Bugs
 
@@ -131,7 +139,9 @@ Open a GitHub issue with:
 - Relevant `RUST_LOG=debug` output (or a minimal `tracing` capture).
 - Affected crate(s) and commit hash.
 
-For confirmed regressions, the speckit workflow (`/speckit.specify` → `/speckit.plan` → ...) provides a structured path from report to fix.
+For a confirmed regression, add a test that fails on the current `main`
+first, then fix it. Paste that test into the issue — it is the reproduction,
+and it is what stops the bug from coming back.
 
 ## Security and Conduct
 

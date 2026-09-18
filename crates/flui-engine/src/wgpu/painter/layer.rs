@@ -556,7 +556,7 @@ impl WgpuPainter {
     /// One function rather than three near-copies differing by a literal: they
     /// drifted apart once already, and the loss they describe is the same loss.
     ///
-    /// `Backend::opens_offscreen` declines to open a clip's offscreen inside
+    /// `LayerDispatcher::opens_offscreen` declines to open a clip's offscreen inside
     /// one of these layers precisely so a `Clip::AntiAliasWithSaveLayer` clip
     /// cannot reach this path; what remains is an explicitly nested opacity
     /// layer, which is the pre-existing limitation `FilterOp::input` has to

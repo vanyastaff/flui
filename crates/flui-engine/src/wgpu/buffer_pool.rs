@@ -44,7 +44,7 @@ const MIN_BUCKET_BYTES: usize = 256;
 ///
 /// Generous enough that steady-state UI frames never evict; eviction reclaims
 /// only the bloat left by a transient large frame. Tunable.
-pub const DEFAULT_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const DEFAULT_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 
 /// Round a byte size up to its pooling bucket: `next_power_of_two`, floored at
 /// [`MIN_BUCKET_BYTES`]. For payloads at or above the floor this bounds waste at
@@ -70,7 +70,7 @@ struct PooledBuffer {
 /// matched by power-of-two capacity bucket; over-budget free buffers are evicted
 /// LRU-first by [`evict_over_budget`](BufferPool::evict_over_budget).
 #[derive(Default)]
-pub struct BufferPool {
+pub(crate) struct BufferPool {
     vertex_buffers: Vec<PooledBuffer>,
     index_buffers: Vec<PooledBuffer>,
     uniform_buffers: Vec<PooledBuffer>,
@@ -87,7 +87,7 @@ pub struct BufferPool {
 
 impl BufferPool {
     /// Create a new buffer pool
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -104,7 +104,7 @@ impl BufferPool {
     ///
     /// # Returns
     /// Reference to buffer (valid until next reset())
-    pub fn get_vertex_buffer(
+    pub(crate) fn get_vertex_buffer(
         &mut self,
         device: &Device,
         queue: &wgpu::Queue,
@@ -225,25 +225,15 @@ impl BufferPool {
         &pool[index].buffer
     }
 
-    /// Get or create a vertex buffer AND an index buffer simultaneously
+    /// Get or create a vertex buffer AND an index buffer simultaneously.
     ///
-    /// This method solves the borrow checker issue where calling
-    /// `get_vertex_buffer` and `get_index_buffer` separately would
-    /// require two `&mut self` borrows. By combining them into one call,
-    /// both buffer references can be held simultaneously.
-    ///
-    /// # Safety Note
-    ///
-    /// Uses raw pointers internally to split borrows on disjoint fields
-    /// (`vertex_buffers` vs `index_buffers`). This is sound because:
-    /// - The two Vec fields are disjoint memory regions
-    /// - The statistics counters are simple increment-only values
-    /// - No reallocation of `vertex_buffers` occurs during the index buffer call
-    #[expect(
-        unsafe_code,
-        reason = "disjoint-field &mut borrow of vertex+index buffers via raw pointers; see SAFETY note"
-    )]
-    pub fn get_vertex_and_index_buffers(
+    /// Both pools and both statistics counters are disjoint fields of `self`,
+    /// so the borrow checker splits them without help: the first call's
+    /// `&mut self.vertex_buffers` / `&mut self.allocations` / `&mut self.reuses`
+    /// are three disjoint field borrows, and the second call's
+    /// `&mut self.index_buffers` / `&mut self.allocations` / `&mut self.reuses`
+    /// are three more. Nothing here needs raw pointers.
+    pub(crate) fn get_vertex_and_index_buffers(
         &mut self,
         device: &Device,
         queue: &wgpu::Queue,
@@ -252,16 +242,6 @@ impl BufferPool {
         index_label: &str,
         index_contents: &[u8],
     ) -> (&Buffer, &Buffer) {
-        // We must call get_buffer_internal twice with disjoint borrows.
-        // `vertex_buffers` and `index_buffers` are separate Vec fields, so
-        // lending &mut to each simultaneously is safe at the value level.
-        // The `allocations`/`reuses` counters are shared between the two calls
-        // via raw pointers; each `unsafe { &mut *ptr }` expression lives only
-        // for the duration of one call argument list, so no two `&mut` aliases
-        // to the same counter are simultaneously live. `current_frame` is copied
-        // by value into each call, so it needs no borrow.
-        let allocations = &raw mut self.allocations;
-        let reuses = &raw mut self.reuses;
         let current_frame = self.current_frame;
 
         let vertex_buf = Self::get_buffer_internal(
@@ -271,18 +251,10 @@ impl BufferPool {
             vertex_contents,
             BufferUsages::VERTEX | BufferUsages::COPY_DST,
             &mut self.vertex_buffers,
-            // SAFETY: `allocations` is a valid, aligned, initialised `usize` owned by
-            // `self`. This `&mut` is the only live reference to it at this point —
-            // `reuses` is a separate field and the borrow ends before the next call.
-            unsafe { &mut *allocations },
-            // SAFETY: `reuses` is a valid, aligned, initialised `usize` owned by
-            // `self`, distinct from `allocations`. This `&mut` ends at the call site.
-            unsafe { &mut *reuses },
+            &mut self.allocations,
+            &mut self.reuses,
             current_frame,
         );
-
-        // Convert to raw pointer to release the mutable borrow on vertex_buffers.
-        let vertex_ptr = std::ptr::from_ref::<Buffer>(vertex_buf);
 
         let index_buf = Self::get_buffer_internal(
             device,
@@ -291,22 +263,12 @@ impl BufferPool {
             index_contents,
             BufferUsages::INDEX | BufferUsages::COPY_DST,
             &mut self.index_buffers,
-            // SAFETY: the previous call's `&mut *allocations` borrow has ended
-            // (it was a temporary for the function call above). This is the only
-            // live `&mut` to `allocations` at this point.
-            unsafe { &mut *allocations },
-            // SAFETY: same reasoning as above for `reuses`.
-            unsafe { &mut *reuses },
+            &mut self.allocations,
+            &mut self.reuses,
             current_frame,
         );
 
-        // SAFETY: valid because the index-buffer call mutates only `index_buffers`;
-        // it never pushes to / reallocates `vertex_buffers`, so `vertex_ptr` stays
-        // in-bounds of a live allocation and its borrow tag is not invalidated by
-        // the disjoint `index_buffers`/counter borrows.
-        let vertex_ref = unsafe { &*vertex_ptr };
-
-        (vertex_ref, index_buf)
+        (vertex_buf, index_buf)
     }
 
     /// Reset pool for next pass/frame.
@@ -314,7 +276,7 @@ impl BufferPool {
     /// Marks all buffers available for reuse. Called per `WgpuPainter::render`
     /// (which runs multiple times per frame); only flips `in_use` flags and frees
     /// nothing — see [`evict_over_budget`](Self::evict_over_budget) for reclaim.
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         for entry in &mut self.vertex_buffers {
             entry.in_use = false;
         }
@@ -334,7 +296,7 @@ impl BufferPool {
     /// is free, and dropping a `wgpu::Buffer` only schedules the GPU free once
     /// outstanding submissions finish, so this never reclaims memory the in-flight
     /// frame still reads. Only `!in_use` buffers are ever dropped.
-    pub fn evict_over_budget(&mut self, budget_bytes: usize) {
+    pub(crate) fn evict_over_budget(&mut self, budget_bytes: usize) {
         while self.total_capacity_bytes() > budget_bytes {
             // Find the oldest free entry across all three pools.
             let mut oldest: Option<(BufferKind, usize, u64)> = None;
@@ -373,7 +335,7 @@ impl BufferPool {
     }
 
     /// Total byte capacity held across all three pools (live + free).
-    pub fn total_capacity_bytes(&self) -> usize {
+    pub(crate) fn total_capacity_bytes(&self) -> usize {
         let sum = |pool: &[PooledBuffer]| pool.iter().map(|entry| entry.capacity).sum::<usize>();
         sum(&self.vertex_buffers) + sum(&self.index_buffers) + sum(&self.uniform_buffers)
     }
@@ -382,7 +344,7 @@ impl BufferPool {
     ///
     /// 1.0 = 100% reuse (perfect)
     /// 0.0 = 0% reuse (all allocations)
-    pub fn reuse_rate(&self) -> f32 {
+    pub(crate) fn reuse_rate(&self) -> f32 {
         let total = self.allocations + self.reuses;
         if total == 0 {
             0.0
@@ -392,7 +354,7 @@ impl BufferPool {
     }
 
     /// Get statistics for the painter's per-frame log line.
-    pub fn stats(&self) -> BufferPoolStats {
+    pub(crate) fn stats(&self) -> BufferPoolStats {
         BufferPoolStats {
             reuse_rate: self.reuse_rate(),
         }
@@ -409,7 +371,7 @@ enum BufferKind {
 
 /// Buffer pool statistics surfaced to the painter's per-frame log.
 #[derive(Debug, Clone, Copy)]
-pub struct BufferPoolStats {
+pub(crate) struct BufferPoolStats {
     /// Reuse rate (0.0 to 1.0)
     pub reuse_rate: f32,
 }

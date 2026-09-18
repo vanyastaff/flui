@@ -12,13 +12,12 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use flui_engine::{
-    CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
-};
+use flui_engine::{EngineError, RasterBackend, RasterOwner};
 use flui_foundation::{
     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId, RealmId,
     SurfaceGeneration,
 };
+use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene, SceneSnapshot};
 use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
 

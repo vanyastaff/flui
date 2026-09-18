@@ -217,18 +217,12 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
 // ```rust
 // // Create gradient stops
 // let stops = vec![
-//     GradientStop {
-//         color: Color::rgb(255, 0, 150),  // Pink
-//         position: 0.0,
-//     },
-//     GradientStop {
-//         color: Color::rgb(0, 200, 255),  // Blue
-//         position: 1.0,
-//     },
+//     GradientStop::new(Color::rgb(255, 0, 150), 0.0), // Pink
+//     GradientStop::new(Color::rgb(0, 200, 255), 1.0), // Blue
 // ];
 //
 // // Render vertical gradient (top to bottom)
-// painter.gradient_rect(
+// painter.draw_gradient_rect(
 //     bounds,
 //     gradient_start: Vec2::new(0.0, 0.0),      // Top of rect
 //     gradient_end: Vec2::new(0.0, bounds.height), // Bottom of rect
@@ -237,7 +231,7 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
 // );
 //
 // // Diagonal gradient (top-left to bottom-right)
-// painter.gradient_rect(
+// painter.draw_gradient_rect(
 //     bounds,
 //     gradient_start: Vec2::new(0.0, 0.0),
 //     gradient_end: Vec2::new(bounds.width, bounds.height),

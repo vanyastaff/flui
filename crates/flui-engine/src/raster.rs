@@ -61,6 +61,7 @@ pub trait RasterBackend: Send {
     /// flag is set. The caller should attempt recovery via the concrete
     /// type's `recover()` method (excluded from this trait — it is async
     /// and takes a window handle, which are backend-specific concerns).
+    #[must_use]
     fn is_device_lost(&self) -> bool;
 
     /// Mark a screen region as dirty (needs repaint on the next frame).
@@ -70,11 +71,13 @@ pub trait RasterBackend: Send {
     fn mark_full_repaint(&mut self);
 
     /// Returns `true` if the renderer has pending damage to paint.
+    #[must_use]
     fn has_damage(&self) -> bool;
 
     /// Current surface size as `(width, height)` in physical pixels.
     ///
     /// Returns `(0, 0)` when no surface is configured (e.g. offscreen).
+    #[must_use]
     fn size(&self) -> (u32, u32);
 
     /// Reconfigure the surface after an outdated or lost surface error.

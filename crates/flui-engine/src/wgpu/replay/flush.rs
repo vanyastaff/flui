@@ -14,8 +14,8 @@ use std::sync::Arc;
 use super::super::{
     command_ir::{DrawSegment, ScissorRect},
     effects_pipeline::GradientKind,
-    pipeline::PipelineKey,
-    pipelines::PipelineSet,
+    pipeline_cache::PipelineKey,
+    pipeline_set::PipelineSet,
     resources::GpuResources,
 };
 use super::GpuReplay;
@@ -206,8 +206,6 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) {
-        use super::super::multi_draw::{MultiDrawBatcher, PipelineId};
-
         let has_rects = !segment.rect_batch.is_empty();
         let has_circles = !segment.circle_batch.is_empty();
         let has_arcs = !segment.arc_batch.is_empty();
@@ -229,59 +227,39 @@ impl GpuReplay {
         // IMPORTANT: Shadows FIRST for correct z-ordering (background → foreground).
         let mut combined_buffer =
             Vec::with_capacity(shadow_size + rect_size + circle_size + arc_size);
-        let mut multi_batcher = MultiDrawBatcher::new();
 
         let shadow_offset = combined_buffer.len() as u64;
         if has_shadows {
             combined_buffer.extend_from_slice(segment.shadow_batch.as_bytes());
-            multi_batcher.add_quad_draw(
-                PipelineId::Rectangle, // shadow pipeline rendered first for z-order
-                segment.shadow_batch.len() as u32,
-                shadow_offset,
-                shadow_size as u64,
-            );
         }
 
         let rect_offset = combined_buffer.len() as u64;
         if has_rects {
             combined_buffer.extend_from_slice(segment.rect_batch.as_bytes());
-            multi_batcher.add_quad_draw(
-                PipelineId::Rectangle,
-                segment.rect_batch.len() as u32,
-                rect_offset,
-                rect_size as u64,
-            );
         }
 
         let circle_offset = combined_buffer.len() as u64;
         if has_circles {
             combined_buffer.extend_from_slice(segment.circle_batch.as_bytes());
-            multi_batcher.add_quad_draw(
-                PipelineId::Circle,
-                segment.circle_batch.len() as u32,
-                circle_offset,
-                circle_size as u64,
-            );
         }
 
         let arc_offset = combined_buffer.len() as u64;
         if has_arcs {
             combined_buffer.extend_from_slice(segment.arc_batch.as_bytes());
-            multi_batcher.add_quad_draw(
-                PipelineId::Arc,
-                segment.arc_batch.len() as u32,
-                arc_offset,
-                arc_size as u64,
-            );
         }
 
         #[cfg(debug_assertions)]
         {
-            let stats = multi_batcher.stats();
+            let draws = usize::from(has_shadows)
+                + usize::from(has_rects)
+                + usize::from(has_circles)
+                + usize::from(has_arcs);
+            let instances = segment.shadow_batch.len()
+                + segment.rect_batch.len()
+                + segment.circle_batch.len()
+                + segment.arc_batch.len();
             tracing::trace!(
-                "GpuReplay::flush_all_instanced_batches: draws={}, instances={}, buffer={}B",
-                stats.active_draws,
-                stats.active_instances,
+                "GpuReplay::flush_all_instanced_batches: draws={draws}, instances={instances}, buffer={}B",
                 combined_buffer.len()
             );
         }
@@ -694,9 +672,9 @@ impl GpuReplay {
 
     /// Flush all texture-cache image draws recorded in the segment.
     ///
-    /// Groups consecutive draws by `TextureId` to minimise draw calls.  When
+    /// Groups consecutive draws by `TextureKey` to minimise draw calls.  When
     /// a texture-ID change forces an early flush, the previous batch is
-    /// submitted before the new `TextureId` takes over.
+    /// submitted before the new `TextureKey` takes over.
     fn flush_segment_cached_images(
         &mut self,
         segment: &mut DrawSegment,
@@ -709,7 +687,7 @@ impl GpuReplay {
         view: &wgpu::TextureView,
     ) {
         let mut pending_images: Vec<(
-            super::super::texture_cache::TextureId,
+            super::super::texture_cache::TextureKey,
             super::super::instancing::TextureInstance,
             ScissorRect,
         )> = std::mem::take(&mut segment.cached_images);
@@ -718,7 +696,7 @@ impl GpuReplay {
             return;
         }
 
-        let mut active_texture_id: Option<super::super::texture_cache::TextureId> = None;
+        let mut active_texture_id: Option<super::super::texture_cache::TextureKey> = None;
         let mut active_texture_view: Option<wgpu::TextureView> = None;
         // Scissor of the most-recently buffered instance — forwarded when a
         // texture-change forces an early flush.
@@ -1022,14 +1000,15 @@ impl GpuReplay {
     ///
     /// Unlike [`Self::flush_texture_batch_premultiplied`] (which always uses the
     /// SrcOver premultiplied pipeline), this method uses
-    /// [`PipelineSet::ensure_ssaa_tile_composite`] /
-    /// [`PipelineSet::ssaa_tile_composite_for`] to obtain a pipeline whose
+    /// [`PipelineSet::ensure_texture_composite`] /
+    /// [`PipelineSet::texture_composite_for`] to obtain a pipeline whose
     /// `wgpu::BlendState` matches `mode` exactly.
     ///
-    /// Used by [`Self::render_ssaa_path`] to composite the
-    /// SSAA 1× tile with the correct blend mode. The source texel is
-    /// premultiplied (box-downsample output), so `src_factor = One` is correct
-    /// for all tile-safe variants.
+    /// Two callers share it: [`Self::render_ssaa_path`], compositing the SSAA
+    /// 1× tile (whose source is a box-downsample output, premultiplied), and
+    /// the `DrawItem::OffscreenTexture` arm in `submit`, compositing a
+    /// shader-mask / backdrop-blur result with the layer's own blend mode.
+    /// Both sources are premultiplied, so `src_factor = One` is correct.
     ///
     /// Takes `pipelines: &mut PipelineSet` because lazy pipeline creation may
     /// be needed on the first call for a given mode.
@@ -1059,10 +1038,10 @@ impl GpuReplay {
 
         // Ensure the per-mode pipeline is in the cache. The `&mut` borrow of
         // `pipelines` ends at the semicolon; subsequent accesses are `&`.
-        pipelines.ensure_ssaa_tile_composite(device, mode);
+        pipelines.ensure_texture_composite(device, mode);
 
         // Both of these are now `&pipelines` (shared) borrows — no conflict.
-        let pipeline = pipelines.ssaa_tile_composite_for(mode);
+        let pipeline = pipelines.texture_composite_for(mode);
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("SSAA Tile Composite Bind Group"),
             layout: &pipelines.texture_bind_group_layout,

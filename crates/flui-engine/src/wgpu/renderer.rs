@@ -22,16 +22,23 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # async fn render(
+//! #     window: impl flui_engine::wgpu::WindowTarget,
+//! #     scene: &flui_layer::Scene,
+//! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::wgpu::Renderer;
 //!
 //! // Create renderer (automatically selects backend). `window` is moved in
 //! // — an owned, `'static` handle source (see `WindowTarget`), not a
 //! // borrow — so the renderer can outlive the caller's stack frame.
-//! let renderer = Renderer::new(window).await?;
+//! let mut renderer = Renderer::new(window).await?;
 //!
-//! // Render frame
-//! renderer.render(display_list)?;
+//! // Render frame. `true` means the frame reached the surface (a `false`
+//! // is a no-damage/occluded skip, not a failure).
+//! renderer.render_scene(scene)?;
+//! # Ok(())
+//! # }
 //! ```
 
 use std::cell::Cell;
@@ -273,7 +280,8 @@ mod new_probes_before_gpu_work_tests {
     use std::sync::Arc;
 
     use super::Renderer;
-    use crate::error::EngineError;
+    use crate::error::{EngineError, EngineResult};
+    use crate::wgpu::WindowTarget;
     use crate::wgpu::fake_window_target::FakeTarget;
 
     /// Pins the production entry point, GPU-free: `Renderer::new` must fail
@@ -316,97 +324,146 @@ mod new_probes_before_gpu_work_tests {
              display_handle, wgpu::Instance::new, or create_surface"
         );
     }
+
+    /// Dropping a `Renderer::new` future mid-flight must release the target.
+    ///
+    /// `Renderer::new` is async and its target becomes an `Arc<dyn
+    /// WindowTarget>` the caller hands over. A caller who cancels the
+    /// construction — a frame loop that gives up on a slow adapter request,
+    /// a `select!` arm that loses — drops the future, and Rust drops the
+    /// future's captured state with it. That is the ownership contract: the
+    /// half-built construction may hold its own target clone, but it must not
+    /// strand one somewhere the caller cannot reach, or the window it wraps
+    /// is retained for the process lifetime by a future that no longer
+    /// exists.
+    ///
+    /// This drives the real `probe_then_build` seam with a builder that
+    /// suspends forever, which is the one shape a GPU-free test can reach: a
+    /// first poll of the production builder enters `wgpu::Instance::new` and
+    /// real Vulkan work *before* it can suspend (measured — it aborts on the
+    /// fake target's null display pointer), so a production-builder version of
+    /// this test cannot run without a GPU. The seam is the production one;
+    /// only the await point is synthetic.
+    ///
+    /// Pinned: the count returns to its pre-call value after the drop. Not
+    /// pinned: the count *during* the suspended state, which is an
+    /// implementation detail of how many clones the builder holds — asserting
+    /// it would over-specify and go red on a legitimate refactor.
+    #[test]
+    fn cancelling_renderer_new_mid_flight_releases_the_target() {
+        use std::future::pending;
+        use std::task::{Context, Poll, Waker};
+
+        let fake = Arc::new(FakeTarget::new(9));
+        let before = Arc::strong_count(&fake);
+
+        let target: Arc<dyn WindowTarget> = Arc::new(Arc::clone(&fake));
+        let mut future = Box::pin(Renderer::probe_then_build(target, |_target| {
+            pending::<EngineResult<(Arc<dyn WindowTarget>, ())>>()
+        }));
+
+        // The probe must succeed (the fake reports a live handle), so this
+        // suspends at the builder's await rather than returning early — a
+        // `Ready` here would mean the seam never reached the await point and
+        // the drop below would prove nothing.
+        let polled = future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()));
+        assert!(
+            matches!(polled, Poll::Pending),
+            "the fake builder must suspend; a Ready result means the cancellation \
+             path was never exercised"
+        );
+
+        drop(future);
+        assert_eq!(
+            Arc::strong_count(&fake),
+            before,
+            "a cancelled construction must not strand a target clone"
+        );
+    }
 }
 
-/// GPU backend capabilities
+/// What the GPU adapter reports, and what this engine asked for.
+///
+/// Holds the adapter's own `Features`/`Limits` tables rather than one `bool`
+/// per question: a query is a method (so a capability this engine starts
+/// using needs no struct change and no `struct_field_names` suppression), and
+/// the tables are what a caller needs when it wants to ask something this
+/// type does not.
+///
+/// `#[non_exhaustive]`: wgpu adds features and limit buckets, and this struct
+/// tracks them. Construction is [`Self::detect`] — an embedder reads the
+/// fields, it does not build one.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GpuCapabilities {
-    /// Backend being used (Metal, DX12, Vulkan, WebGPU, etc.)
+    /// The backend in use (Metal, DX12, Vulkan, WebGPU, …).
     pub backend: wgpu::Backend,
-
-    /// GPU adapter name
+    /// Adapter name, vendor, and device type as wgpu reports them.
     pub adapter_name: String,
-
-    /// GPU vendor (NVIDIA, AMD, Intel, Apple, etc.)
+    /// Human-readable vendor name resolved from the PCI vendor id.
     pub vendor: String,
-
-    /// Maximum texture dimension (e.g., 16384)
-    pub max_texture_size: u32,
-
-    /// Supports HDR rendering
-    pub supports_hdr: bool,
-
-    /// Supports compute shaders
-    pub supports_compute: bool,
-
-    /// Supports immediates / push constants (not available on all mobile GPUs).
-    /// Mapped from `wgpu::Features::IMMEDIATES` (renamed from PUSH_CONSTANTS in wgpu 28).
-    pub supports_push_constants: bool,
-
-    /// Supports BC texture compression (DX)
-    pub supports_bc_compression: bool,
-
-    /// Supports ASTC texture compression (mobile)
-    pub supports_astc_compression: bool,
-
-    /// Supports ETC2 texture compression (mobile)
-    pub supports_etc2_compression: bool,
-
-    /// Supports GPU timestamp queries required for the `gpu-profiler` feature.
-    ///
-    /// `true` only when BOTH `TIMESTAMP_QUERY` AND `TIMESTAMP_QUERY_INSIDE_ENCODERS`
-    /// are present. The encoder-level scopes used by `GpuFrameProfiler` require
-    /// `INSIDE_ENCODERS`; without it wgpu-profiler records 0.0 ms silently.
-    ///
-    /// Typically present on DX12, Vulkan, and Metal. Absent on GLES/WebGL2 and on
-    /// some older/mobile drivers that support the base feature but not the encoder
-    /// variant.
-    pub supports_timestamp_queries: bool,
-
-    /// Supports a second blend source (`@blend_src(1)` + the `Src1` blend
-    /// factors), which is how the tessellated shape shader hands clip coverage
-    /// to the blender on its own channel instead of folding it into the source
-    /// alpha.
-    ///
-    /// Without it, the blend modes whose destination factor ignores source
-    /// alpha (`Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`, `DstIn`,
-    /// `DstATop` — see `super::pipeline::destination_alpha_scale_for`) keep a
-    /// HARD anti-aliased clip edge rather than a feathered one. Every other
-    /// mode is unaffected.
-    ///
-    /// Present on DX12 (unconditionally), Metal, and Vulkan drivers reporting
-    /// `dualSrcBlend`. Optional in WebGPU and absent there, which is why the
-    /// divergence is documented rather than assumed away.
-    pub supports_dual_source_blending: bool,
+    /// The features the adapter exposes.
+    pub features: wgpu::Features,
+    /// The limits the adapter reports.
+    pub limits: wgpu::Limits,
 }
 
 impl GpuCapabilities {
-    /// Detect GPU capabilities from adapter
+    /// Detect GPU capabilities from an adapter.
+    #[must_use]
     pub fn detect(adapter: &wgpu::Adapter) -> Self {
         let info = adapter.get_info();
-        let features = adapter.features();
-        let limits = adapter.limits();
-
         Self {
             backend: info.backend,
-            adapter_name: info.name.clone(),
+            adapter_name: info.name,
             vendor: Self::vendor_name(info.vendor),
-            max_texture_size: limits.max_texture_dimension_2d,
-            supports_hdr: Self::check_hdr_support(info.backend),
-            supports_compute: true, // Compute shaders are supported by default in wgpu
-            supports_push_constants: features.contains(wgpu::Features::IMMEDIATES),
-            supports_bc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
-            supports_astc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
-            supports_etc2_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
-            // Encoder-level profiler scopes (used by the gpu-profiler feature) require
-            // TIMESTAMP_QUERY_INSIDE_ENCODERS in addition to the base TIMESTAMP_QUERY.
-            // Without INSIDE_ENCODERS, wgpu-profiler records 0.0 ms for every scope —
-            // it passes tests while measuring nothing. Only set this flag when both
-            // features are present so the profiler is never `Some` on an incapable adapter.
-            supports_timestamp_queries: features.contains(wgpu::Features::TIMESTAMP_QUERY)
-                && features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
-            supports_dual_source_blending: features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+            features: adapter.features(),
+            limits: adapter.limits(),
         }
+    }
+
+    /// Whether HDR output is expected on this backend.
+    ///
+    /// Metal (EDR on XDR displays) and DX12 (Windows Auto HDR) only; wgpu
+    /// exposes no feature bit for it.
+    #[must_use]
+    pub fn supports_hdr(&self) -> bool {
+        matches!(self.backend, wgpu::Backend::Metal | wgpu::Backend::Dx12)
+    }
+
+    /// Whether the adapter accepts immediate constants ("push constants").
+    #[must_use]
+    pub fn supports_push_constants(&self) -> bool {
+        self.features.contains(wgpu::Features::IMMEDIATES)
+    }
+
+    /// Whether the adapter can run timestamp queries through an encoder.
+    ///
+    /// Both `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS` are
+    /// required: the encoder-level scopes `GpuFrameProfiler` uses need the
+    /// second, and without it wgpu-profiler records 0.0 ms for every scope —
+    /// it passes tests while measuring nothing.
+    #[must_use]
+    pub fn supports_timestamp_queries(&self) -> bool {
+        self.features.contains(wgpu::Features::TIMESTAMP_QUERY)
+            && self
+                .features
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+    }
+
+    /// Whether the adapter exposes a second blend source (`@blend_src(1)`).
+    ///
+    /// Without it, the blend modes whose destination factor ignores source
+    /// alpha (`Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`, `DstIn`,
+    /// `DstATop` — see `super::pipeline_cache::destination_alpha_scale_for`)
+    /// keep a HARD anti-aliased clip edge rather than a feathered one. Every
+    /// other mode is unaffected. Present on DX12 unconditionally, on Metal,
+    /// and on Vulkan drivers reporting `dualSrcBlend`; optional in WebGPU.
+    #[must_use]
+    pub fn supports_dual_source_blending(&self) -> bool {
+        self.features.contains(wgpu::Features::DUAL_SOURCE_BLENDING)
     }
 
     fn vendor_name(vendor_id: u32) -> String {
@@ -420,15 +477,6 @@ impl GpuCapabilities {
             _ => format!("Unknown (0x{vendor_id:04X})"),
         }
     }
-
-    fn check_hdr_support(backend: wgpu::Backend) -> bool {
-        match backend {
-            // macOS EDR (Extended Dynamic Range) on XDR displays,
-            // Windows Auto HDR (Windows 11 24H2+)
-            wgpu::Backend::Metal | wgpu::Backend::Dx12 => true,
-            _ => false,
-        }
-    }
 }
 
 /// GPU context available during layer tree rendering.
@@ -436,7 +484,7 @@ impl GpuCapabilities {
 /// Carries the surface-capability flags the layer walk needs. (Device, queue,
 /// and surface format used to live here for mid-frame backdrop blur; that path
 /// now sources them from the offscreen renderer inside
-/// `Backend::apply_backdrop_blur`, so they were removed as dead fields.)
+/// `LayerDispatcher::apply_backdrop_blur`, so they were removed as dead fields.)
 struct RenderContext {
     /// Whether the surface supports COPY_SRC (for backdrop filter on the
     /// common direct-render path).
@@ -447,6 +495,139 @@ struct RenderContext {
     /// and advanced-blend dst-reads both work regardless of
     /// `supports_copy_src`.
     intermediate_active: bool,
+}
+
+/// The render walk's visit steps.
+///
+/// `enter` is where the three diverted handlers live — `BackdropFilter`
+/// (mid-frame flush + copy + blur), `ShaderMask` (offscreen capture +
+/// mask), and `Follower` (resolved render-time offset). Each consumes its
+/// own subtree and answers [`super::layer_walk::Step::SkipSubtree`]: the
+/// node's own exit is then never run, which is what the recursion this
+/// replaces did by returning before its `render`/`cleanup` pair.
+///
+/// Everything else takes the plain path — `render` on enter, `cleanup` on
+/// exit — so the sequence stays `render → children → cleanup`, and the
+/// walk's own stack supplies the children-then-exit ordering.
+struct RenderLayerVisitor<'a, 'b> {
+    link_registry: &'a flui_layer::LinkRegistry,
+    backend: &'a mut super::layer_dispatcher::LayerDispatcher<'b>,
+    ctx: &'a RenderContext,
+    surface_texture: &'a wgpu::Texture,
+    surface_view: &'a wgpu::TextureView,
+    /// The `Follower` nodes whose resolved offset this visitor has pushed and
+    /// not yet popped, innermost last.
+    ///
+    /// A `Follower` must push its offset on enter and pop it on exit — the
+    /// offset applies to its whole subtree. `exit` is not told what `enter`
+    /// decided, and a node's own `Layer::cleanup` is not where a walk-owned
+    /// transform belongs, so the visitor tracks it: the walk is depth-first
+    /// and LIFO, so the innermost un-popped push is always the node now
+    /// exiting.
+    ///
+    /// Recursing from `enter` instead would put the walk back on the call
+    /// stack, one frame per `Follower` — the exact failure this module exists
+    /// to remove, merely narrowed to chains whose every node is a `Follower`
+    /// (measured: a 10 000-long `Follower` chain still `SIGABRT`s).
+    pushed_follower_offsets: Vec<flui_foundation::LayerId>,
+}
+
+impl super::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
+    fn enter(
+        &mut self,
+        tree: &flui_layer::LayerTree,
+        id: flui_foundation::LayerId,
+        layer: &flui_layer::Layer,
+    ) -> super::layer_walk::Step {
+        use super::layer_render::LayerRender;
+
+        // BackdropFilter requires mid-frame flush + copy. The gate passes
+        // when EITHER the swapchain surface itself has COPY_SRC (common
+        // path), OR the intermediate texture is active (COPY_SRC-less
+        // adapter path): `surface_texture` then points at the
+        // intermediate, which always has COPY_SRC.
+        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer
+            && (self.ctx.supports_copy_src || self.ctx.intermediate_active)
+        {
+            return Renderer::handle_backdrop_filter(
+                bf_layer,
+                self.backend,
+                self.surface_texture,
+                self.surface_view,
+            );
+        }
+
+        // ShaderMask captures children to an offscreen texture, applies
+        // the shader as a GPU mask, then composites the masked result.
+        // Requires an `OffscreenRenderer`; falls through to the inert
+        // clip/save-layer `LayerRender<ShaderMaskLayer>` impl (unmasked
+        // passthrough) when one isn't available, mirroring
+        // `BackdropFilter`'s own non-`Blur` degrade above.
+        if let flui_layer::Layer::ShaderMask(sm_layer) = layer
+            && self.backend.offscreen_mut().is_some()
+        {
+            let Some(node) = tree.get(id) else {
+                return super::layer_walk::Step::SkipSubtree;
+            };
+            Renderer::handle_shader_mask(
+                sm_layer,
+                node,
+                tree,
+                self.link_registry,
+                self.backend,
+                self.ctx,
+            );
+            return super::layer_walk::Step::SkipSubtree;
+        }
+
+        // Follower resolves its render-time position (leader pose, or the
+        // plain unlinked fallback) before descending into children; an
+        // unlinked follower with `show_when_unlinked == false` hides its
+        // subtree entirely (oracle `FollowerLayer.addToScene`,
+        // `layer.dart:2857-2865`), which is the one case that skips.
+        //
+        // A resolved offset is pushed here and popped in `exit` for THIS id —
+        // see `pushed_follower_offsets`. Descending rather than walking the
+        // children here is what keeps a chain of Followers off the call stack.
+        if let flui_layer::Layer::Follower(follower_layer) = layer {
+            let Some(resolved) =
+                flui_layer::resolve_follower_offset(tree, self.link_registry, id, follower_layer)
+            else {
+                return super::layer_walk::Step::SkipSubtree;
+            };
+
+            if resolved != flui_types::geometry::Offset::ZERO {
+                use crate::layer_state_stack::LayerStateStack;
+                self.backend.push_offset(resolved);
+                self.pushed_follower_offsets.push(id);
+            }
+            return super::layer_walk::Step::Descend;
+        }
+
+        // Fall through to the normal LayerRender path (clip + filter
+        // fallback).
+        layer.render(self.backend);
+        super::layer_walk::Step::Descend
+    }
+
+    fn exit(
+        &mut self,
+        _tree: &flui_layer::LayerTree,
+        id: flui_foundation::LayerId,
+        layer: &flui_layer::Layer,
+    ) {
+        // A `Follower`'s pushed offset is popped before its own cleanup, so
+        // whatever `cleanup` does runs in the parent's frame, exactly as the
+        // old `push_offset` / children / `pop_transform` sequence did.
+        if self.pushed_follower_offsets.last() == Some(&id) {
+            use crate::layer_state_stack::LayerStateStack;
+            self.pushed_follower_offsets.pop();
+            self.backend.pop_transform();
+        }
+
+        use super::layer_render::LayerRender;
+        layer.cleanup(self.backend);
+    }
 }
 
 /// Bundled GPU stack rebuilt by `new` (windowed path) and `recover`.
@@ -478,11 +659,13 @@ struct WindowedGpuStack {
 /// both the windowed and offscreen cases — into one enum: `OwnedWindowed`
 /// is the only variant with a surface, full stop.
 ///
-/// A renderer built via [`Renderer::from_offscreen_services`] shares its
-/// stack with every other renderer built from the same `GpuServices`
-/// (ADR-0045 decision 2); it must not rebuild a private one in `recover()`,
-/// which would install a second `set_device_lost_callback` that only it
-/// observes. See [`EngineError::SharedServicesNotRecoverable`].
+/// A future shared-services origin (ADR-0045 decision 2's windowed
+/// `GpuServices`, which needs the `ReplaceServices` re-pointing mechanism)
+/// joins this enum as a third variant whose `recover()` refuses rather than
+/// rebuilding a private stack and installing a second
+/// `set_device_lost_callback`. Nothing constructs one today: the value type
+/// that would have (`GpuServices`) was deleted with no consumer rather than
+/// carried unwired.
 enum GpuStackOrigin {
     /// Built its own windowed stack (`new`); owns its own recovery and the
     /// [`WindowTarget`] the surface was built from.
@@ -494,8 +677,6 @@ enum GpuStackOrigin {
     /// Built its own offscreen (no-surface) stack (`new_offscreen`); owns
     /// its own recovery.
     OwnedOffscreen,
-    /// Shares a `GpuServices` value; recovery is the owner thread's job.
-    SharedServices,
 }
 
 /// Cross-platform GPU renderer
@@ -624,7 +805,7 @@ impl SurfaceAcquireBackend for Renderer {
                 };
                 surface
             }
-            GpuStackOrigin::OwnedOffscreen | GpuStackOrigin::SharedServices => {
+            GpuStackOrigin::OwnedOffscreen => {
                 return Err(EngineError::SurfaceLost);
             }
         };
@@ -670,30 +851,29 @@ impl Renderer {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # async fn run(window: impl flui_engine::wgpu::WindowTarget)
+    /// #     -> Result<(), flui_engine::EngineError> {
     /// use flui_engine::wgpu::Renderer;
     ///
     /// // `window` is moved in — an owned, `'static` handle source (see
     /// // `WindowTarget`), not a borrow.
     /// let renderer = Renderer::new(window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
+    /// # Ok(())
+    /// # }
     /// ```
     ///
-    /// # Superseded (ADR-0045 decision 2)
+    /// # One GPU stack per renderer, today
     ///
-    /// This builds a whole private `Instance → Adapter → Device → Queue`
-    /// stack per call, which is exactly the per-`Renderer` device
-    /// duplication [`super::gpu_services::GpuServices`] exists to remove.
-    /// `#[doc(hidden)]` as of this slice: kept working (its eight call sites
-    /// — three in `flui-app`'s `runner/{desktop,android,web}.rs`, one in
-    /// `flui-app`'s `direct.rs`, the Android demo example, and three in the
-    /// root package's own
-    /// examples: `scene_render.rs`, `filter_demo.rs`, `color_filter_demo.rs`
-    /// — still build their own private stack, unmigrated) but no longer
-    /// advertised as the entry point for new integrations. Deleted in a
-    /// later slice once those eight consumers move to a
-    /// `GpuServices`-backed constructor.
-    #[doc(hidden)]
+    /// This builds a private `Instance → Adapter → Device → Queue` stack per
+    /// call. ADR-0045 decision 2's alternative — one shared stack per owner
+    /// thread, with the per-window surface created alongside its own
+    /// `Instance` — is the target shape, and its windowed half needs the
+    /// `ReplaceServices` re-pointing mechanism device recovery requires once
+    /// several renderers share a device. That mechanism is not built, so
+    /// this constructor is the one this crate ships; it is the advertised
+    /// entry point, not a temporary beside an unwired shared value type.
     pub async fn new(target: impl WindowTarget) -> EngineResult<Self> {
         // An `Arc<dyn PlatformWindow>` (the common caller shape) becomes an
         // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
@@ -702,16 +882,12 @@ impl Renderer {
         // flui-platform → flui-engine layer edge (docs/workspace-layers.toml).
         // One extra pointer chase per surface creation; documented, not
         // fixed — see issue #1043.
-        let target: Arc<dyn WindowTarget> = Arc::new(target);
-
-        // Probe the owner BEFORE any GPU work starts (before even
-        // `wgpu::Instance::new`, inside `build_windowed_gpu_stack`) — see
-        // `surface_lease::probe_target`'s doc for why this distinction from
-        // a generic `SurfaceCreation` failure matters to callers.
-        super::surface_lease::probe_target(&target)?;
-
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
-        let stack = Self::build_windowed_gpu_stack(&target, w, h).await?;
+        let (target, stack) = Self::probe_then_build(Arc::new(target), |target| async move {
+            let stack = Self::build_windowed_gpu_stack(&target, w, h).await?;
+            Ok((target, stack))
+        })
+        .await?;
         let lease = SurfaceLease::from_parts(target, stack.surface);
 
         Ok(Self {
@@ -735,6 +911,32 @@ impl Renderer {
             force_full_repaint_next_frame: false,
             _single_mutator: PhantomData,
         })
+    }
+
+    /// Probe the target, then build the GPU stack against it.
+    ///
+    /// The probe runs BEFORE any GPU work starts (before even
+    /// `wgpu::Instance::new`, inside `build_windowed_gpu_stack`) — see
+    /// `surface_lease::probe_target`'s doc for why this distinction from a
+    /// generic `SurfaceCreation` failure matters to callers.
+    ///
+    /// `build` is a parameter rather than an inline call so the
+    /// drop-on-cancel contract is testable without a GPU: a test can pass a
+    /// builder that never resolves, then drop the future and observe that
+    /// the only extra `Arc<dyn WindowTarget>` went with it. That is the one
+    /// ownership fact a cancelled `Renderer::new` owes — an async fn dropped
+    /// mid-`.await` must not strand a clone the caller cannot reach
+    /// (issue #1149).
+    async fn probe_then_build<S, F, Fut>(
+        target: Arc<dyn WindowTarget>,
+        build: F,
+    ) -> EngineResult<(Arc<dyn WindowTarget>, S)>
+    where
+        F: FnOnce(Arc<dyn WindowTarget>) -> Fut,
+        Fut: std::future::Future<Output = EngineResult<(Arc<dyn WindowTarget>, S)>>,
+    {
+        super::surface_lease::probe_target(&target)?;
+        build(target).await
     }
 
     /// Derive the surface-dependent half of a [`wgpu::SurfaceConfiguration`]
@@ -948,7 +1150,7 @@ impl Renderer {
 
         let capabilities = GpuCapabilities::detect(&adapter);
         tracing::info!(
-            "Selected GPU: {} ({}), Backend: {:?}",
+            "Selected GPU: {} ({}), LayerDispatcher: {:?}",
             capabilities.adapter_name,
             capabilities.vendor,
             capabilities.backend
@@ -978,7 +1180,7 @@ impl Renderer {
         // exposes TIMESTAMP_QUERY. A creation failure is non-fatal — profiling
         // is strictly additive and must never abort initialization.
         #[cfg(feature = "gpu-profiler")]
-        let gpu_profiler = if capabilities.supports_timestamp_queries {
+        let gpu_profiler = if capabilities.supports_timestamp_queries() {
             match super::profiler::GpuFrameProfiler::new(&device) {
                 Ok(profiler) => {
                     tracing::info!("GPU profiler enabled (TIMESTAMP_QUERY available)");
@@ -1050,57 +1252,6 @@ impl Renderer {
         })
     }
 
-    /// Build an offscreen renderer that shares GPU services with every other
-    /// renderer built from the same `GpuServices` value on this owner
-    /// thread (ADR-0045 decision 2).
-    ///
-    /// Unlike [`Renderer::new_offscreen`], this performs no
-    /// `Instance`/`Adapter`/`Device` construction and installs no
-    /// device-lost callback of its own — there is no `wgpu::Instance::new`,
-    /// `request_adapter`, `request_device`, or `set_device_lost_callback`
-    /// call anywhere in this function's body. Every field that
-    /// `new_offscreen` would otherwise construct fresh is instead cloned
-    /// from `services`: `Arc::clone` for the device, queue, and device-lost
-    /// flag (cheap, reference-counted, and — for the flag — the exact SAME
-    /// `Arc<AtomicBool>` every other renderer sharing these services
-    /// observes), and `wgpu::Instance`/`wgpu::Adapter`'s own `Clone` impls
-    /// (also reference-counted handles, not new GPU objects) for the other
-    /// two. This is what makes "exactly one device-lost callback install"
-    /// hold structurally rather than by convention: there is no second call
-    /// site anywhere that could install a competing callback against this
-    /// device.
-    ///
-    /// Synchronous, unlike `new_offscreen`: `services` has already resolved
-    /// everything an `.await` would otherwise be needed for.
-    ///
-    /// `recover()` on the returned renderer always fails with
-    /// [`EngineError::SharedServicesNotRecoverable`] — see `GpuStackOrigin`
-    /// (private to this module).
-    #[must_use]
-    pub fn from_offscreen_services(services: &super::gpu_services::GpuServices) -> Self {
-        Self {
-            instance: services.instance().clone(),
-            adapter: services.adapter().clone(),
-            device: Arc::clone(services.device()),
-            queue: Arc::clone(services.queue()),
-            config: None,
-            capabilities: services.capabilities().clone(),
-            painter: None,
-            offscreen: None,
-            supports_copy_src: false,
-            device_lost: services.device_lost_handle(),
-            damage_tracker: flui_layer::damage::DamageTracker::new(),
-            pre_present_hook: None,
-            gpu_stack_origin: GpuStackOrigin::SharedServices,
-            #[cfg(feature = "gpu-profiler")]
-            gpu_profiler: None,
-            #[cfg(test)]
-            force_intermediate: false,
-            force_full_repaint_next_frame: false,
-            _single_mutator: PhantomData,
-        }
-    }
-
     /// Returns `true` if the GPU device has been lost.
     ///
     /// After a TDR, driver crash, or GPU hardware failure the device-lost
@@ -1108,7 +1259,9 @@ impl Renderer {
     /// should call [`recover()`](Self::recover) to rebuild the GPU context.
     #[must_use]
     pub fn is_device_lost(&self) -> bool {
-        self.device_lost.load(std::sync::atomic::Ordering::Acquire)
+        // `Relaxed`: see the store in `install_device_diagnostics` — the flag
+        // carries no data, so there is nothing for an acquire to pair with.
+        self.device_lost.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether the intermediate-texture present path is active for this frame.
@@ -1162,17 +1315,20 @@ impl Renderer {
     /// the device/queue are replaced; surface, painter, and offscreen are
     /// left as `None`.
     ///
+    /// On the **windowed** path the held surface is released before the
+    /// rebuild, for the one-surface-per-window rule `recreate_surface`
+    /// documents at length: the rebuild creates a fresh `VkSurfaceKHR`, and
+    /// on Android a second one for the same live `ANativeWindow` is refused
+    /// by an `expect` inside `wgpu-hal` rather than surfaced as an error. A
+    /// failed rebuild therefore leaves the presentation released; the next
+    /// attempt re-asks, and [`Renderer::recreate_surface`] restores it just
+    /// as it does after an owner-requested release.
+    ///
     /// On success the device-lost flag is cleared (the fresh device starts
     /// healthy). On failure the underlying [`EngineError`] is returned — the
     /// driver may still be resetting; the runner should retry on the next frame.
     ///
     /// # Errors
-    ///
-    /// Returns [`EngineError::SharedServicesNotRecoverable`] immediately,
-    /// before touching any GPU state, if this renderer was built via
-    /// [`Renderer::from_offscreen_services`] — see `GpuStackOrigin` for
-    /// why rebuilding a private stack here would be unsound for a shared
-    /// one.
     ///
     /// Returns [`EngineError::SurfaceTargetUnavailable`] — before starting
     /// any GPU work — if the window owner reports the native target is gone
@@ -1188,18 +1344,33 @@ impl Renderer {
     pub async fn recover(&mut self) -> EngineResult<()> {
         // Resolved before any `.await` so the borrow of `gpu_stack_origin`
         // never needs to live across one; `target` is an owned `Arc` clone,
-        // not a borrow of `self`. One match, not two: `SharedServices`
-        // returns immediately, before touching any GPU state.
+        // not a borrow of `self`.
         let windowed_target = match &self.gpu_stack_origin {
-            GpuStackOrigin::SharedServices => {
-                return Err(EngineError::SharedServicesNotRecoverable);
-            }
             GpuStackOrigin::OwnedOffscreen => None,
             GpuStackOrigin::OwnedWindowed { lease } => {
                 lease.probe()?;
                 Some(Arc::clone(lease.target()))
             }
         };
+
+        // Release the held surface BEFORE the rebuild: its `create_surface`
+        // runs while this method still owns the old one, and on Android a
+        // second `VkSurfaceKHR` for the same live `ANativeWindow` is refused —
+        // by an `expect` inside `wgpu-hal`, so a device loss on Android would
+        // abort the process rather than recover. `recreate_surface` carries
+        // the full argument; this is the same rule on the same call, and
+        // device loss is the reachable route to it (a lost device does not
+        // release its surface).
+        //
+        // Released here, before the awaits below, so a rebuild that fails
+        // leaves the presentation released rather than holding a surface built
+        // against a dead device. The next recovery attempt re-asks, which is
+        // the stateless contract this path already had.
+        if windowed_target.is_some()
+            && let GpuStackOrigin::OwnedWindowed { lease } = &mut self.gpu_stack_origin
+        {
+            lease.release();
+        }
 
         if let Some(target) = windowed_target {
             // Capture current dimensions before rebuild so the recovered
@@ -1265,9 +1436,9 @@ impl Renderer {
 
     /// Select appropriate backend for the current platform
     ///
-    /// `pub(super)`: reused by [`super::gpu_services::GpuServices`]'s own
-    /// adapter-selection paths so backend selection is written in exactly
-    /// one place, not re-derived per construction site.
+    /// One definition for every construction path in this module, so
+    /// backend selection is written in exactly one place rather than
+    /// re-derived per call site.
     pub(super) fn select_backend() -> wgpu::Backends {
         #[cfg(target_os = "macos")]
         {
@@ -1328,12 +1499,14 @@ impl Renderer {
     /// diagnosable instead of aborting the process or spinning the render
     /// loop blind.
     ///
-    /// `pub(super)`: [`super::gpu_services::GpuServices`] is the one other
-    /// call site in the crate — its own construction path calls this exactly
-    /// once per shared device, which is what makes "exactly one
-    /// `set_device_lost_callback` install" true by construction rather than
-    /// by convention (ADR-0045 decision 2's first hazard).
-    pub(super) fn install_device_diagnostics(
+    /// Called exactly once per device this crate constructs — from
+    /// `build_windowed_gpu_stack`, `new_offscreen`, and `recover`. The
+    /// "exactly one install per device" invariant ADR-0045 decision 2 names
+    /// (a second install is last-writer-wins and orphans the first flag)
+    /// holds because every construction path owns its device outright; the
+    /// windowed shared-services path that would need an explicit guard
+    /// arrives with its own `ReplaceServices` mechanism.
+    fn install_device_diagnostics(
         device: &wgpu::Device,
         device_lost_flag: Arc<std::sync::atomic::AtomicBool>,
     ) {
@@ -1350,7 +1523,14 @@ impl Renderer {
                 "wgpu device lost — the GPU context is gone; the renderer will \
                  attempt device recreation on the next frame",
             );
-            device_lost_flag.store(true, std::sync::atomic::Ordering::Release);
+            // `Relaxed`, and paired with the `Relaxed` load in
+            // `is_device_lost`: this flag carries no data. It answers one
+            // self-contained question ("did the driver report a loss?"), and
+            // every fact a reader acts on after seeing `true` comes from
+            // wgpu's own validation, not from anything published through
+            // this atomic. A release/acquire pair here would synchronize
+            // nothing.
+            device_lost_flag.store(true, std::sync::atomic::Ordering::Relaxed);
         });
     }
 
@@ -1359,8 +1539,8 @@ impl Renderer {
     /// Only requests optional features when the adapter actually exposes them,
     /// so device creation never regresses on GPUs that lack them.
     ///
-    /// `pub(super)`: shared with [`super::gpu_services::GpuServices`] so both
-    /// construction paths request the same feature set from one definition.
+    /// One definition for every construction path, so all of them request
+    /// the same feature set.
     pub(super) fn required_features(capabilities: &GpuCapabilities) -> wgpu::Features {
         let mut features = wgpu::Features::empty();
 
@@ -1369,7 +1549,7 @@ impl Renderer {
 
         // Immediates (formerly push constants): only request if adapter supports them.
         // Some mobile GPUs (especially older Android devices) don't support this.
-        if capabilities.supports_push_constants {
+        if capabilities.supports_push_constants() {
             features |= wgpu::Features::IMMEDIATES;
         }
 
@@ -1379,7 +1559,7 @@ impl Renderer {
         // `supports_timestamp_queries` is already true only when both are present
         // (see `GpuCapabilities::detect`), so requesting both here is safe.
         #[cfg(feature = "gpu-profiler")]
-        if capabilities.supports_timestamp_queries {
+        if capabilities.supports_timestamp_queries() {
             features |=
                 wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         }
@@ -1390,7 +1570,7 @@ impl Renderer {
         // `PipelineCache` falls back to the folded shader otherwise, and the
         // seven affected modes keep a hard edge there. See
         // `GpuCapabilities::supports_dual_source_blending`.
-        if capabilities.supports_dual_source_blending {
+        if capabilities.supports_dual_source_blending() {
             features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         }
 
@@ -1399,16 +1579,15 @@ impl Renderer {
 
     /// Required GPU limits based on capabilities and adapter support
     ///
-    /// `pub(super)`: shared with [`super::gpu_services::GpuServices`], same
-    /// rationale as [`Self::required_features`].
+    /// Same one-definition rationale as [`Self::required_features`].
     pub(super) fn required_limits(capabilities: &GpuCapabilities) -> wgpu::Limits {
         let mut limits = wgpu::Limits {
-            max_texture_dimension_2d: capabilities.max_texture_size.min(16384),
+            max_texture_dimension_2d: capabilities.limits.max_texture_dimension_2d.min(16384),
             ..wgpu::Limits::default()
         };
 
         // Immediate data size — only set if adapter supports immediates
-        if capabilities.supports_push_constants {
+        if capabilities.supports_push_constants() {
             limits.max_immediate_size = 128;
         }
 
@@ -1438,7 +1617,7 @@ impl Renderer {
         // interpolation that diverge from Flutter's gamma-space lerp. Primaries
         // (0 / 255) are OETF fixed points, so the divergence hides on solid
         // black/white but corrupts every mid-tone.
-        let preferred_formats = if capabilities.supports_hdr {
+        let preferred_formats = if capabilities.supports_hdr() {
             vec![
                 wgpu::TextureFormat::Rgba16Float, // HDR
                 wgpu::TextureFormat::Bgra8Unorm,
@@ -1545,6 +1724,7 @@ impl Renderer {
     }
 
     /// Get GPU capabilities
+    #[must_use]
     pub fn capabilities(&self) -> &GpuCapabilities {
         &self.capabilities
     }
@@ -1562,7 +1742,7 @@ impl Renderer {
     /// Get reference to wgpu surface, if this renderer holds one right now.
     ///
     /// `None` now means either of two things: this renderer owns no window
-    /// (`new_offscreen`/`from_offscreen_services`), **or** it is windowed and
+    /// (`new_offscreen`), **or** it is windowed and
     /// its surface is currently released ([`Renderer::release_surface`]). The
     /// return type cannot carry the difference, and growing the API to
     /// express it would add a state the only consumer already knows — a
@@ -1570,10 +1750,11 @@ impl Renderer {
     /// that called `release_surface` or [`Renderer::recreate_surface`]. Every
     /// in-crate caller wants the surface object or nothing, which is what
     /// this returns.
+    #[must_use]
     pub fn surface(&self) -> Option<&wgpu::Surface<'_>> {
         match &self.gpu_stack_origin {
             GpuStackOrigin::OwnedWindowed { lease } => lease.surface(),
-            GpuStackOrigin::OwnedOffscreen | GpuStackOrigin::SharedServices => None,
+            GpuStackOrigin::OwnedOffscreen => None,
         }
     }
 
@@ -1593,6 +1774,7 @@ impl Renderer {
     }
 
     /// Check if the renderer has pending damage.
+    #[must_use]
     pub fn has_damage(&self) -> bool {
         self.damage_tracker.has_damage()
     }
@@ -1708,29 +1890,30 @@ impl Renderer {
     /// release arrived — a signal can be lost — and "skip if a surface is
     /// present" would then preserve a surface built from a handle that is
     /// already gone for the rest of the process's life. A held surface is
-    /// dropped as part of this call, at the commit below, after the new one
-    /// has been built.
+    /// dropped at the top of this call, before the replacement is created.
     ///
     /// "Attempts", not "builds", because the platform gets a say. The Vulkan
     /// specification allows only one `VkSurfaceKHR` per `ANativeWindow` at a
     /// time and refuses a second at `vkCreateAndroidSurfaceKHR` with
-    /// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, and this method creates the new
-    /// surface *before* dropping the held one. So on Android a `true` that
-    /// finds a surface still bound to the same, still-connected window is
-    /// refused: the held surface stays in place and stays valid, and nothing
-    /// is committed. Build-first/commit-last is sound exactly when the native
-    /// handle changed, which is the lost-`false` path this method is stateless
-    /// for. How the refusal surfaces here is the vendored `wgpu-hal`'s call,
-    /// not this method's: the design is a [`EngineError::SurfaceCreation`]
-    /// that the caller logs once, but `wgpu-hal` 30.0.1's
-    /// `create_surface_android` `expect`s the create result
-    /// ("AndroidSurface failed", `src/vulkan/instance.rs`), which turns that
-    /// refusal into a panic on the calling thread under that version. It is
-    /// reachable only outside the ordinary cycle, where every `true` follows
-    /// a `false` that released: through a missed `false` on a window that
-    /// survived, or through two `true`s with no `false` between them (ADR-0063
+    /// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`. Dropping the held surface first is
+    /// what keeps that rule out of this method's way: a `true` that finds a
+    /// surface still bound to the same, still-connected window — a missed
+    /// `false`, or two `true`s with no `false` between them (ADR-0063
     /// decision 6 books both, and marks whether the second ordering occurs at
-    /// all as unverified).
+    /// all as unverified) — releases it and then creates cleanly, where
+    /// build-first would be refused. That refusal is not a recoverable error
+    /// on this stack: `wgpu-hal` 30.0.1's `create_surface_android` `expect`s
+    /// the create result ("AndroidSurface failed", `src/vulkan/instance.rs`),
+    /// so under that version it aborts the process on the calling thread.
+    /// Releasing first is therefore what makes the stateless re-ask above
+    /// actually safe to attempt.
+    ///
+    /// What dropping first gives up is the old surface surviving a failed
+    /// create. On the one platform that emits this signal the old surface's
+    /// window is either the same one — so the create is refused, and the old
+    /// surface is the only one that could be kept — or already dead, in which
+    /// case it is useless. On a create failure the presentation is left
+    /// released, which is the documented post-state; the next `true` re-asks.
     ///
     /// Only the surface is rebuilt. [`Renderer::recover`] stays the device-loss
     /// path and rebuilds the whole stack; a suspend never sets the device-lost
@@ -1780,6 +1963,34 @@ impl Renderer {
         // against a dead handle would collapse it into a `SurfaceCreation`
         // failure (see `surface_lease::probe_target`'s doc).
         lease.probe()?;
+
+        // Drop the held surface BEFORE creating the replacement.
+        //
+        // The two orders trade different losses, and the platform decides
+        // which one is affordable. Build-first keeps a still-valid surface
+        // when the create fails — but on Android the old surface's window is
+        // either the same one (so the create is refused, see below) or
+        // already dead (so the surface is useless). Drop-first costs only
+        // that, and buys the one-surface-per-window rule:
+        // `vkCreateAndroidSurfaceKHR` refuses a second surface for a live
+        // `ANativeWindow` with `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, and
+        // `wgpu-hal` 30.0.1's `create_surface_android` `expect`s that result
+        // ("AndroidSurface failed", `src/vulkan/instance.rs`), which aborts
+        // the process on the callback thread. Reaching that needs a `true`
+        // over a surface still bound to the same live window — a missed
+        // `false`, or two `true`s with no `false` between them — which is
+        // outside the ordinary cycle but is exactly the class this method is
+        // stateless for: it must be able to re-ask unconditionally, because a
+        // missed signal is not detectable from here. Dropping first makes the
+        // re-ask always safe to attempt.
+        //
+        // A drop of a *configured* surface runs `wgpu-core`'s `unconfigure`
+        // into `vkDeviceWaitIdle` (see `release_surface`'s doc for what that
+        // wait costs and why it is accepted); a create that then fails leaves
+        // the lease released, which is the documented post-state. The caller
+        // owns the log line for that failure — see `surface_lifecycle.rs`'s
+        // `a_failed_recreation_carries_the_error_and_leaves_the_presentation_released`.
+        lease.release();
 
         let surface = self
             .instance
@@ -2075,7 +2286,7 @@ impl Renderer {
         // attempting to acquire a surface texture. If the device is gone, we
         // cannot proceed with the current device — return an error that the
         // caller can handle by recreating the renderer.
-        if self.device_lost.load(std::sync::atomic::Ordering::Acquire) {
+        if self.device_lost.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!("Device lost detected; returning DeviceLost error");
             return Err(EngineError::DeviceLost);
         }
@@ -2176,22 +2387,22 @@ impl Renderer {
         render_texture: &wgpu::Texture,
         ctx: &RenderContext,
     ) {
-        use super::backend::Backend;
+        use super::layer_dispatcher::LayerDispatcher;
 
         if !scene.has_content() {
             return;
         }
         // Borrowed in place — `painter` and `offscreen` are disjoint fields,
-        // so the Backend can hold both while the rest of the frame reads
+        // so the LayerDispatcher can hold both while the rest of the frame reads
         // `damage_tracker` / `device` / `queue` / `gpu_profiler`.
         let Some(painter) = self.painter.as_mut() else {
             return;
         };
 
         let mut backend = if let Some(offscreen) = self.offscreen.as_mut() {
-            Backend::with_offscreen(painter, offscreen)
+            LayerDispatcher::with_offscreen(painter, offscreen)
         } else {
-            Backend::new(painter)
+            LayerDispatcher::new(painter)
         };
         // Bind the frame render target so the DisplayList-level
         // `render_backdrop_filter` path can flush + blur the same
@@ -2226,7 +2437,9 @@ impl Renderer {
             // optimisation with pixel-aligned bounds, not a user clip whose
             // edge anyone can see. Feathering it would blend the boundary of a
             // region that is supposed to be an exact repaint window.
-            backend.painter_mut().clip_rect(damage, true);
+            backend
+                .painter_mut()
+                .clip_rect(damage, flui_types::painting::Clip::HardEdge);
             tracing::trace!(
                 left = damage.left().0,
                 top = damage.top().0,
@@ -2279,7 +2492,7 @@ impl Renderer {
         }
 
         // 5. Final flush — submit remaining painter batches.
-        // Drop the Backend first: Drop calls flush_active_transform(), which
+        // Drop the dispatcher first: Drop calls flush_active_transform(), which
         // balances any deferred lazy-coalescing save left by `with_transform`.
         // Once `backend` is dropped the exclusive borrow on `painter` ends, so
         // `painter` is directly accessible for the render and maintenance calls.
@@ -2355,110 +2568,31 @@ impl Renderer {
     /// registers bottom layers first and would see later (on-top, visible)
     /// layers as "occluded" — exactly backwards. A sound front-to-back cull
     /// requires a separate pre-pass that is a future optimization opportunity.
+    /// Walk a layer subtree, rendering every node.
+    ///
+    /// The traversal itself is [`super::layer_walk::walk_layer_tree`] — an
+    /// explicit-stack walk, because one Rust stack frame per layer means a
+    /// deep-but-valid chain aborts the process rather than panicking, and a
+    /// deep composited chain is ordinary. This function supplies the visit
+    /// steps in [`RenderLayerVisitor`].
     fn render_layer_recursive(
         tree: &flui_layer::LayerTree,
         link_registry: &flui_layer::LinkRegistry,
         layer_id: flui_foundation::LayerId,
-        backend: &mut super::backend::Backend<'_>,
+        backend: &mut super::layer_dispatcher::LayerDispatcher<'_>,
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
     ) {
-        use super::layer_render::LayerRender;
-
-        let Some(node) = tree.get(layer_id) else {
-            return;
+        let mut visitor = RenderLayerVisitor {
+            link_registry,
+            backend,
+            ctx,
+            surface_texture,
+            surface_view,
+            pushed_follower_offsets: Vec::new(),
         };
-
-        let layer = node.layer();
-
-        // Special handling for BackdropFilter — requires mid-frame flush + copy.
-        //
-        // The gate passes when EITHER:
-        //   - The swapchain surface itself has COPY_SRC (common path), OR
-        //   - The intermediate texture is active (COPY_SRC-less adapter path):
-        //     `surface_texture` points at the intermediate which always has COPY_SRC.
-        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer
-            && (ctx.supports_copy_src || ctx.intermediate_active)
-        {
-            Self::handle_backdrop_filter(
-                bf_layer,
-                node,
-                tree,
-                link_registry,
-                backend,
-                ctx,
-                surface_texture,
-                surface_view,
-            );
-            return;
-        }
-
-        // Special handling for ShaderMask — captures children to an offscreen
-        // texture, applies the shader as a GPU mask, then composites the
-        // masked result. Requires an `OffscreenRenderer`; falls through to
-        // the inert clip/save-layer `LayerRender<ShaderMaskLayer>` impl
-        // (unmasked passthrough) when one isn't available, mirroring
-        // `BackdropFilter`'s own non-`Blur` degrade above.
-        if let flui_layer::Layer::ShaderMask(sm_layer) = layer
-            && backend.offscreen_mut().is_some()
-        {
-            Self::handle_shader_mask(sm_layer, node, tree, link_registry, backend, ctx);
-            return;
-        }
-
-        // Special handling for Follower — resolve its render-time position
-        // (leader pose, or the plain unlinked fallback) before descending
-        // into children; hide the subtree entirely when unlinked with
-        // `show_when_unlinked == false` (oracle `FollowerLayer.addToScene`,
-        // `layer.dart:2857-2865`).
-        if let flui_layer::Layer::Follower(follower_layer) = layer {
-            if let Some(resolved) =
-                flui_layer::resolve_follower_offset(tree, link_registry, layer_id, follower_layer)
-            {
-                use crate::traits::LayerStateStack;
-
-                let has_offset = resolved != flui_types::geometry::Offset::ZERO;
-                if has_offset {
-                    backend.push_offset(resolved);
-                }
-                for &child_id in node.children() {
-                    Self::render_layer_recursive(
-                        tree,
-                        link_registry,
-                        child_id,
-                        backend,
-                        ctx,
-                        surface_texture,
-                        surface_view,
-                    );
-                }
-                if has_offset {
-                    backend.pop_transform();
-                }
-            }
-            return;
-        }
-        // Fall through to normal LayerRender path (clip + filter fallback)
-
-        // Normal path: render → children → cleanup
-        layer.render(backend);
-
-        // Borrow children as a slice of Copy values; re-borrow `tree` inside the
-        // call is shared and does not conflict with this shared borrow of `node`.
-        for &child_id in node.children() {
-            Self::render_layer_recursive(
-                tree,
-                link_registry,
-                child_id,
-                backend,
-                ctx,
-                surface_texture,
-                surface_view,
-            );
-        }
-
-        layer.cleanup(backend);
+        super::layer_walk::walk_layer_tree(tree, layer_id, &mut visitor);
     }
 
     /// Handle a `BackdropFilterLayer` via mid-frame flush and Dual Kawase blur.
@@ -2469,20 +2603,12 @@ impl Renderer {
     /// 3. Apply Dual Kawase blur via `OffscreenRenderer::render_blur`
     /// 4. Queue blurred result for compositing back to the surface
     /// 5. Render children on top
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "backdrop-filter pipeline needs the surface texture/view and layer-tree context to do its job — splitting these into a helper struct adds indirection without clarity"
-    )]
     fn handle_backdrop_filter(
         bf_layer: &flui_layer::BackdropFilterLayer,
-        node: &flui_layer::tree::LayerNode,
-        tree: &flui_layer::LayerTree,
-        link_registry: &flui_layer::LinkRegistry,
-        backend: &mut super::backend::Backend<'_>,
-        ctx: &RenderContext,
+        backend: &mut super::layer_dispatcher::LayerDispatcher<'_>,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
-    ) {
+    ) -> super::layer_walk::Step {
         use flui_types::painting::ImageFilter;
 
         let bounds = bf_layer.bounds();
@@ -2492,28 +2618,23 @@ impl Renderer {
         let sigma = if let ImageFilter::Blur { sigma_x, sigma_y } = bf_layer.filter() {
             f32::midpoint(*sigma_x, *sigma_y)
         } else {
+            // No blur to apply, so this node is a passthrough: hand its
+            // children back to the walk (`Descend`) rather than walking them
+            // here. Recursing here would put the walk on the call stack, one
+            // frame per nested filter. `BackdropFilterLayer`'s own
+            // `render`/`cleanup` are no-ops, so the walk calling them for this
+            // node is correct.
             tracing::warn!(
                 "Backdrop filter type not supported for GPU blur, rendering children only"
             );
-            for &child_id in node.children() {
-                Self::render_layer_recursive(
-                    tree,
-                    link_registry,
-                    child_id,
-                    backend,
-                    ctx,
-                    surface_texture,
-                    surface_view,
-                );
-            }
-            return;
+            return super::layer_walk::Step::Descend;
         };
 
         // Map the layer's local-space `bounds` to a device-space rect using the
         // accumulated layer-walk CTM (the `RenderView` root `scale(dpr)` plus
         // every intervening transform/offset layer, carried in the painter's
         // `current_transform`). This is the layer-tree equivalent of the
-        // `transform` argument Path B (`Backend::render_backdrop_filter`)
+        // `transform` argument Path B (`LayerDispatcher::render_backdrop_filter`)
         // receives. The shared `apply_backdrop_blur` then clamps + copies +
         // blurs + composites (the off-screen-clamp logic lives there once, so it
         // can't drift between the two backdrop paths). A `false` return (no
@@ -2523,21 +2644,19 @@ impl Renderer {
             .painter()
             .current_transform_matrix()
             .transform_rect(&bounds);
-        backend.apply_backdrop_blur(device_rect, sigma, surface_texture, surface_view);
+        backend.apply_backdrop_blur(
+            device_rect,
+            sigma,
+            bf_layer.blend_mode(),
+            surface_texture,
+            surface_view,
+        );
 
-        // Render children on top of the (maybe-)blurred backdrop. No push/pop
-        // state to clean up in this path.
-        for &child_id in node.children() {
-            Self::render_layer_recursive(
-                tree,
-                link_registry,
-                child_id,
-                backend,
-                ctx,
-                surface_texture,
-                surface_view,
-            );
-        }
+        // Children render on top of the (maybe-)blurred backdrop. No push/pop
+        // state to clean up in this path, so the walk descends normally: the
+        // blur is already composited onto the surface and the child subtrees
+        // are ordinary layer content.
+        super::layer_walk::Step::Descend
     }
 
     /// Handle a `ShaderMaskLayer` subtree by capturing its children to a
@@ -2550,7 +2669,7 @@ impl Renderer {
     /// on top unmodified; this path renders children into a private
     /// offscreen texture FIRST, masks that capture, then composites the
     /// masked result. Mirrors the six-step "capture subtree → mask →
-    /// composite" pipeline [`crate::traits::CommandRenderer::render_shader_mask`]
+    /// composite" pipeline [`crate::command_renderer::CommandRenderer::render_shader_mask`]
     /// already runs for the `DisplayList` path (`Canvas::draw_shader_mask`),
     /// adapted to recurse into a `LayerTree` subtree instead of dispatching a
     /// flat command list.
@@ -2579,8 +2698,8 @@ impl Renderer {
     /// Only reached when `backend.offscreen_mut().is_some()` (checked by the
     /// caller); the no-offscreen-renderer degrade is the existing inert
     /// clip/save-layer `LayerRender<ShaderMaskLayer>` impl in
-    /// `layer_render.rs` (unmasked passthrough). The temporary `Backend`
-    /// wrapping the offscreen painter is built via `Backend::new` (no
+    /// `layer_render.rs` (unmasked passthrough). The temporary `LayerDispatcher`
+    /// wrapping the offscreen painter is built via `LayerDispatcher::new` (no
     /// `OffscreenRenderer`), so a `ShaderMask`/`BackdropFilter` nested inside
     /// this layer's own children gracefully degrades to unmasked/unblurred —
     /// the same precedented limitation `render_shader_mask`'s `DisplayList`
@@ -2591,10 +2710,10 @@ impl Renderer {
         node: &flui_layer::tree::LayerNode,
         tree: &flui_layer::LayerTree,
         link_registry: &flui_layer::LinkRegistry,
-        backend: &mut super::backend::Backend<'_>,
+        backend: &mut super::layer_dispatcher::LayerDispatcher<'_>,
         ctx: &RenderContext,
     ) {
-        use crate::traits::LayerStateStack;
+        use crate::layer_state_stack::LayerStateStack;
         use flui_types::geometry::{Pixels, Size};
 
         let bounds = sm_layer.bounds();
@@ -2602,7 +2721,7 @@ impl Renderer {
         let blend_mode = sm_layer.blend_mode();
 
         // Live ambient CTM/DPR, read exactly as `handle_backdrop_filter` and
-        // `Backend::render_shader_mask` do — before anything below could
+        // `LayerDispatcher::render_shader_mask` do — before anything below could
         // mutate the real painter's transform state.
         let ambient_ctm = backend.painter().current_transform_matrix();
         let dpr_scale = backend.painter().current_max_scale().max(1.0);
@@ -2612,7 +2731,7 @@ impl Renderer {
         let dev_height = (bounds.height().0 * dpr_scale).round().max(1.0) as u32;
 
         // Composite rect in device space — the layer-tree equivalent of
-        // `Backend::render_shader_mask`'s `device_bounds`.
+        // `LayerDispatcher::render_shader_mask`'s `device_bounds`.
         let device_bounds = ambient_ctm.transform_rect(&bounds);
 
         // Step 1-3: acquire GPU handles and a device-sized pooled child
@@ -2632,7 +2751,7 @@ impl Renderer {
         };
 
         // Step 4-8: render this layer's children into the offscreen texture
-        // through a temporary Backend, seeded with the coordinate-frame-
+        // through a temporary LayerDispatcher, seeded with the coordinate-frame-
         // correct transform (see doc comment above).
         {
             let offscreen_painter = backend.get_or_create_offscreen_painter(
@@ -2643,7 +2762,7 @@ impl Renderer {
             );
             offscreen_painter.reset_frame_state();
 
-            let mut temp_backend = super::backend::Backend::new(offscreen_painter);
+            let mut temp_backend = super::layer_dispatcher::LayerDispatcher::new(offscreen_painter);
 
             let mut seed_transform = ambient_ctm;
             seed_transform.translate(-device_bounds.left().0, -device_bounds.top().0, 0.0);
@@ -2667,7 +2786,7 @@ impl Renderer {
 
         // Step 9: flush the offscreen painter's batches into the pooled
         // child texture (clear pass + render), exactly as
-        // `Backend::render_shader_mask` does for the `DisplayList` path.
+        // `LayerDispatcher::render_shader_mask` does for the `DisplayList` path.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("ShaderMask Layer Child Render"),
         });
@@ -2710,19 +2829,13 @@ impl Renderer {
             let offscreen = backend
                 .offscreen_mut()
                 .expect("checked is_some at function entry");
-            let result = offscreen.render_masked(
-                bounds,
-                result_size,
-                shader,
-                blend_mode,
-                child_tex.texture(),
-            );
+            let result = offscreen.render_masked(bounds, result_size, shader, child_tex.texture());
             result.into_texture()
         };
 
         backend
             .painter_mut()
-            .queue_offscreen_result(masked_texture, device_bounds);
+            .queue_offscreen_result(masked_texture, device_bounds, blend_mode);
 
         tracing::debug!(
             "ShaderMask layer GPU pipeline complete: bounds={:?}, device_bounds={:?}, \
@@ -2778,142 +2891,6 @@ mod tests {
                 assert!(renderer.config.is_none());
                 assert!(!renderer.capabilities.adapter_name.is_empty());
             }
-        });
-    }
-
-    /// Pins ADR-0045 decision 2's headline property: one `wgpu::Device` per
-    /// owner thread. Two `Renderer`s built from the SAME [`GpuServices`] via
-    /// [`Renderer::from_offscreen_services`] must share the exact device —
-    /// checked by `Arc::ptr_eq`, not by a proxy like equal capability
-    /// strings (two independently-constructed devices on the same adapter
-    /// would report identical `GpuCapabilities` and still be two devices).
-    ///
-    /// # Limitation, stated rather than papered over
-    ///
-    /// This exercises the OFFSCREEN sharing path only. The windowed path has
-    /// no `Renderer`-level sharing constructor in this slice (see
-    /// `gpu_services.rs`'s module doc) — the raw-handle/surface plumbing it
-    /// would need is out of scope here.
-    #[test]
-    fn two_renderers_from_shared_services_share_one_device() {
-        pollster::block_on(async {
-            let Ok(services) = crate::GpuServices::resolve_offscreen().await else {
-                // No GPU in this environment; skip gracefully (matches every
-                // other GPU test in this module).
-                return;
-            };
-
-            let renderer_a = Renderer::from_offscreen_services(&services);
-            let renderer_b = Renderer::from_offscreen_services(&services);
-
-            assert!(
-                Arc::ptr_eq(&renderer_a.device, &renderer_b.device),
-                "two renderers built from the same GpuServices must share \
-                 one wgpu::Device (by Arc pointer identity), not each hold \
-                 their own"
-            );
-            assert!(
-                Arc::ptr_eq(&renderer_a.device, services.device()),
-                "the renderers' shared device must be the SAME device \
-                 GpuServices itself holds, not a third one"
-            );
-        });
-    }
-
-    /// Pins ADR-0045 decision 2's first named hazard: `set_device_lost_callback`
-    /// is last-writer-wins, so a design that installed it once per `Renderer`
-    /// sharing a device would silently orphan every earlier `Renderer`'s
-    /// flag. Proven by mechanism, not by a mock that counts install calls
-    /// (wgpu's `Device` is a concrete FFI-backed type with no seam to mock):
-    /// two renderers built from the same `GpuServices` must hold the exact
-    /// SAME `Arc<AtomicBool>` as each other and as the services value
-    /// itself. If `Renderer::from_offscreen_services` (or any future
-    /// sharing path) ever called `install_device_diagnostics` a second time
-    /// against a fresh flag, this would fail — the two renderers would
-    /// observe different flags, and only the most-recently-installed
-    /// callback would ever fire wgpu's real device-lost callback.
-    #[test]
-    fn two_renderers_from_shared_services_share_one_device_lost_flag() {
-        pollster::block_on(async {
-            let Ok(services) = crate::GpuServices::resolve_offscreen().await else {
-                return;
-            };
-
-            let renderer_a = Renderer::from_offscreen_services(&services);
-            let renderer_b = Renderer::from_offscreen_services(&services);
-
-            assert!(
-                Arc::ptr_eq(&renderer_a.device_lost, &renderer_b.device_lost),
-                "two renderers sharing GpuServices must observe the SAME \
-                 device_lost flag"
-            );
-            assert!(
-                Arc::ptr_eq(&renderer_a.device_lost, &services.device_lost_handle()),
-                "the shared flag must be the exact one GpuServices installed \
-                 its one callback against"
-            );
-
-            // Behavioral corroboration: flipping the flag through ONE handle
-            // must be visible through every other handle, which is only
-            // true if there is exactly one flag in play.
-            assert!(!renderer_a.is_device_lost());
-            assert!(!renderer_b.is_device_lost());
-            assert!(!services.is_device_lost());
-            renderer_a
-                .device_lost
-                .store(true, std::sync::atomic::Ordering::Release);
-            assert!(
-                renderer_b.is_device_lost(),
-                "renderer_b must observe the flip made through renderer_a's handle"
-            );
-            assert!(
-                services.is_device_lost(),
-                "GpuServices itself must observe the flip too"
-            );
-        });
-    }
-
-    /// Pins the fix for the hole review found: nothing previously stopped
-    /// `recover()` from running on a renderer built via
-    /// `from_offscreen_services`, which would silently rebuild a private
-    /// device, install a SECOND `set_device_lost_callback`, and overwrite
-    /// `self.device_lost` with a fresh, unshared `Arc` — breaking both the
-    /// single-callback invariant and the flag-sharing the two tests above
-    /// pin. `recover()` must reject this before touching any GPU state, and
-    /// every sibling renderer sharing the same `GpuServices` must be
-    /// unaffected by the attempt.
-    #[test]
-    fn recover_on_a_shared_services_renderer_is_rejected() {
-        pollster::block_on(async {
-            let Ok(services) = crate::GpuServices::resolve_offscreen().await else {
-                return;
-            };
-
-            let mut renderer_a = Renderer::from_offscreen_services(&services);
-            let renderer_b = Renderer::from_offscreen_services(&services);
-            let device_before = Arc::clone(&renderer_a.device);
-
-            let result = renderer_a.recover().await;
-            assert!(
-                matches!(result, Err(EngineError::SharedServicesNotRecoverable)),
-                "recover() on a shared-services renderer must return \
-                 SharedServicesNotRecoverable, got {result:?}"
-            );
-
-            assert!(
-                Arc::ptr_eq(&renderer_a.device, &device_before),
-                "a rejected recover() must not touch the device at all"
-            );
-            assert!(
-                Arc::ptr_eq(&renderer_a.device, &renderer_b.device),
-                "renderer_b must still share renderer_a's device after the \
-                 rejected recover() call"
-            );
-            assert!(
-                Arc::ptr_eq(&renderer_a.device_lost, &renderer_b.device_lost),
-                "renderer_b must still share renderer_a's device_lost flag \
-                 after the rejected recover() call"
-            );
         });
     }
 
@@ -3006,7 +2983,7 @@ mod tests {
     /// is the device rect. Red before the fix (logical (100,100,200,200)).
     #[test]
     fn backdrop_filter_path_a_composites_at_device_rect_under_dpr() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
@@ -3055,7 +3032,7 @@ mod tests {
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         // Simulate the `RenderView` DPR root transform: scale(2) on the CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -3075,20 +3052,7 @@ mod tests {
             unreachable!("inserted a BackdropFilter layer");
         };
 
-        let ctx = RenderContext {
-            supports_copy_src: true,
-            intermediate_active: false,
-        };
-        Renderer::handle_backdrop_filter(
-            bf_layer,
-            node,
-            &tree,
-            &flui_layer::LinkRegistry::new(),
-            &mut backend,
-            &ctx,
-            &surface_texture,
-            &surface_view,
-        );
+        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view);
 
         // The blurred backdrop must be queued for compositing at the DEVICE
         // rect — logical bounds (x=100, y=100, w=200, h=200) under scale(2)
@@ -3128,7 +3092,7 @@ mod tests {
     /// (200,200,400,400) with the position wrong at (200,200) instead of (220,220).
     #[test]
     fn backdrop_filter_path_a_honors_translation_under_dpr() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
@@ -3171,7 +3135,7 @@ mod tests {
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         // CTM: scale(2) then translate(+10,+10).
         // Maps (x,y) → (2x+20, 2y+20).
@@ -3194,20 +3158,7 @@ mod tests {
             unreachable!("inserted a BackdropFilter layer");
         };
 
-        let ctx = RenderContext {
-            supports_copy_src: true,
-            intermediate_active: false,
-        };
-        Renderer::handle_backdrop_filter(
-            bf_layer,
-            node,
-            &tree,
-            &flui_layer::LinkRegistry::new(),
-            &mut backend,
-            &ctx,
-            &surface_texture,
-            &surface_view,
-        );
+        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view);
 
         let results = backend.painter().offscreen_results_for_test();
         assert_eq!(
@@ -3261,7 +3212,7 @@ mod tests {
     /// Green-after: composite rect is (350,350,50,50) — matches copy origin/extent.
     #[test]
     fn backdrop_filter_path_a_composites_clamped_rect_when_partially_offscreen() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
@@ -3306,7 +3257,7 @@ mod tests {
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         // CTM is identity (scale=1, DPR=1): device coords == logical coords.
         // Backdrop at (350,350,200,200) — corners (350,350)→(550,550).
@@ -3326,20 +3277,7 @@ mod tests {
             unreachable!("inserted a BackdropFilter layer");
         };
 
-        let ctx = RenderContext {
-            supports_copy_src: true,
-            intermediate_active: false,
-        };
-        Renderer::handle_backdrop_filter(
-            bf_layer,
-            node,
-            &tree,
-            &flui_layer::LinkRegistry::new(),
-            &mut backend,
-            &ctx,
-            &surface_texture,
-            &surface_view,
-        );
+        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view);
 
         let results = backend.painter().offscreen_results_for_test();
         assert_eq!(
@@ -3871,7 +3809,7 @@ mod tests {
 
         let multiply_paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Multiply);
         painter.save_layer(Some(layer_bounds), &multiply_paint);
-        painter.rect(layer_bounds, &Paint::fill(source_orange));
+        painter.draw_rect(layer_bounds, &Paint::fill(source_orange));
         painter.restore_layer();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3998,7 +3936,7 @@ mod tests {
     /// == 1 → GREEN.
     #[test]
     fn on_top_layer_not_culled_by_opaque_background() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use flui_layer::{CanvasLayer, ImageFilterLayer, Layer, LayerTree, OpacityLayer};
@@ -4042,7 +3980,7 @@ mod tests {
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         let ctx = RenderContext {
             supports_copy_src: true,
@@ -4123,7 +4061,7 @@ mod tests {
     // =========================================================================
 
     /// Clears `view` to `color`. Mirrors `Renderer::run_clear_pass`'s body;
-    /// duplicated here because these tests build `WgpuPainter`/`Backend`
+    /// duplicated here because these tests build `WgpuPainter`/`LayerDispatcher`
     /// manually (like OCR-1 above) rather than through a full `Renderer`, so
     /// `run_clear_pass` (an inherent `&mut Renderer` method) isn't reachable.
     /// `painter.render` uses `LoadOp::Load` (see the C2-full test's own
@@ -4165,7 +4103,7 @@ mod tests {
     /// natural (pre-resolution) tree position.
     #[test]
     fn follower_gpu_renders_at_resolved_position_across_repaint_boundaries() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use super::super::render_target::RenderTarget;
@@ -4260,7 +4198,7 @@ mod tests {
             (width, height),
         );
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         let ctx = RenderContext {
             supports_copy_src: true,
@@ -4315,7 +4253,7 @@ mod tests {
     /// routed through `calculate_offset`.
     #[test]
     fn follower_gpu_unlinked_show_when_unlinked_true_renders_at_target_offset() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use super::super::render_target::RenderTarget;
@@ -4389,7 +4327,7 @@ mod tests {
             (width, height),
         );
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         let ctx = RenderContext {
             supports_copy_src: true,
@@ -4441,7 +4379,7 @@ mod tests {
     /// `FollowerLayer.addToScene`'s early return, `layer.dart:2857-2865`).
     #[test]
     fn follower_gpu_unlinked_show_when_unlinked_false_hides_subtree() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use super::super::render_target::RenderTarget;
@@ -4510,7 +4448,7 @@ mod tests {
             (width, height),
         );
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         let ctx = RenderContext {
             supports_copy_src: true,
@@ -4579,9 +4517,133 @@ mod tests {
     /// `shader_mask_nested_under_offset_ancestor_lands_at_correct_position`
     /// below for that); it only proves the GPU mask pipeline is reached at
     /// all.
+    /// A deep chain of nested `ShaderMask`s renders without consuming call
+    /// stack per level — its re-entry is bounded to exactly ONE level, and
+    /// this pins the bound so it cannot regress silently.
+    ///
+    /// `handle_shader_mask` still walks its children by calling
+    /// `render_layer_recursive`, because it renders them through a DIFFERENT
+    /// backend (the offscreen painter) — unlike `BackdropFilter`, whose
+    /// children belong to the same backend and so can be handed back to the
+    /// walk. The bound on that re-entry is the handler's own gate plus the
+    /// temp backend's shape: the gate is `backend.offscreen_mut().is_some()`,
+    /// and the backend it recurses with is `LayerDispatcher::new(offscreen_painter)`,
+    /// which sets `offscreen: None`. So the outermost mask takes the arm and
+    /// every nested mask inside it falls through to the inert clip/save-layer
+    /// path.
+    ///
+    /// Measured, not assumed: instrumenting the handler showed
+    /// `handler_calls == 1` and nesting depth 1 at chain lengths 4, 100, 1000
+    /// and 10 000, and the render completes at depth 50 000 on a fixed 1 MiB
+    /// stack — i.e. cost is flat in depth, not linear. (A 64 KiB stack is too
+    /// small for even ONE invocation: a single `handle_shader_mask` frame
+    /// holds GPU handles, a pooled texture, an encoder and a nested
+    /// `WgpuPainter`, which is tens of KiB of locals. That is a constant, not
+    /// a leak per level, and is why this test uses a budget that fits one
+    /// frame rather than the 64 KiB the pure-walk tests use.)
+    ///
+    /// **What this test does not do:** it is not red-by-revert verified. The
+    /// bound comes from a value the temp backend does not have (`offscreen:
+    /// None`), and I could not express a faithful mutant that grants it
+    /// without inventing an offscreen renderer for that backend — a fake stub
+    /// compiles but exercises nothing. So this pins the CURRENT behaviour and
+    /// the measured numbers; it is not proof that a future regression would
+    /// fail here. If someone does give the temp backend an offscreen, they owe
+    /// a revert test.
+    #[test]
+    fn a_deep_shader_mask_chain_does_not_grow_the_call_stack() {
+        use super::super::layer_dispatcher::LayerDispatcher;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_layer::{Layer, LayerTree, LinkRegistry, ShaderMaskLayer};
+        use flui_painting::Shader;
+
+        const DEPTH: usize = 10_000;
+        // Fits one `handle_shader_mask` frame with room to spare; a per-level
+        // cost would blow it long before 10 000.
+        const STACK: usize = 1024 * 1024;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let (w, h) = (64u32, 64u32);
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deep ShaderMask Chain Surface"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        std::thread::Builder::new()
+            .stack_size(STACK)
+            .spawn(move || {
+                let bounds = flui_types::geometry::Rect::from_xywh(
+                    flui_types::geometry::px(0.0),
+                    flui_types::geometry::px(0.0),
+                    flui_types::geometry::px(64.0),
+                    flui_types::geometry::px(64.0),
+                );
+                let mask = || {
+                    Layer::ShaderMask(ShaderMaskLayer::new(
+                        Shader::solid(flui_types::Color::rgba(10, 20, 30, 128)),
+                        flui_types::painting::BlendMode::SrcOver,
+                        bounds,
+                    ))
+                };
+                let mut tree = LayerTree::new();
+                let mut parent = tree.insert(mask());
+                tree.set_root(Some(parent));
+                for _ in 1..DEPTH {
+                    let child = tree.insert(mask());
+                    tree.add_child(parent, child);
+                    parent = child;
+                }
+
+                let mut painter = WgpuPainter::with_shared_device(
+                    Arc::clone(&device),
+                    Arc::clone(&queue),
+                    format,
+                    (w, h),
+                );
+                let mut offscreen =
+                    OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+                let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
+                let ctx = RenderContext {
+                    supports_copy_src: true,
+                    intermediate_active: false,
+                };
+                let links = LinkRegistry::new();
+                Renderer::render_layer_recursive(
+                    &tree,
+                    &links,
+                    tree.root().expect("root set"),
+                    &mut backend,
+                    &ctx,
+                    &surface_texture,
+                    &surface_view,
+                );
+            })
+            .expect("spawn the deep-shader-mask thread")
+            .join()
+            .expect("a deep ShaderMask chain must not consume the call stack per level");
+    }
+
     #[test]
     fn shader_mask_layer_root_gpu_pixel_readback_reflects_mask() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use super::super::render_target::RenderTarget;
@@ -4643,7 +4705,7 @@ mod tests {
             (width, height),
         );
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         let ctx = RenderContext {
             supports_copy_src: true,
@@ -4685,7 +4747,7 @@ mod tests {
     /// non-zero-offset `Layer::Offset` ancestor must still render its masked
     /// content at the CORRECT on-screen position — not shifted/clipped by a
     /// naive "reset offscreen painter to DPR-scale-only" seed (the approach
-    /// `Backend::render_shader_mask`'s `DisplayList` path uses, which is
+    /// `LayerDispatcher::render_shader_mask`'s `DisplayList` path uses, which is
     /// correct there only because its children are recorded into a FRESH,
     /// self-relative `Canvas`, never the ambient-CTM-relative `LayerTree`).
     ///
@@ -4705,7 +4767,7 @@ mod tests {
     ///     ambient_ctm`) fills the ENTIRE `device_bounds` rectangle.
     #[test]
     fn shader_mask_nested_under_offset_ancestor_lands_at_correct_position() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::offscreen::OffscreenRenderer;
         use super::super::painter::WgpuPainter;
         use super::super::render_target::RenderTarget;
@@ -4776,7 +4838,7 @@ mod tests {
             (width, height),
         );
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         let ctx = RenderContext {
             supports_copy_src: true,
@@ -4850,7 +4912,7 @@ mod tests {
     /// unmodified (still clipped to bounds).
     #[test]
     fn shader_mask_without_offscreen_renderer_falls_through_to_inert_clip() {
-        use super::super::backend::Backend;
+        use super::super::layer_dispatcher::LayerDispatcher;
         use super::super::painter::WgpuPainter;
         use super::super::render_target::RenderTarget;
         use flui_layer::{CanvasLayer, Layer, LayerTree, LinkRegistry, ShaderMaskLayer};
@@ -4910,8 +4972,8 @@ mod tests {
             format,
             (width, height),
         );
-        // No `OffscreenRenderer` bound — `Backend::new`, not `with_offscreen`.
-        let mut backend = Backend::new(&mut painter);
+        // No `OffscreenRenderer` bound — `LayerDispatcher::new`, not `with_offscreen`.
+        let mut backend = LayerDispatcher::new(&mut painter);
 
         let ctx = RenderContext {
             supports_copy_src: true,

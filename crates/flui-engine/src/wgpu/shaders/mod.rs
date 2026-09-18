@@ -33,7 +33,7 @@
 /// are eight chances to get it wrong once.
 macro_rules! coverage_correct_shader {
     ($module:literal) => {
-        super::pipeline::CoverageShaderSources {
+        super::pipeline_cache::CoverageShaderSources {
             folded: concat!(
                 include_str!("common/clip.wgsl"),
                 include_str!("common/coverage.wgsl"),
@@ -56,18 +56,19 @@ macro_rules! coverage_correct_shader {
 /// Tessellated geometry has no instances to hang a clip slot on, so its clip
 /// arrives in a per-batch uniform rather than per instance; the clip block is
 /// the same either way.
-pub const SHAPE: super::pipeline::CoverageShaderSources = coverage_correct_shader!("shape.wgsl");
+pub(crate) const SHAPE: super::pipeline_cache::CoverageShaderSources =
+    coverage_correct_shader!("shape.wgsl");
 
 /// Instanced linear gradient shader — both assemblies.
-pub const LINEAR_GRADIENT: super::pipeline::CoverageShaderSources =
+pub(crate) const LINEAR_GRADIENT: super::pipeline_cache::CoverageShaderSources =
     coverage_correct_shader!("gradients/linear.wgsl");
 
 /// Instanced radial gradient shader — both assemblies.
-pub const RADIAL_GRADIENT: super::pipeline::CoverageShaderSources =
+pub(crate) const RADIAL_GRADIENT: super::pipeline_cache::CoverageShaderSources =
     coverage_correct_shader!("gradients/radial.wgsl");
 
 /// Instanced sweep gradient shader — both assemblies.
-pub const SWEEP_GRADIENT: super::pipeline::CoverageShaderSources =
+pub(crate) const SWEEP_GRADIENT: super::pipeline_cache::CoverageShaderSources =
     coverage_correct_shader!("gradients/sweep.wgsl");
 
 // Instanced rendering
@@ -87,19 +88,19 @@ pub const SWEEP_GRADIENT: super::pipeline::CoverageShaderSources =
 // `CLIP_SDF` const: it concatenates literals, and a `const` is not one.
 
 /// Instanced rectangle rendering shader.
-pub const RECT_INSTANCED: &str = concat!(
+pub(crate) const RECT_INSTANCED: &str = concat!(
     include_str!("common/clip.wgsl"),
     include_str!("rect_instanced.wgsl")
 );
 /// Instanced circle rendering shader.
-pub const CIRCLE_INSTANCED: &str = concat!(
+pub(crate) const CIRCLE_INSTANCED: &str = concat!(
     include_str!("common/clip.wgsl"),
     include_str!("circle_instanced.wgsl")
 );
 /// Instanced arc rendering shader.
-pub const ARC_INSTANCED: &str = include_str!("arc_instanced.wgsl");
+pub(crate) const ARC_INSTANCED: &str = include_str!("arc_instanced.wgsl");
 /// Instanced texture rendering shader.
-pub const TEXTURE_INSTANCED: &str = concat!(
+pub(crate) const TEXTURE_INSTANCED: &str = concat!(
     include_str!("common/clip.wgsl"),
     include_str!("texture_instanced.wgsl")
 );

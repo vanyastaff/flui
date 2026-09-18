@@ -221,10 +221,10 @@ mod gpu_tests {
             GradientStop::new(gradient_right_color, 1.0),
         ];
 
-        // Use painter.rect() with a shader Paint — this goes through
+        // Use painter.draw_rect() with a shader Paint — this goes through
         // dispatch_shader_rect which now diverts to AdvancedShape for advanced modes.
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rect(
+        painter.draw_rect(
             full_bounds,
             &Paint {
                 style: PaintStyle::Fill,
@@ -428,7 +428,7 @@ mod gpu_tests {
                 Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)),
                 px(radius),
             ),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
         painter.draw_image(&source_image, full_surface_bounds(), BlendMode::SrcOver);
         painter.restore();
@@ -513,7 +513,7 @@ mod gpu_tests {
                 Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),
                 px(logical_side / 2.0),
             ),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
         painter.draw_image(
             &source_image,
@@ -854,7 +854,7 @@ mod gpu_tests {
         // Both painters draw the same SrcOver gradient — results must be identical.
         for (surface, view) in [(&surface_a, &view_a), (&surface_b, &view_b)] {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(full_bounds, &gradient_paint);
+            painter.draw_rect(full_bounds, &gradient_paint);
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             painter
@@ -968,7 +968,7 @@ mod gpu_tests {
             clear_surface_to_color(&device, &queue, &surface_view, backdrop);
             {
                 let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-                painter.rect(
+                painter.draw_rect(
                     full_bounds,
                     &Paint {
                         style: PaintStyle::Fill,

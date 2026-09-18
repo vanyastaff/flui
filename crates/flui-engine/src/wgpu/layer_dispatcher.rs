@@ -20,8 +20,8 @@ use super::{
     state_stack::ResolvedClip,
 };
 use crate::{
-    commands::dispatch_command,
-    traits::{CommandRenderer, LayerStateStack},
+    command_renderer::CommandRenderer, dispatch::dispatch_command,
+    layer_state_stack::LayerStateStack,
 };
 
 /// Builds a gradient stop array from a color slice and optional explicit stop
@@ -61,26 +61,27 @@ fn build_gradient_stops(
 ///
 /// # Lifetime parameter
 ///
-/// `Backend<'frame>` borrows the current frame's painter (`&'frame mut
+/// `LayerDispatcher<'frame>` borrows the current frame's painter (`&'frame mut
 /// WgpuPainter`) and, when present, the `wgpu::TextureView` /
 /// `wgpu::Texture` bound by [`bind_surface`](Self::bind_surface). The
 /// lifetime is internal to one render pass: `Renderer::render` creates
-/// the Backend in a scoped block, dispatches the `LayerTree`, then lets
+/// the LayerDispatcher in a scoped block, dispatches the `LayerTree`, then lets
 /// it drop before calling `painter.render()`. Sites that don't need to
 /// flush mid-frame (shader-mask offscreen rendering, tests) call
-/// [`Backend::new`] which leaves the surface handles unbound; the
+/// [`LayerDispatcher::new`] which leaves the surface handles unbound; the
 /// [`render_backdrop_filter`](CommandRenderer::render_backdrop_filter)
 /// command-path falls back to passthrough when the handles are
 /// `None`.
 ///
 /// Per *Rust for Rustaceans* ch.2 "Variance and Lifetimes": the
 /// `'frame` parameter encodes the borrow's scope so the compiler
-/// enforces that no Backend outlives its bound resources.
+/// enforces that no LayerDispatcher outlives its bound resources.
 ///
 /// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
 /// don't implement Debug.
-#[expect(missing_debug_implementations)]
-pub struct Backend<'frame> {
+// `missing_debug_implementations` is a crate-level `#[expect]`: these types
+// hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
+pub(crate) struct LayerDispatcher<'frame> {
     painter: &'frame mut WgpuPainter,
     offscreen: Option<&'frame mut super::offscreen::OffscreenRenderer>,
     /// Cached offscreen painter reused across shader mask invocations.
@@ -109,12 +110,11 @@ pub struct Backend<'frame> {
     /// point where the painter save stack could be mutated outside
     /// `with_transform`'s coalescing path -- the identity /
     /// transform-mismatch arms inside `with_transform` itself, every
-    /// `LayerStateStack` method on `Backend` (`push_clip_*`,
+    /// `LayerStateStack` method on `LayerDispatcher` (`push_clip_*`,
     /// `pop_clip`, `push_offset`, `push_transform`, `pop_transform`,
     /// `push_opacity`, `pop_opacity`, `push_color_filter`,
-    /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`),
-    /// and the explicit [`Backend::restore`](Self::restore) escape
-    /// hatch. These `LayerStateStack` flush points are required: without
+    /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`).
+    /// These `LayerStateStack` flush points are required: without
     /// them, a `push_clip → with_transform → pop_clip` sequence would pop
     /// the lazy save instead of the clip, corrupting state across sibling
     /// layers.
@@ -124,18 +124,18 @@ pub struct Backend<'frame> {
     ///
     /// The `Drop` impl provides a final safety-net flush: if a future
     /// code path forgets to call `flush_active_transform()` before
-    /// the Backend goes out of scope, Drop balances the deferred save
-    /// so the borrowed painter is left in a clean state. The 21 eager
-    /// call sites above are NOT replaced by Drop — they flush at
-    /// precisely the right point for correctness; Drop is the backstop
-    /// for any site that is missed.
+    /// the LayerDispatcher goes out of scope, Drop balances the deferred save
+    /// so the borrowed painter is left in a clean state. The eager call
+    /// sites are NOT replaced by Drop — they flush at precisely the right
+    /// point for correctness; Drop is the backstop for any site that is
+    /// missed.
     active_transform: Option<Matrix4>,
     /// One entry per clip layer that is currently open, innermost last.
     ///
     /// [`LayerStateStack::pop_clip`] serves all three `push_clip_*` variants
     /// and takes no argument, so nothing in the call itself can say whether the
     /// matching push opened an offscreen. This stack is the only thing that
-    /// can, and [`Backend::open_clip_frame`] is the only writer: it performs
+    /// can, and [`LayerDispatcher::open_clip_frame`] is the only writer: it performs
     /// the open and records it in the same call, so a push cannot open a layer
     /// it did not record or record one it did not open.
     clip_frames: Vec<ClipFrame>,
@@ -156,14 +156,14 @@ enum ClipFrame {
     SaveLayer,
 }
 
-impl<'frame> Backend<'frame> {
-    /// Create a new Backend that borrows the given painter for the frame.
+impl<'frame> LayerDispatcher<'frame> {
+    /// Create a new LayerDispatcher that borrows the given painter for the frame.
     ///
     /// `surface_view` / `surface_texture` start unbound. Call
     /// [`bind_surface`](Self::bind_surface) when the frame surface
     /// is available to enable the DisplayList-backdrop-filter
     /// command path.
-    pub fn new(painter: &'frame mut WgpuPainter) -> Self {
+    pub(crate) fn new(painter: &'frame mut WgpuPainter) -> Self {
         Self {
             painter,
             offscreen: None,
@@ -175,8 +175,8 @@ impl<'frame> Backend<'frame> {
         }
     }
 
-    /// Create a new Backend that borrows the given painter and offscreen renderer.
-    pub fn with_offscreen(
+    /// Create a new LayerDispatcher that borrows the given painter and offscreen renderer.
+    pub(crate) fn with_offscreen(
         painter: &'frame mut WgpuPainter,
         offscreen: &'frame mut super::offscreen::OffscreenRenderer,
     ) -> Self {
@@ -194,13 +194,13 @@ impl<'frame> Backend<'frame> {
     /// Bind the frame's surface handles.
     ///
     /// Must be called by [`Renderer::render_scene`](super::renderer::Renderer::render_scene)
-    /// after constructing the Backend and before dispatching any
+    /// after constructing the LayerDispatcher and before dispatching any
     /// `LayerTree` commands. Required for
     /// [`CommandRenderer::render_backdrop_filter`] to actually
     /// flush + blur the surface contents; without it the backdrop-
     /// filter path falls back to dispatching the child display list
     /// without applying the filter (visible regression vs Flutter).
-    pub fn bind_surface(
+    pub(crate) fn bind_surface(
         &mut self,
         view: &'frame wgpu::TextureView,
         texture: &'frame wgpu::Texture,
@@ -210,40 +210,18 @@ impl<'frame> Backend<'frame> {
     }
 
     /// Access the offscreen renderer mutably (for shader mask, backdrop filter).
-    pub fn offscreen_mut(&mut self) -> Option<&mut super::offscreen::OffscreenRenderer> {
+    pub(crate) fn offscreen_mut(&mut self) -> Option<&mut super::offscreen::OffscreenRenderer> {
         self.offscreen.as_deref_mut()
     }
 
     /// Get a reference to the underlying painter.
-    pub fn painter(&self) -> &WgpuPainter {
+    pub(crate) fn painter(&self) -> &WgpuPainter {
         self.painter
     }
 
     /// Get a mutable reference to the underlying painter.
-    pub fn painter_mut(&mut self) -> &mut WgpuPainter {
+    pub(crate) fn painter_mut(&mut self) -> &mut WgpuPainter {
         &mut *self.painter
-    }
-
-    /// Returns the current save stack depth.
-    ///
-    /// This is useful for tracking how many `save()` calls have been made
-    /// by layer rendering so that the corresponding number of `restore()` calls
-    /// can be issued after rendering children.
-    pub fn save_count(&self) -> usize {
-        self.painter.save_count()
-    }
-
-    /// Restores the most recently saved canvas state.
-    ///
-    /// This pops the transform and clip state from the save stack.
-    /// Used to restore state after rendering layer children.
-    ///
-    /// Flushes any lazy `with_transform` save first so the explicit
-    /// `restore()` pops the caller's matched `save()`, not the lazy
-    /// transform that happens to be the top of the painter stack.
-    pub fn restore(&mut self) {
-        self.flush_active_transform();
-        self.painter.restore();
     }
 
     /// Whether this push will render its subtree into an offscreen.
@@ -366,9 +344,8 @@ impl<'frame> Backend<'frame> {
     /// trait method (push_clip_* / pop_clip / push_offset /
     /// push_transform / pop_transform / push_opacity / pop_opacity
     /// / push_color_filter / pop_color_filter / push_image_filter
-    /// / pop_image_filter), the public `Backend::restore` escape
-    /// hatch, and the `Drop` impl (so the borrowed painter is
-    /// balanced when the Backend leaves scope). See
+    /// / pop_image_filter) and the `Drop` impl (so the borrowed painter is
+    /// balanced when the LayerDispatcher leaves scope). See
     /// [`Self::active_transform`] for the full list of flush points and why
     /// each one is needed.
     ///
@@ -425,8 +402,8 @@ impl<'frame> Backend<'frame> {
     ///
     /// Called from every site that mutates the painter save stack
     /// outside the coalescing path: `with_transform`'s identity /
-    /// mismatch arms, every `LayerStateStack` method on `Backend`,
-    /// the public `Backend::restore`, and the `Drop` impl. See the
+    /// mismatch arms, every `LayerStateStack` method on `LayerDispatcher`,
+    /// and the `Drop` impl. See the
     /// [`active_transform`](Self::active_transform) field doc for
     /// the full list of flush points and why each one is needed.
     fn flush_active_transform(&mut self) {
@@ -462,6 +439,7 @@ impl<'frame> Backend<'frame> {
         &mut self,
         device_rect: Rect<Pixels>,
         sigma: f32,
+        blend: BlendMode,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
     ) -> bool {
@@ -582,20 +560,19 @@ impl<'frame> Backend<'frame> {
             Pixels(h as f32),
         );
         self.painter
-            .queue_offscreen_result(blurred, clamped_composite_rect);
+            .queue_offscreen_result(blurred, clamped_composite_rect, blend);
         true
     }
 }
 
-impl Drop for Backend<'_> {
+impl Drop for LayerDispatcher<'_> {
     /// Safety-net: balance any deferred lazy-coalescing save that was left on
-    /// the painter stack by `with_transform`. The 21 eager `flush_active_transform`
-    /// call sites throughout the impl (every `LayerStateStack` method, the identity
-    /// / mismatch arms of `with_transform`, and the `restore` escape hatch) flush at
-    /// the correct semantic point. This `Drop` impl is a backstop for any future call
-    /// path that forgets to flush: when the Backend goes out of scope the painter is
+    /// the painter stack by `with_transform`. Every `LayerStateStack` method and
+    /// both arms of `with_transform` flush at the correct semantic point. This
+    /// `Drop` impl is a backstop for any future call
+    /// path that forgets to flush: when the LayerDispatcher goes out of scope the painter is
     /// left balanced and ready for its next use (`painter.render`,
-    /// `end_frame_maintenance`, or the next frame's Backend).
+    /// `end_frame_maintenance`, or the next frame's LayerDispatcher).
     fn drop(&mut self) {
         self.flush_active_transform();
     }
@@ -631,10 +608,6 @@ impl Drop for Backend<'_> {
 /// the canvas vocabulary rather than to this backend; issue #848 stays open for
 /// it. No in-repo caller reaches it: `RenderClip` and `RenderPhysicalModel` both
 /// paint through `PaintCx::with_clip_*`, which pushes a clip LAYER.
-const fn clip_is_hard(behavior: flui_types::painting::Clip) -> bool {
-    matches!(behavior, flui_types::painting::Clip::HardEdge)
-}
-
 /// Whether a clip layer's mode asks for an offscreen around the clipped
 /// subtree.
 ///
@@ -648,7 +621,7 @@ const fn clip_is_hard(behavior: flui_types::painting::Clip) -> bool {
 /// change, not a side effect.
 ///
 /// This answers only the MODE half of the question. Whether a layer is actually
-/// opened is [`Backend::opens_offscreen`], which also requires that no
+/// opened is [`LayerDispatcher::opens_offscreen`], which also requires that no
 /// enclosing image-filter layer would discard it.
 const fn clip_opens_a_layer(behavior: flui_types::painting::Clip) -> bool {
     matches!(behavior, flui_types::painting::Clip::AntiAliasWithSaveLayer)
@@ -699,7 +672,7 @@ const fn clip_op_is_expressible(clip_op: flui_types::painting::ClipOp) -> bool {
 /// once-per-painter latch `clip_path` already carries, not a level downgrade.
 fn warn_unexpressible_clip_op(shape: &str) {
     tracing::warn!(
-        "Backend::{shape}: ClipOp::Difference keeps the shape's complement, \
+        "LayerDispatcher::{shape}: ClipOp::Difference keeps the shape's complement, \
          which no clip primitive here can express; the clip is NOT applied. \
          Installing the shape as an intersect instead would invert the request \
          and erase the content it asked to keep. Honouring it needs the stencil \
@@ -707,16 +680,16 @@ fn warn_unexpressible_clip_op(shape: &str) {
     );
 }
 
-impl CommandRenderer for Backend<'_> {
+impl CommandRenderer for LayerDispatcher<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
-            painter.rect(rect, paint);
+            painter.draw_rect(rect, paint);
         });
     }
 
     fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
-            painter.rrect(rrect, paint);
+            painter.draw_rrect(rrect, paint);
         });
     }
 
@@ -728,13 +701,13 @@ impl CommandRenderer for Backend<'_> {
         transform: &Matrix4,
     ) {
         self.with_transform(transform, |painter| {
-            painter.circle(center, radius, paint);
+            painter.draw_circle(center, radius, paint);
         });
     }
 
     fn render_oval(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
-            painter.oval(rect, paint);
+            painter.draw_oval(rect, paint);
         });
     }
 
@@ -746,7 +719,7 @@ impl CommandRenderer for Backend<'_> {
         transform: &Matrix4,
     ) {
         self.with_transform(transform, |painter| {
-            painter.line(p1, p2, paint);
+            painter.draw_line(p1, p2, paint);
         });
     }
 
@@ -787,22 +760,22 @@ impl CommandRenderer for Backend<'_> {
             PointMode::Points => {
                 let radius = paint.stroke_width / 2.0;
                 for point in points {
-                    painter.circle(*point, radius, paint);
+                    painter.draw_circle(*point, radius, paint);
                 }
             }
             PointMode::Lines => {
                 for i in (0..points.len()).step_by(2) {
                     if i + 1 < points.len() {
-                        painter.line(points[i], points[i + 1], paint);
+                        painter.draw_line(points[i], points[i + 1], paint);
                     }
                 }
             }
             PointMode::Polygon => {
                 for i in 0..points.len().saturating_sub(1) {
-                    painter.line(points[i], points[i + 1], paint);
+                    painter.draw_line(points[i], points[i + 1], paint);
                 }
                 if points.len() > 2 {
-                    painter.line(points[points.len() - 1], points[0], paint);
+                    painter.draw_line(points[points.len() - 1], points[0], paint);
                 }
             }
         });
@@ -821,7 +794,7 @@ impl CommandRenderer for Backend<'_> {
             let color = style.color.unwrap_or(Color::BLACK);
             let paint = Paint::fill(color);
             let position = Point::new(offset.dx, offset.dy);
-            painter.text(text, position, font_size, &paint);
+            painter.draw_text(text, position, font_size, &paint);
         });
     }
 
@@ -854,7 +827,7 @@ impl CommandRenderer for Backend<'_> {
 
         let position = Point::new(offset.dx, offset.dy);
         self.with_transform(transform, |painter| {
-            painter.rich_text(&runs, position, scaled_font_size, base_color, wrap_width);
+            painter.draw_rich_text(&runs, position, scaled_font_size, base_color, wrap_width);
         });
     }
 
@@ -966,7 +939,7 @@ impl CommandRenderer for Backend<'_> {
         _transform: &Matrix4,
     ) {
         // Flush any deferred-coalesced transform from the prior command before
-        // reading the CTM. The Backend defers transforms lazily (see
+        // reading the CTM. The LayerDispatcher defers transforms lazily (see
         // `with_transform` / `active_transform`); without this call
         // `current_transform_matrix()` / `current_max_scale()` below would read
         // the PRIOR command's unrelated transform and size/position the offscreen
@@ -1021,9 +994,9 @@ impl CommandRenderer for Backend<'_> {
 
             // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
             // Ensure the cache is populated (creates or resizes as needed), then borrow
-            // it for command dispatch. No take/put-back needed: the Backend borrows
+            // it for command dispatch. No take/put-back needed: the LayerDispatcher borrows
             // `&mut WgpuPainter` directly from `self.offscreen_painter`, and the Drop
-            // impl on the temp Backend guarantees `flush_active_transform()` runs when
+            // impl on the temp LayerDispatcher guarantees `flush_active_transform()` runs when
             // the dispatch scope ends — leaving the cached painter balanced for its next
             // use (render call below, or the next ShaderMask in this frame).
             // The cached painter's render target is the device-sized child texture,
@@ -1053,7 +1026,7 @@ impl CommandRenderer for Backend<'_> {
                 if (dpr_scale - 1.0).abs() > f32::EPSILON {
                     offscreen_painter.scale(dpr_scale, dpr_scale);
                 }
-                let mut temp_backend = Backend::new(offscreen_painter);
+                let mut temp_backend = LayerDispatcher::new(offscreen_painter);
                 for command in child.commands() {
                     dispatch_command(command, &mut temp_backend);
                 }
@@ -1112,13 +1085,8 @@ impl CommandRenderer for Backend<'_> {
                     .offscreen
                     .as_deref_mut()
                     .expect("BUG: self.offscreen.is_some() was checked above and nothing clears it before this borrow");
-                let result = offscreen.render_masked(
-                    bounds,
-                    result_size,
-                    shader,
-                    blend_mode,
-                    child_tex.texture(),
-                );
+                let result =
+                    offscreen.render_masked(bounds, result_size, shader, child_tex.texture());
                 result.into_texture()
             };
 
@@ -1126,7 +1094,7 @@ impl CommandRenderer for Backend<'_> {
             // device-space rect (logical `bounds` would composite at half
             // scale/position on a HiDPI frame).
             self.painter
-                .queue_offscreen_result(masked_texture, device_bounds);
+                .queue_offscreen_result(masked_texture, device_bounds, blend_mode);
 
             tracing::debug!(
                 "ShaderMask GPU pipeline complete: bounds={:?}, device_bounds={:?}, \
@@ -1171,7 +1139,7 @@ impl CommandRenderer for Backend<'_> {
                     }
 
                     let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-                    painter.gradient_rect(
+                    painter.draw_gradient_rect(
                         rect,
                         glam::Vec2::new(from.dx.0, from.dy.0),
                         glam::Vec2::new(to.dx.0, to.dy.0),
@@ -1191,7 +1159,7 @@ impl CommandRenderer for Backend<'_> {
                     }
 
                     let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-                    painter.radial_gradient_rect(
+                    painter.draw_radial_gradient_rect(
                         rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
                         *radius,
@@ -1212,7 +1180,7 @@ impl CommandRenderer for Backend<'_> {
                     }
 
                     let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-                    painter.sweep_gradient_rect(
+                    painter.draw_sweep_gradient_rect(
                         rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
                         *start_angle,
@@ -1257,7 +1225,7 @@ impl CommandRenderer for Backend<'_> {
                     }
 
                     let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-                    painter.gradient_rect(
+                    painter.draw_gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(from.dx.0, from.dy.0),
                         glam::Vec2::new(to.dx.0, to.dy.0),
@@ -1277,7 +1245,7 @@ impl CommandRenderer for Backend<'_> {
                     }
 
                     let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-                    painter.radial_gradient_rect(
+                    painter.draw_radial_gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
                         *radius,
@@ -1298,7 +1266,7 @@ impl CommandRenderer for Backend<'_> {
                     }
 
                     let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-                    painter.sweep_gradient_rect(
+                    painter.draw_sweep_gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
                         *start_angle,
@@ -1320,15 +1288,14 @@ impl CommandRenderer for Backend<'_> {
             // Carry the command's blend mode so the full-viewport fill composites
             // correctly (e.g. `DrawColor` with `Clear` punches out the layer).
             let paint = Paint::fill(color).with_blend_mode(blend_mode);
-            painter.rect(viewport_bounds, &paint);
+            painter.draw_rect(viewport_bounds, &paint);
         });
     }
 
     fn render_paint(&mut self, paint: &Paint, transform: &Matrix4) {
-        let paint = paint.clone();
         self.with_transform(transform, |painter| {
             let viewport_bounds = painter.viewport_bounds();
-            painter.rect(viewport_bounds, &paint);
+            painter.draw_rect(viewport_bounds, paint);
         });
     }
 
@@ -1337,13 +1304,14 @@ impl CommandRenderer for Backend<'_> {
         child: Option<&flui_painting::DisplayList>,
         filter: &flui_painting::display_list::ImageFilter,
         bounds: Rect<Pixels>,
-        _blend_mode: BlendMode,
+        blend_mode: BlendMode,
         transform: &Matrix4,
     ) {
-        // `_blend_mode` is intentionally dropped here. Advanced blend on a
-        // BackdropFilter is a separate future backdrop-compositor seam, out of
-        // scope for advanced (dst-read) blend support, which covers
-        // shape/gradient/image producers only.
+        // The blur result is composited with the command's own blend mode
+        // (threaded into `apply_backdrop_blur` below). Advanced (dst-read)
+        // modes are a separate future backdrop-compositor seam, out of scope
+        // for advanced blend support, which covers shape/gradient/image
+        // producers only.
         use flui_painting::display_list::ImageFilter;
 
         // Dispatch the child display list (or no-op when None). Used both as the
@@ -1368,7 +1336,7 @@ impl CommandRenderer for Backend<'_> {
 
         // Path B (DisplayList-command level) backdrop filter. Shares the
         // offscreen blur pipeline with Path A (`Renderer::handle_backdrop_filter`,
-        // layer-tree level) via `Backend::apply_backdrop_blur` — the clamp +
+        // layer-tree level) via `LayerDispatcher::apply_backdrop_blur` — the clamp +
         // copy + blur + composite live there once, so the off-screen-clamp
         // handling can no longer drift between the two paths. Non-blur filters
         // and a missing surface fall back to passthrough with a `warn!` so the
@@ -1400,7 +1368,13 @@ impl CommandRenderer for Backend<'_> {
         // transform), then run the shared blur (no-op return if off-screen or no
         // offscreen renderer — children still render below either way).
         let device_rect = transform.transform_rect(&bounds);
-        self.apply_backdrop_blur(device_rect, sigma, surface_texture, surface_view);
+        self.apply_backdrop_blur(
+            device_rect,
+            sigma,
+            blend_mode,
+            surface_texture,
+            surface_view,
+        );
 
         // Dispatch the child display list on top of the (maybe-)blurred backdrop.
         // Each child `DrawCommand` carries its own pre-composited transform, so
@@ -1436,10 +1410,10 @@ impl CommandRenderer for Backend<'_> {
             warn_unexpressible_clip_op("clip_rect");
             return;
         }
-        // The `Clip` MODE is honoured — see `clip_is_hard`.
-        let hard = clip_is_hard(clip_behavior);
+        // The `Clip` MODE rides through; the painter decides how each shape
+        // honours it (see `WgpuPainter::clip_rect` for the one that cannot).
         self.with_transform(transform, |painter| {
-            painter.clip_rect(rect, hard);
+            painter.clip_rect(rect, clip_behavior);
         });
     }
 
@@ -1457,9 +1431,8 @@ impl CommandRenderer for Backend<'_> {
             warn_unexpressible_clip_op("clip_rrect");
             return;
         }
-        let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
-            painter.clip_rrect(rrect, hard);
+            painter.clip_rrect(rrect, clip_behavior);
         });
     }
 
@@ -1482,9 +1455,8 @@ impl CommandRenderer for Backend<'_> {
             warn_unexpressible_clip_op("clip_rsuperellipse");
             return;
         }
-        let hard = clip_is_hard(clip_behavior);
         self.with_transform(transform, |painter| {
-            painter.clip_rsuperellipse(rsuperellipse, hard);
+            painter.clip_rsuperellipse(rsuperellipse, clip_behavior);
         });
     }
 
@@ -1513,10 +1485,6 @@ impl CommandRenderer for Backend<'_> {
         self.with_transform(transform, |painter| {
             painter.clip_path(path);
         });
-    }
-
-    fn viewport_bounds(&self) -> Rect<Pixels> {
-        self.painter.viewport_bounds()
     }
 
     fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, transform: &Matrix4) {
@@ -1553,7 +1521,7 @@ impl CommandRenderer for Backend<'_> {
     //
     // push_clip_* / push_offset / push_transform / push_opacity /
     // push_color_filter / push_image_filter and their corresponding pop_*
-    // methods live in `impl LayerStateStack for Backend` (below), not in
+    // methods live in `impl LayerStateStack for LayerDispatcher` (below), not in
     // this `CommandRenderer` impl. The visitor methods stay on this trait;
     // the layer-tree state-stack methods live on the dedicated
     // `LayerStateStack` trait. See the doc comment on that trait in
@@ -1577,7 +1545,7 @@ impl CommandRenderer for Backend<'_> {
         let bg_paint = Paint::fill(bg_color);
         let bg_rrect =
             RRect::from_rect_and_radius(bounds, flui_types::geometry::Radius::circular(px(4.0)));
-        self.painter.rrect(bg_rrect, &bg_paint);
+        self.painter.draw_rrect(bg_rrect, &bg_paint);
 
         let x = bounds.left() + px(8.0);
         let x_val = bounds.left() + px(50.0);
@@ -1586,7 +1554,7 @@ impl CommandRenderer for Backend<'_> {
         // GPU label (cyan) + FPS value
         let cyan = Color::rgba(0, 200, 200, 255);
         self.painter
-            .text("GPU", Point::new(x, y), 11.0, &Paint::fill(cyan));
+            .draw_text("GPU", Point::new(x, y), 11.0, &Paint::fill(cyan));
 
         // FPS with color coding
         let fps_color = if fps >= 55.0 {
@@ -1596,7 +1564,7 @@ impl CommandRenderer for Backend<'_> {
         } else {
             Color::rgba(255, 130, 130, 255) // Light red
         };
-        self.painter.text(
+        self.painter.draw_text(
             &format!("{fps:.0}"),
             Point::new(x_val, y),
             11.0,
@@ -1613,22 +1581,22 @@ impl CommandRenderer for Backend<'_> {
             px(8.0)
         };
         self.painter
-            .text("FPS", Point::new(x_val + fps_w, y), 8.0, &Paint::fill(gray));
+            .draw_text("FPS", Point::new(x_val + fps_w, y), 8.0, &Paint::fill(gray));
         y += px(14.0);
 
         // Frametime label (purple) + value
         let purple = Color::rgba(200, 100, 255, 255);
         self.painter
-            .text("Frame", Point::new(x, y), 10.0, &Paint::fill(purple));
+            .draw_text("Frame", Point::new(x, y), 10.0, &Paint::fill(purple));
 
         let white = Color::rgba(220, 220, 220, 255);
-        self.painter.text(
+        self.painter.draw_text(
             &format!("{frame_time_ms:.1}"),
             Point::new(x_val, y),
             10.0,
             &Paint::fill(white),
         );
-        self.painter.text(
+        self.painter.draw_text(
             "ms",
             Point::new(x_val + px(22.0), y),
             8.0,
@@ -1642,7 +1610,7 @@ impl CommandRenderer for Backend<'_> {
             // remains legible after glyph antialiasing and display scaling.
             let diagnostic_color = Color::rgba(205, 205, 210, 255);
             self.painter
-                .text(line, Point::new(x, y), 9.0, &Paint::fill(diagnostic_color));
+                .draw_text(line, Point::new(x, y), 9.0, &Paint::fill(diagnostic_color));
         }
 
         let _ = total_frames;
@@ -1654,12 +1622,12 @@ impl CommandRenderer for Backend<'_> {
 // ============================================================================
 //
 // The 13 push_/pop_ methods below live on the dedicated `LayerStateStack`
-// trait rather than in the `impl CommandRenderer for Backend` block.
+// trait rather than in the `impl CommandRenderer for LayerDispatcher` block.
 // Bodies and behavior are unchanged from before the split; only the
 // receiving trait differs. See `crates/flui-engine/src/traits.rs`
 // for the trait-split rationale.
 
-impl LayerStateStack for Backend<'_> {
+impl LayerStateStack for LayerDispatcher<'_> {
     // Every method on this trait must call `self.flush_active_transform()`
     // BEFORE any `painter.save` / `painter.restore` / `painter.save_layer`
     // / `painter.restore_layer` op. `with_transform`'s coalescing leaves
@@ -1679,7 +1647,7 @@ impl LayerStateStack for Backend<'_> {
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
-        self.painter.clip_rect(*rect, clip_is_hard(clip_behavior));
+        self.painter.clip_rect(*rect, clip_behavior);
         // A rect clip is the hardware scissor under every mode, and the scissor
         // has already clipped every draw that goes into the offscreen. It is
         // binary, so re-applying it to the group would change nothing — hence
@@ -1704,7 +1672,7 @@ impl LayerStateStack for Backend<'_> {
             // avoid.
             Some(self.painter.clip_rrect_at_composite(*rrect))
         } else {
-            self.painter.clip_rrect(*rrect, clip_is_hard(clip_behavior));
+            self.painter.clip_rrect(*rrect, clip_behavior);
             None
         };
         self.open_clip_frame(composite_clip);
@@ -1729,8 +1697,7 @@ impl LayerStateStack for Backend<'_> {
         let composite_clip = if self.opens_offscreen(clip_behavior) {
             Some(self.painter.clip_rsuperellipse_at_composite(*rse))
         } else {
-            self.painter
-                .clip_rsuperellipse(*rse, clip_is_hard(clip_behavior));
+            self.painter.clip_rsuperellipse(*rse, clip_behavior);
             None
         };
         self.open_clip_frame(composite_clip);
@@ -1774,7 +1741,7 @@ impl LayerStateStack for Backend<'_> {
                 // on. The clip stack is the one that underflowed, so the clip
                 // stack is the only one that reports it.
                 tracing::warn!(
-                    "Backend::pop_clip: no clip frame is open; the layer walk emitted a \
+                    "LayerDispatcher::pop_clip: no clip frame is open; the layer walk emitted a \
                      pop_clip without a matching push_clip_* -- painter state left untouched"
                 );
             }
@@ -2107,7 +2074,7 @@ pub(crate) fn flatten_compose(
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
-    use crate::traits::CommandRenderer;
+    use crate::command_renderer::CommandRenderer;
 
     /// Acquire a real device/queue. Returns `None` when no GPU adapter exists
     /// (CI without a GPU), so the test skips gracefully.
@@ -2142,7 +2109,7 @@ mod tests {
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         // Simulate the `RenderView` DPR root transform on the live CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -2228,7 +2195,7 @@ mod tests {
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         // Simulate DPR=2 on the live CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -2289,7 +2256,7 @@ mod tests {
     /// Locks P2 #1: `render_shader_mask` must flush the backend's deferred
     /// transform coalescing state before reading the painter CTM.
     ///
-    /// The Backend's `with_transform` mechanism batches consecutive same-matrix
+    /// The LayerDispatcher's `with_transform` mechanism batches consecutive same-matrix
     /// draw calls by leaving a `save()+apply` on the painter stack between calls,
     /// clearing it lazily on the next transform change. If `render_shader_mask`
     /// reads `current_transform_matrix()` / `current_max_scale()` WITHOUT first
@@ -2334,7 +2301,7 @@ mod tests {
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
 
         // Step 1: push the DPR root scale(2) into the main painter CTM — this
         // happens before any command dispatch in a real frame.
@@ -2460,7 +2427,7 @@ mod tests {
 
         // Call the method under test — must not panic.
         {
-            let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+            let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
             backend.render_shader_mask(
                 &child,
                 &shader,
@@ -2691,7 +2658,7 @@ mod tests {
             sigma_y: 4.0,
         };
 
-        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        let mut backend = LayerDispatcher::with_offscreen(&mut painter, &mut offscreen);
         backend.bind_surface(&surface_view, &surface_texture);
 
         // `child = None` — we only care about the composite rect queued, not child dispatch.

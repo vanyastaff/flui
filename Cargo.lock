@@ -1887,7 +1887,6 @@ dependencies = [
  "bytemuck",
  "criterion",
  "crossbeam-channel",
- "flui-assets",
  "flui-foundation",
  "flui-layer",
  "flui-painting",

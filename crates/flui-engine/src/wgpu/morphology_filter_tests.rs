@@ -292,7 +292,7 @@ mod gpu_tests {
         // Without filter.
         {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(bounds, &Paint::fill(source_color));
+            painter.draw_rect(bounds, &Paint::fill(source_color));
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             painter
@@ -311,7 +311,7 @@ mod gpu_tests {
                 radius: 0.0,
                 op: MorphOp::Dilate,
             });
-            painter.rect(bounds, &Paint::fill(source_color));
+            painter.draw_rect(bounds, &Paint::fill(source_color));
             painter.restore_layer();
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -398,7 +398,7 @@ mod gpu_tests {
             radius: DILATE_RADIUS,
             op: MorphOp::Dilate,
         });
-        painter.rect(content_rect, &Paint::fill(source_color));
+        painter.draw_rect(content_rect, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -516,7 +516,7 @@ mod gpu_tests {
             radius: ERODE_RADIUS,
             op: MorphOp::Erode,
         });
-        painter.rect(opaque_rect, &Paint::fill(source_color));
+        painter.draw_rect(opaque_rect, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -627,8 +627,8 @@ mod gpu_tests {
             radius: DILATE_RADIUS,
             op: MorphOp::Dilate,
         });
-        painter.rect(left_half_rect, &Paint::fill(left_half_color));
-        painter.rect(right_half_rect, &Paint::fill(right_half_color));
+        painter.draw_rect(left_half_rect, &Paint::fill(left_half_color));
+        painter.draw_rect(right_half_rect, &Paint::fill(right_half_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -739,7 +739,7 @@ mod gpu_tests {
             radius: DILATE_RADIUS,
             op: MorphOp::Dilate,
         });
-        painter.rect(content_rect, &Paint::fill(source_color));
+        painter.draw_rect(content_rect, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -826,7 +826,7 @@ mod gpu_tests {
             radius: DILATE_RADIUS,
             op: MorphOp::Dilate,
         });
-        painter.rect(content_rect, &Paint::fill(source_color));
+        painter.draw_rect(content_rect, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -907,7 +907,7 @@ mod gpu_tests {
             radius: ERODE_RADIUS,
             op: MorphOp::Erode,
         });
-        painter.rect(edge_rect, &Paint::fill(source_color));
+        painter.draw_rect(edge_rect, &Paint::fill(source_color));
         painter.restore_layer();
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

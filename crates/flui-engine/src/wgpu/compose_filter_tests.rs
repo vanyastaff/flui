@@ -242,7 +242,7 @@ mod gpu_tests {
                     sigma_y: BLUR_SIGMA
                 },
             ]));
-            painter.rect(content_rect, &Paint::fill(opaque_white));
+            painter.draw_rect(content_rect, &Paint::fill(opaque_white));
             painter.restore_layer();
             painter
                 .render(
@@ -265,7 +265,7 @@ mod gpu_tests {
                 },
                 ImageFilterPass::ColorMatrix(alpha_to_red),
             ]));
-            painter.rect(content_rect, &Paint::fill(opaque_white));
+            painter.draw_rect(content_rect, &Paint::fill(opaque_white));
             painter.restore_layer();
             painter
                 .render(
@@ -390,7 +390,7 @@ mod gpu_tests {
                 ImageFilter::Compose(vec![blur_filter.clone()]),
                 dilate_filter.clone(),
             ]);
-            painter.rect(
+            painter.draw_rect(
                 full_surface_rect(),
                 &Paint::fill(Color::rgba(128, 128, 128, 255)),
             );
@@ -418,7 +418,7 @@ mod gpu_tests {
                 blur_filter.clone(),
                 ImageFilter::Compose(vec![dilate_filter.clone(), matrix_filter.clone()]),
             ]);
-            painter.rect(
+            painter.draw_rect(
                 full_surface_rect(),
                 &Paint::fill(Color::rgba(128, 128, 128, 255)),
             );
@@ -499,7 +499,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save_layer_with_image_filter(ImageFilterSpec::Chain(six_passes));
-        painter.rect(
+        painter.draw_rect(
             full_surface_rect(),
             &Paint::fill(Color::rgba(SOURCE_RED, 0, 0, 255)),
         );
@@ -613,7 +613,7 @@ mod gpu_tests {
         {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             painter.push_compose_for_test(&[]);
-            painter.rect(
+            painter.draw_rect(
                 content_bounds,
                 &Paint::fill(Color::rgba(100, 100, 100, 255)),
             );
@@ -635,7 +635,7 @@ mod gpu_tests {
             painter.push_compose_for_test(&[ImageFilter::Matrix(ColorMatrix {
                 values: matrix_values,
             })]);
-            painter.rect(
+            painter.draw_rect(
                 content_bounds,
                 &Paint::fill(Color::rgba(100, 100, 100, 255)),
             );
@@ -699,7 +699,7 @@ mod painter_image_filter_bridge {
             filters: &[flui_painting::display_list::ImageFilter],
         ) {
             let mut passes: SmallVec<[ImageFilterPass; 4]> = SmallVec::new();
-            crate::wgpu::backend::flatten_compose(filters, &mut passes);
+            crate::wgpu::layer_dispatcher::flatten_compose(filters, &mut passes);
             if passes.is_empty() {
                 self.save_layer(None, &Paint::fill(Color::WHITE));
             } else {

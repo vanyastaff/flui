@@ -29,6 +29,8 @@ You need to...
 ├── Understand port methodology → read docs/PORT.md
 ├── Add a dependency → check workspace deps in root Cargo.toml
 ├── Run tests for one crate → `just test-crate <crate-name>`
+├── Run a single test by name → `just test-name <crate> <name>` (or `cargo nextest run -p <crate> <name>`)
+├── Debug a failing test with stdout → `cargo test -p <crate> <name> -- --nocapture`
 ├── Run full pre-PR gate → `just ci`
 ├── Check if code compiles → `just check`
 └── Run port-check triggers → `just port-check-verbose`
@@ -46,6 +48,7 @@ You need to...
 | Write or review Rust code | `STYLE.md` | Crate `AGENTS.md`, relevant architecture contract |
 | Add a cross-crate dep | `docs/workspace-layers.toml` (the checked layer policy) | Root `Cargo.toml` `[workspace.dependencies]`, `docs/FOUNDATIONS.md` Part IV |
 | Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
+| Catch up on recent changes | `CHANGELOG.md` | `docs/ROADMAP.md` |
 | Understand GPU rendering | `crates/flui-engine/AGENTS.md` | `crates/flui-engine/ARCHITECTURE.md` |
 | Write a test that drives a frame, or add test support | `docs/testing.md` — the map of the tiers; pick the shallowest one that can fail | `crates/flui-testing/AGENTS.md`, `crates/flui-rendering/docs/TESTING.md` |
 | Create a PR | Run `just ci` first | Fix any failures before committing; a PR body may say `close(s)`/`fix(es)`/`resolve(s)` `#N` only when the merge is meant to close that issue — GitHub's linker ignores negation and surrounding prose ("PR4 closes #N" closed #N), so write `Refs #N` otherwise |
@@ -56,7 +59,8 @@ You need to...
 
 This repo declares exactly one MCP server in `.mcp.json` — **cratesio**, for crates.io package,
 version, and docs.rs lookups. It answers questions about *external* crates only; it knows nothing
-about this workspace. Everything else is local tooling:
+about this workspace. (`.codex/config.toml` also lists `cratesio` for Codex compatibility; use
+`.mcp.json` as the authoritative project declaration.) Everything else is local tooling:
 
 - **A symbol's definition, its callers, or a rename** — the rust-analyzer LSP when its binary is on
   PATH; otherwise `rg` for the name, then `read` the hits. A rename without an LSP means finding
@@ -70,11 +74,15 @@ never make a workflow here depend on it.
 
 ---
 
-## Project Overview
-
-FLUI is a Flutter-inspired declarative UI framework for Rust with a three-tree architecture (View → Element → Render) and a `wgpu`-backed GPU rendering engine. Foundation layers are stable; higher layers land incrementally. Phase status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); architecture contracts in [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
-
 ## Tech Stack
+
+FLUI is a Flutter-inspired declarative UI framework for Rust. The current vertical slice is **Core.1**:
+the widget catalog (`flui-widgets`), the full build → layout → paint → composite pipeline, and the
+gesture/animation integration are live end-to-end. Remaining work (runtime ownership, multi-window
+content, design-system completeness) lands incrementally; see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+Pipeline in order: immutable `View` configuration → mutable `Element` lifecycle → layout/paint
+`RenderObject` → retained `Layer` tree → `flui-engine` compositor → `wgpu` GPU.
 
 Versions and the dependency set live in the root `Cargo.toml` (`[workspace.dependencies]`) — read
 them there. What the manifest can't tell you:
@@ -88,20 +96,22 @@ them there. What the manifest can't tell you:
 
 ## Build & Development Commands
 
-This project uses **`justfile`** for build automation. Install [`just`](https://just.systems) and
-run `just --list` for the full recipe set — every recipe is categorised and documented there, so
-don't look for a duplicate list here.
-
-**`just ci` is the gate to run before any commit.** It chains `fmt-check` → `inventory-check` →
-`runtime-conformance-check` → `port-check` → `clippy` → `test` → `test-doc`; running the pieces
-individually is for narrowing a failure, not a substitute.
-
 Two invocations `just --list` won't teach you:
 
 ```bash
 cargo test -p flui-objects --test render_object_harness  # catalog guard for render objects
 just port-check-verbose                                  # per-trigger pass/fail + marker totals
 ```
+
+To *see* what a widget tree renders without a live window, capture it to PNG:
+
+```bash
+cargo run -p flui --example screenshot -- <demo> [width] [height] [out.png]
+# demos: material | cupertino | vertical-slice
+```
+
+This uses the same GPU raster path as on-screen and is the canonical way to verify pixels where
+OS screenshot tools fail (GNOME/Wayland+Mutter, wgpu/Vulkan off-screen surfaces).
 
 Both of CI's non-cargo gates now run inside `just gate` (and so inside `just ci`), through the
 `text-check` recipe — **`typos`** (config: `typos.toml`) and **`taplo fmt --check`** (config:
@@ -276,9 +286,6 @@ workflow file does *not* tell you, and what you will misjudge without it:
 
 - **Toolchain:** development toolchain pinned in `rust-toolchain.toml` to `1.98.1` with `rustfmt` + `clippy` components. The pin is deliberately NOT the MSRV floor (`rust-version = "1.97"`), so a future MSRV freeze does not hold the developer back from stable diagnostics; only the `msrv` CI job exercises the floor
 - **Cargo profiles:** dev `opt-level = 1` (faster runtime) + `debug = "line-tables-only"` (backtrace file:line only — matches CI; variable/type DWARF was the bulk of `target/debug/deps`), deps `opt-level = 2` + `debug = false` (deps carry no debuginfo at all; raise it for one package to step into it — a global `-C debuginfo=` rustflag, from `RUSTFLAGS` or a user-level cargo config, overrides any `debug =` key silently and without error, since rustflags append after the profile flag); `dbg` profile (`inherits = "dev"`, `debug = "full"`) is the opt-in full-type-info build for a step-debugger; release `lto = "thin"`, `codegen-units = 1`, `strip = "debuginfo"` (the symbol table is retained so `perf`/flamegraph/minidumps can resolve frames — measured cost +935 KiB; DWARF from the std rlibs is still dropped, 23.5 MB → 4.19 MB). Local disk: `target/debug/deps` is the largest consumer on a 28-crate wgpu workspace (incremental is off via `[profile.dev] incremental = false` in the root `Cargo.toml` — `.cargo/config.toml`'s `[env] CARGO_INCREMENTAL = "0"` feeds sccache but does not itself reach cargo's profile resolution) — artifacts accumulate per RUSTFLAGS/feature/toolchain fingerprint with no size cap; run `just sweep` periodically (cargo-sweep: current-toolchain + 7-day prune). CI sets `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and reclaims ~25 GB of runner bloat before building.
-- **Build jobs:** 8 (set in `.cargo/config.toml`)
-- **Android examples** require `cargo-ndk` + Android NDK (not in workspace default-members)
-- **WASM examples** require `wasm-pack` (not in workspace default-members); use `just web-server` for the dev server
 
 ## Error Triage
 

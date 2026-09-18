@@ -182,7 +182,7 @@ impl OffscreenRenderer {
     ///   fully-rendered frame.
     /// * `surface_view` — the swapchain view to write into.
     /// * `surface_format` — the swapchain surface format.
-    pub fn blit_to_surface(
+    pub(crate) fn blit_to_surface(
         &mut self,
         intermediate_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,

@@ -49,7 +49,7 @@ use flui_types::{Point, Rect, geometry::Pixels, styling::Color};
 /// byte-identical to the pre-affine instanced output.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct RectInstance {
+pub(crate) struct RectInstance {
     /// Local-space bounding box `[x, y, width, height]`.
     ///
     /// For the baked-AABB path this is already in device pixels (the CPU
@@ -134,7 +134,7 @@ impl RectInstance {
     /// set to identity / zero so the vertex shader produces an identical result
     /// to the pre-affine path.
     #[must_use]
-    pub fn rect(rect: Rect<Pixels>, color: Color) -> Self {
+    pub(crate) fn rect(rect: Rect<Pixels>, color: Color) -> Self {
         Self {
             bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
             color: color.to_f32_array(),
@@ -155,7 +155,7 @@ impl RectInstance {
     /// Affects the SHAPE's edge only; an SDF clip applied to it keeps its own
     /// smoothing, which is the clip's contract rather than the paint's.
     #[must_use]
-    pub const fn aliased(mut self) -> Self {
+    pub(crate) const fn aliased(mut self) -> Self {
         self.clip_kind[1] = 1;
         self
     }
@@ -168,7 +168,7 @@ impl RectInstance {
     /// assertion.
     #[cfg(test)]
     #[must_use]
-    pub const fn is_aliased(&self) -> bool {
+    pub(crate) const fn is_aliased(&self) -> bool {
         self.clip_kind[1] == 1
     }
 
@@ -181,7 +181,7 @@ impl RectInstance {
     /// `rect` must already be in device pixels. The affine fields are identity /
     /// zero — byte-identical to the pre-affine baked-AABB path.
     #[must_use]
-    pub fn rounded_rect_corners(
+    pub(crate) fn rounded_rect_corners(
         rect: Rect<Pixels>,
         color: Color,
         top_left: f32,
@@ -218,7 +218,7 @@ impl RectInstance {
     /// Corner radii default to zero; call `.with_clip_rrect` /
     /// `.with_clip_rsuperellipse` afterwards to attach an SDF clip.
     #[must_use]
-    pub fn with_affine_transform(
+    pub(crate) fn with_affine_transform(
         local_bounds: [f32; 4],
         color: Color,
         corner_radii: [f32; 4],
@@ -254,7 +254,7 @@ impl RectInstance {
     /// the new `transform_translate` field appended at the end of the struct;
     /// appending keeps all existing field offsets byte-identical.
     #[must_use]
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Bounds [x, y, width, height] (location 2)
             2 => Float32x4,
@@ -323,7 +323,7 @@ impl RectInstance {
 /// edge; `fwidth` gives ~1-device-px AA at any radius, scale, or rotation.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct CircleInstance {
+pub(crate) struct CircleInstance {
     /// Radius in `.z`; `.xy` is unused (the center lives in `transform_translate`).
     ///
     /// Baked fast path: `[0, 0, radius, 0]`.
@@ -383,7 +383,12 @@ impl CircleInstance {
     /// `scale_xy` is `[sx, sy]` extracted from the current transform matrix.
     /// Pass `[1.0, 1.0]` for identity / uniform scale.
     #[must_use]
-    pub fn new(center: Point<Pixels>, radius: f32, color: Color, scale_xy: [f32; 2]) -> Self {
+    pub(crate) fn new(
+        center: Point<Pixels>,
+        radius: f32,
+        color: Color,
+        scale_xy: [f32; 2],
+    ) -> Self {
         Self {
             // `center` is already in device pixels. It is carried in
             // `transform_translate` (added AFTER M in the shader) so the scale in
@@ -421,7 +426,7 @@ impl CircleInstance {
     ///
     /// `translation` is `[tx, ty]` = `M_w * center_local + t_w` in device pixels.
     #[must_use]
-    pub fn with_affine_transform(
+    pub(crate) fn with_affine_transform(
         linear_cols: [f32; 4],
         color: Color,
         translation: [f32; 2],
@@ -451,7 +456,7 @@ impl CircleInstance {
     /// new `transform_translate` field appended at the end of the struct;
     /// appending keeps all existing field offsets byte-identical.
     #[must_use]
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Center + radius [cx, cy, radius, _] (location 2)
             2 => Float32x4,
@@ -510,7 +515,7 @@ impl CircleInstance {
 /// at any radius, scale, or rotation.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct ArcInstance {
+pub(crate) struct ArcInstance {
     /// Always `[0, 0, 1, 0]`: unit circle at origin, radius folded into `transform`;
     /// `.xy` unused (the center lives in `transform_translate`).
     pub center_radius: [f32; 4],
@@ -563,7 +568,7 @@ impl ArcInstance {
     ///
     /// `translation` is `[tx, ty]` = `M_w * center_local + t_w` in device pixels.
     #[must_use]
-    pub fn with_affine_transform(
+    pub(crate) fn with_affine_transform(
         linear_cols: [f32; 4],
         start_angle: f32,
         sweep_angle: f32,
@@ -591,7 +596,7 @@ impl ArcInstance {
     /// new `transform_translate` field appended at the end of the struct;
     /// appending keeps all existing field offsets byte-identical.
     #[must_use]
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Center + radius [0, 0, radius, _] (location 2)
             2 => Float32x4,
@@ -619,7 +624,7 @@ impl ArcInstance {
 /// Supports texture atlases via UV coordinates.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct TextureInstance {
+pub(crate) struct TextureInstance {
     /// Destination rectangle [x, y, width, height] in screen space
     pub dst_rect: [f32; 4],
 
@@ -670,7 +675,10 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `tint` - Color tint (use Color::WHITE for no tint)
     #[must_use]
-    pub fn new(dst_rect: flui_types::Rect<flui_types::geometry::Pixels>, tint: Color) -> Self {
+    pub(crate) fn new(
+        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        tint: Color,
+    ) -> Self {
         Self {
             dst_rect: [
                 dst_rect.left().0,
@@ -695,7 +703,7 @@ impl TextureInstance {
     /// * `src_uv` - Source UV rectangle [u_min, v_min, u_max, v_max]
     /// * `tint` - Color tint
     #[must_use]
-    pub fn with_uv(
+    pub(crate) fn with_uv(
         dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
         src_uv: [f32; 4],
         tint: Color,
@@ -733,7 +741,7 @@ impl TextureInstance {
     /// would quantize prematurely. The shader multiplies the sampled texel by
     /// this tint (`tex_color * in.tint`).
     #[must_use]
-    pub fn with_uv_tint_f32(
+    pub(crate) fn with_uv_tint_f32(
         dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
         src_uv: [f32; 4],
         tint: [f32; 4],
@@ -757,7 +765,7 @@ impl TextureInstance {
 
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Destination rect (location 2)
             2 => Float32x4,
@@ -819,15 +827,44 @@ pub(crate) fn reduce_superellipse_clip(c: [f32; 12]) -> [f32; 8] {
     ]
 }
 
-pub trait ClippableInstance {
+pub(crate) trait ClippableInstance {
     /// Store the active clip, or clear the slot when no clip is active.
     ///
-    /// One method rather than a per-kind pair: every implementor has the same
-    /// body, and a two-method form made each of them re-derive the kind flag
-    /// and the superellipse reduction — six copies of arithmetic that has one
-    /// right answer.
+    /// One method rather than a per-kind pair: the clip slot has one layout
+    /// across every instance type, so a two-method form would make each
+    /// implementor re-derive the kind flag and the superellipse reduction.
+    ///
+    /// Every implementor but [`RectInstance`] writes the slot verbatim;
+    /// `impl_clippable_instance!` below holds that one body.
     #[must_use]
     fn with_clip(self, clip: super::state_stack::ResolvedClip) -> Self;
+}
+
+/// Generate the verbatim `with_clip` body for instance types whose
+/// `clip_kind` has the clip as its only writer.
+///
+/// [`RectInstance`] is not in this list: it shares lane 1 of `clip_kind` with
+/// the paint's aliased flag and writes the slot by hand.
+macro_rules! impl_clippable_instance {
+    ($($instance:ty),* $(,)?) => {
+        $(
+            impl ClippableInstance for $instance {
+                fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+                    self.clip_rrect = clip.rrect;
+                    self.clip_kind = clip.kind;
+                    self.clip_device_to_local = [
+                        clip.device_to_local[0],
+                        clip.device_to_local[1],
+                        clip.device_to_local[2],
+                        clip.device_to_local[3],
+                    ];
+                    self.clip_local_origin =
+                        [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
+                    self
+                }
+            }
+        )*
+    };
 }
 
 impl ClippableInstance for RectInstance {
@@ -850,80 +887,13 @@ impl ClippableInstance for RectInstance {
     }
 }
 
-impl ClippableInstance for CircleInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for LinearGradientInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for RadialGradientInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for SweepGradientInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for TextureInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
+impl_clippable_instance!(
+    CircleInstance,
+    LinearGradientInstance,
+    RadialGradientInstance,
+    SweepGradientInstance,
+    TextureInstance,
+);
 
 // =============================================================================
 // Gradient Instances (from effects.rs for API consistency)
@@ -933,7 +903,7 @@ impl ClippableInstance for TextureInstance {
 ///
 /// See `crate::painter::effects::LinearGradientInstance` for full
 /// documentation.
-pub use super::effects::LinearGradientInstance;
+pub(crate) use super::effects::LinearGradientInstance;
 
 impl LinearGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
@@ -973,7 +943,7 @@ impl LinearGradientInstance {
 }
 
 /// Radial gradient instance data for GPU instancing
-pub use super::effects::RadialGradientInstance;
+pub(crate) use super::effects::RadialGradientInstance;
 
 impl RadialGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
@@ -1017,7 +987,7 @@ impl RadialGradientInstance {
 // =============================================================================
 
 /// Sweep gradient instance data for GPU instancing
-pub use super::effects::SweepGradientInstance;
+pub(crate) use super::effects::SweepGradientInstance;
 
 impl SweepGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
@@ -1061,7 +1031,7 @@ impl SweepGradientInstance {
 // =============================================================================
 
 /// Shadow instance data for GPU instancing
-pub use super::effects::ShadowInstance;
+pub(crate) use super::effects::ShadowInstance;
 
 impl ShadowInstance {
     /// Get wgpu vertex buffer layout for instance data
@@ -1104,7 +1074,7 @@ impl ShadowInstance {
 /// snapshotted before replay — used by the deterministic-replay test to assert that
 /// `GpuReplay::submit` does not mutate the IR.
 #[derive(Debug, Clone)]
-pub struct InstanceBatch<T> {
+pub(crate) struct InstanceBatch<T> {
     /// Instance data
     pub instances: Vec<T>,
 
@@ -1115,7 +1085,7 @@ pub struct InstanceBatch<T> {
 impl<T> InstanceBatch<T> {
     /// Create a new instance batch
     #[must_use]
-    pub fn new(max_instances: usize) -> Self {
+    pub(crate) fn new(max_instances: usize) -> Self {
         Self {
             instances: Vec::with_capacity(max_instances),
             max_instances,
@@ -1126,30 +1096,30 @@ impl<T> InstanceBatch<T> {
     ///
     /// Returns true if batch is full and should be flushed.
     #[must_use]
-    pub fn add(&mut self, instance: T) -> bool {
+    pub(crate) fn add(&mut self, instance: T) -> bool {
         self.instances.push(instance);
         self.instances.len() >= self.max_instances
     }
 
     /// Check if batch is empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.instances.is_empty()
     }
 
     /// Get number of instances
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.instances.len()
     }
 
     /// Clear the batch
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.instances.clear();
     }
 
     /// Get instance data as byte slice
-    pub fn as_bytes(&self) -> &[u8]
+    pub(crate) fn as_bytes(&self) -> &[u8]
     where
         T: Pod,
     {

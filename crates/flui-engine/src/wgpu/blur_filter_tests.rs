@@ -356,7 +356,7 @@ mod gpu_tests {
             sigma_x: SIGMA,
             sigma_y: SIGMA,
         });
-        painter.rect(disc_rect, &Paint::fill(half_alpha_white));
+        painter.draw_rect(disc_rect, &Paint::fill(half_alpha_white));
         painter.restore_layer();
 
         let mut encoder =
@@ -445,7 +445,7 @@ mod gpu_tests {
             sigma_x: SIGMA_X,
             sigma_y: SIGMA_Y,
         });
-        painter.rect(content_rect, &Paint::fill(source_color));
+        painter.draw_rect(content_rect, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -546,7 +546,7 @@ mod gpu_tests {
             sigma_x: SIGMA,
             sigma_y: SIGMA,
         });
-        painter.rect(content_rect, &Paint::fill(source_color));
+        painter.draw_rect(content_rect, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -668,7 +668,7 @@ mod gpu_tests {
         // Reference: draw without any filter.
         {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(bounds, &Paint::fill(source_color));
+            painter.draw_rect(bounds, &Paint::fill(source_color));
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             painter
@@ -687,7 +687,7 @@ mod gpu_tests {
                 sigma_x: 0.0,
                 sigma_y: 0.0,
             });
-            painter.rect(bounds, &Paint::fill(source_color));
+            painter.draw_rect(bounds, &Paint::fill(source_color));
             painter.restore_layer();
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -957,7 +957,7 @@ mod gpu_tests {
             sigma_x: SIGMA,
             sigma_y: SIGMA,
         });
-        painter.rect(content_rect, &Paint::fill(source_color));
+        painter.draw_rect(content_rect, &Paint::fill(source_color));
         painter.restore_layer();
 
         let mut encoder =
@@ -1137,7 +1137,7 @@ mod gpu_tests {
         // Draw a baked RectInstance that does NOT fill the surface.
         // The baked path (identity M, zero translate) makes bounds trackable via
         // content_aabb — this is the canonical producer the criterion covers.
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(
                 px(CONTENT_MARGIN as f32),
                 px(CONTENT_MARGIN as f32),
@@ -1245,7 +1245,7 @@ mod gpu_tests {
                 sigma_x: SIGMA,
                 sigma_y: SIGMA,
             });
-            painter.rect(
+            painter.draw_rect(
                 Rect::from_xywh(
                     px(INNER_MARGIN as f32),
                     px(INNER_MARGIN as f32),
@@ -1279,7 +1279,7 @@ mod gpu_tests {
             sigma_y: SIGMA,
         });
         // Opaque rect filling [20,20]→[44,44].
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(
                 px(INNER_MARGIN as f32),
                 px(INNER_MARGIN as f32),
@@ -1370,7 +1370,7 @@ mod gpu_tests {
                 sigma_x: SIGMA,
                 sigma_y: SIGMA,
             });
-            painter.circle(
+            painter.draw_circle(
                 Point::new(Pixels(CENTER_COL as f32), Pixels(CENTER_ROW as f32)),
                 RADIUS_PX as f32,
                 &Paint::fill(Color::rgba(200, 80, 80, 255)),
@@ -1405,7 +1405,7 @@ mod gpu_tests {
             sigma_x: SIGMA,
             sigma_y: SIGMA,
         });
-        painter.circle(
+        painter.draw_circle(
             Point::new(Pixels(CENTER_COL as f32), Pixels(CENTER_ROW as f32)),
             RADIUS_PX as f32,
             &Paint::fill(Color::rgba(200, 80, 80, 255)),
@@ -1505,7 +1505,7 @@ mod gpu_tests {
                 GradientStop::new(flui_types::Color::rgba(255, 0, 0, 255), 0.0),
                 GradientStop::new(flui_types::Color::rgba(0, 0, 255, 255), 1.0),
             ];
-            painter.gradient_rect(
+            painter.draw_gradient_rect(
                 Rect::from_xywh(px(MARGIN), px(MARGIN), px(SIDE), px(SIDE)),
                 glam::Vec2::new(MARGIN, MARGIN),
                 glam::Vec2::new(MARGIN + SIDE, MARGIN),
@@ -1555,7 +1555,7 @@ mod gpu_tests {
             GradientStop::new(flui_types::Color::rgba(200, 100, 0, 255), 0.0),
             GradientStop::new(flui_types::Color::rgba(0, 100, 200, 255), 1.0),
         ];
-        painter.gradient_rect(
+        painter.draw_gradient_rect(
             Rect::from_xywh(px(MARGIN), px(MARGIN), px(SIDE), px(SIDE)),
             glam::Vec2::new(MARGIN, MARGIN),
             glam::Vec2::new(MARGIN + SIDE, MARGIN),
@@ -1616,7 +1616,7 @@ mod gpu_tests {
             sigma_x: SIGMA,
             sigma_y: SIGMA,
         });
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(
                 px(INNER_MARGIN as f32),
                 px(INNER_MARGIN as f32),
@@ -1740,9 +1740,9 @@ mod gpu_tests {
                     px((CLIP_RIGHT - CLIP_LEFT) as f32),
                     px((CLIP_BOTTOM - CLIP_TOP) as f32),
                 ),
-                true,
+                flui_types::painting::Clip::HardEdge,
             );
-            painter.rect(
+            painter.draw_rect(
                 Rect::from_xywh(
                     px(CONTENT_LEFT as f32),
                     px(CONTENT_TOP as f32),
@@ -1801,9 +1801,9 @@ mod gpu_tests {
                 px((CLIP_RIGHT - CLIP_LEFT) as f32),
                 px((CLIP_BOTTOM - CLIP_TOP) as f32),
             ),
-            true,
+            flui_types::painting::Clip::HardEdge,
         );
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(
                 px(CONTENT_LEFT as f32),
                 px(CONTENT_TOP as f32),

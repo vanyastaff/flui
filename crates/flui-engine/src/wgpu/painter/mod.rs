@@ -15,7 +15,7 @@ use flui_painting::PaintingBinding;
 use super::{
     command_ir::{DrawItem, DrawSegment, ImageFilterPass, PendingOffscreenTexture, ScissorRect},
     layer_compositor::LayerCompositor,
-    pipelines::PipelineSet,
+    pipeline_set::PipelineSet,
     replay::GpuReplay,
     resources::GpuResources,
     state_stack::GpuStateStack,
@@ -228,9 +228,9 @@ impl WgpuPainter {
     pub fn reset_frame_state(&mut self) {
         // Assert save/restore balance at the frame boundary BEFORE clearing.
         //
-        // Not placed in `GpuStateStack::Drop` because the Backend
+        // Not placed in `GpuStateStack::Drop` because the LayerDispatcher
         // implicit-single-save (a lazy `active_transform` save, balanced by
-        // `Backend`'s own `Drop`) must not false-positive-panic here, and a
+        // `LayerDispatcher`'s own `Drop`) must not false-positive-panic here, and a
         // Drop panic during unwind aborts the process.
         //
         // The assertion logic lives in `GpuStateStack::debug_assert_balanced`
@@ -518,6 +518,7 @@ impl WgpuPainter {
         &mut self,
         texture: super::texture_pool::PooledTexture,
         bounds: Rect<Pixels>,
+        blend: flui_types::painting::BlendMode,
     ) {
         // Finalize the current segment and start a new one
         self.finish_current_segment();
@@ -525,6 +526,7 @@ impl WgpuPainter {
             .push(DrawItem::OffscreenTexture(PendingOffscreenTexture {
                 texture,
                 bounds,
+                blend,
             }));
     }
 
@@ -679,15 +681,6 @@ impl WgpuPainter {
         self.replay.update_viewport(&self.queue, width, height);
     }
 
-    /// Returns the current save stack depth.
-    ///
-    /// Delegates to `GpuStateStack::depth` — the single source of truth is
-    /// `transform_stack.len()` inside the stack; no parallel counter is
-    /// maintained.
-    pub fn save_count(&self) -> usize {
-        self.state.depth()
-    }
-
     // ===== External Texture Registry Access =====
 
     /// Get a reference to the external texture registry
@@ -697,12 +690,20 @@ impl WgpuPainter {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
     /// use flui_types::painting::TextureId;
     ///
+    /// # fn wire(painter: &mut flui_engine::wgpu::WgpuPainter, gpu_texture: wgpu::Texture) {
     /// let texture_id = TextureId::new(42);
-    /// painter.external_texture_registry()
-    ///     .register(texture_id, gpu_texture, 1920, 1080, true, true);
+    /// painter.external_texture_registry_mut().register(
+    ///     texture_id,
+    ///     gpu_texture,
+    ///     1920,
+    ///     1080,
+    ///     true,
+    ///     true,
+    /// );
+    /// # }
     /// ```
     pub fn external_texture_registry(
         &self,
@@ -729,7 +730,7 @@ impl WgpuPainter {
     /// enough at the magnification they will be baked and drawn at — see
     /// [`Tessellator::set_max_scale`](super::tessellator::Tessellator::set_max_scale).
     ///
-    /// Also consulted by `Backend::render_shader_mask` to size the shader-mask
+    /// Also consulted by `LayerDispatcher::render_shader_mask` to size the shader-mask
     /// offscreen at device resolution: on a HiDPI frame the live device-pixel
     /// ratio rides in the painter CTM (the `RenderView` root pushes
     /// `scale(dpr)`), so the offscreen child/result textures must be allocated

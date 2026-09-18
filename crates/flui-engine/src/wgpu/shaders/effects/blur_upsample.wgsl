@@ -84,100 +84,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // =============================================================================
-// Complete Usage Example (Rust side)
+// Usage (Rust side)
 // =============================================================================
 //
-// ```rust
-// pub struct DualKawaseBlur {
-//     downsample_pipeline: RenderPipeline,
-//     downsample_bind_group_layout: BindGroupLayout,
-//     upsample_pipeline: RenderPipeline,
-//     upsample_bind_group_layout: BindGroupLayout,
-//     mip_textures: Vec<Texture>,
-//     sampler: Sampler,
-// }
-//
-// impl DualKawaseBlur {
-//     pub fn new(device: &Device, max_iterations: u32) -> Self {
-//         // Create mip chain (each level half the size)
-//         let mut mip_textures = Vec::new();
-//         let mut size = initial_size;
-//
-//         for _ in 0..=max_iterations {
-//             mip_textures.push(device.create_texture(&TextureDescriptor {
-//                 size: Extent3d { width: size.width, height: size.height, depth: 1 },
-//                 format: TextureFormat::Rgba8Unorm,
-//                 usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-//                 // ...
-//             }));
-//             size.width /= 2;
-//             size.height /= 2;
-//         }
-//
-//         // Linear sampler for smooth blending
-//         let sampler = device.create_sampler(&SamplerDescriptor {
-//             mag_filter: FilterMode::Linear,
-//             min_filter: FilterMode::Linear,
-//             // ...
-//         });
-//
-//         Self { /* ... */ }
-//     }
-//
-//     pub fn apply(&mut self, encoder: &mut CommandEncoder,
-//                  input: &Texture, iterations: u32) -> &Texture {
-//         // 1. Copy input to mip[0]
-//         encoder.copy_texture_to_texture(input, &self.mip_textures[0], /* ... */);
-//
-//         // 2. Downsample chain (blur and shrink)
-//         for i in 0..iterations {
-//             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-//                 color_attachments: &[RenderPassColorAttachment {
-//                     view: &self.mip_textures[i + 1].create_view(&Default::default()),
-//                     // ...
-//                 }],
-//                 // ...
-//             });
-//
-//             pass.set_pipeline(&self.downsample_pipeline);
-//             pass.set_bind_group(0, &self.create_bind_group(i), &[]);
-//             pass.draw(0..6, 0..1); // Fullscreen quad
-//         }
-//
-//         // 3. Upsample chain (blend and grow)
-//         for i in (0..iterations).rev() {
-//             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-//                 color_attachments: &[RenderPassColorAttachment {
-//                     view: &self.mip_textures[i].create_view(&Default::default()),
-//                     load: LoadOp::Load,  // Blend with existing content
-//                     // ...
-//                 }],
-//                 // ...
-//             });
-//
-//             pass.set_pipeline(&self.upsample_pipeline);
-//             pass.set_bind_group(0, &self.create_bind_group(i + 1), &[]);
-//             pass.draw(0..6, 0..1);
-//         }
-//
-//         // 4. Return blurred result
-//         &self.mip_textures[0]
-//     }
-// }
-//
-// // High-level API usage:
-// let blur = DualKawaseBlur::new(&device, 4);
-//
-// // Glass panel effect
-// let blurred_background = blur.apply(&mut encoder, &background_texture, 3);
-// painter.texture(panel_bounds, blurred_background);
-// painter.rect(panel_bounds, Color::rgba(255, 255, 255, 0.1)); // Tint overlay
-//
-// // Bloom effect
-// let bright_pass = extract_bright_pixels(&scene);
-// let bloom = blur.apply(&mut encoder, &bright_pass, 4);
-// blend_additive(&scene, &bloom);
-// ```
+// This shader is the upsample half of the separable Gaussian filter, driven by
+// `wgpu::blur::apply_blur` (`crates/flui-engine/src/wgpu/blur/mod.rs`), which
+// owns the pipeline, the ping-pong textures, and the iteration count. It is
+// reached from `WgpuPainter` through `ImageFilterPass::Blur`; an embedder
+// applies a blur by pushing an `ImageFilter::Blur` onto a layer, not by driving
+// this shader directly. The `offscreen/blur.rs` Dual Kawase path is a separate
+// consumer of the same idea for backdrop filters.
 //
 // =============================================================================
 // Advanced: Adaptive Blur (variable blur per region)

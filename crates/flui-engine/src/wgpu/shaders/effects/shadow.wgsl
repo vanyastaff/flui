@@ -190,43 +190,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // Usage Example (Rust side)
 // =============================================================================
 //
+// `WgpuPainter::draw_shadow_rect` takes a `ShadowParams` value directly; the
+// Material elevation table lives with the widgets that need it, not here.
+//
 // ```rust
-// // Material Design elevation levels
-// fn elevation_shadow(level: u32) -> ShadowParams {
-//     match level {
-//         1 => ShadowParams {
-//             offset: Vec2::new(0.0, 1.0),
-//             blur_sigma: 2.0,
-//             color: Color::rgba(0, 0, 0, 0.12),
-//         },
-//         2 => ShadowParams {
-//             offset: Vec2::new(0.0, 2.0),
-//             blur_sigma: 4.0,
-//             color: Color::rgba(0, 0, 0, 0.16),
-//         },
-//         3 => ShadowParams {
-//             offset: Vec2::new(0.0, 4.0),
-//             blur_sigma: 8.0,
-//             color: Color::rgba(0, 0, 0, 0.20),
-//         },
-//         _ => ShadowParams::default(),
-//     }
-// }
-//
-// // Render card with shadow
-// let shadow = elevation_shadow(2);
-//
-// // 1. Render shadow first (below card)
-// painter.shadow_rect(
-//     rect,
-//     corner_radius: 12.0,
-//     offset: shadow.offset,
-//     blur: shadow.blur_sigma,
-//     color: shadow.color,
+// let shadow = ShadowParams::new(
+//     Vec2::new(0.0, 2.0),   // offset
+//     4.0,                   // blur_sigma
+//     Color::rgba(0, 0, 0, 0.16),
 // );
 //
-// // 2. Render card on top
-// painter.rect(rect, Color::WHITE, corner_radius: 12.0);
+// // 1. Render the shadow first (below the card).
+// painter.draw_shadow_rect(rect_pos, rect_size, 12.0, &shadow);
+//
+// // 2. Render the card on top.
+// painter.draw_rect(rect, &Paint::fill(Color::WHITE));
 // ```
 //
 // =============================================================================

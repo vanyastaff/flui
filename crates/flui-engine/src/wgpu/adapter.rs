@@ -9,9 +9,9 @@
 //! - `request_flui_device` — the capability-derived `DeviceDescriptor` shared
 //!   by the windowed and offscreen stacks.
 //! - `request_offscreen_gpu` — the full offscreen acquisition
-//!   (instance → adapter → capabilities → device) that `Renderer::new_offscreen`,
-//!   the offscreen half of `Renderer::recover`, and
-//!   `GpuServices::resolve_offscreen` previously each spelled out.
+//!   (instance → adapter → capabilities → device) that `Renderer::new_offscreen`
+//!   and the offscreen half of `Renderer::recover` previously each spelled
+//!   out.
 //!
 //! `HeadlessRenderer` deliberately does not use `request_flui_device`:
 //! capture wants wgpu's default (downlevel-friendly) device rather than the

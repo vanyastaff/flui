@@ -17,7 +17,7 @@ use parking_lot::RwLock;
 
 /// Shader type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ShaderType {
+pub(crate) enum ShaderType {
     /// Solid color mask shader
     SolidMask,
     /// Linear gradient mask shader
@@ -42,7 +42,7 @@ pub enum ShaderType {
 
 impl ShaderType {
     /// Get the WGSL source code for this shader type
-    pub fn source_code(self) -> &'static str {
+    pub(crate) fn source_code(self) -> &'static str {
         match self {
             ShaderType::SolidMask => include_str!("shaders/masks/solid.wgsl"),
             ShaderType::LinearGradientMask => include_str!("shaders/masks/linear_gradient.wgsl"),
@@ -58,7 +58,7 @@ impl ShaderType {
     }
 
     /// Get the shader label (for debugging)
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             ShaderType::SolidMask => "Solid Mask Shader",
             ShaderType::LinearGradientMask => "Linear Gradient Mask Shader",
@@ -70,7 +70,7 @@ impl ShaderType {
     }
 
     /// Get the shader type from a Shader
-    pub fn from_shader(shader: &Shader) -> Self {
+    pub(crate) fn from_shader(shader: &Shader) -> Self {
         match shader {
             Shader::LinearGradient { .. } => ShaderType::LinearGradientMask,
             Shader::RadialGradient { .. } => ShaderType::RadialGradientMask,
@@ -95,7 +95,7 @@ impl ShaderType {
 /// The module field is `None` when created via `get_or_compile` (source-only),
 /// and populated when created via `get_or_compile_module` (GPU-ready).
 #[derive(Clone)]
-pub struct CompiledShader {
+pub(crate) struct CompiledShader {
     pub shader_type: ShaderType,
     pub source: String,
     /// Cached GPU shader module. `None` for source-only inspection.
@@ -118,13 +118,13 @@ impl std::fmt::Debug for CompiledShader {
 /// Caches compiled shader modules to avoid recompilation.
 /// Thread-safe via RwLock.
 #[derive(Debug)]
-pub struct ShaderCache {
+pub(crate) struct ShaderCache {
     cache: RwLock<HashMap<ShaderType, Arc<CompiledShader>>>,
 }
 
 impl ShaderCache {
     /// Create new empty shader cache
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             cache: RwLock::new(HashMap::new()),
         }
@@ -134,7 +134,7 @@ impl ShaderCache {
     ///
     /// Returns cached shader if available, otherwise compiles and caches it.
     #[must_use]
-    pub fn get_or_compile(&self, shader_type: ShaderType) -> Arc<CompiledShader> {
+    pub(crate) fn get_or_compile(&self, shader_type: ShaderType) -> Arc<CompiledShader> {
         // Try to get from cache first (read lock)
         {
             let cache = self.cache.read();
@@ -169,7 +169,7 @@ impl ShaderCache {
     /// source is already cached but lacks a module, compiles and caches the module.
     /// Uses double-check locking to avoid redundant compilation under contention.
     #[must_use]
-    pub fn get_or_compile_module(
+    pub(crate) fn get_or_compile_module(
         &self,
         shader_type: ShaderType,
         device: &wgpu::Device,
@@ -214,16 +214,6 @@ impl ShaderCache {
         tracing::debug!("Compiled and cached shader module: {:?}", shader_type);
         compiled
     }
-
-    /// Pre-compile all shaders
-    ///
-    /// Useful for avoiding frame time spikes on first use.
-    pub fn precompile_all(&self) {
-        let _ = self.get_or_compile(ShaderType::SolidMask);
-        let _ = self.get_or_compile(ShaderType::LinearGradientMask);
-        let _ = self.get_or_compile(ShaderType::RadialGradientMask);
-        let _ = self.get_or_compile(ShaderType::SweepGradientMask);
-    }
 }
 
 // `ShaderCache` deliberately exposes no `clear` method: compiled shader
@@ -232,12 +222,6 @@ impl ShaderCache {
 // flush the cache. A hot-reload/devtools flow that recompiles shaders should
 // add a method next to its concrete consumer rather than keeping an unused
 // entry point suppressed from the dead-code lint here.
-
-impl Default for ShaderCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 // The 5 forward-looking uniform helpers (`SolidMaskUniforms`,
 // `LinearGradientUniforms`, `RadialGradientUniforms`,
@@ -328,21 +312,6 @@ mod tests {
         // Second access should hit cache
         let shader2 = cache.get_or_compile(ShaderType::SolidMask);
         assert!(Arc::ptr_eq(&shader1, &shader2));
-    }
-
-    #[test]
-    fn test_shader_cache_precompile() {
-        let cache = ShaderCache::new();
-        cache.precompile_all();
-
-        // All shaders should be in cache now
-        let solid = cache.get_or_compile(ShaderType::SolidMask);
-        let linear = cache.get_or_compile(ShaderType::LinearGradientMask);
-        let radial = cache.get_or_compile(ShaderType::RadialGradientMask);
-
-        assert_eq!(solid.shader_type, ShaderType::SolidMask);
-        assert_eq!(linear.shader_type, ShaderType::LinearGradientMask);
-        assert_eq!(radial.shader_type, ShaderType::RadialGradientMask);
     }
 
     // The 4 tests (`test_solid_mask_uniforms`,

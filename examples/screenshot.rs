@@ -105,7 +105,8 @@ fn main() {
         std::process::exit(2);
     }
 
-    let renderer = HeadlessRenderer::new().expect("a GPU device for headless capture");
+    let renderer =
+        pollster::block_on(HeadlessRenderer::new()).expect("a GPU device for headless capture");
     // A mounted demo's `LayerTree` is owned by the binding that produced it
     // (`LayerTree` is not `Clone`), so rasterization happens inside each arm
     // rather than after the match — the binding stays alive exactly as long as

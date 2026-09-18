@@ -19,7 +19,7 @@
 //! factor pair, not of `Clear`: `Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`,
 //! `DstIn` and `DstATop` all fail it, while `DstOut` — the other erase-by-alpha
 //! mode — passes, because `(Zero, OneMinusSrcAlpha)` has exactly the absorbing
-//! shape. `super::pipeline::destination_alpha_scale_for` is the classification
+//! shape. `super::pipeline_cache::destination_alpha_scale_for` is the classification
 //! under test; the exhaustive cross-check that it agrees with
 //! `blend_state_for`'s own factor table lives beside it.
 //!
@@ -134,7 +134,7 @@ fn assert_partial_coverage_feathers(mode: BlendMode) {
     let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     let feathered_fringe = coverage_correct(mode, FRINGE_COVERAGE);
@@ -280,7 +280,7 @@ fn exactly_the_modes_that_need_correcting_are_the_ones_marked_for_it() {
                 });
         assert_eq!(
             folding_changes_the_answer,
-            super::pipeline::destination_alpha_scale_for(mode).is_some(),
+            super::pipeline_cache::destination_alpha_scale_for(mode).is_some(),
             "{mode:?}: folding coverage into the source alpha {} its result, but \
              destination_alpha_scale_for {} it a correction",
             if folding_changes_the_answer {
@@ -303,7 +303,7 @@ fn exactly_the_modes_that_need_correcting_are_the_ones_marked_for_it() {
 ///
 /// The assertion is that the two devices agree pixel-for-pixel, rather than a
 /// predicted value, because `DstOut` is tile-safe and therefore renders through
-/// the SSAA tile path (`pipeline::ssaa_eligible_for`), whose 2× supersampled
+/// the SSAA tile path (`pipeline_cache::ssaa_eligible_for`), whose 2× supersampled
 /// edge reports a different coverage for the same column than the tessellated
 /// path does. Predicting that number would pin this test to the SSAA sample
 /// grid; agreeing across devices pins what actually matters — that nothing in
@@ -317,7 +317,7 @@ fn dst_out_renders_the_same_with_and_without_a_second_blend_source() {
         eprintln!("skipping: this adapter does not expose DUAL_SOURCE_BLENDING");
         return;
     }
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     let feathered_samples = blend_through_an_anti_aliased_clip(&feathering, BlendMode::DstOut);

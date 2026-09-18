@@ -53,7 +53,7 @@
 //!
 //! # Invariants preserved
 //!
-//! - `cached_images` entries are `(TextureId, TextureInstance, ScissorRect)`.
+//! - `cached_images` entries are `(TextureKey, TextureInstance, ScissorRect)`.
 //! - `external_images` entries are `(flui_types::painting::TextureId, TextureInstance,
 //!   ScissorRect)` — no `wgpu::TextureView` in the IR; resolution to a view
 //!   happens in `flush_segment_external_images` at replay time.
@@ -87,54 +87,6 @@ use super::{
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
 impl DrawBatcher {
-    /// Record an external texture draw by ID into `external_images`.
-    ///
-    /// The `texture_id` is stored in the IR as-is; resolution to a
-    /// `wgpu::TextureView` happens at replay time in
-    /// `flush_segment_external_images`. A not-found ID at replay emits a
-    /// `tracing::warn!` and skips the draw — identical behavior to before,
-    /// now deferred to the correct side of the record/replay seam.
-    ///
-    /// # Advanced blend note
-    ///
-    /// This method carries no `blend_mode` parameter.  External texture draws
-    /// enter via display-list commands (`DrawTexture`) that carry no `Paint`
-    /// upstream — advanced blend is unreachable here by construction.
-    pub(in super::super) fn texture(
-        segment: &mut DrawSegment,
-        draw_order: &mut Vec<DrawItem>,
-        state: &GpuStateStack,
-        texture_id: flui_types::painting::TextureId,
-        dst_rect: Rect<Pixels>,
-    ) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "DrawBatcher::texture: id={:?}, dst_rect={:?}",
-            texture_id,
-            dst_rect
-        );
-
-        // Apply transform to rect.
-        let top_left = state.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
-        let bottom_right = state.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
-        let transformed_rect =
-            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-
-        // Create texture instance (full UV mapping, no rotation, white tint).
-        let instance = state.apply_active_clip(super::super::instancing::TextureInstance::new(
-            transformed_rect,
-            flui_types::Color::WHITE,
-        ));
-
-        // Store the ID in the IR. Resolution happens at replay time in
-        // flush_segment_external_images, which calls
-        // ExternalTextureRegistry::get(id) immediately before the GPU draw.
-        Self::begin_phase(segment, draw_order, Phase::ExternalImage);
-        segment
-            .external_images
-            .push((texture_id, instance, state.current_scissor()));
-    }
-
     /// Record an image draw by uploading (or retrieving from cache) its RGBA
     /// pixels into the texture cache, then pushing a `cached_images` entry.
     ///
@@ -163,7 +115,7 @@ impl DrawBatcher {
         dst_rect: Rect<Pixels>,
         blend_mode: BlendMode,
     ) {
-        let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
+        let texture_id = super::super::texture_cache::TextureKey::from_ptr(image.data_ptr());
         Self::draw_image_with_id(
             segment,
             draw_order,
@@ -195,7 +147,7 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
-        texture_id: super::super::texture_cache::TextureId,
+        texture_id: super::super::texture_cache::TextureKey,
         image: &Image,
         dst_rect: Rect<Pixels>,
         blend_mode: BlendMode,
@@ -294,7 +246,7 @@ impl DrawBatcher {
         dst: Rect<Pixels>,
         blend_mode: BlendMode,
     ) {
-        let texture_id = super::super::texture_cache::TextureId::from_data(&pixels);
+        let texture_id = super::super::texture_cache::TextureKey::from_data(&pixels);
         let filtered = Image::from_rgba8(width, height, pixels);
         Self::draw_image_with_id(
             segment,
@@ -352,7 +304,7 @@ impl DrawBatcher {
 
             // Helper: load the image into the texture cache and push one tile
             // entry into shape_segment.
-            let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
+            let texture_id = super::super::texture_cache::TextureKey::from_ptr(image.data_ptr());
 
             match texture_cache.load_from_rgba(
                 texture_id.clone(),
@@ -772,7 +724,7 @@ impl DrawBatcher {
                         Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
                     let texture_id =
-                        super::super::texture_cache::TextureId::from_data(sub_image.data());
+                        super::super::texture_cache::TextureKey::from_data(sub_image.data());
                     match texture_cache.load_from_rgba(
                         texture_id.clone(),
                         sub_image.width(),
@@ -1158,7 +1110,7 @@ impl DrawBatcher {
         // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels.
         // Clone the id: `load_from_rgba` takes ownership, but we need the same key
         // for per-sprite `cached_images` pushes below.
-        let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
+        let texture_id = super::super::texture_cache::TextureKey::from_ptr(image.data_ptr());
         let cache_id = texture_id.clone();
 
         match texture_cache.load_from_rgba(texture_id, image.width(), image.height(), image.data())

@@ -1,11 +1,4 @@
-// GPU-accelerated visual effects for FLUI
-//
-// This module provides types and utilities for advanced rendering effects:
-// - Gradients (linear, radial)
-// - Shadows (drop shadows, elevation)
-// - Blur (Dual Kawase)
-//
-// All types are designed for GPU instancing and batching.
+//! Linear / radial / sweep gradient descriptors and their shared color stop.
 
 use bytemuck::{Pod, Zeroable};
 use flui_types::styling::Color;
@@ -22,30 +15,48 @@ use glam::Vec2;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct GradientStop {
-    /// RGBA color (0.0 - 1.0 range)
+    /// RGBA color, straight (not premultiplied), each channel in `0.0..=1.0`.
     pub color: [f32; 4],
-    /// Position along gradient (0.0 = start, 1.0 = end)
+    /// Position along the gradient, clamped to `0.0..=1.0` at construction.
     pub position: f32,
-    /// Padding for GPU alignment
-    pub padding: [f32; 3],
+    /// GPU alignment padding, always zero.
+    ///
+    /// Private on purpose: this value is uploaded verbatim as the shader's
+    /// `_pad0.._pad2`, so a caller-supplied value would be GPU-visible data
+    /// the caller has no reason to control. Construction goes through
+    /// [`Self::new`] / [`Self::from_rgba`], which zero it.
+    padding: [f32; 3],
 }
 
 impl GradientStop {
-    /// Create a new gradient stop
+    /// Create a new gradient stop. `position` is clamped to `0.0..=1.0`.
+    #[must_use]
     pub fn new(color: Color, position: f32) -> Self {
+        Self::from_rgba(color.to_rgba_f32().into(), position)
+    }
+
+    /// Create a stop from straight RGBA channels, each in `0.0..=1.0`.
+    ///
+    /// The `Color`-taking constructor covers the common path; this exists for
+    /// callers already holding a channel array (a colour filter's output, a
+    /// vertex colour) that would otherwise round-trip through `Color`.
+    #[must_use]
+    pub fn from_rgba(rgba: [f32; 4], position: f32) -> Self {
         Self {
-            color: color.to_rgba_f32().into(),
+            color: rgba,
             position: position.clamp(0.0, 1.0),
             padding: [0.0; 3],
         }
     }
 
     /// Create a stop at the start (position = 0.0)
+    #[must_use]
     pub fn start(color: Color) -> Self {
         Self::new(color, 0.0)
     }
 
     /// Create a stop at the end (position = 1.0)
+    #[must_use]
     pub fn end(color: Color) -> Self {
         Self::new(color, 1.0)
     }
@@ -351,150 +362,6 @@ impl SweepGradientInstance {
     }
 }
 
-// =============================================================================
-// Shadow Types
-// =============================================================================
-
-/// Shadow parameters for Material Design elevation levels
-#[derive(Copy, Clone, Debug)]
-pub struct ShadowParams {
-    /// Shadow offset (x, y)
-    pub offset: Vec2,
-    /// Blur sigma (standard deviation)
-    pub blur_sigma: f32,
-    /// Shadow color (usually black with alpha)
-    pub color: Color,
-}
-
-impl ShadowParams {
-    /// Create custom shadow parameters
-    pub fn new(offset: Vec2, blur_sigma: f32, color: Color) -> Self {
-        Self {
-            offset,
-            blur_sigma,
-            color,
-        }
-    }
-
-    // `elevation_1` ... `elevation_5` constructor shortcuts were deleted —
-    // they had zero non-test consumers across the workspace
-    // (the only docstring reference was migrated to
-    // `ShadowParams::new(...)` literal-construction in the same commit).
-    // The Material Design elevation curves they encoded were a higher-level
-    // theming concern that does not belong inside the GPU instancing crate;
-    // when a widget-level theming layer materializes, the elevation→sigma
-    // mapping lands there with the rest of the design tokens.
-}
-
-/// Shadow instance data for GPU instancing
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct ShadowInstance {
-    /// Shadow bounds (expanded by blur radius)
-    pub bounds: [f32; 4],
-    /// Actual rectangle position
-    pub rect_pos: [f32; 2],
-    /// Actual rectangle size
-    pub rect_size: [f32; 2],
-    /// Corner radius (uniform for now)
-    pub corner_radius: f32,
-    /// Padding
-    pub padding1: [f32; 3],
-    /// Shadow offset
-    pub shadow_offset: [f32; 2],
-    /// Blur sigma
-    pub blur_sigma: f32,
-    /// Padding
-    pub padding2: f32,
-    /// Shadow color
-    pub shadow_color: [f32; 4],
-}
-
-impl ShadowInstance {
-    /// Create a new shadow instance
-    ///
-    /// Automatically calculates expanded shadow bounds using 3-sigma rule.
-    pub fn new(
-        rect_pos: [f32; 2],
-        rect_size: [f32; 2],
-        corner_radius: f32,
-        params: &ShadowParams,
-    ) -> Self {
-        // 3-sigma rule: 99.7% of Gaussian is within 3σ
-        let expand = params.blur_sigma * 3.0;
-
-        // Calculate shadow bounds (expanded for blur)
-        let shadow_x = rect_pos[0] + params.offset.x - expand;
-        let shadow_y = rect_pos[1] + params.offset.y - expand;
-        let shadow_width = rect_size[0] + expand * 2.0;
-        let shadow_height = rect_size[1] + expand * 2.0;
-
-        Self {
-            bounds: [shadow_x, shadow_y, shadow_width, shadow_height],
-            rect_pos,
-            rect_size,
-            corner_radius,
-            padding1: [0.0; 3],
-            shadow_offset: [params.offset.x, params.offset.y],
-            blur_sigma: params.blur_sigma,
-            padding2: 0.0,
-            shadow_color: params.color.to_rgba_f32().into(),
-        }
-    }
-}
-
-// Blur uniform-parameter buffer (`BlurParams`) + `BlurIntensity` shorthand
-// enum + `LinearGradientBuilder` fluent-API helper were deleted:
-// zero non-test consumers across the workspace, and the live blur
-// uniform struct (`offscreen::BlurParams`) has a different field shape that
-// the parallel `effects::BlurParams` never adopted. When a public blur API
-// lands on `WgpuPainter`, it will reach for the offscreen-side struct
-// directly. `LinearGradientBuilder` returned a `Vec<GradientStop>` capped
-// at 8 elements; consumers can build the same vector inline without the
-// builder ceremony.
-
-// =============================================================================
-// Blur tap-count helper
-// =============================================================================
-
-/// Impeller's kernel-radius-per-sigma constant (`kKernelRadiusPerSigma`, sigma.h:24).
-///
-/// Value: √3 ≈ 1.732 050 8. Chosen so the Gaussian evaluated at ±radius drops
-/// below ½ of its peak value — the Impeller standard for "sufficient tap coverage".
-///
-/// (Impeller's exact formula is `(sigma - 0.5) × √3`; we omit the `−0.5` as a
-/// conservative over-estimate documented in the spec.)
-const KERNEL_RADIUS_PER_SIGMA: f32 = 1.732_050_8;
-
-/// Gaussian-blur kernel radius (in source pixels) for a given Gaussian sigma.
-///
-/// Computes `ceil(sigma × √3)` — Impeller's `CalculateBlurRadius` from
-/// `impeller/geometry/sigma.h:24`. The integer result is both:
-///
-/// - the **sampling extent** per sub-pass (H or V scans `[-r..=r]` texels), and
-/// - the **coverage radius** for `grown_bounds` expansion in `restore_layer`.
-///
-/// The full kernel spans `2 × kernel_radius + 1` taps.
-///
-/// Returns `0` for non-positive sigma (degenerate / no blur).
-///
-/// Single authoritative home for the blur-pass driver (`apply_blur`) and the
-/// CPU oracle in `blur_filter_tests` — do NOT compute `ceil(sigma * N)` inline
-/// at other call sites.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    // non-negative result: sigma > 0.0 guard ensures (sigma * √3).ceil() ≥ 0;
-    // truncation: u32::MAX ≈ 4.3 × 10^9, overflowable only at sigma > ~2.5 × 10^9 px
-)]
-#[must_use]
-pub(crate) fn kernel_radius(sigma: f32) -> u32 {
-    if sigma <= 0.0 {
-        return 0;
-    }
-    (sigma * KERNEL_RADIUS_PER_SIGMA).ceil() as u32
-}
-
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
@@ -512,54 +379,4 @@ mod tests {
     // `BlurIntensity` items they exercised. The remaining `GradientStop`
     // smoke test covers the only public API in this module that has live
     // consumers (`painter`'s instanced-gradient pipeline).
-}
-
-/// CPU-only tests for `kernel_radius`. These run in CI without a GPU.
-#[cfg(test)]
-mod kernel_radius_tests {
-    use super::kernel_radius;
-
-    /// `kernel_radius(0.0)` must return 0 (degenerate — no blur).
-    #[test]
-    fn zero_sigma_returns_zero() {
-        assert_eq!(kernel_radius(0.0), 0);
-    }
-
-    /// Negative sigma is treated as no-blur.
-    #[test]
-    fn negative_sigma_returns_zero() {
-        assert_eq!(kernel_radius(-1.0), 0);
-    }
-
-    /// `kernel_radius` must be monotonically non-decreasing as sigma grows.
-    ///
-    /// Tests sigma = 0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0.
-    #[test]
-    fn monotonically_nondecreasing() {
-        let sigmas = [0.1_f32, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0];
-        let radii: Vec<u32> = sigmas.iter().map(|&s| kernel_radius(s)).collect();
-        for window in radii.windows(2) {
-            assert!(
-                window[0] <= window[1],
-                "kernel_radius not monotone: sigma pair produced radii {} > {}",
-                window[0],
-                window[1]
-            );
-        }
-    }
-
-    /// sigma = 2.0 → ceil(2.0 × 1.732_050_8) = ceil(3.464_101_6) = 4.
-    ///
-    /// This is the known-value anchor from the spec: the chief-architect
-    /// table entry `(2.0) == 4`.
-    #[test]
-    fn sigma_two_gives_radius_four() {
-        assert_eq!(kernel_radius(2.0), 4);
-    }
-
-    /// sigma = 1.0 → ceil(1.0 × 1.732_050_8) = ceil(1.732_050_8) = 2.
-    #[test]
-    fn sigma_one_gives_radius_two() {
-        assert_eq!(kernel_radius(1.0), 2);
-    }
 }

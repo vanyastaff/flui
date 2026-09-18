@@ -89,47 +89,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // =============================================================================
-// Usage Pattern (Rust side)
+// Usage (Rust side)
 // =============================================================================
 //
-// ```rust
-// pub struct DualKawaseBlur {
-//     downsample_pipeline: RenderPipeline,
-//     upsample_pipeline: RenderPipeline,
-//     mip_textures: Vec<Texture>,
-// }
+// This is the downsample half of the Dual Kawase blur used by backdrop
+// filters, driven by `wgpu::offscreen::blur::render_blur`
+// (`crates/flui-engine/src/wgpu/offscreen/blur.rs`), which owns the pipeline
+// and the mip chain. An embedder reaches it by pushing a backdrop blur onto a
+// layer (`SceneBuilder::push_backdrop_blur`), not by driving this shader.
 //
-// impl DualKawaseBlur {
-//     /// Apply blur with N iterations
-//     /// iterations: 1 = light blur, 4 = heavy blur
-//     pub fn apply(&mut self, input: &Texture, iterations: u32) -> &Texture {
-//         // Downsample chain (shrinking)
-//         self.mip_textures[0] = input.clone();
-//         for i in 1..=iterations {
-//             let src = &self.mip_textures[i - 1];
-//             let dst = &mut self.mip_textures[i];
-//
-//             // Each iteration halves resolution
-//             render_pass.set_pipeline(&self.downsample_pipeline);
-//             render_pass.set_bind_group(0, &src.bind_group, &[]);
-//             render_pass.draw(0..6, 0..1); // Fullscreen quad
-//         }
-//
-//         // Upsample chain (growing)
-//         for i in (0..iterations).rev() {
-//             // See blur_upsample.wgsl
-//         }
-//
-//         &self.mip_textures[0]
-//     }
-// }
-//
-// // Typical blur levels:
-// // iterations=1: radius ~ 4px  (light blur for glass effect)
-// // iterations=2: radius ~ 8px  (medium blur for backdrops)
-// // iterations=3: radius ~ 16px (heavy blur for focus effects)
-// // iterations=4: radius ~ 32px (extreme blur for backgrounds)
-// ```
+// Typical iteration counts, as the blur radius grows: 1 ≈ 4 px, 2 ≈ 8 px,
+// 3 ≈ 16 px, 4 ≈ 32 px. The separable Gaussian path
+// (`wgpu::blur::apply_blur`) is the other filter in this directory and has its
+// own shaders.
 //
 // =============================================================================
 // Performance Characteristics

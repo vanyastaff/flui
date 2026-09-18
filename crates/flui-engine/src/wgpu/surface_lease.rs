@@ -431,6 +431,51 @@ mod tests {
         assert_eq!(*lease.surface().expect("just replaced"), 7);
     }
 
+    /// Release-then-replace is the order `Renderer::recreate_surface` and
+    /// `Renderer::recover` both use to sidestep the one-surface-per-window
+    /// rule, and it must not depend on a *dropped-and-rebuilt* lease: the
+    /// whole point is that the target is retained across the released span,
+    /// so the replacement is built from the same owner the release happened
+    /// against.
+    ///
+    /// Pins the lease's half of that protocol: the old surface is gone
+    /// before the replacement exists, the target stays live and answers
+    /// across the span, and the lease ends holding exactly the replacement
+    /// over the *same* owner.
+    ///
+    /// What this does NOT pin is the renderer's call order — that
+    /// `recreate_surface`/`recover` actually call `release` before
+    /// `create_surface`. That order is what the rule needs, and it is not
+    /// reachable from here: `replace_surface` on an already-released lease
+    /// behaves identically whether the caller released first or not, so a
+    /// mutant that flipped the renderer back to build-first would leave this
+    /// test green. The renderer-side order needs a GPU and is
+    /// compile-verified only, as ADR-0063's partial-evidence bullet states
+    /// for this whole path.
+    #[test]
+    fn release_then_replace_holds_only_the_replacement_over_a_live_target() {
+        let (mut lease, log) = recording_lease();
+        let target: Arc<dyn WindowTarget> = Arc::clone(lease.target());
+
+        lease.release();
+        assert_eq!(
+            drop_log(&log),
+            vec!["surface"],
+            "the old surface is dropped by the release, before any replacement exists"
+        );
+        assert!(
+            target.window_handle().is_ok(),
+            "the retained target still answers while no surface is held"
+        );
+
+        lease.replace_surface(RecordingSurface(Arc::clone(&log)));
+        assert!(lease.has_surface(), "the lease holds the replacement");
+        assert!(
+            Arc::ptr_eq(lease.target(), &target),
+            "the replacement was built against the same retained owner"
+        );
+    }
+
     #[test]
     fn dropping_a_released_lease_releases_only_the_target() {
         let (mut lease, log) = recording_lease();

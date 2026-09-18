@@ -10,7 +10,7 @@
 // primitive's own SDF reports how much of the pixel its geometry covers;
 // `color.a` is how opaque the paint is. Handing the blender their product as
 // one number is exact only for a blend mode whose destination factor absorbs
-// `1 - coverage` — see `pipeline::destination_alpha_scale_for` for which modes
+// `1 - coverage` — see `pipeline_cache::destination_alpha_scale_for` for which modes
 // those are and what the others need instead.
 //
 // This file defines only the shared vocabulary — `ShadedFragment` and

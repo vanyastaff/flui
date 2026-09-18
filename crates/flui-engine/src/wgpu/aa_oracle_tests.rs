@@ -612,7 +612,7 @@ mod gpu_tests {
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rrect(rrect, &Paint::fill(Color::WHITE));
+        painter.draw_rrect(rrect, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("O1 Calibration Encoder"),
@@ -757,7 +757,7 @@ mod gpu_tests {
         // Translate to center, then rotate.
         painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
         painter.rotate(angle);
-        painter.rect(local_rect, &Paint::fill(Color::WHITE));
+        painter.draw_rect(local_rect, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("O3 Rotated Rect Encoder"),
@@ -909,7 +909,7 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
         painter.rotate(angle);
-        painter.rrect(local_rrect, &Paint::fill(Color::WHITE));
+        painter.draw_rrect(local_rrect, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("O4 Rotated RRect Encoder"),
@@ -1026,7 +1026,7 @@ mod gpu_tests {
             let cy = SURFACE_HEIGHT as f32 / 2.0;
 
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.circle(
+            painter.draw_circle(
                 flui_types::Point::new(
                     flui_types::geometry::Pixels(cx),
                     flui_types::geometry::Pixels(cy),
@@ -1141,7 +1141,7 @@ mod gpu_tests {
         painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
         painter.rotate(angle);
         painter.translate(flui_types::Offset::new(Pixels(-cx), Pixels(-cy)));
-        painter.oval(local_rect, &Paint::fill(Color::WHITE));
+        painter.draw_oval(local_rect, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("C2 Rotated Ellipse Encoder"),
@@ -1218,7 +1218,7 @@ mod gpu_tests {
         let radius = 40.0_f32;
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(
                 flui_types::geometry::Pixels(cx),
                 flui_types::geometry::Pixels(cy),
@@ -1312,7 +1312,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.scale(2.0, 2.0);
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(
                 flui_types::geometry::Pixels(32.0),
                 flui_types::geometry::Pixels(32.0),
@@ -1403,7 +1403,7 @@ mod gpu_tests {
 
         for (surface, view) in [(&surface_a, &view_a), (&surface_b, &view_b)] {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(flat_rect, &Paint::fill(color));
+            painter.draw_rect(flat_rect, &Paint::fill(color));
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("O5 Rect Identity Encoder"),
             });
@@ -1452,7 +1452,7 @@ mod gpu_tests {
 
         for (surface, view) in [(&surface_c, &view_c), (&surface_d, &view_d)] {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rrect(rounded_rect_shape, &Paint::fill(color));
+            painter.draw_rrect(rounded_rect_shape, &Paint::fill(color));
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("O5 RRect Identity Encoder"),
             });
@@ -1503,7 +1503,7 @@ mod gpu_tests {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
             painter.rotate(angle);
-            painter.rect(
+            painter.draw_rect(
                 Rect::from_ltrb(
                     Pixels(-half_w),
                     Pixels(-half_h),
@@ -1540,7 +1540,7 @@ mod gpu_tests {
             painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
             painter.scale(8.0, 8.0);
             painter.rotate(angle);
-            painter.rect(
+            painter.draw_rect(
                 Rect::from_ltrb(
                     Pixels(-local_half_w),
                     Pixels(-local_half_h),
@@ -1618,7 +1618,7 @@ mod gpu_tests {
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rrect(rrect, &Paint::fill(Color::WHITE));
+        painter.draw_rrect(rrect, &Paint::fill(Color::WHITE));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("O7 Non-uniform RRect Encoder"),
         });
@@ -2537,12 +2537,12 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         {
-            // Through the SAME `Backend` adapter the layer-tree walk uses —
+            // Through the SAME `LayerDispatcher` adapter the layer-tree walk uses —
             // draws arrive as `render_*(…, transform)` with per-command
             // matrices, exactly the collapsed-app-bar stream: translated
             // row rects + glyphs first, then the surface path at identity.
-            use crate::traits::CommandRenderer;
-            let mut backend = super::super::backend::Backend::new(&mut painter);
+            use crate::command_renderer::CommandRenderer;
+            let mut backend = super::super::layer_dispatcher::LayerDispatcher::new(&mut painter);
             // The real stream runs inside the viewport's clip.
             backend.clip_rect(
                 full,
@@ -2660,8 +2660,8 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         {
-            use crate::traits::CommandRenderer;
-            let mut backend = super::super::backend::Backend::new(&mut painter);
+            use crate::command_renderer::CommandRenderer;
+            let mut backend = super::super::layer_dispatcher::LayerDispatcher::new(&mut painter);
             let blue_style = flui_types::typography::TextStyle {
                 color: Some(Color::rgb(0, 0, 255)),
                 ..flui_types::typography::TextStyle::default()
@@ -2734,13 +2734,13 @@ mod gpu_tests {
         // (the Reintegrate fast-path would splice the content back into the
         // top-level draw order and never exercise the recursion).
         painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
-        painter.text(
+        painter.draw_text(
             "Covered",
             flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
             20.0,
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
-        painter.rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
+        painter.draw_rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
         painter.restore_layer();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2814,11 +2814,11 @@ mod gpu_tests {
                 Pixels(SURFACE_WIDTH as f32),
                 Pixels(CLIP_BOTTOM),
             ),
-            true,
+            flui_types::painting::Clip::HardEdge,
         );
         // Positioned so the run straddles the clip edge: some of it is legally
         // inside, the rest must be cut.
-        painter.text(
+        painter.draw_text(
             "Spill",
             flui_types::Point::new(Pixels(4.0), Pixels(12.0)),
             28.0,
@@ -2885,7 +2885,7 @@ mod gpu_tests {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             painter.save();
             painter.scale(scale, scale);
-            painter.text(
+            painter.draw_text(
                 "Ab",
                 flui_types::Point::new(Pixels(4.0), Pixels(10.0)),
                 16.0,
@@ -2951,7 +2951,7 @@ mod gpu_tests {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             painter.save();
             painter.scale(sx, sy);
-            painter.text(
+            painter.draw_text(
                 "Ab",
                 flui_types::Point::new(Pixels(4.0), Pixels(10.0)),
                 16.0,
@@ -3032,11 +3032,11 @@ mod gpu_tests {
                 ),
                 Pixels(R),
             ),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
         // Radius 90 about the centre of a 128x128 surface: every corner of the
         // surface is well inside this circle.
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(
                 Pixels(SURFACE_WIDTH as f32 / 2.0),
                 Pixels(SURFACE_HEIGHT as f32 / 2.0),
@@ -3133,7 +3133,7 @@ mod gpu_tests {
             stops: Some(vec![0.0, 1.0]),
             tile_mode: flui_types::painting::TileMode::Clamp,
         });
-        painter.rrect(rrect, &paint);
+        painter.draw_rrect(rrect, &paint);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Gradient RRect Corner Encoder"),
@@ -3212,9 +3212,9 @@ mod gpu_tests {
         painter.save();
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(full, Pixels(R)),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
-        painter.gradient_rect(
+        painter.draw_gradient_rect(
             full,
             glam::Vec2::new(0.0, 0.0),
             glam::Vec2::new(0.0, SURFACE_HEIGHT as f32),
@@ -3290,12 +3290,12 @@ mod gpu_tests {
         painter.save();
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(full, Pixels(R)),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
         // A stroke this wide covers the surface, corners included. `Paint`
         // with a Stroke style routes through the tessellator, not the
         // instanced rect path.
-        painter.rect(
+        painter.draw_rect(
             flui_types::Rect::from_xywh(
                 Pixels(SURFACE_WIDTH as f32 / 2.0),
                 Pixels(SURFACE_HEIGHT as f32 / 2.0),
@@ -3364,13 +3364,13 @@ mod gpu_tests {
         painter.save();
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(region, Pixels(40.0)),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
         // A FILL, and a large one: the SSAA gate reads the rect's own area
         // (80x80 = 6400 px², over the 256 px² threshold), not the painted
         // area — a hairline rect with a huge stroke width stays under it and
         // silently takes the direct path instead.
-        painter.rect(
+        painter.draw_rect(
             region,
             &Paint::fill(Color::rgb(0, 0, 255))
                 .with_blend_mode(flui_types::painting::BlendMode::Plus),
@@ -3467,11 +3467,11 @@ mod gpu_tests {
                 flui_types::Rect::from_xywh(Pixels(24.0), Pixels(24.0), Pixels(80.0), Pixels(80.0)),
                 Pixels(12.0),
             ),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
         // Far larger than the surface, so every sample point is inside the
         // drawn shape and only the clip can remove it.
-        painter.rect(
+        painter.draw_rect(
             flui_types::Rect::from_xywh(
                 Pixels(-200.0),
                 Pixels(-200.0),
@@ -3551,9 +3551,9 @@ mod gpu_tests {
                 flui_types::Rect::from_xywh(Pixels(16.0), Pixels(0.0), Pixels(96.0), Pixels(32.0)),
                 Pixels(16.0),
             ),
-            false,
+            flui_types::painting::Clip::AntiAlias,
         );
-        painter.rect(
+        painter.draw_rect(
             flui_types::Rect::from_xywh(
                 Pixels(-200.0),
                 Pixels(-200.0),
@@ -3628,7 +3628,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
-        painter.text(
+        painter.draw_text(
             "Ghost",
             flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
             20.0,
@@ -3636,7 +3636,7 @@ mod gpu_tests {
         );
         painter.restore_layer();
         // Top-level opaque fill AFTER the layer — must bury the layer's text.
-        painter.rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
+        painter.draw_rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Text-Only Layer Encoder"),
@@ -3681,7 +3681,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Top-level text BEFORE the layer — pure blue.
-        painter.text(
+        painter.draw_text(
             "Under",
             flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
             20.0,
@@ -3689,10 +3689,10 @@ mod gpu_tests {
         );
         // Composite-path layer whose fill covers the whole surface.
         painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
-        painter.rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
+        painter.draw_rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
         painter.restore_layer();
         // Top-level text AFTER the layer — yellow, must stay visible.
-        painter.text(
+        painter.draw_text(
             "Over",
             flui_types::Point::new(Pixels(4.0), Pixels(60.0)),
             20.0,
@@ -3946,7 +3946,7 @@ mod gpu_tests {
         let paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rrect(rrect, &paint);
+        painter.draw_rrect(rrect, &paint);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("PD3 Xor Encoder"),
@@ -4029,14 +4029,14 @@ mod gpu_tests {
             px(SURFACE_HEIGHT as f32),
         );
         let green = Color::rgba(0, 255, 0, 255);
-        painter.rect(full_rect, &Paint::fill(green));
+        painter.draw_rect(full_rect, &Paint::fill(green));
 
         // Step 2: paint a large white circle with DstOut blend (tile-safe, non-SrcOver).
         // Radius 40 → bounding box area = 80×80 = 6400 px² >> SSAA_AREA_THRESHOLD_PX_SQ=256.
         // The circle is placed slightly off-pixel-center to ensure non-axis-aligned
         // edges and genuine partial-alpha boundary pixels from the SSAA downsample.
         let center = flui_types::Point::new(px(cx + 0.5), px(cy + 0.5));
-        painter.circle(
+        painter.draw_circle(
             center,
             radius,
             &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::DstOut),
@@ -4127,7 +4127,7 @@ mod gpu_tests {
             clear_surface(&device, &queue, &surface_view);
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
 
-            painter.rect(
+            painter.draw_rect(
                 Rect::from_xywh(
                     px(0.0),
                     px(0.0),
@@ -4136,7 +4136,7 @@ mod gpu_tests {
                 ),
                 &Paint::fill(backdrop),
             );
-            painter.circle(
+            painter.draw_circle(
                 flui_types::Point::new(px(cx + 0.5), px(cy + 0.5)),
                 radius,
                 &Paint::fill(src).with_blend_mode(mode),
@@ -4241,7 +4241,7 @@ mod gpu_tests {
         // 60×60 = 3600 >> 256.  Fractional offset forces non-aligned top/left edge.
         {
             let partial = count_partial(&|p: &mut WgpuPainter| {
-                p.rect(
+                p.draw_rect(
                     Rect::from_xywh(px(cx - 30.0 + off), px(cy - 30.0 + off), px(60.0), px(60.0)),
                     &xor_paint,
                 );
@@ -4260,7 +4260,7 @@ mod gpu_tests {
                     Rect::from_xywh(px(cx - 30.0 + off), px(cy - 30.0 + off), px(60.0), px(60.0)),
                     px(12.0),
                 );
-                p.rrect(r, &xor_paint);
+                p.draw_rrect(r, &xor_paint);
             });
             assert!(
                 partial >= 4,
@@ -4273,7 +4273,7 @@ mod gpu_tests {
         // Diameter 80 → area = 80² = 6400 >> 256.
         {
             let partial = count_partial(&|p: &mut WgpuPainter| {
-                p.circle(
+                p.draw_circle(
                     flui_types::Point::new(px(cx + off), px(cy + off)),
                     40.0,
                     &xor_paint,
@@ -4290,7 +4290,7 @@ mod gpu_tests {
         // Area = 80×60 = 4800 >> 256.
         {
             let partial = count_partial(&|p: &mut WgpuPainter| {
-                p.oval(
+                p.draw_oval(
                     Rect::from_xywh(px(cx - 40.0 + off), px(cy - 30.0 + off), px(80.0), px(60.0)),
                     &xor_paint,
                 );
@@ -4395,12 +4395,12 @@ mod gpu_tests {
             px(SURFACE_WIDTH as f32),
             px(SURFACE_HEIGHT as f32),
         );
-        painter.rect(full_rect, &Paint::fill(Color::rgba(255, 0, 0, 255)));
+        painter.draw_rect(full_rect, &Paint::fill(Color::rgba(255, 0, 0, 255)));
 
         // Step 2: draw a white circle (r=40, area >> SSAA threshold) with Xor blend.
         // The circle is placed at a fractional offset to ensure non-axis-aligned
         // edges, producing genuine partial-alpha pixels from the SSAA downsample.
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(px(cx + 0.5), px(cy + 0.5)),
             radius,
             &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor),
@@ -4590,7 +4590,7 @@ mod gpu_tests {
             Pixels(half_w),
             Pixels(half_h),
         );
-        painter.rect(rotated_rect, &Paint::fill(Color::WHITE));
+        painter.draw_rect(rotated_rect, &Paint::fill(Color::WHITE));
         painter.restore();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -4694,7 +4694,7 @@ mod gpu_tests {
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rect(rect, &Paint::fill(Color::WHITE));
+        painter.draw_rect(rect, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Q1b Axis-Aligned Encoder"),

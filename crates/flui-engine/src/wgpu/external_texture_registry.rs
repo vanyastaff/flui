@@ -20,13 +20,16 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_engine::painter::ExternalTextureRegistry;
-//! use flui_types::painting::TextureId;
+//! `ExternalTextureRegistry` is crate-private (embedders reach it through
+//! `WgpuPainter::external_texture_registry`), so the call shape is shown
+//! rather than compiled:
 //!
-//! // Platform code registers a video frame texture
+//! ```text
+//! # fn wire(registry: &mut ExternalTextureRegistry, gpu_texture: wgpu::Texture) {
+//! // Platform code registers a video frame texture. `is_dynamic` says the
+//! // contents change per frame; `use_linear_filter` picks the sampler.
 //! let texture_id = TextureId::new(42);
-//! registry.register(texture_id, gpu_texture, 1920, 1080);
+//! registry.register(texture_id, gpu_texture, 1920, 1080, true, true);
 //!
 //! // Later, in rendering code:
 //! if let Some(entry) = registry.get(texture_id) {
@@ -35,6 +38,7 @@
 //!
 //! // When done, unregister
 //! registry.unregister(texture_id);
+//! # }
 //! ```
 
 use std::{collections::HashMap, sync::Arc};

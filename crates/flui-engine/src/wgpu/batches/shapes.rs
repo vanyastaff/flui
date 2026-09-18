@@ -8,7 +8,7 @@ use flui_types::{
 
 use super::{
     super::{
-        command_ir::DrawItem, command_ir::DrawSegment, command_ir::Phase, pipeline,
+        command_ir::DrawItem, command_ir::DrawSegment, command_ir::Phase, pipeline_cache,
         state_stack::GpuStateStack, vertex::Vertex,
     },
     DrawBatcher,
@@ -29,7 +29,7 @@ impl DrawBatcher {
     /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called and the
     /// method returns early.  The non-shader fill and stroke paths are unchanged
     /// from the pre-extraction behavior.
-    pub(in super::super) fn rect(
+    pub(in super::super) fn draw_rect(
         &mut self,
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
@@ -126,7 +126,7 @@ impl DrawBatcher {
                 //
                 // PR-4 routing: tile-safe and advanced modes → SSAA tile (AA'd);
                 // coverage-destructive modes → tessellated (aliased, correct).
-                // See `pipeline::is_tile_safe_for_ssaa` for the mode table.
+                // See `pipeline_cache::is_tile_safe_for_ssaa` for the mode table.
                 let tl = state.apply_transform(Point::new(rect.left(), rect.top()));
                 let tr = state.apply_transform(Point::new(rect.right(), rect.top()));
                 let br = state.apply_transform(Point::new(rect.right(), rect.bottom()));
@@ -157,7 +157,7 @@ impl DrawBatcher {
                 let indices = [0u32, 1, 2, 0, 2, 3];
                 let mode = paint.blend_mode;
                 let device_area = rect.width().0 * rect.height().0 * state.area_scale();
-                if pipeline::ssaa_eligible_for(mode, device_area) {
+                if pipeline_cache::ssaa_eligible_for(mode, device_area) {
                     // Vertices are already in device-pixel space (apply_transform was
                     // called above). Pass them directly to divert_path_to_ssaa.
                     Self::divert_path_to_ssaa(
@@ -173,7 +173,7 @@ impl DrawBatcher {
                         state,
                         vertices,
                         &indices,
-                        pipeline::pipeline_key_from_paint(paint),
+                        pipeline_cache::pipeline_key_from_paint(paint),
                     );
                 }
             }
@@ -187,7 +187,7 @@ impl DrawBatcher {
                     state,
                     vertices,
                     &indices,
-                    pipeline::pipeline_key_from_paint(paint),
+                    pipeline_cache::pipeline_key_from_paint(paint),
                 );
             }
         }
@@ -199,7 +199,7 @@ impl DrawBatcher {
     /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with the
     /// max per-corner radii and returns early.  The non-shader fill and stroke
     /// paths preserve the pre-extraction behavior.
-    pub(in super::super) fn rrect(
+    pub(in super::super) fn draw_rrect(
         &mut self,
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
@@ -251,7 +251,7 @@ impl DrawBatcher {
                         let device_area = rrect.bounding_rect().width().0
                             * rrect.bounding_rect().height().0
                             * state.area_scale();
-                        let ssaa_eligible = pipeline::ssaa_eligible_for(mode, device_area);
+                        let ssaa_eligible = pipeline_cache::ssaa_eligible_for(mode, device_area);
                         if ssaa_eligible {
                             // Bake current transform into vertices before divert.
                             // `divert_path_to_ssaa` expects pre-transformed device-px coords.
@@ -268,7 +268,7 @@ impl DrawBatcher {
                         } else {
                             // Coverage-destructive or sub-threshold: tessellated path.
                             // `submit_transformed_geometry` applies the CTM itself.
-                            let key = pipeline::pipeline_key_from_paint(&fill_paint);
+                            let key = pipeline_cache::pipeline_key_from_paint(&fill_paint);
                             Self::submit_transformed_geometry(
                                 segment, draw_order, state, vertices, &indices, key,
                             );
@@ -367,7 +367,7 @@ impl DrawBatcher {
                     state,
                     vertices,
                     &indices,
-                    pipeline::pipeline_key_from_paint(paint),
+                    pipeline_cache::pipeline_key_from_paint(paint),
                 );
             }
         }
@@ -386,7 +386,7 @@ impl DrawBatcher {
                   fields passed as separate borrows; merging them into a context struct defeats \
                   the disjoint-field borrow split"
     )]
-    pub(in super::super) fn circle(
+    pub(in super::super) fn draw_circle(
         &mut self,
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
@@ -492,7 +492,7 @@ impl DrawBatcher {
                         // Circle local-space AABB: (2r)×(2r) = 4r²; area_scale converts to device px².
                         let local_area = (radius * 2.0) * (radius * 2.0);
                         let device_area = local_area * state.area_scale();
-                        let ssaa_eligible = pipeline::ssaa_eligible_for(mode, device_area);
+                        let ssaa_eligible = pipeline_cache::ssaa_eligible_for(mode, device_area);
                         if ssaa_eligible {
                             let transform = state.current_transform();
                             let mut baked = vertices;
@@ -505,7 +505,7 @@ impl DrawBatcher {
                                 segment, draw_order, state, &baked, &indices, mode,
                             );
                         } else {
-                            let key = pipeline::pipeline_key_from_paint(&fill_paint);
+                            let key = pipeline_cache::pipeline_key_from_paint(&fill_paint);
                             Self::submit_transformed_geometry(
                                 segment, draw_order, state, vertices, &indices, key,
                             );
@@ -528,7 +528,7 @@ impl DrawBatcher {
                     state,
                     vertices,
                     &indices,
-                    pipeline::pipeline_key_from_paint(paint),
+                    pipeline_cache::pipeline_key_from_paint(paint),
                 );
             }
         }
@@ -554,7 +554,7 @@ impl DrawBatcher {
     /// This is a pre-existing engine characteristic (bucket order ≠ draw order),
     /// now extended consistently to ovals/rotated circles for the AA win; true
     /// painter-order compositing is a separate, engine-wide concern.
-    pub(in super::super) fn oval(
+    pub(in super::super) fn draw_oval(
         &mut self,
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
@@ -617,7 +617,7 @@ impl DrawBatcher {
                     .tessellate_ellipse(center, radii, &fill_paint)
             {
                 let device_area = rect.width().0 * rect.height().0 * state.area_scale();
-                let ssaa_eligible = pipeline::ssaa_eligible_for(mode, device_area);
+                let ssaa_eligible = pipeline_cache::ssaa_eligible_for(mode, device_area);
                 if ssaa_eligible {
                     let transform = state.current_transform();
                     let mut baked = vertices;
@@ -633,7 +633,7 @@ impl DrawBatcher {
                         state,
                         vertices,
                         &indices,
-                        pipeline::pipeline_key_from_paint(&fill_paint),
+                        pipeline_cache::pipeline_key_from_paint(&fill_paint),
                     );
                 }
             }
@@ -650,7 +650,7 @@ impl DrawBatcher {
                     state,
                     vertices,
                     &indices,
-                    pipeline::pipeline_key_from_paint(paint),
+                    pipeline_cache::pipeline_key_from_paint(paint),
                 );
             }
         }
@@ -680,7 +680,8 @@ impl DrawBatcher {
                 // definition (`is_tile_safe_for_ssaa(SrcOver) == true`), so
                 // `ssaa_eligible_for` subsumes it.
                 let device_area = outer.width().0 * outer.height().0 * state.area_scale();
-                if paint.style == PaintStyle::Fill && pipeline::ssaa_eligible_for(mode, device_area)
+                if paint.style == PaintStyle::Fill
+                    && pipeline_cache::ssaa_eligible_for(mode, device_area)
                 {
                     Self::submit_transformed_and_divert_to_ssaa(
                         segment, draw_order, state, vertices, &indices, mode,
@@ -692,7 +693,7 @@ impl DrawBatcher {
                         state,
                         vertices,
                         &indices,
-                        pipeline::pipeline_key_from_paint(paint),
+                        pipeline_cache::pipeline_key_from_paint(paint),
                     );
                 }
             }
@@ -826,7 +827,7 @@ impl DrawBatcher {
                         // them through SSAA again would be redundant. The `mode != SrcOver`
                         // guard is load-bearing and must NOT be folded into ssaa_eligible_for.
                         let ssaa_eligible = mode != BlendMode::SrcOver
-                            && pipeline::ssaa_eligible_for(mode, device_area);
+                            && pipeline_cache::ssaa_eligible_for(mode, device_area);
                         if ssaa_eligible {
                             let transform = state.current_transform();
                             let mut baked = vertices;
@@ -839,7 +840,7 @@ impl DrawBatcher {
                                 segment, draw_order, state, &baked, &indices, mode,
                             );
                         } else {
-                            let key = pipeline::pipeline_key_from_paint(&fill_paint);
+                            let key = pipeline_cache::pipeline_key_from_paint(&fill_paint);
                             Self::submit_transformed_geometry(
                                 segment, draw_order, state, vertices, &indices, key,
                             );
@@ -864,7 +865,7 @@ impl DrawBatcher {
                         state,
                         vertices,
                         &indices,
-                        pipeline::pipeline_key_from_paint(paint),
+                        pipeline_cache::pipeline_key_from_paint(paint),
                     );
                 }
                 Err(e) => {

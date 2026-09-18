@@ -12,7 +12,6 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::painting::BlendMode;
 use wgpu::util::DeviceExt;
 
 use super::{
@@ -53,7 +52,14 @@ const MAX_BLUR_ITERATIONS: usize = 5;
 /// │  Output: Masked Canvas                                  │
 /// └──────────────────────────────────────────────────────────┘
 /// ```
-#[expect(missing_debug_implementations)]
+// `missing_debug_implementations` is a crate-level `#[expect]`: these types
+// hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
+//
+// `pub` (not `pub(crate)`) because the `enable-wgpu-tests` feature re-exports
+// this type for the `offscreen_resource_cache` bench; in a default build the
+// crate-wide `unreachable_pub` warn has nothing else to say about it, so the
+// expectation is scoped to the configuration that makes it true.
+#[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
 pub struct OffscreenRenderer {
     /// Texture pool for offscreen rendering — owned directly; borrow it via
     /// [`Self::texture_pool_mut`]. The pool is single-mutator by
@@ -152,6 +158,9 @@ impl OffscreenRenderer {
     /// * `device` - wgpu device for GPU operations
     /// * `queue` - wgpu queue for command submission
     /// * `surface_format` - texture format for framebuffer
+    // `pub` under `enable-wgpu-tests`: the `offscreen_resource_cache` bench
+    // (a separate crate target) constructs one. Private otherwise.
+    #[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -166,37 +175,6 @@ impl OffscreenRenderer {
         Self {
             texture_pool: TexturePool::new(Arc::clone(&device)),
             shader_cache: Arc::new(ShaderCache::new()),
-            device,
-            queue,
-            surface_format,
-            pipelines: HashMap::new(),
-            bind_group_layout,
-            blur_bind_group_layout,
-            blur_pipelines: None,
-            blit_pipeline: None,
-            linear_sampler,
-            fullscreen_quad_vb,
-            blur_uniform_buffers,
-        }
-    }
-
-    /// Create with custom texture pool and shader cache
-    pub fn with_caches(
-        texture_pool: TexturePool,
-        shader_cache: Arc<ShaderCache>,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
-        let bind_group_layout = Self::create_bind_group_layout(&device);
-        let blur_bind_group_layout = Self::create_blur_bind_group_layout(&device);
-        let linear_sampler = Self::create_linear_sampler(&device);
-        let fullscreen_quad_vb = Self::create_fullscreen_quad_vb(&device);
-        let blur_uniform_buffers = Self::create_blur_uniform_buffers(&device);
-
-        Self {
-            texture_pool,
-            shader_cache,
             device,
             queue,
             surface_format,
@@ -346,45 +324,27 @@ impl OffscreenRenderer {
             .collect()
     }
 
-    /// Pre-compile all shaders (reduces first-use latency)
-    pub fn warmup(&mut self) {
-        self.shader_cache.precompile_all();
-
-        // Pre-create all pipelines
-        self.get_or_create_pipeline(ShaderType::SolidMask);
-        self.get_or_create_pipeline(ShaderType::LinearGradientMask);
-        self.get_or_create_pipeline(ShaderType::RadialGradientMask);
-    }
-
     /// Access the wgpu device
-    pub fn device(&self) -> &Arc<wgpu::Device> {
+    pub(crate) fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
     }
 
     /// Access the wgpu queue
-    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+    pub(crate) fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.queue
     }
 
     /// Get the surface texture format
-    pub fn surface_format(&self) -> wgpu::TextureFormat {
+    pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
         self.surface_format
     }
 
     /// Exclusive access to the texture pool (all pool operations take
     /// `&mut` — the inventory is directly owned, not behind a lock).
+    // `pub` under `enable-wgpu-tests` for the `offscreen_resource_cache` bench.
+    #[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
     pub fn texture_pool_mut(&mut self) -> &mut TexturePool {
         &mut self.texture_pool
-    }
-
-    /// Get texture pool statistics
-    pub fn texture_pool_stats(&mut self) -> super::texture_pool::PoolStats {
-        self.texture_pool.stats()
-    }
-
-    /// Clear texture pool (useful for memory management)
-    pub fn clear_texture_pool(&mut self) {
-        self.texture_pool.clear();
     }
 }
 
@@ -395,30 +355,15 @@ impl OffscreenRenderer {
 /// Contains the offscreen texture with the masked content.
 /// The texture will be automatically returned to the pool when dropped.
 #[derive(Debug)]
+#[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
 pub struct MaskedRenderResult {
     /// Offscreen texture containing masked result
     pub texture: PooledTexture,
-
-    /// Shader type that was applied
-    pub shader_type: ShaderType,
-
-    /// Blend mode for final composition
-    pub blend_mode: BlendMode,
 }
 
 impl MaskedRenderResult {
-    /// Get the texture descriptor
-    pub fn texture_desc(&self) -> &super::texture_pool::TextureDesc {
-        self.texture.desc()
-    }
-
-    /// Get texture dimensions
-    pub fn size(&self) -> (u32, u32) {
-        (self.texture.width(), self.texture.height())
-    }
-
     /// Consume the result and extract the pooled texture for compositing.
-    pub fn into_texture(self) -> PooledTexture {
+    pub(crate) fn into_texture(self) -> PooledTexture {
         self.texture
     }
 }
@@ -426,7 +371,7 @@ impl MaskedRenderResult {
 /// Uniform parameters for Dual Kawase blur shaders
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct BlurParams {
+pub(crate) struct BlurParams {
     /// Size of the source texture in pixels
     pub texture_size: [f32; 2],
     /// Sample offset multiplier (controls blur spread)
@@ -442,7 +387,7 @@ struct BlurPipelines {
 }
 
 // This module deliberately defines no pipeline-manager abstraction of its
-// own: pipeline ownership lives in `wgpu/pipelines.rs`, which `Backend`
+// own: pipeline ownership lives in `wgpu/pipelines.rs`, which `LayerDispatcher`
 // actually drives, and the offscreen passes reach their pipelines directly.
 // A speculative `PipelineManager`/`PipelineHandle` wrapper pair once lived
 // here (a `ShaderCache` holder and a `ShaderType` newtype, with no behavior
@@ -455,7 +400,7 @@ struct BlurPipelines {
 /// Used to render the masked texture as a fullscreen quad.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct FullscreenVertex {
+pub(crate) struct FullscreenVertex {
     pub position: [f32; 2],
     pub tex_coords: [f32; 2],
 }
@@ -464,7 +409,7 @@ impl FullscreenVertex {
     /// Create fullscreen quad vertices
     ///
     /// Returns 6 vertices forming 2 triangles that cover the entire screen.
-    pub fn fullscreen_quad() -> [FullscreenVertex; 6] {
+    pub(crate) fn fullscreen_quad() -> [FullscreenVertex; 6] {
         [
             // Triangle 1
             FullscreenVertex {

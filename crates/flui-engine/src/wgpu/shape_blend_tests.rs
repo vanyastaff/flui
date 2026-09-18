@@ -180,7 +180,7 @@ mod gpu_tests {
 
         // Direct drawRect with Multiply blend mode — no saveLayer.
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rect(
+        painter.draw_rect(
             draw_rect,
             &Paint {
                 style: PaintStyle::Fill,
@@ -268,7 +268,7 @@ mod gpu_tests {
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rrect(
+        painter.draw_rrect(
             rrect,
             &Paint {
                 style: PaintStyle::Fill,
@@ -360,10 +360,10 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
 
         // Draw 1: SrcOver rect (becomes backdrop context for the Multiply).
-        painter.rect(full_bounds, &Paint::fill(before_color));
+        painter.draw_rect(full_bounds, &Paint::fill(before_color));
 
         // Draw 2: Multiply shape (advanced) — Z-seal fires here.
-        painter.rect(
+        painter.draw_rect(
             full_bounds,
             &Paint {
                 style: PaintStyle::Fill,
@@ -374,7 +374,7 @@ mod gpu_tests {
         );
 
         // Draw 3: SrcOver rect drawn AFTER the advanced shape (green center).
-        painter.rect(center_rect, &Paint::fill(after_color));
+        painter.draw_rect(center_rect, &Paint::fill(after_color));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("S7 Z-interleave Encoder"),
@@ -456,7 +456,7 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
 
         // 1. A red circle covering the middle of the surface.
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(
                 Pixels(SURFACE_WIDTH as f32 / 2.0),
                 Pixels(SURFACE_HEIGHT as f32 / 2.0),
@@ -466,7 +466,7 @@ mod gpu_tests {
         );
 
         // 2. An opaque blue rect recorded AFTER it, covering the same area.
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(
                 Pixels(SURFACE_WIDTH as f32 / 4.0),
                 Pixels(SURFACE_HEIGHT as f32 / 4.0),
@@ -538,16 +538,8 @@ mod gpu_tests {
 
         let solid = |rgba: [f32; 4]| {
             [
-                crate::wgpu::effects::GradientStop {
-                    color: rgba,
-                    position: 0.0,
-                    padding: [0.0; 3],
-                },
-                crate::wgpu::effects::GradientStop {
-                    color: rgba,
-                    position: 1.0,
-                    padding: [0.0; 3],
-                },
+                crate::wgpu::effects::GradientStop::from_rgba(rgba, 0.0),
+                crate::wgpu::effects::GradientStop::from_rgba(rgba, 1.0),
             ]
         };
 
@@ -556,7 +548,7 @@ mod gpu_tests {
         // 1. A green gradient in the top-left quadrant — fills the first
         //    segment's stop table so the second gradient's offset is non-zero.
         let top_left = Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(24.0), Pixels(24.0));
-        painter.gradient_rect(
+        painter.draw_gradient_rect(
             top_left,
             glam::Vec2::new(0.0, 0.0),
             glam::Vec2::new(24.0, 0.0),
@@ -571,19 +563,19 @@ mod gpu_tests {
         //    only the explicit gradient guard in `begin_phase` does. A version
         //    of this test with just a rect between the gradients never reaches
         //    a backward transition and passes either way.
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(Pixels(6.0), Pixels(52.0)),
             4.0,
             &Paint::fill(Color::rgba(0, 0, 0, 255)),
         );
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(Pixels(0.0), Pixels(40.0), Pixels(8.0), Pixels(8.0)),
             &Paint::fill(Color::rgba(0, 0, 0, 255)),
         );
 
         // 3. A blue gradient recorded into the post-seal segment.
         let bottom_right = Rect::from_xywh(Pixels(36.0), Pixels(36.0), Pixels(24.0), Pixels(24.0));
-        painter.gradient_rect(
+        painter.draw_gradient_rect(
             bottom_right,
             glam::Vec2::new(0.0, 0.0),
             glam::Vec2::new(24.0, 0.0),
@@ -645,7 +637,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
 
-        painter.rect(
+        painter.draw_rect(
             Rect::from_xywh(
                 Pixels(SURFACE_WIDTH as f32 / 4.0),
                 Pixels(SURFACE_HEIGHT as f32 / 4.0),
@@ -654,7 +646,7 @@ mod gpu_tests {
             ),
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
-        painter.circle(
+        painter.draw_circle(
             flui_types::Point::new(
                 Pixels(SURFACE_WIDTH as f32 / 2.0),
                 Pixels(SURFACE_HEIGHT as f32 / 2.0),
@@ -746,8 +738,8 @@ mod gpu_tests {
         // Apply scissor; the tessellation will only emit foreground geometry for
         // the left half.  The advanced-blend pass reads the backdrop and composites
         // the trimmed foreground.
-        painter.clip_rect(clip, true);
-        painter.rect(
+        painter.clip_rect(clip, flui_types::painting::Clip::HardEdge);
+        painter.draw_rect(
             full_bounds,
             &Paint {
                 style: PaintStyle::Fill,
@@ -825,7 +817,7 @@ mod gpu_tests {
         // Both painters draw the same SrcOver rect — results must be identical.
         for (surface, view) in [(&surface_a, &view_a), (&surface_b, &view_b)] {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(draw_bounds, &Paint::fill(source_color));
+            painter.draw_rect(draw_bounds, &Paint::fill(source_color));
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             painter
@@ -875,7 +867,7 @@ mod gpu_tests {
 
         for mode in [BlendMode::Plus, BlendMode::Modulate] {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.rect(
+            painter.draw_rect(
                 draw_bounds,
                 &Paint {
                     style: PaintStyle::Fill,
@@ -932,7 +924,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Record a Multiply (advanced) rect that covers the full surface.
-        painter.rect(
+        painter.draw_rect(
             full_bounds,
             &Paint {
                 style: PaintStyle::Fill,
@@ -975,7 +967,7 @@ mod gpu_tests {
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.rect(
+        painter.draw_rect(
             shape_bounds,
             &Paint {
                 style: PaintStyle::Fill,
@@ -1012,7 +1004,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // SrcOver (default) — this stays in a `DrawItem::Segment`, NOT AdvancedShape.
-        painter.rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 255)));
+        painter.draw_rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 255)));
 
         assert!(
             !painter.has_advanced_shape_straddling(damage),
@@ -1060,7 +1052,7 @@ mod gpu_tests {
                 ..Default::default()
             },
         );
-        painter.rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
+        painter.draw_rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
         painter.restore_layer();
 
         assert!(
@@ -1107,7 +1099,7 @@ mod gpu_tests {
                 ..Default::default()
             },
         );
-        painter.rect(layer_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
+        painter.draw_rect(layer_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
         painter.restore_layer();
 
         assert!(
@@ -1143,7 +1135,7 @@ mod gpu_tests {
         // The OpacityLayer arm in the detector gates on `op.blend.is_advanced()`, which is
         // `false` for SrcOver, so the straddling check returns `false`.
         painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 128)));
-        painter.rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
+        painter.draw_rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
         painter.restore_layer();
 
         assert!(

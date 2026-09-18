@@ -166,6 +166,8 @@ impl OffscreenRenderer {
     /// # Returns
     ///
     /// A new `PooledTexture` containing the blurred result at the original resolution.
+    // `pub` under `enable-wgpu-tests` for the `offscreen_resource_cache` bench.
+    #[cfg_attr(not(feature = "enable-wgpu-tests"), expect(unreachable_pub))]
     pub fn render_blur(&mut self, input: &PooledTexture, sigma: f32) -> PooledTexture {
         // sigma ≤ 0 means "no blur" — copy the input through without running
         // any Kawase passes. Without this guard sigma=0 would produce one

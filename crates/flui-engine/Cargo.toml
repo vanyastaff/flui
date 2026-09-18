@@ -7,11 +7,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "GPU-accelerated rendering engine for FLUI using wgpu"
+documentation = "https://docs.rs/flui-engine"
+readme = "README.md"
 keywords = ["rendering", "gpu", "wgpu", "ui", "graphics"]
 categories = ["rendering::engine", "graphics", "gui"]
 
 [features]
-default = ["wgpu-backend", "images"]
+default = ["wgpu-backend"]
 
 # === Rendering Backends ===
 wgpu-backend = ["dep:wgpu", "dep:glyphon", "dep:lyon"]
@@ -26,8 +28,6 @@ webgpu = ["wgpu-backend", "wgpu/webgpu", "wgpu/wgsl"]
 gles = ["wgpu-backend", "wgpu/gles", "wgpu/wgsl"]
 
 # === Optional Features ===
-images = ["dep:image"]
-assets = ["dep:flui-assets"]
 # lyon sub-features: use the weak-dep `?` so they compose with --no-default-features
 # (no wgpu-backend → no lyon → these are silently no-ops rather than errors).
 serialization = ["lyon?/serialization"]
@@ -48,7 +48,6 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-painting = { path = "../flui-painting", version = "0.2.0" }
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-layer = { path = "../flui-layer", version = "0.2.0" }
-flui-assets = { path = "../flui-assets", version = "0.2.0", optional = true }
 
 # === GPU Rendering (wgpu backend) ===
 wgpu = { workspace = true, default-features = false, optional = true }
@@ -72,7 +71,6 @@ lyon = { version = "1.0.16", optional = true }
 glam = { workspace = true, features = ["serde"] }
 
 # === Utilities ===
-pollster = { workspace = true }
 parking_lot = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
@@ -88,9 +86,6 @@ crossbeam-channel = { workspace = true }
 # derivation and `!Sync` posture) — same convention as flui-app/flui-view/
 # flui-rendering etc.
 static_assertions = { workspace = true }
-
-# Image loading (optional)
-image = { workspace = true, optional = true }
 
 # GPU profiling (optional, feature-gated, excluded from wasm32 via feature design)
 wgpu-profiler = { workspace = true, optional = true }
@@ -133,9 +128,7 @@ regex = { workspace = true }
 pollster = { workspace = true }
 criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test
-# support). Production texture loading reaches `image` through the optional
-# `images` feature; test diagnostics must not depend on a lib feature combo,
-# so tests get their own unconditional edge to the same workspace pin.
+# support) — the only remaining `image` consumer, and it is a dev/test one.
 image = { workspace = true }
 # Compile-fail fixtures pinning ADR-0045 decision 1: an unwrapped raw
 # platform handle breaks `Renderer`'s derived `Send`, and a `!Send` backend
@@ -172,5 +165,10 @@ harness = false
 workspace = true
 
 [package.metadata.docs.rs]
-all-features = true
+# NOT `all-features`: that would enable `enable-wgpu-tests`, whose
+# `OffscreenRenderer`/`PooledTexture`/`TexturePool` re-exports are bench
+# scaffolding the crate documents as "NOT part of the public API". The
+# backend's own per-target wgpu entries in this manifest apply on docs.rs's
+# linux host, so `wgpu-backend` is the whole of what the page needs.
+features = ["wgpu-backend"]
 rustdoc-args = ["--cfg", "docsrs"]

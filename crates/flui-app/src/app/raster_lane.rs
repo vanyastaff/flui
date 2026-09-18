@@ -319,10 +319,10 @@ impl<B: RasterBackend> RasterLane<B> {
             self.address,
             epoch,
             self.stamp.surface_generation(),
-            // The windowed backend is not `GpuServices`-backed yet, so both
-            // sides of the resource-generation compare sit at `ZERO` — the
-            // typed "no shared GPU services bound" state that axis's own
-            // doc defines, not a bypass of the check.
+            // The windowed backend owns a private GPU stack per renderer,
+            // so both sides of the resource-generation compare sit at
+            // `ZERO` — the typed "no shared GPU services bound" state that
+            // axis's own doc defines, not a bypass of the check.
             GpuResourceGeneration::ZERO,
         );
         let snapshot = SceneSnapshot::new(stamp, DamageRegion::Full, scene);
@@ -372,8 +372,9 @@ impl<B: RasterBackend> RasterLane<B> {
                 SubmitVerdict::SurfaceStale
             }
             PumpOutcome::ResourceOutdated { .. } => {
-                // Unreachable until the windowed backend binds `GpuServices`
-                // generations (both sides sit at `ZERO` today); classified
+                // Unreachable until a shared-stack backend binds
+                // GPU-resource generations (both sides sit at `ZERO`
+                // today); classified
                 // as stale-surface semantics — retry after rebinding —
                 // rather than silently dropped, so the arm stays honest if
                 // that wiring lands without this match being revisited.

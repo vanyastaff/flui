@@ -47,16 +47,15 @@ impl Default for DiagnosticsProfile {
 /// shape a caller could reasonably expect to govern pacing. Both are
 /// removed, not deprecated, and the checker mechanically enforces that
 /// absence (`docs/runtime-contract.toml`'s `frame-config-effective-or-removed`
-/// contract, `forbidden_pattern` entries below). `flui_engine::RasterOptions`
-/// (`target_frame_rate`, `max_frames_in_flight`) is the SHAPE a future
-/// production frame-pacing surface would take, not one that governs
-/// anything today: `RasterOwner` reads its own `RasterOptions` field for
-/// nothing (`crates/flui-engine/src/raster_owner.rs`'s own doc: "this module
-/// never acts on it"), and `FrameClock::set_min_produce_interval`/
-/// `set_max_in_flight` have zero callers outside this workspace's own test
-/// code. There is no field here to remove-or-wire because there is no
-/// consumer downstream to wire it to yet — that consumer is #559's job, not
-/// a claim this removal gets to make in the meantime.
+/// contract, `forbidden_pattern` entries below). A frame-pacing surface
+/// returns with the threaded raster lane that can act on one: the unwired
+/// `flui_engine::RasterOptions` DTO was deleted rather than kept as a shape
+/// nothing read, because its every consumer was its own test (and
+/// ADR-0045 decision 6 had already decided to replace its
+/// `max_frames_in_flight` field with `PipelineDepth`). There is no field
+/// here to remove-or-wire because there is no consumer downstream to wire
+/// it to yet — that consumer is #559's job, not a claim this removal gets
+/// to make in the meantime.
 ///
 /// # Example
 ///
@@ -111,7 +110,8 @@ pub struct AppConfig {
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
     ///
     /// Scope, deliberately narrow: the renderer
-    /// (`flui_engine::wgpu::Backend::add_performance_overlay`) draws three rows
+    /// (`WgpuPainter`'s `add_performance_overlay`, reached through the layer
+    /// dispatcher) draws three rows
     /// but still ignores both the frame counter and the option mask, so
     /// `PerformanceOverlayOption` has no observable effect yet. The sampled
     /// interval is between *composited* frames — an idle frame produces no layer

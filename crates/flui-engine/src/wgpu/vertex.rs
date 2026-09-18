@@ -37,7 +37,7 @@ use bytemuck::{Pod, Zeroable};
 /// coordinates.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
-pub struct Vertex {
+pub(crate) struct Vertex {
     /// Position in device pixels
     pub position: [f32; 2],
 
@@ -51,7 +51,7 @@ pub struct Vertex {
 impl Vertex {
     /// Create a new vertex
     #[must_use]
-    pub fn new(position: [f32; 2], color: [f32; 4], tex_coord: [f32; 2]) -> Self {
+    pub(crate) fn new(position: [f32; 2], color: [f32; 4], tex_coord: [f32; 2]) -> Self {
         Self {
             position,
             color,
@@ -61,7 +61,7 @@ impl Vertex {
 
     /// Get the vertex buffer layout descriptor
     #[must_use]
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,

@@ -26,10 +26,10 @@
 //! Layer + LayerRender trait
 //!     │ dispatch commands
 //!     ▼
-//! CommandRenderer trait (crate::traits)
+//! CommandRenderer trait (crate::command_renderer)
 //!     │
 //!     ▼
-//! Backend (backend.rs) → WgpuPainter (painter/)
+//! LayerDispatcher (layer_dispatcher.rs) → WgpuPainter (painter/)
 //!     │                      │
 //!     │                      ├── Tessellator
 //!     │                      ├── TextRenderer
@@ -40,9 +40,12 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # async fn render(
+//! #     window: impl flui_engine::wgpu::WindowTarget,
+//! #     scene: &flui_layer::Scene,
+//! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::wgpu::Renderer;
-//! use flui_layer::Scene;
 //!
 //! // Create a renderer for a window (owns per-window GPU state). `window`
 //! // is an owned, `'static` handle source — see `WindowTarget` — not a
@@ -50,7 +53,9 @@
 //! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render a scene
-//! renderer.render_scene(&scene)?;
+//! renderer.render_scene(scene)?;
+//! # Ok(())
+//! # }
 //! ```
 
 // ============================================================================
@@ -66,7 +71,6 @@
 mod adapter;
 pub(crate) mod advanced_blend;
 mod atlas;
-mod backend;
 /// Record-side draw accumulation helpers: `DrawBatcher` owns the tessellator,
 /// path cache, and superellipse cache so they can be borrowed independently
 /// from the flush-side state during draw recording.
@@ -97,83 +101,67 @@ pub(crate) mod command_ir;
 /// Alpha is unchanged.  [`gamma::GammaPipeline`] owns the pipeline and
 /// bind-group layout.
 pub(crate) mod gamma;
+mod layer_dispatcher;
 /// Per-pixel ColorFilter::Mode blend pass: [`mode::apply_mode`] applies a
 /// [`command_ir::LayerFilter::Mode`] by compositing a solid filter color (SRC)
 /// over each layer pixel (DST) using one of the 28 Porter-Duff / W3C blend
 /// modes (unpremul DST → blend in straight sRGB → clamp → emit premul).
 /// [`mode::ModePipeline`] owns the pipeline and bind-group layout.
 pub(crate) mod mode;
-// `buffers.rs` was deleted. The module hosted `DynamicBuffer`
-// (auto-growing vertex/instance buffer) and `BufferManager`
-// (5-buffer GPU resource bag). Workspace grep returned zero non-self
-// consumers in any crate; the wgpu module graph went through
-// `buffer_pool.rs` (live, distinct logic -- reusable per-frame
-// allocations) instead. The whole module was dead code masked by a
-// `pub use buffers::{...}` re-export elsewhere in this file, which
-// itself had zero consumers (a closer look revealed both layers were
-// dead).
-#[cfg(debug_assertions)]
-mod debug;
-/// Gradient + shadow + blur instance descriptors consumed by `painter`'s
-/// instanced-batch pipelines. The previous module-level `#[allow(dead_code)]`
-/// reflex was removed alongside the forward-looking helpers
-/// (`ShadowParams::elevation_*`, `BlurIntensity`, `LinearGradientBuilder`,
-/// the parallel `effects::BlurParams`); any zombie that returns lands as an
-/// item-level lint, not a broad module suppression.
+// A command recorder with no GPU: it exists so the dispatch tests can assert
+// which `render_*` arm fired without a device. Test-only, which is also what
+// makes it honest — nothing in a shipped build constructs one.
+#[cfg(test)]
+pub(crate) mod debug;
+/// Gradient, shadow, and blur instance descriptors.
+///
+/// `GradientStop` and `ShadowParams` appear in `WgpuPainter`'s public
+/// methods, so the module stays reachable; the instance structs are
+/// `#[doc(hidden)]` batch payloads a caller never constructs by hand.
 pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
-pub mod font_loader;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
 /// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
-/// `ArcInstance`, `TextureInstance`, gradient instances. All
-/// surviving items are consumed by `painter`. A cleanup pass
-/// deleted the 6 forward-looking shortcuts the previous
-/// module-level `#[allow(dead_code)]` was masking (`RectInstance::rounded_rect`,
-/// `RectInstance::with_clip_rsuperellipse`, `RectInstance::with_transform`,
-/// `CircleInstance::ellipse`, `ArcInstance::ellipse`,
-/// `TextureInstance::with_rotation`); any zombie that returns now
-/// surfaces as an item-level lint, not a broad module suppression.
+/// `ArcInstance`, `TextureInstance`, and the gradient/shadow instances.
+/// Consumed by `painter`, which owns the per-primitive batch layout.
 mod instancing;
-// NOTE: integration_tests.rs removed - needs rewrite for new
-// Pixels/DevicePixels API
+/// Opacity/layer save-state machine: `opacity_stack`, `current_opacity`, and
+/// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
+/// `save_layer`/`restore_layer`; GPU emission lives in `GpuReplay`.
+pub(super) mod layer_compositor;
+/// Offscreen-layer rendering and compositing: `render_segment_to_offscreen`,
+/// `render_layer_to_offscreen`, `flush_opacity_layer`, and the filter-chain
+/// folding they drive. Named for the job (a layer rendered to a texture), not
+/// for one of its callers.
+pub(super) mod layer_offscreen;
 /// Separable morphological filter (dilate / erode) pass: [`morphology::apply_morphology`]
 /// applies an [`command_ir::ImageFilterPass::Morph`] to a premultiplied layer
 /// offscreen via two H/V sub-passes into pooled ping-pong textures, then returns
 /// the filtered texture for compositing via `DrawItem::Filter`.
 /// [`morphology::MorphologyPipeline`] owns the pipeline and bind-group layout.
 pub(crate) mod morphology;
-mod multi_draw;
 mod offscreen;
 mod painter;
+/// Path tessellation cache. `#[doc(hidden)] pub` rather than `pub(crate)`
+/// because this crate's own `render_throughput` criterion bench — a separate
+/// crate target — measures a warm `PathCache::get` hit; that measurement is
+/// the only reason the name is reachable from outside. It is not an
+/// embedder API and is hidden from a published docs page.
+#[doc(hidden)]
 pub mod path_cache;
-/// Pipeline key types and cache consumed by `painter`. Live items:
-/// `PipelineKey` (opaque/alpha-blend factory methods + bitfield queries),
-/// `PipelineCache` (get_or_create, viewport_bind_group_layout), and
-/// `pipeline_key_from_paint`. Unused constants/methods/cache helpers deleted.
-mod pipeline;
-// An earlier, parallel `pipelines.rs` (with its own `PipelineCache` +
-// `PipelineBuilder` structs, name-colliding with `pipeline.rs`) was deleted.
-// The `pipelines.rs` that exists today is distinct: it defines `PipelineSet`,
-// which *composes* the live `PipelineCache` from `pipeline.rs` (singular) and
-// adds the nine named pipelines previously scattered as painter fields.
-/// Shared per-owner-thread GPU services (ADR-0045 decision 2):
-/// `GpuServices` and its immutable `GpuResourceGeneration` stamp. Reuses
-/// `renderer`'s `select_backend`/`required_features`/`required_limits`/
-/// `install_device_diagnostics` (widened to `pub(super)`) so adapter
-/// selection and diagnostics installation are written in exactly one place
-/// each, not re-derived per construction site.
-mod gpu_services;
-/// Opacity/layer save-state machine: `opacity_stack`, `current_opacity`, and
-/// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
-/// `save_layer`/`restore_layer`; GPU emission lives in `GpuReplay`.
-pub(super) mod layer_compositor;
-/// Offscreen-layer render helper: extracted from `flush_opacity_layer` so the
-/// renderer driver can reuse the same routine for backdrop-read compositing.
-pub(super) mod opacity_layer;
-pub(crate) mod pipelines;
+/// Pipeline key types and cache consumed by `painter`: `PipelineKey`
+/// (opaque/alpha-blend factory methods + bitfield queries), `PipelineCache`
+/// (get_or_create, viewport_bind_group_layout), and `pipeline_key_from_paint`.
+mod pipeline_cache;
+/// `pipeline_set.rs` — `PipelineSet` composes the live `PipelineCache` from
+/// `pipeline_cache.rs` and adds the nine named pipelines previously scattered
+/// as painter fields. The name-colliding earlier file with its own
+/// `PipelineCache`/`PipelineBuilder` is gone; this module is the surviving
+/// half.
+pub(crate) mod pipeline_set;
 mod profiler;
 /// Frame render-target descriptor: `view` + optional back-reference `texture`
 /// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
@@ -184,14 +172,8 @@ mod renderer;
 /// `submit` dispatch loop, and `flush_opacity_layer` recursion.
 pub(super) mod replay;
 pub(crate) mod resources;
-/// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
-/// blur / morph). Carries no `#[allow(dead_code)]` at any scope: the
-/// surface is exactly what the offscreen pipelines call
-/// (`get_or_compile` / `precompile_all`), so any zombie surfaces as an
-/// item-level lint. The forward-looking `ShaderCache::clear` (devtools
-/// hot-reload, zero consumers in every build configuration) was deleted;
-/// see the note at the end of the impl block for why no flush entry
-/// point is needed.
+/// Shader cache for the offscreen pipelines (`OffscreenRenderer` mask /
+/// blur / morph). Its surface is exactly what those pipelines call.
 mod shader_compiler;
 /// naga_oil shader composition helper: resolves `#import` directives
 /// in WGSL at pipeline-init time via [`shader_composer::compose_wgsl_shader`].
@@ -217,7 +199,7 @@ pub(super) mod state_stack;
 mod surface_lease;
 mod tessellator;
 mod text;
-pub mod texture_cache;
+pub(crate) mod texture_cache;
 mod texture_pool;
 mod uniform_pool;
 mod vertex;
@@ -232,6 +214,7 @@ mod window_target;
 // ============================================================================
 
 pub(crate) mod layer_render;
+pub(crate) mod layer_walk;
 
 // readback_dump is shared test-support for every GPU readback/oracle test in
 // this module: when `FLUI_READBACK_DUMP_DIR` is set, each local readback
@@ -346,7 +329,7 @@ mod blur_filter_tests;
 mod compose_filter_tests;
 
 // color_filter_producer_tests contains P1-P4 GPU readback acceptance tests for
-// the T1 producer-path change: Backend::push_color_filter(&ColorFilter) dispatch
+// the T1 producer-path change: LayerDispatcher::push_color_filter(&ColorFilter) dispatch
 // for Mode (P1), LinearToSrgbGamma (P2), SrgbToLinearGamma (P3), and Matrix (P4).
 // These tests would fail to compile on main (old &ColorMatrix signature).
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
@@ -354,7 +337,7 @@ mod color_filter_producer_tests;
 
 // scenebuilder_filter_chain_tests contains SC1-SC5 GPU readback acceptance tests
 // for T2′ of `gpu-filters-consumer-chain`: SceneBuilder→LayerTree→LayerRender→
-// Backend→GPU pixel closure for image-filter blur (SC1), Mode/Multiply (SC2),
+// LayerDispatcher→GPU pixel closure for image-filter blur (SC1), Mode/Multiply (SC2),
 // LinearToSrgbGamma (SC3), SrgbToLinearGamma (SC4), and Matrix/grayscale (SC5).
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod scenebuilder_filter_chain_tests;
@@ -364,68 +347,52 @@ mod scenebuilder_filter_chain_tests;
 // ============================================================================
 
 // ----------------------------------------------------------------------------
-// Public re-export surface trim
+// Public re-export surface
 //
-// Workspace ripgrep of `flui_engine::wgpu::<Name>` returned consumers
-// ONLY for `Renderer` (4 callsites in flui-app); every other
-// `pub use` re-export here had zero external (non-flui-engine)
-// consumers AND zero in-crate consumers either (sibling modules
-// reach internal types via their module paths directly, not via
-// the re-export at this module level).
+// The embedder-facing names are `Renderer`, `WindowTarget`, `WgpuPainter`,
+// `HeadlessRenderer`, and `GpuResourceGeneration`. Everything else this
+// module used to re-export (`LayerDispatcher`, `LayerRender`, `CommandRenderer`, the
+// `dispatch_*` pair, `DebugBackend`, `FontLoader`) has no consumer outside
+// the workspace: `flui-app` reaches the renderer only through
+// `RasterBackend`, and the layer walk / command dispatch is internal
+// machinery no embedder composes by hand. Those names stay reachable at
+// `flui_engine::wgpu::<module>` for in-workspace callers but are no longer
+// re-exported here, so the docs.rs surface is the entry points rather than
+// the plumbing.
 //
-// The previously-`pub` re-exports were paying public-API
-// monomorphization + discoverability + stability cost for nothing.
-// They are deleted outright, NOT demoted to `pub(crate)`: a
-// `pub(crate) use` line with zero in-crate consumers is itself
-// dead code (rustc emits `unused_imports` for it under
-// `-D warnings`). The 30+ "dead-code" warnings the previous
-// wave-4 attempt produced were masking the real signal: the
-// re-exports were never wired into the module graph at this
-// level.
-//
-// `Backend`, `FontLoader`, `LayerRender`, `WgpuPainter`, `DebugBackend`,
-// `Renderer`, and the `commands::` / `traits::` re-exports stay
-// because they have verified consumers (either flui-app callsites
-// or lib.rs's crate-root re-export chain).
+// `OffscreenRenderer`/`PooledTexture`/`TexturePool` stay gated on
+// `enable-wgpu-tests` for the `offscreen_resource_cache` criterion bench;
+// that feature is not enabled by `[package.metadata.docs.rs]`, so they do
+// not appear on a published page.
 // ----------------------------------------------------------------------------
 
-// Backend (external via lib.rs re-export at crate root)
-pub use backend::Backend;
-// Command rendering (re-exported from crate root)
-pub use crate::{
-    commands::{dispatch_command, dispatch_commands},
-    traits::CommandRenderer,
-};
-#[cfg(debug_assertions)]
-pub use debug::DebugBackend;
+// The dispatcher and command dispatch stay `pub(crate)` at this module:
+// `pub(crate) use` lines with no in-crate consumer would themselves be
+// dead imports, and in-crate callers name `layer_dispatcher::LayerDispatcher` /
+// `layer_render::LayerRender` directly.
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
-// Layer rendering (external via lib.rs re-export at crate root)
-pub use layer_render::LayerRender;
 pub use painter::WgpuPainter;
 
-// Renderer (the one and only externally-consumed wgpu/* type)
+// Renderer (the one externally-consumed wgpu/* type)
 pub use renderer::Renderer;
 // What a windowed `Renderer` draws into (issue #1043); exported beside
-// `Renderer` here at `flui_engine::wgpu` (neither is re-exported at the
-// crate root — `lib.rs` names no `Renderer` re-export of its own).
+// `Renderer` here at `flui_engine::wgpu`.
 pub use window_target::WindowTarget;
-// Shared per-owner-thread GPU services (ADR-0045 decision 2; external via
-// lib.rs re-export at crate root as `flui_engine::GpuServices`).
-pub use gpu_services::{GpuResourceGeneration, GpuServices};
-// Font loading utilities (external via lib.rs re-export at crate root)
-pub use font_loader::FontLoader;
+// The GPU-resource freshness stamp (ADR-0045 decision 4). Declared in
+// `flui-foundation` because `FrameStamp` compares this axis at the raster
+// boundary and cannot name a `flui-engine` type; re-exported here and at the
+// crate root so `flui_engine::GpuResourceGeneration` keeps resolving for the
+// compile-fail fixture that pins its private field.
+pub use flui_foundation::GpuResourceGeneration;
 // GPU frame profile — feature-independent type, always available so callers
 // can store/display profiling results without gating on `gpu-profiler`.
 pub use profiler::{GpuFrameProfile, PassTiming};
 
 // Offscreen renderer + texture pool — re-exported ONLY under the
 // `enable-wgpu-tests` feature for the `offscreen_resource_cache` criterion bench.
-// These are internal GPU types and are NOT part of the public API; consumers use
-// `Renderer` / `WgpuPainter`. Gated so benching does not widen the public surface.
+// Gated so benching does not widen the public surface.
 #[cfg(feature = "enable-wgpu-tests")]
 pub use offscreen::OffscreenRenderer;
 #[cfg(feature = "enable-wgpu-tests")]
 pub use texture_pool::{PooledTexture, TexturePool};
-
-// Painter (WgpuPainter is the concrete implementation; the `Painter` trait was deleted)

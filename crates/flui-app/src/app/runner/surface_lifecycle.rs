@@ -330,13 +330,13 @@ mod surface_lifecycle_tests {
     ///
     /// This pins the *seam*: `ensure_surface` never consults what is held and
     /// never short-circuits. It does not pin the platform. The real Vulkan
-    /// backend allows one surface per `ANativeWindow`, and
-    /// `Renderer::recreate_surface` creates before it commits, so a second
-    /// surface on the same still-connected window is refused by the platform
-    /// and the held one stays; "recreates over a held surface" is delivered
-    /// by the platform only when the native handle changed (see that
-    /// method's doc). The scripted backend succeeds unconditionally because
-    /// the property under test is the seam's, not the driver's.
+    /// backend allows one surface per `ANativeWindow`, which is why
+    /// `Renderer::recreate_surface` releases the held surface before creating
+    /// the replacement (see that method's doc): a second `true` over a surface
+    /// still bound to the same live window then creates cleanly instead of
+    /// being aborted inside `wgpu-hal`'s `create_surface_android`. The
+    /// scripted backend succeeds unconditionally because the property under
+    /// test is the seam's, not the driver's.
     #[test]
     fn an_acquire_request_recreates_over_a_held_surface_and_reports_recreated() {
         let mut backend = ScriptedSurfaceBackend::holding_a_surface();

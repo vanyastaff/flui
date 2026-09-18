@@ -215,163 +215,107 @@ pub trait PersistentHeaderRenderObject:
     fn deliver_snap(&mut self, command: Option<SnapCommand>);
 }
 
-impl PersistentHeaderRenderObject for RenderSliverScrollingPersistentHeader {
-    fn create(min_extent: f32, max_extent: f32) -> Self {
-        Self::new(min_extent, max_extent)
-    }
+/// Emit the [`PersistentHeaderRenderObject`] implementation for one header
+/// variant.
+///
+/// All four variants construct from extents, adopt the delegate's extents and
+/// stretch configuration, and install the shrink cell the same way; only the
+/// floating pair also receives snap state. `create` takes the optional
+/// controller the floating constructors require, so it is spelled out per
+/// variant here.
+macro_rules! persistent_header_render_object {
+    ($header:ty, snap, $create:expr) => {
+        impl PersistentHeaderRenderObject for $header {
+            fn create(min_extent: f32, max_extent: f32) -> Self {
+                $create(min_extent, max_extent)
+            }
 
-    fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
-        self.set_shrink_cell(cell);
-    }
+            fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
+                self.set_shrink_cell(cell);
+            }
 
-    fn update_extents(
-        &mut self,
-        min_extent: f32,
-        max_extent: f32,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
-    }
+            fn update_extents(
+                &mut self,
+                min_extent: f32,
+                max_extent: f32,
+            ) -> flui_rendering::RenderUpdateImpact {
+                self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
+            }
 
-    fn update_stretch(
-        &mut self,
-        stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_stretch_configuration(stretch)
-    }
+            fn update_stretch(
+                &mut self,
+                stretch: Option<OverScrollHeaderStretchConfiguration>,
+            ) -> flui_rendering::RenderUpdateImpact {
+                self.set_stretch_configuration(stretch)
+            }
 
-    fn install_snap(
-        &mut self,
-        _controller: Option<AnimationController>,
-        _configuration: Option<FloatingHeaderSnapConfiguration>,
-    ) {
-        // Not floating: nothing to settle. Flutter's non-floating headers
-        // likewise ignore snapConfiguration.
-    }
+            fn install_snap(
+                &mut self,
+                controller: Option<AnimationController>,
+                configuration: Option<FloatingHeaderSnapConfiguration>,
+            ) {
+                self.set_snap_controller(controller);
+                self.set_snap_configuration(configuration);
+            }
 
-    fn deliver_snap(&mut self, _command: Option<SnapCommand>) {
-        // Not floating: see install_snap.
-    }
-}
-
-impl PersistentHeaderRenderObject for RenderSliverPinnedPersistentHeader {
-    fn create(min_extent: f32, max_extent: f32) -> Self {
-        Self::new(min_extent, max_extent)
-    }
-
-    fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
-        self.set_shrink_cell(cell);
-    }
-
-    fn update_extents(
-        &mut self,
-        min_extent: f32,
-        max_extent: f32,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
-    }
-
-    fn update_stretch(
-        &mut self,
-        stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_stretch_configuration(stretch)
-    }
-
-    fn install_snap(
-        &mut self,
-        _controller: Option<AnimationController>,
-        _configuration: Option<FloatingHeaderSnapConfiguration>,
-    ) {
-        // Not floating: nothing to settle. Flutter's non-floating headers
-        // likewise ignore snapConfiguration.
-    }
-
-    fn deliver_snap(&mut self, _command: Option<SnapCommand>) {
-        // Not floating: see install_snap.
-    }
-}
-
-impl PersistentHeaderRenderObject for RenderSliverFloatingPersistentHeader {
-    fn create(min_extent: f32, max_extent: f32) -> Self {
-        // No controller: snap and programmatic expansion are deferred until a
-        // snap configuration reaches this seam (the facade documents this).
-        Self::new(min_extent, max_extent, None)
-    }
-
-    fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
-        self.set_shrink_cell(cell);
-    }
-
-    fn update_extents(
-        &mut self,
-        min_extent: f32,
-        max_extent: f32,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
-    }
-
-    fn update_stretch(
-        &mut self,
-        stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_stretch_configuration(stretch)
-    }
-
-    fn install_snap(
-        &mut self,
-        controller: Option<AnimationController>,
-        configuration: Option<FloatingHeaderSnapConfiguration>,
-    ) {
-        self.set_snap_controller(controller);
-        self.set_snap_configuration(configuration);
-    }
-
-    fn deliver_snap(&mut self, command: Option<SnapCommand>) {
-        if let Some(command) = command {
-            self.apply_snap_command(command);
+            fn deliver_snap(&mut self, command: Option<SnapCommand>) {
+                if let Some(command) = command {
+                    self.apply_snap_command(command);
+                }
+            }
         }
-    }
-}
+    };
+    ($header:ty, plain, $create:expr) => {
+        impl PersistentHeaderRenderObject for $header {
+            fn create(min_extent: f32, max_extent: f32) -> Self {
+                $create(min_extent, max_extent)
+            }
 
-impl PersistentHeaderRenderObject for RenderSliverFloatingPinnedPersistentHeader {
-    fn create(min_extent: f32, max_extent: f32) -> Self {
-        Self::new(min_extent, max_extent, None)
-    }
+            fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
+                self.set_shrink_cell(cell);
+            }
 
-    fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
-        self.set_shrink_cell(cell);
-    }
+            fn update_extents(
+                &mut self,
+                min_extent: f32,
+                max_extent: f32,
+            ) -> flui_rendering::RenderUpdateImpact {
+                self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
+            }
 
-    fn update_extents(
-        &mut self,
-        min_extent: f32,
-        max_extent: f32,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
-    }
+            fn update_stretch(
+                &mut self,
+                stretch: Option<OverScrollHeaderStretchConfiguration>,
+            ) -> flui_rendering::RenderUpdateImpact {
+                self.set_stretch_configuration(stretch)
+            }
 
-    fn update_stretch(
-        &mut self,
-        stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        self.set_stretch_configuration(stretch)
-    }
+            // Not floating: nothing to settle, matching Flutter's non-floating
+            // headers ignoring `snapConfiguration`.
+            fn install_snap(
+                &mut self,
+                _controller: Option<AnimationController>,
+                _configuration: Option<FloatingHeaderSnapConfiguration>,
+            ) {
+            }
 
-    fn install_snap(
-        &mut self,
-        controller: Option<AnimationController>,
-        configuration: Option<FloatingHeaderSnapConfiguration>,
-    ) {
-        self.set_snap_controller(controller);
-        self.set_snap_configuration(configuration);
-    }
-
-    fn deliver_snap(&mut self, command: Option<SnapCommand>) {
-        if let Some(command) = command {
-            self.apply_snap_command(command);
+            fn deliver_snap(&mut self, _command: Option<SnapCommand>) {}
         }
-    }
+    };
 }
+
+persistent_header_render_object!(RenderSliverScrollingPersistentHeader, plain, Self::new);
+persistent_header_render_object!(RenderSliverPinnedPersistentHeader, plain, Self::new);
+persistent_header_render_object!(
+    RenderSliverFloatingPersistentHeader,
+    snap,
+    |min_extent, max_extent| Self::new(min_extent, max_extent, None)
+);
+persistent_header_render_object!(
+    RenderSliverFloatingPinnedPersistentHeader,
+    snap,
+    |min_extent, max_extent| Self::new(min_extent, max_extent, None)
+);
 
 // ============================================================================
 // VIEW (generic over the four variants)

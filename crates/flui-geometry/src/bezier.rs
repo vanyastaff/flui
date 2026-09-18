@@ -17,6 +17,37 @@ use super::{
 };
 
 // ============================================================================
+// Shared curve operations
+// ============================================================================
+
+/// Arc length by recursive subdivision, shared by every Bézier order.
+///
+/// `eval` is the only order-specific part: the flatness test compares each
+/// half-chord's sum against the full chord, and subdivides until they agree
+/// within `tolerance`. One body keeps the two orders measuring length the
+/// same way.
+fn arc_length_recursive<U, F>(eval: &F, t0: f32, t1: f32, tolerance: f32) -> f32
+where
+    U: NumericUnit + Into<f32> + FloatUnit,
+    F: Fn(f32) -> Point<U>,
+{
+    let p0 = eval(t0);
+    let p1 = eval(t1);
+    let pm = eval(f32::midpoint(t0, t1));
+
+    let chord = p0.distance(p1);
+    let arc = p0.distance(pm) + pm.distance(p1);
+
+    if (arc - chord) < tolerance {
+        arc
+    } else {
+        let mid = f32::midpoint(t0, t1);
+        arc_length_recursive(eval, t0, mid, tolerance)
+            + arc_length_recursive(eval, mid, t1, tolerance)
+    }
+}
+
+// ============================================================================
 // Quadratic Bézier
 // ============================================================================
 
@@ -191,24 +222,7 @@ impl QuadBez<Pixels> {
     #[inline]
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
-        self.arc_length_recursive(0.0, 1.0, tolerance)
-    }
-
-    fn arc_length_recursive(&self, t0: f32, t1: f32, tolerance: f32) -> f32 {
-        let p0 = self.eval(t0);
-        let p1 = self.eval(t1);
-        let pm = self.eval(f32::midpoint(t0, t1));
-
-        let chord = p0.distance(p1);
-        let arc = p0.distance(pm) + pm.distance(p1);
-
-        if (arc - chord) < tolerance {
-            arc
-        } else {
-            let mid = f32::midpoint(t0, t1);
-            self.arc_length_recursive(t0, mid, tolerance)
-                + self.arc_length_recursive(mid, t1, tolerance)
-        }
+        arc_length_recursive(&|t| self.eval(t), 0.0, 1.0, tolerance)
     }
 
     /// Finds the nearest point on the curve to the given point using binary
@@ -483,24 +497,7 @@ impl CubicBez<Pixels> {
     #[inline]
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
-        self.arc_length_recursive(0.0, 1.0, tolerance)
-    }
-
-    fn arc_length_recursive(&self, t0: f32, t1: f32, tolerance: f32) -> f32 {
-        let p0 = self.eval(t0);
-        let p1 = self.eval(t1);
-        let pm = self.eval(f32::midpoint(t0, t1));
-
-        let chord = p0.distance(p1);
-        let arc = p0.distance(pm) + pm.distance(p1);
-
-        if (arc - chord) < tolerance {
-            arc
-        } else {
-            let mid = f32::midpoint(t0, t1);
-            self.arc_length_recursive(t0, mid, tolerance)
-                + self.arc_length_recursive(mid, t1, tolerance)
-        }
+        arc_length_recursive(&|t| self.eval(t), 0.0, 1.0, tolerance)
     }
 
     /// Finds the nearest point on the curve using subdivision.

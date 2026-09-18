@@ -48,7 +48,7 @@ use flui_types::{Rect, geometry::Pixels};
 use super::{
     command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase, SsaaPathOp, TessellatedBatch},
     path_cache::PathCache,
-    pipeline::PipelineKey,
+    pipeline_cache::PipelineKey,
     state_stack::GpuStateStack,
     tessellator::Tessellator,
     vertex::Vertex,
@@ -621,19 +621,11 @@ mod unit_tests {
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
         let stops = [
-            GradientStop {
-                color: [1.0, 0.0, 0.0, 1.0],
-                position: 0.0,
-                padding: [0.0; 3],
-            },
-            GradientStop {
-                color: [1.0, 0.0, 0.0, 1.0],
-                position: 1.0,
-                padding: [0.0; 3],
-            },
+            GradientStop::from_rgba([1.0, 0.0, 0.0, 1.0], 0.0),
+            GradientStop::from_rgba([1.0, 0.0, 0.0, 1.0], 1.0),
         ];
 
-        DrawBatcher::gradient_rect(
+        DrawBatcher::draw_gradient_rect(
             &mut segment,
             &state,
             Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),

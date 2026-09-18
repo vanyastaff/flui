@@ -9,9 +9,7 @@
 //! `painter`.  These types are re-exported `pub(crate)` so `painter`
 //! and future batcher/compositor modules can import from one place.
 
-use flui_types::{
-    Rect, geometry::Pixels, painting::BlendMode, painting::TextureId as ExternalTextureId,
-};
+use flui_types::{Rect, geometry::Pixels, painting::BlendMode};
 use smallvec::SmallVec;
 
 use super::{
@@ -20,8 +18,8 @@ use super::{
         ArcInstance, CircleInstance, InstanceBatch, LinearGradientInstance, RadialGradientInstance,
         RectInstance, ShadowInstance, SweepGradientInstance, TextureInstance,
     },
-    pipeline::PipelineKey,
-    texture_cache::TextureId,
+    pipeline_cache::PipelineKey,
+    texture_cache::TextureKey,
     texture_pool::PooledTexture,
     vertex::Vertex,
 };
@@ -459,6 +457,12 @@ pub(crate) struct TessellatedBatch {
 pub(crate) struct PendingOffscreenTexture {
     pub(crate) texture: PooledTexture,
     pub(crate) bounds: Rect<Pixels>,
+    /// The blend mode the offscreen result must be composited with. The
+    /// offscreen target is cleared transparent and drawn with straight
+    /// `ALPHA_BLENDING`, so the result is premultiplied; `SrcOver` is the
+    /// premultiplied identity and every other mode routes through the
+    /// per-mode composite pipeline.
+    pub(crate) blend: BlendMode,
 }
 
 /// Saved render state for `save_layer`/`restore_layer` offscreen compositing.
@@ -588,10 +592,10 @@ pub(crate) struct DrawSegment {
     ///
     /// The third element is the scissor rect active at draw time, forwarded to
     /// `flush_texture_batch` so clipped images don't spill outside their clip region.
-    pub(crate) cached_images: Vec<(TextureId, TextureInstance, ScissorRect)>,
+    pub(crate) cached_images: Vec<(TextureKey, TextureInstance, ScissorRect)>,
     /// External-texture draws queued for this segment.
     ///
-    /// Each entry carries the `ExternalTextureId` (a `flui_types::painting::TextureId`)
+    /// Each entry carries a `flui_types::painting::TextureId`
     /// so the IR is comparable by value and free of non-`PartialEq` wgpu handles.
     /// Resolution from ID to `wgpu::TextureView` happens at replay time in
     /// `flush_segment_external_images`, which calls
@@ -602,7 +606,11 @@ pub(crate) struct DrawSegment {
     /// semantics documented in [`super::external_texture_registry`].
     ///
     /// The third element is the scissor rect active at draw time.
-    pub(crate) external_images: Vec<(ExternalTextureId, TextureInstance, ScissorRect)>,
+    pub(crate) external_images: Vec<(
+        flui_types::painting::TextureId,
+        TextureInstance,
+        ScissorRect,
+    )>,
 
     /// The replay phase of the most recent primitive recorded into this
     /// segment, or `None` while it is still geometry-empty.
