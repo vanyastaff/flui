@@ -241,7 +241,7 @@ where
 
     #[cfg(target_os = "ios")]
     {
-        run_ios(config);
+        run_ios(root, config);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -255,7 +255,10 @@ where
 // ============================================================================
 
 #[cfg(target_os = "ios")]
-fn run_ios(_config: AppConfig) {
+fn run_ios<V>(_root: V, _config: AppConfig)
+where
+    V: View + StatelessView + Clone + 'static,
+{
     // Native iOS (UIKit windowing + surface) is a Cross.P (Platform breadth)
     // deliverable — see docs/ROADMAP.md's Cross.P section. This stub exists
     // only so `#[cfg(target_os = "ios")]` builds compile; there is no

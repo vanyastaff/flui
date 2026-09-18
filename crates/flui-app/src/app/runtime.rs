@@ -69,11 +69,11 @@ use flui_semantics::AccessibilityFeatures;
 #[cfg(not(target_os = "ios"))]
 use parking_lot::{Mutex, RwLock};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 use super::execution::SpawnError;
 #[cfg(not(target_os = "ios"))]
 use super::execution::{ExecutionServices, HostExecutors};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 use super::lifecycle::{
     ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
 };
