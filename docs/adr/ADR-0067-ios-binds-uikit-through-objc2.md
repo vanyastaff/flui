@@ -79,12 +79,34 @@ is the owner-affine scope ADR-0027 prefers, it matches the winit backend's own
 `ACTIVE_EVENT_LOOP` publication, and it keeps the ambient-reach ratchet
 (`docs/runtime-contract.toml`) from gaining a new process-global.
 
-**D4 — the frame source is a `CADisplayLink` on the main run loop.** Its
-callback requests a frame through the window's callbacks; the background and
-foreground edges pause and resume it, so a suspended app does no work. This is
-the iOS-side counterpart of Android's `poll_events` loop and macOS's display
-pass: the platform schedules the frame, and the framework's transaction runs
-inside it.
+**D4 — the frame source is a `CADisplayLink` on the main run loop, and
+`request_redraw` is a *demand signal only*.** The link's callback requests a
+frame through the window's callbacks; the background and foreground edges pause
+and resume it, so a suspended app does no work. This is the iOS-side counterpart
+of Android's `poll_events` loop and macOS's display pass: the platform schedules
+the frame, and the framework's transaction runs inside it. `request_redraw`
+therefore does **not** dispatch a frame synchronously and does **not** call
+`setNeedsDisplay()` — both were tried and both are wrong on this backend:
+
+  - *A synchronous dispatch kills the app.* A static tree runs one frame and
+    returns, so it looks fine; an animated tree re-arms from inside that frame
+    (its ticker wakes through `request_redraw` again), so the callback drain
+    never empties and `didFinishLaunching` never returns to UIKit. iOS's
+    scene-create watchdog then terminates the process at ~19.6 s
+    (`0x8BADF00D`). Measured on a real simulator; the crash stack ran
+    `did_finish_launching → bootstrap_ios → request_redraw → drain_events →
+    run_frame`.
+  - *`setNeedsDisplay()` paints white over the GPU content.* It asks UIKit to
+    repaint the opaque `UIView`'s own (empty) layer, drawing it over the
+    `CAMetalLayer` the renderer presents into, so frames arrive and the screen
+    stays white. Metal presents a drawable to the layer directly; the view's
+    display machinery is not part of this path.
+
+  The caller's `needs_redraw` flag is what the next tick's `wake_action` reads,
+  so the request is honoured at the display's own cadence rather than lost.
+  Verified after the fix: the animated demo runs at ~60 fps (median 16.68 ms
+  frame delta on a 60 Hz panel) and survives indefinitely, and the Material,
+  ColoredBox and vertical-slice demos all render.
 
 ## Consequences
 
