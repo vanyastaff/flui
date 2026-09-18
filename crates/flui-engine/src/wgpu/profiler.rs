@@ -150,7 +150,7 @@ fn flatten_timer_results(
 /// 5. Optionally call [`GpuFrameProfiler::process_finished_frame`] after
 ///    `SurfaceTexture::present` to harvest the oldest completed result.
 #[cfg(feature = "gpu-profiler")]
-pub struct GpuFrameProfiler {
+pub(crate) struct GpuFrameProfiler {
     inner: wgpu_profiler::GpuProfiler,
     /// The most recently harvested completed-frame profile, if any.
     latest_profile: Option<GpuFrameProfile>,
@@ -188,7 +188,7 @@ impl GpuFrameProfiler {
     /// Propagates `wgpu_profiler::CreationError` when the settings are invalid.
     /// In practice only `InvalidMaxNumPendingFrames` (value < 1) can fire, which
     /// cannot happen with the `PENDING_FRAME_BUFFER_DEPTH` constant above.
-    pub fn new(device: &wgpu::Device) -> Result<Self, wgpu_profiler::CreationError> {
+    pub(crate) fn new(device: &wgpu::Device) -> Result<Self, wgpu_profiler::CreationError> {
         let settings = wgpu_profiler::GpuProfilerSettings {
             enable_timer_queries: true,
             enable_debug_groups: true,
@@ -210,7 +210,7 @@ impl GpuFrameProfiler {
     /// The guard borrows `self` and the encoder for its lifetime, preventing any
     /// other mutable use of the encoder while the scope is open — matching the
     /// wgpu-profiler contract.
-    pub fn scope<'a>(
+    pub(crate) fn scope<'a>(
         &'a self,
         label: impl Into<String>,
         encoder: &'a mut wgpu::CommandEncoder,
@@ -224,7 +224,7 @@ impl GpuFrameProfiler {
     ///
     /// Must be called **after** all scope guards for this encoder have been
     /// dropped, and **before** the encoder is submitted via `queue.submit`.
-    pub fn resolve_queries(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    pub(crate) fn resolve_queries(&mut self, encoder: &mut wgpu::CommandEncoder) {
         self.inner.resolve_queries(encoder);
     }
 
@@ -233,7 +233,7 @@ impl GpuFrameProfiler {
     /// Call after all submits for the current frame. Errors (unclosed/unresolved
     /// queries) are logged via `tracing` rather than propagated — a profiling
     /// error must never abort a frame.
-    pub fn end_frame(&mut self) {
+    pub(crate) fn end_frame(&mut self) {
         if let Err(err) = self.inner.end_frame() {
             tracing::warn!(
                 error = ?err,
@@ -251,7 +251,10 @@ impl GpuFrameProfiler {
     /// Returns the completed profile and stores it in [`Self::latest_completed_frame`].
     /// Returns `None` when the GPU pipeline hasn't yet completed enough frames
     /// to return results (normally requires `PENDING_FRAME_BUFFER_DEPTH` frames).
-    pub fn process_finished_frame(&mut self, timestamp_period: f32) -> Option<&GpuFrameProfile> {
+    pub(crate) fn process_finished_frame(
+        &mut self,
+        timestamp_period: f32,
+    ) -> Option<&GpuFrameProfile> {
         if let Some(raw_results) = self.inner.process_finished_frame(timestamp_period) {
             let mut passes = Vec::with_capacity(raw_results.len());
             flatten_timer_results(&raw_results, 0, &mut passes);
@@ -262,7 +265,7 @@ impl GpuFrameProfiler {
 
     /// The latest completed frame profile, or `None` if no frame has resolved.
     #[must_use]
-    pub fn latest_completed_frame(&self) -> Option<&GpuFrameProfile> {
+    pub(crate) fn latest_completed_frame(&self) -> Option<&GpuFrameProfile> {
         self.latest_profile.as_ref()
     }
 }
@@ -276,7 +279,7 @@ impl GpuFrameProfiler {
 /// Calls `end_query` on drop, closing the GPU timestamp pair. Must be dropped
 /// before [`GpuFrameProfiler::resolve_queries`] is called on the same encoder.
 #[cfg(feature = "gpu-profiler")]
-pub struct ScopeGuard<'a> {
+pub(crate) struct ScopeGuard<'a> {
     inner: wgpu_profiler::Scope<'a, wgpu::CommandEncoder>,
 }
 
@@ -296,7 +299,7 @@ impl ScopeGuard<'_> {
     /// returned reference is a reborrow of the scope's internally-held encoder
     /// reference, so the borrow checker correctly prevents concurrent mutable
     /// access to the encoder outside this scope.
-    pub fn recorder(&mut self) -> &mut wgpu::CommandEncoder {
+    pub(crate) fn recorder(&mut self) -> &mut wgpu::CommandEncoder {
         self.inner.recorder
     }
 }

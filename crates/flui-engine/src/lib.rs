@@ -161,13 +161,21 @@ pub mod error;
 
 /// The command dispatch surface (`CommandRenderer`). Crate plumbing: the
 /// layer walk dispatches through it, no embedder implements it today.
+///
+/// Gated on `wgpu-backend` with the rest of the backend: the layer walk is
+/// the only caller, and without the backend there is no walk to dispatch. A
+/// default-off build (`--no-default-features`) exists for the raster-mailbox
+/// protocol, which never names these traits.
+#[cfg(feature = "wgpu-backend")]
 pub(crate) mod command_renderer;
 
 /// The layer-tree state hand-off (`LayerStateStack`), the sibling of
 /// `command_renderer`.
+#[cfg(feature = "wgpu-backend")]
 pub(crate) mod layer_state_stack;
 
 /// `DrawCommand` dispatch functions. Crate plumbing, same as the traits.
+#[cfg(feature = "wgpu-backend")]
 pub(crate) mod dispatch;
 
 /// Backend-agnostic superellipse (iOS squircle) path generation.
