@@ -20,21 +20,24 @@
 //!     ↓
 //! WindowCallbacks::dispatch_input
 //! ```
+//!
+//! # Migration note
+//!
+//! The class is built with objc2's imperative `ClassBuilder` (the successor to
+//! `objc` 0.2's `ClassDecl`) rather than the declarative `define_class!` macro,
+//! because the `NSTextInputClient` methods are registered by a *separate*
+//! function in [`super::text_input`] — the macro wants all methods in one
+//! block, and the split is what keeps the IME conformance's eleven callbacks
+//! beside the state they read.
 
 use std::cell::RefCell;
+use std::ffi::CStr;
 use std::sync::Weak;
 
-use cocoa::{
-    base::{BOOL, YES, id, nil},
-    foundation::NSRect,
-};
-use objc::{
-    class,
-    declare::ClassDecl,
-    msg_send,
-    runtime::{Class, Object, Sel},
-    sel, sel_impl,
-};
+use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, Sel};
+use objc2::{ClassType, msg_send};
+use objc2_app_kit::{NSResponder, NSView as NSViewClass};
+use objc2_foundation::{NSRect, NSRectEdge};
 
 use super::events::convert_ns_event;
 use super::text_input::{TextInputState, add_text_input_methods};
@@ -44,6 +47,9 @@ use crate::shared::WindowCallbacks;
 // FLUIContentView Creation
 // ============================================================================
 
+/// The ivar name holding the boxed [`ViewContext`].
+const CONTEXT_IVAR: &CStr = c"context_ptr";
+
 /// Create a content view for receiving input events
 ///
 /// This view becomes the NSWindow's contentView and first responder,
@@ -52,14 +58,14 @@ pub fn create_content_view(
     frame: NSRect,
     scale_factor: f64,
     callbacks: Weak<WindowCallbacks>,
-) -> id {
+) -> *mut AnyObject {
     // SAFETY: FLUIContentView is registered before alloc/init; the boxed
     // ViewContext pointer is stored in the view's ivar and released in
     // `dealloc`, so it lives exactly as long as the view.
     unsafe {
         let class = get_or_create_view_class();
-        let view: id = msg_send![class, alloc];
-        let view: id = msg_send![view, initWithFrame: frame];
+        let view: *mut AnyObject = msg_send![class, alloc];
+        let view: *mut AnyObject = msg_send![view, initWithFrame: frame];
 
         // Store context (scale factor + callbacks + composition state)
         let context = Box::into_raw(Box::new(ViewContext {
@@ -68,7 +74,14 @@ pub fn create_content_view(
             text_input: RefCell::new(TextInputState::default()),
         }))
         .cast::<std::ffi::c_void>();
-        (*view).set_ivar("context_ptr", context);
+
+        // SAFETY: `view` is a live FLUIContentView just allocated above, so it
+        // carries `CONTEXT_IVAR`; the value is a pointer this function owns.
+        let ivar = class
+            .instance_variable(CONTEXT_IVAR)
+            .expect("BUG: FLUIContentView declares the context ivar");
+        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&*view);
+        *slot = context;
 
         view
     }
@@ -98,7 +111,11 @@ pub(super) struct ViewContext {
 /// `pub(super)` because `super::text_input`'s `doCommandBySelector:` is the
 /// second caller: the key event an input method declined is handed back here to
 /// take the ordinary keyboard path.
-pub(super) extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id) {
+pub(super) extern "C-unwind" fn handle_input_event(
+    this: &AnyObject,
+    _sel: Sel,
+    event: *mut AnyObject,
+) {
     // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
     // live objects); `event` is a valid NSEvent* for the duration of the call;
     // `bounds` is a plain NSRect getter.
@@ -135,7 +152,7 @@ pub(super) extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id)
 /// `pending_key_event` is set for exactly the duration of the
 /// `interpretKeyEvents:` call, which is the only window in which the input
 /// context can call `doCommandBySelector:` back for this event.
-extern "C" fn key_down(this: &Object, _sel: Sel, event: id) {
+extern "C-unwind" fn key_down(this: &AnyObject, _sel: Sel, event: *mut AnyObject) {
     // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent* for
     // the duration of the call, and `interpretKeyEvents:` retains it for the
     // span of its own dispatch. The array is created by an NSArray class
@@ -155,7 +172,7 @@ extern "C" fn key_down(this: &Object, _sel: Sel, event: id) {
         // `super::text_input`).
         let ime_allowed = ctx.text_input.borrow().ime_allowed;
         if !ime_allowed {
-            handle_input_event(this, sel!(keyDown:), event);
+            handle_input_event(this, objc2::sel!(keyDown:), event);
             return;
         }
 
@@ -166,7 +183,10 @@ extern "C" fn key_down(this: &Object, _sel: Sel, event: id) {
         // dropping a command that belongs to this press.
         let previous_pending_key_event = ctx.text_input.borrow().pending_key_event;
         ctx.text_input.borrow_mut().pending_key_event = event as usize;
-        let events: id = msg_send![class!(NSArray), arrayWithObject: event];
+        let events: *mut AnyObject = msg_send![
+            objc2::class!(NSArray),
+            arrayWithObject: event
+        ];
         let _: () = msg_send![this, interpretKeyEvents: events];
         ctx.text_input.borrow_mut().pending_key_event = previous_pending_key_event;
     }
@@ -186,7 +206,7 @@ extern "C" fn key_down(this: &Object, _sel: Sel, event: id) {
 /// the composition here), so an ordinary typed character still reports its
 /// release normally. What is suppressed is exactly the release that lands
 /// inside an open composition.
-extern "C" fn key_up(this: &Object, _sel: Sel, event: id) {
+extern "C-unwind" fn key_up(this: &AnyObject, _sel: Sel, event: *mut AnyObject) {
     // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
     // live objects); `event` is a valid NSEvent* for the duration of the call.
     let reported = unsafe {
@@ -195,11 +215,11 @@ extern "C" fn key_up(this: &Object, _sel: Sel, event: id) {
     if !reported {
         return;
     }
-    handle_input_event(this, sel!(keyUp:), event);
+    handle_input_event(this, objc2::sel!(keyUp:), event);
 }
 
 /// Dispatch a hover status change through the per-window callbacks.
-fn dispatch_hover_change(this: &Object, is_hovered: bool) {
+fn dispatch_hover_change(this: &AnyObject, is_hovered: bool) {
     // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
     // live objects); `get_context`'s ivar contract holds for views created by
     // `create_content_view`.
@@ -213,13 +233,13 @@ fn dispatch_hover_change(this: &Object, is_hovered: bool) {
 }
 
 /// mouseEntered: — report hover gained, then forward the pointer event.
-extern "C" fn mouse_entered(this: &Object, sel: Sel, event: id) {
+extern "C-unwind" fn mouse_entered(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
     dispatch_hover_change(this, true);
     handle_input_event(this, sel, event);
 }
 
 /// mouseExited: — report hover lost, then forward the pointer event.
-extern "C" fn mouse_exited(this: &Object, sel: Sel, event: id) {
+extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
     dispatch_hover_change(this, false);
     handle_input_event(this, sel, event);
 }
@@ -238,7 +258,7 @@ extern "C" fn mouse_exited(this: &Object, sel: Sel, event: id) {
 /// made at any other moment and defer only the former.
 ///
 /// [`DisplayPassGuard`]: super::display_pass::DisplayPassGuard
-extern "C" fn draw_rect(this: &Object, _sel: Sel, dirty_rect: NSRect) {
+extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) {
     // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
     // is the documented NSView teardown of the dirty region.
     unsafe {
@@ -255,49 +275,48 @@ extern "C" fn draw_rect(this: &Object, _sel: Sel, dirty_rect: NSRect) {
             tracing::trace!("FLUIContentView drawRect: no live callbacks; frame request dropped");
         }
 
-        let superclass = class!(NSView);
-        let _: () = msg_send![super(this, superclass), drawRect: dirty_rect];
+        let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
     }
 }
 
 /// Get or create the FLUIContentView class
-fn get_or_create_view_class() -> &'static Class {
+fn get_or_create_view_class() -> &'static AnyClass {
     use std::sync::Once;
     static INIT: Once = Once::new();
 
     INIT.call_once(|| {
-        let superclass = class!(NSView);
-        let mut decl = ClassDecl::new("FLUIContentView", superclass)
+        let superclass = NSViewClass::class();
+        let mut builder = objc2::runtime::ClassBuilder::new(c"FLUIContentView", superclass)
             .expect("FLUIContentView must be registered exactly once (guarded by Once)");
 
-        // Add ivar to store context
-        decl.add_ivar::<*mut std::ffi::c_void>("context_ptr");
+        // Add ivar to store context (a raw `*mut c_void` boxed ViewContext).
+        builder.add_ivar::<*mut std::ffi::c_void>(CONTEXT_IVAR);
 
         // =================================================================
         // NSResponder Methods (Input Events)
         // =================================================================
 
         // acceptsFirstResponder - Allow view to become first responder
-        extern "C" fn accepts_first_responder(_this: &Object, _sel: Sel) -> BOOL {
-            YES
+        extern "C-unwind" fn accepts_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
+            Bool::YES
         }
 
         // becomeFirstResponder
-        extern "C" fn become_first_responder(_this: &Object, _sel: Sel) -> BOOL {
+        extern "C-unwind" fn become_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
             tracing::debug!("FLUIContentView became first responder");
-            YES
+            Bool::YES
         }
 
         // resignFirstResponder
-        extern "C" fn resign_first_responder(_this: &Object, _sel: Sel) -> BOOL {
+        extern "C-unwind" fn resign_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
             tracing::debug!("FLUIContentView resigned first responder");
-            YES
+            Bool::YES
         }
 
         // flagsChanged: — modifier keys (Shift, Control, Alt, Command).
         // Modifier state is carried on every converted event, so flag-only
         // transitions are observed but not dispatched separately.
-        extern "C" fn flags_changed(_this: &Object, _sel: Sel, _event: id) {
+        extern "C-unwind" fn flags_changed(_this: &AnyObject, _sel: Sel, _event: *mut AnyObject) {
             tracing::trace!("Modifier flags changed");
         }
 
@@ -305,19 +324,24 @@ fn get_or_create_view_class() -> &'static Class {
         // View Lifecycle
         // =================================================================
 
-        extern "C" fn dealloc(this: &Object, _sel: Sel) {
+        extern "C-unwind" fn dealloc(this: &AnyObject, _sel: Sel) {
             // SAFETY: the ivar holds either null or a Box<ViewContext> leaked
             // in `create_content_view`; reclaiming it here (exactly once, on
             // dealloc) is the matching release. The super dealloc message is
             // the mandatory NSObject teardown.
             unsafe {
-                let context_ptr: *mut std::ffi::c_void = *this.get_ivar("context_ptr");
+                let class = AnyClass::get(c"FLUIContentView")
+                    .expect("BUG: dealloc only runs on a registered FLUIContentView");
+                let ivar = class
+                    .instance_variable(CONTEXT_IVAR)
+                    .expect("BUG: FLUIContentView declares the context ivar");
+                let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(this);
+                let context_ptr = *slot;
                 if !context_ptr.is_null() {
                     drop(Box::from_raw(context_ptr.cast::<ViewContext>()));
                 }
 
-                let superclass = class!(NSView);
-                let _: () = msg_send![super(this, superclass), dealloc];
+                let _: () = msg_send![super(this, NSViewClass::class()), dealloc];
             }
         }
 
@@ -325,12 +349,12 @@ fn get_or_create_view_class() -> &'static Class {
         // View Drawing (Optional)
         // =================================================================
 
-        extern "C" fn is_opaque(_this: &Object, _sel: Sel) -> BOOL {
-            YES // Our view is fully opaque
+        extern "C-unwind" fn is_opaque(_this: &AnyObject, _sel: Sel) -> Bool {
+            Bool::YES // Our view is fully opaque
         }
 
-        extern "C" fn accepts_touch_events(_this: &Object, _sel: Sel) -> BOOL {
-            YES // Accept touch events for future trackpad gestures
+        extern "C-unwind" fn accepts_touch_events(_this: &AnyObject, _sel: Sel) -> Bool {
+            Bool::YES // Accept touch events for future trackpad gestures
         }
 
         // =================================================================
@@ -338,122 +362,128 @@ fn get_or_create_view_class() -> &'static Class {
         // =================================================================
 
         // SAFETY: every registered function pointer matches the Objective-C
-        // method signature of its selector (`&Object, Sel` plus the declared
-        // argument/return types), as required by `ClassDecl::add_method`.
+        // method signature of its selector (`&AnyObject, Sel` plus the declared
+        // argument/return types), as required by `ClassBuilder::add_method`.
         unsafe {
             // First responder
-            decl.add_method(
-                sel!(acceptsFirstResponder),
-                accepts_first_responder as extern "C" fn(&Object, Sel) -> BOOL,
+            builder.add_method(
+                objc2::sel!(acceptsFirstResponder),
+                accepts_first_responder as extern "C-unwind" fn(_, _) -> Bool,
             );
-            decl.add_method(
-                sel!(becomeFirstResponder),
-                become_first_responder as extern "C" fn(&Object, Sel) -> BOOL,
+            builder.add_method(
+                objc2::sel!(becomeFirstResponder),
+                become_first_responder as extern "C-unwind" fn(_, _) -> Bool,
             );
-            decl.add_method(
-                sel!(resignFirstResponder),
-                resign_first_responder as extern "C" fn(&Object, Sel) -> BOOL,
+            builder.add_method(
+                objc2::sel!(resignFirstResponder),
+                resign_first_responder as extern "C-unwind" fn(_, _) -> Bool,
             );
 
             // Keyboard events
-            decl.add_method(sel!(keyDown:), key_down as extern "C" fn(&Object, Sel, id));
-            decl.add_method(sel!(keyUp:), key_up as extern "C" fn(&Object, Sel, id));
-            decl.add_method(
-                sel!(flagsChanged:),
-                flags_changed as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(keyDown:),
+                key_down as extern "C-unwind" fn(_, _, *mut AnyObject),
+            );
+            builder.add_method(
+                objc2::sel!(keyUp:),
+                key_up as extern "C-unwind" fn(_, _, *mut AnyObject),
+            );
+            builder.add_method(
+                objc2::sel!(flagsChanged:),
+                flags_changed as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
 
             // Left mouse
-            decl.add_method(
-                sel!(mouseDown:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(mouseDown:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(mouseUp:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(mouseUp:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(mouseMoved:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(mouseMoved:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(mouseDragged:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(mouseDragged:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
 
             // Right mouse
-            decl.add_method(
-                sel!(rightMouseDown:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(rightMouseDown:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(rightMouseUp:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(rightMouseUp:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(rightMouseDragged:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(rightMouseDragged:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
 
             // Other mouse
-            decl.add_method(
-                sel!(otherMouseDown:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(otherMouseDown:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(otherMouseUp:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(otherMouseUp:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(otherMouseDragged:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(otherMouseDragged:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
 
             // Mouse enter/exit (hover status + pointer event)
-            decl.add_method(
-                sel!(mouseEntered:),
-                mouse_entered as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(mouseEntered:),
+                mouse_entered as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            decl.add_method(
-                sel!(mouseExited:),
-                mouse_exited as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(mouseExited:),
+                mouse_exited as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
 
             // Scroll
-            decl.add_method(
-                sel!(scrollWheel:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+            builder.add_method(
+                objc2::sel!(scrollWheel:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
 
             // Drawing — drawRect: drives the on_request_frame contract
-            decl.add_method(
-                sel!(drawRect:),
-                draw_rect as extern "C" fn(&Object, Sel, NSRect),
+            builder.add_method(
+                objc2::sel!(drawRect:),
+                draw_rect as extern "C-unwind" fn(_, _, NSRect),
             );
 
             // Lifecycle
-            decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
+            builder.add_method(objc2::sel!(dealloc), dealloc as extern "C-unwind" fn(_, _));
 
             // Properties
-            decl.add_method(
-                sel!(isOpaque),
-                is_opaque as extern "C" fn(&Object, Sel) -> BOOL,
+            builder.add_method(
+                objc2::sel!(isOpaque),
+                is_opaque as extern "C-unwind" fn(_, _) -> Bool,
             );
-            decl.add_method(
-                sel!(acceptsTouchEvents),
-                accepts_touch_events as extern "C" fn(&Object, Sel) -> BOOL,
+            builder.add_method(
+                objc2::sel!(acceptsTouchEvents),
+                accepts_touch_events as extern "C-unwind" fn(_, _) -> Bool,
             );
 
             // The NSTextInputClient conformance and its callbacks —
             // `interpretKeyEvents:` reaches this view's composition state, and
             // the input method reaches it back, only through these.
-            add_text_input_methods(&mut decl);
+            add_text_input_methods(&mut builder);
         }
 
-        decl.register();
+        builder.register();
     });
 
-    Class::get("FLUIContentView").expect("FLUIContentView was registered by the Once block above")
+    AnyClass::get(c"FLUIContentView").expect("FLUIContentView was registered by the Once block")
 }
 
 // ============================================================================
@@ -466,12 +496,15 @@ fn get_or_create_view_class() -> &'static Class {
 ///
 /// `view` must be a live FLUIContentView whose `context_ptr` ivar is either
 /// null or points to a `ViewContext` owned by that view.
-pub(super) unsafe fn get_context(view: &Object) -> Option<&ViewContext> {
+pub(super) unsafe fn get_context(view: &AnyObject) -> Option<&ViewContext> {
     // SAFETY: per the function contract the ivar is null or a valid
     // Box<ViewContext> pointer owned by the view; the returned shared
     // reference cannot outlive the view method invocation that holds `view`.
     unsafe {
-        let context_ptr: *mut std::ffi::c_void = *view.get_ivar("context_ptr");
+        let class = AnyClass::get(c"FLUIContentView")?;
+        let ivar = class.instance_variable(CONTEXT_IVAR)?;
+        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(view);
+        let context_ptr = *slot;
         if context_ptr.is_null() {
             return None;
         }
@@ -486,29 +519,30 @@ pub(super) unsafe fn get_context(view: &Object) -> Option<&ViewContext> {
 /// `FLUIContentView` methods — AppKit invokes a method on an object that
 /// declares it. A view obtained from `-[NSWindow contentView]` carries no such
 /// guarantee: `liquid_glass` replaces the content view with an
-/// `NSVisualEffectView`, which has no `context_ptr` ivar at all, and `get_ivar`
-/// **panics** rather than returning null — fatally, across an AppKit
-/// `extern "C"` frame. So every read of that ivar from a view the crate did not
-/// itself receive as `self` goes through here, where the class is checked
-/// first.
+/// `NSVisualEffectView`, which has no `context_ptr` ivar at all, and reading it
+/// would be undefined rather than returning null. So every read of that ivar
+/// from a view the crate did not itself receive as `self` goes through here,
+/// where the class is checked first.
 ///
 /// # Safety
 ///
 /// `view` must be null or a live `NSView*`.
-unsafe fn content_view_context_ptr(view: id) -> Option<*mut ViewContext> {
+unsafe fn content_view_context_ptr(view: *mut AnyObject) -> Option<*mut ViewContext> {
     // SAFETY: per the function contract `view` is null or a live NSView;
     // `isKindOfClass:` is asked before the ivar is touched, and a view that
     // answers yes to it is one `create_content_view` built, whose
     // `context_ptr` is either null or a `ViewContext` it owns.
     unsafe {
-        if view == nil {
+        if view.is_null() {
             return None;
         }
-        let is_content_view: BOOL = msg_send![view, isKindOfClass: get_or_create_view_class()];
-        if is_content_view != YES {
+        let is_content_view: Bool = msg_send![view, isKindOfClass: get_or_create_view_class()];
+        if is_content_view != Bool::YES {
             return None;
         }
-        let context_ptr: *mut std::ffi::c_void = *(*view).get_ivar("context_ptr");
+        let ivar = get_or_create_view_class().instance_variable(CONTEXT_IVAR)?;
+        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&*view);
+        let context_ptr = *slot;
         if context_ptr.is_null() {
             return None;
         }
@@ -529,7 +563,7 @@ unsafe fn content_view_context_ptr(view: id) -> Option<*mut ViewContext> {
 /// `view` must be null or a live `NSView*`, and `body` must not hold on to what
 /// it is given past its own return (it may not: the reference is scoped to it).
 pub(super) unsafe fn with_view_context<R>(
-    view: id,
+    view: *mut AnyObject,
     body: impl FnOnce(&ViewContext) -> R,
 ) -> Option<R> {
     // SAFETY: `content_view_context_ptr` establishes that the pointer is a live
@@ -546,7 +580,7 @@ pub(super) unsafe fn with_view_context<R>(
 /// `NSView*`, and `body` must not hold on to what it is given past its own
 /// return.
 pub(super) unsafe fn with_view_context_mut<R>(
-    view: id,
+    view: *mut AnyObject,
     body: impl FnOnce(&mut ViewContext) -> R,
 ) -> Option<R> {
     // SAFETY: as `with_view_context`, plus: the `&mut` is sound because the
@@ -576,7 +610,7 @@ pub(super) fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::Plat
 /// A no-op on any view that is not a `FLUIContentView`: the caller reaches this
 /// through `-[NSWindow contentView]`, and `liquid_glass` leaves an
 /// `NSVisualEffectView` there.
-pub fn update_view_scale_factor(view: id, new_scale_factor: f64) {
+pub fn update_view_scale_factor(view: *mut AnyObject, new_scale_factor: f64) {
     // SAFETY: `view` is null or a live NSView* (callers pass the window's
     // content view); `with_view_context_mut` checks the class before touching
     // the ivar and scopes the borrow to the closure, and the mutation is
@@ -596,14 +630,14 @@ pub fn update_view_scale_factor(view: id, new_scale_factor: f64) {
 ///
 /// Raw values per AppKit's `NSTrackingAreaOptions`.
 mod tracking_area_options {
-    pub const MOUSE_ENTERED_AND_EXITED: u64 = 0x01;
-    pub const MOUSE_MOVED: u64 = 0x02;
-    pub const ACTIVE_IN_KEY_WINDOW: u64 = 0x20;
-    pub const IN_VISIBLE_RECT: u64 = 0x200;
+    pub const MOUSE_ENTERED_AND_EXITED: usize = 0x01;
+    pub const MOUSE_MOVED: usize = 0x02;
+    pub const ACTIVE_IN_KEY_WINDOW: usize = 0x20;
+    pub const IN_VISIBLE_RECT: usize = 0x200;
 }
 
 /// Enable mouse tracking for mouse moved events
-pub fn enable_mouse_tracking(view: id) {
+pub fn enable_mouse_tracking(view: *mut AnyObject) {
     // SAFETY: `view` is a live NSView; NSTrackingArea is looked up via the
     // runtime (the class always exists in AppKit), and `addTrackingArea:`
     // retains the tracking area, so releasing our reference is handled by
@@ -613,18 +647,20 @@ pub fn enable_mouse_tracking(view: id) {
         let bounds: NSRect = msg_send![view, bounds];
 
         // Create tracking area options
-        let options: u64 = tracking_area_options::MOUSE_MOVED
+        let options: usize = tracking_area_options::MOUSE_MOVED
             | tracking_area_options::ACTIVE_IN_KEY_WINDOW
             | tracking_area_options::MOUSE_ENTERED_AND_EXITED
             | tracking_area_options::IN_VISIBLE_RECT;
 
         // Create tracking area
-        let tracking_area: id = msg_send![class!(NSTrackingArea), alloc];
-        let tracking_area: id = msg_send![tracking_area,
+        let cls = AnyClass::get(c"NSTrackingArea")
+            .expect("BUG: NSTrackingArea is an AppKit class this backend always has");
+        let tracking_area: *mut AnyObject = msg_send![cls, alloc];
+        let tracking_area: *mut AnyObject = msg_send![tracking_area,
             initWithRect: bounds
             options: options
             owner: view
-            userInfo: nil
+            userInfo: std::ptr::null_mut::<AnyObject>()
         ];
 
         // Add to view
@@ -633,3 +669,8 @@ pub fn enable_mouse_tracking(view: id) {
         tracing::debug!("Enabled mouse tracking for view");
     }
 }
+
+/// Unused-import guard: `NSResponder`/`AnyProtocol`/`NSRectEdge` are named by
+/// the conformance and superclass chain objc2's typed AppKit API relies on.
+#[allow(dead_code)]
+fn _typed_appkit_is_used(_r: Option<&NSResponder>, _p: Option<&AnyProtocol>, _e: NSRectEdge) {}

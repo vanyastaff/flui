@@ -39,113 +39,18 @@
 //!
 //! [`PlatformWindow::bounds`]: crate::traits::PlatformWindow::bounds
 
-use cocoa::{
-    base::{BOOL, NO, YES, id, nil},
-    foundation::{NSNotFound, NSPoint, NSRect, NSSize, NSUInteger},
-};
+use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
+use objc2::{msg_send, sel};
+use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
+
 use flui_types::{
     ImeEvent,
     geometry::{Bounds, Pixels},
-};
-use objc::{
-    Encode, class,
-    declare::ClassDecl,
-    msg_send,
-    runtime::{Object, Protocol, Sel},
-    sel, sel_impl,
 };
 
 use super::view::{ViewContext, get_context as get_view_context};
 use super::window::route_on_owner;
 use crate::traits::PlatformTextInput;
-
-// ============================================================================
-// NSRange
-// ============================================================================
-
-/// AppKit's `NSRange` — a `{location, length}` pair in UTF-16 units.
-///
-/// A local mirror of `cocoa::foundation::NSRange` rather than that type itself,
-/// for one mechanical reason: `objc` 0.2's `ClassDecl::add_method` writes each
-/// registered method's runtime type encoding and therefore requires every
-/// argument and return type to implement `objc::Encode`, which cocoa-foundation
-/// does not implement for `NSRange`. The two are layout-identical, and the
-/// encoding below is the one AppKit itself records (`{_NSRange=QQ}`, read from
-/// `method_getTypeEncoding` on `NSTextView`'s own `NSTextInputClient`
-/// implementations), so a value crossing this boundary is the same 16 bytes
-/// with the same metadata.
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub(super) struct NsRange {
-    location: usize,
-    length: usize,
-}
-
-impl NsRange {
-    fn new(location: usize, length: usize) -> Self {
-        Self { location, length }
-    }
-
-    /// The pair AppKit uses to say "no range": `{NSNotFound, 0}`.
-    fn not_found() -> Self {
-        Self::new(NSNotFound as usize, 0)
-    }
-}
-
-// SAFETY: `repr(C)` over two machine words matches the C struct's layout, and
-// the encoding string is a well-formed Objective-C struct encoding (`from_str`
-// copies it; nothing borrows). The field encodings are `NSUInteger`'s own.
-unsafe impl Encode for NsRange {
-    fn encode() -> objc::Encoding {
-        let encoding = format!(
-            "{{_NSRange={}{}}}",
-            usize::encode().as_str(),
-            usize::encode().as_str()
-        );
-        // SAFETY: the string above is a valid Objective-C type encoding for a
-        // two-word unsigned struct — the same form the runtime prints for
-        // NSRange, verified against the SDK's own method encodings.
-        unsafe { objc::Encoding::from_str(&encoding) }
-    }
-}
-
-/// An `NSRange *` out-parameter — what AppKit's `actualRange:` arguments take.
-///
-/// A `#[repr(transparent)]` newtype rather than a bare `*mut NsRange` because
-/// `objc` 0.2 implements `Encode` for no arbitrary pointer type, while
-/// `ClassDecl::add_method` requires it of every registered argument. The
-/// encoding is AppKit's own for these arguments (`^{_NSRange=QQ}`).
-#[repr(transparent)]
-#[derive(Copy, Clone)]
-pub(super) struct NsRangePointer(*mut NsRange);
-
-// SAFETY: `repr(transparent)` over the pointer, so the layout is exactly a
-// pointer; `from_str` copies the encoding string and nothing borrows it.
-unsafe impl Encode for NsRangePointer {
-    fn encode() -> objc::Encoding {
-        let encoding = format!("^{}", NsRange::encode().as_str());
-        // SAFETY: a pointer-to-NSRange encoding, the form the runtime prints
-        // for AppKit's own `NSRangePointer` arguments.
-        unsafe { objc::Encoding::from_str(&encoding) }
-    }
-}
-
-impl NsRangePointer {
-    /// Write `range` through this out-parameter.
-    ///
-    /// # Safety
-    ///
-    /// Either null — AppKit may pass a null `actualRange:` — or a valid,
-    /// writable `NSRange*` for the duration of the call as AppKit documents.
-    unsafe fn write(self, range: NsRange) {
-        // SAFETY: per this method's contract.
-        unsafe {
-            if !self.0.is_null() {
-                *self.0 = range;
-            }
-        }
-    }
-}
 
 // ============================================================================
 // View-owned composition state
@@ -284,13 +189,13 @@ pub(super) fn utf16_range_to_byte_range(
 ///
 /// `string` must be null or a live `NSString*`, or an object that answers
 /// `UTF8String` in its stead.
-unsafe fn ns_string_to_owned(string: id) -> Option<String> {
+unsafe fn ns_string_to_owned(string: *mut AnyObject) -> Option<String> {
     // SAFETY: per this function's contract the message goes to a live string
     // object, and `UTF8String` returns an autoreleased buffer valid for the
     // current pool — the bytes are copied out here, so nothing borrowed
     // escapes this call.
     unsafe {
-        if string == nil {
+        if string.is_null() {
             return None;
         }
         let utf8: *const std::ffi::c_char = msg_send![string, UTF8String];
@@ -316,16 +221,16 @@ unsafe fn ns_string_to_owned(string: id) -> Option<String> {
 /// # Safety
 ///
 /// `string` must be null or the live argument AppKit passed to `insertText:`.
-unsafe fn insert_text_argument_string(string: id) -> Option<String> {
+unsafe fn insert_text_argument_string(string: *mut AnyObject) -> Option<String> {
     // SAFETY: `respondsToSelector:` runs before `-string` is sent, so the
     // message goes only to an object that declares it; both branches end in
     // `ns_string_to_owned`'s own contract.
     unsafe {
-        if string == nil {
+        if string.is_null() {
             return None;
         }
-        let responds: BOOL = msg_send![string, respondsToSelector: sel!(string)];
-        let text = if responds == YES {
+        let responds: Bool = msg_send![string, respondsToSelector: sel!(string)];
+        let text = if responds == Bool::YES {
             msg_send![string, string]
         } else {
             string
@@ -352,12 +257,32 @@ fn zero_rect() -> NSRect {
     NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0))
 }
 
+/// Write `range` through an `actualRange:` out-parameter.
+///
+/// # Safety
+///
+/// Either null — AppKit may pass a null `actualRange:` — or a valid, writable
+/// `NSRange*` for the duration of the call, as AppKit documents.
+unsafe fn write_actual_range(actual_range: *mut NSRange, range: NSRange) {
+    // SAFETY: per this function's contract.
+    unsafe {
+        if !actual_range.is_null() {
+            *actual_range = range;
+        }
+    }
+}
+
 // ============================================================================
 // NSTextInputClient callbacks
 // ============================================================================
 
 /// `insertText:replacementRange:` — the input method committed text.
-extern "C" fn insert_text(this: &Object, _sel: Sel, string: id, _replacement_range: NsRange) {
+extern "C-unwind" fn insert_text(
+    this: &AnyObject,
+    _sel: Sel,
+    string: *mut AnyObject,
+    _replacement_range: NSRange,
+) {
     // SAFETY: `this` is a live FLUIContentView — AppKit invokes a method only on
     // an object that declares it, and `add_text_input_methods` registered this
     // one on that class; `string` is the live argument for the duration of the
@@ -383,13 +308,13 @@ extern "C" fn insert_text(this: &Object, _sel: Sel, string: id, _replacement_ran
 /// `selectedRange` is the caret's position *within* the composition, and it is
 /// the only range AppKit gives here that is meaningful to a view with no
 /// document: the marked range this view reports is the whole composition
-/// (`NsRange::new(0, ..)`), while the selection is this narrower one.
-extern "C" fn set_marked_text(
-    this: &Object,
+/// (`NSRange::new(0, ..)`), while the selection is this narrower one.
+extern "C-unwind" fn set_marked_text(
+    this: &AnyObject,
     _sel: Sel,
-    string: id,
-    selected_range: NsRange,
-    _replacement_range: NsRange,
+    string: *mut AnyObject,
+    selected_range: NSRange,
+    _replacement_range: NSRange,
 ) {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`); `string` is
     // the live argument for the duration of the call, copied out immediately.
@@ -426,7 +351,7 @@ extern "C" fn set_marked_text(
 /// (`TextEditingController::set_composing_text`'s empty branch strips only an
 /// active span, and reports no change when there is none), which is why this
 /// callback needs no `hasMarkedText` check of its own.
-extern "C" fn unmark_text(this: &Object, _sel: Sel) {
+extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
     unsafe {
         if let Some(ctx) = get_view_context(this) {
@@ -443,28 +368,28 @@ extern "C" fn unmark_text(this: &Object, _sel: Sel) {
 }
 
 /// `hasMarkedText` — is a composition in progress?
-extern "C" fn has_marked_text(this: &Object, _sel: Sel) -> BOOL {
+extern "C-unwind" fn has_marked_text(this: &AnyObject, _sel: Sel) -> Bool {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
     unsafe {
         match get_view_context(this) {
-            Some(ctx) if !ctx.text_input.borrow().marked_text.is_empty() => YES,
-            _ => NO,
+            Some(ctx) if !ctx.text_input.borrow().marked_text.is_empty() => Bool::YES,
+            _ => Bool::NO,
         }
     }
 }
 
 /// `markedRange` — the range of the composition, in UTF-16 units.
-extern "C" fn marked_range(this: &Object, _sel: Sel) -> NsRange {
+extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
     unsafe {
         let Some(ctx) = get_view_context(this) else {
-            return NsRange::not_found();
+            return NSRange::new(NSNotFound as usize, 0);
         };
         let state = ctx.text_input.borrow();
         if state.marked_text.is_empty() {
-            NsRange::not_found()
+            NSRange::new(NSNotFound as usize, 0)
         } else {
-            NsRange::new(state.marked_range.0, state.marked_range.1)
+            NSRange::new(state.marked_range.0, state.marked_range.1)
         }
     }
 }
@@ -474,17 +399,17 @@ extern "C" fn marked_range(this: &Object, _sel: Sel) -> NsRange {
 /// `{NSNotFound, 0}` outside one: a view with no document of its own cannot
 /// truthfully name a selection the application has not reported, and AppKit
 /// documents that pair as "no selection".
-extern "C" fn selected_range(this: &Object, _sel: Sel) -> NsRange {
+extern "C-unwind" fn selected_range(this: &AnyObject, _sel: Sel) -> NSRange {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
     unsafe {
         let Some(ctx) = get_view_context(this) else {
-            return NsRange::not_found();
+            return NSRange::new(NSNotFound as usize, 0);
         };
         let state = ctx.text_input.borrow();
         if state.marked_text.is_empty() {
-            NsRange::not_found()
+            NSRange::new(NSNotFound as usize, 0)
         } else {
-            NsRange::new(state.selected_range.0, state.selected_range.1)
+            NSRange::new(state.selected_range.0, state.selected_range.1)
         }
     }
 }
@@ -493,10 +418,13 @@ extern "C" fn selected_range(this: &Object, _sel: Sel) -> NsRange {
 ///
 /// Empty: the composing text is rendered by the framework's own client, not by
 /// AppKit's text system, so an attributed composition has nothing to describe.
-extern "C" fn valid_attributes_for_marked_text(_this: &Object, _sel: Sel) -> id {
+extern "C-unwind" fn valid_attributes_for_marked_text(
+    _this: &AnyObject,
+    _sel: Sel,
+) -> *mut AnyObject {
     // SAFETY: `+[NSArray array]` is a class constructor on a class AppKit
     // always provides; it returns an autoreleased empty array.
-    unsafe { msg_send![class!(NSArray), array] }
+    unsafe { msg_send![objc2::class!(NSArray), array] }
 }
 
 /// `attributedSubstringForProposedRange:actualRange:` — the text in a range.
@@ -504,16 +432,17 @@ extern "C" fn valid_attributes_for_marked_text(_this: &Object, _sel: Sel) -> id 
 /// `nil`, with `actualRange` answered `{NSNotFound, 0}`: this view holds no
 /// attributed text to slice, and the documented answer for a range that cannot
 /// be satisfied is a nil substring plus a not-found actual range.
-extern "C" fn attributed_substring_for_proposed_range(
-    _this: &Object,
+extern "C-unwind" fn attributed_substring_for_proposed_range(
+    _this: &AnyObject,
     _sel: Sel,
-    _range: NsRange,
-    actual_range: NsRangePointer,
-) -> id {
+    _range: NSRange,
+    actual_range: *mut NSRange,
+) -> *mut AnyObject {
     // SAFETY: `actual_range` is AppKit's own out-parameter for this call —
-    // null or a valid writable `NSRange*` — which is what `write` requires.
-    unsafe { actual_range.write(NsRange::not_found()) };
-    nil
+    // null or a valid writable `NSRange*` — which is what `write_actual_range`
+    // requires.
+    unsafe { write_actual_range(actual_range, NSRange::new(NSNotFound as usize, 0)) };
+    std::ptr::null_mut()
 }
 
 /// `firstRectForCharacterRange:actualRange:` — where to place candidates.
@@ -523,11 +452,11 @@ extern "C" fn attributed_substring_for_proposed_range(
 /// to screen coordinates. The Y axis is flipped on the way in — the framework's
 /// window coordinates have their origin at the top-left, AppKit's at the
 /// bottom-left — see this module's doc for why that flip is load-bearing.
-extern "C" fn first_rect_for_character_range(
-    this: &Object,
+extern "C-unwind" fn first_rect_for_character_range(
+    this: &AnyObject,
     _sel: Sel,
-    _range: NsRange,
-    actual_range: NsRangePointer,
+    _range: NSRange,
+    actual_range: *mut NSRange,
 ) -> NSRect {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`);
     // `actual_range` is AppKit's own out-parameter; `bounds` and `window` are
@@ -535,7 +464,7 @@ extern "C" fn first_rect_for_character_range(
     // before `convertRectToScreen:` — a view with no window (mid-teardown) has
     // no screen rectangle to answer with.
     unsafe {
-        actual_range.write(NsRange::not_found());
+        write_actual_range(actual_range, NSRange::new(NSNotFound as usize, 0));
         let Some(ctx) = get_view_context(this) else {
             return zero_rect();
         };
@@ -553,9 +482,9 @@ extern "C" fn first_rect_for_character_range(
         // for the paths that return `zero_rect()`, where there is no area for a
         // range to correspond to.
         let corresponding = if state.marked_text.is_empty() {
-            NsRange::new(0, 0)
+            NSRange::new(0, 0)
         } else {
-            NsRange::new(state.marked_range.0, state.marked_range.1)
+            NSRange::new(state.marked_range.0, state.marked_range.1)
         };
         let view_bounds: NSRect = msg_send![this, bounds];
         let flipped_y = view_bounds.size.height - (area.origin.y.0 + area.size.height.0) as f64;
@@ -563,12 +492,12 @@ extern "C" fn first_rect_for_character_range(
             NSPoint::new(area.origin.x.0 as f64, flipped_y),
             NSSize::new(area.size.width.0 as f64, area.size.height.0 as f64),
         );
-        let window: id = msg_send![this, window];
-        if window == nil {
+        let window: *mut AnyObject = msg_send![this, window];
+        if window.is_null() {
             return zero_rect();
         }
         let screen_rect: NSRect = msg_send![window, convertRectToScreen: window_rect];
-        actual_range.write(corresponding);
+        write_actual_range(actual_range, corresponding);
         screen_rect
     }
 }
@@ -576,7 +505,11 @@ extern "C" fn first_rect_for_character_range(
 /// `characterIndexForPoint:` — the character under a point.
 ///
 /// `NSNotFound`: this view owns no text, so it can answer no index into one.
-extern "C" fn character_index_for_point(_this: &Object, _sel: Sel, _point: NSPoint) -> NSUInteger {
+extern "C-unwind" fn character_index_for_point(
+    _this: &AnyObject,
+    _sel: Sel,
+    _point: NSPoint,
+) -> NSUInteger {
     NSNotFound as NSUInteger
 }
 
@@ -591,7 +524,7 @@ extern "C" fn character_index_for_point(_this: &Object, _sel: Sel, _point: NSPoi
 /// `interpretKeyEvents:` call (it also does so for menu-key equivalents, with no
 /// event of ours on the stack); there is then no key press to convert, so the
 /// command is dropped rather than invented.
-extern "C" fn do_command_by_selector(this: &Object, _sel: Sel, _command: Sel) {
+extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _command: Sel) {
     // SAFETY: `this` is a live FLUIContentView; `pending_key_event` is either 0
     // or an `NSEvent*` AppKit owns and keeps alive across the
     // `interpretKeyEvents:` call whose dispatch is on this stack frame, which is
@@ -605,7 +538,7 @@ extern "C" fn do_command_by_selector(this: &Object, _sel: Sel, _command: Sel) {
             tracing::trace!("doCommandBySelector: outside a pending key press; command dropped");
             return;
         }
-        super::view::handle_input_event(this, sel!(keyDown:), pending_key_event as id);
+        super::view::handle_input_event(this, sel!(keyDown:), pending_key_event as *mut AnyObject);
     }
 }
 
@@ -620,7 +553,7 @@ extern "C" fn do_command_by_selector(this: &Object, _sel: Sel, _command: Sel) {
 /// applies to, and every function pointer below must keep matching its
 /// selector's Objective-C signature — the signatures are fixed by
 /// `NSTextInputClient`'s own declaration in AppKit.
-pub(super) unsafe fn add_text_input_methods(decl: &mut ClassDecl) {
+pub(super) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
     // Conformance, not just the methods: AppKit's `NSTextInputContext` asks
     // `conformsToProtocol:` before it will route a key event through the input
     // method at all, so a class with these methods and no protocol is never
@@ -632,7 +565,7 @@ pub(super) unsafe fn add_text_input_methods(decl: &mut ClassDecl) {
     // quietly dead. The protocol is declared since 10.5 and this backend's
     // floor is 11.0 (checked against the SDK's `NSTextInputClient.h`), so a
     // `None` here can only mean this module's own name or floor is wrong.
-    let protocol = Protocol::get("NSTextInputClient").expect(
+    let protocol = Protocol::get(c"NSTextInputClient").expect(
         "BUG: NSTextInputClient is a protocol every macOS this backend supports provides; \
          a None here means the protocol name or the declared deployment floor is wrong",
     );
@@ -650,46 +583,46 @@ pub(super) unsafe fn add_text_input_methods(decl: &mut ClassDecl) {
     unsafe {
         decl.add_method(
             sel!(insertText:replacementRange:),
-            insert_text as extern "C" fn(&Object, Sel, id, NsRange),
+            insert_text as extern "C-unwind" fn(_, _, *mut AnyObject, NSRange),
         );
         decl.add_method(
             sel!(setMarkedText:selectedRange:replacementRange:),
-            set_marked_text as extern "C" fn(&Object, Sel, id, NsRange, NsRange),
+            set_marked_text as extern "C-unwind" fn(_, _, *mut AnyObject, NSRange, NSRange),
         );
-        decl.add_method(sel!(unmarkText), unmark_text as extern "C" fn(&Object, Sel));
+        decl.add_method(sel!(unmarkText), unmark_text as extern "C-unwind" fn(_, _));
         decl.add_method(
             sel!(hasMarkedText),
-            has_marked_text as extern "C" fn(&Object, Sel) -> BOOL,
+            has_marked_text as extern "C-unwind" fn(_, _) -> Bool,
         );
         decl.add_method(
             sel!(markedRange),
-            marked_range as extern "C" fn(&Object, Sel) -> NsRange,
+            marked_range as extern "C-unwind" fn(_, _) -> NSRange,
         );
         decl.add_method(
             sel!(selectedRange),
-            selected_range as extern "C" fn(&Object, Sel) -> NsRange,
+            selected_range as extern "C-unwind" fn(_, _) -> NSRange,
         );
         decl.add_method(
             sel!(validAttributesForMarkedText),
-            valid_attributes_for_marked_text as extern "C" fn(&Object, Sel) -> id,
+            valid_attributes_for_marked_text as extern "C-unwind" fn(_, _) -> *mut AnyObject,
         );
         decl.add_method(
             sel!(attributedSubstringForProposedRange:actualRange:),
             attributed_substring_for_proposed_range
-                as extern "C" fn(&Object, Sel, NsRange, NsRangePointer) -> id,
+                as extern "C-unwind" fn(_, _, NSRange, *mut NSRange) -> *mut AnyObject,
         );
         decl.add_method(
             sel!(firstRectForCharacterRange:actualRange:),
             first_rect_for_character_range
-                as extern "C" fn(&Object, Sel, NsRange, NsRangePointer) -> NSRect,
+                as extern "C-unwind" fn(_, _, NSRange, *mut NSRange) -> NSRect,
         );
         decl.add_method(
             sel!(characterIndexForPoint:),
-            character_index_for_point as extern "C" fn(&Object, Sel, NSPoint) -> NSUInteger,
+            character_index_for_point as extern "C-unwind" fn(_, _, NSPoint) -> NSUInteger,
         );
         decl.add_method(
             sel!(doCommandBySelector:),
-            do_command_by_selector as extern "C" fn(&Object, Sel, Sel),
+            do_command_by_selector as extern "C-unwind" fn(_, _, _),
         );
     }
 }
@@ -711,7 +644,7 @@ pub(super) struct MacOSTextInput {
     /// Not retained: the capability borrows the window it was discovered from,
     /// as every other per-window capability on this backend does. `closed` is
     /// what keeps a late call safe.
-    ns_window: id,
+    ns_window: *mut AnyObject,
 
     /// Set once the window has closed (see `MacOSWindow`): the same liveness
     /// gate `HasWindowHandle::window_handle` consults, so a capability clone
@@ -743,7 +676,7 @@ unsafe impl Sync for MacOSTextInput {}
 
 impl MacOSTextInput {
     pub(super) fn new(
-        ns_window: id,
+        ns_window: *mut AnyObject,
         closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
         owner: &'static dispatch::Queue,
         owner_is_main: bool,
@@ -785,7 +718,7 @@ impl MacOSTextInput {
             // the context ivar (the content view is an NSVisualEffectView while
             // liquid glass is applied, and carries no such ivar at all).
             unsafe {
-                let content_view: id = msg_send![this.ns_window, contentView];
+                let content_view: *mut AnyObject = msg_send![this.ns_window, contentView];
                 super::view::with_view_context(content_view, body)
             }
         })

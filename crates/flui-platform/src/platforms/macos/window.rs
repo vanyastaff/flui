@@ -400,9 +400,15 @@ impl MacOSWindow {
                 text_input: std::sync::OnceLock::new(),
             });
 
-            // Create content view for input events
+            // Create content view for input events. `frame` is cocoa's
+            // `NSRect`; the view module takes objc2's `CGRect` alias, and the
+            // two are layout-identical C structs mid-migration.
+            let frame_cg = objc2_foundation::NSRect::new(
+                objc2_foundation::NSPoint::new(frame.origin.x, frame.origin.y),
+                objc2_foundation::NSSize::new(frame.size.width, frame.size.height),
+            );
             let content_view =
-                view::create_content_view(frame, scale, Arc::downgrade(&window.callbacks));
+                view::create_content_view(frame_cg, scale, Arc::downgrade(&window.callbacks));
             let _: () = msg_send![ns_window, setContentView: content_view];
 
             // Subclass the freshly installed content view for VoiceOver.
@@ -850,7 +856,7 @@ impl PlatformWindow for MacOSWindow {
     fn text_input(&self) -> Option<Arc<dyn crate::traits::PlatformTextInput>> {
         let text_input = self.text_input.get_or_init(|| {
             Arc::new(super::text_input::MacOSTextInput::new(
-                self.ns_window,
+                self.ns_window.cast::<objc2::runtime::AnyObject>(),
                 Arc::clone(&self.closed),
                 self.owner,
                 self.owner_is_main,
@@ -1830,7 +1836,10 @@ impl MacOSWindowExtTrait for MacOSWindow {
 
             // Remove visual effect view and restore normal content view
             let content_view = view::create_content_view(
-                NSRect::new(cocoa::foundation::NSPoint::new(0.0, 0.0), frame.size),
+                objc2_foundation::NSRect::new(
+                    objc2_foundation::NSPoint::new(0.0, 0.0),
+                    objc2_foundation::NSSize::new(frame.size.width, frame.size.height),
+                ),
                 PlatformWindow::scale_factor(self),
                 Arc::downgrade(&self.callbacks),
             );
@@ -2480,7 +2489,10 @@ impl MacOSWindow {
             // Update content view scale factor
             let content_view: id = msg_send![self.ns_window, contentView];
             if content_view != nil {
-                view::update_view_scale_factor(content_view, new_scale);
+                view::update_view_scale_factor(
+                    content_view.cast::<objc2::runtime::AnyObject>(),
+                    new_scale,
+                );
             }
 
             // A scale change invalidates layout: notify as a resize
