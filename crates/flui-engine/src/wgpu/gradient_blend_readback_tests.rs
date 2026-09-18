@@ -369,7 +369,7 @@ fn assert_partial_coverage_feathers(kind: GradientKind, mode: BlendMode) {
     let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     let feathered_fringe = coverage_correct(mode, SOURCE, DESTINATION, FRINGE_COVERAGE);
@@ -525,7 +525,7 @@ fn a_gradient_does_not_correct_dst_out() {
         eprintln!("skipping: this adapter does not expose DUAL_SOURCE_BLENDING");
         return;
     }
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     let fringe = coverage_correct(BlendMode::DstOut, SOURCE, DESTINATION, FRINGE_COVERAGE);

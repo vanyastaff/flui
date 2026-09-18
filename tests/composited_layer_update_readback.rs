@@ -127,7 +127,7 @@ fn the_update_path_and_a_repaint_produce_the_same_pixels() {
     // loudly. A readback test that silently skips is counted as passing and
     // then proves nothing, which is exactly how a GPU oracle goes quietly
     // dead.
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let updated = frame_after_alpha_change(&renderer, 0.25, false);
@@ -161,7 +161,7 @@ fn the_update_path_and_a_repaint_produce_the_same_pixels() {
 /// produce different pixels for the comparison to mean anything.
 #[test]
 fn a_different_alpha_produces_different_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let quarter = frame_after_alpha_change(&renderer, 0.25, false);
@@ -270,7 +270,7 @@ fn frame_after_transform_change(
 /// a byte difference that no layer-tree assertion would catch.
 #[test]
 fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let updated = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), false);
@@ -303,7 +303,7 @@ fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
 /// produce different pixels for the comparison to mean anything.
 #[test]
 fn a_different_matrix_produces_different_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let smaller = frame_after_transform_change(&renderer, Matrix4::scaling(1.2, 1.2, 1.0), false);
@@ -444,7 +444,7 @@ fn pixel_at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
 /// difference no layer-tree assertion would catch.
 #[test]
 fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let updated = frame_after_radius_change(&renderer, 2.0, false);
@@ -493,7 +493,7 @@ fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
 /// entirely, or a fixture whose clip never reaches the sampled pixel.
 #[test]
 fn a_different_radius_produces_different_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     const SAMPLE: (u32, u32) = (21, 21);

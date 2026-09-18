@@ -323,7 +323,7 @@ pub(crate) fn resolve_unavailable_gpu(reason: &str, require: bool) {
 /// capability set is not this crate's to require, and forcing it would make CI
 /// fail on a fact about the runner rather than about the code.
 pub(crate) fn renderer_or_skip() -> Option<super::headless::HeadlessRenderer> {
-    match super::headless::HeadlessRenderer::new() {
+    match pollster::block_on(super::headless::HeadlessRenderer::new()) {
         Ok(renderer) => Some(renderer),
         Err(error) => {
             resolve_unavailable_gpu(&error.to_string(), require_gpu());

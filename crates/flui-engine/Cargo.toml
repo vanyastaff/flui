@@ -69,7 +69,6 @@ lyon = { version = "1.0.16", optional = true }
 glam = { workspace = true, features = ["serde"] }
 
 # === Utilities ===
-pollster = { workspace = true }
 parking_lot = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }

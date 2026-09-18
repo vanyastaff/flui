@@ -44,10 +44,16 @@ impl HeadlessRenderer {
     /// renderer does — `Renderer::required_features` makes the same request for
     /// the same reason. Nothing else about the device is negotiated.
     ///
+    /// Async because wgpu's adapter and device requests are async. Calling
+    /// `Renderer::new` and this from the same async context is the point: a
+    /// blocking constructor would stall whichever executor thread it ran on,
+    /// and the sync wrapper belongs to the caller (an example, a test) that
+    /// owns its runtime, not to the library.
+    ///
     /// # Errors
     /// Returns [`EngineError`] when no GPU adapter or device is available.
-    pub fn new() -> EngineResult<Self> {
-        Self::acquire(wgpu::Features::DUAL_SOURCE_BLENDING)
+    pub async fn new() -> EngineResult<Self> {
+        Self::acquire(wgpu::Features::DUAL_SOURCE_BLENDING).await
     }
 
     /// [`Self::new`] with [`wgpu::Features::DUAL_SOURCE_BLENDING`] withheld
@@ -62,29 +68,34 @@ impl HeadlessRenderer {
     /// # Errors
     /// Returns [`EngineError`] when no GPU adapter or device is available.
     #[cfg(test)]
-    pub(crate) fn without_dual_source_blending() -> EngineResult<Self> {
-        Self::acquire(wgpu::Features::empty())
+    pub(crate) async fn without_dual_source_blending() -> EngineResult<Self> {
+        Self::acquire(wgpu::Features::empty()).await
     }
 
     /// Acquires the capture device, requesting whichever of `wanted_features`
     /// the adapter actually offers.
-    fn acquire(wanted_features: wgpu::Features) -> EngineResult<Self> {
+    async fn acquire(wanted_features: wgpu::Features) -> EngineResult<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(
-            &super::adapter::trusted_adapter_options(wgpu::PowerPreference::HighPerformance, None),
-        ))
-        .map_err(EngineError::adapter_request)?;
+        let adapter = instance
+            .request_adapter(&super::adapter::trusted_adapter_options(
+                wgpu::PowerPreference::HighPerformance,
+                None,
+            ))
+            .await
+            .map_err(EngineError::adapter_request)?;
 
         // Deliberately NOT `adapter::request_flui_device`: capture wants
         // wgpu's default (downlevel-friendly) device rather than the
         // renderer's capability-negotiated one — plus the features above,
         // which change what the captured pixels look like.
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("FLUI Headless Capture Device"),
-            required_features: adapter.features() & wanted_features,
-            ..Default::default()
-        }))
-        .map_err(EngineError::device_creation)?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("FLUI Headless Capture Device"),
+                required_features: adapter.features() & wanted_features,
+                ..Default::default()
+            })
+            .await
+            .map_err(EngineError::device_creation)?;
 
         Ok(Self {
             device: Arc::new(device),
@@ -342,7 +353,7 @@ mod target_size_tests {
     /// are reached even where `HeadlessRenderer::new` would fail.
     #[test]
     fn zero_sized_capture_is_a_typed_error() {
-        let Ok(renderer) = HeadlessRenderer::new() else {
+        let Ok(renderer) = pollster::block_on(HeadlessRenderer::new()) else {
             // No adapter on this host: the guard is still reachable through
             // the error variant's own classification test in `error.rs`.
             return;

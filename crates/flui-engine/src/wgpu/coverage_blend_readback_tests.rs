@@ -134,7 +134,7 @@ fn assert_partial_coverage_feathers(mode: BlendMode) {
     let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     let feathered_fringe = coverage_correct(mode, FRINGE_COVERAGE);
@@ -317,7 +317,7 @@ fn dst_out_renders_the_same_with_and_without_a_second_blend_source() {
         eprintln!("skipping: this adapter does not expose DUAL_SOURCE_BLENDING");
         return;
     }
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     let feathered_samples = blend_through_an_anti_aliased_clip(&feathering, BlendMode::DstOut);

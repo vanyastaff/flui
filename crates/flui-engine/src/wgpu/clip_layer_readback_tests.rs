@@ -2053,7 +2053,7 @@ fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
     let Some(feathering) = super::test_support::renderer_or_skip() else {
         return;
     };
-    let folded = HeadlessRenderer::without_dual_source_blending()
+    let folded = pollster::block_on(HeadlessRenderer::without_dual_source_blending())
         .expect("an adapter that answered once must answer again with fewer features");
 
     // The fallback half runs on every device, including one whose adapter
