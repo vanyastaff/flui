@@ -280,7 +280,8 @@ mod new_probes_before_gpu_work_tests {
     use std::sync::Arc;
 
     use super::Renderer;
-    use crate::error::EngineError;
+    use crate::error::{EngineError, EngineResult};
+    use crate::wgpu::WindowTarget;
     use crate::wgpu::fake_window_target::FakeTarget;
 
     /// Pins the production entry point, GPU-free: `Renderer::new` must fail
@@ -321,6 +322,64 @@ mod new_probes_before_gpu_work_tests {
             vec!["window_handle"],
             "the probe must fail on the first query (window_handle) and never reach \
              display_handle, wgpu::Instance::new, or create_surface"
+        );
+    }
+
+    /// Dropping a `Renderer::new` future mid-flight must release the target.
+    ///
+    /// `Renderer::new` is async and its target becomes an `Arc<dyn
+    /// WindowTarget>` the caller hands over. A caller who cancels the
+    /// construction — a frame loop that gives up on a slow adapter request,
+    /// a `select!` arm that loses — drops the future, and Rust drops the
+    /// future's captured state with it. That is the ownership contract: the
+    /// half-built construction may hold its own target clone, but it must not
+    /// strand one somewhere the caller cannot reach, or the window it wraps
+    /// is retained for the process lifetime by a future that no longer
+    /// exists.
+    ///
+    /// This drives the real `probe_then_build` seam with a builder that
+    /// suspends forever, which is the one shape a GPU-free test can reach: a
+    /// first poll of the production builder enters `wgpu::Instance::new` and
+    /// real Vulkan work *before* it can suspend (measured — it aborts on the
+    /// fake target's null display pointer), so a production-builder version of
+    /// this test cannot run without a GPU. The seam is the production one;
+    /// only the await point is synthetic.
+    ///
+    /// Pinned: the count returns to its pre-call value after the drop. Not
+    /// pinned: the count *during* the suspended state, which is an
+    /// implementation detail of how many clones the builder holds — asserting
+    /// it would over-specify and go red on a legitimate refactor.
+    #[test]
+    fn cancelling_renderer_new_mid_flight_releases_the_target() {
+        use std::future::pending;
+        use std::task::{Context, Poll, Waker};
+
+        let fake = Arc::new(FakeTarget::new(9));
+        let before = Arc::strong_count(&fake);
+
+        let target: Arc<dyn WindowTarget> = Arc::new(Arc::clone(&fake));
+        let mut future = Box::pin(Renderer::probe_then_build(target, |_target| {
+            pending::<EngineResult<(Arc<dyn WindowTarget>, ())>>()
+        }));
+
+        // The probe must succeed (the fake reports a live handle), so this
+        // suspends at the builder's await rather than returning early — a
+        // `Ready` here would mean the seam never reached the await point and
+        // the drop below would prove nothing.
+        let polled = future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()));
+        assert!(
+            matches!(polled, Poll::Pending),
+            "the fake builder must suspend; a Ready result means the cancellation \
+             path was never exercised"
+        );
+
+        drop(future);
+        assert_eq!(
+            Arc::strong_count(&fake),
+            before,
+            "a cancelled construction must not strand a target clone"
         );
     }
 }
@@ -713,16 +772,12 @@ impl Renderer {
         // flui-platform → flui-engine layer edge (docs/workspace-layers.toml).
         // One extra pointer chase per surface creation; documented, not
         // fixed — see issue #1043.
-        let target: Arc<dyn WindowTarget> = Arc::new(target);
-
-        // Probe the owner BEFORE any GPU work starts (before even
-        // `wgpu::Instance::new`, inside `build_windowed_gpu_stack`) — see
-        // `surface_lease::probe_target`'s doc for why this distinction from
-        // a generic `SurfaceCreation` failure matters to callers.
-        super::surface_lease::probe_target(&target)?;
-
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
-        let stack = Self::build_windowed_gpu_stack(&target, w, h).await?;
+        let (target, stack) = Self::probe_then_build(Arc::new(target), |target| async move {
+            let stack = Self::build_windowed_gpu_stack(&target, w, h).await?;
+            Ok((target, stack))
+        })
+        .await?;
         let lease = SurfaceLease::from_parts(target, stack.surface);
 
         Ok(Self {
@@ -746,6 +801,32 @@ impl Renderer {
             force_full_repaint_next_frame: false,
             _single_mutator: PhantomData,
         })
+    }
+
+    /// Probe the target, then build the GPU stack against it.
+    ///
+    /// The probe runs BEFORE any GPU work starts (before even
+    /// `wgpu::Instance::new`, inside `build_windowed_gpu_stack`) — see
+    /// `surface_lease::probe_target`'s doc for why this distinction from a
+    /// generic `SurfaceCreation` failure matters to callers.
+    ///
+    /// `build` is a parameter rather than an inline call so the
+    /// drop-on-cancel contract is testable without a GPU: a test can pass a
+    /// builder that never resolves, then drop the future and observe that
+    /// the only extra `Arc<dyn WindowTarget>` went with it. That is the one
+    /// ownership fact a cancelled `Renderer::new` owes — an async fn dropped
+    /// mid-`.await` must not strand a clone the caller cannot reach
+    /// (issue #1149).
+    async fn probe_then_build<S, F, Fut>(
+        target: Arc<dyn WindowTarget>,
+        build: F,
+    ) -> EngineResult<(Arc<dyn WindowTarget>, S)>
+    where
+        F: FnOnce(Arc<dyn WindowTarget>) -> Fut,
+        Fut: std::future::Future<Output = EngineResult<(Arc<dyn WindowTarget>, S)>>,
+    {
+        super::surface_lease::probe_target(&target)?;
+        build(target).await
     }
 
     /// Derive the surface-dependent half of a [`wgpu::SurfaceConfiguration`]

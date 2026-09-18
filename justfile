@@ -393,15 +393,17 @@ deny:
 # The third covers flui-engine's surface lease (issue #1043/#1149): the whole
 # wgpu-free `SurfaceLease` protocol at `wgpu/surface_lease.rs`, which is where
 # the two test-only `borrow_raw` calls and the surface-before-target drop
-# order live. `SurfaceLease` is generic over its surface type precisely so
-# this runs without a GPU, so the lib target linking wgpu costs the run
-# nothing. Measured 6 tests / ~3.3s warm.
+# order live; plus `cancelling_renderer_new_mid_flight_releases_the_target`,
+# which drives the same `probe_then_build` seam with a never-resolving builder
+# and so never touches wgpu either. `SurfaceLease` is generic over its surface
+# type precisely so this runs without a GPU. Measured 7 tests / ~4s warm.
 [group("test")]
-[doc("Run miri on flui-rendering's pipeline::owner, flui-view's owner::global_key, and flui-engine's wgpu::surface_lease tests (requires nightly + miri)")]
+[doc("Run miri on flui-rendering's pipeline::owner, flui-view's owner::global_key, and flui-engine's GPU-free surface-lease tests (requires nightly + miri)")]
 miri:
     cargo +nightly miri test -p flui-rendering --lib pipeline::owner
     cargo +nightly miri test -p flui-view --lib owner::global_key
     cargo +nightly miri test -p flui-engine --lib wgpu::surface_lease
+    cargo +nightly miri test -p flui-engine --lib cancelling_renderer_new
 
 # Local mirror of the weekly `nightly-canary` job. Advisory: nightly is where
 # the next stable's deprecations, new lints, and future-incompat errors show

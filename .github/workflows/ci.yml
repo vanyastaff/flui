@@ -910,6 +910,16 @@ jobs:
       - name: cargo miri test (wgpu::surface_lease)
         run: cargo +nightly miri test -p flui-engine --lib --locked wgpu::surface_lease
 
+      # The cancellation oracle for `Renderer::new` (issue #1149): drives the
+      # production `probe_then_build` seam with a builder that suspends
+      # forever, then drops the future and asserts the target's strong count
+      # returned to its pre-call value. GPU-free by construction — the
+      # synthetic builder is what keeps wgpu out of the path, since a first
+      # poll of the production builder enters `wgpu::Instance::new`.
+      # Measured 1 test / ~1.7s warm.
+      - name: cargo miri test (cancelling_renderer_new)
+        run: cargo +nightly miri test -p flui-engine --lib --locked cancelling_renderer_new
+
   # ─────────────────────────────────────────────────────────────────────────
   # feature-matrix — xilem-style per-feature clippy via cargo-hack. The plain
   # `clippy` job compiles the whole workspace under feature unification with
