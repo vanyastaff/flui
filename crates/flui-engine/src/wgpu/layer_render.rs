@@ -45,7 +45,26 @@ pub trait LayerRender<R: CommandRenderer + LayerStateStack + ?Sized> {
     ///
     /// This is called after all children have been rendered to restore
     /// the renderer state (transforms, clips, effects).
-    fn cleanup(&self, renderer: &mut R);
+    ///
+    /// The default is a no-op, correct for every layer whose `render`
+    /// pushes nothing: the four clip layers are the ones that override it,
+    /// through `clip_layer_cleanup!` below.
+    fn cleanup(&self, _renderer: &mut R) {}
+}
+
+/// Generate the shared `cleanup` body for the SDF clip layers.
+///
+/// Each clip layer's `render` returns early when it clips nothing, so its
+/// `cleanup` must pop only what was actually pushed — the pairing is the
+/// contract, and one body keeps the two from drifting apart.
+macro_rules! clip_layer_cleanup {
+    () => {
+        fn cleanup(&self, renderer: &mut R) {
+            if self.clips() {
+                renderer.pop_clip();
+            }
+        }
+    };
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
@@ -138,19 +157,11 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for CanvasLay
     fn render(&self, renderer: &mut R) {
         dispatch_commands(self.display_list().commands(), renderer);
     }
-
-    fn cleanup(&self, _renderer: &mut R) {
-        // Leaf layer - no state to clean up
-    }
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PictureLayer {
     fn render(&self, renderer: &mut R) {
         dispatch_commands(self.picture().commands(), renderer);
-    }
-
-    fn cleanup(&self, _renderer: &mut R) {
-        // Leaf layer - no state to clean up
     }
 }
 
@@ -167,11 +178,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipRectL
         renderer.push_clip_rect(&rect, self.clip_behavior());
     }
 
-    fn cleanup(&self, renderer: &mut R) {
-        if self.clips() {
-            renderer.pop_clip();
-        }
-    }
+    clip_layer_cleanup!();
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipRRectLayer {
@@ -183,11 +190,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipRRect
         renderer.push_clip_rrect(rrect, self.clip_behavior());
     }
 
-    fn cleanup(&self, renderer: &mut R) {
-        if self.clips() {
-            renderer.pop_clip();
-        }
-    }
+    clip_layer_cleanup!();
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipPathLayer {
@@ -199,11 +202,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipPathL
         renderer.push_clip_path(path, self.clip_behavior());
     }
 
-    fn cleanup(&self, renderer: &mut R) {
-        if self.clips() {
-            renderer.pop_clip();
-        }
-    }
+    clip_layer_cleanup!();
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
@@ -223,11 +222,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
         renderer.push_clip_rsuperellipse(self.clip_superellipse(), self.clip_behavior());
     }
 
-    fn cleanup(&self, renderer: &mut R) {
-        if self.clips() {
-            renderer.pop_clip();
-        }
-    }
+    clip_layer_cleanup!();
 }
 
 // ============================================================================
@@ -390,19 +385,11 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TextureLa
             &flui_types::geometry::Matrix4::IDENTITY,
         );
     }
-
-    fn cleanup(&self, _renderer: &mut R) {
-        // Leaf layer - no state to clean up
-    }
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PlatformViewLayer {
     fn render(&self, _renderer: &mut R) {
         // Platform views are composited by the platform embedder
-    }
-
-    fn cleanup(&self, _renderer: &mut R) {
-        // Leaf layer - no state to clean up
     }
 }
 
@@ -450,10 +437,6 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Performan
             self.total_frames(),
             self.diagnostic_line(),
         );
-    }
-
-    fn cleanup(&self, _renderer: &mut R) {
-        // Leaf layer - no state to clean up
     }
 }
 

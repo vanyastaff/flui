@@ -90,6 +90,42 @@ const HISTORY_SIZE: usize = MAX_SAMPLES;
 /// Polynomial degree for the least-squares fit. Quadratic — same as Flutter.
 const POLYNOMIAL_DEGREE: usize = 2;
 
+/// Speed below which a release is not a fling, in px/s.
+///
+/// Flutter's `VerticalDragGestureRecognizer.isFlingGesture` combines this
+/// with a slop check on the up/down offset; this crate applies the speed half
+/// on its own, through [`fling_velocity_or_zero`].
+const MIN_FLING_SPEED_PX_S: f32 = 50.0;
+
+/// Gate `velocity` to [`Velocity::ZERO`] unless it is a fling, or `allow_slow`
+/// waives the gate.
+///
+/// Every tracker exposes this as `get_fling_velocity`; one body keeps the
+/// threshold, and the axes it is measured on, from drifting between them.
+fn fling_velocity_or_zero(velocity: Velocity, allow_slow: bool) -> Velocity {
+    if allow_slow {
+        return velocity;
+    }
+    if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED_PX_S
+        && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED_PX_S
+    {
+        return Velocity::ZERO;
+    }
+    velocity
+}
+
+/// The velocity an estimate carries, or [`Velocity::ZERO`] when there is no
+/// estimate or it reports no motion.
+///
+/// Every tracker exposes this as `get_velocity`; one body keeps the
+/// missing-estimate and zero-motion cases answering alike.
+fn velocity_from_estimate(estimate: Option<VelocityEstimate>) -> Velocity {
+    match estimate {
+        Some(est) if est.pixels_per_second != Offset::ZERO => Velocity::new(est.pixels_per_second),
+        _ => Velocity::ZERO,
+    }
+}
+
 // ============================================================================
 // PointAtTime
 // ============================================================================
@@ -432,12 +468,7 @@ impl VelocityTracker {
     /// `&mut self` for the same memoization reason as
     /// [`Self::get_velocity_estimate`], which this delegates to.
     pub fn get_velocity(&mut self) -> Velocity {
-        match self.get_velocity_estimate() {
-            Some(est) if est.pixels_per_second != Offset::ZERO => {
-                Velocity::new(est.pixels_per_second)
-            }
-            _ => Velocity::ZERO,
-        }
+        velocity_from_estimate(self.get_velocity_estimate())
     }
 
     /// Velocity for fling detection.
@@ -453,18 +484,7 @@ impl VelocityTracker {
     ///
     /// `&mut self` for the same memoization reason as [`Self::get_velocity`].
     pub fn get_fling_velocity(&mut self, allow_slow: bool) -> Velocity {
-        let velocity = self.get_velocity();
-        if allow_slow {
-            return velocity;
-        }
-        // ~50 px/s threshold. Below that, the gesture is not a fling.
-        const MIN_FLING_SPEED_PX_S: f32 = 50.0;
-        if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED_PX_S
-            && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED_PX_S
-        {
-            return Velocity::ZERO;
-        }
-        velocity
+        fling_velocity_or_zero(self.get_velocity(), allow_slow)
     }
 
     /// Flutter-port alias for [`Self::get_velocity_estimate`].
@@ -617,17 +637,7 @@ impl IosFlingVelocityTracker {
     /// Velocity for fling detection. Same semantics as
     /// [`VelocityTracker::get_fling_velocity`].
     pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
-        let velocity = self.get_velocity();
-        if allow_slow {
-            return velocity;
-        }
-        const MIN_FLING_SPEED: f32 = 50.0;
-        if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED
-            && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED
-        {
-            return Velocity::ZERO;
-        }
-        velocity
+        fling_velocity_or_zero(self.get_velocity(), allow_slow)
     }
 
     /// The raw weighted-average velocity, regardless of the
@@ -675,12 +685,7 @@ impl IosFlingVelocityTracker {
     /// Velocity as a [`Velocity`]. [`Velocity::ZERO`] when the estimate is
     /// missing or its velocity is zero.
     pub fn get_velocity(&self) -> Velocity {
-        match self.get_velocity_estimate() {
-            Some(est) if est.pixels_per_second != Offset::ZERO => {
-                Velocity::new(est.pixels_per_second)
-            }
-            _ => Velocity::ZERO,
-        }
+        velocity_from_estimate(self.get_velocity_estimate())
     }
 }
 
@@ -939,28 +944,13 @@ impl ImpulseVelocityTracker {
 
     /// Velocity as a [`Velocity`].
     pub fn get_velocity(&self) -> Velocity {
-        match self.get_velocity_estimate() {
-            Some(est) if est.pixels_per_second != Offset::ZERO => {
-                Velocity::new(est.pixels_per_second)
-            }
-            _ => Velocity::ZERO,
-        }
+        velocity_from_estimate(self.get_velocity_estimate())
     }
 
     /// Velocity for fling detection. Same semantics as
     /// [`VelocityTracker::get_fling_velocity`].
     pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
-        let velocity = self.get_velocity();
-        if allow_slow {
-            return velocity;
-        }
-        const MIN_FLING_SPEED: f32 = 50.0;
-        if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED
-            && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED
-        {
-            return Velocity::ZERO;
-        }
-        velocity
+        fling_velocity_or_zero(self.get_velocity(), allow_slow)
     }
 }
 

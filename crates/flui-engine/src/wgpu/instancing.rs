@@ -822,12 +822,41 @@ pub(crate) fn reduce_superellipse_clip(c: [f32; 12]) -> [f32; 8] {
 pub trait ClippableInstance {
     /// Store the active clip, or clear the slot when no clip is active.
     ///
-    /// One method rather than a per-kind pair: every implementor has the same
-    /// body, and a two-method form made each of them re-derive the kind flag
-    /// and the superellipse reduction — six copies of arithmetic that has one
-    /// right answer.
+    /// One method rather than a per-kind pair: the clip slot has one layout
+    /// across every instance type, so a two-method form would make each
+    /// implementor re-derive the kind flag and the superellipse reduction.
+    ///
+    /// Every implementor but [`RectInstance`] writes the slot verbatim;
+    /// `impl_clippable_instance!` below holds that one body.
     #[must_use]
     fn with_clip(self, clip: super::state_stack::ResolvedClip) -> Self;
+}
+
+/// Generate the verbatim `with_clip` body for instance types whose
+/// `clip_kind` has the clip as its only writer.
+///
+/// [`RectInstance`] is not in this list: it shares lane 1 of `clip_kind` with
+/// the paint's aliased flag and writes the slot by hand.
+macro_rules! impl_clippable_instance {
+    ($($instance:ty),* $(,)?) => {
+        $(
+            impl ClippableInstance for $instance {
+                fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+                    self.clip_rrect = clip.rrect;
+                    self.clip_kind = clip.kind;
+                    self.clip_device_to_local = [
+                        clip.device_to_local[0],
+                        clip.device_to_local[1],
+                        clip.device_to_local[2],
+                        clip.device_to_local[3],
+                    ];
+                    self.clip_local_origin =
+                        [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
+                    self
+                }
+            }
+        )*
+    };
 }
 
 impl ClippableInstance for RectInstance {
@@ -850,80 +879,13 @@ impl ClippableInstance for RectInstance {
     }
 }
 
-impl ClippableInstance for CircleInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for LinearGradientInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for RadialGradientInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for SweepGradientInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
-
-impl ClippableInstance for TextureInstance {
-    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
-        self.clip_rrect = clip.rrect;
-        self.clip_kind = clip.kind;
-        self.clip_device_to_local = [
-            clip.device_to_local[0],
-            clip.device_to_local[1],
-            clip.device_to_local[2],
-            clip.device_to_local[3],
-        ];
-        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
-        self
-    }
-}
+impl_clippable_instance!(
+    CircleInstance,
+    LinearGradientInstance,
+    RadialGradientInstance,
+    SweepGradientInstance,
+    TextureInstance,
+);
 
 // =============================================================================
 // Gradient Instances (from effects.rs for API consistency)
