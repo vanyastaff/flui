@@ -2082,3 +2082,55 @@ fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
          much of it the clip admits, leaving a partial value. Found none"
     );
 }
+
+/// A deep layer chain rasterizes instead of aborting the process.
+///
+/// The capture walk is iterative (`layer_walk.rs`), so depth costs heap rather
+/// than Rust stack frames. Before that, `walk_layer_tree` recursed once per
+/// layer, and a stack overflow in Rust is a process abort — not a panic a test
+/// could catch — so this shape took the whole capture path down. The depth and
+/// the stack budget match `flui-layer`'s own diagnostic-walker oracle
+/// (`testing/inspect.rs::walkers_survive_a_deep_chain_on_a_small_stack`), so
+/// the production walker is held to the standard the diagnostic one already
+/// set.
+///
+/// The walk runs on this test's thread (the capture call is synchronous), so
+/// the small stack is supplied by rendering inside a spawned thread rather than
+/// by changing the process's stack.
+#[test]
+fn a_deep_layer_chain_captures_without_overflowing_a_small_stack() {
+    const DEPTH: usize = 10_000;
+
+    let Some(renderer) = super::test_support::renderer_or_skip() else {
+        return;
+    };
+
+    let pixels = std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(move || {
+            let mut tree = LayerTree::new();
+            let mut parent = tree.insert(flui_layer::Layer::Canvas(Box::new(
+                flui_layer::CanvasLayer::new(),
+            )));
+            tree.set_root(Some(parent));
+            for _ in 1..DEPTH {
+                let child = tree.insert(flui_layer::Layer::Canvas(Box::new(
+                    flui_layer::CanvasLayer::new(),
+                )));
+                tree.add_child(parent, child);
+                parent = child;
+            }
+            renderer
+                .render_layer_tree(&tree, (SIDE, SIDE))
+                .expect("a deep but valid chain must rasterize")
+        })
+        .expect("spawn the small-stack capture thread")
+        .join()
+        .expect("the walk must not overflow a small stack on a deep chain");
+
+    assert_eq!(
+        sample(&pixels, SAMPLE_X, SAMPLE_Y),
+        [255, 255, 255, 255],
+        "the (empty) chain paints nothing, so the cleared white surface shows through"
+    );
+}

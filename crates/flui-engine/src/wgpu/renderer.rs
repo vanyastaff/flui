@@ -515,6 +515,130 @@ struct RenderContext {
     intermediate_active: bool,
 }
 
+/// The render walk's visit steps.
+///
+/// `enter` is where the three diverted handlers live — `BackdropFilter`
+/// (mid-frame flush + copy + blur), `ShaderMask` (offscreen capture +
+/// mask), and `Follower` (resolved render-time offset). Each consumes its
+/// own subtree and answers [`super::layer_walk::Step::SkipSubtree`]: the
+/// node's own exit is then never run, which is what the recursion this
+/// replaces did by returning before its `render`/`cleanup` pair.
+///
+/// Everything else takes the plain path — `render` on enter, `cleanup` on
+/// exit — so the sequence stays `render → children → cleanup`, and the
+/// walk's own stack supplies the children-then-exit ordering.
+struct RenderLayerVisitor<'a, 'b> {
+    link_registry: &'a flui_layer::LinkRegistry,
+    backend: &'a mut super::backend::Backend<'b>,
+    ctx: &'a RenderContext,
+    surface_texture: &'a wgpu::Texture,
+    surface_view: &'a wgpu::TextureView,
+}
+
+impl super::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
+    fn enter(
+        &mut self,
+        tree: &flui_layer::LayerTree,
+        id: flui_foundation::LayerId,
+        layer: &flui_layer::Layer,
+    ) -> super::layer_walk::Step {
+        use super::layer_render::LayerRender;
+
+        // BackdropFilter requires mid-frame flush + copy. The gate passes
+        // when EITHER the swapchain surface itself has COPY_SRC (common
+        // path), OR the intermediate texture is active (COPY_SRC-less
+        // adapter path): `surface_texture` then points at the
+        // intermediate, which always has COPY_SRC.
+        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer
+            && (self.ctx.supports_copy_src || self.ctx.intermediate_active)
+        {
+            let Some(node) = tree.get(id) else {
+                return super::layer_walk::Step::SkipSubtree;
+            };
+            Renderer::handle_backdrop_filter(
+                bf_layer,
+                node,
+                tree,
+                self.link_registry,
+                self.backend,
+                self.ctx,
+                self.surface_texture,
+                self.surface_view,
+            );
+            return super::layer_walk::Step::SkipSubtree;
+        }
+
+        // ShaderMask captures children to an offscreen texture, applies
+        // the shader as a GPU mask, then composites the masked result.
+        // Requires an `OffscreenRenderer`; falls through to the inert
+        // clip/save-layer `LayerRender<ShaderMaskLayer>` impl (unmasked
+        // passthrough) when one isn't available, mirroring
+        // `BackdropFilter`'s own non-`Blur` degrade above.
+        if let flui_layer::Layer::ShaderMask(sm_layer) = layer
+            && self.backend.offscreen_mut().is_some()
+        {
+            let Some(node) = tree.get(id) else {
+                return super::layer_walk::Step::SkipSubtree;
+            };
+            Renderer::handle_shader_mask(
+                sm_layer,
+                node,
+                tree,
+                self.link_registry,
+                self.backend,
+                self.ctx,
+            );
+            return super::layer_walk::Step::SkipSubtree;
+        }
+
+        // Follower resolves its render-time position (leader pose, or the
+        // plain unlinked fallback) before descending into children; an
+        // unlinked follower with `show_when_unlinked == false` hides its
+        // subtree entirely (oracle `FollowerLayer.addToScene`,
+        // `layer.dart:2857-2865`). Its children are walked here, under the
+        // pushed offset, which is why the node itself is skipped.
+        if let flui_layer::Layer::Follower(follower_layer) = layer {
+            use crate::traits::LayerStateStack;
+
+            if let Some(node) = tree.get(id)
+                && let Some(resolved) = flui_layer::resolve_follower_offset(
+                    tree,
+                    self.link_registry,
+                    id,
+                    follower_layer,
+                )
+            {
+                let has_offset = resolved != flui_types::geometry::Offset::ZERO;
+                if has_offset {
+                    self.backend.push_offset(resolved);
+                }
+                for &child_id in node.children() {
+                    super::layer_walk::walk_layer_tree(tree, child_id, self);
+                }
+                if has_offset {
+                    self.backend.pop_transform();
+                }
+            }
+            return super::layer_walk::Step::SkipSubtree;
+        }
+
+        // Fall through to the normal LayerRender path (clip + filter
+        // fallback).
+        layer.render(self.backend);
+        super::layer_walk::Step::Descend
+    }
+
+    fn exit(
+        &mut self,
+        _tree: &flui_layer::LayerTree,
+        _id: flui_foundation::LayerId,
+        layer: &flui_layer::Layer,
+    ) {
+        use super::layer_render::LayerRender;
+        layer.cleanup(self.backend);
+    }
+}
+
 /// Bundled GPU stack rebuilt by `new` (windowed path) and `recover`.
 ///
 /// All fields are moved into `Renderer` after construction — this struct is
@@ -2504,6 +2628,13 @@ impl Renderer {
     /// registers bottom layers first and would see later (on-top, visible)
     /// layers as "occluded" — exactly backwards. A sound front-to-back cull
     /// requires a separate pre-pass that is a future optimization opportunity.
+    /// Walk a layer subtree, rendering every node.
+    ///
+    /// The traversal itself is [`super::layer_walk::walk_layer_tree`] — an
+    /// explicit-stack walk, because one Rust stack frame per layer means a
+    /// deep-but-valid chain aborts the process rather than panicking, and a
+    /// deep composited chain is ordinary. This function supplies the visit
+    /// steps in [`RenderLayerVisitor`].
     fn render_layer_recursive(
         tree: &flui_layer::LayerTree,
         link_registry: &flui_layer::LinkRegistry,
@@ -2513,101 +2644,14 @@ impl Renderer {
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
     ) {
-        use super::layer_render::LayerRender;
-
-        let Some(node) = tree.get(layer_id) else {
-            return;
+        let mut visitor = RenderLayerVisitor {
+            link_registry,
+            backend,
+            ctx,
+            surface_texture,
+            surface_view,
         };
-
-        let layer = node.layer();
-
-        // Special handling for BackdropFilter — requires mid-frame flush + copy.
-        //
-        // The gate passes when EITHER:
-        //   - The swapchain surface itself has COPY_SRC (common path), OR
-        //   - The intermediate texture is active (COPY_SRC-less adapter path):
-        //     `surface_texture` points at the intermediate which always has COPY_SRC.
-        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer
-            && (ctx.supports_copy_src || ctx.intermediate_active)
-        {
-            Self::handle_backdrop_filter(
-                bf_layer,
-                node,
-                tree,
-                link_registry,
-                backend,
-                ctx,
-                surface_texture,
-                surface_view,
-            );
-            return;
-        }
-
-        // Special handling for ShaderMask — captures children to an offscreen
-        // texture, applies the shader as a GPU mask, then composites the
-        // masked result. Requires an `OffscreenRenderer`; falls through to
-        // the inert clip/save-layer `LayerRender<ShaderMaskLayer>` impl
-        // (unmasked passthrough) when one isn't available, mirroring
-        // `BackdropFilter`'s own non-`Blur` degrade above.
-        if let flui_layer::Layer::ShaderMask(sm_layer) = layer
-            && backend.offscreen_mut().is_some()
-        {
-            Self::handle_shader_mask(sm_layer, node, tree, link_registry, backend, ctx);
-            return;
-        }
-
-        // Special handling for Follower — resolve its render-time position
-        // (leader pose, or the plain unlinked fallback) before descending
-        // into children; hide the subtree entirely when unlinked with
-        // `show_when_unlinked == false` (oracle `FollowerLayer.addToScene`,
-        // `layer.dart:2857-2865`).
-        if let flui_layer::Layer::Follower(follower_layer) = layer {
-            if let Some(resolved) =
-                flui_layer::resolve_follower_offset(tree, link_registry, layer_id, follower_layer)
-            {
-                use crate::traits::LayerStateStack;
-
-                let has_offset = resolved != flui_types::geometry::Offset::ZERO;
-                if has_offset {
-                    backend.push_offset(resolved);
-                }
-                for &child_id in node.children() {
-                    Self::render_layer_recursive(
-                        tree,
-                        link_registry,
-                        child_id,
-                        backend,
-                        ctx,
-                        surface_texture,
-                        surface_view,
-                    );
-                }
-                if has_offset {
-                    backend.pop_transform();
-                }
-            }
-            return;
-        }
-        // Fall through to normal LayerRender path (clip + filter fallback)
-
-        // Normal path: render → children → cleanup
-        layer.render(backend);
-
-        // Borrow children as a slice of Copy values; re-borrow `tree` inside the
-        // call is shared and does not conflict with this shared borrow of `node`.
-        for &child_id in node.children() {
-            Self::render_layer_recursive(
-                tree,
-                link_registry,
-                child_id,
-                backend,
-                ctx,
-                surface_texture,
-                surface_view,
-            );
-        }
-
-        layer.cleanup(backend);
+        super::layer_walk::walk_layer_tree(tree, layer_id, &mut visitor);
     }
 
     /// Handle a `BackdropFilterLayer` via mid-frame flush and Dual Kawase blur.

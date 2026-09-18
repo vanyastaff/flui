@@ -128,7 +128,10 @@ impl HeadlessRenderer {
         {
             let mut backend = Backend::new(&mut painter);
             if let Some(root) = tree.root() {
-                walk_layer_tree(tree, root, &mut backend);
+                let mut visitor = CaptureVisitor {
+                    backend: &mut backend,
+                };
+                super::layer_walk::walk_layer_tree(tree, root, &mut visitor);
             }
             // `backend` drops here → its `Drop` flushes the active transform.
         }
@@ -258,21 +261,25 @@ impl HeadlessRenderer {
     }
 }
 
-/// Depth-first walk mirroring `Renderer::render_layer_recursive`: render a
-/// node, recurse into its children, then run the node's post-children cleanup
-/// (e.g. a filter container popping its offscreen scope).
-fn walk_layer_tree(tree: &LayerTree, node_id: LayerId, backend: &mut Backend<'_>) {
-    let Some(layer) = tree.get_layer(node_id) else {
-        return;
-    };
-    layer.render(backend);
+/// The headless capture's visit steps: every node renders and cleans up the
+/// same way, with no diverted subtree handlers, so this is the plain shape
+/// [`walk_layer_tree`](super::layer_walk::walk_layer_tree) drives.
+struct CaptureVisitor<'a, 'b> {
+    backend: &'a mut Backend<'b>,
+}
 
-    let children: Vec<LayerId> = tree.children(node_id).unwrap_or_default().to_vec();
-    for child_id in children {
-        walk_layer_tree(tree, child_id, backend);
+impl super::layer_walk::LayerVisitor for CaptureVisitor<'_, '_> {
+    fn enter(
+        &mut self,
+        _tree: &LayerTree,
+        _id: LayerId,
+        layer: &flui_layer::Layer,
+    ) -> super::layer_walk::Step {
+        layer.render(self.backend);
+        super::layer_walk::Step::Descend
     }
 
-    if let Some(layer) = tree.get_layer(node_id) {
-        layer.cleanup(backend);
+    fn exit(&mut self, _tree: &LayerTree, _id: LayerId, layer: &flui_layer::Layer) {
+        layer.cleanup(self.backend);
     }
 }

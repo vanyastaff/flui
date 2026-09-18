@@ -237,6 +237,7 @@ mod window_target;
 // ============================================================================
 
 pub(crate) mod layer_render;
+pub(crate) mod layer_walk;
 
 // readback_dump is shared test-support for every GPU readback/oracle test in
 // this module: when `FLUI_READBACK_DUMP_DIR` is set, each local readback

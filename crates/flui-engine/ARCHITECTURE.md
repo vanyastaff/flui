@@ -402,6 +402,36 @@ Each module file in `batches/` must stay **< 1 500 non-test LOC**. `/spec-verify
 
 `WgpuPainter`'s code is split across the `painter/` directory (`mod` / `draw` / `transform_clip` / `layer` / `gradient`), each file **< 1 500 non-test LOC**. **C1 is closed.** The replay/submit path (`render()` / `flush_segment` / `flush_*`) was extracted into `GpuReplay`, then split into `replay/{mod,flush}.rs` (both < 1 500 non-test LOC).
 
+### Layer traversal is iterative, and owned once — `wgpu/layer_walk.rs`
+
+Both walkers over a `LayerTree` — `Renderer::render_layer_recursive` (windowed)
+and `HeadlessRenderer`'s capture (`headless.rs`) — share one explicit-stack
+traversal in [`wgpu/layer_walk.rs`](src/wgpu/layer_walk.rs), parameterized by a
+two-step visitor (`enter` returns `Descend` or `SkipSubtree`; `exit` runs the
+node's post-children cleanup). The windowed renderer's three diverted handlers
+(`BackdropFilter`, `ShaderMask`, `Follower`) each consume their own subtree and
+answer `SkipSubtree`; the headless path renders every node the same way.
+
+**Why not recursion.** A Rust stack overflow is a process abort, not a
+catchable panic, so one frame per layer means a deep-but-valid composited chain
+takes the render or capture path down. `flui-layer`'s diagnostic walkers had
+already chosen an explicit stack for exactly this reason
+(`testing/inspect.rs`, tested against a 10 000-deep chain on a 64 KiB stack);
+the production walkers had not, and `clear`/`update`/`clone` over the same tree
+shape aborted (issue #1083). The visitor trait exists so the traversal — the
+part that is order-critical and stack-sensitive — is testable with no GPU:
+`layer_walk.rs`'s own tests pin paint order, the cleanup-after-subtree
+ordering, the no-descend/no-cleanup rule for `SkipSubtree`, and the 10 000-deep
+small-stack walk. The GPU-side evidence is the readback suite, which stays
+pixel-identical across the rewrite, plus
+`a_deep_layer_chain_captures_without_overflowing_a_small_stack` for the capture
+path end-to-end (red-by-revert: restoring the recursion `SIGABRT`s it).
+
+**Still recursive, and named rather than assumed:** `flui-layer`'s
+`clone_subtree_into`, `update_subtree_needs_add_to_scene`, and
+`clear_needs_add_to_scene_subtree` are the other half of issue #1083 and belong
+to that crate, not this one.
+
 ### C4 rule — Matrix4 must not appear in batches/, pipelines.rs, or replay/
 
 `GpuStateStack` stores transforms as `glam::Mat4`. The conversion to/from `flui_types::Matrix4` happens at exactly one structural edge:
