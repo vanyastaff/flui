@@ -115,7 +115,13 @@ else:
     if extra:
         errors.append("justfile active_crates has non-active crates: " + ", ".join(extra))
 
-build_match = re.search(r"(?ms)^build-layered:\n(?P<body>(?:^[ \t].*\n)+)", justfile)
+# MULTILINE only — deliberately NOT DOTALL. With DOTALL, `.` matches newlines and
+# `(?:^[ \t].*\n)+` swallows every indented line to the end of the file instead of
+# stopping at the first unindented one, so the recipe body becomes "the rest of the
+# justfile". That over-collection silently disables the `missing` check below (the
+# body can never be short a crate) and misfires `extra` on any later recipe that runs
+# `cargo build -p <facade-or-example>`, attributing it to `build-layered`.
+build_match = re.search(r"(?m)^build-layered:\n(?P<body>(?:^[ \t].*\n)+)", justfile)
 if build_match is None:
     errors.append("justfile is missing the `build-layered` recipe body")
 else:

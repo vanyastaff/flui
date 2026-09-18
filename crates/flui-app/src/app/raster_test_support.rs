@@ -18,13 +18,16 @@
 //!
 //! [`with_size`]: TestRasterBackend::with_size
 
-use flui_engine::{EngineError, RasterBackend};
+use flui_engine::{EngineError, PresentDisposition, RasterBackend};
 use flui_layer::Scene;
 use flui_types::geometry::{Pixels, Rect};
 
 /// The scripted `render_scene` behavior a [`TestRasterBackend`] carries:
-/// zero-based call index and submitted scene in, present outcome out.
-type RenderScript = Box<dyn FnMut(u32, &Scene) -> Result<bool, EngineError> + Send>;
+/// zero-based call index and submitted scene in, what became of the frame
+/// out — the backend's own [`PresentDisposition`], so a test that needs to
+/// script "owed content it could not show" scripts a value the real backend
+/// can actually produce, not a stand-in for one.
+type RenderScript = Box<dyn FnMut(u32, &Scene) -> Result<PresentDisposition, EngineError> + Send>;
 
 /// Closure-configurable [`RasterBackend`] double.
 ///
@@ -52,7 +55,7 @@ pub(crate) struct TestRasterBackend {
     /// What `size()` reports.
     size: (u32, u32),
     /// The installed pre-present hook, run before every script outcome
-    /// that reports a present (`Ok(true)`).
+    /// that reports a present (`Presented`).
     pre_present_hook: Option<flui_engine::PrePresentHook>,
 }
 
@@ -62,7 +65,7 @@ impl TestRasterBackend {
     /// The script receives the zero-based call index and the submitted
     /// scene; call counting and content recording happen before it runs.
     pub(crate) fn new(
-        render: impl FnMut(u32, &Scene) -> Result<bool, EngineError> + Send + 'static,
+        render: impl FnMut(u32, &Scene) -> Result<PresentDisposition, EngineError> + Send + 'static,
     ) -> Self {
         Self {
             render: Box::new(render),
@@ -75,7 +78,7 @@ impl TestRasterBackend {
 
     /// Every `render_scene` call reports a successful present.
     pub(crate) fn always_presents() -> Self {
-        Self::new(|_, _| Ok(true))
+        Self::new(|_, _| Ok(PresentDisposition::Presented))
     }
 
     /// Exactly one `render_scene` call is allowed; it returns `outcome`.
@@ -84,7 +87,7 @@ impl TestRasterBackend {
     /// on the panic to catch a frame that unexpectedly reaches the backend
     /// twice (`EngineError` is not `Clone`, so the outcome cannot simply be
     /// replayed).
-    pub(crate) fn single_shot(outcome: Result<bool, EngineError>) -> Self {
+    pub(crate) fn single_shot(outcome: Result<PresentDisposition, EngineError>) -> Self {
         let mut outcome = Some(outcome);
         Self::new(move |_, _| {
             outcome
@@ -100,7 +103,7 @@ impl TestRasterBackend {
         let mut error = Some(error);
         Self::new(move |_, _| match error.take() {
             Some(error) => Err(error),
-            None => Ok(true),
+            None => Ok(PresentDisposition::Presented),
         })
     }
 
@@ -112,14 +115,14 @@ impl TestRasterBackend {
 }
 
 impl RasterBackend for TestRasterBackend {
-    fn render_scene(&mut self, scene: &Scene) -> Result<bool, EngineError> {
+    fn render_scene(&mut self, scene: &Scene) -> Result<PresentDisposition, EngineError> {
         let call_index = self.render_scene_calls;
         self.render_scene_calls += 1;
         self.submitted_scene_had_content.push(scene.has_content());
         let outcome = (self.render)(call_index, scene);
         // Mirror the wgpu renderer's contract: the hook runs only for a
         // frame that presents, and before that present.
-        if matches!(outcome, Ok(true))
+        if matches!(outcome, Ok(PresentDisposition::Presented))
             && let Some(hook) = self.pre_present_hook.as_mut()
         {
             hook();

@@ -2125,6 +2125,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cocoa",
  "console_error_panic_hook",
+ "core-graphics 0.25.0",
  "crossbeam-channel",
  "cursor-icon",
  "dispatch",

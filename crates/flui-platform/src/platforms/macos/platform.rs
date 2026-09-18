@@ -39,6 +39,12 @@ pub struct MacOSPlatform {
     /// Platform event handlers
     handlers: Arc<Mutex<PlatformHandlers>>,
 
+    /// The landing place for the wake deadline `handlers.wake_deadline`
+    /// publishes — AppKit has no `ControlFlow::WaitUntil`, so this module
+    /// actuates it (see `super::wake_pump`). Each window holds a `Weak` back
+    /// to it and arms it from `request_redraw`.
+    wake_pump: Arc<super::wake_pump::WakePump>,
+
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
 
@@ -132,12 +138,37 @@ impl MacOSPlatform {
             // Create executors
             let background_executor = Arc::new(BackgroundExecutor::new());
 
+            // Bind the fields the wake pump needs as locals first: the pump is
+            // passed a wake closure over the window map, and both must exist
+            // before the struct literal that owns them.
+            let windows = Arc::new(Mutex::new(HashMap::new()));
+            let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
+            let wake_pump = super::wake_pump::WakePump::new(Arc::clone(&handlers), {
+                let windows = Arc::clone(&windows);
+                Box::new(move || {
+                    // Clone the window handles out and drop the guard
+                    // before messaging any of them: `request_redraw`
+                    // reaches the owner lane, and ADR-0038 §5's
+                    // discipline for re-entrant calls applies to a lock
+                    // held across one just as it does to the handler lock.
+                    let open: Vec<Arc<MacOSWindow>> = windows.lock().values().cloned().collect();
+                    for window in open {
+                        // A frame for a window whose surface is already
+                        // gone is the renderer's to decline — this only
+                        // asks, exactly as `FrameWakeHandle::wake_frame`
+                        // does through the same method.
+                        PlatformWindow::request_redraw(window.as_ref());
+                    }
+                })
+            });
+
             tracing::info!("macOS platform initialized with AppKit");
 
             let platform = Self {
                 app,
-                windows: Arc::new(Mutex::new(HashMap::new())),
-                handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
+                windows,
+                handlers,
+                wake_pump,
                 background_executor,
                 config,
                 affinity: OwnerAffinity::new(),
@@ -227,6 +258,10 @@ impl Platform for MacOSPlatform {
             .debug_assert_owner("MacOSPlatform::open_window");
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
+        // Installed immediately after construction, before the window can be
+        // handed to anyone who might redraw it — the slot is a `OnceLock`, so
+        // a later install would be silently ignored rather than racing.
+        window.install_wake_pump(Arc::downgrade(&self.wake_pump));
 
         Ok(window)
     }
@@ -289,6 +324,26 @@ impl Platform for MacOSPlatform {
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         let mut handlers = self.handlers.lock();
         handlers.window_event = Some(callback);
+    }
+
+    /// Unlike `winit`'s override (which hands the deadline to
+    /// `ControlFlow::WaitUntil`) and Android's (whose own loop checks it
+    /// once per iteration), AppKit's run loop is opaque and exposes neither —
+    /// so this backend *actuates* the deadline instead: the private
+    /// `wake_pump` module schedules a main-queue tick for it and asks the
+    /// windows for a frame
+    /// when it comes due. Storage is the identical
+    /// `PlatformHandlers::wake_deadline` slot the other two backends use, for
+    /// the same `Arc`-cloned-out-of-the-lock consultation discipline
+    /// (ADR-0038 §5) — which is why the pump, not this method, owns the call.
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        // Store under the lock, then arm OUTSIDE it: arming consults the hook,
+        // and the hook re-enters `flui-app` while taking gesture locks.
+        self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+        self.wake_pump.arm();
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {

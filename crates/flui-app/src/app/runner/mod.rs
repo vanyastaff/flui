@@ -205,8 +205,11 @@ where
     // No frame-pacing field is logged here: `AppConfig` carries none — the
     // advisory-only `vsync`/`target_fps` fields it used to have were removed
     // rather than kept misleading. The desktop runner's steady-state pacing
-    // comes entirely from the GPU-side blocking Fifo present
-    // (`flui-engine::wgpu::Renderer::render_scene`) today. `flui_engine::
+    // comes entirely from the present path in
+    // `flui-engine::wgpu::Renderer::render_scene` today — the blocking Fifo
+    // present on the Vulkan/Wayland path, and the platform's display-pass
+    // cadence on the native AppKit backend (ADR-0029's AppKit subsection).
+    // `flui_engine::
     // RasterOptions` exists as the shape a future frame-pacing surface would
     // take, but nothing reads it at the raster boundary yet (`RasterOwner`
     // stores its `RasterOptions` and never acts on it) — that wiring is

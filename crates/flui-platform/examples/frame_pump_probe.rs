@@ -118,6 +118,27 @@ mod appkit_frame_pump_probe {
             Err(error) => fatal(format!("open_window was refused: {error:?}")),
         };
 
+        // What this window reports for its display period, from the real
+        // backend on the real display — the value `flui-app`'s runner paces
+        // against in place of its 60 Hz default, and the one a unit test of
+        // the arithmetic cannot reach (it needs the live NSScreen → CGDisplay
+        // → current-mode path). Reported as its own marker, not folded into
+        // the pump result: a display that reports no rate makes this `None`
+        // without saying anything about the pump, and the two claims fail
+        // independently.
+        if let Some(period) = window.refresh_period() {
+            tracing::info!(
+                period_us = period.as_micros() as u64,
+                hz = period.as_secs_f64().recip(),
+                "FRAME_PUMP_PROBE_REFRESH_PERIOD=reported"
+            );
+        } else {
+            tracing::warn!(
+                "FRAME_PUMP_PROBE_REFRESH_PERIOD=unreported: refresh_period() returned None, so \
+                 the runner paces against its default 60 Hz period on this display"
+            );
+        }
+
         // The frame body: count, then ask for the next frame from inside the
         // frame — the engine's own shape, and the call the display pass
         // discards when it is not deferred. The window is reached through a

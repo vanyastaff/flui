@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crossbeam_channel::Receiver;
-use flui_engine::{EngineError, RasterBackend};
+use flui_engine::{EngineError, PresentDisposition, RasterBackend};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_engine::{FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner};
 #[cfg(not(target_arch = "wasm32"))]
@@ -75,10 +75,23 @@ use parking_lot::Mutex;
 pub(crate) enum SubmitVerdict {
     /// The frame rendered and reached `present()`.
     Presented,
-    /// The frame rendered successfully but never presented (no damage, or
-    /// an occluded surface) — no vsync block happened, so the caller's
-    /// no-present fallback pacing applies.
+    /// The frame rendered successfully but had nothing to present — the
+    /// backend reported no damage — so no vsync block happened and the
+    /// caller's no-present fallback pacing applies. The work was genuinely
+    /// finished; nothing is left to retry.
     NoPresent,
+    /// The frame rendered successfully and then could not be shown: the
+    /// backend owed content it had nowhere to put on screen (an occluded
+    /// surface, or one its owner had released). Also no vsync block, but
+    /// unlike [`Self::NoPresent`] the work was CONSUMED and never reached
+    /// the screen — so the caller retains the frame rather than counting it
+    /// as done. See [`RasterBackend::render_scene`]'s
+    /// [`PresentDisposition`] for the same distinction at the backend
+    /// boundary.
+    ///
+    /// [`RasterBackend::render_scene`]: flui_engine::RasterBackend::render_scene
+    /// [`PresentDisposition`]: flui_engine::PresentDisposition
+    NotShown,
     /// The surface this frame was produced against is gone, outdated, or
     /// misconfigured (surface lost, validation failure, or a stale
     /// [`flui_foundation::SurfaceGeneration`] stamp). A retry against the
@@ -340,20 +353,29 @@ impl<B: RasterBackend> RasterLane<B> {
         match outcome {
             PumpOutcome::Presented { .. } => {
                 // `PumpOutcome::Presented` classifies a successful render
-                // attempt; whether the frame actually reached `present()`
-                // rides the reliable completion slot (see
-                // `RasterOwner::pump`'s own comment at its `Ok(did_present)`
-                // arm). The pacing decision must read that bit, never infer
-                // it from the outcome name.
-                let presented = self
+                // attempt; what the frame actually became rides the reliable
+                // completion slot (see `RasterOwner::pump`'s own comment at
+                // its `Ok(reported)` arm). The pacing decision must read
+                // that, never infer it from the outcome name.
+                let disposition = self
                     .handle
                     .surface_state()
                     .last_completion
-                    .is_some_and(|completion| completion.epoch == epoch && completion.presented);
-                if presented {
-                    SubmitVerdict::Presented
-                } else {
-                    SubmitVerdict::NoPresent
+                    .filter(|completion| completion.epoch == epoch)
+                    .map(|completion| completion.disposition);
+                match disposition {
+                    Some(PresentDisposition::Presented) => SubmitVerdict::Presented,
+                    Some(PresentDisposition::NotShown) => SubmitVerdict::NotShown,
+                    // Two different facts, one verdict. `NoDamage` is the
+                    // backend answering "this frame owed the screen
+                    // nothing"; `None` is the slot having no answer at all
+                    // for this epoch — the pump reported a successful
+                    // render, so the frame did run, but it recorded no
+                    // disposition. Neither is a reason to retry: only
+                    // `NotShown` says content was produced and lost, and
+                    // inventing a retry from a missing fact would repaint an
+                    // app that has nothing to draw.
+                    Some(PresentDisposition::NoDamage) | None => SubmitVerdict::NoPresent,
                 }
             }
             PumpOutcome::SurfaceOutdated { stale, current, .. } => {
@@ -449,8 +471,9 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
     fn submit(&mut self, scene: Scene) -> SubmitVerdict {
         self.renderer.mark_full_repaint();
         match self.renderer.render_scene(&scene) {
-            Ok(true) => SubmitVerdict::Presented,
-            Ok(false) => SubmitVerdict::NoPresent,
+            Ok(PresentDisposition::Presented) => SubmitVerdict::Presented,
+            Ok(PresentDisposition::NoDamage) => SubmitVerdict::NoPresent,
+            Ok(PresentDisposition::NotShown) => SubmitVerdict::NotShown,
             Err(EngineError::SurfaceLost) => {
                 tracing::debug!("surface lost during render");
                 SubmitVerdict::SurfaceStale
@@ -492,7 +515,7 @@ mod tests {
     /// queued up front, and the applied state (resize calls, render calls)
     /// is observable afterwards.
     struct ScriptedBackend {
-        outcomes: std::collections::VecDeque<Result<bool, EngineError>>,
+        outcomes: std::collections::VecDeque<Result<PresentDisposition, EngineError>>,
         render_calls: u32,
         resizes: Vec<(u32, u32)>,
         lost: bool,
@@ -508,16 +531,18 @@ mod tests {
             }
         }
 
-        fn queue(mut self, outcome: Result<bool, EngineError>) -> Self {
+        fn queue(mut self, outcome: Result<PresentDisposition, EngineError>) -> Self {
             self.outcomes.push_back(outcome);
             self
         }
     }
 
     impl RasterBackend for ScriptedBackend {
-        fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+        fn render_scene(&mut self, _scene: &Scene) -> Result<PresentDisposition, EngineError> {
             self.render_calls += 1;
-            self.outcomes.pop_front().unwrap_or(Ok(true))
+            self.outcomes
+                .pop_front()
+                .unwrap_or(Ok(PresentDisposition::Presented))
         }
         fn resize(&mut self, width: u32, height: u32) {
             self.resizes.push((width, height));
@@ -558,9 +583,44 @@ mod tests {
 
     #[test]
     fn a_no_present_completion_classifies_no_present() {
-        let backend = ScriptedBackend::presenting().queue(Ok(false));
+        let backend = ScriptedBackend::presenting().queue(Ok(PresentDisposition::NoDamage));
         let mut lane = RasterLane::new(backend, test_address(), 640, 480);
         assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::NoPresent);
+    }
+
+    /// The lane reports the backend's own answer rather than collapsing every
+    /// non-present into `NoPresent`.
+    ///
+    /// Driven as a two-frame script on ONE lane, so the assertion is about
+    /// the classification of two answers that differ only in the disposition
+    /// they carry: `NoDamage` means the caller's work was done, `NotShown`
+    /// means it was consumed and lost. A lane that read `was_shown()` — or
+    /// matched only `Presented` and defaulted the rest — would return
+    /// `NoPresent` for both frames and pass a single-frame test for either.
+    #[test]
+    fn a_withheld_frame_is_not_collapsed_into_no_present() {
+        let backend = ScriptedBackend::presenting()
+            .queue(Ok(PresentDisposition::NoDamage))
+            .queue(Ok(PresentDisposition::NotShown));
+        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
+
+        assert_eq!(
+            lane.submit_and_pump(test_scene()),
+            SubmitVerdict::NoPresent,
+            "nothing was owed: the loop may park"
+        );
+        assert_eq!(
+            lane.submit_and_pump(test_scene()),
+            SubmitVerdict::NotShown,
+            "content was owed and lost: the caller retains the frame"
+        );
+        lane.with_backend(|backend| {
+            assert_eq!(
+                backend.render_calls, 2,
+                "both frames reached the backend; the distinction is in the \
+                 classification, not in whether the render ran"
+            );
+        });
     }
 
     #[test]
@@ -608,7 +668,7 @@ mod tests {
             "the lane adopted the loss-minted generation for the retry"
         );
 
-        // The retry (the next queued outcome defaults to Ok(true)) renders
+        // The retry (the next queued outcome defaults to `Presented`) renders
         // against the restamped generation instead of being rejected.
         assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
     }

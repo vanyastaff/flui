@@ -55,7 +55,7 @@ use flui_layer::SceneSnapshot;
 use parking_lot::{Condvar, Mutex};
 
 use crate::error::EngineError;
-use crate::raster::RasterBackend;
+use crate::raster::{PresentDisposition, RasterBackend};
 use crate::raster_options::RasterOptions;
 
 /// Telemetry ack channel capacity.
@@ -88,15 +88,21 @@ const SHUTDOWN_COMPLETE_CHANNEL_CAPACITY: usize = 1;
 /// This is the reliable, latest-wins fact used by owner-side pacing. It is
 /// intentionally separate from the lossy [`RasterAck`] lane and from the
 /// bounded frame-history ring used for latency distributions: pacing asks
-/// only whether the latest completed frame presented.
+/// only what became of the latest completed frame.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RasterCompletion {
     /// The retired frame's epoch, scoped to the presentation address this
     /// [`RasterOwner`] is bound to.
     pub epoch: FrameEpoch,
-    /// Whether the backend actually presented the frame.
-    pub presented: bool,
+    /// What the backend did with the frame.
+    ///
+    /// A three-state [`PresentDisposition`] rather than a presented bit,
+    /// because owner-side pacing has to tell a frame that owed nothing
+    /// apart from one that owed content it could not show: only the second
+    /// has work left to retry, and a consumer that merges them ends the
+    /// loop on a frame that was never drawn. See [`PresentDisposition`].
+    pub disposition: PresentDisposition,
 }
 
 /// Reliable, coalesced surface state — read directly via
@@ -348,15 +354,22 @@ impl Drop for WakeGuard {
         // Publish BEFORE waking. `notify_retired` drops `in_flight` to zero
         // and fires the wake hook, and the woken consumer reads
         // `last_completion` to decide its next move. Without this write it
-        // would see the PREVIOUS frame's completion — `presented: true` for an
+        // would see the PREVIOUS frame's completion — `Presented` for an
         // older epoch — while `in_flight()` says nothing is outstanding, which
         // contradicts the latest-completion contract and can let a retry skip
         // the no-present fallback pace. The panic itself stays fatal; this only
         // keeps the published state honest for whoever observes it first.
+        //
+        // `NotShown`, not `NoDamage`: a frame that unwound had work to show
+        // and did not show it, which is exactly what that variant means. The
+        // conservative-sounding choice (`NoDamage`, "nothing was owed", so
+        // nothing is retried) would be a lie about this frame, and the reason
+        // this field is not a bool any more is that the two were being
+        // conflated.
         if let Some((mailbox, epoch)) = &self.unwind_completion {
             mailbox.set_last_completion(RasterCompletion {
                 epoch: *epoch,
-                presented: false,
+                disposition: PresentDisposition::NotShown,
             });
         }
         self.accounting.notify_retired();
@@ -1403,7 +1416,13 @@ impl<B: RasterBackend> RasterOwner<B> {
             && self.attached;
         let resource_fresh = frame_gpu_resource_generation == self.current_gpu_resource_generation;
 
-        let mut presented = false;
+        // `NotShown` as the starting value, not `NoDamage`: every other way
+        // through this function — a stale surface generation, a stale GPU
+        // resource generation, a render that returned `Err` — had a frame in
+        // hand that never reached the screen, which is what that variant
+        // says. Only the `Ok` arm below can report anything else, and it
+        // overwrites this with the backend's own answer.
+        let mut disposition = PresentDisposition::NotShown;
         let outcome = if surface_fresh && resource_fresh {
             // `DamageRegion::Full` is the only variant that exists today
             // (flui-layer's own doc: fine-grained damage is an additive,
@@ -1417,13 +1436,15 @@ impl<B: RasterBackend> RasterOwner<B> {
 
             match self.backend.render_scene(&frame.snapshot.scene) {
                 // The legacy ack/outcome names classify a successful render
-                // attempt. The backend's stricter presented bit is retained
-                // separately in the reliable completion state because the
-                // owner-side pacing predicate must distinguish occluded/no-
-                // damage completion from an actual present without trusting
-                // the lossy ack lane.
-                Ok(did_present) => {
-                    presented = did_present;
+                // attempt. What the backend actually did with the frame is
+                // retained separately in the reliable completion state,
+                // because the owner-side pacing predicate must distinguish an
+                // occluded/no-damage completion from an actual present —
+                // and, within those two, must tell a frame that owed nothing
+                // from one that owed content it could not show — without
+                // trusting the lossy ack lane.
+                Ok(reported) => {
+                    disposition = reported;
                     // A successful present is the recovery signal:
                     // whatever device-lost state the reliable slot was
                     // carrying no longer applies.
@@ -1494,7 +1515,7 @@ impl<B: RasterBackend> RasterOwner<B> {
 
         self.mailbox.set_last_completion(RasterCompletion {
             epoch: frame.snapshot.stamp.epoch,
-            presented,
+            disposition,
         });
 
         // `outcome` computed without unwinding: disarm `wake_guard` so the
@@ -1669,7 +1690,7 @@ mod tests {
         render_calls: usize,
         resize_calls: Vec<(u32, u32)>,
         full_repaint_calls: usize,
-        planned_results: VecDeque<Result<bool, EngineError>>,
+        planned_results: VecDeque<Result<PresentDisposition, EngineError>>,
         size: (u32, u32),
         /// When `true`, the NEXT `render_scene` call panics instead of
         /// consulting `planned_results`, then clears itself — so a test can
@@ -1737,7 +1758,9 @@ mod tests {
     }
 
     impl FakeBackend {
-        fn with_planned(results: impl IntoIterator<Item = Result<bool, EngineError>>) -> Self {
+        fn with_planned(
+            results: impl IntoIterator<Item = Result<PresentDisposition, EngineError>>,
+        ) -> Self {
             Self {
                 planned_results: results.into_iter().collect(),
                 ..Self::default()
@@ -1746,7 +1769,7 @@ mod tests {
     }
 
     impl RasterBackend for FakeBackend {
-        fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+        fn render_scene(&mut self, _scene: &Scene) -> Result<PresentDisposition, EngineError> {
             self.render_calls += 1;
             assert!(
                 !std::mem::take(&mut self.panic_next_render),
@@ -1755,7 +1778,9 @@ mod tests {
             if let Some(gate) = self.render_gate.take() {
                 gate.enter_and_wait_for_release();
             }
-            self.planned_results.pop_front().unwrap_or(Ok(true))
+            self.planned_results
+                .pop_front()
+                .unwrap_or(Ok(PresentDisposition::Presented))
         }
 
         fn resize(&mut self, width: u32, height: u32) {
@@ -2630,7 +2655,7 @@ mod tests {
                 attached: true,
                 last_completion: Some(RasterCompletion {
                     epoch: FrameEpoch::ZERO.next(),
-                    presented: true,
+                    disposition: PresentDisposition::Presented,
                 }),
             },
             "the priming resize was applied by the first pump above, and \
@@ -2678,7 +2703,7 @@ mod tests {
                 attached: true,
                 last_completion: Some(RasterCompletion {
                     epoch,
-                    presented: false,
+                    disposition: PresentDisposition::NotShown,
                 }),
             },
             "the reliable slot must reflect the reconfigure even though its \
@@ -2687,8 +2712,11 @@ mod tests {
     }
 
     #[test]
-    fn reliable_completion_preserves_the_backends_actual_presented_bit() {
-        let backend = FakeBackend::with_planned([Ok(false), Ok(true)]);
+    fn reliable_completion_preserves_the_backends_own_disposition() {
+        let backend = FakeBackend::with_planned([
+            Ok(PresentDisposition::NotShown),
+            Ok(PresentDisposition::Presented),
+        ]);
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let generation = handle.resize(1, 1);
 
@@ -2701,9 +2729,10 @@ mod tests {
             handle.surface_state().last_completion,
             Some(RasterCompletion {
                 epoch: skipped_epoch,
-                presented: false,
+                disposition: PresentDisposition::NotShown,
             }),
-            "Ok(false) is a successful backend call but not an actual present"
+            "NotShown is a successful backend call whose frame never reached \
+             the screen -- the caller must be able to tell it from a present"
         );
 
         let presented_epoch = skipped_epoch.next();
@@ -2715,7 +2744,7 @@ mod tests {
             handle.surface_state().last_completion,
             Some(RasterCompletion {
                 epoch: presented_epoch,
-                presented: true,
+                disposition: PresentDisposition::Presented,
             }),
             "the reliable slot must advance latest-wins on every completion"
         );
@@ -2877,7 +2906,7 @@ mod tests {
             handle.surface_state().last_completion,
             Some(RasterCompletion {
                 epoch: epoch1,
-                presented: true,
+                disposition: PresentDisposition::Presented,
             }),
         );
 
@@ -2898,10 +2927,10 @@ mod tests {
             handle.surface_state().last_completion,
             Some(RasterCompletion {
                 epoch: epoch2,
-                presented: false,
+                disposition: PresentDisposition::NotShown,
             }),
-            "the panicking frame must publish its OWN epoch as not-presented, not leave \
-             the previous frame's presented: true standing while in_flight() reads 0"
+            "the panicking frame must publish its OWN epoch as NotShown, not leave \
+             the previous frame's Presented standing while in_flight() reads 0"
         );
     }
 
@@ -3552,7 +3581,10 @@ mod tests {
     /// rejected `SurfaceOutdated`.
     #[test]
     fn single_counter_rejects_a_frame_stamped_before_a_post_loss_resize() {
-        let backend = FakeBackend::with_planned([Ok(true), Err(EngineError::SurfaceLost)]);
+        let backend = FakeBackend::with_planned([
+            Ok(PresentDisposition::Presented),
+            Err(EngineError::SurfaceLost),
+        ]);
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
 
         // Establish a baseline: both "sides" sit at the same generation G.
@@ -3861,7 +3893,7 @@ mod tests {
         for _ in 0..3u32 {
             // Resize half: proves this round's resize-minted generation is
             // genuinely accepted, not merely self-consistent.
-            planned.push_back(Ok(true));
+            planned.push_back(Ok(PresentDisposition::Presented));
             // Loss half, twice in a row: the second of the pair is where an
             // independent loss-side counter is forced to disagree with the
             // mailbox's real field (see this test's own doc).

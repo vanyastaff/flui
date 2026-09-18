@@ -110,6 +110,63 @@ impl PlatformDisplay for MacOSDisplay {
     }
 }
 
+/// The inter-frame period of the display `screen` is on, or `None` when the
+/// display cannot be reached or does not report a rate.
+///
+/// Reads the refresh rate of the display's *current* mode
+/// (`CGDisplayModeGetRefreshRate` over `CGDisplayCopyDisplayMode`), which is
+/// the same source the winit backend reads, so both backends answer
+/// `PlatformWindow::refresh_period` the same way. A rate of 0 — CoreGraphics
+/// reports 0 for modes it cannot describe, and some displays do — is treated
+/// as unknown rather than turned into an infinite period.
+///
+/// # Safety
+///
+/// `screen` must be a valid, live `NSScreen*`. Call on the owner lane: this
+/// messages the screen, which is AppKit traffic this backend keeps there.
+pub(super) unsafe fn refresh_period_for_screen(screen: id) -> Option<std::time::Duration> {
+    // SAFETY: the caller guarantees `screen` is live; `deviceDescription` and
+    // its values are read before the autorelease pool drains, and
+    // `CGDisplay::new`/`display_mode` are safe wrappers whose `CGDisplayMode`
+    // is released on drop (create rule).
+    unsafe {
+        if screen == nil {
+            return None;
+        }
+
+        let description: id = msg_send![screen, deviceDescription];
+        let display_id_key: id =
+            msg_send![class!(NSString), stringWithUTF8String: c"NSScreenNumber".as_ptr()];
+        let display_id_value: id = msg_send![description, objectForKey: display_id_key];
+        if display_id_value == nil {
+            return None;
+        }
+
+        // `unsignedIntValue`, not the `unsignedLongLongValue` the bounds read
+        // above uses: `NSScreenNumber` holds a `CGDirectDisplayID`, which is a
+        // `u32`, so this is the CFNumber's actual width.
+        let display_id: u32 = msg_send![display_id_value, unsignedIntValue];
+
+        let mode = core_graphics::display::CGDisplay::new(display_id).display_mode()?;
+        period_from_refresh_hz(mode.refresh_rate())
+    }
+}
+
+/// Convert a refresh rate in Hz into the interval between two frames, or
+/// `None` for a value that does not describe a cadence (zero, negative, NaN,
+/// infinite).
+///
+/// Free-standing and AppKit-free so the arithmetic is testable without a
+/// display: it is the part that can be wrong for inputs this machine cannot
+/// produce, and neither this backend's path nor the winit implementation it
+/// mirrors had a test for it.
+pub(super) fn period_from_refresh_hz(hz: f64) -> Option<std::time::Duration> {
+    if !hz.is_finite() || hz <= 0.0 {
+        return None;
+    }
+    Some(std::time::Duration::from_secs_f64(1.0 / hz))
+}
+
 /// Enumerate all displays using NSScreen
 pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
     // SAFETY: `+[NSScreen screens]` returns an autoreleased NSArray of live
@@ -136,5 +193,54 @@ pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
 
         tracing::debug!("Enumerated {} displays", displays.len());
         displays
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::period_from_refresh_hz;
+    use std::time::Duration;
+
+    /// The panel this backend's pacing was measured on: 100 Hz → 10 ms, the
+    /// value `refresh_period()` exists to report in place of the runner's
+    /// 60 Hz default.
+    #[test]
+    fn refresh_rate_becomes_its_period() {
+        assert_eq!(
+            period_from_refresh_hz(100.0),
+            Some(Duration::from_millis(10))
+        );
+    }
+
+    /// A fractional rate must survive the conversion: rounding 59.94 up to
+    /// 60 would pace a broadcast-rate panel against the wrong interval.
+    #[test]
+    fn a_fractional_rate_keeps_its_precision() {
+        let period = period_from_refresh_hz(59.94)
+            .expect("59.94 Hz is a cadence")
+            .as_secs_f64();
+        assert!((period - 0.016_683_35).abs() < 1e-9, "period={period}");
+        assert_ne!(
+            period_from_refresh_hz(59.94),
+            period_from_refresh_hz(60.0),
+            "a fractional rate was rounded to its neighbour"
+        );
+    }
+
+    /// CoreGraphics reports 0 for modes it cannot describe, and some displays
+    /// do; a NaN or negative could only come from a corrupted mode. All of
+    /// them mean "unknown", never an infinite or negative period.
+    #[test]
+    fn a_rate_that_is_not_a_cadence_is_unknown() {
+        for hz in [
+            0.0,
+            -1.0,
+            -100.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            assert_eq!(period_from_refresh_hz(hz), None, "hz={hz}");
+        }
     }
 }

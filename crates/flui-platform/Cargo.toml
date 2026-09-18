@@ -101,6 +101,15 @@ windows = { version = "0.62", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.27.0"
 objc = "0.2"
+# CoreGraphics, for the one display property Cocoa does not expose: the
+# refresh rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
+# which is what `PlatformWindow::refresh_period` needs. NSScreen has no
+# current-mode rate — its `maximumFramesPerSecond` is the hardware *maximum*
+# (it over-reports on a ProMotion panel running a 60 Hz mode) and is macOS 12+,
+# above this crate's 11.0 deployment floor — and the winit backend this mirrors
+# reads the mode rate the same way. Pinned to the version `cocoa` 0.27 already
+# pulls in, so no second copy of the crate enters the tree.
+core-graphics = "0.25"
 # Grand Central Dispatch: the owner lane (AppKit main queue, or a test serial
 # queue) every NSPasteboard operation is routed through. Zero-dep crate;
 # 0.2.0 is already pinned in Cargo.lock transitively via objc2-foundation.

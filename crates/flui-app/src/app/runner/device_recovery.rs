@@ -475,6 +475,7 @@ where
     not(target_arch = "wasm32")
 ))]
 mod device_recovery_tests {
+    use flui_engine::PresentDisposition;
     use std::time::Duration;
 
     use flui_engine::{EngineError, RasterBackend};
@@ -544,7 +545,7 @@ mod device_recovery_tests {
         lost: bool,
         /// `render_scene` outcome once the scene reaches it (`take`n —
         /// `EngineError` is not `Clone`).
-        scene_outcome: Option<Result<bool, EngineError>>,
+        scene_outcome: Option<Result<PresentDisposition, EngineError>>,
         /// `try_recover_device` outcome (`take`n, same reason).
         recover_outcome: Option<Result<(), EngineError>>,
         /// Whether a successful recovery clears the lost flag (a failing
@@ -561,7 +562,7 @@ mod device_recovery_tests {
         fn healthy() -> Self {
             Self {
                 lost: false,
-                scene_outcome: Some(Ok(true)),
+                scene_outcome: Some(Ok(PresentDisposition::Presented)),
                 recover_outcome: Some(Ok(())),
                 recover_clears_lost: true,
                 lose_on_render: false,
@@ -572,7 +573,10 @@ mod device_recovery_tests {
     }
 
     impl RasterBackend for ScriptedDeviceBackend {
-        fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+        fn render_scene(
+            &mut self,
+            _scene: &flui_layer::Scene,
+        ) -> Result<PresentDisposition, EngineError> {
             self.render_calls += 1;
             if self.lose_on_render {
                 self.lost = true;
@@ -721,7 +725,7 @@ mod device_recovery_tests {
         // tree dirty in between (no input, no animation, no resize).
         lane.with_backend(|b| {
             b.lost = true;
-            b.scene_outcome = Some(Ok(true));
+            b.scene_outcome = Some(Ok(PresentDisposition::Presented));
             b.recover_outcome = Some(Ok(()));
         });
 
@@ -875,7 +879,10 @@ mod device_recovery_tests {
     }
 
     impl RasterBackend for AlwaysRecoversButDiesOnFirstRenderBackend {
-        fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+        fn render_scene(
+            &mut self,
+            _scene: &flui_layer::Scene,
+        ) -> Result<PresentDisposition, EngineError> {
             self.render_calls += 1;
             if !self.died_on_render {
                 self.died_on_render = true;
@@ -883,7 +890,7 @@ mod device_recovery_tests {
                 // (below) just cleared `lost`.
                 self.lost = true;
             }
-            Ok(true)
+            Ok(PresentDisposition::Presented)
         }
         fn resize(&mut self, _width: u32, _height: u32) {}
         fn is_device_lost(&self) -> bool {

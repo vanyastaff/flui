@@ -43,6 +43,27 @@ use wgpu;
 use super::surface_lease::SurfaceLease;
 use super::window_target::WindowTarget;
 use crate::error::{EngineError, EngineResult};
+use crate::raster::PresentDisposition;
+
+/// What a frame's presentation became, from the two facts `render_scene`
+/// establishes before it paints anything.
+///
+/// Split out and named because the third cell of this table is the whole
+/// reason [`PresentDisposition`] exists, and at the acquire site it is
+/// invisible: "the surface handed us no texture" and "we had nothing to
+/// draw" both look like `Ok(None)`/no-error, and a caller that merges them
+/// ends its frame loop on a frame the screen never saw. A naked
+/// `return Ok(PresentDisposition::NotShown)` would say the right thing to a
+/// reader and be untestable — the arm needs a windowed surface with an
+/// occluded drawable, which no test in this crate can construct — so the
+/// decision lives here where a test can cover every cell.
+fn classify_frame(had_damage: bool, acquired_surface: bool) -> PresentDisposition {
+    match (had_damage, acquired_surface) {
+        (false, _) => PresentDisposition::NoDamage,
+        (true, true) => PresentDisposition::Presented,
+        (true, false) => PresentDisposition::NotShown,
+    }
+}
 
 /// Surface-acquisition outcomes normalized away from wgpu's concrete frame
 /// type so the retry policy can be tested without constructing a GPU surface.
@@ -141,8 +162,45 @@ where
 
 #[cfg(test)]
 mod surface_acquisition_tests {
-    use super::{SurfaceAcquireBackend, SurfaceAcquireOutcome, acquire_surface_texture_with};
+    use super::{
+        SurfaceAcquireBackend, SurfaceAcquireOutcome, acquire_surface_texture_with, classify_frame,
+    };
     use crate::error::EngineError;
+    use crate::raster::PresentDisposition;
+
+    /// The table `render_scene` decides every frame by.
+    ///
+    /// The row that matters is `(true, false)`: a frame with damage to paint
+    /// whose surface handed it no texture is WITHHELD, not idle. Classifying
+    /// it as `NoDamage` is the defect this replaced — such a frame's work has
+    /// already been consumed out of the pipeline, so a caller that reads it
+    /// as "nothing was owed" parks the loop and the window never draws.
+    /// Every other row is here so the pin is on the decision rather than on
+    /// one arm of it: a change that swapped two rows would still satisfy a
+    /// single-case assertion.
+    #[test]
+    fn the_frame_classification_table_separates_withheld_from_idle() {
+        assert_eq!(
+            classify_frame(false, false),
+            PresentDisposition::NoDamage,
+            "nothing to paint is the idle answer, whatever the surface did"
+        );
+        assert_eq!(
+            classify_frame(false, true),
+            PresentDisposition::NoDamage,
+            "a texture nobody needed is still nothing owed — never Presented"
+        );
+        assert_eq!(
+            classify_frame(true, false),
+            PresentDisposition::NotShown,
+            "damage and no texture is content owed that could not be shown"
+        );
+        assert_eq!(
+            classify_frame(true, true),
+            PresentDisposition::Presented,
+            "damage and a texture is the only path that presents"
+        );
+    }
 
     struct FakeSurface {
         outcomes: std::vec::IntoIter<SurfaceAcquireOutcome<u8>>,
@@ -631,6 +689,12 @@ impl SurfaceAcquireBackend for Renderer {
         // Under `Fifo` with a frame latency of 1 this is where the vsync
         // block lands (ADR-0045 decision 3), so its duration is the one
         // number that says whether the display is pacing this thread.
+        // Measured on the native AppKit backend 2026-09-17: it is not the
+        // steady-state pacer there (p50 62 µs of a 10 ms period — AppKit's
+        // display-pass cadence is), but it IS where that backend's ~3.4 % of
+        // late frames wait, at p50 8.3 ms, while their own CPU phases stay
+        // near 80 µs. `acquire_us` is therefore the number this comment
+        // promised it was.
         let acquire_started = crate::frame_timing::now();
         let acquired = surface.get_current_texture();
         let outcome = match &acquired {
@@ -803,17 +867,40 @@ impl Renderer {
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             // 1 (not 2): during a live resize the displayed frame must track the
-            // window size as tightly as possible. A latency of 2 lets the present
-            // queue hold frames rendered for an older size, which the compositor
-            // then stretches to the current window → visible resize jitter.
+            // window size as tightly as possible, and this is the only lever
+            // that trades that tracking away.
+            //
+            // The reason this comment used to give — "a latency of 2 lets the
+            // present queue hold frames rendered for an older size, which the
+            // compositor then stretches to the current window" — is **not
+            // reproduced on the native AppKit/Metal backend**, and the correction
+            // belongs here rather than in a commit message. `just
+            // macos-resize-jitter` drives a real 40-resize burst through a real
+            // visible window at both settings and counts
+            // `warn_on_size_mismatch`, the acquired-texture/configured-size
+            // divergence: **zero at 1 and zero at 2**, four runs, including runs
+            // with the surface deliberately held three frames behind the window.
+            // It is structural, not luck — `render_scene` acquires and presents
+            // inside one call and `resize` reconfigures before it, so no drawable
+            // is ever alive across a `Surface::configure`, and Metal allocates
+            // drawables at the layer's *current* `drawableSize`. What stays
+            // unmeasured is the compositor-side half, and it is the honest reason
+            // to leave this at 1: at a latency of 2 the window server may hold the
+            // previously presented frame for one extra display period after a
+            // resize, so the window's content lags its own edge by ~10 ms during a
+            // live drag. Nothing in-process can observe that — it is a judgement
+            // call, not a measurement, and it must not be reported as either had.
+            // (The measured benefit of widening is real and in the other
+            // direction: 147 of 148 stalled acquires disappear and late frames go
+            // from 12.6–14.1 % to 0.1 % — ADR-0029's AppKit subsection.)
             //
             // Pinned regardless of `flui_engine::RasterOptions::max_frames_in_flight`
             // (issue #556): that number is a CLOCK-side produce-capacity threshold
             // only (`flui_scheduler::FrameClock::set_max_in_flight`) — it is never
             // threaded into this field, and this field is never derived from it.
             // Re-coupling the two is a separate decision that needs its own
-            // resize-jitter regression test, not something to slip in by widening
-            // this literal. Two implementer notes worth having in one place: (a)
+            // evidence, not something to slip in by widening this literal. Two
+            // implementer notes worth having in one place: (a)
             // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
             // backend (live here — `Backends::GL` is selectable via the `gles`
             // feature), so on GL the clock-side in-flight counter is the ONLY
@@ -1473,12 +1560,17 @@ impl Renderer {
 
     /// Select present mode based on capabilities.
     ///
-    /// Fifo (vsync-blocked present) is the default. `render_scene`'s blocking
-    /// `get_current_texture()`/`present()` pair against Fifo is the
-    /// steady-state pacing mechanism for the whole frame loop: every
-    /// PRESENTED frame blocks at display cadence, which is what lets
-    /// `flui-app`'s runner drop its fixed frame-budget sleep in favor of a
-    /// real vsync block (see the frame-pacing ADR). Mailbox (triple
+    /// Fifo is the default. On the Vulkan/Wayland path `render_scene`'s
+    /// blocking `get_current_texture()`/`present()` pair against Fifo is the
+    /// steady-state pacing mechanism: every PRESENTED frame blocks at display
+    /// cadence, which is what lets `flui-app`'s runner drop its fixed
+    /// frame-budget sleep in favor of a real vsync block (see the frame-pacing
+    /// ADR). That is a per-backend fact, not a property of Fifo: measured
+    /// 2026-09-17 on the native AppKit backend, `queue.present()` returns in
+    /// ~42 µs and the display cadence comes from AppKit's display-pass
+    /// scheduling instead — same vsync-locked period, different mechanism
+    /// (ADR-0029's AppKit subsection; Windows' native backend is unmeasured).
+    /// Mailbox (triple
     /// buffering, uncapped present, lower latency) is a documented future
     /// opt-in for latency-sensitive apps that accept trading pacing for
     /// responsiveness — it is not the default because pairing an uncapped
@@ -1866,16 +1958,26 @@ impl Renderer {
     /// For scenes containing `BackdropFilterLayer`, the render flow supports
     /// mid-frame flush: painter batches are submitted early so the surface
     /// texture can be copied, blurred, and composited before continuing.
-    /// Renders `scene` and returns whether it actually reached `present()`.
+    /// Renders `scene` and reports what became of the frame.
     ///
-    /// `Ok(false)` covers every path that skips presentation without error —
-    /// no damage, the surface reporting `Occluded`, or the surface being
-    /// released by its owner ([`Renderer::release_surface`]) — and carries no
-    /// vsync signal: Fifo's blocking present never engaged, so the caller got
-    /// no pacing out of this call. `Ok(true)` means `present()` ran, which
-    /// (under the default Fifo present mode) blocked until the next vsync —
-    /// the steady-state pacing the frame loop relies on.
-    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+    /// [`PresentDisposition::Presented`] means `present()` ran. Whether that
+    /// call paced the frame depends on the backend: under the default Fifo
+    /// present mode it blocks until the next vsync on the Vulkan/Wayland
+    /// path, while the native AppKit backend returns from it in ~42 µs and
+    /// takes its cadence from AppKit's display-pass scheduling instead
+    /// (ADR-0029's AppKit subsection).
+    /// [`PresentDisposition::NoDamage`] and
+    /// [`PresentDisposition::NotShown`] both skip presentation without error
+    /// and so carry no vsync signal, but they are not interchangeable to the
+    /// caller: the first means nothing was owed, the second that this
+    /// backend owed content it could not put on screen (the surface reporting
+    /// `Occluded`, or released by its owner via
+    /// [`Renderer::release_surface`]) and that the caller should come back
+    /// for it rather than counting the frame finished.
+    pub fn render_scene(
+        &mut self,
+        scene: &flui_layer::Scene,
+    ) -> Result<PresentDisposition, EngineError> {
         // Fine-grained damage tracking is the caller's responsibility: the
         // application layer calls `mark_dirty()` / `mark_full_repaint()` after
         // input events or state changes. Nothing calls `mark_dirty` today, so
@@ -1907,13 +2009,19 @@ impl Renderer {
         if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
             // Nothing changed — skip this frame entirely; no present, no vsync block.
             tracing::trace!("Skipping frame: no damage");
-            return Ok(false);
+            return Ok(classify_frame(false, false));
         }
 
         // Acquire the swapchain texture; returns None when the frame should be
-        // skipped (Occluded), or Err for unrecoverable surface states.
+        // skipped (Occluded, or the surface is released), or Err for
+        // unrecoverable surface states. All the `None` causes are the same
+        // answer to the caller — content was owed and there is nothing to
+        // present it into — so they collapse here on purpose, at the one place
+        // that knows the frame got past the damage check.
         let Some(output) = self.acquire_surface_texture()? else {
-            return Ok(false);
+            // Past the damage check, so this frame owed content — see
+            // `classify_frame`, which is where that distinction is pinned.
+            return Ok(classify_frame(true, false));
         };
 
         let view = output
@@ -2062,14 +2170,19 @@ impl Renderer {
         // Reset damage for next frame
         self.damage_tracker.reset();
 
-        Ok(true)
+        Ok(classify_frame(true, true))
     }
 
     /// Acquire the current swapchain texture, handling device-lost and all
     /// `CurrentSurfaceTexture` variants with one reconfigure-and-retry on
     /// Outdated, Lost, or Validation.
     ///
-    /// Returns `Ok(None)` when the frame should be silently skipped (Occluded).
+    /// Returns `Ok(None)` when the frame should be skipped rather than
+    /// presented — the surface reports itself `Occluded`, or its owner has
+    /// released it. Both mean the same thing to `render_scene` (content was
+    /// owed and there is nowhere to put it), which classifies them together;
+    /// the distinction is only ever useful in a trace, where each cause logs
+    /// its own line.
     fn acquire_surface_texture(&mut self) -> Result<Option<wgpu::SurfaceTexture>, EngineError> {
         // Check for device-lost flag (set by the device-lost callback) before
         // attempting to acquire a surface texture. If the device is gone, we
@@ -2098,7 +2211,16 @@ impl Renderer {
             let attachment = (output_texture.width(), output_texture.height());
             let configured = (config.width, config.height);
             if attachment != configured {
+                // A dedicated target, not the module path: this fires at most a
+                // handful of times even on a pathological resize storm, so it is
+                // easy to miss in a log — but it is the one signal that says the
+                // swapchain handed back a stale-size backbuffer. On its own
+                // target it can be counted directly (see
+                // `examples/resize_jitter_probe.rs`, which fails the run on a
+                // non-zero count), while `RUST_LOG=flui.gpu` still selects it by
+                // prefix and plain `warn` still selects it outright.
                 tracing::warn!(
+                    target: "flui.gpu.resize_transient",
                     ?attachment,
                     ?configured,
                     "render_scene: swapchain texture size != configured surface size \

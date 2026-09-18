@@ -6,6 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use cocoa::{
@@ -28,7 +29,7 @@ use raw_window_handle::{
     RawWindowHandle,
 };
 
-use super::view;
+use super::{display::refresh_period_for_screen, view};
 use crate::{
     config::WindowConfiguration,
     shared::WindowCallbacks,
@@ -82,6 +83,23 @@ pub struct MacOSWindow {
     /// constructor fills it immediately after installing the view.
     #[cfg(feature = "a11y")]
     accessibility: std::sync::OnceLock<Arc<super::accessibility::MacosAccessibility>>,
+
+    /// The platform's wake pump, armed from [`PlatformWindow::request_redraw`].
+    ///
+    /// `Weak`, and a `OnceLock`: the pump is platform-owned and outlives every
+    /// window, so a window must not keep it alive — and the slot is filled
+    /// once, by `MacOSPlatform::open_window` right after construction. A
+    /// window built by the test constructor (`MacOSWindow::for_test`, a
+    /// `#[cfg(test)]` function absent from non-test doc builds, hence the
+    /// plain-font reference) leaves it empty and simply never arms one.
+    wake_pump: std::sync::OnceLock<super::wake_pump::WeakWakePump>,
+
+    /// This window's IME capability, built on first access by
+    /// [`PlatformWindow::text_input`]. A `OnceLock` for the same reason the
+    /// accessibility slot above is one: the capability is discovered through a
+    /// `&self` accessor and must be handed out as one shared instance per
+    /// window, not a fresh one per call.
+    text_input: std::sync::OnceLock<Arc<super::text_input::MacOSTextInput>>,
 }
 
 // SAFETY: the remaining fields are `Arc`/`Mutex`-protected, and sharing the
@@ -151,6 +169,15 @@ struct MacOSWindowState {
     /// Scale factor (1.0 for non-Retina, 2.0 for Retina)
     scale_factor: f64,
 
+    /// Inter-frame period of the display this window is on, when that display
+    /// reports a rate. Cached, not queried per call: the query messages the
+    /// window's screen, which is AppKit traffic this backend keeps on the
+    /// owner lane, while `PlatformWindow::refresh_period` is a plain `&self`
+    /// accessor any thread may call. Refreshed wherever `scale_factor` is —
+    /// `windowDidChangeScreen:` and `windowDidChangeBackingProperties:` — which
+    /// is the re-query point the trait's own contract names.
+    refresh_period: Option<Duration>,
+
     /// Cursor selected by this exact window's presentation.
     cursor: CursorIcon,
 
@@ -198,6 +225,34 @@ impl MacOSWindow {
             super::owner_lane::owner_queue(),
             true,
         )
+    }
+
+    /// Hand this window the platform's wake pump.
+    ///
+    /// Called once by `MacOSPlatform::open_window`, immediately after
+    /// construction and before the window is handed to anyone who could
+    /// redraw it. `pub(crate)` and a setter rather than a `MacOSWindow::new`
+    /// parameter on purpose: `MacOSWindow` is public API, and threading a
+    /// platform-internal type through its constructor would make the pump
+    /// part of the surface for a dependency only the platform ever supplies.
+    pub(crate) fn install_wake_pump(&self, pump: super::wake_pump::WeakWakePump) {
+        // A second install is silently ignored rather than racing the first:
+        // the slot is read on every redraw, so "first writer wins" is the
+        // only outcome that cannot leave a window flipping between pumps.
+        let _ = self.wake_pump.set(pump);
+    }
+
+    /// Arm the platform's wake pump, if this window has one.
+    ///
+    /// Called from [`PlatformWindow::request_redraw`] — the point that means
+    /// "a frame is coming" for this window — because a frame arms its
+    /// fallback deadline while it runs, and the pump is what looks back at
+    /// that deadline once the frame has gone. See `super::wake_pump` for why
+    /// the second look is needed at all.
+    fn arm_wake_pump(&self) {
+        if let Some(pump) = self.wake_pump.get().and_then(std::sync::Weak::upgrade) {
+            pump.arm();
+        }
     }
 
     /// Construct a test window on a caller-supplied owner lane.
@@ -307,6 +362,15 @@ impl MacOSWindow {
             // Center window on screen
             let _: () = msg_send![ns_window, center];
 
+            // Refresh period of the display this window is on. The window is
+            // created at the origin — a point on a screen — so
+            // `-[NSWindow screen]` answers here rather than returning nil;
+            // measured at this exact stage rather than assumed, by the
+            // `scale_order.m` probe, which reports the screen live and the
+            // display id reachable before `makeKeyAndOrderFront:`.
+            let screen: id = msg_send![ns_window, screen];
+            let refresh_period = refresh_period_for_screen(screen);
+
             let callbacks = Arc::new(WindowCallbacks::new());
 
             let window = Arc::new(Self {
@@ -320,6 +384,7 @@ impl MacOSWindow {
                         size: options.size,
                     },
                     scale_factor: scale,
+                    refresh_period,
                     cursor: CursorIcon::default(),
                     occlusion_visible: true,
                 })),
@@ -331,6 +396,8 @@ impl MacOSWindow {
                 owner_is_main,
                 #[cfg(feature = "a11y")]
                 accessibility: std::sync::OnceLock::new(),
+                wake_pump: std::sync::OnceLock::new(),
+                text_input: std::sync::OnceLock::new(),
             });
 
             // Create content view for input events
@@ -769,6 +836,29 @@ impl PlatformWindow for MacOSWindow {
             .map(|bridge| Arc::clone(bridge) as _)
     }
 
+    /// The window's IME capability — the `NSTextInputClient` conformance the
+    /// content view carries (see `super::text_input`). Without this override
+    /// the trait default (`None`) leaves the native backend with no IME at all
+    /// while the optional winit fallback has one.
+    ///
+    /// Built once and cached, like the accessibility bridge above, but lazily
+    /// rather than in the constructor: the capability needs nothing the
+    /// constructor has not already produced by the time the window value
+    /// exists, and a window that never attaches a text input never builds one.
+    /// `closed` is shared rather than copied so the capability observes the
+    /// window's own close.
+    fn text_input(&self) -> Option<Arc<dyn crate::traits::PlatformTextInput>> {
+        let text_input = self.text_input.get_or_init(|| {
+            Arc::new(super::text_input::MacOSTextInput::new(
+                self.ns_window,
+                Arc::clone(&self.closed),
+                self.owner,
+                self.owner_is_main,
+            ))
+        });
+        Some(Arc::clone(text_input) as Arc<dyn crate::traits::PlatformTextInput>)
+    }
+
     fn physical_size(&self) -> Size<DevicePixels> {
         let state = self.state.lock();
         let logical = state.bounds.size;
@@ -787,6 +877,10 @@ impl PlatformWindow for MacOSWindow {
     fn scale_factor(&self) -> f64 {
         let state = self.state.lock();
         state.scale_factor
+    }
+
+    fn refresh_period(&self) -> Option<Duration> {
+        self.state.lock().refresh_period
     }
 
     /// # Thread affinity — owner-routed
@@ -816,6 +910,11 @@ impl PlatformWindow for MacOSWindow {
     /// (the hook posts, the owner thread drains) remains scoped to the
     /// `PlatformProxy` redraw verb (#559).
     fn request_redraw(&self) {
+        // A frame is coming, so the platform's wake pump should look at the
+        // deadline that frame is about to arm. Before the routing below, not
+        // after: the deferred arm is a lane turn away, and the pump needs to
+        // be scheduled no later than the frame itself.
+        self.arm_wake_pump();
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         dispatch_redraw_request(
@@ -1172,6 +1271,14 @@ impl Clone for MacOSWindow {
             // never two (`OnceLock<Arc<_>>` clones the shared handle).
             #[cfg(feature = "a11y")]
             accessibility: self.accessibility.clone(),
+            // A clone shares the window, so it arms the same platform pump —
+            // a redraw asked for through any handle must schedule the wake
+            // deadline's landing place, or a clone would be a way to redraw
+            // without the loop being able to come back.
+            wake_pump: self.wake_pump.clone(),
+            // A clone shares the window, so it is the same capability — one
+            // `NSTextInputClient` view behind both handles, never two.
+            text_input: self.text_input.clone(),
         }
     }
 }
@@ -2348,6 +2455,16 @@ impl MacOSWindow {
         unsafe {
             let new_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
 
+            // Re-read the refresh period in the same pass: this handler is
+            // reached on both a backing-properties change and a screen change
+            // (`handle_screen_changed` delegates here), and the period belongs
+            // to the display, so it moves with the window exactly as the scale
+            // does. No resize is dispatched for it — a period change does not
+            // invalidate layout, and the runner re-reads the period when it
+            // does resize.
+            let screen: id = msg_send![self.ns_window, screen];
+            let new_refresh_period = refresh_period_for_screen(screen);
+
             // Update window state
             let (changed, size) = {
                 let mut state = self.state.lock();
@@ -2356,6 +2473,7 @@ impl MacOSWindow {
                     state.scale_factor = new_scale;
                     tracing::info!("Window scale factor changed to {}", new_scale);
                 }
+                state.refresh_period = new_refresh_period;
                 (changed, state.bounds.size)
             };
 

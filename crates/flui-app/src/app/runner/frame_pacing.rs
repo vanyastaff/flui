@@ -5,8 +5,10 @@
 // Extracted as free functions — pure, no realm/window/GPU state — so the
 // decisions each platform's frame callback makes each wake are unit
 // testable without a live event loop. See the frame-pacing ADR for the
-// full design: Fifo present blocks every PRESENTED frame at display
-// cadence (the steady-state pacing); these functions cover what happens on
+// full design: a PRESENTED frame is paced at display cadence by the
+// backend's own present path (the blocking Fifo present on Vulkan/Wayland,
+// the display-pass cadence on native AppKit); these functions cover what
+// happens on
 // the frames that path never blocks: a spurious wake with nothing to do or
 // a backgrounded app (`wake_action`), and a frame that ran the pipeline but
 // never reached `present()` (`FallbackWake`, ADR-0058: a non-blocking wake
@@ -75,24 +77,39 @@ pub(super) fn wake_action(
     frame_scheduled: bool,
     fallback: FallbackGate,
 ) -> WakeAction {
-    if !frames_enabled {
-        return WakeAction::PumpAsync;
-    }
-    if dirty {
-        return WakeAction::Render;
-    }
     // A scheduled ticker alone renders — unless a fallback wake is armed
     // and not yet due (ADR-0058): the previous pump ran the pipeline for
     // this ticker and presented nothing (no visible change in the ~0.2 ms
     // since the last present), so re-running it now would only repeat
     // that; the armed deadline brings the loop back exactly one display
-    // period after the last present, and real dirty work (`dirty` above)
-    // is never held behind it.
-    if frame_scheduled && !fallback.pending {
+    // period after the last present, and real dirty work (`dirty`) is
+    // never held behind it.
+    let action = if !frames_enabled {
+        WakeAction::PumpAsync
+    } else if dirty || (frame_scheduled && !fallback.pending) {
         WakeAction::Render
     } else {
         WakeAction::Skip
-    }
+    };
+
+    // Every platform wake resolves here, and `Render` is the only action
+    // that leaves any other trace of itself — so without this line a loop
+    // that stopped and a platform that stopped delivering wakes are
+    // indistinguishable in the logs, and the two inputs that decide `Skip`
+    // are exactly what tells them apart. `trace`, not `debug`: this fires
+    // once per platform wake, which on a healthy loop is the display rate.
+    tracing::trace!(
+        target: "flui.pace",
+        event = "wake_resolved",
+        action = ?action,
+        frames_enabled,
+        dirty,
+        frame_scheduled,
+        fallback_pending = fallback.pending,
+        "platform wake resolved"
+    );
+
+    action
 }
 
 /// The frame closure's `dirty` gate, shared verbatim by both backends' own
@@ -425,6 +442,7 @@ impl FallbackWake {
     not(target_arch = "wasm32")
 ))]
 mod desktop_pacing_tests {
+    use flui_engine::PresentDisposition;
     use std::time::{Duration, Instant};
 
     use super::{
@@ -629,7 +647,11 @@ mod desktop_pacing_tests {
                 // happens the window has already been notified for THIS frame.
                 seen_for_script.store(notifies_for_script.load(Ordering::SeqCst), Ordering::SeqCst);
             }
-            Ok(presents)
+            Ok(if presents {
+                PresentDisposition::Presented
+            } else {
+                PresentDisposition::NoDamage
+            })
         });
 
         let scene = Scene::default();

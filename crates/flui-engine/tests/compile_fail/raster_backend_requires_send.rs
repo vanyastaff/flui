@@ -20,8 +20,8 @@ impl flui_engine::RasterBackend for BadBackend {
     fn render_scene(
         &mut self,
         _scene: &flui_layer::Scene,
-    ) -> Result<bool, flui_engine::EngineError> {
-        Ok(false)
+    ) -> Result<flui_engine::PresentDisposition, flui_engine::EngineError> {
+        Ok(flui_engine::PresentDisposition::NoDamage)
     }
 
     fn resize(&mut self, _width: u32, _height: u32) {}

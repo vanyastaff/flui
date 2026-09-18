@@ -407,11 +407,20 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > code/docs shows the remaining risks plainly: hot restart still logs "root
 > remount not yet implemented" in `crates/flui-app/src/app/binding.rs`, the
 > platform service traits (`PlatformTextInput`, `PlatformSystemChrome`,
-> `PlatformHaptics`) are still open, Linux/iOS platform-init stubs remain a
+> `PlatformHaptics`) are still open — Linux/iOS platform-init stubs remain a
 > sanctioned exemption under port-check trigger #8, and the Windows
 > `STATUS_HEAP_CORRUPTION` issue keeps `flui-platform` out of the CI nextest
 > lane. Treat App.1 as active migration work with major blockers, not a crate
 > re-enable task.
+>
+> **Update (2026-09-17):** `PlatformTextInput` no longer has the same shape on
+> every backend. macOS gained a real implementor (`MacOSTextInput`, with
+> `FLUIContentView` conforming to `NSTextInputClient` and `keyDown:` gated by
+> ADR-0066), verified end-to-end on a real Mac by the bundled `.app` probe
+> `just macos-ime` (`IME_PROBE_RESULT=PASS`); Windows still has none, and the
+> macOS evidence proves *routing* — which producer a press reaches — not a real
+> input method driving a composition. The trait is therefore not "closed" either
+> way; the row's status is unchanged.
 
 | # | Deliverable | Status |
 |---|---|---|

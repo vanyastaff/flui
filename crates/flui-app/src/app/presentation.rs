@@ -207,6 +207,19 @@ pub(crate) struct PresentationState {
     frames_rendered: Cell<u64>,
     /// Frames dropped due to surface errors. See [`Self::frames_rendered`].
     frames_dropped: Cell<u64>,
+    /// Consecutive frames this presentation produced and handed to the
+    /// backend that the backend could not put on screen, reset by any frame
+    /// that ends otherwise.
+    ///
+    /// Bounds the retention of a withheld frame
+    /// ([`Self::record_frame_withheld`]'s caller decides how long to keep
+    /// retrying). A transient — the drawable is briefly unavailable while
+    /// the compositor rearranges itself — must be ridden out, because the
+    /// scene that was consumed producing it is gone and nothing else will
+    /// redraw it. A *permanent* unavailability must not be, because the
+    /// retry dirties this presentation on every attempt and would otherwise
+    /// spin at the fallback pace indefinitely.
+    not_shown_streak: Cell<u32>,
     /// Performance-overlay state. `Some` IS the enable flag: the rolling
     /// frame-time window only exists while the overlay is on, so "enabled
     /// but no stats" is unrepresentable and a disabled overlay costs one
@@ -577,6 +590,7 @@ impl PresentationState {
             renderer,
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
+            not_shown_streak: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
             vsync: RefCell::new(Vsync::new()),
@@ -641,6 +655,7 @@ impl PresentationState {
             renderer,
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
+            not_shown_streak: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
             vsync: RefCell::new(Vsync::new()),
@@ -885,6 +900,27 @@ impl PresentationState {
     /// Record a frame dropped due to a surface error.
     pub(crate) fn record_frame_dropped(&self) {
         self.frames_dropped.set(self.frames_dropped.get() + 1);
+    }
+
+    /// Record a frame the backend could not put on screen, returning the new
+    /// count of consecutive such frames. See the `not_shown_streak` field.
+    ///
+    /// The return value is the *post*-increment streak so a caller can bound
+    /// its retention against this attempt without a second read.
+    pub(crate) fn record_frame_withheld(&self) -> u32 {
+        let streak = self.not_shown_streak.get().saturating_add(1);
+        self.not_shown_streak.set(streak);
+        streak
+    }
+
+    /// End a withheld streak: this frame was either shown or had nothing to
+    /// show, so the surface is no longer *continuously* unavailable. Called
+    /// from every frame outcome other than a withheld one, which is what
+    /// makes "the next real event restarts the retry" true rather than
+    /// assumed — a later withheld frame opens a fresh streak and retains
+    /// again instead of inheriting an exhausted budget.
+    pub(crate) fn clear_not_shown_streak(&self) {
+        self.not_shown_streak.set(0);
     }
 
     // ========================================================================

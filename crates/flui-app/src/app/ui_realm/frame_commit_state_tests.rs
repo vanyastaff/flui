@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use flui_animation::AnimationController;
 use flui_engine::EngineError;
+use flui_engine::PresentDisposition;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
@@ -191,7 +192,12 @@ fn fresh_presentation_starts_at_committed_zero() {
 fn presented_and_no_present_painted_frames_commit() {
     for presents in [true, false] {
         let realm = mount_box();
-        let mut backend = TestRasterBackend::single_shot(Ok(presents));
+        let outcome = if presents {
+            PresentDisposition::Presented
+        } else {
+            PresentDisposition::NoDamage
+        };
+        let mut backend = TestRasterBackend::single_shot(Ok(outcome));
         assert_eq!(realm.render_frame_entered(&mut backend), presents);
         assert_eq!(primary_state(&realm), FrameCommitState::Committed);
         let revision = TreeRevision::ZERO.next();
@@ -717,6 +723,175 @@ fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
     );
 }
 
+/// A frame the backend owed content for and could not put on screen must be
+/// RETAINED: the loop has to come back for it, and the retry has to find real
+/// work when it does.
+///
+/// Both halves are asserted separately because only the second one is easy to
+/// get wrong. Waking alone re-opens `draw_frame_entered`'s segment gate but
+/// leaves `PipelineOwner` with nothing dirty — the frame that could not be
+/// shown already consumed the state that produced its scene — so a retry that
+/// only wakes produces `Idle`, never reaches `render_scene`, and parks
+/// (the shape issue #637 records for the submit-failure arms). Asserting on
+/// the backend being ASKED AGAIN is what pins that, where asserting on the
+/// wake bit alone would pass with the repaint missing.
+#[test]
+fn a_frame_the_surface_never_showed_is_retained_and_repainted() {
+    let realm = mount_box();
+    let mut backend = TestRasterBackend::new(|call, _scene| {
+        Ok(if call == 0 {
+            PresentDisposition::NotShown
+        } else {
+            PresentDisposition::Presented
+        })
+    });
+
+    assert!(
+        !realm.render_frame_entered(&mut backend),
+        "a frame whose surface was unavailable did not present"
+    );
+    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(
+        primary_state(&realm),
+        FrameCommitState::Committed,
+        "the pipeline DID produce this frame, so its tree revision commits -- \
+         what failed was showing it, not making it"
+    );
+
+    let _ = realm.render_frame_entered(&mut backend);
+    assert_eq!(
+        backend.render_scene_calls, 2,
+        "the retained frame must be handed to the backend again, not merely \
+         have its wake bit set"
+    );
+}
+
+/// The other side of the same rule: a frame that owed nothing is finished.
+///
+/// Without this, "retain everything" would satisfy the test above — and an
+/// app with nothing to draw would repaint at the fallback pace forever.
+#[test]
+fn a_frame_with_nothing_owed_is_not_retained() {
+    let realm = mount_box();
+    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::NoDamage));
+
+    assert!(
+        !realm.render_frame_entered(&mut backend),
+        "nothing was owed, so nothing presented"
+    );
+    assert_eq!(backend.render_scene_calls, 1);
+    assert!(
+        !realm.needs_redraw(),
+        "a frame with nothing owed leaves the loop nothing to come back for"
+    );
+}
+
+/// The withheld retry is BOUNDED: a drawable that never comes back stops
+/// being retried instead of spinning at the fallback pace forever.
+///
+/// This is the one rule separating "ride out a transient" from "loop
+/// forever", and AppKit's occlusion gate does not provide it — that gate keys
+/// off `occlusionState`, which the cold-start trace behind this arm has
+/// reporting the window VISIBLE for the whole ~132 ms the drawable was
+/// unavailable. Retrying is itself what re-dirties the presentation, so with
+/// no cap a surface that stays withdrawn produces one frame per fallback
+/// period indefinitely.
+#[test]
+fn the_withheld_retry_is_bounded_and_then_parks() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    let realm = mount_box();
+    // Every attempt is withheld, including the one that exhausts the budget,
+    // so what the test measures is WHERE the loop stopped rather than that it
+    // stopped only because a frame finally succeeded.
+    let mut backend = TestRasterBackend::new(|_, _| Ok(PresentDisposition::NotShown));
+
+    for _ in 0..=budget {
+        assert!(
+            !realm.render_frame_entered(&mut backend),
+            "a withheld frame never reports a present"
+        );
+    }
+    assert_eq!(
+        backend.render_scene_calls,
+        budget + 1,
+        "the budget is spent by RE-ARMING: {budget} retained attempts, then \
+         the attempt that exhausts it and runs without arming another"
+    );
+
+    for _ in 0..8 {
+        let _ = realm.render_frame_entered(&mut backend);
+    }
+    assert_eq!(
+        backend.render_scene_calls,
+        budget + 1,
+        "once the budget is spent and nothing else is dirty the loop must \
+         park: no further frame may reach the backend"
+    );
+}
+
+/// A withheld streak ends on any frame that ends otherwise, so an exhausted
+/// budget does not disable retention permanently.
+///
+/// Recovery must not depend on the counter being reset by hand. After the
+/// budget is spent the app parks; the next real event dirties the pipeline
+/// and the frame it produces either presents — clearing the streak — or is
+/// withheld again, opening a fresh one. This drives the first case and then
+/// proves the retry is live again.
+#[test]
+fn a_presented_frame_clears_the_withheld_streak() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    let realm = mount_box();
+    let mut backend = TestRasterBackend::new(move |call, _| {
+        // Present exactly once, on the attempt that exhausts the budget;
+        // withhold every other attempt.
+        Ok(if call == budget {
+            PresentDisposition::Presented
+        } else {
+            PresentDisposition::NotShown
+        })
+    });
+
+    // Spend the budget, ending on the scripted present.
+    for i in 0..=budget {
+        let presented = realm.render_frame_entered(&mut backend);
+        assert_eq!(
+            presented,
+            i == budget,
+            "attempt {i} must {}",
+            if i == budget {
+                "present"
+            } else {
+                "be withheld"
+            }
+        );
+    }
+
+    // A real event dirties the pipeline; the frame it produces is withheld
+    // and must retain again, which is only true if the present above reset
+    // the streak rather than leaving it spent.
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+
+    let _ = realm.render_frame_entered(&mut backend);
+    let after_event = backend.render_scene_calls;
+    assert_eq!(
+        after_event,
+        budget + 2,
+        "the event-driven frame reached the backend"
+    );
+
+    let _ = realm.render_frame_entered(&mut backend);
+    assert_eq!(
+        backend.render_scene_calls,
+        after_event + 1,
+        "a withheld frame AFTER the present must retain again — the streak it \
+         inherited was cleared, not carried over as an exhausted budget"
+    );
+}
+
 #[test]
 fn no_present_commit_also_replays_held_pointer_input() {
     let realm = mount_box();
@@ -739,7 +914,7 @@ fn no_present_commit_also_replays_held_pointer_input() {
             PointerType::Touch,
         ));
 
-    let mut backend = TestRasterBackend::single_shot(Ok(false));
+    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::NoDamage));
     assert!(!realm.render_frame_entered(&mut backend));
 
     assert!(

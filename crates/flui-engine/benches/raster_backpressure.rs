@@ -52,8 +52,11 @@ use flui_types::geometry::{Pixels, Rect};
 struct NoOpBackend;
 
 impl RasterBackend for NoOpBackend {
-    fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-        Ok(true)
+    fn render_scene(
+        &mut self,
+        _scene: &Scene,
+    ) -> Result<flui_engine::PresentDisposition, EngineError> {
+        Ok(flui_engine::PresentDisposition::Presented)
     }
 
     fn resize(&mut self, _width: u32, _height: u32) {}

@@ -21,6 +21,7 @@
 //! WindowCallbacks::dispatch_input
 //! ```
 
+use std::cell::RefCell;
 use std::sync::Weak;
 
 use cocoa::{
@@ -36,6 +37,7 @@ use objc::{
 };
 
 use super::events::convert_ns_event;
+use super::text_input::{TextInputState, add_text_input_methods};
 use crate::shared::WindowCallbacks;
 
 // ============================================================================
@@ -59,10 +61,11 @@ pub fn create_content_view(
         let view: id = msg_send![class, alloc];
         let view: id = msg_send![view, initWithFrame: frame];
 
-        // Store context (scale factor + callbacks)
+        // Store context (scale factor + callbacks + composition state)
         let context = Box::into_raw(Box::new(ViewContext {
             scale_factor,
             callbacks,
+            text_input: RefCell::new(TextInputState::default()),
         }))
         .cast::<std::ffi::c_void>();
         (*view).set_ivar("context_ptr", context);
@@ -72,9 +75,16 @@ pub fn create_content_view(
 }
 
 /// Context stored in NSView ivar
-struct ViewContext {
+pub(super) struct ViewContext {
     scale_factor: f64,
-    callbacks: Weak<WindowCallbacks>,
+    pub(super) callbacks: Weak<WindowCallbacks>,
+
+    /// The `NSTextInputClient` composition state this view is driven through
+    /// (see [`super::text_input`]). A `RefCell` because the AppKit callbacks and
+    /// the routed [`super::text_input::MacOSTextInput`] bodies both reach it
+    /// through a shared `&ViewContext`, and every one of them either runs on the
+    /// main thread (AppKit's delivery contract) or under the owner-lane guard.
+    pub(super) text_input: RefCell<TextInputState>,
 }
 
 // ============================================================================
@@ -84,7 +94,11 @@ struct ViewContext {
 /// Handle an input NSEvent arriving at a FLUIContentView method.
 ///
 /// Converts the event and dispatches it through the per-window callbacks.
-extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id) {
+///
+/// `pub(super)` because `super::text_input`'s `doCommandBySelector:` is the
+/// second caller: the key event an input method declined is handed back here to
+/// take the ordinary keyboard path.
+pub(super) extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id) {
     // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
     // live objects); `event` is a valid NSEvent* for the duration of the call;
     // `bounds` is a plain NSRect getter.
@@ -96,6 +110,88 @@ extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id) {
             }
         }
     }
+}
+
+/// `keyDown:` — the input-context route while a text input is attached, the
+/// keyboard route otherwise.
+///
+/// The gate is load-bearing and its default is the load-bearing part: with
+/// `ime_allowed == false` — the state of every window until a presentation
+/// attaches a text input and enables composition — this is byte-identical to
+/// wiring `keyDown:` straight to [`handle_input_event`], which is what it did
+/// before the `NSTextInputClient` conformance existed. Only while a text input
+/// IS attached does the event take AppKit's input method instead, through
+/// `interpretKeyEvents:`: that call comes back into this view's
+/// `NSTextInputClient` methods (`setMarkedText:` while composing, `insertText:`
+/// on commit), so a key delivered to both routes would reach the application
+/// twice from one physical press — an `ImeEvent::Commit` *and* a
+/// `Key::Character`. `doCommandBySelector:` is the way back for the keys the
+/// input method declines.
+///
+/// `pending_key_event` is set for exactly the duration of the
+/// `interpretKeyEvents:` call, which is the only window in which the input
+/// context can call `doCommandBySelector:` back for this event.
+extern "C" fn key_down(this: &Object, _sel: Sel, event: id) {
+    // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent* for
+    // the duration of the call, and `interpretKeyEvents:` retains it for the
+    // span of its own dispatch. The array is created by an NSArray class
+    // constructor and autoreleased.
+    unsafe {
+        let Some(ctx) = get_context(this) else {
+            return;
+        };
+        // The gate, and the whole of the change this callback makes to a window
+        // that never attaches a text input: while no input context is attached
+        // the key takes the keyboard path below, byte for byte as `keyDown:`
+        // did before `NSTextInputClient` existed. Only an attached text input
+        // makes AppKit's input method a *second* producer for the same press,
+        // and a press must reach the application exactly once — either as a
+        // composition/commit through the input context, or as a key event
+        // through the keyboard conversion, never both (see the module doc of
+        // `super::text_input`).
+        let ime_allowed = ctx.text_input.borrow().ime_allowed;
+        if !ime_allowed {
+            handle_input_event(this, sel!(keyDown:), event);
+            return;
+        }
+
+        // Saved and restored rather than set and cleared: an input method can
+        // route a *second* `keyDown:` through the view while this one is inside
+        // `interpretKeyEvents:` (the character palette does), and a plain clear
+        // would leave the outer event's `doCommandBySelector:` reading zero and
+        // dropping a command that belongs to this press.
+        let previous_pending_key_event = ctx.text_input.borrow().pending_key_event;
+        ctx.text_input.borrow_mut().pending_key_event = event as usize;
+        let events: id = msg_send![class!(NSArray), arrayWithObject: event];
+        let _: () = msg_send![this, interpretKeyEvents: events];
+        ctx.text_input.borrow_mut().pending_key_event = previous_pending_key_event;
+    }
+}
+
+/// `keyUp:` — the keyboard route, except while a composition is in flight.
+///
+/// Gated on the *composition* rather than on `ime_allowed`, which is the
+/// distinction winit draws in its own `keyUp:` arm: it queues the release only
+/// from its `Ground` and `Disabled` states, so an active preedit suppresses it.
+/// The reason is the same one [`key_down`] exists for, on the opposite edge —
+/// the press was consumed by the input method, so a release reported while the
+/// composition is still open describes a key the application never saw go down.
+///
+/// A commit returns the state to `Ground` before the release arrives (winit
+/// resets it in `keyDown:`, and [`TextInputState::clear_marked_text`] empties
+/// the composition here), so an ordinary typed character still reports its
+/// release normally. What is suppressed is exactly the release that lands
+/// inside an open composition.
+extern "C" fn key_up(this: &Object, _sel: Sel, event: id) {
+    // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
+    // live objects); `event` is a valid NSEvent* for the duration of the call.
+    let reported = unsafe {
+        get_context(this).is_none_or(|ctx| ctx.text_input.borrow().reports_key_release())
+    };
+    if !reported {
+        return;
+    }
+    handle_input_event(this, sel!(keyUp:), event);
 }
 
 /// Dispatch a hover status change through the per-window callbacks.
@@ -256,14 +352,8 @@ fn get_or_create_view_class() -> &'static Class {
             );
 
             // Keyboard events
-            decl.add_method(
-                sel!(keyDown:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
-            );
-            decl.add_method(
-                sel!(keyUp:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
-            );
+            decl.add_method(sel!(keyDown:), key_down as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(keyUp:), key_up as extern "C" fn(&Object, Sel, id));
             decl.add_method(
                 sel!(flagsChanged:),
                 flags_changed as extern "C" fn(&Object, Sel, id),
@@ -349,6 +439,11 @@ fn get_or_create_view_class() -> &'static Class {
                 sel!(acceptsTouchEvents),
                 accepts_touch_events as extern "C" fn(&Object, Sel) -> BOOL,
             );
+
+            // The NSTextInputClient conformance and its callbacks —
+            // `interpretKeyEvents:` reaches this view's composition state, and
+            // the input method reaches it back, only through these.
+            add_text_input_methods(&mut decl);
         }
 
         decl.register();
@@ -367,7 +462,7 @@ fn get_or_create_view_class() -> &'static Class {
 ///
 /// `view` must be a live FLUIContentView whose `context_ptr` ivar is either
 /// null or points to a `ViewContext` owned by that view.
-unsafe fn get_context(view: &Object) -> Option<&ViewContext> {
+pub(super) unsafe fn get_context(view: &Object) -> Option<&ViewContext> {
     // SAFETY: per the function contract the ivar is null or a valid
     // Box<ViewContext> pointer owned by the view; the returned shared
     // reference cannot outlive the view method invocation that holds `view`.
@@ -380,8 +475,87 @@ unsafe fn get_context(view: &Object) -> Option<&ViewContext> {
     }
 }
 
+/// The `context_ptr` of `view`, or `None` unless `view` is really one of ours.
+///
+/// The class check is the whole point of this function. [`get_context`] may
+/// index the `context_ptr` ivar directly only because its callers are
+/// `FLUIContentView` methods — AppKit invokes a method on an object that
+/// declares it. A view obtained from `-[NSWindow contentView]` carries no such
+/// guarantee: `liquid_glass` replaces the content view with an
+/// `NSVisualEffectView`, which has no `context_ptr` ivar at all, and `get_ivar`
+/// **panics** rather than returning null — fatally, across an AppKit
+/// `extern "C"` frame. So every read of that ivar from a view the crate did not
+/// itself receive as `self` goes through here, where the class is checked
+/// first.
+///
+/// # Safety
+///
+/// `view` must be null or a live `NSView*`.
+unsafe fn content_view_context_ptr(view: id) -> Option<*mut ViewContext> {
+    // SAFETY: per the function contract `view` is null or a live NSView;
+    // `isKindOfClass:` is asked before the ivar is touched, and a view that
+    // answers yes to it is one `create_content_view` built, whose
+    // `context_ptr` is either null or a `ViewContext` it owns.
+    unsafe {
+        if view == nil {
+            return None;
+        }
+        let is_content_view: BOOL = msg_send![view, isKindOfClass: get_or_create_view_class()];
+        if is_content_view != YES {
+            return None;
+        }
+        let context_ptr: *mut std::ffi::c_void = *(*view).get_ivar("context_ptr");
+        if context_ptr.is_null() {
+            return None;
+        }
+        Some(context_ptr.cast::<ViewContext>())
+    }
+}
+
+/// Reach the [`ViewContext`] of a view fetched from somewhere other than a
+/// `FLUIContentView` method, scoped to `body`.
+///
+/// Answers `None` for anything that is not a view this crate built, so a caller
+/// that obtained its view from `-[NSWindow contentView]` needs no check of its
+/// own. The context is handed to `body` rather than returned, so the borrow
+/// cannot outlive the call that established the view was alive.
+///
+/// # Safety
+///
+/// `view` must be null or a live `NSView*`, and `body` must not hold on to what
+/// it is given past its own return (it may not: the reference is scoped to it).
+pub(super) unsafe fn with_view_context<R>(
+    view: id,
+    body: impl FnOnce(&ViewContext) -> R,
+) -> Option<R> {
+    // SAFETY: `content_view_context_ptr` establishes that the pointer is a live
+    // `ViewContext` owned by `view`; the reference is scoped to `body`, so it
+    // cannot outlive the call that established the view was alive.
+    unsafe { content_view_context_ptr(view).map(|ptr| body(&*ptr)) }
+}
+
+/// [`with_view_context`], handing the context out mutably.
+///
+/// # Safety
+///
+/// Same contract as [`with_view_context`]: `view` must be null or a live
+/// `NSView*`, and `body` must not hold on to what it is given past its own
+/// return.
+pub(super) unsafe fn with_view_context_mut<R>(
+    view: id,
+    body: impl FnOnce(&mut ViewContext) -> R,
+) -> Option<R> {
+    // SAFETY: as `with_view_context`, plus: the `&mut` is sound because the
+    // pointer is the view's own ivar and AppKit delivers these callbacks
+    // serially on the main thread, so no other borrow of this context is live.
+    unsafe { content_view_context_ptr(view).map(|ptr| body(&mut *ptr)) }
+}
+
 /// Dispatch input event to the window's callbacks
-fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::PlatformInput) {
+///
+/// `pub(super)` for [`super::text_input`], whose IME events take this same
+/// throat so they are ordered against pointer and keyboard events.
+pub(super) fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::PlatformInput) {
     if let Some(callbacks) = ctx.callbacks.upgrade() {
         let _result = callbacks.dispatch_input(input);
     } else {
@@ -394,17 +568,23 @@ fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::PlatformInput) 
 // ============================================================================
 
 /// Update view scale factor (called when window moves to different display)
+///
+/// A no-op on any view that is not a `FLUIContentView`: the caller reaches this
+/// through `-[NSWindow contentView]`, and `liquid_glass` leaves an
+/// `NSVisualEffectView` there.
 pub fn update_view_scale_factor(view: id, new_scale_factor: f64) {
-    // SAFETY: `view` is a live FLUIContentView (callers pass the window's
-    // content view); its ivar is null or a valid ViewContext owned by the
-    // view, and the mutation is confined to the main thread (AppKit calls).
-    unsafe {
-        let context_ptr: *mut std::ffi::c_void = *(*view).get_ivar("context_ptr");
-        if !context_ptr.is_null() {
-            let context = &mut *context_ptr.cast::<ViewContext>();
+    // SAFETY: `view` is null or a live NSView* (callers pass the window's
+    // content view); `with_view_context_mut` checks the class before touching
+    // the ivar and scopes the borrow to the closure, and the mutation is
+    // confined to the main thread (AppKit calls).
+    let updated = unsafe {
+        with_view_context_mut(view, |context| {
             context.scale_factor = new_scale_factor;
-            tracing::debug!("Updated view scale factor to {}", new_scale_factor);
-        }
+        })
+        .is_some()
+    };
+    if updated {
+        tracing::debug!("Updated view scale factor to {}", new_scale_factor);
     }
 }
 

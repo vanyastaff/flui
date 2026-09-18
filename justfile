@@ -279,6 +279,24 @@ macos-frame-pump:
 } }}
 
 [group("test")]
+[doc("Executable resize-transient coverage on a real Mac: builds the resize_jitter_probe example into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the RESIZE_JITTER_PROBE_RESULT=PASS and RESIZE_JITTER_PROBE_STALE=0 markers. The probe drives a scripted burst of REAL window resizes while rendering continuously into the Metal swapchain, with the surface deliberately held frames behind the window, and counts Renderer::warn_on_size_mismatch — the acquired swapchain texture differing from the configured surface size, i.e. the frame a compositor would stretch. It pins that invariant; it does NOT discriminate desired_maximum_frame_latency, which it was built to do and measurably cannot (zero at 1 and at 2, four runs) — see the probe's own module doc and the literal's comment in renderer.rs. macOS-only by construction; skips with a message on other hosts")]
+macos-resize-jitter:
+    {{ if os() == "macos" {
+"cargo build -p flui --locked --example resize_jitter_probe\nAPP=target/macos-resize-jitter/ResizeJitterProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp examples/Info.plist.resize_jitter_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/resize_jitter_probe \"$APP/Contents/MacOS/resize_jitter_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/resize_jitter_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_RESULT=PASS' || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_STALE=0'; then\n  echo 'macos-resize-jitter FAILED: probe exit code, PASS marker, or the zero stale-size marker is missing (output above)'\n  exit 1\nfi"
+} else {
+"echo 'Skipping macos-resize-jitter on this host: the probe measures the Metal swapchain of a real visible AppKit window under a resize burst, so it needs a real macOS host with an active GUI session and a staged .app bundle; on a Mac run: just macos-resize-jitter'"
+} }}
+
+[group("test")]
+[doc("Executable macOS text-input coverage on a real Mac: builds the ime_probe example, stages it into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the IME_PROBE_RESULT=PASS marker. The probe runs the real backend through the production launch path, reaches the window's content view through AppKit, and drives four assertions: (A, ADR-0066) one synthesized keyDown for one letter reaches the application as exactly one ImeEvent::Commit with zero Key::Character while a text input is attached, and the exact inverse with it detached; (B) the NSTextInputClient queries AppKit makes answer correctly, including the UTF-16 to byte cursor conversion; (C) a cursor area set through the trait comes back as a non-zero rect; (D) unmarkText announces the end of composition. The key events are synthesized, not human keystrokes, and NO genuine input method runs, so a real composition stays undriven - the probe covers the routing and the protocol, not the input method. macOS-only by construction; skips with a message on other hosts")]
+macos-ime:
+    {{ if os() == "macos" {
+"cargo build -p flui-platform --locked --example ime_probe\nAPP=target/macos-ime/ImeProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.ime_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/ime_probe \"$APP/Contents/MacOS/ime_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/ime_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'IME_PROBE_RESULT=PASS'; then\n  echo 'macos-ime FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
+} else {
+"echo 'Skipping macos-ime on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle — it routes AppKit key events into a visible window, so it cannot run headless or on another OS; on a Mac run: just macos-ime'"
+} }}
+
+[group("test")]
 [doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast

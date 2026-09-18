@@ -37,7 +37,9 @@ pub trait PlatformCapabilities: Send + Sync {
     /// frame-pacing field at all — issue #556 removed the unwired
     /// `vsync`/`target_fps` fields it used to have rather than leave them
     /// misleading). Steady-state frame pacing on desktop does not depend on
-    /// this value either — it comes from the GPU-side blocking Fifo present.
+    /// this value either — it comes from the GPU side's present path: the
+    /// blocking Fifo present on Vulkan/Wayland, the display-pass cadence on
+    /// native AppKit (ADR-0029's AppKit subsection).
     fn default_target_fps(&self) -> u32;
 
     /// Should rendering be suspended when in background?
