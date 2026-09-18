@@ -9,25 +9,34 @@ use std::{
     time::Duration,
 };
 
-use cocoa::{
-    appkit::{NSBackingStoreType, NSWindowStyleMask},
-    base::{BOOL, NO, YES, id, nil},
-    foundation::NSRect,
-};
 use cursor_icon::CursorIcon;
+use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::{ClassType, class, sel};
+use objc2_app_kit::{NSBackingStoreType, NSWindowStyleMask};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
-use objc::{
-    class,
-    declare::ClassDecl,
-    msg_send,
-    runtime::{Class, Object, Sel},
-    sel, sel_impl,
-};
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle,
 };
+
+// Mid-migration shims for the raw-send shape this file keeps: `NSWindow` is
+// `MainThreadOnly` in objc2's typed API, but this backend constructs test
+// windows on a caller-supplied off-main serial lane (`MacOSWindow::for_test`),
+// which a `MainThreadMarker`-gated method would refuse. The file therefore
+// sends raw `msg_send!` (objc2's macro accepts a raw `*mut AnyObject` receiver,
+// `Bool` arguments, and a manual `release`) and these aliases keep the
+// Cocoa-era spelling readable.
+type ObjcId = *mut AnyObject;
+type Object = AnyObject;
+type Class = AnyClass;
+const NIL: ObjcId = std::ptr::null_mut();
+type BObjC = Bool;
+const YES: Bool = Bool::YES;
+const NO: Bool = Bool::NO;
 
 use super::{display::refresh_period_for_screen, view};
 use crate::{
@@ -39,7 +48,7 @@ use crate::{
 /// macOS window wrapper around NSWindow
 pub struct MacOSWindow {
     /// Native window handle (NSWindow*)
-    ns_window: id,
+    ns_window: ObjcId,
 
     /// Window state
     state: Arc<Mutex<MacOSWindowState>>,
@@ -284,39 +293,35 @@ impl MacOSWindow {
         // SAFETY: must run on the owner thread (enforced by the platform's
         // event-loop ownership, or by `for_test` routing construction onto
         // the lane); all messaged objects are alive: the freshly allocated
-        // NSWindow is checked for nil before further use.
+        // NSWindow is checked for NIL before further use.
         unsafe {
             // Convert logical size to NSRect
             let frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(0.0, 0.0),
-                cocoa::foundation::NSSize::new(
-                    options.size.width.0 as f64,
-                    options.size.height.0 as f64,
-                ),
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(options.size.width.0 as f64, options.size.height.0 as f64),
             );
 
             // Build window style mask
-            let mut style_mask = NSWindowStyleMask::NSClosableWindowMask
-                | NSWindowStyleMask::NSMiniaturizableWindowMask;
+            let mut style_mask = NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
 
             if options.decorated {
-                style_mask |= NSWindowStyleMask::NSTitledWindowMask;
+                style_mask |= NSWindowStyleMask::Titled;
             }
 
             if options.resizable {
-                style_mask |= NSWindowStyleMask::NSResizableWindowMask;
+                style_mask |= NSWindowStyleMask::Resizable;
             }
 
             // Create NSWindow
-            let ns_window: id = msg_send![class!(NSWindow), alloc];
-            let ns_window: id = msg_send![ns_window,
+            let ns_window: ObjcId = msg_send![class!(NSWindow), alloc];
+            let ns_window: ObjcId = msg_send![ns_window,
                 initWithContentRect: frame
                 styleMask: style_mask
-                backing: NSBackingStoreType::NSBackingStoreBuffered
+                backing: NSBackingStoreType::Buffered
                 defer: NO
             ];
 
-            if ns_window == nil {
+            if ns_window == NIL {
                 return Err(OpenWindowError::Backend {
                     message: "Failed to create NSWindow".to_string(),
                 });
@@ -335,19 +340,16 @@ impl MacOSWindow {
             let _: () = msg_send![ns_window, setReleasedWhenClosed: NO];
 
             // Set window title
-            let title = cocoa::foundation::NSString::alloc(nil);
-            let title = cocoa::foundation::NSString::init_str(title, &options.title);
-            let _: () = msg_send![ns_window, setTitle: title];
+            let title = NSString::from_str(&options.title);
+            let _: () = msg_send![ns_window, setTitle: &*title];
 
             // Apply size constraints
             if let Some(min) = options.min_size {
-                let ns_size =
-                    cocoa::foundation::NSSize::new(min.width.0 as f64, min.height.0 as f64);
+                let ns_size = NSSize::new(min.width.0 as f64, min.height.0 as f64);
                 let _: () = msg_send![ns_window, setMinSize: ns_size];
             }
             if let Some(max) = options.max_size {
-                let ns_size =
-                    cocoa::foundation::NSSize::new(max.width.0 as f64, max.height.0 as f64);
+                let ns_size = NSSize::new(max.width.0 as f64, max.height.0 as f64);
                 let _: () = msg_send![ns_window, setMaxSize: ns_size];
             }
 
@@ -356,7 +358,7 @@ impl MacOSWindow {
 
             // Make window visible if requested
             if options.visible {
-                let _: () = msg_send![ns_window, makeKeyAndOrderFront: nil];
+                let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
             }
 
             // Center window on screen
@@ -364,11 +366,11 @@ impl MacOSWindow {
 
             // Refresh period of the display this window is on. The window is
             // created at the origin — a point on a screen — so
-            // `-[NSWindow screen]` answers here rather than returning nil;
+            // `-[NSWindow screen]` answers here rather than returning NIL;
             // measured at this exact stage rather than assumed, by the
             // `scale_order.m` probe, which reports the screen live and the
             // display id reachable before `makeKeyAndOrderFront:`.
-            let screen: id = msg_send![ns_window, screen];
+            let screen: ObjcId = msg_send![ns_window, screen];
             let refresh_period = refresh_period_for_screen(screen.cast::<std::ffi::c_void>());
 
             let callbacks = Arc::new(WindowCallbacks::new());
@@ -432,7 +434,7 @@ impl MacOSWindow {
             view::enable_mouse_tracking(content_view);
 
             // Make content view first responder to receive keyboard events
-            let _: () = msg_send![ns_window, makeFirstResponder: content_view];
+            let _: Bool = msg_send![ns_window, makeFirstResponder: content_view];
 
             // Set window delegate for lifecycle events
             let delegate = create_window_delegate(Arc::downgrade(&window));
@@ -455,7 +457,7 @@ impl MacOSWindow {
     }
 
     /// Get the NSWindow handle
-    pub fn ns_window(&self) -> id {
+    pub fn ns_window(&self) -> ObjcId {
         self.ns_window
     }
 
@@ -626,9 +628,9 @@ impl MacOSWindow {
         unsafe {
             // SAFETY: per the function's contract, the caller is on the owner
             // lane (re-checked by the assertion above) and `ns_window` is live.
-            // The content view is nil-checked before messaging.
-            let content_view: id = msg_send![self.ns_window, contentView];
-            if content_view == nil {
+            // The content view is NIL-checked before messaging.
+            let content_view: ObjcId = msg_send![self.ns_window, contentView];
+            if content_view == NIL {
                 tracing::trace!(
                     deferred,
                     "request_redraw: window has no content view; request dropped"
@@ -648,14 +650,14 @@ impl MacOSWindow {
                     let window_visible: bool = msg_send![self.ns_window, isVisible];
                     let occlusion: usize = msg_send![self.ns_window, occlusionState];
                     let needs_display: bool = msg_send![content_view, needsDisplay];
-                    let view_window: id = msg_send![content_view, window];
+                    let view_window: ObjcId = msg_send![content_view, window];
                     let is_key: bool = msg_send![self.ns_window, isKeyWindow];
-                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
                     let app_active: bool = msg_send![app, isActive];
                     let policy: i64 = msg_send![app, activationPolicy];
                     let window_number: i64 = msg_send![self.ns_window, windowNumber];
                     let on_active_space: bool = msg_send![self.ns_window, isOnActiveSpace];
-                    let screen: id = msg_send![self.ns_window, screen];
+                    let screen: ObjcId = msg_send![self.ns_window, screen];
                     let alpha: f64 = msg_send![self.ns_window, alphaValue];
                     let level: i64 = msg_send![self.ns_window, level];
                     let view_hidden: bool = msg_send![content_view, isHiddenOrHasHiddenAncestor];
@@ -665,13 +667,13 @@ impl MacOSWindow {
                         window_visible,
                         occlusion,
                         needs_display,
-                        view_in_window = view_window != nil,
+                        view_in_window = view_window != NIL,
                         is_key,
                         app_active,
                         policy,
                         window_number,
                         on_active_space,
-                        has_screen = screen != nil,
+                        has_screen = screen != NIL,
                         alpha,
                         level,
                         view_hidden,
@@ -978,8 +980,8 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
-            let ns_title: id = msg_send![self.ns_window, title];
-            if ns_title == nil {
+            let ns_title: ObjcId = msg_send![self.ns_window, title];
+            if ns_title == NIL {
                 return String::new();
             }
             let c_str: *const i8 = msg_send![ns_title, UTF8String];
@@ -1002,9 +1004,8 @@ impl PlatformWindow for MacOSWindow {
             // runs on the owner thread — inline on the OS main thread for a
             // main-lane owner, or dispatched onto the lane under the reentrancy
             // guard — before the message is sent.
-            let ns_title = cocoa::foundation::NSString::alloc(nil);
-            let ns_title = cocoa::foundation::NSString::init_str(ns_title, title);
-            let _: () = msg_send![self.ns_window, setTitle: ns_title];
+            let ns_title = NSString::from_str(title);
+            let _: () = msg_send![self.ns_window, setTitle: &*ns_title];
         });
     }
 
@@ -1016,7 +1017,7 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
-            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: nil];
+            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
         });
     }
 
@@ -1028,7 +1029,7 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
-            let _: () = msg_send![self.ns_window, miniaturize: nil];
+            let _: () = msg_send![self.ns_window, miniaturize: NIL];
         });
     }
 
@@ -1042,7 +1043,7 @@ impl PlatformWindow for MacOSWindow {
             // messages are sent.
             let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
             if !is_zoomed {
-                let _: () = msg_send![self.ns_window, zoom: nil];
+                let _: () = msg_send![self.ns_window, zoom: NIL];
             }
         });
     }
@@ -1057,11 +1058,11 @@ impl PlatformWindow for MacOSWindow {
             // messages are sent.
             let is_minimized: bool = msg_send![self.ns_window, isMiniaturized];
             if is_minimized {
-                let _: () = msg_send![self.ns_window, deminiaturize: nil];
+                let _: () = msg_send![self.ns_window, deminiaturize: NIL];
             }
             let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
             if is_zoomed {
-                let _: () = msg_send![self.ns_window, zoom: nil];
+                let _: () = msg_send![self.ns_window, zoom: NIL];
             }
         });
     }
@@ -1074,7 +1075,7 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
-            let _: () = msg_send![self.ns_window, toggleFullScreen: nil];
+            let _: () = msg_send![self.ns_window, toggleFullScreen: NIL];
         });
     }
 
@@ -1090,7 +1091,7 @@ impl PlatformWindow for MacOSWindow {
             // using `contentRectForFrameRect:`), so resize the content, not
             // the frame — on decorated windows a frame-sized `setFrame:`
             // would shrink the content by the titlebar height.
-            let ns_size = cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64);
+            let ns_size = NSSize::new(size.width.0 as f64, size.height.0 as f64);
             let _: () = msg_send![self.ns_window, setContentSize: ns_size];
 
             // Update state
@@ -1123,6 +1124,11 @@ impl PlatformWindow for MacOSWindow {
         });
     }
 
+    // The explicit `arrowCursor` list below is intentional documentation of
+    // which icons resolve to the default arrow; it is textually identical to
+    // the `_` arm's body, which objc2's `msg_send!` expansion makes clippy
+    // visible (objc 0.2's differing expansion hid it).
+    #[allow(clippy::match_same_arms)]
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
@@ -1135,7 +1141,7 @@ impl PlatformWindow for MacOSWindow {
             // pointer location. The body runs on the owner thread — inline on
             // the OS main thread for a main-lane owner, or dispatched onto the
             // lane under the reentrancy guard — before the messages are sent.
-            let ns_cursor: id = match cursor {
+            let ns_cursor: ObjcId = match cursor {
                 CursorIcon::ContextMenu => msg_send![class!(NSCursor), contextualMenuCursor],
                 CursorIcon::Pointer => msg_send![class!(NSCursor), pointingHandCursor],
                 CursorIcon::Cell | CursorIcon::Crosshair => {
@@ -1182,7 +1188,7 @@ impl PlatformWindow for MacOSWindow {
                 | CursorIcon::DndAsk => msg_send![class!(NSCursor), arrowCursor],
                 _ => msg_send![class!(NSCursor), arrowCursor],
             };
-            if ns_cursor == nil {
+            if ns_cursor == NIL {
                 return Err(CursorError::Backend(
                     "AppKit returned a null NSCursor".to_string(),
                 ));
@@ -1227,7 +1233,7 @@ impl HasWindowHandle for MacOSWindow {
         // answering long after the window is meaningless to hand a GPU
         // handle for — a caller re-acquiring a handle from a retained
         // `Arc<dyn PlatformWindow>` (issue #1043's recovery path) needs
-        // this flag, not a nil check, to learn the window is gone.
+        // this flag, not a NIL check, to learn the window is gone.
         if self.closed.load(Ordering::SeqCst) {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
@@ -1236,7 +1242,7 @@ impl HasWindowHandle for MacOSWindow {
         // the NSWindow.
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
         // returned handle borrows `self`, so the view outlives it.
-        let content_view: id = unsafe { msg_send![self.ns_window, contentView] };
+        let content_view: ObjcId = unsafe { msg_send![self.ns_window, contentView] };
         let ns_view = NonNull::new(content_view.cast::<std::ffi::c_void>())
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
         let handle = AppKitWindowHandle::new(ns_view);
@@ -1291,7 +1297,7 @@ impl Clone for MacOSWindow {
 
 /// An Objective-C object id owned by the drop-tail closure and only ever
 /// messaged ON its owner lane.
-struct OwnerLaneId(id);
+struct OwnerLaneId(ObjcId);
 
 // SAFETY: `id` is `*mut Object`; a raw pointer is `!Send` because it generally
 // carries no ownership or thread guarantee. This use provides both. The wrapper
@@ -1423,7 +1429,7 @@ impl WindowTrait for MacOSWindow {
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             let frame: NSRect = msg_send![this.ns_window, frame];
             let new_frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(position.x.0 as f64, position.y.0 as f64),
+                NSPoint::new(position.x.0 as f64, position.y.0 as f64),
                 frame.size,
             );
             let _: () = msg_send![this.ns_window, setFrame: new_frame display: YES];
@@ -1453,11 +1459,11 @@ impl WindowTrait for MacOSWindow {
             // messages are sent.
             let is_minimized: bool = msg_send![self.ns_window, isMiniaturized];
             let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
-            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
 
             if is_minimized {
                 WindowState::Minimized
-            } else if style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
+            } else if style_mask.contains(NSWindowStyleMask::FullScreen) {
                 WindowState::Fullscreen
             } else if is_zoomed {
                 WindowState::Maximized
@@ -1484,43 +1490,41 @@ impl WindowTrait for MacOSWindow {
                     // Restore from minimized
                     let is_minimized: bool = msg_send![this.ns_window, isMiniaturized];
                     if is_minimized {
-                        let _: () = msg_send![this.ns_window, deminiaturize: nil];
+                        let _: () = msg_send![this.ns_window, deminiaturize: NIL];
                     }
 
                     // Restore from maximized
                     let is_zoomed: bool = msg_send![this.ns_window, isZoomed];
                     if is_zoomed {
-                        let _: () = msg_send![this.ns_window, zoom: nil];
+                        let _: () = msg_send![this.ns_window, zoom: NIL];
                     }
 
                     // Exit fullscreen
-                    let style_mask: cocoa::appkit::NSWindowStyleMask =
-                        msg_send![this.ns_window, styleMask];
-                    if style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
-                        let _: () = msg_send![this.ns_window, toggleFullScreen: nil];
+                    let style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
+                    if style_mask.contains(NSWindowStyleMask::FullScreen) {
+                        let _: () = msg_send![this.ns_window, toggleFullScreen: NIL];
                     }
                 }
                 WindowState::Minimized => {
-                    let _: () = msg_send![this.ns_window, miniaturize: nil];
+                    let _: () = msg_send![this.ns_window, miniaturize: NIL];
                 }
                 WindowState::Maximized => {
                     // First restore from minimized if needed
                     let is_minimized: bool = msg_send![this.ns_window, isMiniaturized];
                     if is_minimized {
-                        let _: () = msg_send![this.ns_window, deminiaturize: nil];
+                        let _: () = msg_send![this.ns_window, deminiaturize: NIL];
                     }
 
                     // Then zoom (maximize)
                     let is_zoomed: bool = msg_send![this.ns_window, isZoomed];
                     if !is_zoomed {
-                        let _: () = msg_send![this.ns_window, zoom: nil];
+                        let _: () = msg_send![this.ns_window, zoom: NIL];
                     }
                 }
                 WindowState::Fullscreen => {
-                    let style_mask: cocoa::appkit::NSWindowStyleMask =
-                        msg_send![this.ns_window, styleMask];
-                    if !style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
-                        let _: () = msg_send![this.ns_window, toggleFullScreen: nil];
+                    let style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
+                    if !style_mask.contains(NSWindowStyleMask::FullScreen) {
+                        let _: () = msg_send![this.ns_window, toggleFullScreen: NIL];
                     }
                 }
             }
@@ -1544,9 +1548,9 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             if visible {
-                let _: () = msg_send![this.ns_window, makeKeyAndOrderFront: nil];
+                let _: () = msg_send![this.ns_window, makeKeyAndOrderFront: NIL];
             } else {
-                let _: () = msg_send![this.ns_window, orderOut: nil];
+                let _: () = msg_send![this.ns_window, orderOut: NIL];
             }
         });
     }
@@ -1559,8 +1563,8 @@ impl WindowTrait for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
-            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            style_mask.contains(NSWindowStyleMask::NSResizableWindowMask)
+            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            style_mask.contains(NSWindowStyleMask::Resizable)
         })
     }
 
@@ -1576,12 +1580,11 @@ impl WindowTrait for MacOSWindow {
             // Capturing `this` (a `&MacOSWindow`)
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let mut style_mask: cocoa::appkit::NSWindowStyleMask =
-                msg_send![this.ns_window, styleMask];
+            let mut style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
             if resizable {
-                style_mask |= NSWindowStyleMask::NSResizableWindowMask;
+                style_mask |= NSWindowStyleMask::Resizable;
             } else {
-                style_mask &= !NSWindowStyleMask::NSResizableWindowMask;
+                style_mask &= !NSWindowStyleMask::Resizable;
             }
             let _: () = msg_send![this.ns_window, setStyleMask: style_mask];
         });
@@ -1595,8 +1598,8 @@ impl WindowTrait for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
-            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            style_mask.contains(NSWindowStyleMask::NSMiniaturizableWindowMask)
+            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            style_mask.contains(NSWindowStyleMask::Miniaturizable)
         })
     }
 
@@ -1612,12 +1615,11 @@ impl WindowTrait for MacOSWindow {
             // Capturing `this` (a `&MacOSWindow`)
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let mut style_mask: cocoa::appkit::NSWindowStyleMask =
-                msg_send![this.ns_window, styleMask];
+            let mut style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
             if minimizable {
-                style_mask |= NSWindowStyleMask::NSMiniaturizableWindowMask;
+                style_mask |= NSWindowStyleMask::Miniaturizable;
             } else {
-                style_mask &= !NSWindowStyleMask::NSMiniaturizableWindowMask;
+                style_mask &= !NSWindowStyleMask::Miniaturizable;
             }
             let _: () = msg_send![this.ns_window, setStyleMask: style_mask];
         });
@@ -1631,8 +1633,8 @@ impl WindowTrait for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
-            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            style_mask.contains(NSWindowStyleMask::NSClosableWindowMask)
+            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            style_mask.contains(NSWindowStyleMask::Closable)
         })
     }
 
@@ -1648,12 +1650,11 @@ impl WindowTrait for MacOSWindow {
             // Capturing `this` (a `&MacOSWindow`)
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let mut style_mask: cocoa::appkit::NSWindowStyleMask =
-                msg_send![this.ns_window, styleMask];
+            let mut style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
             if closable {
-                style_mask |= NSWindowStyleMask::NSClosableWindowMask;
+                style_mask |= NSWindowStyleMask::Closable;
             } else {
-                style_mask &= !NSWindowStyleMask::NSClosableWindowMask;
+                style_mask &= !NSWindowStyleMask::Closable;
             }
             let _: () = msg_send![this.ns_window, setStyleMask: style_mask];
         });
@@ -1688,12 +1689,11 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             if let Some(size) = size {
-                let ns_size =
-                    cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64);
+                let ns_size = NSSize::new(size.width.0 as f64, size.height.0 as f64);
                 let _: () = msg_send![this.ns_window, setMinSize: ns_size];
             } else {
                 // Set to zero to remove constraint
-                let ns_size = cocoa::foundation::NSSize::new(0.0, 0.0);
+                let ns_size = NSSize::new(0.0, 0.0);
                 let _: () = msg_send![this.ns_window, setMinSize: ns_size];
             }
         });
@@ -1712,12 +1712,11 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             if let Some(size) = size {
-                let ns_size =
-                    cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64);
+                let ns_size = NSSize::new(size.width.0 as f64, size.height.0 as f64);
                 let _: () = msg_send![this.ns_window, setMaxSize: ns_size];
             } else {
                 // Set to max to remove constraint
-                let ns_size = cocoa::foundation::NSSize::new(f64::MAX, f64::MAX);
+                let ns_size = NSSize::new(f64::MAX, f64::MAX);
                 let _: () = msg_send![this.ns_window, setMaxSize: ns_size];
             }
         });
@@ -1732,7 +1731,7 @@ impl WindowTrait for MacOSWindow {
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
         // returned raw pointers are opaque handles for GPU integration.
         unsafe {
-            let content_view: id = msg_send![self.ns_window, contentView];
+            let content_view: ObjcId = msg_send![self.ns_window, contentView];
             CrossRawWindowHandle::MacOS {
                 ns_view: content_view.cast::<std::ffi::c_void>(),
                 ns_window: self.ns_window.cast::<std::ffi::c_void>(),
@@ -1775,16 +1774,16 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // field is what keeps the closure `Send`: `&MacOSWindow: Send` via
             // the `unsafe impl Sync`.
             // Apply vibrancy effect to window content view
-            let content_view: id = msg_send![this.ns_window, contentView];
-            if content_view == nil {
-                tracing::warn!("Cannot apply Liquid Glass: content view is nil");
+            let content_view: ObjcId = msg_send![this.ns_window, contentView];
+            if content_view == NIL {
+                tracing::warn!("Cannot apply Liquid Glass: content view is NIL");
                 return;
             }
 
             // Create NSVisualEffectView
             let effect_view_class = class!(NSVisualEffectView);
-            let effect_view: id = msg_send![effect_view_class, alloc];
-            let effect_view: id = msg_send![effect_view, init];
+            let effect_view: ObjcId = msg_send![effect_view_class, alloc];
+            let effect_view: ObjcId = msg_send![effect_view, init];
 
             // Set frame to match content view
             let frame: NSRect = msg_send![content_view, frame];
@@ -1811,10 +1810,8 @@ impl MacOSWindowExtTrait for MacOSWindow {
 
             // Make window titlebar transparent if requested
             if config.transparent_titlebar {
-                let style_mask: cocoa::appkit::NSWindowStyleMask =
-                    msg_send![this.ns_window, styleMask];
-                let new_style_mask =
-                    style_mask | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
+                let style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
+                let new_style_mask = style_mask | NSWindowStyleMask::FullSizeContentView;
                 let _: () = msg_send![this.ns_window, setStyleMask: new_style_mask];
                 let _: () = msg_send![this.ns_window, setTitlebarAppearsTransparent: YES];
             }
@@ -1928,7 +1925,7 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // Window ids are NSWindow pointers (see `WindowTrait::id`)
             let other_ns_window = other_window_id as *mut Object;
 
-            if other_ns_window == nil {
+            if other_ns_window == NIL {
                 tracing::warn!("Cannot add tab: window {:?} not found", other_window_id);
             } else {
                 let _: () = msg_send![this.ns_window, addTabbedWindow:other_ns_window ordered:0]; // NSWindowAbove
@@ -1949,7 +1946,7 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // Capturing `this` (a `&MacOSWindow`)
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let _: () = msg_send![this.ns_window, toggleFullScreen: nil];
+            let _: () = msg_send![this.ns_window, toggleFullScreen: NIL];
             tracing::debug!("Toggled native fullscreen");
         });
     }
@@ -2024,7 +2021,7 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // Capturing `this` (a `&MacOSWindow`)
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let value: BOOL = if has_shadow { YES } else { NO };
+            let value: BObjC = if has_shadow { YES } else { NO };
             let _: () = msg_send![this.ns_window, setHasShadow: value];
             tracing::debug!("Set window shadow: {}", has_shadow);
         });
@@ -2071,19 +2068,23 @@ impl MacOSWindowExtTrait for MacOSWindow {
 use std::sync::Weak;
 
 /// Create a window delegate for lifecycle events
-fn create_window_delegate(window: Weak<MacOSWindow>) -> id {
+fn create_window_delegate(window: Weak<MacOSWindow>) -> ObjcId {
     // SAFETY: the delegate class is registered before alloc/init; the boxed
     // Weak pointer stored in the ivar is reclaimed in the delegate's
     // `dealloc`, so it lives exactly as long as the delegate.
     unsafe {
         // Get or create delegate class
         let class = get_or_create_delegate_class();
-        let delegate: id = msg_send![class, alloc];
-        let delegate: id = msg_send![delegate, init];
+        let delegate: ObjcId = msg_send![class, alloc];
+        let delegate: ObjcId = msg_send![delegate, init];
 
         // Store weak pointer to window
         let window_ptr = Box::into_raw(Box::new(window)).cast::<std::ffi::c_void>();
-        (*delegate).set_ivar("window_ptr", window_ptr);
+        let ivar = class
+            .instance_variable(c"window_ptr")
+            .expect("BUG: FLUIWindowDelegate declares the window_ptr ivar");
+        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&*delegate);
+        *slot = window_ptr;
 
         delegate
     }
@@ -2095,15 +2096,15 @@ fn get_or_create_delegate_class() -> &'static Class {
     static INIT: Once = Once::new();
 
     INIT.call_once(|| {
-        let superclass = class!(NSObject);
-        let mut decl = ClassDecl::new("FLUIWindowDelegate", superclass)
+        let superclass = objc2_foundation::NSObject::class();
+        let mut decl = ClassBuilder::new(c"FLUIWindowDelegate", superclass)
             .expect("FLUIWindowDelegate must be registered exactly once (guarded by Once)");
 
         // Add ivar to store window pointer
-        decl.add_ivar::<*mut std::ffi::c_void>("window_ptr");
+        decl.add_ivar::<*mut std::ffi::c_void>(c"window_ptr");
 
         // windowDidResize:
-        extern "C" fn window_did_resize(this: &Object, _sel: Sel, _notification: id) {
+        extern "C-unwind" fn window_did_resize(this: &Object, _sel: Sel, _notification: ObjcId) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
                 window.handle_resize();
@@ -2111,7 +2112,7 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // windowDidMove:
-        extern "C" fn window_did_move(this: &Object, _sel: Sel, _notification: id) {
+        extern "C-unwind" fn window_did_move(this: &Object, _sel: Sel, _notification: ObjcId) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
                 window.handle_move();
@@ -2119,7 +2120,11 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // windowDidBecomeKey:
-        extern "C" fn window_did_become_key(this: &Object, _sel: Sel, _notification: id) {
+        extern "C-unwind" fn window_did_become_key(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
                 window.handle_focus_gained();
@@ -2127,7 +2132,11 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // windowDidResignKey:
-        extern "C" fn window_did_resign_key(this: &Object, _sel: Sel, _notification: id) {
+        extern "C-unwind" fn window_did_resign_key(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
                 window.handle_focus_lost();
@@ -2135,7 +2144,11 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // windowShouldClose:
-        extern "C" fn window_should_close(this: &Object, _sel: Sel, _sender: id) -> BOOL {
+        extern "C-unwind" fn window_should_close(
+            this: &Object,
+            _sel: Sel,
+            _sender: ObjcId,
+        ) -> BObjC {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
                 if window.handle_close_request() {
@@ -2149,7 +2162,7 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // windowWillClose:
-        extern "C" fn window_will_close(this: &Object, _sel: Sel, _notification: id) {
+        extern "C-unwind" fn window_will_close(this: &Object, _sel: Sel, _notification: ObjcId) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
                 window.handle_close();
@@ -2157,10 +2170,10 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // windowDidChangeBackingProperties: (Retina/DPI change)
-        extern "C" fn window_did_change_backing_properties(
+        extern "C-unwind" fn window_did_change_backing_properties(
             this: &Object,
             _sel: Sel,
-            _notification: id,
+            _notification: ObjcId,
         ) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
@@ -2169,7 +2182,11 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // windowDidChangeScreen: (moved to different monitor)
-        extern "C" fn window_did_change_screen(this: &Object, _sel: Sel, _notification: id) {
+        extern "C-unwind" fn window_did_change_screen(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
                 window.handle_screen_changed();
@@ -2180,10 +2197,10 @@ fn get_or_create_delegate_class() -> &'static Class {
         // full occlusion by other windows, miniaturization, hide/unhide,
         // and space switches; the visible bit is the surface-composed
         // claim the runtime's FrameClock gate consumes)
-        extern "C" fn window_did_change_occlusion_state(
+        extern "C-unwind" fn window_did_change_occlusion_state(
             this: &Object,
             _sel: Sel,
-            _notification: id,
+            _notification: ObjcId,
         ) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
@@ -2192,7 +2209,7 @@ fn get_or_create_delegate_class() -> &'static Class {
         }
 
         // dealloc — reclaim the boxed Weak<MacOSWindow>
-        extern "C" fn delegate_dealloc(this: &Object, _sel: Sel) {
+        extern "C-unwind" fn delegate_dealloc(this: &Object, _sel: Sel) {
             // SAFETY: the ivar holds either null or a Box<Weak<MacOSWindow>>
             // leaked in `create_window_delegate`; reclaiming it exactly once
             // on dealloc is the matching release. The super dealloc message
@@ -2214,50 +2231,50 @@ fn get_or_create_delegate_class() -> &'static Class {
         unsafe {
             decl.add_method(
                 sel!(windowDidResize:),
-                window_did_resize as extern "C" fn(&Object, Sel, id),
+                window_did_resize as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(windowDidMove:),
-                window_did_move as extern "C" fn(&Object, Sel, id),
+                window_did_move as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(windowDidBecomeKey:),
-                window_did_become_key as extern "C" fn(&Object, Sel, id),
+                window_did_become_key as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(windowDidResignKey:),
-                window_did_resign_key as extern "C" fn(&Object, Sel, id),
+                window_did_resign_key as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(windowShouldClose:),
-                window_should_close as extern "C" fn(&Object, Sel, id) -> BOOL,
+                window_should_close as extern "C-unwind" fn(_, _, _) -> Bool,
             );
             decl.add_method(
                 sel!(windowWillClose:),
-                window_will_close as extern "C" fn(&Object, Sel, id),
+                window_will_close as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(windowDidChangeBackingProperties:),
-                window_did_change_backing_properties as extern "C" fn(&Object, Sel, id),
+                window_did_change_backing_properties as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(windowDidChangeScreen:),
-                window_did_change_screen as extern "C" fn(&Object, Sel, id),
+                window_did_change_screen as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(windowDidChangeOcclusionState:),
-                window_did_change_occlusion_state as extern "C" fn(&Object, Sel, id),
+                window_did_change_occlusion_state as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
                 sel!(dealloc),
-                delegate_dealloc as extern "C" fn(&Object, Sel),
+                delegate_dealloc as extern "C-unwind" fn(_, _),
             );
         }
 
         decl.register();
     });
 
-    Class::get("FLUIWindowDelegate")
+    AnyClass::get(c"FLUIWindowDelegate")
         .expect("FLUIWindowDelegate was registered by the Once block above")
 }
 
@@ -2445,7 +2462,7 @@ impl MacOSWindow {
         // here breaks.
         self.callbacks.clear();
 
-        // Match winit's own `windowWillClose:` handling: nil the delegate
+        // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this
         // wrapper now treats as closed. Harmless even without this today
         // (the delegate holds only a `Weak<MacOSWindow>`), but this is the
@@ -2453,14 +2470,14 @@ impl MacOSWindow {
         //
         // SAFETY: `ns_window` is alive for the lifetime of `self`.
         unsafe {
-            let _: () = msg_send![self.ns_window, setDelegate: nil];
+            let _: () = msg_send![self.ns_window, setDelegate: NIL];
         }
     }
 
     /// Handle backing properties changed (Retina/DPI change)
     fn handle_backing_properties_changed(&self) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // content view is nil-checked before use.
+        // content view is NIL-checked before use.
         unsafe {
             let new_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
 
@@ -2471,7 +2488,7 @@ impl MacOSWindow {
             // does. No resize is dispatched for it — a period change does not
             // invalidate layout, and the runner re-reads the period when it
             // does resize.
-            let screen: id = msg_send![self.ns_window, screen];
+            let screen: ObjcId = msg_send![self.ns_window, screen];
             let new_refresh_period = refresh_period_for_screen(screen.cast::<std::ffi::c_void>());
 
             // Update window state
@@ -2487,8 +2504,8 @@ impl MacOSWindow {
             };
 
             // Update content view scale factor
-            let content_view: id = msg_send![self.ns_window, contentView];
-            if content_view != nil {
+            let content_view: ObjcId = msg_send![self.ns_window, contentView];
+            if content_view != NIL {
                 view::update_view_scale_factor(
                     content_view.cast::<objc2::runtime::AnyObject>(),
                     new_scale,
@@ -2505,10 +2522,10 @@ impl MacOSWindow {
     /// Handle screen changed (moved to different monitor)
     fn handle_screen_changed(&self) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // screen object is nil-checked before messaging.
+        // screen object is NIL-checked before messaging.
         unsafe {
-            let screen: id = msg_send![self.ns_window, screen];
-            if screen != nil {
+            let screen: ObjcId = msg_send![self.ns_window, screen];
+            if screen != NIL {
                 let scale: f64 = msg_send![screen, backingScaleFactor];
                 tracing::debug!("Window moved to screen with scale factor {}", scale);
 
