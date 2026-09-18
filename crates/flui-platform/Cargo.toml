@@ -178,6 +178,61 @@ console_error_panic_hook = "0.1"
 [target.'cfg(target_os = "linux")'.dependencies]
 accesskit_unix = { version = "0.23", optional = true }
 
+# iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
+# binding stack — the `objc` crate the macOS backend still uses has not
+# released since 2019, and `cocoa` has no UIKit surface at all. Only the
+# classes this backend messages are enabled: objc2-ui-kit exposes one feature
+# per header and turns all ~456 on by default, which would compile the whole
+# framework's bindings for a handful of classes. Versions are the ones already
+# in the lock via `wgpu-hal` 30.0.1, so this adds no new crate generation.
+#   - `dispatch2` is Grand Central Dispatch (the main queue, the owner lane).
+#   - `objc2-quartz-core`'s `CADisplayLink` is the per-frame signal; QuartzCore
+#     rather than UIKit because `CADisplayLink` is declared there.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { version = "0.6.4", features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSObject",
+    "NSString",
+    "NSSet",
+    "NSArray",
+    "NSDictionary",
+    "NSNotification",
+    "NSValue",
+    "NSThread",
+    "NSGeometry",
+    "NSData",
+    "NSURL",
+    "NSEnumerator",
+    "NSRunLoop",
+] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "objc2-core-foundation",
+    "UIApplication",
+    "UIEvent",
+    "UIGeometry",
+    "UIKey",
+    "UIResponder",
+    "UIScreen",
+    "UIScreenMode",
+    "UITraitCollection",
+    "UITouch",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "UIPasteboard",
+    "UIColor",
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "CADisplayLink",
+    "CALayer",
+    "CAMetalLayer",
+] }
+objc2-metal = { version = "0.3.2", default-features = false }
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+
 # UIA bridge for Windows, same `a11y` feature. Version cohort must match the
 # workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its `windows`
 # dependency (0.62) matches the backend's own, so no duplicate windows-rs
