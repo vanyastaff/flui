@@ -17,9 +17,19 @@
 //! - ✅ Multi-display support with Retina/HiDPI
 //! - ✅ Event loop integration
 //! - ✅ raw-window-handle for wgpu/Metal
-//! - 🚧 Keyboard and mouse events (TODO)
-//! - 🚧 NSPasteboard clipboard (TODO)
-//! - 🚧 Core Text system (TODO)
+//! - ✅ Keyboard, mouse, scroll and hover events (`events.rs`/`view.rs`)
+//! - ✅ `NSPasteboard` clipboard, routed through the owner lane (`clipboard.rs`)
+//! - ✅ IME composition via an `NSTextInputClient` conformance
+//!   (`text_input.rs`, [ADR-0066](../../../../../docs/adr/ADR-0066-a-keydown-produces-one-semantic-event.md)):
+//!   `keyDown:` is a gate, so one press reaches the application exactly once —
+//!   either as a composition/commit or as a key event, never both
+//! - ✅ `refresh_period()` from the display's current mode
+//! - ✅ A wake pump that actuates the registered wake deadline (`wake_pump.rs`),
+//!   since AppKit exposes no `ControlFlow::WaitUntil`
+//!
+//! No Core Text system is needed: text shaping is cosmic-text end to end
+//! ([ADR-0059](../../../../../docs/adr/ADR-0059-flui-stays-on-cosmic-text.md)),
+//! which is why the historical "Core Text (TODO)" item is gone rather than done.
 //!
 //! # Usage
 //!
