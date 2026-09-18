@@ -1254,6 +1254,15 @@ impl Renderer {
     /// the device/queue are replaced; surface, painter, and offscreen are
     /// left as `None`.
     ///
+    /// On the **windowed** path the held surface is released before the
+    /// rebuild, for the one-surface-per-window rule `recreate_surface`
+    /// documents at length: the rebuild creates a fresh `VkSurfaceKHR`, and
+    /// on Android a second one for the same live `ANativeWindow` is refused
+    /// by an `expect` inside `wgpu-hal` rather than surfaced as an error. A
+    /// failed rebuild therefore leaves the presentation released; the next
+    /// attempt re-asks, and [`Renderer::recreate_surface`] restores it just
+    /// as it does after an owner-requested release.
+    ///
     /// On success the device-lost flag is cleared (the fresh device starts
     /// healthy). On failure the underlying [`EngineError`] is returned — the
     /// driver may still be resetting; the runner should retry on the next frame.
@@ -1292,6 +1301,25 @@ impl Renderer {
                 Some(Arc::clone(lease.target()))
             }
         };
+
+        // Release the held surface BEFORE the rebuild: its `create_surface`
+        // runs while this method still owns the old one, and on Android a
+        // second `VkSurfaceKHR` for the same live `ANativeWindow` is refused —
+        // by an `expect` inside `wgpu-hal`, so a device loss on Android would
+        // abort the process rather than recover. `recreate_surface` carries
+        // the full argument; this is the same rule on the same call, and
+        // device loss is the reachable route to it (a lost device does not
+        // release its surface).
+        //
+        // Released here, before the awaits below, so a rebuild that fails
+        // leaves the presentation released rather than holding a surface built
+        // against a dead device. The next recovery attempt re-asks, which is
+        // the stateless contract this path already had.
+        if windowed_target.is_some()
+            && let GpuStackOrigin::OwnedWindowed { lease } = &mut self.gpu_stack_origin
+        {
+            lease.release();
+        }
 
         if let Some(target) = windowed_target {
             // Capture current dimensions before rebuild so the recovered
@@ -1800,29 +1828,30 @@ impl Renderer {
     /// release arrived — a signal can be lost — and "skip if a surface is
     /// present" would then preserve a surface built from a handle that is
     /// already gone for the rest of the process's life. A held surface is
-    /// dropped as part of this call, at the commit below, after the new one
-    /// has been built.
+    /// dropped at the top of this call, before the replacement is created.
     ///
     /// "Attempts", not "builds", because the platform gets a say. The Vulkan
     /// specification allows only one `VkSurfaceKHR` per `ANativeWindow` at a
     /// time and refuses a second at `vkCreateAndroidSurfaceKHR` with
-    /// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, and this method creates the new
-    /// surface *before* dropping the held one. So on Android a `true` that
-    /// finds a surface still bound to the same, still-connected window is
-    /// refused: the held surface stays in place and stays valid, and nothing
-    /// is committed. Build-first/commit-last is sound exactly when the native
-    /// handle changed, which is the lost-`false` path this method is stateless
-    /// for. How the refusal surfaces here is the vendored `wgpu-hal`'s call,
-    /// not this method's: the design is a [`EngineError::SurfaceCreation`]
-    /// that the caller logs once, but `wgpu-hal` 30.0.1's
-    /// `create_surface_android` `expect`s the create result
-    /// ("AndroidSurface failed", `src/vulkan/instance.rs`), which turns that
-    /// refusal into a panic on the calling thread under that version. It is
-    /// reachable only outside the ordinary cycle, where every `true` follows
-    /// a `false` that released: through a missed `false` on a window that
-    /// survived, or through two `true`s with no `false` between them (ADR-0063
+    /// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`. Dropping the held surface first is
+    /// what keeps that rule out of this method's way: a `true` that finds a
+    /// surface still bound to the same, still-connected window — a missed
+    /// `false`, or two `true`s with no `false` between them (ADR-0063
     /// decision 6 books both, and marks whether the second ordering occurs at
-    /// all as unverified).
+    /// all as unverified) — releases it and then creates cleanly, where
+    /// build-first would be refused. That refusal is not a recoverable error
+    /// on this stack: `wgpu-hal` 30.0.1's `create_surface_android` `expect`s
+    /// the create result ("AndroidSurface failed", `src/vulkan/instance.rs`),
+    /// so under that version it aborts the process on the calling thread.
+    /// Releasing first is therefore what makes the stateless re-ask above
+    /// actually safe to attempt.
+    ///
+    /// What dropping first gives up is the old surface surviving a failed
+    /// create. On the one platform that emits this signal the old surface's
+    /// window is either the same one — so the create is refused, and the old
+    /// surface is the only one that could be kept — or already dead, in which
+    /// case it is useless. On a create failure the presentation is left
+    /// released, which is the documented post-state; the next `true` re-asks.
     ///
     /// Only the surface is rebuilt. [`Renderer::recover`] stays the device-loss
     /// path and rebuilds the whole stack; a suspend never sets the device-lost
@@ -1872,6 +1901,34 @@ impl Renderer {
         // against a dead handle would collapse it into a `SurfaceCreation`
         // failure (see `surface_lease::probe_target`'s doc).
         lease.probe()?;
+
+        // Drop the held surface BEFORE creating the replacement.
+        //
+        // The two orders trade different losses, and the platform decides
+        // which one is affordable. Build-first keeps a still-valid surface
+        // when the create fails — but on Android the old surface's window is
+        // either the same one (so the create is refused, see below) or
+        // already dead (so the surface is useless). Drop-first costs only
+        // that, and buys the one-surface-per-window rule:
+        // `vkCreateAndroidSurfaceKHR` refuses a second surface for a live
+        // `ANativeWindow` with `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, and
+        // `wgpu-hal` 30.0.1's `create_surface_android` `expect`s that result
+        // ("AndroidSurface failed", `src/vulkan/instance.rs`), which aborts
+        // the process on the callback thread. Reaching that needs a `true`
+        // over a surface still bound to the same live window — a missed
+        // `false`, or two `true`s with no `false` between them — which is
+        // outside the ordinary cycle but is exactly the class this method is
+        // stateless for: it must be able to re-ask unconditionally, because a
+        // missed signal is not detectable from here. Dropping first makes the
+        // re-ask always safe to attempt.
+        //
+        // A drop of a *configured* surface runs `wgpu-core`'s `unconfigure`
+        // into `vkDeviceWaitIdle` (see `release_surface`'s doc for what that
+        // wait costs and why it is accepted); a create that then fails leaves
+        // the lease released, which is the documented post-state. The caller
+        // owns the log line for that failure — see `surface_lifecycle.rs`'s
+        // `a_failed_recreation_carries_the_error_and_leaves_the_presentation_released`.
+        lease.release();
 
         let surface = self
             .instance
