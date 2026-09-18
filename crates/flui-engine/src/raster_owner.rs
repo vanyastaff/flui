@@ -1,6 +1,6 @@
 //! `RasterOwner` — the raster mailbox + outcome-channel boundary.
 //!
-//! Compositing hands one owned [`SceneSnapshot`] per presentation frame to a
+//! Compositing hands one owned [`flui_layer::SceneSnapshot`] per presentation frame to a
 //! raster owner at exactly one seam: the **raster mailbox**. The mailbox is
 //! a latest-frame-wins *slot*, not a queue — a pending, un-started frame is
 //! replaced (never enqueued behind) a newer submit, and the replaced frame
@@ -366,7 +366,7 @@ impl Drop for WakeGuard {
     }
 }
 
-/// A [`SceneSnapshot`] sitting in the mailbox, paired with the
+/// A [`flui_layer::SceneSnapshot`] sitting in the mailbox, paired with the
 /// [`InFlightTicket`] that accounts for it in [`InFlightAccounting::count`].
 /// See [`InFlightTicket`]'s doc for why every retire path is exactly this
 /// dropping.
@@ -547,7 +547,7 @@ impl RasterMailbox {
 // Acks
 // ---------------------------------------------------------------------------
 
-/// One outcome of a submitted [`SceneSnapshot`], delivered on the lossy
+/// One outcome of a submitted [`flui_layer::SceneSnapshot`], delivered on the lossy
 /// telemetry channel returned by [`RasterOwner::new`]. Never
 /// load-bearing for correctness — see the module docs for why shutdown
 /// completion rides a separate, guaranteed channel instead of a variant
@@ -571,7 +571,7 @@ pub enum RasterAck {
         /// The presented frame's epoch.
         epoch: FrameEpoch,
         /// The presented frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
     },
     /// The frame with this epoch was dropped without presenting.
@@ -580,7 +580,7 @@ pub enum RasterAck {
         /// The dropped frame's epoch.
         epoch: FrameEpoch,
         /// The dropped frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
         /// Why it was dropped.
         reason: FrameDropReason,
@@ -595,7 +595,7 @@ pub enum RasterAck {
         /// The rejected frame's epoch.
         epoch: FrameEpoch,
         /// The rejected frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
         /// The generation the rejected frame was stamped with.
         stale: SurfaceGeneration,
@@ -617,7 +617,7 @@ pub enum RasterAck {
         /// The rejected frame's epoch.
         epoch: FrameEpoch,
         /// The rejected frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
         /// The `GpuResourceGeneration` the rejected frame was stamped with.
         stale: GpuResourceGeneration,
@@ -637,7 +637,7 @@ pub enum RasterAck {
         /// The frame that was being rendered when the device was lost.
         epoch: FrameEpoch,
         /// The frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
     },
 }
@@ -1017,7 +1017,7 @@ pub enum PumpOutcome {
         /// The presented frame's epoch.
         epoch: FrameEpoch,
         /// The presented frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
     },
     /// The pending frame was dropped without presenting.
@@ -1026,7 +1026,7 @@ pub enum PumpOutcome {
         /// The dropped frame's epoch.
         epoch: FrameEpoch,
         /// The dropped frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
         /// Why it was dropped.
         reason: FrameDropReason,
@@ -1039,7 +1039,7 @@ pub enum PumpOutcome {
         /// The rejected frame's epoch.
         epoch: FrameEpoch,
         /// The rejected frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
         /// The generation the rejected frame was stamped with.
         stale: SurfaceGeneration,
@@ -1056,7 +1056,7 @@ pub enum PumpOutcome {
         /// The rejected frame's epoch.
         epoch: FrameEpoch,
         /// The rejected frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
         /// The `GpuResourceGeneration` the rejected frame was stamped with.
         stale: GpuResourceGeneration,
@@ -1069,7 +1069,7 @@ pub enum PumpOutcome {
         /// The frame that was being rendered when the device was lost.
         epoch: FrameEpoch,
         /// The frame's address, echoed from the submitted
-        /// [`SceneSnapshot`].
+        /// [`flui_layer::SceneSnapshot`].
         address: PresentationAddress,
     },
     /// The mailbox was empty and shutdown had been requested: the

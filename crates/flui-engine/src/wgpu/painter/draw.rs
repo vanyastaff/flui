@@ -234,7 +234,7 @@ impl super::WgpuPainter {
     /// `font_size` is in device pixels.  The text is submitted to
     /// `TextRenderer` (glyphon) as a single-style run; shaping and atlas
     /// upload happen during the next `render` call.  For styled spans
-    /// with per-run fonts, weights, or colors use [`Self::rich_text`] instead.
+    /// with per-run fonts, weights, or colors use [`Self::draw_rich_text`] instead.
     ///
     /// The current transform is applied to `position` before submission so that
     /// glyphs land at the correct device-pixel coordinate even inside a

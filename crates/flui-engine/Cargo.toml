@@ -164,5 +164,10 @@ harness = false
 workspace = true
 
 [package.metadata.docs.rs]
-all-features = true
+# NOT `all-features`: that would enable `enable-wgpu-tests`, whose
+# `OffscreenRenderer`/`PooledTexture`/`TexturePool` re-exports are bench
+# scaffolding the crate documents as "NOT part of the public API". The
+# backend's own per-target wgpu entries in this manifest apply on docs.rs's
+# linux host, so `wgpu-backend` is the whole of what the page needs.
+features = ["wgpu-backend"]
 rustdoc-args = ["--cfg", "docsrs"]
