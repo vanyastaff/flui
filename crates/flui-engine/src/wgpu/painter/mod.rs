@@ -697,12 +697,20 @@ impl WgpuPainter {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
     /// use flui_types::painting::TextureId;
     ///
+    /// # fn wire(painter: &mut flui_engine::wgpu::WgpuPainter, gpu_texture: wgpu::Texture) {
     /// let texture_id = TextureId::new(42);
-    /// painter.external_texture_registry()
-    ///     .register(texture_id, gpu_texture, 1920, 1080, true, true);
+    /// painter.external_texture_registry_mut().register(
+    ///     texture_id,
+    ///     gpu_texture,
+    ///     1920,
+    ///     1080,
+    ///     true,
+    ///     true,
+    /// );
+    /// # }
     /// ```
     pub fn external_texture_registry(
         &self,

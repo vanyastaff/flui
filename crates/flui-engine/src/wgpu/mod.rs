@@ -40,9 +40,12 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # async fn render(
+//! #     window: impl flui_engine::wgpu::WindowTarget,
+//! #     scene: &flui_layer::Scene,
+//! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::wgpu::Renderer;
-//! use flui_layer::Scene;
 //!
 //! // Create a renderer for a window (owns per-window GPU state). `window`
 //! // is an owned, `'static` handle source — see `WindowTarget` — not a
@@ -50,7 +53,9 @@
 //! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render a scene
-//! renderer.render_scene(&scene)?;
+//! renderer.render_scene(scene)?;
+//! # Ok(())
+//! # }
 //! ```
 
 // ============================================================================

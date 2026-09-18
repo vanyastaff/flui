@@ -225,7 +225,11 @@ impl SsaaDownsamplePipeline {
 /// dimensions are bounded by `max_tex_dim` before this function is called).
 ///
 /// # Examples
-/// ```ignore
+///
+/// `round_up_to_alignment` is private to this module, so the arithmetic is
+/// shown rather than compiled:
+///
+/// ```text
 /// assert_eq!(round_up_to_alignment(130, 64), 192);
 /// assert_eq!(round_up_to_alignment(128, 64), 128); // already aligned
 /// assert_eq!(round_up_to_alignment(1, 64), 64);

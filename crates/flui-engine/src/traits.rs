@@ -34,7 +34,7 @@ use flui_types::{
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```text
 /// pub struct WgpuBackend { /* ... */ }
 ///
 /// impl CommandRenderer for WgpuBackend {

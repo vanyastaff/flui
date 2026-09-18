@@ -6,20 +6,24 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use glyphon::FontSystem;
+//! ```rust,no_run
+//! # fn load() -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::wgpu::FontLoader;
+//! use glyphon::FontSystem;
 //!
 //! let mut font_system = FontSystem::new();
 //!
-//! // Load bundled font
-//! FontLoader::load_bytes(&mut font_system, include_bytes!("fonts/Roboto.ttf"));
+//! // Load font bytes the caller already holds
+//! FontLoader::load_bytes(&mut font_system, b"...");
 //!
 //! // Load from file
 //! FontLoader::load_file(&mut font_system, "assets/fonts/CustomFont.ttf")?;
 //!
-//! // Load all fonts in a directory
+//! // Load all fonts in a directory; returns how many were loaded
 //! let count = FontLoader::load_directory(&mut font_system, "assets/fonts")?;
+//! # let _ = count;
+//! # Ok(())
+//! # }
 //! ```
 
 use glyphon::FontSystem;

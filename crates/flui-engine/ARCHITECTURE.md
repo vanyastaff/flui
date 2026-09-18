@@ -520,11 +520,22 @@ The module-level `#[allow(dead_code)]` masks are gone from all four files and th
 
 An earlier cleanup proposed deleting all four modules because no external caller exists; the deferred per-field audit has since run and found each one populated **and** queried on a production path, so all four stay. Call paths are documented in the DONE audit entry in [Outstanding refactors](#outstanding-refactors).
 
-### Doctest examples may use pre-`Pixels`-wrap `Offset::new(f32, f32)` shape
+### Doctest sweep: `ignore` masked four stale examples — DONE
 
-**Sites:** TBD per `cargo test --doc -p flui-engine` after the chain merges. The doctest breakage pattern is the same as the `flui-layer` chain's Friction log entry; engine doctests inherit the same `Offset::new` signature constraint.
+**Sites:** [`src/lib.rs`](src/lib.rs), [`src/wgpu/mod.rs`](src/wgpu/mod.rs), [`src/wgpu/renderer.rs`](src/wgpu/renderer.rs), [`src/wgpu/painter/gradient.rs`](src/wgpu/painter/gradient.rs), [`src/wgpu/external_texture_registry.rs`](src/wgpu/external_texture_registry.rs).
 
-**Next planned step:** mechanical sweep of `Offset::new(<f32>, <f32>)` -> `Offset::new(px(<f32>), px(<f32>))` plus an explicit `use flui_types::geometry::px;` in each affected doc example. Out of scope for this Mythos chain.
+The earlier entry above prescribed a mechanical `Offset::new(f32, f32)` -> `px(..)` rewrite. It was wrong about the cause: **no engine doctest ever used the un-wrapped `Offset::new` shape**, so that sweep had nothing to fix. The 17 ignored blocks were ignored for three other reasons, and `ignore` is what let them rot:
+
+- **Runtime context the example cannot own** (a `WindowTarget`, a `wgpu::Device`/`Queue`, a `WgpuPainter`): now `no_run` with a hidden `#` helper binding the value, so the example's own calls are compile-checked but nothing executes. 9 sites.
+- **Genuinely private items** (`round_up_to_alignment`, `TextRenderer`, `TexturePool`, `ExternalTextureRegistry`, the `CommandRenderer` impl sketch): a doctest cannot name them at all, so they are `text` blocks that state that fact. 5 sites.
+- **API drift the `ignore` had been hiding** — the payoff for sweeping at all, since each one was a lie a reader would have copy-pasted:
+  - `Scene::from_layer` had gained a `frame_number: u64` parameter;
+  - `Layer::Canvas` now stores `Box<CanvasLayer>`, so `Layer::Canvas(CanvasLayer::new())` does not type-check;
+  - `Renderer::render` was renamed to `render_scene(&Scene)`;
+  - `flui_engine::painter::effects::ShadowParams` names a module path that does not exist (it is `wgpu::effects`);
+  - `ExternalTextureRegistry::register` had gained `is_dynamic` and `use_linear_filter` parameters.
+
+`cargo test -p flui-engine --doc` now reports **12 passed / 0 ignored** (plus the pre-existing compile-fail fixture), where it previously reported **0 passed / 17 ignored**. Every remaining non-compiling block is `text`, which rustdoc skips by design and whose first line states why.
 
 ---
 
@@ -613,7 +624,7 @@ Commit `1b376beb` deleted `pub trait Painter` and made its methods inherent on `
 
 The following pre-existing concerns are tracked outside this Outstanding refactors list because they have no concrete blocker -- they are scheduled fixes, not technical deferrals:
 
-- **Doctest `Pixels`-wrap fix:** every doctest in `src/wgpu/*.rs` currently uses `Offset::new(100.0, 50.0)` which fails to compile because `Offset<Pixels>::new` requires `Pixels`-wrapped arguments. Pre-existed the Mythos chain. Mechanical sweep; 1-2 hours. Should be its own PR; not on the deferred-refactor list because there is no blocker. Tracked separately in the Friction log.
+- ~~Doctest `Pixels`-wrap fix~~ **DONE** — the prescribed sweep had nothing to fix (no engine doctest used that shape). The real work was the 17 `ignore`d blocks: 12 now compile under `no_run`, 5 are `text` because their item is private, and the sweep exposed four stale examples. See [Outstanding refactors](#outstanding-refactors).
 
 - **Cross-crate Mythos chain continuation** (`flui-app`, `flui-view`, `flui-platform`, `flui-painting`, `flui-interaction`): these are next-crate planning artifacts. Listed in [`docs/PORT.md`](../../docs/PORT.md) `## Index` as "Not yet templated" entries; brainstorms + verdicts + plans live in `docs/brainstorms/`, `docs/designs/`, `docs/plans/` when they are authored. **Out of scope for `flui-engine/ARCHITECTURE.md`'s Outstanding refactors** (which scope to work visible from this crate outward). Pointers stay in `docs/PORT.md`.
 
@@ -625,5 +636,5 @@ The following pre-existing concerns are tracked outside this Outstanding refacto
 - **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): -812 from `utils/`, -2,190 from the parallel scene/compositor stack, -2,188 from platform stubs, -1 from the commands shim/import cleanup, -429 from the Painter trait deletion, +23 from the `anyhow` → `EngineResult` migration, and -291 from deleting `text_renderer.rs` plus the dead-code audit. Original target was ≥6,000 LOC; **target missed by ~112 LOC** because the proposed 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; the deferred audit has since confirmed all four live on production paths — that 1,955 LOC never materializes; see Outstanding refactors). `offscreen.rs` remained the one un-split god module at chain end (the `painter.rs` → `painter/` and `replay.rs` → `replay/` splits landed); it has since been split into `offscreen/{mod,blit,blur,mask}.rs` — see the Friction log.
 - **`port-check.sh` was extended during this chain** -- see [`docs/PORT.md`](../../docs/PORT.md) `## Refusal triggers` for the current trigger inventory.
 - **`Arc<Mutex<>>` shapes for `OffscreenRenderer` and `TexturePoolInner` survived the chain.** Documented in Friction log + Outstanding refactors with concrete blockers. The chain prioritised dead-code deletion (largest LOC wins) over lock-shape refactoring (substantial lifetime gymnastics for marginal runtime benefit).
-- **Two test counts** at chain end: `cargo test -p flui-engine --lib` shows 48 passed (down from 53 pre-chain, with 5 tests deleted alongside `text_renderer.rs`); `cargo test -p flui-engine --doc` count TBD per doctest fix Outstanding refactor.
+- **Two test counts** at chain end: `cargo test -p flui-engine --lib` shows 48 passed (down from 53 pre-chain, with 5 tests deleted alongside `text_renderer.rs`). The doctest count the chain left open is now resolved: **12 passed / 0 ignored**, up from 0 passed / 17 ignored — see [Outstanding refactors](#outstanding-refactors).
 - **`anyhow::Result` is no longer in the engine's public API.** `Renderer::new`, `Renderer::new_offscreen`, `FontLoader::load_file`, `FontLoader::load_directory` all return `EngineResult<T>`. The `anyhow` crate stays in `Cargo.toml` (transitive via wgpu) but is no longer used in any signature; the workspace-wide consistency win.

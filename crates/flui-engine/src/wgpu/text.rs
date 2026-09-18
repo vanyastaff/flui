@@ -403,7 +403,11 @@ enum BatchEntry {
 /// Cache is automatically pruned to remove stale entries.
 ///
 /// # Example
-/// ```ignore
+///
+/// `TextRenderer` is crate-private (the painter reaches it through its own
+/// state), so the call shape is shown rather than compiled:
+///
+/// ```text
 /// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system);
 ///
 /// // Add plain text during frame

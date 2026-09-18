@@ -22,16 +22,23 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # async fn render(
+//! #     window: impl flui_engine::wgpu::WindowTarget,
+//! #     scene: &flui_layer::Scene,
+//! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::wgpu::Renderer;
 //!
 //! // Create renderer (automatically selects backend). `window` is moved in
 //! // — an owned, `'static` handle source (see `WindowTarget`), not a
 //! // borrow — so the renderer can outlive the caller's stack frame.
-//! let renderer = Renderer::new(window).await?;
+//! let mut renderer = Renderer::new(window).await?;
 //!
-//! // Render frame
-//! renderer.render(display_list)?;
+//! // Render frame. `true` means the frame reached the surface (a `false`
+//! // is a no-damage/occluded skip, not a failure).
+//! renderer.render_scene(scene)?;
+//! # Ok(())
+//! # }
 //! ```
 
 use std::cell::Cell;
@@ -670,13 +677,17 @@ impl Renderer {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # async fn run(window: impl flui_engine::wgpu::WindowTarget)
+    /// #     -> Result<(), flui_engine::EngineError> {
     /// use flui_engine::wgpu::Renderer;
     ///
     /// // `window` is moved in — an owned, `'static` handle source (see
     /// // `WindowTarget`), not a borrow.
     /// let renderer = Renderer::new(window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Superseded (ADR-0045 decision 2)

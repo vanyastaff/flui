@@ -30,12 +30,16 @@ use crate::{
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_engine::wgpu::{LayerRender, Backend};
-/// use flui_layer::{Layer, CanvasLayer};
+/// ```rust,no_run
+/// use flui_engine::wgpu::{Backend, LayerRender};
+/// use flui_layer::{CanvasLayer, Layer};
 ///
-/// let layer = Layer::Canvas(CanvasLayer::new());
-/// layer.render(&mut backend);
+/// # fn draw(layer: &Layer, backend: &mut Backend<'_>) {
+/// layer.render(backend);
+/// # }
+/// // `Backend` is minted per frame by `WgpuPainter`; a caller supplies one
+/// // it already holds.
+/// # let _ = Layer::Canvas(Box::new(CanvasLayer::new()));
 /// ```
 pub trait LayerRender<R: CommandRenderer + LayerStateStack + ?Sized> {
     /// Render this layer using the provided command renderer.

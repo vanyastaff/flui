@@ -230,9 +230,11 @@ impl TexturePoolInner {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_engine::wgpu::TexturePool;
+/// `TexturePool` is crate-private (exported only under `enable-wgpu-tests`,
+/// where the readback suite drives it), so this sketch shows the call shape
+/// rather than compiling:
 ///
+/// ```text
 /// let mut pool = TexturePool::new(device.clone());
 /// let texture = pool.acquire(800, 600, wgpu::TextureFormat::Rgba8UnormSrgb);
 ///

@@ -55,23 +55,30 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # async fn render(
+//! #     window: impl flui_engine::wgpu::WindowTarget,
+//! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::wgpu::Renderer;
 //! use flui_layer::{Scene, CanvasLayer, Layer};
-//! use flui_types::Size;
+//! use flui_types::{Size, geometry::px};
 //!
 //! // 1. Build a Scene (in framework layer)
 //! let scene = Scene::from_layer(
-//!     Size::new(800.0, 600.0),
-//!     Layer::Canvas(CanvasLayer::new()),
+//!     Size::new(px(800.0), px(600.0)),
+//!     Layer::Canvas(Box::new(CanvasLayer::new())),
 //!     0,
 //! );
 //!
 //! // 2. Render the Scene (in the engine layer) — `Renderer` owns per-window
-//! //    GPU state, and owns `window` itself (an owned, `'static` handle
+//! //    GPU state, and owns its target itself (an owned, `'static` handle
 //! //    source — see `flui_engine::wgpu::WindowTarget` — not a borrow).
+//! //    `window` is any `WindowTarget`: usually an
+//! //    `Arc<dyn PlatformWindow>`, or an owned raw-window-handle type.
 //! let mut renderer = Renderer::new(window).await?;
 //! renderer.render_scene(&scene)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Feature Flags

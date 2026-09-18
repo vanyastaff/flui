@@ -228,7 +228,10 @@ pub struct FrameMaintenance {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # fn load(device: std::sync::Arc<wgpu::Device>, queue: std::sync::Arc<wgpu::Queue>) {
+/// use flui_engine::wgpu::texture_cache::{TextureCache, TextureId};
+///
 /// let mut cache = TextureCache::new(device, queue);
 ///
 /// // Load texture (first time - cache miss)
@@ -237,6 +240,8 @@ pub struct FrameMaintenance {
 ///
 /// // Next frame - reuse (cache hit, instant!)
 /// let texture = cache.get_or_load(texture_id).unwrap();
+/// # let _ = texture;
+/// # }
 /// ```
 #[expect(missing_debug_implementations)]
 pub struct TextureCache {
