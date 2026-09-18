@@ -16,9 +16,20 @@
 //! because the renderers' visit steps are not uniform — the windowed renderer
 //! diverts `BackdropFilter`, `ShaderMask`, and `Follower` subtrees to
 //! specialized handlers, while the headless path renders every node the same
-//! way. A caller expresses that by matching on the layer inside its visitor
-//! and returning [`Step::SkipSubtree`] for a subtree its handler already
-//! consumed.
+//! way. A caller expresses that by matching on the layer inside its visitor:
+//!
+//! - [`Step::Descend`] when the walk should carry the children — which is what
+//!   a handler returns when its own work finishes BEFORE the children paint
+//!   (`BackdropFilter` composites its blur, then the children go on top;
+//!   a `Follower` pushes its offset and pops it on exit). Descending is what
+//!   keeps a chain of such nodes off the call stack.
+//! - [`Step::SkipSubtree`] when the handler consumed the subtree itself
+//!   (`ShaderMask` renders children into its own offscreen texture, so it
+//!   cannot hand them back to a walk that owns the real backend; an unlinked
+//!   `Follower` with `show_when_unlinked == false`, whose subtree is hidden).
+//!   A recursive call inside `enter` is the third option and the one to avoid:
+//!   it costs a call-stack frame per level, which is the failure this module
+//!   exists to remove.
 
 use flui_foundation::LayerId;
 use flui_layer::LayerTree;
@@ -50,8 +61,26 @@ enum Frame {
 /// any), `exit` runs after them. A node that has been removed from the tree
 /// between frames is skipped at whichever step reaches it, matching the
 /// recursion this replaces, which re-resolved every id it touched.
+///
+/// # Cycles terminate
+///
+/// `LayerTree::add_child` rejects cycles, so a tree built through the public
+/// API cannot contain one. A malformed tree can — the layer crate's own
+/// `is_ancestor_of` names the case ("a slab loaded from disk with corrupt
+/// parent pointers") — and an explicit-stack walk over one is worse than the
+/// recursion it replaced: recursion overflowed the stack and aborted, this
+/// would spin forever while `stack` grew without bound.
+///
+/// The guard tracks the nodes on the CURRENT descent path and skips an `Enter`
+/// for one already on it. That is a true cycle; a node merely reachable twice
+/// (a DAG, which a malformed parent pointer can also produce) still visits
+/// twice, exactly as the recursion did, because its first visit's `Exit`
+/// removes it from the path before the second `Enter`.
 pub(crate) fn walk_layer_tree<V: LayerVisitor>(tree: &LayerTree, root: LayerId, visitor: &mut V) {
     let mut stack = vec![Frame::Enter(root)];
+    // Nodes whose `Exit` frame is still pending, i.e. the current descent path.
+    // Bounded by the tree's depth, not its size.
+    let mut on_path: std::collections::HashSet<LayerId> = std::collections::HashSet::new();
 
     while let Some(frame) = stack.pop() {
         match frame {
@@ -59,7 +88,21 @@ pub(crate) fn walk_layer_tree<V: LayerVisitor>(tree: &LayerTree, root: LayerId, 
                 let Some(node) = tree.get(id) else {
                     continue;
                 };
+                if !on_path.insert(id) {
+                    tracing::error!(
+                        target: "flui.layer",
+                        ?id,
+                        "layer tree contains a cycle reachable from this root; \
+                         skipping the repeated node. The tree is malformed — \
+                         LayerTree::add_child rejects cycles, so this was built \
+                         by corrupting parent/child pointers after the fact"
+                    );
+                    continue;
+                }
                 if visitor.enter(tree, id, node.layer()) == Step::SkipSubtree {
+                    // No `Exit` frame is pushed, so the node is off the path
+                    // again the moment its subtree is.
+                    on_path.remove(&id);
                     continue;
                 }
                 // Children are pushed in reverse so they pop in paint order,
@@ -72,6 +115,7 @@ pub(crate) fn walk_layer_tree<V: LayerVisitor>(tree: &LayerTree, root: LayerId, 
                 }
             }
             Frame::Exit(id) => {
+                on_path.remove(&id);
                 let Some(node) = tree.get(id) else {
                     continue;
                 };
@@ -156,6 +200,116 @@ mod tests {
 
     fn canvas() -> flui_layer::Layer {
         flui_layer::Layer::Canvas(Box::new(flui_layer::CanvasLayer::new()))
+    }
+
+    /// A visitor that panics if the walk exceeds `budget` visits.
+    ///
+    /// Without this, a walk that failed to terminate would HANG the suite
+    /// rather than fail it — a reverted cycle guard would consume CI's test
+    /// timeout instead of reporting. The budget makes the bug loud and fast.
+    struct Bounded {
+        visits: usize,
+        budget: usize,
+    }
+
+    impl LayerVisitor for Bounded {
+        fn enter(&mut self, _t: &LayerTree, _i: LayerId, _l: &flui_layer::Layer) -> Step {
+            self.visits += 1;
+            assert!(
+                self.visits <= self.budget,
+                "walk exceeded {} visits — it is not terminating",
+                self.budget
+            );
+            Step::Descend
+        }
+
+        fn exit(&mut self, _t: &LayerTree, _i: LayerId, _l: &flui_layer::Layer) {
+            self.visits += 1;
+            assert!(
+                self.visits <= self.budget,
+                "walk exceeded {} visits — it is not terminating",
+                self.budget
+            );
+        }
+    }
+
+    /// A cycle in the tree terminates the walk instead of spinning forever.
+    ///
+    /// `LayerTree::add_child` rejects cycles, so this cannot be built through
+    /// the tree-level API — but `LayerNode::add_child` is public and does not
+    /// check, so a cyclic graph is constructible, and the layer crate's own
+    /// `is_ancestor_of` names the case (a slab loaded from disk with corrupt
+    /// parent pointers). The walk that preceded this one overflowed the stack
+    /// on such input and aborted; an unbounded explicit-stack walk would spin
+    /// instead, growing its heap stack without limit — strictly worse.
+    ///
+    /// The cycle guard skips only a node already on the CURRENT descent path,
+    /// which is what makes a cycle (`root -> a -> root`) terminate while a DAG
+    /// (`root -> [a, b]`, both -> `c`) still visits `c` once per parent,
+    /// exactly as the recursion did.
+    #[test]
+    fn a_cyclic_tree_terminates_rather_than_spinning() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(offset());
+        tree.set_root(Some(root));
+        let a = tree.insert(offset());
+        tree.add_child(root, a);
+        // The cycle: `a` lists `root` as a child, so `root -> a -> root -> ...`
+        // would never end. `LayerNode::add_child` does not reject it.
+        tree.get_mut(a)
+            .expect("the inserted node is live")
+            .add_child(root);
+
+        let mut bounded = Bounded {
+            visits: 0,
+            budget: 16,
+        };
+        walk_layer_tree(&tree, root, &mut bounded);
+
+        assert_eq!(
+            bounded.visits, 4,
+            "root and `a` each enter and exit once; the cycle back to the root \
+             is refused, so `a`'s second child contributes nothing"
+        );
+    }
+
+    /// A diamond (shared child, no cycle) still visits the shared node once per
+    /// parent — the guard must not mistake a DAG for a cycle.
+    #[test]
+    fn a_shared_child_is_visited_once_per_parent() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(offset());
+        tree.set_root(Some(root));
+        let a = tree.insert(offset());
+        let b = tree.insert(offset());
+        let shared = tree.insert(canvas());
+        tree.add_child(root, a);
+        tree.add_child(root, b);
+        tree.add_child(a, shared);
+        // NOT `tree.add_child`: that RE-PARENTS (detaches from the previous
+        // parent), so the shared node would move rather than be shared. A
+        // second parent edge needs the unchecked node-level call — the same
+        // route a corrupt load takes.
+        tree.get_mut(b)
+            .expect("the inserted node is live")
+            .add_child(shared);
+
+        let mut rec = Recorder::default();
+        walk_layer_tree(&tree, root, &mut rec);
+
+        let expected = format!(
+            "offset{r} offset{a} canvas{s} cleanup{s} cleanup{a} \
+             offset{b} canvas{s} cleanup{s} cleanup{b} cleanup{r}",
+            r = root.get(),
+            a = a.get(),
+            b = b.get(),
+            s = shared.get(),
+        );
+        assert_eq!(
+            rec.joined(),
+            expected,
+            "a shared child is not a cycle: both parents visit it"
+        );
     }
 
     /// Render → children → cleanup, children in paint order.

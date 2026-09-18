@@ -567,20 +567,12 @@ impl super::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
         if let flui_layer::Layer::BackdropFilter(bf_layer) = layer
             && (self.ctx.supports_copy_src || self.ctx.intermediate_active)
         {
-            let Some(node) = tree.get(id) else {
-                return super::layer_walk::Step::SkipSubtree;
-            };
-            Renderer::handle_backdrop_filter(
+            return Renderer::handle_backdrop_filter(
                 bf_layer,
-                node,
-                tree,
-                self.link_registry,
                 self.backend,
-                self.ctx,
                 self.surface_texture,
                 self.surface_view,
             );
-            return super::layer_walk::Step::SkipSubtree;
         }
 
         // ShaderMask captures children to an offscreen texture, applies
@@ -2680,20 +2672,12 @@ impl Renderer {
     /// 3. Apply Dual Kawase blur via `OffscreenRenderer::render_blur`
     /// 4. Queue blurred result for compositing back to the surface
     /// 5. Render children on top
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "backdrop-filter pipeline needs the surface texture/view and layer-tree context to do its job — splitting these into a helper struct adds indirection without clarity"
-    )]
     fn handle_backdrop_filter(
         bf_layer: &flui_layer::BackdropFilterLayer,
-        node: &flui_layer::tree::LayerNode,
-        tree: &flui_layer::LayerTree,
-        link_registry: &flui_layer::LinkRegistry,
         backend: &mut super::backend::Backend<'_>,
-        ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
-    ) {
+    ) -> super::layer_walk::Step {
         use flui_types::painting::ImageFilter;
 
         let bounds = bf_layer.bounds();
@@ -2703,21 +2687,16 @@ impl Renderer {
         let sigma = if let ImageFilter::Blur { sigma_x, sigma_y } = bf_layer.filter() {
             f32::midpoint(*sigma_x, *sigma_y)
         } else {
+            // No blur to apply, so this node is a passthrough: hand its
+            // children back to the walk (`Descend`) rather than walking them
+            // here. Recursing here would put the walk on the call stack, one
+            // frame per nested filter. `BackdropFilterLayer`'s own
+            // `render`/`cleanup` are no-ops, so the walk calling them for this
+            // node is correct.
             tracing::warn!(
                 "Backdrop filter type not supported for GPU blur, rendering children only"
             );
-            for &child_id in node.children() {
-                Self::render_layer_recursive(
-                    tree,
-                    link_registry,
-                    child_id,
-                    backend,
-                    ctx,
-                    surface_texture,
-                    surface_view,
-                );
-            }
-            return;
+            return super::layer_walk::Step::Descend;
         };
 
         // Map the layer's local-space `bounds` to a device-space rect using the
@@ -2736,19 +2715,11 @@ impl Renderer {
             .transform_rect(&bounds);
         backend.apply_backdrop_blur(device_rect, sigma, surface_texture, surface_view);
 
-        // Render children on top of the (maybe-)blurred backdrop. No push/pop
-        // state to clean up in this path.
-        for &child_id in node.children() {
-            Self::render_layer_recursive(
-                tree,
-                link_registry,
-                child_id,
-                backend,
-                ctx,
-                surface_texture,
-                surface_view,
-            );
-        }
+        // Children render on top of the (maybe-)blurred backdrop. No push/pop
+        // state to clean up in this path, so the walk descends normally: the
+        // blur is already composited onto the surface and the child subtrees
+        // are ordinary layer content.
+        super::layer_walk::Step::Descend
     }
 
     /// Handle a `ShaderMaskLayer` subtree by capturing its children to a
@@ -3286,20 +3257,7 @@ mod tests {
             unreachable!("inserted a BackdropFilter layer");
         };
 
-        let ctx = RenderContext {
-            supports_copy_src: true,
-            intermediate_active: false,
-        };
-        Renderer::handle_backdrop_filter(
-            bf_layer,
-            node,
-            &tree,
-            &flui_layer::LinkRegistry::new(),
-            &mut backend,
-            &ctx,
-            &surface_texture,
-            &surface_view,
-        );
+        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view);
 
         // The blurred backdrop must be queued for compositing at the DEVICE
         // rect — logical bounds (x=100, y=100, w=200, h=200) under scale(2)
@@ -3405,20 +3363,7 @@ mod tests {
             unreachable!("inserted a BackdropFilter layer");
         };
 
-        let ctx = RenderContext {
-            supports_copy_src: true,
-            intermediate_active: false,
-        };
-        Renderer::handle_backdrop_filter(
-            bf_layer,
-            node,
-            &tree,
-            &flui_layer::LinkRegistry::new(),
-            &mut backend,
-            &ctx,
-            &surface_texture,
-            &surface_view,
-        );
+        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view);
 
         let results = backend.painter().offscreen_results_for_test();
         assert_eq!(
@@ -3537,20 +3482,7 @@ mod tests {
             unreachable!("inserted a BackdropFilter layer");
         };
 
-        let ctx = RenderContext {
-            supports_copy_src: true,
-            intermediate_active: false,
-        };
-        Renderer::handle_backdrop_filter(
-            bf_layer,
-            node,
-            &tree,
-            &flui_layer::LinkRegistry::new(),
-            &mut backend,
-            &ctx,
-            &surface_texture,
-            &surface_view,
-        );
+        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view);
 
         let results = backend.painter().offscreen_results_for_test();
         assert_eq!(
@@ -4790,6 +4722,130 @@ mod tests {
     /// `shader_mask_nested_under_offset_ancestor_lands_at_correct_position`
     /// below for that); it only proves the GPU mask pipeline is reached at
     /// all.
+    /// A deep chain of nested `ShaderMask`s renders without consuming call
+    /// stack per level — its re-entry is bounded to exactly ONE level, and
+    /// this pins the bound so it cannot regress silently.
+    ///
+    /// `handle_shader_mask` still walks its children by calling
+    /// `render_layer_recursive`, because it renders them through a DIFFERENT
+    /// backend (the offscreen painter) — unlike `BackdropFilter`, whose
+    /// children belong to the same backend and so can be handed back to the
+    /// walk. The bound on that re-entry is the handler's own gate plus the
+    /// temp backend's shape: the gate is `backend.offscreen_mut().is_some()`,
+    /// and the backend it recurses with is `Backend::new(offscreen_painter)`,
+    /// which sets `offscreen: None`. So the outermost mask takes the arm and
+    /// every nested mask inside it falls through to the inert clip/save-layer
+    /// path.
+    ///
+    /// Measured, not assumed: instrumenting the handler showed
+    /// `handler_calls == 1` and nesting depth 1 at chain lengths 4, 100, 1000
+    /// and 10 000, and the render completes at depth 50 000 on a fixed 1 MiB
+    /// stack — i.e. cost is flat in depth, not linear. (A 64 KiB stack is too
+    /// small for even ONE invocation: a single `handle_shader_mask` frame
+    /// holds GPU handles, a pooled texture, an encoder and a nested
+    /// `WgpuPainter`, which is tens of KiB of locals. That is a constant, not
+    /// a leak per level, and is why this test uses a budget that fits one
+    /// frame rather than the 64 KiB the pure-walk tests use.)
+    ///
+    /// **What this test does not do:** it is not red-by-revert verified. The
+    /// bound comes from a value the temp backend does not have (`offscreen:
+    /// None`), and I could not express a faithful mutant that grants it
+    /// without inventing an offscreen renderer for that backend — a fake stub
+    /// compiles but exercises nothing. So this pins the CURRENT behaviour and
+    /// the measured numbers; it is not proof that a future regression would
+    /// fail here. If someone does give the temp backend an offscreen, they owe
+    /// a revert test.
+    #[test]
+    fn a_deep_shader_mask_chain_does_not_grow_the_call_stack() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_layer::{Layer, LayerTree, LinkRegistry, ShaderMaskLayer};
+        use flui_painting::Shader;
+
+        const DEPTH: usize = 10_000;
+        // Fits one `handle_shader_mask` frame with room to spare; a per-level
+        // cost would blow it long before 10 000.
+        const STACK: usize = 1024 * 1024;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let (w, h) = (64u32, 64u32);
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deep ShaderMask Chain Surface"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        std::thread::Builder::new()
+            .stack_size(STACK)
+            .spawn(move || {
+                let bounds = flui_types::geometry::Rect::from_xywh(
+                    flui_types::geometry::px(0.0),
+                    flui_types::geometry::px(0.0),
+                    flui_types::geometry::px(64.0),
+                    flui_types::geometry::px(64.0),
+                );
+                let mask = || {
+                    Layer::ShaderMask(ShaderMaskLayer::new(
+                        Shader::solid(flui_types::Color::rgba(10, 20, 30, 128)),
+                        flui_types::painting::BlendMode::SrcOver,
+                        bounds,
+                    ))
+                };
+                let mut tree = LayerTree::new();
+                let mut parent = tree.insert(mask());
+                tree.set_root(Some(parent));
+                for _ in 1..DEPTH {
+                    let child = tree.insert(mask());
+                    tree.add_child(parent, child);
+                    parent = child;
+                }
+
+                let mut painter = WgpuPainter::with_shared_device(
+                    Arc::clone(&device),
+                    Arc::clone(&queue),
+                    format,
+                    (w, h),
+                );
+                let mut offscreen =
+                    OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+                let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+                let ctx = RenderContext {
+                    supports_copy_src: true,
+                    intermediate_active: false,
+                };
+                let links = LinkRegistry::new();
+                Renderer::render_layer_recursive(
+                    &tree,
+                    &links,
+                    tree.root().expect("root set"),
+                    &mut backend,
+                    &ctx,
+                    &surface_texture,
+                    &surface_view,
+                );
+            })
+            .expect("spawn the deep-shader-mask thread")
+            .join()
+            .expect("a deep ShaderMask chain must not consume the call stack per level");
+    }
+
     #[test]
     fn shader_mask_layer_root_gpu_pixel_readback_reflects_mask() {
         use super::super::backend::Backend;
