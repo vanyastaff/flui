@@ -105,7 +105,11 @@ pub(super) extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id)
     unsafe {
         if let Some(ctx) = get_context(this) {
             let bounds: NSRect = msg_send![this, bounds];
-            if let Some(input) = convert_ns_event(event, ctx.scale_factor, bounds.size.height) {
+            if let Some(input) = convert_ns_event(
+                event.cast::<std::ffi::c_void>(),
+                ctx.scale_factor,
+                bounds.size.height,
+            ) {
                 dispatch_input_event(ctx, input);
             }
         }
