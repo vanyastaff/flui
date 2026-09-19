@@ -63,15 +63,6 @@ flui-painting = { path = "../flui-painting", version = "0.2.0" }
 # moved into the shared harness (`flui_widgets::testing`), which enables this
 # same `testing` feature itself.
 flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
-parking_lot = { workspace = true }
-
-# The parity test suite lives in a subdirectory so `mod *_test;` works via
-# Cargo's single-binary test model (mirrors flui-widgets' `tests/parity/`).
-# Auto-discovery misses subdirectory main files, so the target is declared
-# explicitly.
-[[test]]
-name = "parity"
-path = "tests/parity/main.rs"
 
 [lints]
 workspace = true

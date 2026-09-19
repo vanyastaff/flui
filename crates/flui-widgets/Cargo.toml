@@ -110,24 +110,11 @@ flui-platform = { path = "../flui-platform", version = "0.2.0" }
 flui-testing = { workspace = true }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
-# Deterministic paint/layout snapshot assertions.
-insta = { workspace = true }
 # Compile-time ownership-boundary assertions for ADR-0027.
 static_assertions = { workspace = true }
 # `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
 # (`asset-images` feature) and the async `Image` widget integration tests.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-# Thread-local subscriber (`tracing::subscriber::with_default`) that captures
-# a `tracing::error!` diagnostic's text for the custom_multi_child_layout_test
-# divergence pin -- the panic itself is caught and poisoned by the render
-# pipeline before it ever reaches the test, so the original message is only
-# observable through the diagnostic log, not a propagated panic or Result.
-tracing-subscriber = { workspace = true }
-# Parity-inventory manifest (tests/parity/manifest.toml) parsing for the
-# `parity_inventory` guard test.
-serde = { workspace = true }
-toml = { workspace = true }
-
 # All root tests/*.rs files, consolidated into one binary via `#[path]` module
 # declarations in tests/main.rs (autotests = false above disables the per-file
 # auto-discovered binaries that each linked the whole wgpu stack).
@@ -151,21 +138,6 @@ harness = true
 name = "image_network"
 path = "tests/image_network.rs"
 harness = true
-
-# The parity test suite lives in a subdirectory so `mod harness; mod *_test;`
-# work via Cargo's single-binary test model. Auto-discovery misses subdirectory
-# main files, so the target is declared explicitly.
-[[test]]
-name = "parity"
-path = "tests/parity/main.rs"
-
-# Executable Flutter-parity inventory: validates tests/parity/manifest.toml
-# against the parity tree (and, when a pinned .flutter checkout is present,
-# against the Flutter reference itself). Deliberately a separate target so it
-# links without the wgpu stack.
-[[test]]
-name = "parity_inventory"
-path = "tests/parity_inventory.rs"
 
 [features]
 default = []

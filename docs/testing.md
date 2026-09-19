@@ -32,8 +32,7 @@ Two structural rules hold across the stack:
   shipped crate. Where layering forbids the move — `flui_widgets::testing`
   mounts `FocusRoot`/`VsyncScope`/`GestureArenaScope`, which are widgets, and
   `flui-testing` may never depend on the widget catalog — the harness stays put
-  but is *built on* `flui-testing`, so the shared machinery is not forked. See
-  [`crates/flui-testing/AGENTS.md`](../crates/flui-testing/AGENTS.md).
+  but is *built on* `flui-testing`, so the shared machinery is not forked.
 - **Mount through `HeadlessBinding::mount_root`.** It owns the eight-step
   bootstrap whose ordering is load-bearing, and its contract is that the
   bootstrap frame is the same frame `pump_frame` runs (same layout↔build
@@ -275,8 +274,8 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-layer` | [crates/flui-layer/README.md](../crates/flui-layer/README.md) | `SceneBuilder`, `inspect::structure` / `clip_rects` / `first_picture_bounds` |
 | `flui-painting` | [crates/flui-painting/docs/TESTING.md](../crates/flui-painting/docs/TESTING.md) | `record`, `command_count`, `bounds`, `diagnostics` |
 | `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `DiagnosticsNode` / `DiagnosticsBuilder` for structured assertions (no `testing` module) |
-| `flui-testing` | [crates/flui-testing/AGENTS.md](../crates/flui-testing/AGENTS.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
-| `flui-widgets` | [crates/flui-widgets/AGENTS.md](../crates/flui-widgets/AGENTS.md) | `testing::{lay_out, LaidOut, settle_lazy}` — the canonical widget harness, shared verbatim by `flui-material` / `flui-cupertino` |
+| `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
+| `flui-widgets` | [crates/flui-widgets/README.md](../crates/flui-widgets/README.md) | `testing::{lay_out, LaidOut, settle_lazy}` — the canonical widget harness, shared verbatim by `flui-material` / `flui-cupertino` |
 
 | Crate | What it gives you |
 |-------|-------------------|
@@ -449,8 +448,8 @@ Two crates deliberately do not, because they have nothing to poison — their
 capture tests share no callsite with anything else in their binary, each
 emitting at its own source line inside its own helper. `flui-log` additionally
 has no in-workspace dependencies at all, which its layer entry states as a
-contract; `flui-foundation` is emission-only and may not construct a subscriber
-(`crates/flui-foundation/AGENTS.md`), which is also why the primitive lives in
+contract; `flui-foundation` is emission-only and may not construct a subscriber,
+which is also why the primitive lives in
 `flui-testing` rather than at the bottom of the DAG where every crate could
 reach it without an edge.
 

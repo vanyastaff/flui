@@ -63,7 +63,7 @@ A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView f
 
 ## For contributors and agents
 
-- [AGENTS.md](AGENTS.md): the guide every agent runtime loads — prime directive, code navigation, build and CI commands, testing quirks, definition of done.
+- [AGENTS.md](AGENTS.md): the guide every agent runtime loads — prime directive, code navigation, build and CI commands, definition of done.
 - [STYLE.md](STYLE.md): toolchain policy and the lint baseline.
 - [STRATEGY.md](STRATEGY.md): product strategy and why Flutter is the reference and the oracle, not the ceiling.
 - [Port methodology](docs/PORT.md): the mapping rules and the refusal triggers `just port-check` enforces.

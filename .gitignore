@@ -22,6 +22,13 @@ debug/
 !.claude/settings.json
 !.claude/hooks
 !.claude/hooks/*
+# `.claude/rules/*.md` carry `paths:` frontmatter and load only when Claude
+# works with matching files. They hold the same reviewed, shared guidance as
+# `AGENTS.md` — CI internals and testing gotchas were moved there from the
+# always-loaded root file — so they are tracked like `settings.json` and
+# `hooks`, not kept per-developer.
+!.claude/rules
+!.claude/rules/*
 
 # Local agent runtime mounts/state. Project-authored guidance lives in
 # AGENTS.md and the tracked runtime-specific config files, not in these dirs.

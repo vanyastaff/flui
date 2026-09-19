@@ -290,7 +290,7 @@ jobs:
       # things this default-feature workspace run cannot give flui-platform:
       # `--all-features` (the winit backend, its actual Linux-runnable
       # implementation, only compiles under `winit-backend` — invisible to
-      # `default = ["desktop"]`, see crates/flui-platform/AGENTS.md) and a
+      # `default = ["desktop"]`) and a
       # real X11 connection for the handful of tests that construct
       # `WinitPlatform` directly. The dedicated step below supplies both and
       # runs flui-platform's Linux-runnable suite green; see that step's

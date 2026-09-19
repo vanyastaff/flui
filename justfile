@@ -289,8 +289,8 @@ test-ci:
     cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
     # Mirrors CI's dedicated flui-platform step, guarded by host OS:
     # `--all-features` is required just to compile the winit backend
-    # (crates/flui-platform/AGENTS.md — invisible under `default =
-    # ["desktop"]`); `FLUI_HEADLESS=1` routes `current_platform()` to the
+    # (invisible under `default = ["desktop"]`); `FLUI_HEADLESS=1` routes
+    # `current_platform()` to the
     # `HeadlessPlatform` mock so most of the suite needs no display server;
     # a handful of winit-internals unit tests construct `WinitPlatform::new()`
     # directly and need a real (if virtual) X11 connection for clipboard
@@ -298,9 +298,9 @@ test-ci:
     # On Windows this is not a missing-tool gap: STATUS_HEAP_CORRUPTION
     # (H9, docs/ROADMAP-TRACKER.md) is an unresolved crash in this crate's
     # Windows backend, so the tests must not run there at all. 175/175
-    # pass on Linux, 5x-verified stable — see AGENTS.md Testing Quirks for
-    # what stays excluded and why.
-    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see crates/flui-platform/AGENTS.md.'" } }}
+    # pass on Linux, 5x-verified stable — see docs/testing.md for what stays
+    # excluded and why.
+    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md.'" } }}
 
 [group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
