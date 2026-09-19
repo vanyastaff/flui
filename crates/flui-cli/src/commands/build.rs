@@ -78,8 +78,6 @@ pub fn execute(
     cliclack::intro(style(format!(" flui build {target} ")).on_cyan().black())?;
     cliclack::log::info(format!("Mode: {}", style(mode).cyan()))?;
 
-    ensure_resolvable_target(&options)?;
-
     // `flui-build`'s builders shell out through `tokio::process`, whose
     // `Command::status()` needs a Tokio reactor in scope on this thread.
     // `pollster` only drives the future; it installs no reactor, so every
@@ -116,48 +114,6 @@ pub fn execute(
     Ok(())
 }
 
-/// Reject an unresolvable default target with an actionable message.
-///
-/// `--example`/`--package` name the unit explicitly. Without either, cargo
-/// builds the current directory's own binary — which the FLUI source tree
-/// itself does not have: its root is a library-only workspace package, and its
-/// runnable entry points are examples. Left unchecked, the failure surfaces
-/// deep inside cargo as an opaque "no bin target named ..." error.
-///
-/// This reads the manifest as text rather than parsing it: only the presence of
-/// a `[package]`/`[[bin]]` section and the framework crates' directory matters,
-/// and a text scan cannot be defeated by a stricter TOML grammar the way
-/// `toml::Value` was here (the repo's root manifest fails to parse under the
-/// pinned `toml` 1.1, which would have silently disabled a parse-based guard).
-fn ensure_resolvable_target(options: &BuildOptions) -> CliResult<()> {
-    if options.example.is_some() || options.package.is_some() {
-        return Ok(());
-    }
-
-    let Ok(manifest) = std::fs::read_to_string("Cargo.toml") else {
-        return Ok(());
-    };
-
-    // A manifest with a binary target is resolvable as-is.
-    if manifest.contains("[[bin]]") {
-        return Ok(());
-    }
-    // The FLUI source tree: a workspace root that also owns the framework
-    // crates. Generated projects are standalone workspaces without them.
-    let is_workspace_root = manifest.contains("[workspace]");
-    let has_crates_dir = std::path::Path::new("crates/flui-app").is_dir();
-    if !(is_workspace_root && has_crates_dir) {
-        return Ok(());
-    }
-
-    Err(crate::error::CliError::NotFluiProject {
-        reason: "This is the FLUI source tree, whose runnable entry points are \
-                 examples — pass `--example <name>` (see `examples/`) or \
-                 `--package <name>` to name the target to build."
-            .to_string(),
-    })
-}
-
 /// Resolve application-bundle metadata for a macOS build, from `flui.toml`.
 ///
 /// A `.app` needs a display name and a bundle identifier; `flui.toml`'s
@@ -165,27 +121,34 @@ fn ensure_resolvable_target(options: &BuildOptions) -> CliResult<()> {
 /// (e.g. building an in-repo example), the directory name stands in — a bundle
 /// still gets staged, with a derived identifier, rather than the build silently
 /// degrading to a bare binary.
-fn macos_bundle() -> Option<AppBundle> {
-    let manifest = std::path::Path::new("flui.toml");
-    if let Ok(text) = std::fs::read_to_string(manifest)
-        && let Ok(value) = text.parse::<toml::Value>()
-        && let Some(app) = value.get("app")
-    {
-        let name = app
-            .get("name")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("FLUI App");
-        let org = app
-            .get("organization")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("dev.flui");
-        return Some(AppBundle::new(name, org));
-    }
+fn macos_bundle() -> CliResult<AppBundle> {
+    let root = std::env::current_dir().context("Failed to resolve application directory")?;
+    macos_bundle_at(&root)
+}
 
-    let dir_name = std::env::current_dir()
-        .ok()
-        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))?;
-    Some(AppBundle::new(&dir_name, "dev.flui"))
+fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
+    let manifest = root.join("flui.toml");
+    match std::fs::symlink_metadata(&manifest) {
+        Ok(_) => {
+            let config = crate::config::FluiConfig::load_from(&manifest)?;
+            Ok(AppBundle::new(&config.app.name, &config.app.organization))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let name = root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    crate::error::CliError::Missing(
+                        "Application directory has no usable bundle name".into(),
+                    )
+                })?;
+            Ok(AppBundle::new(name, "dev.flui"))
+        }
+        Err(error) => Err(crate::error::CliError::context(
+            error,
+            format!("Failed to inspect {}", manifest.display()),
+        )),
+    }
 }
 
 /// Execute build with progress indicators from `flui_build`.
@@ -545,8 +508,7 @@ fn build_desktop(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<(
         Profile::Debug
     };
 
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize Desktop builder")?;
+    let desktop_builder = DesktopBuilder::new();
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop { target: None })
@@ -555,8 +517,8 @@ fn build_desktop(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<(
 
     // `Desktop` builds for the host; on macOS that means staging a `.app`.
     #[cfg(target_os = "macos")]
-    if let Some(bundle) = macos_bundle() {
-        builder = builder.with_bundle(bundle);
+    {
+        builder = builder.with_bundle(macos_bundle()?);
     }
 
     if let Some(out) = output {
@@ -608,8 +570,7 @@ fn build_desktop_with_progress(
         Profile::Debug
     };
 
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize Desktop builder")?;
+    let desktop_builder = DesktopBuilder::new();
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop { target: None })
@@ -617,8 +578,8 @@ fn build_desktop_with_progress(
         .with_profile(profile);
 
     #[cfg(target_os = "macos")]
-    if let Some(bundle) = macos_bundle() {
-        builder = builder.with_bundle(bundle);
+    {
+        builder = builder.with_bundle(macos_bundle()?);
     }
 
     if let Some(out) = output {
@@ -682,8 +643,7 @@ fn build_specific_platform(
         Profile::Debug
     };
 
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
+    let desktop_builder = DesktopBuilder::new();
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop {
@@ -693,10 +653,8 @@ fn build_specific_platform(
         .with_profile(profile);
 
     // `flui build macos` stages a `.app`; other triples keep the bare binary.
-    if target == BuildTarget::Macos
-        && let Some(bundle) = macos_bundle()
-    {
-        builder = builder.with_bundle(bundle);
+    if target == BuildTarget::Macos {
+        builder = builder.with_bundle(macos_bundle()?);
     }
 
     if let Some(out) = output {
@@ -775,8 +733,7 @@ fn build_macos_universal(options: BuildOptions, output: Option<&PathBuf>) -> Cli
 
         spinner.set_message(format!("Building {triple}..."));
 
-        let builder_inst =
-            DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
+        let builder_inst = DesktopBuilder::new();
         let slice_ctx = BuilderContextBuilder::new(workspace_root.clone())
             .with_platform(Platform::Desktop {
                 target: Some(triple.to_string()),
@@ -849,8 +806,7 @@ fn build_specific_platform_with_progress(
         Profile::Debug
     };
 
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
+    let desktop_builder = DesktopBuilder::new();
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop {
@@ -859,10 +815,8 @@ fn build_specific_platform_with_progress(
         .with_target(options.cargo_target())
         .with_profile(profile);
 
-    if target == BuildTarget::Macos
-        && let Some(bundle) = macos_bundle()
-    {
-        builder = builder.with_bundle(bundle);
+    if target == BuildTarget::Macos {
+        builder = builder.with_bundle(macos_bundle()?);
     }
 
     if let Some(out) = output {
@@ -900,4 +854,39 @@ fn build_specific_platform_with_progress(
     ));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod bundle_tests {
+    #[test]
+    fn app_document_controls_display_name_and_identifier() {
+        let root = tempfile::tempdir().expect("fixture");
+        std::fs::write(
+            root.path().join("flui.toml"),
+            "[app]\nname = \"Named App\"\nversion = \"0.1.0\"\norganization = \"org.example\"\n",
+        )
+        .expect("config");
+        let bundle = super::macos_bundle_at(root.path()).expect("valid app document");
+        assert_eq!(bundle.name, "Named App");
+        assert_eq!(bundle.identifier, "org.example.named-app");
+    }
+
+    #[test]
+    fn only_absent_app_config_uses_directory_identity() {
+        let root = tempfile::tempdir().expect("fixture");
+        let bundle = super::macos_bundle_at(root.path()).expect("missing config fallback");
+        assert_eq!(
+            bundle.name,
+            root.path().file_name().expect("name").to_string_lossy()
+        );
+        for text in [
+            "[app",
+            "[app]\nname = 42\nversion = \"0.1.0\"\norganization = \"org.example\"\n",
+        ] {
+            std::fs::write(root.path().join("flui.toml"), text).expect("config");
+            let error =
+                super::macos_bundle_at(root.path()).expect_err("present invalid config must fail");
+            assert!(error.to_string().contains("Failed to parse"));
+        }
+    }
 }

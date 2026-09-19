@@ -162,6 +162,7 @@ smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+cargo_metadata = "0.23.1"
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
 

@@ -776,7 +776,37 @@ fn main() {
     };
 
     if let Err(e) = result {
-        let _ = cliclack::log::error(format!("{e}"));
+        let _ = cliclack::log::error(format_error_chain(&e));
         std::process::exit(1);
+    }
+}
+
+/// Keep command context and its actionable underlying cause visible together.
+fn format_error_chain(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str("\nCaused by: ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
+#[cfg(test)]
+mod desktop_error_tests {
+    #[test]
+    fn command_context_keeps_the_actionable_build_cause() {
+        let error = crate::error::CliError::context(
+            flui_build::BuildError::path_not_found(
+                "/custom target/app".into(),
+                "Cargo executable absent",
+            ),
+            "Failed to build binary",
+        );
+        let text = super::format_error_chain(&error);
+        assert!(text.contains("Failed to build binary"));
+        assert!(text.contains("/custom target/app"));
+        assert!(text.contains("Cargo executable absent"));
     }
 }

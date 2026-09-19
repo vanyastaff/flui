@@ -1,39 +1,18 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::error::{BuildError, BuildResult};
-use crate::platform::{
-    BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts, PlatformBuilder, private,
-};
-use crate::util::process;
+use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
+use crate::util::cargo;
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
-#[derive(Debug)]
-pub struct DesktopBuilder {
-    workspace_root: PathBuf,
-}
+#[derive(Debug, Default)]
+pub struct DesktopBuilder;
 
 impl DesktopBuilder {
-    /// Creates a new `DesktopBuilder`
-    ///
-    /// # Errors
-    ///
-    /// Currently infallible, but returns Result for consistency
-    pub fn new(workspace_root: &Path) -> BuildResult<Self> {
-        Ok(Self {
-            workspace_root: workspace_root.to_path_buf(),
-        })
-    }
-
-    /// Resolve the built executable path for `name` under a target/profile dir.
-    ///
-    /// Cargo writes `name` (plus `.exe` when `target` is a Windows triple)
-    /// into `target/<triple>/<profile>/`.
-    fn executable_path(&self, target: &str, profile: &str, name: &str) -> PathBuf {
-        self.workspace_root
-            .join("target")
-            .join(target)
-            .join(profile)
-            .join(executable_file_name(target, name))
+    /// Create a stateless desktop builder; each operation uses its `BuilderContext`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
     }
 
     /// Detect the host target triple from `rustc -vV`.
@@ -107,7 +86,8 @@ impl PlatformBuilder for DesktopBuilder {
         tracing::info!("Building desktop target '{target}' ({:?})", ctx.target);
 
         let mut args = vec!["build".to_string(), "--target".to_string(), target.clone()];
-        args.extend(ctx.target.cargo_args());
+        let selected = cargo::select_target(&ctx.workspace_root, &ctx.target).await?;
+        args.extend(selected.cargo_args());
         if let Some(profile_flag) = ctx.profile.cargo_flag() {
             args.push(profile_flag.to_string());
         }
@@ -116,9 +96,7 @@ impl PlatformBuilder for DesktopBuilder {
             args.push(ctx.features.join(","));
         }
 
-        process::run_command_in_dir("cargo", &args, &ctx.workspace_root).await?;
-
-        let executable = self.resolve_executable(&target, ctx)?;
+        let executable = cargo::build_executable(&ctx.workspace_root, &args, &selected).await?;
 
         Ok(BuildArtifacts {
             rust_libs: Vec::new(),
@@ -142,8 +120,6 @@ impl PlatformBuilder for DesktopBuilder {
             )
         })?;
 
-        std::fs::create_dir_all(&ctx.output_dir)?;
-
         // macOS with bundle metadata stages a `.app`; every other case (and
         // macOS without metadata) copies the bare executable. A bundle is what
         // a foreground-activatable, double-clickable app needs; a bare Mach-O
@@ -152,6 +128,8 @@ impl PlatformBuilder for DesktopBuilder {
         if let Some(bundle) = &ctx.bundle {
             return Self::stage_macos_app(ctx, executable, bundle);
         }
+
+        std::fs::create_dir_all(&ctx.output_dir)?;
 
         let file_name = executable.file_name().ok_or_else(|| {
             BuildError::invalid_config(
@@ -214,13 +192,22 @@ impl DesktopBuilder {
         executable: &Path,
         bundle: &crate::platform::AppBundle,
     ) -> BuildResult<FinalArtifacts> {
+        validate_bundle_name(&bundle.name)?;
         let app_dir = ctx.output_dir.join(format!("{}.app", bundle.name));
         let contents = app_dir.join("Contents");
         let macos_dir = contents.join("MacOS");
         let resources_dir = contents.join("Resources");
 
-        if app_dir.exists() {
-            std::fs::remove_dir_all(&app_dir)?;
+        match std::fs::symlink_metadata(&app_dir) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(BuildError::invalid_config(
+                    "bundle output",
+                    "Refusing to replace a symbolic link at the application bundle path",
+                ));
+            }
+            Ok(_) => std::fs::remove_dir_all(&app_dir)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
         std::fs::create_dir_all(&macos_dir)?;
         std::fs::create_dir_all(&resources_dir)?;
@@ -282,114 +269,22 @@ impl DesktopBuilder {
             size_bytes,
         })
     }
+}
 
-    /// Locate the executable cargo just produced for `ctx.target`.
-    fn resolve_executable(&self, target: &str, ctx: &BuilderContext) -> BuildResult<PathBuf> {
-        let profile_dir = ctx.profile.as_str();
-
-        let path = match &ctx.target {
-            BuildUnit::Example(name) => self
-                .workspace_root
-                .join("target")
-                .join(target)
-                .join(profile_dir)
-                .join("examples")
-                .join(executable_file_name(target, name)),
-            BuildUnit::Package(name) => {
-                let bin = self
-                    .binary_name_from_manifest(name)
-                    .unwrap_or_else(|| name.clone());
-                self.executable_path(target, profile_dir, &bin)
-            }
-            BuildUnit::DefaultBinary => {
-                let name = Self::binary_name_from_manifest_at(&ctx.workspace_root)?;
-                self.executable_path(target, profile_dir, &name)
-            }
-        };
-
-        if !path.is_file() {
-            return Err(BuildError::PathNotFound {
-                path,
-                context:
-                    "Compiled desktop executable not found (does the target produce a binary?)"
-                        .to_string(),
-            });
-        }
-        Ok(path)
+/// Public bundle display names must also be safe single filesystem components.
+#[cfg(target_os = "macos")]
+fn validate_bundle_name(name: &str) -> BuildResult<()> {
+    let mut components = Path::new(name).components();
+    if name.contains(['/', '\\', '\0'])
+        || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Err(BuildError::invalid_config(
+            "bundle.name",
+            "Application name must be a single nonempty filename component without separators, NUL, '.' or '..'",
+        ));
     }
-
-    /// Resolve a workspace package's binary name from its own manifest.
-    ///
-    /// Walks `crates/*/Cargo.toml` under the workspace root and matches
-    /// `[package].name == name`, then prefers an explicit `[[bin]].name` over
-    /// the package name. Returns `None` when no matching manifest is found —
-    /// the caller then falls back to cargo's package-name convention.
-    fn binary_name_from_manifest(&self, name: &str) -> Option<String> {
-        let crates_dir = self.workspace_root.join("crates");
-        let entries = std::fs::read_dir(&crates_dir).ok()?;
-        for entry in entries.flatten() {
-            let manifest = entry.path().join("Cargo.toml");
-            let Ok(text) = std::fs::read_to_string(&manifest) else {
-                continue;
-            };
-            let Ok(value) = text.parse::<toml::Value>() else {
-                continue;
-            };
-            let package_name = value
-                .get("package")
-                .and_then(|p| p.get("name"))
-                .and_then(toml::Value::as_str);
-            if package_name != Some(name) {
-                continue;
-            }
-            if let Some(bins) = value.get("bin").and_then(toml::Value::as_array)
-                && let Some(first) = bins.first()
-                && let Some(bin_name) = first.get("name").and_then(toml::Value::as_str)
-            {
-                return Some(bin_name.to_string());
-            }
-            return Some(name.to_string());
-        }
-        None
-    }
-
-    /// Resolve the sole package's binary name from the manifest at `dir`.
-    ///
-    /// Prefers `[[bin]].name`, then `[package].name`. A generated application
-    /// has one of the two; when neither parses, the directory's own name is
-    /// cargo's documented fallback.
-    fn binary_name_from_manifest_at(dir: &Path) -> BuildResult<String> {
-        let manifest = dir.join("Cargo.toml");
-        let text = std::fs::read_to_string(&manifest).map_err(|e| {
-            BuildError::path_not_found(dir.to_path_buf(), format!("reading Cargo.toml: {e}"))
-        })?;
-        let value = text.parse::<toml::Value>().map_err(|e| {
-            BuildError::invalid_config("Cargo.toml", format!("could not parse manifest: {e}"))
-        })?;
-
-        if let Some(bins) = value.get("bin").and_then(toml::Value::as_array)
-            && let Some(first) = bins.first()
-            && let Some(bin_name) = first.get("name").and_then(toml::Value::as_str)
-        {
-            return Ok(bin_name.to_string());
-        }
-        if let Some(package_name) = value
-            .get("package")
-            .and_then(|p| p.get("name"))
-            .and_then(toml::Value::as_str)
-        {
-            return Ok(package_name.to_string());
-        }
-        dir.file_name()
-            .and_then(|n| n.to_str())
-            .map(str::to_string)
-            .ok_or_else(|| {
-                BuildError::invalid_config(
-                    "workspace_root",
-                    format!("{} has no usable directory name", dir.display()),
-                )
-            })
-    }
+    Ok(())
 }
 
 /// Escape the five XML metacharacters in a plist `<string>` value.
@@ -413,23 +308,6 @@ fn xml_escape(value: &str) -> String {
         }
     }
     out
-}
-
-/// The file name cargo emits for a binary, given the *requested* target
-/// triple.
-///
-/// The suffix must come from `target`, never the host: a cross-build
-/// (`flui build windows` on macOS or Linux) writes
-/// `target/<windows-triple>/<profile>/<name>.exe`, and a Windows host building
-/// a Linux target writes a bare `<name>`. Keying off `cfg!(target_os = ...)`
-/// checks the CLI host and gets both directions wrong — the build succeeds but
-/// the artifact lookup reports `PathNotFound`.
-fn executable_file_name(target: &str, name: &str) -> String {
-    if target.contains("windows") {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
 }
 
 /// Total size of every file under `dir`, recursively.
@@ -474,37 +352,5 @@ mod xml_escape_tests {
     fn ordinary_names_pass_through_unchanged() {
         assert_eq!(xml_escape("My Great App"), "My Great App");
         assert_eq!(xml_escape("com.example.app"), "com.example.app");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::executable_file_name;
-
-    #[test]
-    fn a_windows_target_gets_an_exe_suffix_on_any_host() {
-        // The regression: this used to key off `cfg!(target_os = "windows")`,
-        // the CLI host. A Linux or macOS host cross-building
-        // `x86_64-pc-windows-msvc` searched for a bare name and reported
-        // `PathNotFound` after a successful compile.
-        assert_eq!(
-            executable_file_name("x86_64-pc-windows-msvc", "demo"),
-            "demo.exe"
-        );
-        assert_eq!(
-            executable_file_name("aarch64-pc-windows-msvc", "demo"),
-            "demo.exe"
-        );
-    }
-
-    #[test]
-    fn a_non_windows_target_has_no_suffix_even_on_a_windows_host() {
-        // The inverse direction: a Windows host targeting Linux/macOS must
-        // not append `.exe`.
-        assert_eq!(
-            executable_file_name("x86_64-unknown-linux-gnu", "demo"),
-            "demo"
-        );
-        assert_eq!(executable_file_name("aarch64-apple-darwin", "demo"), "demo");
     }
 }

@@ -1,3 +1,5 @@
+/// Cargo package selection and artifact protocol.
+pub(crate) mod cargo;
 /// Environment variable resolution and validation
 pub(crate) mod environment;
 /// Process execution utilities

@@ -286,3 +286,40 @@ crate names. Headless CLI fixtures execute marker binaries and reject unrelated
 members, dev/build-only dependencies, comments and prefix lookalikes. This tests
 admission, not live UI behavior. Evidence: `/tmp/flui-run-admission-red.log`
 (original sole-facade rejection) and `/tmp/flui-run-admission-suite.log`.
+
+## Desktop build artifact discovery
+
+The first external generated-app `flui build desktop` probe completed Cargo
+compilation but failed artifact lookup because the output directory was configured
+through `CARGO_TARGET_DIR`. The pre-beta `DesktopBuilder::new(&root) -> Result`
+constructor becomes stateless `new() -> Self` with `Default`; operation contexts
+own the working directory. Desktop builds now consume Cargo's actual executable
+artifact and metadata rather than reconstructing a path or guessing the first binary
+in a manifest. Package/default-run/example selection is explicit; ambiguous and
+non-executable selections fail with the underlying cause visible in CLI output.
+
+Present application configuration uses the existing typed loader, preserving the
+configured display name and organization. Invalid configuration fails; absent
+configuration retains the example-directory fallback. Bundle names are checked before
+filesystem mutation, and existing bundle-path symlinks are rejected. These checks
+preserve ordinary Unicode names and spaces.
+
+Tiny real Cargo fixtures verify external/configured output directories, package and
+example selection, cached artifacts, failed builds and staging. This is scoped build
+verification; a new generated-FLUI application build and visible launch are recorded
+separately when performed. No new cross-platform runtime or shutdown claim follows
+from artifact discovery alone.
+
+The retained generated counter subsequently passed `flui build desktop` with its
+external `CARGO_TARGET_DIR` (`/tmp/flui-beta-counter-desktop-fixed.log`). Launching
+the resulting bundle through the UI automation service showed a white window;
+directly launching the same bundled executable rendered the counter, and two
+observed pointer clicks changed 18 to 19 to 20. The initial value of that live
+observation was already 18, so it does not establish the initial zero state.
+The close action reached the `Window closed` callback, but the process remained
+inside `NSApplication.run` (`/tmp/flui-beta-counter-bundle-direct.log` and
+`/tmp/flui-beta-counter-close-sample.txt`). Bundle launch and ordinary shutdown
+remain unresolved runtime checks; this successful artifact repair does not close
+them. The independent fixture review also strengthened package selection coverage:
+same-named binaries now emit distinct package identities, which the tests execute
+and verify (`/tmp/flui-desktop-package-identity-repair.log`, nine tests passed).

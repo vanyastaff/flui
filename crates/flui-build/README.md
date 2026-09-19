@@ -216,7 +216,7 @@ let ctx = BuilderContextBuilder::new(PathBuf::from("."))
     .with_profile(Profile::Release)
     .build();
 
-let builder = DesktopBuilder::new(&ctx.workspace_root)?;
+let builder = DesktopBuilder::new();
 let artifacts = builder.build_rust(&ctx)?;
 let final_artifacts = builder.build_platform(&ctx, &artifacts)?;
 
