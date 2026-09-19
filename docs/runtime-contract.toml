@@ -378,7 +378,7 @@ membership and a real `WindowRegistry` mapping; \
 `one_realm_two_windows_policy_routes_by_presentation`). `ExitPolicy` is \
 LIVE-WIRED, not merely mechanism: `flui_platform::traits::Platform:: \
 set_exit_policy_hook` (a new default-no-op trait method, overridden by the \
-winit and headless backends only) lets `runner/host.rs::install_exit_policy_hook` \
+winit, AppKit, and headless backends) lets `runner/host.rs::install_exit_policy_hook` \
 install a hook that consults `AppRuntime::should_exit` INSTEAD of a \
 backend's own unconditional "every window I track just closed -> exit" \
 bookkeeping -- proven through the REAL platform seam (not a direct \
@@ -457,14 +457,20 @@ spurious request a no-op. \
 `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits` \
 pins both halves: that the tail parks a request at all (the assertion the \
 fix adds -- without the tail change nothing is parked), and that driving it \
-produces the quit. Reverting either half turns it red. Backend note, \
-unchanged: since issue #919 this shape only ever arose on the HEADLESS \
-double, because the winit backend's `close()` never runs its teardown \
+produces the quit. Reverting either half turns it red. The winit backend's `close()` never runs its teardown \
 synchronously (it is posted to the owner lane and run on the owner's next \
 turn, top-level, with no realm checked out), so a programmatic close from \
 inside a dispatched callback tore down un-nested there and the hook already \
 saw the emptied registry. The headless `close()` stays synchronous, which \
-is what that test drives.
+is what that test drives. AppKit also closes synchronously, then defers its \
+exit-policy consultation to the next owner turn. Its native evidence is \
+`exit_policy_probe` through `scripts/check-macos-exit.py`: last-window exit, \
+policy veto, worker re-evaluation, replacement windows and hooks, normal \
+return/drop, native weak release after autorelease-pool drain, bootstrap \
+failures and standalone NSApplication ownership. Native termination is \
+tested by sending `terminate:`, not by asserting physical Cmd+Q/menu wiring. \
+No keep-alive enum variant is added; the native veto case uses the platform \
+hook and the existing app service-completion test verifies notifier wiring.
 
 **A second product gap this required fixing: `open_secondary_window` \
 assumed `OwnerPlatform::open_window` always resolves `Ready`.** It does, \
@@ -2794,7 +2800,7 @@ kind = "function"
 declared_in = "crates/flui-app/src/app/runner/mod.rs"
 contains = "pub fn run_app_impl"
 classification = "stable-candidate"
-thread_affinity = "call on the process main thread; blocks until the event loop exits (never returns on macOS)"
+thread_affinity = "call on the process main thread; blocks until the event loop exits; standalone AppKit returns through Rust teardown"
 owner = "application composition root (runner)"
 failure_semantics = "returns unit; bootstrap failures are logged and the loop exits — no Result surface today"
 consumers = ["flui facade re-export", "examples"]

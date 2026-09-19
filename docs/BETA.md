@@ -43,6 +43,35 @@ and a test, as required by [AGENTS.md](../AGENTS.md).
 
 ## Platform evidence
 
+### Application lifecycle acceptance
+
+Lifecycle is a framework contract exposed through `flui`, including startup,
+window close versus application quit, minimize/restore, focus gain/loss,
+hide/show, continued work without visible windows, reopening the interface,
+and platform suspension/resumption. Window visibility, input focus, rendering
+eligibility, and process lifetime must remain distinct. Background services
+follow the host OS's execution rules; keeping a desktop process alive does not
+prove mobile background execution.
+
+Verify each transition through a public consumer, including multiple windows
+and realms, repeated notifications, cancellation, and teardown. Explicit quit
+must notify every surviving realm and finish application services. A resident
+application must be able to reopen its UI and explicitly quit through public
+capabilities. Native activation/reopen and background-launch behavior need their
+own live checks. The macOS shutdown probes below cover only their named cases.
+
+The current audit found that desktop quit dispatch targets the primary realm;
+the secondary-window runner explicitly leaves all-realm quit notification as
+follow-up work. This remains a release gap until a multi-realm regression and
+the implementation prove notification to every hosted realm.
+
+Primary references: [AppKit last-window termination policy](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:))
+separates window closure from application termination; [winit application lifecycle](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)
+documents platform-specific suspend/resume and redundant notifications. These
+inform the acceptance cases, not a claim that FLUI already implements them all.
+
+### Candidate evidence records
+
 Track macOS, Windows, Linux, Android, iOS, and Web separately. For each candidate,
 record the commit, OS/device/browser, toolchain, backend, command, test result,
 and artifact or log location. Distinguish physical devices from simulators,
@@ -318,8 +347,33 @@ observed pointer clicks changed 18 to 19 to 20. The initial value of that live
 observation was already 18, so it does not establish the initial zero state.
 The close action reached the `Window closed` callback, but the process remained
 inside `NSApplication.run` (`/tmp/flui-beta-counter-bundle-direct.log` and
-`/tmp/flui-beta-counter-close-sample.txt`). Bundle launch and ordinary shutdown
-remain unresolved runtime checks; this successful artifact repair does not close
+`/tmp/flui-beta-counter-close-sample.txt`). At that point, bundle launch and ordinary shutdown
+remained unresolved runtime checks; this successful artifact repair does not close
 them. The independent fixture review also strengthened package selection coverage:
 same-named binaries now emit distinct package identities, which the tests execute
 and verify (`/tmp/flui-desktop-package-identity-repair.log`, nine tests passed).
+
+### Native macOS last-window exit
+
+AppKit now consults the existing exit-policy hook after close callbacks and
+re-evaluates it on the owner thread when a worker releases a keep-alive holder.
+Explicit quit and native `terminate:` requests stop and wake the loop, returning
+through Rust cleanup instead of exiting the process inside AppKit. The standalone
+runner rejects a running NSApplication or existing delegate before mutation;
+foreign delegate and activation-policy changes are preserved.
+
+The bounded `exit_policy_probe` reproduces the original failure: its close
+callback ran but `Platform::run` did not return within eight seconds. The repaired
+native cases verify post-return and destructor markers, exactly-once quit,
+replacement-window survival, veto/re-evaluation, bootstrap errors and native
+window weak references becoming nil after autorelease-pool drain. The platform
+architecture document records the ownership and callback-lifetime decisions.
+This certifies native-loop behavior, not physical Cmd+Q/menu routing, nested modal
+loops, or foreign-loop embedding. Full CI remains a final-release gate.
+
+A generated counter built through `flui build desktop` was also launched directly
+from its produced macOS bundle: native UI interaction advanced 0 → 1 → 2, then
+closing the window logged both window close and platform quit and returned exit
+code 0 without a signal. A separate LaunchServices/background launch still showed
+a blank window; that rendering/startup issue remains open and is not covered by
+the direct-launch result.

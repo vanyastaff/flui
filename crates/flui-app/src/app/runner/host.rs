@@ -448,14 +448,14 @@ pub(crate) fn with_owner_platform<R>(
 
 /// Unwind-safe TLS clearing. Arm this guard *before* calling
 /// `Platform::run(...)` on any backend whose `run` returns (winit,
-/// headless, Android) — not inside `on_ready` — so a panic anywhere inside
+/// headless, Android, AppKit) — not inside `on_ready` — so a panic anywhere inside
 /// `on_ready` or later in `run` unwinds through the guard's `Drop` and
 /// cannot leak the host into whatever runs on this thread next (notably,
 /// the next test). Clearing an already-empty slot is a no-op.
 ///
 /// Web deliberately arms no guard: the host stays resident for the page's
-/// lifetime (see the web runner's own comment on this). macOS is moot:
-/// `run` never returns there (`terminate:` exits the process).
+/// lifetime (see the web runner's own comment on this). Standalone AppKit
+/// stops its native loop and returns through this guard like other desktops.
 ///
 /// # No host re-entry, and no eager resolution
 ///

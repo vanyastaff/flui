@@ -236,9 +236,8 @@ pub trait Platform: Send + Sync + 'static {
     /// Takes `self: Box<Self>` because some backends (e.g. winit) require
     /// ownership of the event loop to run it.
     ///
-    /// This function only returns when the application quits (never, on
-    /// backends whose native run loop does not return control — e.g. macOS,
-    /// where `terminate:` exits the process).
+    /// Desktop event loops, including standalone AppKit, return after orderly
+    /// shutdown. Backends tied to a page/process lifetime may not return.
     ///
     /// # Errors
     /// Propagates `on_ready`'s own `Err` as [`PlatformError::Bootstrap`],
@@ -273,11 +272,10 @@ pub trait Platform: Send + Sync + 'static {
     /// this backend's native window count decide alone.
     ///
     /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit` and `headless` today — Win32/AppKit/Android/Web/iOS
+    /// except `winit`, AppKit, and `headless` today — Win32/Android/Web/iOS
     /// remain cross-typecheck-only for this specific mechanism, stated
     /// honestly rather than silently assumed) keeps its pre-existing
-    /// unconditional "last window closed -> exit" behavior exactly as
-    /// before; installing a hook there is inert.
+    /// native lifecycle behavior; installing a hook there is inert.
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
         let _ = hook;
     }
@@ -303,7 +301,7 @@ pub trait Platform: Send + Sync + 'static {
     /// are still open, or while the hook still vetoes, is a no-op.
     ///
     /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit` and `headless` today — Win32/AppKit/Android/Web/iOS
+    /// except `winit`, AppKit, and `headless` today — Win32/Android/Web/iOS
     /// remain cross-typecheck-only for this mechanism, stated honestly
     /// rather than silently assumed) simply never re-evaluates: on those
     /// backends a keep-alive holder's release does not end the process

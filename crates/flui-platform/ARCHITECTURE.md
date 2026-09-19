@@ -9,6 +9,62 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Standalone AppKit stops its loop and returns through Rust cleanup
+
+The existing `Platform` exit-policy hook remains the boundary: `flui-app`
+owns realm/service policy; `flui-platform` owns window bookkeeping and native
+loop actuation. AppKit now implements both policy installation and coalesced,
+any-thread re-evaluation. Close callbacks finish before the deferred owner turn
+consults the hook. Hooks run outside locks, and both loop phase and window count
+are checked again afterward because a hook may open a replacement window.
+Reentrant requests get another owner turn; a replaced hook is never overwritten
+by restoring the old leased callback. No public policy variant is added.
+
+`LoopOwnership` accepts only a standalone NSApplication: a running application
+or existing delegate is rejected before bootstrap or activation mutation. The
+constructor merely acquires the singleton. The run scope retains its delegate,
+sets Regular activation, and restores the previous policy only while its own
+delegate and installed policy are still current. External replacements survive.
+The delegate routes native termination into the same deferred quit path and
+returns TerminateCancel, preventing AppKit from exiting the process itself.
+
+Explicit quit bypasses the last-window veto. `stop(None)` plus an application
+NSEvent wakes the native wait; quit during bootstrap skips `run()` entirely.
+This follows [Apple's stop contract](https://developer.apple.com/documentation/appkit/nsapplication/stop(_:))
+and the installed winit 0.30.13 `stop_app_immediately` implementation. This is the
+standalone main loop contract; nested modal loops and foreign-loop embedding are
+not supported by this owner. Physical keyboard/menu wiring is a separate input
+concern, not proved by sending `terminate:` in a probe.
+
+Shutdown first closes admission, clears callback cycles and closes remaining
+windows on main, then invokes quit once outside locks. Cleanup also runs on
+bootstrap error/unwind. User callback/destructor panics are contained per cleanup
+step and logged; exceptional panic payloads are deliberately leaked rather than
+risk a second panic during unwinding. Resource cleanup after such a panic is
+best effort, while the guard still detaches its own delegate.
+
+Native window release now executes inline on its owner, including after the
+loop returns, through the same panic boundary used by lifecycle cleanup. The
+`inline_cleanup_contains_hostile_panic_and_unwinds_local_resources` test injects
+a panic payload whose destructor also panics: the boundary retains that payload
+without destruction while ordinary local resource destructors still execute. `windowWillClose:` pins its receiver with an extra retain transferred
+to the surrounding autorelease pool before callbacks can drop the final wrapper.
+That prevents deallocation under the native close stack. Worker drops remain
+nonblocking queued tails; if the owner no longer services them, that existing
+fallback can leak native resources and never releases them off-main.
+
+**Verification:** `cargo build -p flui-platform --locked --example exit_policy_probe`
+then `python3 scripts/check-macos-exit.py target/debug/examples/exit_policy_probe`
+stages a fresh bundled subprocess per case with an eight-second kill/reap limit.
+Cases require post-return, quit, callback-drop and stack-drop markers, and weak
+NSWindow references must be nil after an explicit autorelease pool drains.
+Replacement windows must survive a later owner turn before the probe closes them;
+replacement hooks must actually execute. Foreign ownership, pre-run/bootstrap
+quit, bootstrap failure/unwind and quit panic each have their own case. Unsupported
+hosts and unknown case names fail explicitly. The older close-path and frame-pump
+probes retain their narrower lifecycle/frame assertions.
+
+
 ### The winit backend delegates the whole keyboard event to `ui-events-winit`; Win32/AppKit keep hand-written tables
 
 **Rule:** every native keyboard event this crate receives must be normalized
