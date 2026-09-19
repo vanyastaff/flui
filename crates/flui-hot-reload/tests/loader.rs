@@ -23,6 +23,10 @@ use std::time::{Duration, SystemTime};
 
 use flui_hot_reload::ScenePlugin;
 use flui_hot_reload::dynlib::{DynLib, file_mtime};
+#[cfg(unix)]
+use flui_testing::log_capture::capture;
+#[cfg(unix)]
+use tracing::Level;
 
 /// A self-cleaning temp file path unique to each test (no `tempfile` dep).
 struct TempPath(PathBuf);
@@ -56,6 +60,35 @@ fn dynlib_open_missing_file_is_none() {
     assert!(
         DynLib::open(&missing).is_none(),
         "opening a non-existent path must return None, not panic or a dangling handle",
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn dynlib_open_missing_file_traces_structured_path() {
+    let missing = TempPath::new("dlopen_trace");
+    let missing_display = missing.path().display().to_string();
+
+    let (library, captured_log) = capture(|| DynLib::open(missing.path()));
+
+    assert!(
+        library.is_none(),
+        "opening a non-existent path must return None; captured:\n{captured_log}",
+    );
+
+    let failure_events: Vec<_> = captured_log
+        .at_level(Level::TRACE)
+        .filter(|record| record.message == "dlopen failed")
+        .collect();
+    assert_eq!(
+        failure_events.len(),
+        1,
+        "one trace must describe the failed dynamic-library load; captured:\n{captured_log}",
+    );
+    assert_eq!(
+        failure_events[0].field("path"),
+        Some(missing_display.as_str()),
+        "the failure trace must retain the attempted path as a structured field; captured:\n{captured_log}",
     );
 }
 
