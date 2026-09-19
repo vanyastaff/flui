@@ -58,6 +58,8 @@ mod gesture_detector;
 mod gesture_detector_advanced;
 #[path = "hero_public.rs"]
 mod hero_public;
+#[path = "hot_reload_state.rs"]
+mod hot_reload_state;
 #[path = "image.rs"]
 mod image;
 #[path = "implicit_animations.rs"]

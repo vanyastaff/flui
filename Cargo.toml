@@ -583,6 +583,15 @@ name = "cupertino_demo"
 path = "examples/cupertino_demo/main.rs"
 required-features = ["cupertino"]
 
+# The iOS simulator demo: the same Material tree as `material_demo`, run on the
+# native UIKit backend. Only meaningful on the `aarch64-apple-ios-sim` target —
+# every other target compiles a no-op `main` — but it is declared unconditionally
+# so `just ios-sim` can build it by name.
+[[example]]
+name = "ios_demo"
+path = "examples/ios_demo.rs"
+required-features = ["material"]
+
 # Renders any demo tree offscreen to a PNG; it `#[path]`-includes both catalog
 # demos, so it needs both.
 [[example]]

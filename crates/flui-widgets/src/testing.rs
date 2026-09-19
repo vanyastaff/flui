@@ -708,6 +708,24 @@ impl LaidOut {
         self.binding.pump_frame(Duration::ZERO);
     }
 
+    /// Hot-reload entry point: mark every mounted element dirty, without
+    /// unmounting or disposing state.
+    ///
+    /// Call [`pump`](Self::pump) afterward to run the rebuild. Paired with
+    /// [`reassemble_render_tree`](Self::reassemble_render_tree) this is the
+    /// headless twin of production `PresentationState::apply_hot_reload`.
+    pub fn perform_reassemble(&mut self) {
+        self.binding.perform_reassemble();
+    }
+
+    /// Hot-reload render half: mark the render tree's layout + paint dirty.
+    ///
+    /// Call before [`pump`](Self::pump) after
+    /// [`perform_reassemble`](Self::perform_reassemble).
+    pub fn reassemble_render_tree(&self) {
+        self.binding.reassemble_render_tree();
+    }
+
     /// Register `controller` with the binding so each [`pump`](Self::pump) /
     /// [`tick`](Self::tick) / [`pump_for`](Self::pump_for) advances it on the
     /// virtual timeline (restart-aware). Register before starting the controller.

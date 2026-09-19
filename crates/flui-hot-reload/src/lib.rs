@@ -179,7 +179,7 @@ pub use host::{PluginKind, ScenePlugin};
 #[cfg(not(target_arch = "wasm32"))]
 pub use worker::{
     RegisterWorkerBuildFn, WorkerPlugin, WorkerPollOutcome, WorkerReloadDriver,
-    get_worker_build_ptr, host_register_fn,
+    get_worker_build_ptr, host_register_fn, worker_artifact_stamp,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]

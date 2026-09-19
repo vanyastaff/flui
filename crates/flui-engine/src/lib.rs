@@ -509,7 +509,7 @@ mod scenebuilder_filter_chain_tests;
 pub use error::{EngineError, EngineResult, Recoverability};
 // RasterBackend: the frame-driver swap point. The trait is unconditional;
 // only the wgpu impl is feature-gated.
-pub use raster::{PrePresentHook, RasterBackend};
+pub use raster::{PrePresentHook, PresentDisposition, RasterBackend};
 // Raster mailbox + dedicated ack channel boundary.
 pub use raster_owner::{
     FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner,

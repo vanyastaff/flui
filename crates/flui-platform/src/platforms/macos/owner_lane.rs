@@ -30,7 +30,8 @@
 //! `Queue::main()` / `Queue::create` would break the identity comparison. Keep
 //! the statics.
 
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::msg_send;
+use objc2::runtime::AnyClass;
 
 /// The production owner lane: the dispatch queue bound to the AppKit main
 /// thread. Calls from other threads are dispatched here synchronously.
@@ -123,8 +124,10 @@ pub(super) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bo
         || (owner_is_main && {
             // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
             // class method with no arguments and a BOOL return; it may be
-            // called from any thread at any time.
-            let is_main: bool = unsafe { msg_send![class!(NSThread), isMainThread] };
+            // called from any thread at any time. objc2's `msg_send!` takes
+            // the class object itself as the receiver for a class method.
+            let cls = AnyClass::get(c"NSThread").expect("BUG: NSThread is always registered");
+            let is_main: bool = unsafe { msg_send![cls, isMainThread] };
             is_main
         })
 }

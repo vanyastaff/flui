@@ -50,8 +50,10 @@ pub mod embedder; // PORT-CHECK-OK-SP4: embedder API surface; binding entry for 
 // Primary exports - Flutter naming
 pub use app::{
     AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config,
-    run_direct,
 };
+// `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
+#[cfg(not(target_os = "ios"))]
+pub use app::run_direct;
 // Host-injected execution seam (issue #557): an embedded host provides its
 // own worker pools via `AppConfig::with_executors`, and the runtime's
 // default pools are then never constructed. `DeterministicExecutors` is the
@@ -135,7 +137,9 @@ pub mod prelude {
     // FLUI crate emits from. Nothing in the prelude installs a subscriber.
     pub use tracing::{debug, error, info, trace, warn};
 
-    pub use crate::{AppConfig, run_app, run_app_with_config, run_direct};
+    #[cfg(not(target_os = "ios"))]
+    pub use crate::run_direct;
+    pub use crate::{AppConfig, run_app, run_app_with_config};
     // Bindings
     pub use crate::{
         GestureBinding, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding,

@@ -227,7 +227,7 @@ wasm-link-check:
 # Green here means "compiles clean under the workspace lints", nothing more.
 # Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
 [group("build")]
-[doc("Clippy flui-platform's Windows, macOS, and Android backends from this host (mirrors the CI cross-typecheck job)")]
+[doc("Clippy flui-platform's Windows, macOS, Android, and iOS backends from this host (mirrors the CI cross-typecheck job)")]
 cross-typecheck:
     # `--features a11y` on every line: the UIA/NSAccessibility bridges are
     # feature-gated and this job is the ONLY gate that compiles them at all
@@ -236,6 +236,12 @@ cross-typecheck:
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target x86_64-pc-windows-msvc -- -D warnings
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-darwin -- -D warnings
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
+    # iOS: the native UIKit backend had no lint gate at all before this line,
+    # and it did not compile for the target until the platform work landed.
+    # `aarch64-apple-ios` (device) rather than `-sim`, matching the other
+    # targets: sim and device differ only in the slice, not in the API surface
+    # this lint sees, and `just ios-sim` executes the simulator one.
+    cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
 
 # =============================================================================
 # Testing
@@ -276,6 +282,33 @@ macos-frame-pump:
 "cargo build -p flui-platform --locked --example frame_pump_probe\nAPP=target/macos-frame-pump/FramePumpProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.frame_pump_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/frame_pump_probe \"$APP/Contents/MacOS/frame_pump_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/frame_pump_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'FRAME_PUMP_PROBE_RESULT=PASS'; then\n  echo 'macos-frame-pump FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
 } else {
 "echo 'Skipping macos-frame-pump on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle — it measures frames from a visible window, so it cannot run headless or on another OS; on a Mac run: just macos-frame-pump'"
+} }}
+
+[group("test")]
+[doc("Executable resize-transient coverage on a real Mac: builds the resize_jitter_probe example into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the RESIZE_JITTER_PROBE_RESULT=PASS and RESIZE_JITTER_PROBE_STALE=0 markers. The probe drives a scripted burst of REAL window resizes while rendering continuously into the Metal swapchain, with the surface deliberately held frames behind the window, and counts Renderer::warn_on_size_mismatch — the acquired swapchain texture differing from the configured surface size, i.e. the frame a compositor would stretch. It pins that invariant; it does NOT discriminate desired_maximum_frame_latency, which it was built to do and measurably cannot (zero at 1 and at 2, four runs) — see the probe's own module doc and the literal's comment in renderer.rs. macOS-only by construction; skips with a message on other hosts")]
+macos-resize-jitter:
+    {{ if os() == "macos" {
+"cargo build -p flui --locked --example resize_jitter_probe\nAPP=target/macos-resize-jitter/ResizeJitterProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp examples/Info.plist.resize_jitter_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/resize_jitter_probe \"$APP/Contents/MacOS/resize_jitter_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/resize_jitter_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_RESULT=PASS' || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_STALE=0'; then\n  echo 'macos-resize-jitter FAILED: probe exit code, PASS marker, or the zero stale-size marker is missing (output above)'\n  exit 1\nfi"
+} else {
+"echo 'Skipping macos-resize-jitter on this host: the probe measures the Metal swapchain of a real visible AppKit window under a resize burst, so it needs a real macOS host with an active GUI session and a staged .app bundle; on a Mac run: just macos-resize-jitter'"
+} }}
+
+[group("test")]
+[doc("Executable macOS text-input coverage on a real Mac: builds the ime_probe example, stages it into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the IME_PROBE_RESULT=PASS marker. The probe runs the real backend through the production launch path, reaches the window's content view through AppKit, and drives four assertions: (A, ADR-0069) one synthesized keyDown for one letter reaches the application as exactly one ImeEvent::Commit with zero Key::Character while a text input is attached, and the exact inverse with it detached; (B) the NSTextInputClient queries AppKit makes answer correctly, including the UTF-16 to byte cursor conversion; (C) a cursor area set through the trait comes back as a non-zero rect; (D) unmarkText announces the end of composition. The key events are synthesized, not human keystrokes, and NO genuine input method runs, so a real composition stays undriven - the probe covers the routing and the protocol, not the input method. macOS-only by construction; skips with a message on other hosts")]
+macos-ime:
+    {{ if os() == "macos" {
+"cargo build -p flui-platform --locked --example ime_probe\nAPP=target/macos-ime/ImeProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.ime_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/ime_probe \"$APP/Contents/MacOS/ime_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/ime_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'IME_PROBE_RESULT=PASS'; then\n  echo 'macos-ime FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
+} else {
+"echo 'Skipping macos-ime on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle — it routes AppKit key events into a visible window, so it cannot run headless or on another OS; on a Mac run: just macos-ime'"
+} }}
+
+[group("test")]
+[doc("Runs the iOS demo on an iOS Simulator (the only executing coverage of the native UIKit backend). Builds examples/ios_demo for aarch64-apple-ios-sim, stages it into a minimal .app, boots a simulator, installs and launches it, captures a screenshot, and asserts the app got as far as a created Metal device and a rendered frame — read out of the simulator's unified log, since UIApplicationMain owns the process and no test harness can. macOS-host only (needs Xcode + simctl); skips with a message elsewhere.")]
+ios-sim:
+    {{ if os() == "macos" {
+"set -e\nDEVICE=\"${FLUI_IOS_SIM_DEVICE:-iPhone 17 Pro}\"\nxcrun simctl boot \"$DEVICE\" 2>/dev/null || true\nxcrun simctl bootstatus \"$DEVICE\" -b >/dev/null 2>&1 || true\n\n# Arm 1 — a static Material app: Metal device created and a frame rendered.\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-sim/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\nxcrun simctl install booted \"$APP\"\nxcrun simctl terminate booted \"$BUNDLE\" 2>/dev/null || true\nxcrun simctl launch booted \"$BUNDLE\" >/dev/null\nsleep 12\nLOG=target/ios-sim/app.log\nxcrun simctl spawn booted log show --last 5m --process ios_demo > \"$LOG\" 2>/dev/null || true\nxcrun simctl io booted screenshot target/ios-sim/screen.png >/dev/null 2>&1 || true\nif ! grep -q 'Selected GPU:.*Metal' \"$LOG\" || ! grep -q 'First frame rendered' \"$LOG\"; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 1 (static app): expected \"Selected GPU ... Metal\" and \"First frame rendered\"; tail:';\n  grep 'flui]' \"$LOG\" | tail -20;\n  exit 1;\nfi\necho 'IOS_SIM arm1=PASS (Metal device created, first frame rendered)';\n\n# Arm 2 — an ANIMATED app, and the regression guard for the iOS frame-source\n# bug. Survival alone is NOT the discriminator: a request_redraw that\n# dispatches a frame synchronously AND calls setNeedsDisplay() can still\n# complete and log frames while the screen stays WHITE, because UIKit repaints\n# the opaque UIView's empty layer over the CAMetalLayer the renderer presented\n# into. The honest signal is the pixels: two screenshots of a live, animating\n# tree must DIFFER. A cropped centre square is compared so a ticking status-bar\n# clock can never masquerade as motion.\nANIM=dev.flui.anim-demo\nAAPP=target/ios-sim/AnimDemo.app\ncargo build -p flui --locked --example animated_box_app --target aarch64-apple-ios-sim\nrm -rf \"$AAPP\"\nmkdir -p \"$AAPP\"\ncp examples/Info.plist.ios_anim \"$AAPP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/animated_box_app \"$AAPP/animated_box_app\"\nxcrun simctl install booted \"$AAPP\"\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nxcrun simctl launch booted \"$ANIM\" >/dev/null\nsleep 12\ntarget_io=target/ios-sim\nxcrun simctl io booted screenshot \"$target_io/anim_a.png\" >/dev/null 2>&1 || true\nsleep 2\nxcrun simctl io booted screenshot \"$target_io/anim_b.png\" >/dev/null 2>&1 || true\ncp \"$target_io/anim_a.png\" \"$target_io/anim_a_crop.png\"\ncp \"$target_io/anim_b.png\" \"$target_io/anim_b_crop.png\"\nsips -c 240 240 \"$target_io/anim_a_crop.png\" >/dev/null 2>&1 || true\nsips -c 240 240 \"$target_io/anim_b_crop.png\" >/dev/null 2>&1 || true\nHA=$(md5 -q \"$target_io/anim_a_crop.png\")\nHB=$(md5 -q \"$target_io/anim_b_crop.png\")\nALIVE=$(pgrep -f animated_box_app | wc -l | tr -d ' ')\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nif [ \"$HA\" = \"$HB\" ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): two screenshots 2 s apart are IDENTICAL, so no animation reached the screen (frozen or white) even though frames may be logged; see target/ios-sim/anim_{a,b}.png';\n  exit 1;\nfi\nif [ \"$ALIVE\" -lt 1 ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): the app did not survive to the screenshot pass - request_redraw likely never returned to UIKit and iOS scene-create watchdog killed it';\n  exit 1;\nfi\necho 'IOS_SIM arm2=PASS (animated pixels differ, app survived)';\necho 'IOS_SIM_RESULT=PASS (static + animated, screenshots under target/ios-sim/)'"
+} else {
+"echo 'Skipping ios-sim on this host: it needs a macOS host with Xcode and the iOS Simulator (xcrun simctl) plus the aarch64-apple-ios-sim target; on a Mac run: just ios-sim'"
 } }}
 
 [group("test")]

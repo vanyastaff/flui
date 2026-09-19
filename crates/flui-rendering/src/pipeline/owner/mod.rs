@@ -644,6 +644,82 @@ mod tests {
         assert!(!owner.has_dirty_nodes());
     }
 
+    /// Hot-reload `reassemble` must dirty all four phases Flutter's
+    /// `RenderObject.reassemble()` dirties — layout, compositing bits, paint,
+    /// and semantics — not just layout + paint. A reload can change code that
+    /// affects only compositing or semantics, and the old two-mark version left
+    /// such a change invisible until something else dirtied those phases.
+    ///
+    /// The tree is settled with a real frame first: that is the actual
+    /// precondition (a hot reload happens after the app has rendered at least
+    /// once), and it clears every per-node flag and queue so the only dirt the
+    /// assertions see is what `reassemble` introduces.
+    #[test]
+    fn reassemble_marks_layout_compositing_paint_and_semantics() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.set_root_render_object(Box::new(SemanticLeaf::boundary_labeled("root")));
+        owner
+            .insert_child_render_object(root, Box::new(PaintingLeaf::red(10.0, 10.0)))
+            .expect("child inserted");
+        // Semantics marking is gated on the pipeline's own enable flag.
+        owner.set_semantics_enabled(true);
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(10.0), px(10.0)))));
+
+        let (mut owner, result) = owner.run_frame();
+        result.expect("settling frame should succeed");
+        assert!(
+            !owner.has_dirty_nodes(),
+            "the settling frame must leave nothing dirty"
+        );
+
+        owner.reassemble();
+
+        assert!(
+            !owner.nodes_needing_layout().is_empty(),
+            "reassemble must mark the tree for layout"
+        );
+        assert!(
+            !owner.nodes_needing_compositing_bits_update().is_empty(),
+            "reassemble must mark compositing bits dirty (Flutter parity)"
+        );
+        assert!(
+            !owner.nodes_needing_paint().is_empty(),
+            "reassemble must mark the tree for paint"
+        );
+        assert!(
+            !owner.nodes_needing_semantics().is_empty(),
+            "reassemble must mark semantics dirty when semantics are enabled"
+        );
+    }
+
+    /// With semantics disabled, reassemble still dirties the other three phases
+    /// and does not enqueue a semantics update — the gate is the pipeline's own
+    /// contract, not a hole in the reload.
+    #[test]
+    fn reassemble_respects_the_semantics_gate() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.set_root_render_object(Box::new(SemanticLeaf::boundary_labeled("root")));
+        owner
+            .insert_child_render_object(root, Box::new(PaintingLeaf::red(10.0, 10.0)))
+            .expect("child inserted");
+        assert!(!owner.semantics_enabled(), "semantics off by default");
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(10.0), px(10.0)))));
+
+        let (mut owner, result) = owner.run_frame();
+        result.expect("settling frame should succeed");
+        assert!(!owner.has_dirty_nodes(), "settled tree must be clean");
+
+        owner.reassemble();
+
+        assert!(!owner.nodes_needing_layout().is_empty());
+        assert!(!owner.nodes_needing_compositing_bits_update().is_empty());
+        assert!(!owner.nodes_needing_paint().is_empty());
+        assert!(
+            owner.nodes_needing_semantics().is_empty(),
+            "no semantics work is queued while semantics are disabled"
+        );
+    }
+
     #[test]
     fn test_run_layout_sorts_by_depth_shallow_first() {
         let mut owner = PipelineOwner::new();

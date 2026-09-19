@@ -17,9 +17,19 @@
 //! - ✅ Multi-display support with Retina/HiDPI
 //! - ✅ Event loop integration
 //! - ✅ raw-window-handle for wgpu/Metal
-//! - 🚧 Keyboard and mouse events (TODO)
-//! - 🚧 NSPasteboard clipboard (TODO)
-//! - 🚧 Core Text system (TODO)
+//! - ✅ Keyboard, mouse, scroll and hover events (`events.rs`/`view.rs`)
+//! - ✅ `NSPasteboard` clipboard, routed through the owner lane (`clipboard.rs`)
+//! - ✅ IME composition via an `NSTextInputClient` conformance
+//!   (`text_input.rs`, [ADR-0069](../../../../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md)):
+//!   `keyDown:` is a gate, so one press reaches the application exactly once —
+//!   either as a composition/commit or as a key event, never both
+//! - ✅ `refresh_period()` from the display's current mode
+//! - ✅ A wake pump that actuates the registered wake deadline (`wake_pump.rs`),
+//!   since AppKit exposes no `ControlFlow::WaitUntil`
+//!
+//! No Core Text system is needed: text shaping is cosmic-text end to end
+//! ([ADR-0059](../../../../../docs/adr/ADR-0059-flui-stays-on-cosmic-text.md)),
+//! which is why the historical "Core Text (TODO)" item is gone rather than done.
 //!
 //! # Usage
 //!
@@ -33,12 +43,15 @@
 //! }))?;
 //! ```
 
-// cocoa 0.26 deprecates its entire API surface in favor of the objc2 family;
-// this backend deliberately stays on the single cocoa/objc stack until a
-// dedicated objc2 migration replaces it wholesale.
+// The backend is on the `objc2` family (`objc2`/`objc2-app-kit`/
+// `objc2-foundation`): the `cocoa` 0.27 / `objc` 0.2 pair it used to carry is
+// gone entirely. `expect(deprecated)` stays because a handful of AppKit
+// accessors this backend uses (`UIScreen.mainScreen`'s macOS analogues, the
+// non-scene `NSApplication` entry points) are deprecated in the multi-scene
+// era, and the module documents each such use at its call site.
 #![expect(deprecated)]
 // This module (and its submodules) is one of the workspace's sanctioned
-// `unsafe` FFI islands — direct AppKit/Cocoa objc calls have no safe
+// `unsafe` FFI islands — direct AppKit objc calls have no safe
 // wrapper. The workspace lint `unsafe_code = "warn"` is opted out here, at
 // the module boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
@@ -52,7 +65,9 @@ mod events;
 mod liquid_glass;
 mod owner_lane;
 mod platform;
+mod text_input;
 mod view;
+mod wake_pump;
 mod window;
 mod window_ext;
 mod window_manager;

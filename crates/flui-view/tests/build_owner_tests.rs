@@ -599,8 +599,24 @@ fn test_reassemble_marks_all_live_elements_dirty() {
     owner.build_scope(&mut tree);
     assert!(!owner.has_dirty_elements());
 
-    owner.reassemble(&tree);
+    owner.reassemble(&mut tree);
     assert_eq!(owner.dirty_count(), tree.len());
+
+    // The heap count alone is not the contract: a queued entry whose element's
+    // own dirty flag is unset is skipped by the drain's guard and rebuilds
+    // nothing. Assert the flag too, then prove the drain consumes the queue.
+    for (id, node) in tree.iter_nodes() {
+        assert!(
+            node.element().is_dirty(),
+            "reassemble must set each element's dirty flag, not only queue it"
+        );
+        let _ = id;
+    }
+    owner.build_scope(&mut tree);
+    assert!(
+        !owner.has_dirty_elements(),
+        "the queued reassemble work must actually drain (no entry left skipped)"
+    );
 }
 
 // ============================================================================

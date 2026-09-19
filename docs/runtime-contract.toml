@@ -93,7 +93,8 @@ declarations = [
     "pub mod app;",
     "pub mod bindings;",
     "pub mod embedder;",
-    "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
+    "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, };",
+    "pub use app::run_direct;",
     "pub use app::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
     "pub use app::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use app::{ FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind, FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SegmentPhase, };",
@@ -212,7 +213,7 @@ declarations = [
     "pub use ::wgpu;",
     "pub mod headless;",
     "pub use error::{EngineError, EngineResult, Recoverability};",
-    "pub use raster::{PrePresentHook, RasterBackend};",
+    "pub use raster::{PrePresentHook, PresentDisposition, RasterBackend};",
     "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner, RasterSubmitError, SurfaceState, };",
     "pub use flui_foundation::GpuResourceGeneration;",
     "pub use headless::HeadlessRenderer;",
@@ -916,6 +917,92 @@ evidence = [
 ]
 
 [[contract]]
+key = "frame-disposition-distinguishes-withheld-from-idle"
+statement = """
+`RasterBackend::render_scene` answers with `PresentDisposition` -- \
+`Presented` / `NoDamage` / `NotShown` -- rather than a `bool`, because \
+"this frame did not reach the screen" is two different events with opposite \
+consequences for the caller's pacing. `NoDamage` means nothing was owed and \
+the loop may park. `NotShown` means content WAS owed -- an occluded \
+surface, a surface its owner released, or a frame that unwound before it \
+could present -- and the work was consumed without ever reaching the screen. \
+The distinction is load-bearing, not descriptive: `UiRealm`'s frame tail \
+retains on `NotShown` (`retry_needed` AND `retry_needs_repaint`) and clears \
+on `NoDamage`, and the second half is what makes the retention real. \
+Waking alone reopens the segment gate while `PipelineOwner` still has \
+nothing dirty, so the retry pump produces `Idle`, never reaches \
+`render_scene`, and parks -- the frame would be lost exactly as it was \
+before. A cold start on the native AppKit backend is the failure this \
+closes: the surface's first drawable can report `Occluded`, and with no \
+retry armed the process parked in `_nextEventMatchingEventMask:untilDate:` \
+at 0% CPU on a window that had never drawn. \
+\
+Retention is bounded, because the platform's own gate does NOT bound it. A \
+window AppKit reports as occluded does stop reaching this arm -- \
+`windowDidChangeOcclusionState:` drives the visibility ladder to \
+`frames_enabled == false` and `wake_action` returns `PumpAsync` before any \
+frame runs -- but that gate keys off `occlusionState`, while what withdraws \
+the drawable is the swapchain's own availability. The two disagree in the \
+very trace this contract was derived from: `occlusionState` reported the \
+window VISIBLE for the whole ~132 ms the drawable was unavailable, across 12 \
+consecutive withheld frames. Wherever they disagree and stay disagreeing (a \
+window on an inactive Space, a display asleep), the lifecycle gate never \
+engages, and an unbounded retry -- which re-dirties the presentation on every \
+attempt -- is an unbounded repaint loop at the fallback deadline's pace. So \
+the retry carries its own cap, `MAX_NOT_SHOWN_RETRIES`: past it the frame \
+parks rather than re-arming, and the next real platform event dirties the \
+pipeline as usual. A withheld streak is cleared by any frame that ends \
+otherwise, so the cap is a bound on a *continuous* withdrawal, never a \
+permanent disable. Measured cold-start transients across six runs span 2 to \
+12 attempts (~132 ms at the worst), so 128 is a backstop the ordinary \
+transient never reaches: on the three runs measured WITH the cap, `streak` \
+peaked at 3 and the give-up arm never fired. \
+\
+The enum is deliberately exhaustive rather than `#[non_exhaustive]`, unlike \
+its sibling protocol types: the defect being fixed was a SILENT conflation \
+of two answers, and a wildcard arm folding a future state into "nothing \
+owed" would institutionalise that same mistake for the next state. \
+Exhaustiveness paid for itself immediately -- adding the variant made the \
+compiler name the one `SubmitVerdict` match site that had to classify it. \
+That is also why this is a `[[contract]]` rather than a local detail: any \
+backend may now report `NotShown`, and any consumer must decide what it \
+means for pacing. \
+\
+**Honest residual:** the DECISION is pinned, the producer is not. \
+`classify_frame(had_damage, acquired_surface)` holds the mapping and is \
+covered cell by cell, but the arm that feeds it `acquired_surface = false` \
+from a real surface-acquisition failure needs a windowed surface with an \
+occluded drawable, which no test in `flui-engine` can construct. What is \
+executed end to end is the consumer half -- a backend reporting `NotShown` \
+is classified `SubmitVerdict::NotShown` at the lane and retained by the \
+realm -- plus the engine's own table. The wgpu arm itself is read-reviewed, \
+not executed. Verified by mutation, one mutant per rule: reverting \
+`retry_needs_repaint` to `false` in the `NotShown` arm fails \
+`a_frame_the_surface_never_showed_is_retained_and_repainted` on its second \
+`render_scene` assertion; widening the cap to `u32::MAX` fails \
+`the_withheld_retry_is_bounded_and_then_parks`; and dropping the streak clear \
+from the `Presented` arm fails `a_presented_frame_clears_the_withheld_streak`. \
+Each mutant is killed by exactly one test.\
+"""
+state = "partial"
+domain = "realm"
+owner_issue = 559
+mechanical = false
+mechanism = "engine decision table + lane classification + realm retention each pinned by test; the wgpu acquire arm is read-reviewed only"
+evidence = [
+    { kind = "symbol", file = "crates/flui-engine/src/raster.rs", contains = "pub enum PresentDisposition" },
+    { kind = "symbol", file = "crates/flui-engine/src/raster.rs", contains = "fn render_scene(&mut self, scene: &Scene) -> Result<PresentDisposition, EngineError>;" },
+    { kind = "symbol", file = "crates/flui-engine/src/renderer.rs", contains = "fn classify_frame(had_damage: bool, acquired_surface: bool) -> PresentDisposition {" },
+    { kind = "test", file = "crates/flui-engine/src/renderer.rs", contains = "fn the_frame_classification_table_separates_withheld_from_idle" },
+    { kind = "test", file = "crates/flui-app/src/app/raster_lane.rs", contains = "fn a_withheld_frame_is_not_collapsed_into_no_present" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn a_frame_the_surface_never_showed_is_retained_and_repainted" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn a_frame_with_nothing_owed_is_not_retained" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "const MAX_NOT_SHOWN_RETRIES: u32 = 128;" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn the_withheld_retry_is_bounded_and_then_parks" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn a_presented_frame_clears_the_withheld_streak" },
+]
+
+[[contract]]
 key = "idle-only-commit-points"
 statement = """
 Cross-thread commands and worker results commit only while the realm's \
@@ -1029,7 +1116,7 @@ evidence = [
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn latest_frame_wins_supersedes_pending" },
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn stale_surface_generation_is_rejected_before_render" },
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn shutdown_handshake_completes_and_thread_joins" },
-    { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn reliable_completion_preserves_the_backends_actual_presented_bit" },
+    { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn reliable_completion_preserves_the_backends_own_disposition" },
 ]
 
 [[contract]]
@@ -2117,10 +2204,19 @@ evidence = [
 [[contract]]
 key = "fifo-default-present-mode"
 statement = """
-`select_present_mode` defaults to Fifo; the blocking `present()` under Fifo \
-is the steady-state pacing mechanism. Mailbox is a documented future opt-in, \
-unreachable from `flui-app`. No unit test pins the selection — the evidence \
-is the source plus the measured-cadence record in the ADR.\
+`select_present_mode` defaults to Fifo. On Wayland/Vulkan the blocking \
+`present()` under Fifo is the steady-state pacing mechanism; on the native \
+AppKit backend it is NOT — measured 2026-09-17, `queue.present()` returns in \
+42 µs and the period comes from AppKit's display-pass cadence instead, so the \
+two backends reach the same vsync-locked cadence by different means. Mailbox is \
+a documented future opt-in, unreachable from `flui-app`. No unit test pins the \
+selection — the evidence is the source plus the measured-cadence record in the \
+ADR, which covers two platforms: Wayland/winit (2026-07-17, median ratio 0.9988 \
+to a 164.89 Hz panel) and the native AppKit backend (2026-09-17, 12,600 ticks \
+over three 45 s runs, median ratio 0.99605–0.99750 to a 100.000 Hz panel, \
+presents ≈ ticks, static app parked at 1 present over a measured 20.047 s). \
+Windows' native backend is still unmeasured and its pacing evidence stays with \
+Cross.P.\
 """
 state = "implemented"
 domain = "raster"
@@ -2861,7 +2957,7 @@ thread_affinity = "invoked once, synchronously, on the event-loop owner thread b
 owner = "backend run() contract"
 failure_semantics = "fallible: Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>> where BootstrapError = Box<dyn std::error::Error + Send + Sync> (opaque on purpose: embedder bootstrap is application-land and returns arbitrary errors). Platform::run itself returns Result<(), PlatformError> and propagates on_ready's Err out of it as PlatformError::Bootstrap with the embedder error as source; every backend stops entering (or promptly exits) its loop on Err rather than continuing to run a half-built app."
 consumers = [
-    "all eight backends (winit, windows, macos, web, android, headless, linux stub, ios stub)",
+    "all eight backends (winit, windows, macos, web, android, headless, linux stub, iOS)",
     "runner",
 ]
 owner_issue = 551
@@ -3136,7 +3232,7 @@ notes = "The former `pub fn budget(&self) -> parking_lot::MutexGuard<'_, FrameBu
 # #556, module and file included -- no surface entry for it survives
 # here (a `declared_in` citation requires the file to still exist). It was a
 # fixed-rate vsync simulator with zero production consumers; real frame
-# pacing lives in the blocking Fifo present (ADR-0029). Deleted alongside it:
+# pacing lives in the GPU's present path (ADR-0029). Deleted alongside it:
 # `UpdateScheduler::{set_vsync, has_vsync}` and
 # `SchedulerBuilder::vsync_refresh_rate`. Per-presentation physical pacing is
 # a future `FrameClock` (a later #556 slice), not this crate.

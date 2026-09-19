@@ -82,7 +82,7 @@ pub(super) trait SurfaceLifecycle {
     fn recreate_surface(&mut self) -> Result<(), EngineError>;
 }
 
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 impl SurfaceLifecycle for flui_engine::Renderer {
     fn release_surface(&mut self) {
         // `Renderer::release_surface` is the inherent method of the same
@@ -103,13 +103,14 @@ impl SurfaceLifecycle for flui_engine::Renderer {
 /// whose identity nothing has refreshed.
 #[must_use]
 #[derive(Debug)]
-// Only the Android runner and this module's own tests drive the seam, so a
-// host build without tests (and every other target) sees it as unused.
+// Only the mobile runners (Android, iOS) and this module's own tests drive
+// the seam, so a host build without tests (and every other target) sees it as
+// unused.
 #[cfg_attr(
-    not(any(test, target_os = "android")),
+    not(any(test, target_os = "android", target_os = "ios")),
     expect(
         dead_code,
-        reason = "driven by the Android runner and by this module's tests -- see module doc"
+        reason = "driven by the Android/iOS runners and by this module's tests -- see module doc"
     )
 )]
 pub(super) enum SurfaceLifecycleOutcome {
@@ -180,12 +181,12 @@ pub(super) enum SurfaceLifecycleOutcome {
 ///
 /// Nothing is logged here. The caller owns the log line, because only it
 /// knows which signal produced the request and at what frequency; see the
-/// Android runner's registration for the levels.
+/// the mobile runners' registration for the levels.
 #[cfg_attr(
-    not(any(test, target_os = "android")),
+    not(any(test, target_os = "android", target_os = "ios")),
     expect(
         dead_code,
-        reason = "driven by the Android runner and by this module's tests -- see module doc"
+        reason = "driven by the Android/iOS runners and by this module's tests -- see module doc"
     )
 )]
 pub(super) fn ensure_surface<L: SurfaceLifecycle>(

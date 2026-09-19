@@ -2,12 +2,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use cocoa::{
-    appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular},
-    base::{YES, id, nil},
-};
 use flui_foundation::OwnerAffinity;
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::MainThreadMarker;
+use objc2::rc::Retained;
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use parking_lot::Mutex;
 
 use super::{display, window::MacOSWindow};
@@ -30,14 +28,20 @@ static MACOS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 
 /// macOS platform state
 pub struct MacOSPlatform {
-    /// NSApplication instance (retained)
-    app: id,
+    /// The process-wide `NSApplication` singleton, retained.
+    app: Retained<NSApplication>,
 
     /// Open windows (keyed by NSWindow pointer as u64)
     windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
 
     /// Platform event handlers
     handlers: Arc<Mutex<PlatformHandlers>>,
+
+    /// The landing place for the wake deadline `handlers.wake_deadline`
+    /// publishes — AppKit has no `ControlFlow::WaitUntil`, so this module
+    /// actuates it (see `super::wake_pump`). Each window holds a `Weak` back
+    /// to it and arms it from `request_redraw`.
+    wake_pump: Arc<super::wake_pump::WakePump>,
 
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
@@ -58,11 +62,12 @@ pub struct MacOSPlatform {
 fn debug_assert_appkit_main_thread(op: &'static str) {
     #[cfg(debug_assertions)]
     {
-        // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
-        // class method with no arguments and a BOOL return.
-        let is_main: objc::runtime::BOOL = unsafe { msg_send![class!(NSThread), isMainThread] };
+        // `MainThreadMarker::new()` is objc2's typed form of the same
+        // `+[NSThread isMainThread]` check; `None` means this is not the main
+        // thread.
+        let is_main = MainThreadMarker::new().is_some();
         debug_assert!(
-            is_main != objc::runtime::NO,
+            is_main,
             "BUG: `{op}` must run on the AppKit main thread — thread-affine \
              AppKit APIs are reached through the owner thread (ADR-0039)"
         );
@@ -110,34 +115,57 @@ impl MacOSPlatform {
 
     /// Create a new macOS platform with custom configuration
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        // AppKit is touched below (`NSApp()`, `setActivationPolicy_`), so
-        // the main-thread requirement starts HERE, not at `run` — check it
-        // before the first AppKit operation rather than after the fact.
+        // AppKit is touched below (`sharedApplication`,
+        // `setActivationPolicy`), so the main-thread requirement starts HERE,
+        // not at `run` — `MainThreadMarker::new()` both checks it and produces
+        // the token objc2's AppKit API requires, which is why there is no
+        // separate pre-check.
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
+            message: "MacOSPlatform::with_config must run on the AppKit main thread".to_string(),
+        })?;
         debug_assert_appkit_main_thread("MacOSPlatform::with_config");
-        // SAFETY: must run on the main thread (the platform owns the event
-        // loop); `NSApp()` returns the shared application singleton which is
-        // nil-checked before use.
-        unsafe {
-            // Initialize NSApplication
-            let app = NSApp();
-            if app == nil {
-                return Err(PlatformError::Init {
-                    message: "Failed to get NSApplication".to_string(),
-                });
-            }
+
+        {
+            // Initialize NSApplication (the process-wide singleton).
+            let app = NSApplication::sharedApplication(mtm);
 
             // Set activation policy to regular app (shows in Dock)
-            app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
             // Create executors
             let background_executor = Arc::new(BackgroundExecutor::new());
+
+            // Bind the fields the wake pump needs as locals first: the pump is
+            // passed a wake closure over the window map, and both must exist
+            // before the struct literal that owns them.
+            let windows = Arc::new(Mutex::new(HashMap::new()));
+            let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
+            let wake_pump = super::wake_pump::WakePump::new(Arc::clone(&handlers), {
+                let windows = Arc::clone(&windows);
+                Box::new(move || {
+                    // Clone the window handles out and drop the guard
+                    // before messaging any of them: `request_redraw`
+                    // reaches the owner lane, and ADR-0038 §5's
+                    // discipline for re-entrant calls applies to a lock
+                    // held across one just as it does to the handler lock.
+                    let open: Vec<Arc<MacOSWindow>> = windows.lock().values().cloned().collect();
+                    for window in open {
+                        // A frame for a window whose surface is already
+                        // gone is the renderer's to decline — this only
+                        // asks, exactly as `FrameWakeHandle::wake_frame`
+                        // does through the same method.
+                        PlatformWindow::request_redraw(window.as_ref());
+                    }
+                })
+            });
 
             tracing::info!("macOS platform initialized with AppKit");
 
             let platform = Self {
                 app,
-                windows: Arc::new(Mutex::new(HashMap::new())),
-                handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
+                windows,
+                handlers,
+                wake_pump,
                 background_executor,
                 config,
                 affinity: OwnerAffinity::new(),
@@ -151,8 +179,8 @@ impl MacOSPlatform {
     }
 
     /// Get the NSApplication instance
-    pub fn app(&self) -> id {
-        self.app
+    pub fn app(&self) -> &Retained<NSApplication> {
+        &self.app
     }
 }
 
@@ -170,9 +198,9 @@ impl Platform for MacOSPlatform {
         self.affinity.bind_current();
         debug_assert_appkit_main_thread("MacOSPlatform::run");
 
-        // `app` is a Copy Objective-C object pointer: captured before `self`
-        // moves into the `Arc<dyn Platform>` the capability needs.
-        let app = self.app;
+        // Clone the retained singleton before `self` moves into the
+        // `Arc<dyn Platform>` the capability needs.
+        let app = Retained::clone(&self.app);
 
         // No owner lane on this backend: every `OwnerPlatform::open_window`
         // call creates directly and is always `Ready` (ADR-0039 slice 2).
@@ -190,18 +218,15 @@ impl Platform for MacOSPlatform {
         on_finish_launching(OwnerPlatform::new(platform, hooks))
             .map_err(PlatformError::bootstrap)?;
 
-        // SAFETY: runs on the main thread; `app` is the live NSApplication
-        // singleton.
-        unsafe {
-            // Activate the app (bring to foreground)
-            app.activateIgnoringOtherApps_(YES);
+        // Runs on the main thread; `app` is the live NSApplication singleton.
+        // Activate the app (bring to foreground).
+        app.activateIgnoringOtherApps(true);
 
-            // Run the NSApplication event loop. Window lifecycle events are
-            // delivered via NSWindowDelegate; input events via the content
-            // view's NSResponder chain.
-            tracing::info!("Starting NSApplication event loop");
-            app.run();
-        }
+        // Run the NSApplication event loop. Window lifecycle events are
+        // delivered via NSWindowDelegate; input events via the content view's
+        // NSResponder chain.
+        tracing::info!("Starting NSApplication event loop");
+        app.run();
 
         // Unreachable in practice: `app.run()` never returns on macOS
         // (`terminate:` exits the process) — this satisfies the trait's
@@ -212,11 +237,8 @@ impl Platform for MacOSPlatform {
     fn quit(&self) {
         self.affinity.debug_assert_owner("MacOSPlatform::quit");
         debug_assert_appkit_main_thread("MacOSPlatform::quit");
-        // SAFETY: `self.app` is the live NSApplication singleton.
-        unsafe {
-            tracing::info!("Requesting application quit");
-            let _: () = msg_send![self.app, terminate: nil];
-        }
+        tracing::info!("Requesting application quit");
+        self.app.terminate(None);
     }
 
     fn open_window(
@@ -227,6 +249,10 @@ impl Platform for MacOSPlatform {
             .debug_assert_owner("MacOSPlatform::open_window");
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
+        // Installed immediately after construction, before the window can be
+        // handed to anyone who might redraw it — the slot is a `OnceLock`, so
+        // a later install would be silently ignored rather than racing.
+        window.install_wake_pump(Arc::downgrade(&self.wake_pump));
 
         Ok(window)
     }
@@ -235,17 +261,12 @@ impl Platform for MacOSPlatform {
         self.affinity
             .debug_assert_owner("MacOSPlatform::active_window");
         debug_assert_appkit_main_thread("MacOSPlatform::active_window");
-        // SAFETY: `self.app` is the live NSApplication singleton; `keyWindow`
-        // returns nil or a live NSWindow whose pointer value is used as an id.
-        unsafe {
-            let key_window: id = msg_send![self.app, keyWindow];
-            if key_window == nil {
-                None
-            } else {
-                let ptr = key_window as u64;
-                Some(WindowId(ptr))
-            }
-        }
+        // `keyWindow` answers `None` when no window is key. The window id is
+        // the native `NSWindow` pointer, the same identity `MacOSWindow`
+        // reports, so a caller can compare them.
+        let key_window = self.app.keyWindow()?;
+        let ptr = Retained::as_ptr(&key_window) as u64;
+        Some(WindowId(ptr))
     }
 
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
@@ -291,39 +312,33 @@ impl Platform for MacOSPlatform {
         handlers.window_event = Some(callback);
     }
 
+    /// Unlike `winit`'s override (which hands the deadline to
+    /// `ControlFlow::WaitUntil`) and Android's (whose own loop checks it
+    /// once per iteration), AppKit's run loop is opaque and exposes neither —
+    /// so this backend *actuates* the deadline instead: the private
+    /// `wake_pump` module schedules a main-queue tick for it and asks the
+    /// windows for a frame
+    /// when it comes due. Storage is the identical
+    /// `PlatformHandlers::wake_deadline` slot the other two backends use, for
+    /// the same `Arc`-cloned-out-of-the-lock consultation discipline
+    /// (ADR-0038 §5) — which is why the pump, not this method, owns the call.
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        // Store under the lock, then arm OUTSIDE it: arming consults the hook,
+        // and the hook re-enters `flui-app` while taking gesture locks.
+        self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+        self.wake_pump.arm();
+    }
+
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
-        // SAFETY: `mainBundle` returns the shared NSBundle singleton; both it
-        // and `bundlePath` are nil-checked, and the UTF8String buffer is
-        // copied into an owned PathBuf before the autorelease pool drains.
-        unsafe {
-            let bundle: id = msg_send![class!(NSBundle), mainBundle];
-            if bundle == nil {
-                return Err(PlatformError::AppPath {
-                    message: "Failed to get main bundle".to_string(),
-                });
-            }
-
-            let path: id = msg_send![bundle, bundlePath];
-            if path == nil {
-                return Err(PlatformError::AppPath {
-                    message: "Failed to get bundle path".to_string(),
-                });
-            }
-
-            let c_str: *const i8 = msg_send![path, UTF8String];
-            if c_str.is_null() {
-                return Err(PlatformError::AppPath {
-                    message: "Bundle path has no UTF-8 representation".to_string(),
-                });
-            }
-            let rust_str = std::ffi::CStr::from_ptr(c_str).to_str().map_err(|error| {
-                PlatformError::AppPath {
-                    message: format!("Invalid UTF-8 in bundle path: {error}"),
-                }
-            })?;
-
-            Ok(std::path::PathBuf::from(rust_str))
-        }
+        // `NSBundle.mainBundle` is the shared singleton; `bundlePath` is a
+        // non-null `NSString` (Foundation returns an empty string, not nil,
+        // for a bundle without a path), so there is no nil arm to guard.
+        let bundle = objc2_foundation::NSBundle::mainBundle();
+        let path = bundle.bundlePath();
+        Ok(std::path::PathBuf::from(path.to_string()))
     }
 }
 

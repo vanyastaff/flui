@@ -22,9 +22,9 @@
 //! The lane machinery itself lives in the shared [`super::owner_lane`]
 //! module — this file only decides what runs on the lane.
 
-use cocoa::base::{id, nil};
-use cocoa::foundation::NSString;
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::rc::Retained;
+use objc2_app_kit::{NSPasteboard, NSPasteboardType};
+use objc2_foundation::NSString;
 
 use crate::traits::Clipboard;
 
@@ -57,36 +57,28 @@ impl std::fmt::Debug for MacOSClipboard {
     }
 }
 
+/// The plain-text pasteboard UTI (`NSPasteboardTypeString`).
+///
+/// `public.utf8-plain-text` is the UTI AppKit's own `NSPasteboardTypeString`
+/// constant holds; a `NSPasteboardType` is an `NSString`, so this wraps the
+/// literal.
+fn string_type() -> Retained<NSPasteboardType> {
+    NSPasteboardType::from_str("public.utf8-plain-text")
+}
+
 /// Resolve the pasteboard object for a board name on the owner lane.
 ///
 /// Returns `generalPasteboard` when `name` is `None`, otherwise the named
 /// pasteboard created on demand. Named boards are resolved per operation and
-/// never stored past the enclosing autoreleasepool.
-fn resolve(name: Option<String>) -> id {
+/// never stored; both constructors return a retained object, so there is no
+/// nil case for a caller to check.
+fn resolve(name: Option<String>) -> Retained<NSPasteboard> {
     match name {
-        None => unsafe {
-            // SAFETY: `+[NSPasteboard generalPasteboard]` is a documented
-            // thread-safe class method returning the process-wide singleton
-            // (or nil, which every caller checks). The object is managed by
-            // AppKit for the process lifetime — it is neither autoreleased nor
-            // owned by the enclosing pool — and the code only ever uses it on
-            // the owner lane inside a call, never storing or returning it.
-            msg_send![class!(NSPasteboard), generalPasteboard]
-        },
-        Some(name) => unsafe {
-            // SAFETY: `+[NSPasteboard pasteboardWithName:]` returns the named
-            // pasteboard, creating it if it does not already exist (or nil on
-            // failure). The object lives in AppKit's process-wide named-board
-            // table, outliving the enclosing pool; the name NSString is owned
-            // (+1) and released here, and the returned `id` is used only on
-            // the owner lane inside the calling operation, never stored or
-            // returned through `R`.
-            let ns_name = NSString::alloc(nil);
-            let ns_name = NSString::init_str(ns_name, &name);
-            let pasteboard: id = msg_send![class!(NSPasteboard), pasteboardWithName: ns_name];
-            let _: () = msg_send![ns_name, release];
-            pasteboard
-        },
+        None => NSPasteboard::generalPasteboard(),
+        Some(name) => {
+            let ns_name = NSString::from_str(&name);
+            NSPasteboard::pasteboardWithName(&ns_name)
+        }
     }
 }
 
@@ -124,17 +116,7 @@ impl MacOSClipboard {
     /// Use this to detect if clipboard has changed without reading contents.
     #[cfg_attr(not(test), expect(dead_code))]
     fn change_count(&self) -> i64 {
-        self.with_pasteboard_on_owner(|pasteboard| {
-            // SAFETY: `changeCount` is a plain integer getter; the id is live
-            // on the owner lane inside the enclosing autoreleasepool, and
-            // nil is handled before the message is sent.
-            unsafe {
-                if pasteboard == nil {
-                    return 0;
-                }
-                msg_send![pasteboard, changeCount]
-            }
-        })
+        self.with_pasteboard_on_owner(|pasteboard| pasteboard.changeCount() as i64)
     }
 
     /// Run `f` with the pasteboard id resolved on the owner lane.
@@ -145,15 +127,16 @@ impl MacOSClipboard {
     /// directly with no dispatch; from any other thread the operation is
     /// dispatched synchronously to the owner queue and the caller blocks
     /// until it completes.
-    fn with_pasteboard_on_owner<R: Send>(&self, f: impl FnOnce(id) -> R + Send) -> R {
+    fn with_pasteboard_on_owner<R: Send>(&self, f: impl FnOnce(&NSPasteboard) -> R + Send) -> R {
         let name = self.pasteboard.clone();
-        // The pasteboard id is re-resolved on the lane inside the closure —
-        // never captured from the calling thread. Routing itself (the direct
-        // in-lane path, the `isMainThread` shortcut for main-lane instances,
-        // and the catch_unwind-shielded `exec_sync` for everything else) is
-        // the shared `owner_lane` machinery's job.
+        // The pasteboard is re-resolved on the lane inside the closure — never
+        // captured from the calling thread (a `Retained<NSPasteboard>` is not
+        // `Send`, which is what keeps the routing honest). Routing itself (the
+        // direct in-lane path, the `isMainThread` shortcut for main-lane
+        // instances, and the catch_unwind-shielded `exec_sync` for everything
+        // else) is the shared `owner_lane` machinery's job.
         super::owner_lane::exec_on_owner(self.owner, self.owner_is_main, || {
-            objc::rc::autoreleasepool(|| f(resolve(name)))
+            objc2::rc::autoreleasepool(|_pool| f(&resolve(name)))
         })
     }
 }
@@ -167,130 +150,48 @@ impl Default for MacOSClipboard {
 impl Clipboard for MacOSClipboard {
     fn read_text(&self) -> Option<String> {
         self.with_pasteboard_on_owner(|pasteboard| {
-            // SAFETY: `pasteboard` is a live NSPasteboard id resolved on the
-            // owner lane inside the enclosing autoreleasepool. The `types`
-            // array and the `stringForType:` NSString are autoreleased and
-            // live through the call; the UTF8String buffer is copied into an
-            // owned Rust String before the pool drains.
-            unsafe {
-                if pasteboard == nil {
-                    tracing::warn!("Pasteboard is nil, cannot read text");
-                    return None;
-                }
+            let string_type = string_type();
 
-                // NSPasteboardTypeString is the UTI for plain text
-                // (kUTTypeUTF8PlainText). Created autoreleased so the
-                // enclosing pool owns its lifetime regardless of early
-                // returns.
-                let string_type: id = msg_send![
-                    class!(NSString),
-                    stringWithUTF8String: c"public.utf8-plain-text".as_ptr()
-                ];
-
-                // Get available types
-                let types: id = msg_send![pasteboard, types];
-                if types == nil {
-                    tracing::debug!("No types available on pasteboard");
-                    return None;
-                }
-
-                // Check if text is available
-                let has_string: bool = msg_send![types, containsObject: string_type];
-
-                if !has_string {
-                    tracing::debug!("Pasteboard does not contain text");
-                    return None;
-                }
-
-                // Read string
-                let ns_string: id = msg_send![pasteboard, stringForType: string_type];
-                if ns_string == nil {
-                    tracing::warn!("Failed to read string from pasteboard");
-                    return None;
-                }
-
-                // Convert NSString to Rust String
-                let c_str: *const i8 = msg_send![ns_string, UTF8String];
-                if c_str.is_null() {
-                    tracing::warn!("Failed to get UTF8String from NSString");
-                    return None;
-                }
-
-                let rust_string = std::ffi::CStr::from_ptr(c_str)
-                    .to_string_lossy()
-                    .into_owned();
-
-                tracing::debug!(len = rust_string.len(), "Read text from clipboard");
-                Some(rust_string)
+            // `types()` is `None` only when the pasteboard has no types at
+            // all; a missing text type is the ordinary "no text" case.
+            let types = pasteboard.types()?;
+            if !types.iter().any(|t| *t == *string_type) {
+                tracing::debug!("Pasteboard does not contain text");
+                return None;
             }
+
+            let ns_string = pasteboard.stringForType(&string_type)?;
+            let rust_string = ns_string.to_string();
+            tracing::debug!(len = rust_string.len(), "Read text from clipboard");
+            Some(rust_string)
         })
     }
 
     fn write_text(&self, text: String) {
         self.with_pasteboard_on_owner(|pasteboard| {
-            // SAFETY: `pasteboard` is a live NSPasteboard id on the owner
-            // lane inside the enclosing autoreleasepool. The content
-            // NSString is created and released entirely in this scope; the
-            // pasteboard copies its contents during `setString:forType:`.
-            unsafe {
-                if pasteboard == nil {
-                    tracing::error!("Pasteboard is nil, cannot write text");
-                    return;
-                }
+            // Clear existing contents; the return value is the new change
+            // count, which this backend does not consume.
+            pasteboard.clearContents();
 
-                // Clear existing contents (`-clearContents` returns BOOL)
-                let _: bool = msg_send![pasteboard, clearContents];
+            let ns_string = NSString::from_str(&text);
+            let string_type = string_type();
+            // The pasteboard copies the string's contents during the set.
+            let success = pasteboard.setString_forType(&ns_string, &string_type);
 
-                // Create NSString from Rust String
-                let ns_string = NSString::alloc(nil);
-                let ns_string = NSString::init_str(ns_string, &text);
-
-                // NSPasteboardTypeString UTI; created autoreleased, so the
-                // enclosing pool owns its lifetime.
-                let string_type: id = msg_send![
-                    class!(NSString),
-                    stringWithUTF8String: c"public.utf8-plain-text".as_ptr()
-                ];
-
-                // Write string to pasteboard
-                let success: bool = msg_send![pasteboard, setString:ns_string forType:string_type];
-
-                // The pasteboard copied the string's contents; release the
-                // owned(+1) NSString. The UTI string is autoreleased and is
-                // drained with the pool.
-                let _: () = msg_send![ns_string, release];
-
-                if success {
-                    tracing::debug!(len = text.len(), "Wrote text to clipboard");
-                } else {
-                    tracing::error!(len = text.len(), "Failed to write text to clipboard");
-                }
+            if success {
+                tracing::debug!(len = text.len(), "Wrote text to clipboard");
+            } else {
+                tracing::error!(len = text.len(), "Failed to write text to clipboard");
             }
         });
     }
 
     fn has_text(&self) -> bool {
         self.with_pasteboard_on_owner(|pasteboard| {
-            // SAFETY: `types`/`containsObject:` operate on autoreleased
-            // objects consumed before the enclosing pool drains; the UTI
-            // string is created autoreleased and released with the pool.
-            unsafe {
-                if pasteboard == nil {
-                    return false;
-                }
-
-                let string_type: id = msg_send![
-                    class!(NSString),
-                    stringWithUTF8String: c"public.utf8-plain-text".as_ptr()
-                ];
-
-                let types: id = msg_send![pasteboard, types];
-                if types == nil {
-                    return false;
-                }
-
-                msg_send![types, containsObject: string_type]
-            }
+            let string_type = string_type();
+            pasteboard
+                .types()
+                .is_some_and(|types| types.iter().any(|t| *t == *string_type))
         })
     }
 }
@@ -313,11 +214,12 @@ mod tests {
     #[test]
     fn test_clipboard_creation() {
         let clipboard = test_clipboard("creation");
-        // The nil probe travels through the shared lane like every other
+        // `resolve` travels through the shared lane like every other
         // pasteboard operation, never as a raw message to AppKit from a test
-        // worker thread.
-        let resolved = clipboard.with_pasteboard_on_owner(|pasteboard| pasteboard != nil);
-        assert!(resolved, "Named pasteboard should resolve to a live id");
+        // worker thread. A named board always resolves to a live object, so
+        // the assertion is simply that the lane ran the body at all.
+        let ran = clipboard.with_pasteboard_on_owner(|_pasteboard| true);
+        assert!(ran, "Named pasteboard operation must run on the owner lane");
     }
 
     #[test]

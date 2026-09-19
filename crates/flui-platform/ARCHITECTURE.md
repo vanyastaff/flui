@@ -353,3 +353,273 @@ measurement window with the deferral branch removed. Both runs' marker lines are
 recorded in the plan beside their probe
 (`.rust-studio/specs/macos-native-vsync-pacing-evidence/plan.md` §4); the raw
 run logs are not tracked, since `.gitignore` excludes `*.log` repo-wide.
+
+### macOS reports its display period as the current mode's rate, cached on the window
+
+**Rule:** a backend that can tell an embedder the display's refresh period should
+report the rate of the mode that display is *in* — not a capability of the panel
+and not a generic default. The value is a floor for pacing ("never produce faster
+than this", `PlatformWindow::refresh_period`), so a rate that is too high paces
+against a cadence the display is not running, and a rate that cannot be
+determined must be reported as unknown rather than guessed at.
+
+**Choice:** `MacOSWindow::refresh_period` answers from
+`CGDisplayModeGetRefreshRate` over the display's *current* mode
+(`platforms/macos/display.rs::refresh_period_for_screen`), reached from the
+window's screen via `NSScreenNumber` — the same display id `display.rs` already
+reads for its bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it
+cannot describe and some displays do, and a 0 turned into a period is infinite.
+The read is **cached** in `MacOSWindowState` beside `scale_factor`, refreshed in
+the handler that already updates the scale
+(`handle_backing_properties_changed`, reached from `handle_screen_changed`) and
+seeded at construction, which is safe there because the window is created at the
+origin — a point on a screen — so `-[NSWindow screen]` answers rather than
+returning nil. Caching is the one place this diverges from the winit
+implementation it otherwise mirrors: winit queries the monitor per call, but this
+backend's AppKit traffic belongs to the owner lane while `refresh_period` is a
+plain `&self` accessor any thread may call, so the query happens on the lane and
+the accessor reads the lock.
+
+**Alternatives considered:**
+- `NSScreen.maximumFramesPerSecond` — rejected twice over. It is macOS 12+, above
+  this crate's 11.0 deployment floor, so an unguarded call would crash on 11;
+  and it reports the panel's hardware *maximum*, so it over-reports on a
+  ProMotion display running a 60 Hz mode — exactly the too-high rate the rule
+  above forbids. winit does not use it.
+- Querying per call, the way winit does — rejected here for lane safety, above.
+- A `CVDisplayLink` fallback for displays whose mode reports 0 (winit has one) —
+  **deferred, not dropped**: it needs a `core-video` dependency, and CVDisplayLink
+  is this backend's intended produce signal anyway (ADR-0044), so it belongs with
+  that tick source rather than ahead of it. Until then `None` is honest and
+  observable: `flui-app`'s runner logs `reported=false` and paces against its
+  documented default.
+
+**Market lineage:** winit 0.30.13's macOS `MonitorHandle::refresh_rate_millihertz`
+(`src/platform_impl/macos/monitor.rs:260`) reads `CGDisplayCopyDisplayMode` →
+`CGDisplayModeGetRefreshRate`, returns it when it is `> 0.0`, and only then falls
+back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the source
+read here and the reason for the `> 0` guard. Read at the version pinned in this
+workspace's `Cargo.lock`, not recalled.
+
+**Trade-off:** the cached value follows the window across screens and backing
+changes, and is re-read whenever a resize reaches the runner. It does **not**
+follow a mode change that leaves the window where it is (a user switching refresh
+rate in System Settings): this backend observes no screen-parameters
+notification, so such a change is picked up on the next move or resize rather
+than immediately. Named rather than assumed away — it is unobservable on the
+single fixed-mode display this was measured on.
+
+**Replacement coverage:** the arithmetic is free-standing and AppKit-free
+(`period_from_refresh_hz`), with three always-run tests: the 100 Hz → 10 ms
+conversion, a fractional rate that must not round to its neighbour, and the
+non-cadence inputs (zero, negative, NaN, ±infinity) that must be unknown rather
+than an infinite or panicking period — removing the guard makes that third test
+fail inside `Duration::from_secs_f64`, checked by mutation. The live path is
+pinned behaviourally by the same bundled probe that pins the frame pump
+(`just macos-frame-pump`), which reports `FRAME_PUMP_PROBE_REFRESH_PERIOD` from
+the real backend on the real display: measured 2026-09-17 as `period_us=10000
+hz=100.0`, matching the independent AppKit probe's `CGDisplayModeGetRefreshRate`
+of 100.000 Hz on the same panel. Like every macOS-gated test here, these run
+locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
+
+### AppKit's input method is a route for a `keyDown:`, not a second producer of one
+
+**Decision.** `FLUIContentView` conforms to `NSTextInputClient` (all 11 methods plus
+`add_protocol`), and `keyDown:` becomes a gate rather than a direct conversion:
+while `TextInputState.ime_allowed` is **false** it calls `handle_input_event`
+exactly as before; while it is **true** it hands the event to
+`interpretKeyEvents:` and emits nothing itself, with `doCommandBySelector:`
+re-dispatching the events the input method declines. `PlatformTextInput` is
+implemented by `MacOSTextInput`, whose two setters route through the owner lane.
+
+**Why.** AppKit's composition pipeline is entered only by `interpretKeyEvents:`,
+which calls *back* into the same view (`setMarkedText:` while composing,
+`insertText:` on commit). Calling it alongside the existing conversion would make
+one physical press reach the application twice — a `Key::Character` **and** an
+`ImeEvent::Commit`. That is ADR-0044 §3's double-producer defect class, and
+ADR-0069 states the contract it violates. The gate makes attachment the *only*
+variable: the pre-existing path is byte-identical at the default, so the
+conformance adds no regression surface to a window that never attaches a text
+input.
+
+**Market lineage.** winit 0.30.13 documents the same rule in the same terms
+(`Window::set_ime_allowed`): with IME allowed the window receives `Ime` events
+and, during the preedit phase, no `KeyboardInput`; with it disallowed the window
+receives no `Ime` events and a `KeyboardInput` for every keypress; and IME is
+**not** allowed by default. The winit backend inherits this by delegation
+(`WinitTextInput`); the native backend owns the pipeline instead of delegating,
+so it implements the protocol rather than wrapping one. The documentation covers
+the *press*; reading winit's macOS implementation shows the release is gated too
+and on a different variable — `key_up` queues a `KeyboardInput` only from its
+`Ground` and `Disabled` states, so an open preedit suppresses the release while a
+committed character's release still arrives (`ImeState::Committed` is reset to
+`Ground` inside `keyDown:`). `key_up` here gates on the same condition expressed
+in this backend's own state (`TextInputState::reports_key_release`), so a release
+inside an open composition is suppressed for the same reason the press was: the
+application never saw that key go down.
+
+**Divergences from Flutter, both deliberate.** Flutter's framework closes a
+connection *without discarding the composed characters*:
+`EditableTextState.connectionClosed` (`editable_text.dart:4138`, checked at the
+pinned 3.44.0) nulls the connection, drops `_lastKnownRemoteTextEditingValue`
+and unfocuses; the unfocus routes through `_openOrCloseInputConnectionIfNeeded`
+to `controller.clearComposing()`, and `clearComposing`
+(`editable_text.dart:378`) assigns only `composing: TextRange.empty` — the
+controller's `text` is untouched. The characters the user was composing are
+therefore still there afterwards, as ordinary text. What Flutter does *not* do
+on teardown is announce a commit: the text simply remains, and the commit the
+application finally observes is the input method's own last
+`updateEditingValue` before the close. `set_ime_allowed(false)` here **drops**
+the composition (ADR-0069) and `unmarkText` emits
+`ImeEvent::Preedit { text: String::new(), cursor: None }` rather than nothing, so
+the second divergence is a *third* answer to the same situation rather than the
+inverse of Flutter's. It is grounded in the client-side bug class
+`flui-types/src/ime.rs` records — a client left holding composition state it was
+never told ended suppresses `Key::Character` for the rest of the focus session
+and keeps the cancelled slice in its buffer — and in winit's own macOS
+implementation, which drops the marked text on `set_ime_allowed(false)`, so
+ADR-0069 cites that implementation for the drop-vs-commit half rather than the
+Flutter contrast. AppKit's header does not say whether an empty
+`setMarkedText:` always precedes `unmarkText`, so both paths are covered; the
+event is inert when nothing is composing, which is why the callback carries no
+`hasMarkedText` check.
+
+**Rejected.** Unconditional `interpretKeyEvents:` (the two-producer defect).
+Gating on `-[NSTextInputContext handleEvent:]`'s `BOOL` — the routing decision is
+already correct before the call, and consulting AppKit first would take the
+keyboard path in exactly the states where both producers are live. A pre-call
+predicate on the key, which is undecidable before the input method runs, and
+wrong per layout: on a U.S. layout a plain letter *does* reach `insertText:`.
+
+**Marked-range convention, a choice a document-less view cannot do better than.**
+`markedRange` answers `(0, utf16_len)` while composing and `{NSNotFound, 0}`
+otherwise; `selectedRange` echoes what `setMarkedText:` delivered. `NSRange` is
+UTF-16 and `ImeEvent::Preedit.cursor` is a **byte** range, so the conversion is
+`utf16_range_to_byte_range` — AppKit-free and tested.
+
+**Trade-off, named rather than assumed.** The class-registration block cannot run
+under a bare `cargo test` (an unbundled `NSWindow` throws
+`_CFBundleGetValueForInfoKey`), so every encoding and selector here was
+hand-checked against `objc-0.2.7`'s `add_method` preconditions until the bundled
+probe executed them — which it now has, on a real Mac, with all five assertions
+passing. What the probe measures about the rect is that it is non-zero and
+screen-relative; the **direction** of the `firstRectForCharacterRange:` Y-flip is
+still designed rather than measured, because a flip of the wrong sign produces a
+non-zero screen rect too. Measuring which side of the caret the candidate window
+would land on needs a real input method to ask, which is the same gap the probe's
+own module doc states.
+
+**Replacement coverage.** The conversion carries seven always-run tests
+(ASCII identity, multi-byte divergence from UTF-16 offsets, CJK unit-vs-byte, a
+range splitting a surrogate pair, past-the-end, empty text, and AppKit's real
+`NSNotFound` location), and an eighth pins the `keyUp:` gate across all four
+states it distinguishes — unattached, attached-but-idle, composing, and a
+composition that has just ended. It is mutation-checked against the gate a
+reader would first reach for (`!ime_allowed` alone fails it on the
+attached-but-idle case). `just macos-ime` drives the live path from a bundled
+`.app` and reports `IME_PROBE_RESULT=PASS` on a real Mac: the inverse pair
+(attached → one `Commit` and no key event; detached → one key event and no
+`ImeEvent`), the `Preedit` → `Commit` sequence with the byte cursor asserted, the
+empty-`Preedit` that ends a composition, a non-zero cursor rect whose
+`actualRange:` is answered rather than left not-found, and the `keyUp:` gate
+end-to-end — a release reported while a text input is attached with nothing
+composing, and the same call suppressed while a composition is open. The gate's
+arm is mutation-checked against the ungated `key_up`: removing the check leaks a
+`KeyboardEvent { state: Up, key: Character("a") }` into that arm and fails the
+probe. Its own module doc states that a synthesized `NSEvent` proves the
+*routing* and is not a genuine input method, so real composition (press-and-hold
+or a CJK source) remains **not driven**.
+
+### iOS binds UIKit through `objc2`, and its loop-exit signal is `applicationWillTerminate:`
+
+**Decision.** The iOS backend (`platforms/ios/`) binds UIKit through `objc2`
+0.6 / `objc2-ui-kit` 0.3 / `objc2-quartz-core` / `objc2-metal` / `block2` /
+`dispatch2`, and takes its framework loop-exit signal from
+`applicationWillTerminate:`. ADR-0070 carries the full record.
+
+**Why `objc2` and not the macOS backend's `cocoa`/`objc`.** The choice is not
+consistency-versus-modernity: `objc` has not released since 2019 and `cocoa`
+has **no UIKit surface at all**, so the macOS stack cannot express this platform
+even in principle. `icrate`, which this module's stub doc once named, is a
+deprecated alias split into the `objc2-*` crates. Every shipping Rust Apple
+stack is on `objc2` (winit's iOS backend since 0.30, wgpu-hal, egui, slint,
+gpui), and the macOS module's own header already commits to migrating there.
+
+**Why `applicationWillTerminate:`.** `UIApplicationMain` never returns, so
+there is no "after `Platform::run`" for the runner to use — the desktop and
+Android runners call `teardown_platform_realm()` there. Without a deliberate
+choice the framework never receives its loop-exit signal on iOS and leaks every
+realm, service pool and the clipboard for the process's life. That delegate
+method is the only pre-exit notification iOS sends, so the platform fires its
+quit handler from it and the runner runs the teardown.
+
+**Alternatives considered.**
+- *A process-global for the delegate's session state* — rejected: it would add
+  a new entry to the ambient-reach ratchet (`docs/runtime-contract.toml`), and
+  the state is main-thread-only anyway. A thread-local is the owner-affine
+  scope ADR-0027 prefers and matches winit's own `ACTIVE_EVENT_LOOP`.
+- *`UIScene` adoption* — deferred, not dropped. It is the multi-window iPadOS
+  feature and would make `UIScreen.mainScreen` (deprecated in the scene era)
+  scene-relative; this backend presents one full-screen window, so the app-wide
+  accessor is the honest spelling and the module carries an
+  `expect(deprecated)` with that reason.
+- *`objc2-ui-kit` with default features* — rejected: it enables all ~456
+  header features, compiling the whole framework's bindings for a handful of
+  classes. The backend names the classes it messages, as `winit-uikit` does.
+
+**Trade-off.** Two `objc2` generations are in the tree: this backend uses
+0.6.4/0.3.2 (already there via `wgpu-hal`), while `winit` 0.30 and
+`accesskit_macos` 0.27 still pull 0.5.2/0.2.2. The duplicate resolves when
+those move (H10 / winit 0.31), not by anything here. A real device is not
+covered — the simulator slice is, via `just ios-sim` — and no CI job boots a
+simulator; `cross-typecheck` gained an `aarch64-apple-ios` clippy line so a
+broken iOS build is at least loud.
+
+**Replacement coverage.** `just ios-sim` (executing; asserts a Metal device
+and a rendered frame from the app's own log, plus a screenshot) for the
+end-to-end path, and three host-run unit tests on `display.rs`'s bounds
+arithmetic. The engine-side portability fix this uncovered —
+`required_limits` clamped to the adapter's own, because the simulator's Metal
+adapter caps `max_inter_stage_shader_variables` at 15 where
+`wgpu::Limits::default()` asks for 16 — carries a comment at the clamp.
+
+### macOS and iOS share the `objc2` binding stack; the `cocoa`/`objc` pair is gone
+
+**Decision.** Both Apple backends bind their platform frameworks through the
+`objc2` family (`objc2`, `objc2-app-kit` for macOS/AppKit, `objc2-ui-kit` for
+iOS/UIKit, `objc2-foundation`, `objc2-quartz-core`, `objc2-metal`) at the
+versions `wgpu-hal` already pins. The `cocoa` 0.27 / `objc` 0.2 dependency pair
+and the `build.rs` that existed only for its `cfg` macros are removed from the
+crate; neither appears in `Cargo.lock` any more. ADR-0071 carries the full
+record (ADR-0070 chose the stack for iOS first).
+
+**Why.** `objc` has not released since 2019 and points at `objc2` as its
+successor; `cocoa` deprecated its whole surface in the same direction and has no
+UIKit bindings at all. Every shipping Rust Apple stack is on `objc2` (winit since
+0.30, `wgpu-hal`, egui, slint, gpui). Carrying both stacks was a two-generation
+wart with a `build.rs` to feed.
+
+**The raw `msg_send!` shape is kept on purpose, not left un-migrated.** objc2's
+macro accepts a raw `*mut AnyObject` receiver, `Bool` arguments and a manual
+`release`, so `window.rs`'s already-reviewed safety shape survives. The concrete
+reason: `NSWindow`/`NSView` are `MainThreadOnly` in objc2's typed API, while the
+backend constructs test windows on a caller-supplied off-main serial lane
+(`MacOSWindow::for_test`), which a `MainThreadMarker`-gated method would refuse.
+`ClassBuilder` replaces `objc` 0.2's `ClassDecl` for the two runtime classes
+(`FLUIContentView`, `FLUIWindowDelegate`).
+
+**Two defects the stricter macro caught.** objc2's `msg_send!` verifies return
+types against the selector encoding at run time and found `makeFirstResponder:`
+declared `void` where AppKit returns `BOOL` — silently accepted by objc 0.2. It
+also made the cursor-icon match's explicit `arrowCursor` arm list
+`clippy::match_same_arms`-visible (kept as documentation under a scoped allow).
+The newer macro is a stricter oracle; that is part of the migration's value.
+
+**Trade-off.** A second `objc2` generation is still in the lock via
+`accesskit_macos` 0.27 and winit 0.30 (both on 0.5); resolved when those move
+(H10), not by anything here.
+
+**Replacement coverage.** The four bundled macOS probes are unchanged in what
+they assert and all PASS on `objc2`, driving the migrated `msg_send!` sites
+through the production launch path; the five real-`NSPasteboard` tests and the
+`display.rs` arithmetic run in the normal suite.

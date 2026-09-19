@@ -17,6 +17,7 @@ use flui_widgets::SizedBox;
 
 use super::{FrameFailureHandler, FrameFailureKind, SegmentPhase, UiRealm};
 use crate::app::raster_test_support::TestRasterBackend;
+use flui_engine::PresentDisposition;
 
 fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
     type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>;
@@ -50,7 +51,7 @@ fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> TestRasterBackend
             .lock()
             .expect("scene capture mutex")
             .push(format!("{:?}", scene.tree()));
-        Ok(true)
+        Ok(PresentDisposition::Presented)
     })
 }
 
@@ -127,7 +128,7 @@ fn semantics_failure_retry_submits_the_retained_linked_tree() {
             .lock()
             .expect("link-count capture mutex")
             .push((leaders, followers));
-        Ok(true)
+        Ok(PresentDisposition::Presented)
     });
 
     assert!(

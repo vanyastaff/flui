@@ -120,6 +120,7 @@ impl PlatformBuilder for WebBuilder {
 
         Ok(BuildArtifacts {
             rust_libs,
+            executable: None,
             metadata: serde_json::json!({}),
         })
     }

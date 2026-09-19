@@ -4,18 +4,18 @@ This directory contains platform-specific build configurations and native wrappe
 
 ## Overview
 
-FLUI is a cross-platform UI framework built in Rust with **wgpu** for GPU-accelerated rendering. All builds are managed through the **xtask** build system (see `../BUILD.md` for complete documentation).
+FLUI is a cross-platform UI framework built in Rust with **wgpu** for GPU-accelerated rendering. Native windowing lives in `crates/flui-platform` (Win32, AppKit, Android, winit fallback); this directory holds only the host build projects (Xcode, Gradle, CMake) that link the Rust library into a platform app. Build and test commands are the `justfile` recipes — run `just --list`.
 
 ## Supported Platforms
 
 | Platform | Status | Rendering Backend | Build System |
 |----------|--------|-------------------|--------------|
-| **Android** | ✅ Production | Vulkan / OpenGL ES 3.0 | Gradle + NDK |
-| **iOS** | ⚠️ In Progress | Metal | Xcode |
+| **Android** | ✅ Production | Vulkan | Gradle + NDK |
+| **iOS** | 🟡 Native backend, simulator-verified | Metal | Xcode |
 | **Web** | ✅ Production | WebGPU | wasm-pack |
-| **Windows** | ⚠️ In Progress | DirectX 12 / Vulkan | CMake + MSVC |
-| **Linux** | ⚠️ In Progress | Vulkan / OpenGL | CMake + GTK3 |
-| **macOS** | ⚠️ In Progress | Metal | Xcode |
+| **Windows** | 🚧 Win32 backend, lint-only in CI | DirectX 12 / Vulkan | CMake + MSVC |
+| **Linux** | 🪟 winit fallback | Vulkan | cargo + `just` |
+| **macOS** | ✅ Native AppKit backend | Metal | Xcode |
 
 ## Directory Structure
 
@@ -60,31 +60,31 @@ platforms/
 
 ### Prerequisites
 
-See `../BUILD.md` for complete setup instructions.
-
 **All platforms:**
-- Rust toolchain (stable)
+- Rust toolchain (version pinned in `rust-toolchain.toml`)
 - Platform-specific targets via rustup
 
 ### Building for Specific Platform
 
-Use the **xtask** build system from the workspace root:
+Build the Rust library with cargo, then the host project with its own tool:
 
 ```bash
 # Android
-cargo xtask build android --release
+cargo ndk -t arm64-v8a build -p flui-android-demo
 
 # Web
-cargo xtask build web --release
+cd examples/web_demo && wasm-pack build --target web --out-dir pkg
 
-# Desktop (Windows/Linux/macOS)
-cargo xtask build desktop --release
+# iOS (simulator, Apple Silicon)
+cargo build --target aarch64-apple-ios-sim -p flui-app
 
-# Check environment
-cargo xtask info
+# macOS / desktop
+cargo build --release
 ```
 
-See `../BUILD.md` for complete documentation.
+The macOS native backend's bundled probes are `just macos-frame-pump`,
+`just macos-close-path`, `just macos-ime`, and `just macos-resize-jitter`;
+run `just --list` for the full recipe set.
 
 ## wgpu Rendering Backends
 
@@ -106,6 +106,9 @@ FLUI uses [wgpu](https://wgpu.rs/) for cross-platform GPU rendering. The backend
 - Orientation changes
 - Mobile GPU optimization
 - App lifecycle management
+
+*(Both are now implemented backends; iOS was verified on a simulator via
+`just ios-sim`. A real-device run still needs signing.)*
 
 ### Web (WASM)
 - WebGPU rendering
@@ -177,9 +180,10 @@ When adding platform support or features:
 
 - **Android**: Primary development platform
 - **Web**: Production ready
-- **iOS/macOS**: Looking for contributors
-- **Windows**: Looking for contributors
-- **Linux**: Looking for contributors
+- **macOS**: Native AppKit backend complete; lint-only in CI plus local bundled probes
+- **iOS**: Native UIKit backend, simulator-verified (`just ios-sim`); real-device run needs signing
+- **Windows**: Win32 backend present; needs a Windows session to close H9
+- **Linux**: winit fallback in production use; native Wayland/X11 still open
 
 ## Resources
 

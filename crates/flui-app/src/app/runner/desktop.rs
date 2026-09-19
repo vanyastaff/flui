@@ -37,7 +37,7 @@ where
     };
     use parking_lot::Mutex;
 
-    use crate::app::hot_reload::{RebuildHookGuard, WorkerReload};
+    use crate::app::hot_reload::{RebuildHookGuard, WorkerReload, WorkerWatcherGuard};
 
     tracing::info!("Starting desktop platform via flui-platform");
 
@@ -68,6 +68,13 @@ where
     let rebuild_registration: Rc<RefCell<Option<RebuildHookGuard>>> = Rc::new(RefCell::new(None));
     let rebuild_registration_slot = Rc::clone(&rebuild_registration);
 
+    // The background worker-artifact watcher's stop guard: like
+    // `rebuild_registration`, it can only be created from inside `on_ready`
+    // (it needs the realm's `wake`), so it is threaded back out through a cell
+    // and dropped after the loop exits.
+    let worker_watcher: Rc<RefCell<Option<WorkerWatcherGuard>>> = Rc::new(RefCell::new(None));
+    let worker_watcher_slot = Rc::clone(&worker_watcher);
+
     /// The actual desktop bootstrap: opens the window, initializes the GPU
     /// renderer, mounts the widget tree, and wires every platform/window
     /// callback. Runs exactly once, synchronously, inside `on_ready` (see
@@ -94,6 +101,7 @@ where
         config: AppConfig,
         worker_reload: WorkerReload,
         rebuild_registration_slot: Rc<RefCell<Option<RebuildHookGuard>>>,
+        worker_watcher_slot: Rc<RefCell<Option<WorkerWatcherGuard>>>,
     ) -> anyhow::Result<()>
     where
         V: View + StatelessView + Clone + 'static,
@@ -283,6 +291,26 @@ where
         *rebuild_registration_slot.borrow_mut() =
             Some(worker_reload.register_rebuild_hook(hot_reload_sender));
 
+        // 3c1b. Start the background worker-artifact watcher. `poll_and_apply`
+        // (below, in the frame callback) only notices a rebuild when a frame
+        // runs; an idle event loop runs none, so without this an edit would
+        // wait for an unrelated frame. The watcher polls the artifact
+        // off-thread and fires `wake` on a change — `wake` sets `needs_redraw`
+        // and requests a redraw, so the next frame runs `poll_and_apply`, which
+        // does the actual owner-thread `dlopen`.
+        //
+        // Spawn into a local FIRST, then move it into the slot. The slot holds
+        // a `JoinHandle`-owning guard, so the displaced value must be dropped
+        // with the `RefMut` guard already fallen — assigning through the guard
+        // would drop a previous guard (and join its thread) while the borrow is
+        // still held, the `LockDiscipline/StatementDrop` shape port-check
+        // refuses (and a deadlock risk if that drop ever re-entered this cell).
+        let watcher_guard = worker_reload.spawn_watcher(Arc::clone(&wake));
+        let displaced = {
+            let mut slot = worker_watcher_slot.borrow_mut();
+            std::mem::replace(&mut *slot, watcher_guard)
+        };
+        drop(displaced);
         // 3c2. Start config-declared application services (issue #558) now
         // that the realm install above has resolved the loop's execution
         // services. Started here — not before the install — so a service's
@@ -847,7 +875,13 @@ where
         install_owner_platform(owner);
         // `?` converts `bootstrap_desktop`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl).
-        bootstrap_desktop(root, config, worker_reload, rebuild_registration_slot)?;
+        bootstrap_desktop(
+            root,
+            config,
+            worker_reload,
+            rebuild_registration_slot,
+            worker_watcher_slot,
+        )?;
         Ok(())
     }));
 
@@ -856,6 +890,11 @@ where
     // death.
     let detached = rebuild_registration.borrow_mut().take();
     drop(detached);
+    // Stop the background watcher before teardown: it holds the `wake`
+    // closure, and joining it keeps it from firing a wake into a torn-down
+    // runtime.
+    let watcher = worker_watcher.borrow_mut().take();
+    drop(watcher);
     teardown_platform_realm();
 
     // Surface a fatal bootstrap failure (GPU init, `UiRealm` construction,

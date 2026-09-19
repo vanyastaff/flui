@@ -1,9 +1,6 @@
-#[cfg(not(target_os = "ios"))]
 use std::sync::Arc;
-#[cfg(not(target_os = "ios"))]
 use std::sync::atomic::AtomicBool;
 
-#[cfg(not(target_os = "ios"))]
 use crate::app::runtime::{AppRuntime, ExitPolicy};
 
 /// A fresh clone of the loop-scoped platform wake capability — see
@@ -11,14 +8,12 @@ use crate::app::runtime::{AppRuntime, ExitPolicy};
 /// currently mutably borrowed when this is called (it takes a shared
 /// borrow); every call site here is either before a realm is installed or
 /// after one has been taken out of the slot for dispatch.
-#[cfg(not(target_os = "ios"))]
 pub(super) fn runtime_wake_callback() -> Arc<dyn Fn() + Send + Sync> {
     APP_RUNTIME.with(|slot| slot.borrow().frame_wake_callback())
 }
 
 /// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_realm::UiRealm::new`]'s
 /// `needs_redraw` parameter.
-#[cfg(not(target_os = "ios"))]
 pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
     APP_RUNTIME.with(|slot| slot.borrow().needs_redraw_handle())
 }
@@ -27,7 +22,6 @@ pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
 // Loop-scoped composition root (ADR-0027, ADR-0039 §6)
 // ============================================================================
 
-#[cfg(not(target_os = "ios"))]
 thread_local! {
     /// The one loop-scoped composition root, shared by desktop, Android, and
     /// wasm. Absorbs what were, before the `AppRuntime` skeleton existed, two
@@ -65,7 +59,6 @@ thread_local! {
 /// and full system-font enumeration on a path that can never consume
 /// either. `install_platform_realm` is the one call site that resolves —
 /// every realm-hosting backend goes through it, `run_direct` never does.
-#[cfg(not(target_os = "ios"))]
 pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
     APP_RUNTIME.with(|slot| {
         slot.borrow_mut().owner_platform = Some(owner);
@@ -88,9 +81,15 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
 /// later (a window closing) — never synchronously from this function, which
 /// only registers it — so this does not violate `with_owner_platform`'s "no
 /// host re-entry" rule.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "run_desktop (its one caller) is desktop-only -- android/wasm32 bootstraps \
@@ -166,9 +165,15 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
 /// unlike `install_exit_policy_hook`'s `&mut self` — no deferred-mutation
 /// drain needed here, since computing a wake deadline never touches the
 /// realm registry itself.
-#[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
     expect(
         dead_code,
         reason = "run_desktop (its one caller) is desktop-only -- android/wasm32 bootstraps \
@@ -197,7 +202,6 @@ pub(super) fn install_wake_deadline_hook(
 /// deadline and the secondary (device-recovery) one, and correctly leaving
 /// the realm's deadline untouched when the secondary source has nothing
 /// pending.
-#[cfg(not(target_os = "ios"))]
 pub(super) fn merge_wake_deadlines(
     a: Option<web_time::Instant>,
     b: Option<web_time::Instant>,
@@ -227,11 +231,14 @@ pub(super) fn merge_wake_deadlines(
 /// the root unconditionally (`UiRealm::redirty_root_for_frames_reenable`),
 /// which wakes the loop through the ordinary `needs_redraw` channel and
 /// lets a real `WakeAction::Render` resume the retry then.
-// Desktop-only, like its sole caller `bootstrap_desktop`: wasm has no
-// `ControlFlow`/`WaitUntil` to feed and iOS has no bootstrap here, so
-// compiling it on either target is dead code the `-D warnings` wasm gate
-// rejects.
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+// Desktop-only, like its sole caller `bootstrap_desktop`: the mobile backends
+// have no `ControlFlow`/`WaitUntil` to feed and wasm has no loop, so compiling
+// it on any of them is dead code the `-D warnings` cross-target gates reject.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 pub(super) fn desktop_secondary_wake_deadline(
     next_attempt_at: Option<web_time::Instant>,
     frames_enabled: bool,
@@ -411,7 +418,6 @@ mod merge_wake_deadlines_tests {
 /// methods), so this is a documented invariant with a regression pin
 /// (`with_owner_platform_reentering_dispatch_panics` below), not a runtime
 /// guard.
-#[cfg(not(target_os = "ios"))]
 pub(crate) fn with_owner_platform<R>(
     f: impl FnOnce(&flui_platform::OwnerPlatform) -> R,
 ) -> Option<R> {
@@ -466,14 +472,12 @@ pub(crate) fn with_owner_platform<R>(
 /// while already unwinding. A panic during that resolution, on top of the
 /// panic already unwinding, would abort the process instead of propagating
 /// the original failure.
-#[cfg(not(target_os = "ios"))]
 #[must_use = "the guard must stay alive across the Platform::run(...) call it \
               guards, or the TLS host clears immediately instead of at loop exit"]
 pub(crate) struct OwnerHostClearGuard {
     _private: (),
 }
 
-#[cfg(not(target_os = "ios"))]
 impl OwnerHostClearGuard {
     /// Arms the guard. Call immediately before `Platform::run(...)`.
     pub(crate) fn arm() -> Self {
@@ -481,7 +485,6 @@ impl OwnerHostClearGuard {
     }
 }
 
-#[cfg(not(target_os = "ios"))]
 impl Drop for OwnerHostClearGuard {
     fn drop(&mut self) {
         APP_RUNTIME.with(|slot| {

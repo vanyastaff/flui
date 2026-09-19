@@ -20,9 +20,10 @@
 //!
 //! There is no process-global scheduler to reach for any more (each realm
 //! now owns its own): the controller is built with
-//! [`AnimationController::without_ticker`] and driven entirely through the
-//! ambient `VsyncScope` the realm wraps every mounted tree in — the same
-//! seam `AnimatedSize`/`ImplicitController` use internally.
+//! [`AnimationController::with_detached_ticker`] and driven entirely through
+//! the ambient `VsyncScope` the realm wraps every mounted tree in — the same
+//! seam `AnimatedSize` uses internally, and the same constructor it picked,
+//! since a ticker-less controller cannot report `is_animating()`.
 //!
 //! The loop is self-sustaining and STOPS sustaining itself the moment
 //! the controller stops — no busy-looping while idle.
@@ -176,18 +177,28 @@ impl App {
     /// (`examples/screenshot.rs`, which mounts and captures a single frame
     /// at t=0 without ever starting the controller) go through.
     pub fn new() -> Self {
-        // No ticker: there is no process-global scheduler to reach for any
-        // more (each realm now owns its own). `AnimatedBoxDemoState::init_state`
-        // registers this controller with the ambient `VsyncScope` the realm
-        // wraps every mounted tree in — the same seam `AnimatedSize` uses
-        // internally — so it advances once mounted under a real realm.
-        // `repeat(true)` happens there too, after registration, not here:
-        // the screenshot harness mounts this tree without ever registering
-        // (a headless `HeadlessBinding` tree with no `VsyncScope`), so this
-        // constructor alone must never start the run.
-        let controller = Arc::new(AnimationController::without_ticker(Duration::from_millis(
-            1400,
-        )));
+        // A real, but permanently detached, ticker -- `with_detached_ticker`,
+        // not `without_ticker`. There is no process-global scheduler to reach
+        // for any more (each realm now owns its own);
+        // `AnimatedBoxDemoState::init_state` registers this controller with the
+        // ambient `VsyncScope` the realm wraps every mounted tree in — the same
+        // seam `AnimatedSize` uses internally — so it advances once mounted
+        // under a real realm. But `is_animating()` is intentionally
+        // ticker-based (Flutter parity: `Ticker.isActive`, not this
+        // controller's own status), so a ticker-less controller can never
+        // report it, and `repeat()` on one logs "the animation will not
+        // advance" — which is false here, since `Vsync` drives the value ticks
+        // through `tick_at` regardless. `with_detached_ticker` gives the
+        // controller a ticker whose start/stop transitions real ticker state
+        // without an `UpdateScheduler` to pump, which is exactly what
+        // `AnimatedSize` chose for the same reason. `repeat(true)` happens in
+        // `init_state`, after registration, not here: the screenshot harness
+        // mounts this tree without ever registering (a headless
+        // `HeadlessBinding` tree with no `VsyncScope`), so this constructor
+        // alone must never start the run.
+        let controller = Arc::new(AnimationController::with_detached_ticker(
+            Duration::from_millis(1400),
+        ));
 
         Self {
             controller,

@@ -897,9 +897,23 @@ impl BuildOwner {
     /// Flutter parity: `BuildOwner.reassemble()` / `Element.reassemble()` during
     /// hot reload. **Does not** unmount elements or dispose `State` — stateful
     /// elements keep their in-tree `ViewState` across the call.
-    pub fn reassemble(&mut self, tree: &ElementTree) {
-        for (id, node) in tree.iter_nodes() {
-            self.schedule_build_for(id, node.depth, RebuildReason::HotReload);
+    ///
+    /// Both halves are required, and for a while only one was here: the drain
+    /// skips any element whose own `is_dirty()` is false (its guard exists so a
+    /// clean entry that reached the heap through an inherited-dependency change
+    /// cannot have its children reconciled away), so marking the *heap* without
+    /// marking the *element* queued work the drain then dropped — a hot reload
+    /// that rebuilt nothing. `tree.mark_needs_build` sets the flag;
+    /// `schedule_build_for` orders the entry. The external-inbox drain works the
+    /// same two-step way.
+    pub fn reassemble(&mut self, tree: &mut ElementTree) {
+        let ids: Vec<(ElementId, usize)> = tree
+            .iter_nodes()
+            .map(|(id, node)| (id, node.depth()))
+            .collect();
+        for (id, depth) in ids {
+            tree.mark_needs_build(id);
+            self.schedule_build_for(id, depth, RebuildReason::HotReload);
         }
         tracing::info!(
             count = self.dirty_count(),

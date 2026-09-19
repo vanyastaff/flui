@@ -72,6 +72,36 @@ use crate::bindings::RenderingFlutterBinding;
 /// runtime via `UiCommandSender::capacity`; not part of the public API.
 const DEFAULT_COMMAND_CAPACITY: usize = 256;
 
+/// How many consecutive frames a presentation will re-arm after the backend
+/// produced content it could not put on screen, before giving up and parking.
+///
+/// A frame lost this way cannot be recovered by waiting: the pipeline
+/// consumed the work that produced it, so the scene would never be redrawn —
+/// hence the retry. But the retry re-dirties the presentation on every
+/// attempt, so an *unbounded* one is a self-sustaining repaint loop paced by
+/// the runner's fallback gate (~9.5 ms, ~105 Hz). This bound is what separates
+/// riding out a transient from spinning on a permanently unavailable
+/// drawable.
+///
+/// Chosen against measurement, not intuition. Across six cold starts of the
+/// native macOS backend with the drawable withdrawn at first paint, the
+/// transient took 2, 2 and 3 consecutive attempts on the three runs that
+/// carry this cap, and 12 (~132 ms) on the coldest, the run that motivated
+/// the retention in the first place. 128 sits ~10x above the worst observed
+/// (~1.2 s at the same pace), which is the direction to err: too generous
+/// costs one bounded burst of wasted frames on a surface that never comes
+/// back, while too tight reintroduces the blank window this bound exists to
+/// sit behind. On the runs measured with the cap in place it never engaged —
+/// `streak` peaked at 3 — so it is a backstop against the pathological case,
+/// not a limit the ordinary transient touches.
+///
+/// Exhausting the budget is not permanent. The streak is per-presentation and
+/// cleared by any frame that ends otherwise (see
+/// `PresentationState::clear_not_shown_streak`), and a real platform event
+/// still dirties the tree and produces an attempt of its own — so recovery
+/// after the bound does not depend on this counter ever being reset by hand.
+const MAX_NOT_SHOWN_RETRIES: u32 = 128;
+
 /// Realm-level arbitration of which presentation currently owns OS keyboard
 /// focus (issue #555's addressed-routing slice). One [`FocusManager`] exists per presentation
 /// (`PresentationState::focus_manager`), but only ONE presentation's tree
@@ -392,10 +422,13 @@ impl UiCommandSender {
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
     #[cfg_attr(
-        target_arch = "wasm32",
+        all(
+            not(test),
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32")
+        ),
         expect(
             dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+            reason = "consumed only by the desktop runner's inbox-capacity read and by tests"
         )
     )]
     pub fn capacity(&self) -> usize {
@@ -1332,14 +1365,11 @@ impl UiRealm {
 
     /// A new cross-thread sender into this runtime's inbox.
     #[must_use]
-    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
-    // non-test consumer, so the wasm lib check sees this as dead.
+    // Desktop and iOS runners both vend it (iOS for the reload hook); Android
+    // and wasm have no caller, so their lib checks see this as dead.
     #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
-        )
+        all(not(test), any(target_os = "android", target_arch = "wasm32")),
+        expect(dead_code, reason = "no Android/wasm caller outside tests")
     )]
     pub fn command_sender(&self) -> UiCommandSender {
         self.sender_prototype.clone()
@@ -2802,12 +2832,15 @@ impl UiRealm {
             // when the render returns.
             let render_verdict = sink.submit(scene);
             // Telemetry: sampled AFTER the submit returns, never before
-            // it -- on the production wgpu backend, a `Presented` verdict
-            // means the backend called `output.present()`, which
-            // under the default `Fifo` presentation mode BLOCKS until the
-            // next vsync before returning (on the inline raster lane the
-            // pump runs synchronously inside `submit`, so that block still
-            // lands within this call). Sampling before the call (as an
+            // it -- a `Presented` verdict means the backend called
+            // `output.present()`, and whatever pacing block that call carries
+            // happens inside it rather than after it (under the default
+            // `Fifo` mode the block is a wait for the next vsync on the
+            // Vulkan/Wayland path; the native AppKit backend returns from the
+            // present in ~42 µs — ADR-0029's AppKit subsection. On the inline
+            // raster lane the pump runs synchronously inside `submit`, so the
+            // call's own duration lands here either way). Sampling before the
+            // call (as an
             // earlier version of this method did) understates every
             // "input-to-present"/"produce-to-present" latency by up to a
             // full frame interval -- it would measure submit, not present,
@@ -2820,8 +2853,9 @@ impl UiRealm {
             // arm's `submit_at` is likewise "whenever the backend finished
             // attempting this submit", including whatever work (partial
             // blocking, driver validation) it did before failing. Never
-            // recorded for `NoPresent` (no damage/occluded, nothing
-            // actually reached the backend): that branch's pending input
+            // recorded for `NoPresent`/`NotShown` (no damage, or surface
+            // unavailable -- either way the frame never reached the
+            // screen): those branches' pending input
             // epochs stay buffered on the clock for whichever later pump
             // does submit, per `FrameClock::record_frame`'s own doc.
             let submit_at = producer.clock().now();
@@ -2830,6 +2864,10 @@ impl UiRealm {
                     self.commit_painted_frame(producer);
                     presented = true;
                     producer.record_frame_rendered();
+                    // The surface is demonstrably available: any withheld
+                    // streak ends here, so a later withdrawal gets the full
+                    // retry budget again.
+                    producer.clear_not_shown_streak();
                     Self::record_submit_telemetry(
                         producer,
                         submit_at,
@@ -2845,11 +2883,98 @@ impl UiRealm {
                 }
                 SubmitVerdict::NoPresent => {
                     self.commit_painted_frame(producer);
+                    // Nothing was owed and nothing was lost — the surface was
+                    // never asked to show anything, so a withheld streak is
+                    // over just as it is on a present.
+                    producer.clear_not_shown_streak();
                     tracing::trace!(
                         frame = frame_number,
-                        "Frame skipped: no damage or surface occluded (no present)"
+                        "Frame skipped: no damage (no present)"
                     );
                     replay_committed_input = true;
+                }
+                // The backend had content in hand and could not put it on
+                // screen. Everything `NoPresent` does about the TREE still
+                // applies — the pipeline ran, produced a scene, and that
+                // scene is the latest one this presentation has — but the
+                // frame itself is NOT finished, and treating it as finished
+                // is how a window ends up permanently blank: the work that
+                // produced this scene has already been consumed out of the
+                // pipeline, so a loop that parks here has nothing left to
+                // wake it and nothing left to draw if it did.
+                //
+                // Hence the same two-part retention the submit-failure arms
+                // below use, and for the identical reason issue #637
+                // records: `wake_frame()` alone re-opens the segment gate
+                // but not `PipelineOwner`'s own dirty tracking, so the
+                // retry pump would find nothing to do, produce `Idle`, and
+                // clear the flag having never reached `render_scene`.
+                // `mark_needs_full_repaint_for` is what gives the retry
+                // real work.
+                //
+                // The retry is paced by the runner's fallback gate
+                // (`keeps_frame_gate_open` / `FallbackWake`, ADR-0058) — one
+                // pipeline pass per display period — and capped here at
+                // `MAX_NOT_SHOWN_RETRIES` consecutive attempts.
+                //
+                // The cap is load-bearing, not belt-and-braces. A window that
+                // AppKit reports as occluded does stop reaching this arm, but
+                // by a route that does NOT cover this condition: occlusion
+                // reaches the frame loop as
+                // `windowDidChangeOcclusionState:` -> `WindowVisibility` ->
+                // `AppLifecycleState::Hidden` -> `frames_enabled == false`, and
+                // the visibility bit there is AppKit's `occlusionState`. What
+                // withdraws the drawable, however, is the *swapchain's* own
+                // availability, and the two disagree — the cold-start trace
+                // that motivated this arm has `occlusionState` reporting the
+                // window visible throughout while the drawable was
+                // unavailable for 12 consecutive frames. Wherever they
+                // disagree and stay disagreeing (a window on an inactive
+                // Space, a display asleep) the lifecycle gate never engages and
+                // an unbounded retry is an unbounded loop. The transient that
+                // clears is the common case; the cap is what makes the
+                // pathological one terminate.
+                SubmitVerdict::NotShown => {
+                    self.commit_painted_frame(producer);
+                    producer.record_frame_dropped();
+                    let streak = producer.record_frame_withheld();
+                    replay_committed_input = true;
+                    if streak <= MAX_NOT_SHOWN_RETRIES {
+                        tracing::debug!(
+                            frame = frame_number,
+                            streak,
+                            "Frame rendered but never shown (surface unavailable); \
+                             retaining it — retry armed via wake_frame()"
+                        );
+                        retry_needed = true;
+                        retry_needs_repaint = true;
+                    } else {
+                        // Budget exhausted: park rather than retry. The tree
+                        // stays committed (the scene above is still the latest
+                        // this presentation has).
+                        //
+                        // Reset the streak with the park, not on the next
+                        // presented frame alone. Left above the limit, the
+                        // very next event-driven frame that lands here — the
+                        // drawable still unavailable, which is exactly the
+                        // case this cap exists for — would increment the stale
+                        // count and park again immediately, never opening the
+                        // fresh retry burst the comment above promises. If the
+                        // drawable returned asynchronously afterwards the
+                        // window could stay blank until some unrelated event
+                        // forced a successful frame. Clearing here makes the
+                        // cap a bound on a *continuous* withdrawal, never a
+                        // permanent disable: the next real event gets a full
+                        // budget again.
+                        producer.clear_not_shown_streak();
+                        tracing::warn!(
+                            frame = frame_number,
+                            streak,
+                            "Frame withheld by the surface for {} consecutive attempts; \
+                             giving up until the next real event",
+                            MAX_NOT_SHOWN_RETRIES
+                        );
+                    }
                 }
                 SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
@@ -2964,6 +3089,24 @@ impl UiRealm {
                     result
                 });
         }
+
+        // The one place a frame decides whether the loop continues itself.
+        // A frame that presents is followed by the compositor's own pacing,
+        // but a frame that did NOT present continues the loop only if this
+        // decision arms a wake — so a stall is legible here and nowhere
+        // else: `presented=false retry_needed=false` is a frame that
+        // consumed the work and left nothing to come back for. Same target
+        // and level as `flui.pace`'s wake trace, which fires once per
+        // platform wake; this one fires once per frame.
+        tracing::trace!(
+            target: "flui.pace",
+            event = "frame_tail",
+            presented,
+            any_failed,
+            retry_needed,
+            retry_needs_repaint,
+            "frame tail resolved"
+        );
 
         if retry_needed {
             // Issue #637: `wake_frame()` alone re-opens `draw_frame_entered`'s
@@ -3734,6 +3877,7 @@ mod frame_failure_recovery_tests;
 
 #[cfg(test)]
 mod tests {
+    use flui_engine::PresentDisposition;
     use std::num::NonZeroU32;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
 
@@ -6477,7 +6621,7 @@ mod tests {
 
             realm.set_now_secs_for_test(0.0);
             realm.mark_rendered();
-            let mut backend = TestRasterBackend::single_shot(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
             let _ = realm.render_frame_entered(&mut backend);
             // `needs_redraw()` is what actually carries this assertion in
             // this test, not `has_pending_work()`: no widget is attached
@@ -6501,7 +6645,7 @@ mod tests {
 
             realm.set_now_secs_for_test(0.05);
             realm.mark_rendered();
-            let mut backend = TestRasterBackend::single_shot(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
             let _ = realm.render_frame_entered(&mut backend);
             assert!(
                 realm.needs_redraw() || realm.has_pending_work(),
@@ -6515,7 +6659,7 @@ mod tests {
 
             realm.set_now_secs_for_test(0.20);
             realm.mark_rendered();
-            let mut backend = TestRasterBackend::single_shot(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
             let _ = realm.render_frame_entered(&mut backend);
             assert_eq!(controller.status(), AnimationStatus::Completed);
 
@@ -6824,7 +6968,7 @@ mod tests {
         #[test]
         fn a_successful_frame_still_clears_needs_redraw() {
             let realm = mount_root();
-            let mut backend = TestRasterBackend::single_shot(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
 
             realm.request_redraw();
             let presented = realm.render_frame_entered(&mut backend);
@@ -10860,13 +11004,16 @@ mod tests {
 
         /// Finding: `submit_at` used to be sampled BEFORE `render_scene`
         /// was called, so any time the call spent blocked inside a
-        /// synchronous `present()` (the production `Fifo` case) was
-        /// invisible to the recorded latency — the shipped
+        /// synchronous `present()` — which the production backend does on
+        /// the Vulkan/Wayland path under `Fifo` — was invisible to the
+        /// recorded latency, and the shipped
         /// `input_to_present_histogram`/`produce_to_present_histogram`
         /// names would then be lying about what they measure (submit, not
-        /// present). This backend simulates that blocking present with a
-        /// real sleep; a `submit_at` sampled before the call would report a
-        /// latency that does NOT include it.
+        /// present). This backend simulates that in-call cost with a real
+        /// sleep, so the ordering pinned here holds for any backend whose
+        /// present takes measurable time — including one that waits on a
+        /// drawable rather than on the present itself; a `submit_at` sampled
+        /// before the call would report a latency that does NOT include it.
         #[test]
         fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
             use flui_interaction::events::{PointerType, make_down_event};
@@ -10880,15 +11027,15 @@ mod tests {
                 realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
             });
 
-            // The sleep stands in for the production wgpu backend's
-            // `output.present()` under the default `Fifo` presentation
-            // mode, which blocks until the next vsync before `render_scene`
-            // returns — proving `submit_at` is sampled AFTER `render_scene`
-            // returns, not before it.
+            // The sleep stands in for the time a production backend's
+            // `output.present()` can spend inside the call — under the
+            // default `Fifo` presentation mode that is a wait for the next
+            // vsync on the Vulkan/Wayland path — proving `submit_at` is
+            // sampled AFTER `render_scene` returns, not before it.
             let sleep = std::time::Duration::from_millis(30);
             let mut backend = TestRasterBackend::new(move |_, _| {
                 std::thread::sleep(sleep);
-                Ok(true)
+                Ok(PresentDisposition::Presented)
             });
             assert!(
                 realm.render_frame_entered(&mut backend),

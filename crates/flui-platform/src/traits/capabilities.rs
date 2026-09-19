@@ -36,7 +36,9 @@ pub trait PlatformCapabilities: Send + Sync {
     /// carries none — issue #556 removed its unwired `vsync`/`target_fps`
     /// fields — and `flui-engine`'s `RasterOptions` was deleted for the same
     /// reason). Steady-state frame pacing on desktop does not depend on
-    /// this value either — it comes from the GPU-side blocking Fifo present.
+    /// this value either — it comes from the GPU's present path: the blocking
+    /// Fifo present on Vulkan/Wayland, the display-pass cadence on native
+    /// AppKit (ADR-0029's AppKit subsection).
     fn default_target_fps(&self) -> u32;
 
     /// Should rendering be suspended when in background?

@@ -61,8 +61,10 @@ AppRuntime (loop-scoped composition root)
   bootstrap/shutdown (ADR-0035).
 - **Frame loop** — on-demand rendering: a frame runs only when the tree is
   dirty or the scheduler has pending work; physical pacing between frames
-  comes from the blocking Fifo present (ADR-0029), not from the scheduler
-  itself — `UpdateScheduler` makes no refresh-rate assumption of its own.
+  comes from the platform's present path — the blocking Fifo present on
+  Vulkan/Wayland, the display-pass cadence on native AppKit (ADR-0029) — not
+  from the scheduler itself — `UpdateScheduler` makes no refresh-rate
+  assumption of its own.
 - **Embedder** (`embedder`) — adapter types connecting the framework to
   windowing, GPU, and input on desktop (Win32/AppKit/headless via
   flui-platform + wgpu); Android/iOS/Web entry points are feature-gated.

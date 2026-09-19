@@ -30,10 +30,12 @@ use flui_types::geometry::{Bounds, Pixels};
 pub trait PlatformTextInput: Send + Sync {
     /// Enable or disable IME composition for this window's active input.
     ///
-    /// Disabling mid-composition follows winit's own semantics: the
-    /// in-progress composing text is dropped, not committed (a documented
-    /// divergence from Flutter's `TextInputConnection.connectionClosed`,
-    /// which keeps the uncommitted text — see the `PlatformTextInput` ADR).
+    /// Disabling mid-composition drops the in-progress composing text rather
+    /// than committing it — winit's macOS backend clears its marked text on
+    /// `set_ime_allowed(false)` before queueing `Ime::Disabled`, and a
+    /// deliberate divergence from Flutter, which closes a connection leaving
+    /// the composed characters in the controller's text and clears only the
+    /// composing range. See the `PlatformTextInput` ADR (ADR-0069).
     fn set_ime_allowed(&self, allowed: bool);
 
     /// Tell the platform IME where to draw its candidate/composition

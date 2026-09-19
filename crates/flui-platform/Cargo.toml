@@ -99,8 +99,52 @@ windows = { version = "0.62", features = [
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.27.0"
-objc = "0.2"
+# `objc2` is the backend's binding stack. The `cocoa`/`objc` pair it replaced
+# is gone entirely: `objc` had not released since 2019, and `cocoa` deprecated
+# its whole surface in favor of this family. Versions are the ones `wgpu-hal`
+# already pins, so no new crate generation was introduced.
+objc2 = { version = "0.6.4", features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSObject",
+    "NSString",
+    "NSArray",
+    "NSDictionary",
+    "NSValue",
+    "NSThread",
+    "NSGeometry",
+    "NSEnumerator",
+    "NSRunLoop",
+    "NSBundle",
+    "NSRange",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "objc2-core-foundation",
+    "NSApplication",
+    "NSRunningApplication",
+    "NSView",
+    "NSWindow",
+    "NSResponder",
+    "NSEvent",
+    "NSScreen",
+    "NSPasteboard",
+    "NSGraphics",
+    "NSCursor",
+    "NSVisualEffectView",
+    "NSWindowScripting",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false }
+dispatch2 = "0.3.1"
+# CoreGraphics, for the one display property Cocoa does not expose: the
+# refresh rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
+# which is what `PlatformWindow::refresh_period` needs. NSScreen has no
+# current-mode rate — its `maximumFramesPerSecond` is the hardware *maximum*
+# (it over-reports on a ProMotion panel running a 60 Hz mode) and is macOS 12+,
+# above this crate's 11.0 deployment floor — and the winit backend this mirrors
+# reads the mode rate the same way. Pinned to the version `cocoa` 0.27 already
+# pulls in, so no second copy of the crate enters the tree.
+core-graphics = "0.25"
 # Grand Central Dispatch: the owner lane (AppKit main queue, or a test serial
 # queue) every NSPasteboard operation is routed through. Zero-dep crate;
 # 0.2.0 is already pinned in Cargo.lock transitively via objc2-foundation.
@@ -168,6 +212,61 @@ console_error_panic_hook = "0.1"
 # screen-reader bridge should not link a D-Bus stack.
 [target.'cfg(target_os = "linux")'.dependencies]
 accesskit_unix = { version = "0.23", optional = true }
+
+# iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
+# binding stack — the `objc` crate the macOS backend still uses has not
+# released since 2019, and `cocoa` has no UIKit surface at all. Only the
+# classes this backend messages are enabled: objc2-ui-kit exposes one feature
+# per header and turns all ~456 on by default, which would compile the whole
+# framework's bindings for a handful of classes. Versions are the ones already
+# in the lock via `wgpu-hal` 30.0.1, so this adds no new crate generation.
+#   - `dispatch2` is Grand Central Dispatch (the main queue, the owner lane).
+#   - `objc2-quartz-core`'s `CADisplayLink` is the per-frame signal; QuartzCore
+#     rather than UIKit because `CADisplayLink` is declared there.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { version = "0.6.4", features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSObject",
+    "NSString",
+    "NSSet",
+    "NSArray",
+    "NSDictionary",
+    "NSNotification",
+    "NSValue",
+    "NSThread",
+    "NSGeometry",
+    "NSData",
+    "NSURL",
+    "NSEnumerator",
+    "NSRunLoop",
+] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "objc2-core-foundation",
+    "UIApplication",
+    "UIEvent",
+    "UIGeometry",
+    "UIKey",
+    "UIResponder",
+    "UIScreen",
+    "UIScreenMode",
+    "UITraitCollection",
+    "UITouch",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "UIPasteboard",
+    "UIColor",
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "CADisplayLink",
+    "CALayer",
+    "CAMetalLayer",
+] }
+objc2-metal = { version = "0.3.2", default-features = false }
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
 
 # UIA bridge for Windows, same `a11y` feature. Version cohort must match the
 # workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its `windows`

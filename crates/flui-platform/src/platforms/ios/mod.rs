@@ -1,276 +1,66 @@
-//! iOS platform implementation (stub)
+//! iOS platform implementation (UIKit + Metal).
 //!
-//! This module provides a stub implementation of the Platform trait for iOS.
-//! It serves as a placeholder for future native iOS integration using:
+//! A native iOS backend built on UIKit, `wgpu`'s Metal backend, and Grand
+//! Central Dispatch — the same `Platform`/`PlatformWindow` contract the other
+//! backends implement, so an application changes nothing but its entry point.
 //!
-//! - **UIKit**: UIWindow, UIView, UIViewController
-//! - **Core Animation**: CALayer, CAMetalLayer for compositing
-//! - **Metal**: Apple's GPU API via wgpu
-//! - **Grand Central Dispatch (GCD)**: For async task execution
-//! - **Core Text**: For text rendering
+//! # Architecture
 //!
-//! # Current Status
-//!
-//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for
-//! all operations.
-//!
-//! # Implementation Roadmap
-//!
-//! ## Core Integration
-//!
-//! 1. **App & View Lifecycle**:
-//!    - UIApplicationDelegate for app lifecycle
-//!    - UISceneDelegate for multi-window (iOS 13+)
-//!    - UIViewController for view hierarchy
-//!    - View lifecycle (viewDidLoad, viewWillAppear, viewDidAppear, etc.)
-//!    - App states (background, foreground, suspended)
-//!
-//! 2. **Window Management**:
-//!    - UIWindow for top-level container
-//!    - UIScreen for display information
-//!    - Multi-window support (iPadOS 13+)
-//!    - Split View / Slide Over (iPad)
-//!    - Safe Area handling (notch, home indicator)
-//!    - Keyboard avoidance
-//!
-//! 3. **Input System**:
-//!    - UITouch for touch events
-//!    - Multi-touch with gesture recognizers
-//!    - UIGestureRecognizer (tap, pan, pinch, rotate, swipe, long-press)
-//!    - 3D Touch / Haptic Touch
-//!    - Apple Pencil support (pressure, tilt, azimuth)
-//!    - Physical keyboard (Smart Keyboard, Magic Keyboard)
-//!    - Trackpad/mouse support (iOS 13.4+)
-//!
-//! 4. **Rendering**:
-//!    - CAMetalLayer for Metal rendering
-//!    - wgpu Metal backend
-//!    - HDR support (iPhone 12+)
-//!    - ProMotion (120Hz on iPad Pro, iPhone 13 Pro+)
-//!    - Wide color gamut (Display P3)
-//!
-//! ## Platform Services
-//!
-//! 5. **Display & Graphics**:
-//!    - UIScreen for display metrics
-//!    - Scale factor (1x, 2x, 3x for Retina)
-//!    - Safe area insets (UIEdgeInsets)
-//!    - Screen bounds and native bounds
-//!    - Dark mode (UIUserInterfaceStyle)
-//!
-//! 6. **Text System**:
-//!    - Core Text for text rendering
-//!    - UIFont for system fonts
-//!    - Text Kit for advanced text layout
-//!    - UITextInput protocol for keyboard input
-//!    - Emoji and international text support
-//!
-//! 7. **System Integration**:
-//!    - UIPasteboard for clipboard
-//!    - UIHapticFeedback for haptics
-//!    - UINotification for local notifications
-//!    - UIActivityViewController for sharing
-//!    - Document picker (UIDocumentPickerViewController)
-//!    - Photo library access (PHPickerViewController)
-//!
-//! 8. **Async & Threading**:
-//!    - Grand Central Dispatch (GCD) for background tasks
-//!    - Main queue (DispatchQueue.main) for UI updates
-//!    - Tokio integration for Rust async
-//!
-//! ## iOS-Specific Features
-//!
-//! 9. **Mobile Capabilities**:
-//!    - Battery status (UIDevice.batteryState)
-//!    - Network reachability (NWPathMonitor)
-//!    - Picture-in-Picture (AVPictureInPictureController)
-//!    - Background refresh
-//!    - Push notifications (UserNotifications framework)
-//!    - App extensions
-//!    - WidgetKit integration
-//!    - App Clips
-//!
-//! 10. **Apple Ecosystem**:
-//!     - Handoff / Continuity
-//!     - iCloud integration
-//!     - Sign in with Apple
-//!     - Apple Pay
-//!     - HealthKit, HomeKit, etc.
-//!
-//! # Usage
-//!
-//! Currently, attempting to use this platform will panic. For iOS development,
-//! use the winit-based backend or wait for native implementation.
-//!
-//! ```rust,ignore
-//! #[cfg(target_os = "ios")]
-//! use flui_platform::IOSPlatform;
-//!
-//! // This will panic with "not implemented"
-//! let platform = IOSPlatform::new();
+//! ```text
+//! flui_ios_main()  (called from the Xcode app's Swift/ObjC entry point)
+//!   -> IOSPlatform::new()
+//!   -> Platform::run()                 [UIApplicationMain]
+//!     -> AppDelegate.didFinishLaunching    -> on_ready(): window + GPU + realm
+//!     -> didBecomeActive / willResignActive -> active + surface signals
+//!     -> didEnterBackground / willEnterForeground -> surface signals
+//!     -> CADisplayLink tick                -> dispatch_request_frame()
 //! ```
 //!
-//! # Dependencies (Future)
+//! # Binding stack
 //!
-//! When implemented, will require:
-//! - `objc = "0.2"` - Objective-C runtime bindings
-//! - `block = "0.1"` - Objective-C block support
-//! - `cocoa-foundation = "0.1"` - Foundation framework
-//! - `core-graphics = "0.22"` - Core Graphics bindings
-//! - `icrate` - Modern Objective-C 2.0 bindings
+//! `objc2` + `objc2-ui-kit` + `objc2-foundation`, not the `objc` 0.2 /
+//! `cocoa` pair the macOS backend still carries: `objc` has not released since
+//! 2019 and `cocoa` has no UIKit surface at all, while `objc2` is what every
+//! shipping Rust macOS/iOS stack uses today (winit, wgpu, egui, slint, gpui).
+//! The versions here are the ones already in the lock via `wgpu-hal` 30.0.1.
+//!
+//! # Threading
+//!
+//! UIKit is main-thread-only, and `UIApplicationMain` owns the main thread for
+//! the process's life. Every window, view, and pasteboard access therefore
+//! happens on that thread; the only background work is GCD's
+//! ([`executor::IOSExecutor`]). The delegate's session state is thread-local
+//! for the same reason — see `platform.rs`'s `DELEGATE_STATE`.
+//!
+//! # iOS versions
+//!
+//! Target: iOS 13+. `objc2`'s bindings span iOS 10–26, so nothing here needs
+//! an availability gate above 13 — a claim to re-check the moment a call is
+//! added that the SDK marks newer.
 
-use std::sync::Arc;
+// `UIScreen.mainScreen` and a handful of UIKit accessors are marked deprecated
+// in the multi-scene era (the replacements route through a `UIWindowScene`).
+// This backend presents exactly one full-screen window and never adopts
+// scenes, so the app-wide accessors remain the honest spelling; `UIScene` is
+// a separate, larger feature (multi-window on iPadOS) and is not implemented.
+// Adopting scenes would make every `mainScreen` call site scene-relative.
+#![expect(deprecated)]
+// This module (and its submodules) is the workspace's sanctioned `unsafe` FFI
+// island for UIKit — direct Objective-C calls have no safe wrapper. The
+// workspace lint `unsafe_code = "warn"` is opted out here, at the module
+// boundary, rather than for the whole crate (the same shape `macos/mod.rs`
+// uses).
+#![expect(unsafe_code)]
 
-use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
-use crate::error::PlatformError;
-use crate::traits::*;
+mod clipboard;
+mod display;
+mod events;
+mod executor;
+mod platform;
+mod window;
 
-/// iOS platform implementation (stub)
-///
-/// This is a placeholder for future native iOS support. All methods
-/// currently return `unimplemented!()`.
-///
-/// # Future Implementation
-///
-/// Will use UIKit + Metal:
-/// - `UIWindow` for window management
-/// - `UIViewController` for view hierarchy
-/// - `CAMetalLayer` for Metal rendering
-/// - `GCD` for async execution
-/// - `Core Text` for text rendering
-///
-/// # iOS Versions
-///
-/// Target: iOS 13+ (97% market share)
-/// - iOS 13: Multi-window, dark mode, SwiftUI
-/// - iOS 14: Widgets, App Clips, App Library
-/// - iOS 15: Focus modes, SharePlay
-/// - iOS 16: Lock Screen customization
-/// - iOS 17: StandBy mode, NameDrop
-pub struct IOSPlatform;
-
-impl IOSPlatform {
-    /// Create a new iOS platform instance (stub)
-    ///
-    /// # Panics
-    ///
-    /// Always panics with "iOS platform not yet implemented"
-    pub fn new() -> Result<Self, PlatformError> {
-        unimplemented!(
-            "iOS platform not yet implemented - use winit backend or wait for native UIKit implementation"
-        )
-    }
-
-    /// Initialize from UIApplication
-    ///
-    /// # Panics
-    ///
-    /// Always panics (stub implementation)
-    pub fn from_application(_app: ()) -> Result<Self, PlatformError> {
-        unimplemented!("iOS UIApplication initialization not implemented")
-    }
-}
-
-impl Platform for IOSPlatform {
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        unimplemented!("iOS GCD executor not implemented")
-    }
-
-    fn run(
-        self: Box<Self>,
-        _on_finish_launching: PlatformReadyCallback,
-    ) -> Result<(), PlatformError> {
-        // Pre-existing signature mismatch fixed by the callback flip
-        // (ADR-0039 slice 2): this stub never compiled under any CI target
-        // before (`target_os = "ios"` has no CI compile job) and still
-        // returns `unimplemented!()` -- platform-init stub exemption
-        // (AGENTS.md). The later fallible `on_ready`/`run` flip is likewise
-        // trivial propagation here — `unimplemented!()` unifies with any
-        // return type.
-        unimplemented!("iOS UIApplicationMain run loop not implemented")
-    }
-
-    fn quit(&self) {
-        unimplemented!("iOS quit (not recommended by Apple) not implemented")
-    }
-
-    fn active_window(&self) -> Option<WindowId> {
-        unimplemented!("iOS active window query not implemented")
-    }
-
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        unimplemented!("iOS UIScreen enumeration not implemented")
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        unimplemented!("iOS main screen query not implemented")
-    }
-
-    fn open_window(
-        &self,
-        _options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
-        unimplemented!("iOS UIWindow creation not implemented")
-    }
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        unimplemented!("iOS UIPasteboard not implemented")
-    }
-
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // No iOS transport yet (ADR-0038): inert and honest.
-        Arc::new(NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        unimplemented!("iOS capabilities not implemented")
-    }
-
-    fn name(&self) -> &'static str {
-        "iOS (stub)"
-    }
-
-    fn on_quit(&self, _callback: Box<dyn FnMut() + Send>) {
-        unimplemented!("iOS quit callback not implemented")
-    }
-
-    fn on_window_event(&self, _callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        unimplemented!("iOS window event callback not implemented")
-    }
-
-    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
-        unimplemented!("iOS app bundle path query not implemented")
-    }
-}
-
-// TODO: Implement these when adding native iOS support:
-//
-// Core:
-// - IOSWindow wrapping UIWindow
-// - IOSDisplay wrapping UIScreen
-// - GCDExecutor using Grand Central Dispatch
-// - CoreTextSystem using Core Text
-//
-// Input:
-// - Touch event handling (UITouch)
-// - Multi-touch with gesture recognizers
-// - Apple Pencil support
-// - Keyboard input (UITextInput)
-//
-// Lifecycle:
-// - UIApplicationDelegate callbacks
-// - UISceneDelegate for multi-window
-// - View lifecycle integration
-// - Background/foreground transitions
-//
-// Services:
-// - UIPasteboard via objc
-// - UIHapticFeedback
-// - UIActivityViewController for sharing
-// - Document/photo pickers
-//
-// Integration:
-// - Objective-C bridge (objc/icrate)
-// - CAMetalLayer for wgpu
-// - Safe area handling
-// - Keyboard avoidance
+pub use clipboard::IOSClipboard;
+pub use display::IOSDisplay;
+pub use executor::IOSExecutor;
+pub use platform::IOSPlatform;
+pub use window::IOSWindow;

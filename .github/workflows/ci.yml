@@ -1306,7 +1306,7 @@ jobs:
       - name: Install Rust stable + windows/macos/android targets
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-linux-android
+          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-linux-android,aarch64-apple-ios
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -1319,7 +1319,7 @@ jobs:
       # version — so the target has to be added again against the pin. Without
       # this the build fails with E0463 "can't find crate for `core`".
       - name: Add cross targets to the pinned toolchain
-        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
+        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios
 
       # `--features a11y` on every line: the UIA/NSAccessibility bridges are
       # feature-gated and this job is the ONLY gate that compiles them at all
@@ -1334,6 +1334,13 @@ jobs:
 
       - name: cargo clippy (android backend)
         run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
+
+      # The native UIKit backend had no lint gate at all before this step.
+      # `just ios-sim` (the `live-smoke`-adjacent job below) is the only
+      # EXECUTING coverage; this line is the type-check half, matching how the
+      # other three native backends are gated.
+      - name: cargo clippy (ios backend)
+        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection

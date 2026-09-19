@@ -21,6 +21,7 @@
 
 mod basic;
 mod counter;
+mod hot_reload;
 
 use crate::Template;
 use crate::error::CliResult;
@@ -57,6 +58,7 @@ pub struct TemplateBuilder {
     run_cargo_check: bool,
     local: bool,
     platforms: Vec<String>,
+    hot_reload: bool,
 }
 
 impl TemplateBuilder {
@@ -75,6 +77,7 @@ impl TemplateBuilder {
             run_cargo_check: true,
             local: false,
             platforms: Vec::new(),
+            hot_reload: false,
         }
     }
 
@@ -116,6 +119,16 @@ impl TemplateBuilder {
         self
     }
 
+    /// Generate the Flutter-parity hot-reload workspace (host/worker/types)
+    /// instead of a single-crate project.
+    ///
+    /// Takes precedence over [`template`](Self::template): the hot-reload
+    /// layout is a workspace shape, not one of the single-crate templates.
+    pub fn hot_reload(mut self, hot_reload: bool) -> Self {
+        self.hot_reload = hot_reload;
+        self
+    }
+
     /// Generate the project from the template.
     ///
     /// This is the terminal method that consumes the builder and creates
@@ -129,6 +142,17 @@ impl TemplateBuilder {
     pub fn generate(self, dir: &Path) -> CliResult<GeneratedProject> {
         let name_str = self.name.as_str();
         let org_str = self.org.as_str();
+
+        if self.hot_reload {
+            hot_reload::generate(dir, name_str, org_str, self.local)?;
+            return Ok(GeneratedProject {
+                name: self.name,
+                org: self.org,
+                template: self.template,
+                path: dir.to_path_buf(),
+                git_initialized: self.init_git,
+            });
+        }
 
         match self.template {
             Template::Counter => {

@@ -241,11 +241,15 @@ pub struct FrameSnapshot {
     pub segment_end: Instant,
     /// When the raster backend RETURNED from consuming the scene — not when
     /// the scene was handed to it. On the production wgpu backend that call
-    /// performs `present()`, which under the default Fifo mode blocks until
-    /// the next vsync, so this instant is present-inclusive and is what makes
-    /// [`Self::latencies`] and the produce-to-present histogram mean what
-    /// their names say. Sampled once, after the call returns, for every
-    /// outcome including the error arms.
+    /// performs `present()`, so this instant is present-inclusive and is what
+    /// makes [`Self::latencies`] and the produce-to-present histogram mean
+    /// what their names say. How much of the span that accounts for varies by
+    /// backend: under the default Fifo mode the call blocks until the next
+    /// vsync on the Vulkan/Wayland path, whereas the native AppKit backend
+    /// returns from it in ~42 µs (ADR-0029's AppKit subsection) — there the
+    /// span is nearly all produce, which is what the name already implies.
+    /// Sampled once, after the call returns, for every outcome including the
+    /// error arms.
     pub submit_at: Instant,
     /// What became of the submit.
     pub present_outcome: PresentOutcome,

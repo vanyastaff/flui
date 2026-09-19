@@ -10,7 +10,6 @@
 //! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
 //! the runner drives the scheduler directly.
 
-#[cfg(not(target_os = "ios"))]
 pub(crate) mod close_request;
 mod config;
 pub mod direct;
@@ -37,7 +36,6 @@ pub(crate) mod window_registry;
 #[cfg(test)]
 pub(crate) mod window_test_support;
 
-#[cfg(not(target_os = "ios"))]
 pub use close_request::{CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse};
 pub use config::{AppConfig, DiagnosticsProfile};
 pub use direct::run_direct;

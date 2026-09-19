@@ -18,14 +18,14 @@
 /// `Renderer::recover` in `pollster::block_on`; test fakes script the
 /// outcome. `is_device_lost` is NOT duplicated here — it already lives on
 /// `RasterBackend`, and every consumer bounds on both traits.
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) trait DeviceRecovery {
     /// Attempt to rebuild the lost device synchronously on the runner
     /// thread.
     fn try_recover_device(&mut self) -> Result<(), flui_engine::EngineError>;
 }
 
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 impl DeviceRecovery for flui_engine::Renderer {
     fn try_recover_device(&mut self) -> Result<(), flui_engine::EngineError> {
         // `pollster` is already a dep and safe to use here — the
@@ -103,12 +103,12 @@ impl DeviceRecovery for flui_engine::Renderer {
 /// happen to be the same type off-`wasm32` (this backoff's own `cfg` gate
 /// already excludes `wasm32`, so the distinction is moot today, but the
 /// convention is the same one this whole module already follows).
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) struct DeviceRecoveryBackoff {
     state: parking_lot::Mutex<DeviceRecoveryBackoffState>,
 }
 
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 struct DeviceRecoveryBackoffState {
     /// Consecutive failures since the last success (or since construction).
     consecutive_failures: u32,
@@ -121,7 +121,7 @@ struct DeviceRecoveryBackoffState {
     next_attempt_at: Option<web_time::Instant>,
 }
 
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 impl DeviceRecoveryBackoff {
     /// The base interval: roughly one frame at 60 Hz. A retry cadence, not
     /// a pacing constant — it deliberately does NOT track the display (a
@@ -235,7 +235,7 @@ impl DeviceRecoveryBackoff {
 }
 
 /// Outcome of one call to [`attempt_device_recovery`].
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 enum RecoveryAttempt {
     /// The backoff's armed deadline had not yet elapsed — no attempt was
     /// made. Carries that SAME deadline (not a freshly computed one).
@@ -253,7 +253,7 @@ enum RecoveryAttempt {
 /// why this is a deadline CHECK, never a sleep: skipping is the only
 /// non-blocking way to pace an attempt that can cost a full GPU stack
 /// rebuild.
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn attempt_device_recovery<R: DeviceRecovery>(
     renderer: &mut R,
     backoff: &DeviceRecoveryBackoff,
@@ -278,10 +278,22 @@ fn attempt_device_recovery<R: DeviceRecovery>(
 }
 
 /// Outcome of driving one frame through [`render_frame_with_device_recovery`].
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) struct FrameRecoveryOutcome {
     /// Whether the frame reached `present()` — same meaning as
     /// [`crate::app::ui_realm::UiRealm::render_frame_entered`]'s own return.
+    // Read only by the desktop runner's fallback-pacing arm; the mobile and
+    // web runners pace from their own frame sources and do not consult it.
+    #[cfg_attr(
+        all(
+            not(test),
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32")
+        ),
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner's fallback pacing"
+        )
+    )]
     pub(super) presented: bool,
     /// Set exactly when a NEW recovery attempt failed this call — never on
     /// a merely-deferred attempt (the backoff deadline had not elapsed) and
@@ -374,7 +386,7 @@ pub(super) struct FrameRecoveryOutcome {
 /// neither: that frame already had its own chance to present before the
 /// loss was even noticed, so there is no known-blank backing store to force
 /// a fresh submit for.
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn render_frame_with_device_recovery<B>(
     realm: &crate::app::ui_realm::UiRealm,
     lane: &mut crate::app::raster_lane::RasterLane<B>,
@@ -475,6 +487,7 @@ where
     not(target_arch = "wasm32")
 ))]
 mod device_recovery_tests {
+    use flui_engine::PresentDisposition;
     use std::time::Duration;
 
     use flui_engine::{EngineError, RasterBackend};
@@ -544,7 +557,7 @@ mod device_recovery_tests {
         lost: bool,
         /// `render_scene` outcome once the scene reaches it (`take`n —
         /// `EngineError` is not `Clone`).
-        scene_outcome: Option<Result<bool, EngineError>>,
+        scene_outcome: Option<Result<PresentDisposition, EngineError>>,
         /// `try_recover_device` outcome (`take`n, same reason).
         recover_outcome: Option<Result<(), EngineError>>,
         /// Whether a successful recovery clears the lost flag (a failing
@@ -561,7 +574,7 @@ mod device_recovery_tests {
         fn healthy() -> Self {
             Self {
                 lost: false,
-                scene_outcome: Some(Ok(true)),
+                scene_outcome: Some(Ok(PresentDisposition::Presented)),
                 recover_outcome: Some(Ok(())),
                 recover_clears_lost: true,
                 lose_on_render: false,
@@ -572,7 +585,10 @@ mod device_recovery_tests {
     }
 
     impl RasterBackend for ScriptedDeviceBackend {
-        fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+        fn render_scene(
+            &mut self,
+            _scene: &flui_layer::Scene,
+        ) -> Result<PresentDisposition, EngineError> {
             self.render_calls += 1;
             if self.lose_on_render {
                 self.lost = true;
@@ -721,7 +737,7 @@ mod device_recovery_tests {
         // tree dirty in between (no input, no animation, no resize).
         lane.with_backend(|b| {
             b.lost = true;
-            b.scene_outcome = Some(Ok(true));
+            b.scene_outcome = Some(Ok(PresentDisposition::Presented));
             b.recover_outcome = Some(Ok(()));
         });
 
@@ -875,7 +891,10 @@ mod device_recovery_tests {
     }
 
     impl RasterBackend for AlwaysRecoversButDiesOnFirstRenderBackend {
-        fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+        fn render_scene(
+            &mut self,
+            _scene: &flui_layer::Scene,
+        ) -> Result<PresentDisposition, EngineError> {
             self.render_calls += 1;
             if !self.died_on_render {
                 self.died_on_render = true;
@@ -883,7 +902,7 @@ mod device_recovery_tests {
                 // (below) just cleared `lost`.
                 self.lost = true;
             }
-            Ok(true)
+            Ok(PresentDisposition::Presented)
         }
         fn resize(&mut self, _width: u32, _height: u32) {}
         fn is_device_lost(&self) -> bool {
